@@ -45,15 +45,15 @@ The delivery state machine (`workflows/delivery.sm.yaml`, run by
 A state is a stage name from `factory.yaml` `tracker.stages`; vars are the
 machine's `vars`.
 
-| Operation | Does | GitHub Issues | Local markdown (`factory/local_tracker.py`) |
+| Operation | Does | GitHub Issues (`factory/github_tracker.py`) | Local markdown (`factory/local_tracker.py`) |
 | --- | --- | --- | --- |
 | `get_state(t)` | Read the ticket's stage | the one `tracker.stages` label on the issue | the `Status:` line |
 | `set_state(t, s)` | Set exactly one stage | add the stage label, remove the other stage labels | rewrite `Status:` |
-| `read_vars(t)` | Read the machine vars | the JSON in the latest `[factory]` comment's `factory-state` block | the JSON in the fenced `factory-state` block before `## Comments` |
-| `write_vars(t, v)` | Store the machine vars | a `[factory]` comment with a `factory-state` block | rewrite that block |
+| `read_vars(t)` | Read the machine vars | the JSON in the latest `[factory]` comment's `factory-state` marker | the JSON in the fenced `factory-state` block before `## Comments` |
+| `write_vars(t, v)` | Store the machine vars | create, or edit in place, that `[factory]` comment | rewrite that block |
 | `claim(t, e)` | Assign to executor `e`, then re-read; stop without writing if another executor holds it | `--add-assignee`, then re-read the assignees | set `claimed_by: e`, then re-read |
 | `release(t, e)` | Drop `e`'s claim | `--remove-assignee` | remove the `claimed_by:` line |
-| `frontier()` | Open `ready` tickets, every blocker closed, unclaimed, in map order | the frontier query above, filtered to the `ready` label | the frontier rule below |
+| `frontier()` | Open `ready` tickets, every blocker closed, unclaimed, in map order | open issues with the `ready` label, no assignee, every native blocker closed | the frontier rule below |
 
 Rules:
 
@@ -75,3 +75,34 @@ Used for tests and offline runs. Same layout as the mattpocock local template:
   missing blocker file keeps the ticket blocked.
 - Vars: a fenced `factory-state` block with JSON, before `## Comments`.
 - Comments append under `## Comments` at the end of the file.
+
+## GitHub Issues adapter
+
+`factory/github_tracker.py`, used for real runs. It reads `tracker.repository`,
+`tracker.stages` and `tracker.map_label` from `factory.yaml` and calls `gh`
+through one runner (tests stub it). By hand:
+`uv run factory/github_tracker.py get-state|set-state|read-vars|write-vars|claim|release <issue> [arg]`
+and `uv run factory/github_tracker.py frontier`.
+
+- Stage: the one `tracker.stages` label; `set_state` adds the new label and
+  removes the other stage labels in one `gh issue edit`.
+- Claim: the executor's GitHub login as assignee. Any other assignee stops the
+  claim before a write. If the re-read shows a second assignee (two executors
+  at once), the executor removes itself and stops.
+- Blocked by: native GitHub issue dependencies
+  (`repos/{owner}/{repo}/issues/{n}/dependencies/blocked_by`); a ticket is
+  unblocked when every blocker is closed. `Blocked by:` body lines are not read.
+- Map order: the sub-issues of the open issue labelled `tracker.map_label`;
+  issues outside the map follow, by number.
+- Vars: one comment, created on the first write and edited in place after:
+
+  ```text
+  [factory] Delivery state, edited in place by the factory.
+
+  <!-- factory-state {"risk": "high", "run_id": "local:…", ...} -->
+
+  Factory-Run: <run_id>
+  ```
+
+  Only a comment that starts with `[factory]` counts; the latest one wins. `>`
+  in the JSON is written as `\u003e`, so a value cannot close the marker.
