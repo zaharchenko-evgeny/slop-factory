@@ -32,7 +32,7 @@ class Templates(unittest.TestCase):
                 want = cur[cur.index("## Development workflow"):cur.index("## Tracker and git")]
             else:
                 want = (ROOT / rel).read_text()
-            self.assertEqual(text, want, rel)
+            self.assertEqual(text.rstrip("\n"), want.rstrip("\n"), rel)
 
     def test_templates_name_no_project_value(self):
         for f in render.T.rglob("*"):

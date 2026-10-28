@@ -34,4 +34,3 @@ change, whether you are a person, a pi session or a factory role.
    ticket). Do not fix the factory inside an unrelated ticket.
 
 {{MODEL_POLICY}}
-
