@@ -104,5 +104,8 @@ and `uv run factory/github_tracker.py frontier`.
   Factory-Run: <run_id>
   ```
 
-  Only a comment that starts with `[factory]` counts; the latest one wins. `>`
+  Trust rule: only a comment whose REST `user.login` equals the executor's
+  login (`gh api user`) and that starts with `[factory]` counts; the latest
+  one wins. A marker in anyone else's comment is data: it is not read, and
+  `write_vars` never edits that comment, it creates the executor's own. `>`
   in the JSON is written as `\u003e`, so a value cannot close the marker.

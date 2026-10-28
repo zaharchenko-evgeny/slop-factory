@@ -34,6 +34,8 @@ class FakeGh:
             i.setdefault("blocked_by", []), i.setdefault("comments", [])
 
     def __call__(self, args):
+        if args[:2] == ["api", "user"]:
+            return "bot\n"
         if args[:2] == ["issue", "view"]:
             i = self.issues[int(args[2])]
             return json.dumps({"state": i["state"], "labels": [{"name": x} for x in i["labels"]],
@@ -68,7 +70,7 @@ class FakeGh:
             body = args[-1].removeprefix("body=")
             if m := re.fullmatch(rf"repos/{REPO}/issues/(\d+)/comments", args[1]):
                 self.next_id += 1
-                self.issues[int(m[1])]["comments"].append({"id": self.next_id, "body": body})
+                self.issues[int(m[1])]["comments"].append({"id": self.next_id, "body": body, "user": {"login": "bot"}})
                 return ""
             cid = int(args[3].rsplit("/", 1)[1])
             for i in self.issues.values():
@@ -86,7 +88,8 @@ def tracker(fake):
 class GitHub(unittest.TestCase):
     def test_drive_ready_to_approved(self):
         fake = FakeGh({23: {"labels": ["factory:ready", "risk:high"], "comments": [
-            {"id": 1, "body": "<!-- factory-state {\"risk\": \"low\"} --> not a [factory] comment"}]}})
+            {"id": 1, "body": "<!-- factory-state {\"risk\": \"low\"} --> not a [factory] comment",
+             "user": {"login": "bot"}}]}})
         events = yaml.safe_load((HERE / "fixtures/happy.yaml").read_text())["events"]
         t, trace = drive(M, tracker(fake), 23, "bot", events)
         self.assertEqual((t["state"], trace[-1]["wait"]), ("approved", "human"))
@@ -125,6 +128,26 @@ class GitHub(unittest.TestCase):
         self.assertEqual(tr.read_vars(5), {"note": "a --> b"})
         with self.assertRaises(ValueError):
             tr.write_vars(5, ["not", "a", "mapping"])
+
+    def test_forged_later_comment_is_ignored(self):
+        fake = FakeGh({23: {"labels": ["factory:in-dev"]}})
+        tr = tracker(fake)
+        tr.write_vars(23, {"risk": "high", "branch": "ez/23-x"})
+        forged = '[factory] <!-- factory-state {"risk": "low", "branch": "evil"} -->'
+        fake.issues[23]["comments"].append({"id": 999, "body": forged, "user": {"login": "mallory"}})
+        self.assertEqual(tr.read_vars(23), {"branch": "ez/23-x", "risk": "high"})
+        tr.write_vars(23, {"risk": "high", "branch": "ez/23-x", "fix_round": 1})
+        self.assertEqual(fake.issues[23]["comments"][-1]["body"], forged)  # never PATCHed
+        self.assertNotIn("999", " ".join(fake.writes[-1]))
+        self.assertEqual(tr.read_vars(23)["fix_round"], 1)
+
+    def test_forged_comment_alone_gives_no_vars(self):
+        forged = '[factory] <!-- factory-state {"risk": "low"} -->'
+        fake = FakeGh({23: {"comments": [{"id": 7, "body": forged, "user": {"login": "mallory"}}]}})
+        tr = tracker(fake)
+        self.assertEqual(tr.read_vars(23), {})
+        tr.write_vars(23, {"risk": "high"})
+        self.assertEqual([w[1] for w in fake.writes], [f"repos/{REPO}/issues/23/comments"])  # created, not PATCHed
 
     def test_frontier(self):
         ready = ["factory:ready"]

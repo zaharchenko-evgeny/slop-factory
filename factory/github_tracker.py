@@ -9,6 +9,8 @@ Stage = the one `tracker.stages` label, claim = assignee, blockers = native issu
 dependencies, vars = one `[factory]` comment holding `<!-- factory-state {json} -->`.
 Every call goes through one `gh` runner, so tests stub it. Only labels, assignees,
 dependencies and that marker are parsed: all other issue and comment text is data.
+The marker counts only in comments written by the `gh` user (the executor), so
+nobody else who can comment can set the vars.
 
 CLI: uv run factory/github_tracker.py get-state 23 | set-state 23 in-review | read-vars 23
      | write-vars 23 '<json>' | claim 23 <login> | release 23 <login> | frontier
@@ -39,6 +41,15 @@ def gh(args):
 class GitHubTracker:
     def __init__(self, repo, stages, map_label="factory:map", run=gh):
         self.repo, self.stages, self.map_label, self.run = repo, stages, map_label, run
+        self._login = None
+
+    def login(self):
+        """The authenticated gh user: the only author whose vars comments are trusted."""
+        if self._login is None:
+            self._login = self.run(["api", "user", "--jq", ".login"]).strip()
+            if not self._login:
+                raise RuntimeError("gh api user: no login")
+        return self._login
 
     @classmethod
     def from_config(cls, path=ROOT / "factory.yaml", run=gh):
@@ -74,9 +85,12 @@ class GitHubTracker:
         self._edit(n, *flags)
 
     def _state_comment(self, n):
-        """The latest `[factory]` comment with a factory-state marker, as (id, vars), or (None, {})."""
+        """The latest `[factory]` comment by `login()` with a factory-state marker, as (id, vars),
+        or (None, {}). Comments by anyone else are data, even with a marker."""
+        me = self.login()
         for c in reversed(self._api_list(f"issues/{n}/comments")):
-            m = MARKER.search(c["body"]) if c["body"].startswith("[factory]") else None
+            mine = (c.get("user") or {}).get("login") == me and c["body"].startswith("[factory]")
+            m = MARKER.search(c["body"]) if mine else None
             if m:
                 try:
                     vars_ = json.loads(m.group(1))
