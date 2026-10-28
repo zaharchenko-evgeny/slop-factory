@@ -12,8 +12,10 @@ actions here, agent actions through run_role.py (each reviewer in its own run
 dir and detached checkout, the fallback model after a malformed handoff). Stage
 and vars (with the `_run` state) are written through the adapter after each step; the run dir keeps
 `sm.json`, `<step>.in.md` and `checks-<round>.md`. Publish relabels the ticket's risk and
-docs-impact, posts the reviewers' nits as one PR comment and watches CI (`gh pr checks`);
-after the summary the driver posts its comment on the ticket, edits the PR body from
+docs-impact, posts the reviewers' nits as one PR comment and watches CI (`gh pr checks`, after
+waiting for the checks to register). The reviewers of a fork run in parallel. Once publish moves the
+ticket to `approved`, the driver runs the router summary (input: final stage, CI result, event log),
+posts its comment on the ticket, edits the PR body from
 `Refs #N` to `Closes #N` when the summary says `complete: yes`, and removes the worktree. `pi` and `gh` can be
 replaced with $FACTORY_AGENT and $FACTORY_GH.
 
@@ -30,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yaml
@@ -38,6 +41,10 @@ import preflight
 import run_role
 import sm
 from local_tracker import ClaimError, LocalTracker
+
+class ResumeError(Exception):
+    """--resume on a ticket that has no resume point."""
+
 
 STOPWORDS = {"a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "with", "from", "by"}
 
@@ -56,7 +63,7 @@ def drive(m, tracker, nn, executor, results=(), execute=None, resume=False):
         point = vars_.pop("_resume", None)
         if resume:
             if state != "failed" or not point:
-                raise ValueError(f"ticket {nn}: --resume needs a failed ticket with a stored resume point")
+                raise ResumeError(f"ticket {nn}: --resume needs a failed ticket with a stored resume point")
             state, vars_["_run"] = point["state"], {**vars_.get("_run", {}), **point["run"], "retries": {}}
         ticket = sm.new_ticket(m, {"state": state, "vars": vars_})
         if resume:
@@ -119,7 +126,13 @@ def gh():
 
 SAFE_BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
 REVIEWERS = ("review_full", "review_behaviour", "review_structure_security")
-CI_WAIT = 1800
+CI_WAIT = 1800  # seconds for CI to register and finish its checks
+CI_POLL = 15  # seconds between reads while no checks are registered
+NO_CHECKS = "no checks reported"
+
+
+def event_line(rep):
+    return f"{rep['event']:<26} {rep['from']} -> {rep['to']}  {' '.join(rep['run'])}  {rep['note'] or ''}".rstrip()
 
 
 class Delivery:
@@ -132,22 +145,32 @@ class Delivery:
         local = self.config["targets"]["local"]
         self.run_dir = self.root / local["run_dir"] / str(nn)
         self.wt = self.root / local["worktree_dir"] / str(nn)
+        self.done = []  # (action, (result, payload)) of fork branches that ran together, not yet reported
+        self.trace = []
 
     def __call__(self, t):
         if not t["pending"]:
             return {"stage.ready": {"run_id": self.run_id}} if t["state"] == self.m["initial"] else None
-        action = t["pending"][0]
+        self.save(t)
+        self.done = [d for d in self.done if d[0] in t["pending"]]
+        if not self.done and t["fork"] and len(t["pending"]) > 1:
+            with ThreadPoolExecutor(len(t["pending"])) as ex:  # each reviewer has its own dirs (run_role.py)
+                self.done = list(zip(t["pending"], ex.map(lambda a: self.run(t, a), t["pending"])))
+        action, (result, payload) = self.done.pop(0) if self.done else (t["pending"][0], self.run(t, t["pending"][0]))
+        return {f"{action}.{result}": payload}
+
+    def save(self, t):
         self.run_dir.mkdir(parents=True, exist_ok=True)
         (self.run_dir / "sm.json").write_text(json.dumps(t, indent=2))  # run_role.py reads risk and pr_urls
+
+    def run(self, t, action):
         spec = self.m["actions"][action]
         if spec["kind"] != "script":
-            result, payload = self.agent(t, action, spec)
-        else:
-            try:
-                result, payload = getattr(self, action)(t)
-            except (RuntimeError, OSError, ValueError) as e:
-                result, payload = "failed", {"error": str(e)}
-        return {f"{action}.{result}": payload}
+            return self.agent(t, action, spec)
+        try:
+            return getattr(self, action)(t)
+        except (RuntimeError, OSError, ValueError) as e:
+            return "failed", {"error": str(e)}
 
     def issue(self):
         """(title and body, base branch): the body's `base:` line, else the primary repository's default."""
@@ -216,21 +239,48 @@ class Delivery:
         if nits:
             body = "\n\n".join(["[factory] Review nits (advisory, not blocking)", *nits, self.trailer(t)])
             sh([gh(), "pr", "comment", url, "--body", body], self.wt)
-        # shortcut: waits at most CI_WAIT seconds, then reports CI as pending; raise it if CI gets slower.
-        try:
-            subprocess.run([gh(), "pr", "checks", url, "--watch"], cwd=self.wt, capture_output=True,
-                           text=True, timeout=CI_WAIT)
-            # The --watch stream can still hold the first pending snapshot: report a final read.
-            r = subprocess.run([gh(), "pr", "checks", url], cwd=self.wt, capture_output=True, text=True)
-            ci = "passed" if r.returncode == 0 else f"failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[-300:]}"
-        except subprocess.TimeoutExpired:
-            ci = f"pending after {CI_WAIT}s"
-        return "done", {"pr_urls": [url], "ci": ci}
+        return "done", {"pr_urls": [url], "ci": self.ci(url)}
 
-    def finish(self, t):
+    def ci(self, url):
+        """`passed`, `failed (...)` or `pending ...`: wait until CI has registered checks for the PR head
+        ("no checks reported" right after `gh pr create` is pending), watch them, then read them once more."""
+        # shortcut: waits at most CI_WAIT seconds, then reports CI as pending; raise it if CI gets slower.
+        deadline = time.monotonic() + CI_WAIT
+
+        def checks(*flags):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise subprocess.TimeoutExpired("gh pr checks", CI_WAIT)
+            return subprocess.run([gh(), "pr", "checks", url, *flags], cwd=self.wt, capture_output=True,
+                                  text=True, timeout=left)
+        try:
+            while NO_CHECKS in (r := checks()).stdout + r.stderr:
+                time.sleep(max(0, min(CI_POLL, deadline - time.monotonic())))
+            checks("--watch")
+            r = checks()  # the --watch stream can still hold the first pending snapshot
+        except subprocess.TimeoutExpired:
+            return f"pending after {CI_WAIT}s"
+        if r.returncode == 0:
+            return "passed"
+        if r.returncode == 8:  # gh: checks still pending
+            return "pending"
+        return f"failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[-300:]}"
+
+    def summarize(self, t, trace):
+        """After publish moved the ticket to `approved`: the router summary (with the action's retries),
+        then `finish`. The summary is best effort: its result never changes the stage."""
+        self.trace = trace
+        self.save(t)
+        spec = self.m["actions"]["summary"]
+        for _ in range(1 + spec.get("retry", 0)):
+            result, h = self.agent(t, "summary", spec)
+            if result == "done":
+                break
+        self.finish(t, {"result": result, **h})
+
+    def finish(self, t, s):
         """After the summary: post its comment on the ticket, switch the PR body to `Closes #N` when the
         summary says `complete: yes`, and remove the worktree (the run dir stays)."""
-        s = t["out"].get("summary") or {}
         if s.get("comment"):
             self.tracker.comment(self.nn, s["comment"])
         if s.get("complete") == "yes":
@@ -279,7 +329,10 @@ class Delivery:
         elif action == "fix":
             blocks = {a: out[a] for a in REVIEWERS if (out.get(a) or {}).get("verdict") == "changes-requested"}
         elif action == "summary":
+            lines += [f"stage: {t['state']} (the summary runs after the stage change)",
+                      f"ci: {(out.get('publish') or {}).get('ci', 'unknown')}"]
             blocks = {a: out[a] for a in ("implement", "fix", "checks", *REVIEWERS, "publish") if a in out}
+            blocks["events"] = "\n".join(map(event_line, self.trace))
         for name, block in blocks.items():
             text = block if isinstance(block, str) else json.dumps(block, indent=2)
             lines += ["", f"## {name}", "", "~~~~", text.rstrip(), "~~~~"]
@@ -304,8 +357,8 @@ def run_ticket(root, nn, tracker, executor, run_id=None, resume=False):
     """Deliver ticket `nn` until the machine waits on a human or external actor. Return (ticket, trace)."""
     d = Delivery(root, nn, tracker, run_id or f"local:{time.strftime('%Y%m%dT%H%M%S')}-{nn}")
     t, trace = drive(d.m, tracker, nn, executor, execute=d, resume=resume)
-    if trace and trace[-1]["event"].startswith("summary."):  # only the run that reached the summary
-        d.finish(t)
+    if trace and trace[-1]["event"] == "publish.done":  # only the run that reached approved
+        d.summarize(t, trace)
     return t, trace
 
 
@@ -338,11 +391,11 @@ def main(argv=None):
         p.error(f"--tracker {args.tracker!r}: use local:<effort dir> or github")
     try:
         t, trace = run_ticket(sm.ROOT, args.ticket, tracker, executor, resume=args.resume)
-    except (ClaimError, ValueError) as e:  # a claim held elsewhere, or no resume point
+    except (ClaimError, ResumeError) as e:  # a claim held elsewhere, or no resume point
         print(f"drive.py: error: {e}", file=sys.stderr)
         return 2
     for rep in trace:
-        print(f"{rep['event']:<26} {rep['from']} -> {rep['to']}  {' '.join(rep['run'])}  {rep['note'] or ''}".rstrip())
+        print(event_line(rep))
     print(f"final: {t['state']}")
     return 0 if t["state"] == "approved" else 1
 

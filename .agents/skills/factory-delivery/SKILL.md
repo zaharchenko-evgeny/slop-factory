@@ -24,9 +24,10 @@ uv run --quiet factory/drive.py run "$N" --tracker local:<effort dir>
 The driver claims the ticket and runs the machine (`workflows/delivery.sm.yaml`)
 until it waits on a human: preflight, intake, start, implement, checks, the
 reviewers by risk, fix rounds, publish (push, PR with `Refs #N`, risk and
-docs-impact labels, one nits comment, CI watch), the summary (posted on the
-ticket; the PR body becomes `Closes #N` when it says `complete: yes`) and the
-worktree cleanup. It prints each step and exits 0 at `approved`. Run
+docs-impact labels, one nits comment, CI watch once checks register), then,
+after the stage moves to `approved`, the summary (posted on the ticket; the PR
+body becomes `Closes #N` when it says `complete: yes`) and the worktree
+cleanup. The reviewers of a high-risk fork run in parallel. It prints each step and exits 0 at `approved`. Run
 artefacts stay in `.factory/runs/<N>/`.
 
 If it stops in `blocked` or `failed`, do not continue by hand: report the last

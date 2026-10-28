@@ -18,4 +18,3 @@ events:
   - checks.passed
   - review_structure_security.done: { verdict: approved, reviewed_sha: bbb, risk: high }
   - publish.done: { pr_urls: ["https://example.invalid/pr/1"] }
-  - summary.done
