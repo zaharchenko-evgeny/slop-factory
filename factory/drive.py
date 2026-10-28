@@ -17,10 +17,11 @@ after the summary the driver posts its comment on the ticket, edits the PR body 
 `Refs #N` to `Closes #N` when the summary says `complete: yes`, and removes the worktree. `pi` and `gh` can be
 replaced with $FACTORY_AGENT and $FACTORY_GH.
 
-CLI: uv run factory/drive.py run <ticket> [--tracker local:<effort dir>|github] [--executor NAME]
+CLI: uv run factory/drive.py run <ticket> [--tracker local:<effort dir>|github] [--executor NAME] [--resume]
      uv run factory/drive.py branch <ticket> <ticket.json>  prints the ticket's branch name.
 """
 import argparse
+import copy
 import getpass
 import json
 import os
@@ -36,20 +37,30 @@ import yaml
 import preflight
 import run_role
 import sm
-from local_tracker import LocalTracker
+from local_tracker import ClaimError, LocalTracker
 
 STOPWORDS = {"a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "with", "from", "by"}
 
 
-def drive(m, tracker, nn, executor, results=(), execute=None):
+def drive(m, tracker, nn, executor, results=(), execute=None, resume=False):
     """Claim ticket `nn`, resume from the stored state, vars and run state (`sm.persisted`),
     apply each result with `sm.step`, write them back after every step, and release the claim
     once the ticket waits on a human or external actor, or when reading the ticket fails.
+    A step that ends in `failed` also stores `_resume`: the stage and the actions that were running.
+    `resume` restarts a `failed` ticket from it, with fresh retries.
     `results` items use sm.parse_event's forms; once they run out, `execute(ticket)` gives the
     next one (None: stop). Return (ticket, trace)."""
     tracker.claim(nn, executor)  # raises before any write when another executor holds it
     try:
-        ticket = sm.new_ticket(m, {"state": tracker.get_state(nn), "vars": tracker.read_vars(nn)})
+        state, vars_ = tracker.get_state(nn), tracker.read_vars(nn)
+        point = vars_.pop("_resume", None)
+        if resume:
+            if state != "failed" or not point:
+                raise ValueError(f"ticket {nn}: --resume needs a failed ticket with a stored resume point")
+            state, vars_["_run"] = point["state"], {**vars_.get("_run", {}), **point["run"], "retries": {}}
+        ticket = sm.new_ticket(m, {"state": state, "vars": vars_})
+        if resume:
+            tracker.set_state(nn, state)
     except BaseException:
         tracker.release(nn, executor)
         raise
@@ -57,10 +68,12 @@ def drive(m, tracker, nn, executor, results=(), execute=None):
     try:
         items, end = iter(results), object()
         while (item := next(items, end)) is not end or (item := execute and execute(ticket)) is not None:
+            prev = ticket
             ticket, rep = sm.step(m, ticket, *sm.parse_event(item))
             trace.append(rep)
             tracker.set_state(nn, ticket["state"])
-            tracker.write_vars(nn, sm.persisted(ticket))
+            tracker.write_vars(nn, {**sm.persisted(ticket), **(
+                {"_resume": resume_point(prev)} if ticket["state"] == "failed" else {})})
             if rep["wait"]:
                 break
     except BaseException:
@@ -69,6 +82,16 @@ def drive(m, tracker, nn, executor, results=(), execute=None):
     if m["states"][ticket["state"]]["actor"] != "agent":
         tracker.release(nn, executor)
     return ticket, trace
+
+
+def resume_point(t):
+    """The stage and running actions of `t`; a fork reruns every branch that did not end `done`."""
+    fork = copy.deepcopy(t["fork"])
+    pending = list(t["pending"])
+    if fork:
+        pending = [b for b, r in fork["results"].items() if r != "done"]
+        fork["results"].update({b: None for b in pending})
+    return {"state": t["state"], "run": {"pending": pending, "fork": fork}}
 
 
 def slug(title, words=4):
@@ -195,8 +218,10 @@ class Delivery:
             sh([gh(), "pr", "comment", url, "--body", body], self.wt)
         # shortcut: waits at most CI_WAIT seconds, then reports CI as pending; raise it if CI gets slower.
         try:
-            r = subprocess.run([gh(), "pr", "checks", url, "--watch"], cwd=self.wt, capture_output=True,
-                               text=True, timeout=CI_WAIT)
+            subprocess.run([gh(), "pr", "checks", url, "--watch"], cwd=self.wt, capture_output=True,
+                           text=True, timeout=CI_WAIT)
+            # The --watch stream can still hold the first pending snapshot: report a final read.
+            r = subprocess.run([gh(), "pr", "checks", url], cwd=self.wt, capture_output=True, text=True)
             ci = "passed" if r.returncode == 0 else f"failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[-300:]}"
         except subprocess.TimeoutExpired:
             ci = f"pending after {CI_WAIT}s"
@@ -275,10 +300,10 @@ class Delivery:
         return (h["status"] if h.get("status") in ("done", "blocked") else "error"), h
 
 
-def run_ticket(root, nn, tracker, executor, run_id=None):
+def run_ticket(root, nn, tracker, executor, run_id=None, resume=False):
     """Deliver ticket `nn` until the machine waits on a human or external actor. Return (ticket, trace)."""
     d = Delivery(root, nn, tracker, run_id or f"local:{time.strftime('%Y%m%dT%H%M%S')}-{nn}")
-    t, trace = drive(d.m, tracker, nn, executor, execute=d)
+    t, trace = drive(d.m, tracker, nn, executor, execute=d, resume=resume)
     if trace and trace[-1]["event"].startswith("summary."):  # only the run that reached the summary
         d.finish(t)
     return t, trace
@@ -291,6 +316,7 @@ def main(argv=None):
     r.add_argument("ticket")
     r.add_argument("--tracker", default="github", help="local:<effort dir> or github (default)")
     r.add_argument("--executor", help="claim name (default: the gh login, or the OS user for local)")
+    r.add_argument("--resume", action="store_true", help="restart a failed ticket at the step that failed")
     b = sub.add_parser("branch", help="print the ticket's branch name")
     b.add_argument("ticket")
     b.add_argument("ticket_json")
@@ -310,7 +336,11 @@ def main(argv=None):
         executor = args.executor or tracker.login()
     else:
         p.error(f"--tracker {args.tracker!r}: use local:<effort dir> or github")
-    t, trace = run_ticket(sm.ROOT, args.ticket, tracker, executor)
+    try:
+        t, trace = run_ticket(sm.ROOT, args.ticket, tracker, executor, resume=args.resume)
+    except (ClaimError, ValueError) as e:  # a claim held elsewhere, or no resume point
+        print(f"drive.py: error: {e}", file=sys.stderr)
+        return 2
     for rep in trace:
         print(f"{rep['event']:<26} {rep['from']} -> {rep['to']}  {' '.join(rep['run'])}  {rep['note'] or ''}".rstrip())
     print(f"final: {t['state']}")

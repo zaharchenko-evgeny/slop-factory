@@ -52,7 +52,8 @@ models:
 
 roles:
   router: { tier: cheap }
-  developer: { tier: mid, tier_high_risk: strong }
+  # `fallback` reruns the developer once, in its resumed session, after a malformed handoff.
+  developer: { tier: mid, tier_high_risk: strong, fallback: mid }
   # One entry per reviewer focus (an action mode in workflows/delivery.sm.yaml).
   # `fallback` reruns the same focus once when the reviewer's output has no valid handoff.
   reviewer:

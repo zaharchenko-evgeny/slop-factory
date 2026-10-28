@@ -150,8 +150,34 @@ class DriveRun(unittest.TestCase):
     def test_empty_agent_output_runs_at_most_twice(self):
         (self.stub / "reply-implement").unlink()
         t = self.go()
-        self.assertEqual((t["state"], self.calls("implement")), ("failed", 2))
+        self.assertEqual((t["state"], self.calls("implement")), ("failed", 4))  # 2 runs, each model + fallback
         self.assertEqual(self.stages[-1], "failed")
+
+    def test_resume_restarts_a_failed_ticket_at_the_failed_step(self):
+        self.tr.claim("01", "executor-b")
+        before = self.tr.path("01").read_text()
+        self.assertEqual(drive.main(["run", "01", "--tracker", f"local:{self.tr.issues.parent}", "--executor",
+                                     "executor-a", "--resume"]), 2)  # held elsewhere: stop, no writes
+        self.assertEqual(self.tr.path("01").read_text(), before)
+        self.tr.release("01", "executor-b")
+        with self.assertRaises(ValueError):  # not failed: nothing to resume
+            drive.run_ticket(self.root, "01", self.tr, "executor-a", resume=True)
+        (self.stub / "reply-implement").unlink()
+        self.assertEqual(self.go()["state"], "failed")
+        self.tr.release("01", "executor-b")
+        self.assertEqual(self.tr.read_vars("01")["_resume"]["state"], "in-dev")
+        (self.stub / "reply-implement").write_text(REPLIES["implement"])
+        t, _ = drive.run_ticket(self.root, "01", self.tr, "executor-a", run_id="r1", resume=True)
+        self.assertEqual((t["state"], self.calls("implement"), self.calls("intake")), ("approved", 5, 1))
+        self.assertEqual(self.stages, ["ready", "in-dev", "failed", "in-dev", "in-review", "approved"])
+        self.assertNotIn("_resume", self.tr.read_vars("01"))
+
+    def test_resume_point_reruns_unfinished_fork_branches(self):
+        t = {"state": "in-review", "pending": ["b"], "fork": {"name": "review", "join": "all",
+             "results": {"a": "done", "b": None, "c": "error"}}}
+        p = drive.resume_point(t)
+        self.assertEqual((p["state"], p["run"]["pending"]), ("in-review", ["b", "c"]))
+        self.assertEqual(p["run"]["fork"]["results"], {"a": "done", "b": None, "c": None})
 
     def test_unfenced_review_is_accepted(self):
         (self.stub / "reply-full").write_text("Looks fine.\nREVIEWER\nverdict: approved\nrisk: low\n")

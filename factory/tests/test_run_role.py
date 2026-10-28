@@ -99,14 +99,19 @@ class RunRole(unittest.TestCase):
         return argv[argv.index("--model") + 1]
 
     def test_empty_output_is_logged_and_runs_once(self):
-        self.assertEqual(self.go("implement", ok_at=2), 3)  # no fallback: the engine's retry reruns it
+        self.assertEqual(self.go("intake", ok_at=2), 3)  # no fallback: the engine's retry reruns it
         self.assertEqual(self.calls(), 1)
-        log = (self.run_dir / "implement.log").read_text()
-        self.assertIn(f"factory: empty output from implement on {self.model('mid')}", log)
+        log = (self.run_dir / "intake.log").read_text()
+        self.assertIn(f"factory: empty output from intake on {self.model('cheap')}", log)
         self.assertIn("stub stderr 1", log)
+        self.assertEqual(self.go("intake", ok_at=2), 0)
+        self.assertIn("stub stderr 1", (self.run_dir / "intake.log").read_text())  # the log keeps both calls
+        self.assertNotIn("fallback_from", json.loads((self.run_dir / "intake.handoff.json").read_text()))
+
+    def test_developer_falls_back_in_its_session(self):
         self.assertEqual(self.go("implement", ok_at=2), 0)
-        self.assertIn("stub stderr 1", (self.run_dir / "implement.log").read_text())  # the log keeps both calls
-        self.assertNotIn("fallback_from", json.loads((self.run_dir / "implement.handoff.json").read_text()))
+        h = json.loads((self.run_dir / "implement.handoff.json").read_text())
+        self.assertEqual((self.calls(), h["fallback_from"], h["model"]), (2, self.model("mid"), self.model("mid")))
 
     def test_empty_output_runs_the_fallback_once(self):
         self.assertEqual(self.go("review_behaviour", ok_at=2), 0)
@@ -133,11 +138,11 @@ class RunRole(unittest.TestCase):
 
     def test_handoff_followed_by_prose_is_rejected(self):
         os.environ["STUB_PROSE"] = "1"
-        self.assertEqual(self.go("implement", ok_at=2), 3)
-        self.assertEqual(self.calls(), 1)  # no fallback for the developer
-        self.assertIn("factory: text after the last fenced block from implement",
-                      (self.run_dir / "implement.log").read_text())
-        self.assertEqual(self.go("implement", ok_at=2), 0)
+        self.assertEqual(self.go("intake", ok_at=2), 3)
+        self.assertEqual(self.calls(), 1)  # no fallback for the router
+        self.assertIn("factory: text after the last fenced block from intake",
+                      (self.run_dir / "intake.log").read_text())
+        self.assertEqual(self.go("intake", ok_at=2), 0)
 
     def test_malformed_handoff_runs_the_fallback_once(self):
         for env in ("STUB_PROSE", "STUB_UNFENCED"):
