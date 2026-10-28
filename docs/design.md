@@ -123,6 +123,22 @@ The factory approves a PR only when all of these hold:
    `decide`): low risk, intent clear, scope limited to the ticket. Every
    question must resolve to `decided`; any `host` result means `needs-human`.
 
+Decision models are cheap solvers, set in `factory.yaml`:
+
+| Engine | Model | Use |
+| --- | --- | --- |
+| `openai-decisions` | `gpt-6-luna` (default) | Primary judge: calibrated probabilities, so thresholds can return `host` |
+| `agent:claude` | `claude-haiku-5-5` (`DECISIONS_MODEL`) | Second opinion from another model family: an uncalibrated verdict |
+
+For auto-approval both run; any disagreement between them, or any `host` from
+the primary, means `needs-human`. Haiku alone never approves, because an agent
+verdict has confidence 1.0 and cannot fall below a threshold. The definition of
+ready uses only the primary. In Air, the primary authenticates with a JetBrains
+Cloud service account: `JBAI_CLIENT_ID` and `JBAI_CLIENT_SECRET` mint a
+short-lived token at run time, sent as Bearer to
+`https://api.jetbrains.ai/llm/openai/v1`. decisions-kit is installed as the
+pinned `0.3.0` wheel.
+
 The policy starts in dry-run mode: the approver logs "would auto-approve" and a
 human still approves. The first decisions become the calibration set for the
 judgment.
@@ -243,7 +259,8 @@ where a repository requires it.
 
 - Air project: `a38ceec8-a27f-4d16-b8f9-6e2d628451a0` (personal factory project).
 - One project environment `factory-eval` with shared secrets: `GITHUB_TOKEN`,
-  `YOUTRACK_TOKEN`, `TEAMCITY_TOKEN`, `SPACE_TOKEN`, and decisions-kit provider
+  `YOUTRACK_TOKEN`, `TEAMCITY_TOKEN`, `SPACE_TOKEN`, `JBAI_CLIENT_ID` and
+  `JBAI_CLIENT_SECRET` for decisions-kit (section 8), and other provider
   auth. Secrets are referenced by name only. MCP connectors:
   `internal-youtrack`, `internal-glean`.
 - Automation names start with `[factory]`. Prompts are thin: they point to role
