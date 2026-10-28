@@ -1,0 +1,101 @@
+# Delivery workflow as a state machine. `factory/sm.py validate` checks it;
+# `sm.py next` and `sm.py simulate` run it. Semantics: factory/sm.py docstring.
+#
+# - States are tracker stages (factory.yaml `tracker.stages`). The engine runs
+#   actions only in `agent` states and waits in `human` and `external` states.
+# - `on` is `<action>.<result>` (the action's handoff becomes `out.<action>`)
+#   or a declared external event. The first matching transition wins.
+# - Only `set:` (and a `loop:` counter) changes vars.
+# - Guards and `set:` values are a JSONata subset: comparisons, and, or,
+#   $not(), field paths, $count(), literals.
+version: 1
+initial: ready
+
+vars:
+  fix_round: { type: int, default: 0 }
+  reviewed_sha: { type: string, default: "" }
+  last_blocking_ids: { type: list, default: [] }
+  risk: { type: string, default: "low" }
+  branch: { type: string, default: "" }
+  pr_urls: { type: list, default: [] }
+  run_id: { type: string, default: "" }
+
+# External events from the tracker and the forge bridges.
+events: [stage.ready, pr.merged]
+
+# Results: script actions end `done` or `failed`; agent actions end with their
+# handoff status (`done`, `blocked`) or `error` for a missing or malformed
+# handoff, which `retry` reruns.
+actions:
+  preflight: { kind: script }
+  intake: { kind: agent, role: router, mode: intake, retry: 1 }
+  start: { kind: script }
+  implement: { kind: agent, role: developer, mode: implement, tier_by: risk, retry: 1 }
+  checks: { kind: script, run: "factory.yaml checks, stage pre-review; only blocking ones fail" }
+  review: { kind: agent, role: reviewer, session: fresh, retry: 1 }
+  fix: { kind: agent, role: developer, mode: fix, session: resume, retry: 1 }
+  publish: { kind: script }
+  summary: { kind: agent, role: router, mode: summary, retry: 1 }
+
+states:
+  ready: { actor: agent }
+  in-dev: { actor: agent }
+  changes-requested: { actor: agent }
+  in-review: { actor: agent }
+  approved: { actor: human }   # gate 2: a human approves and merges
+  done: { actor: human }
+  blocked: { actor: human }
+  failed: { actor: human }
+
+transitions:
+  - { from: ready, on: stage.ready, set: { run_id: event.run_id }, do: preflight }
+  - { from: ready, on: preflight.done, do: intake }
+  - { from: ready, on: preflight.failed, to: blocked }
+  - from: ready
+    on: intake.done
+    if: 'out.intake.ready = "yes"'
+    set: { risk: out.intake.risk }
+    do: start
+    to: in-dev
+  - { from: ready, on: intake.done, to: blocked }   # not ready: the question goes on the ticket
+  - { from: ready, on: intake.error, to: failed }
+
+  - { from: in-dev, on: start.done, set: { branch: out.start.branch }, do: implement }
+  - { from: in-dev, on: start.failed, to: failed }
+  - { from: in-dev, on: implement.done, do: checks }
+  - { from: in-dev, on: implement.blocked, to: blocked }
+  - { from: in-dev, on: implement.error, to: failed }
+
+  # A failed blocking check sends the work back to the developer as a fix round.
+  - { from: [in-dev, changes-requested], on: checks.passed, do: review, to: in-review }
+  - from: [in-dev, changes-requested]
+    on: checks.failed
+    loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
+    do: fix
+  - { from: [in-dev, changes-requested], on: fix.done, do: checks }
+  - { from: [in-dev, changes-requested], on: fix.blocked, to: blocked }
+  - { from: [in-dev, changes-requested], on: fix.error, to: failed }
+
+  - from: in-review
+    on: review.done
+    if: 'out.review.verdict = "approved"'
+    set: { reviewed_sha: out.review.reviewed_sha }
+    do: publish
+  # The same blocking findings in two consecutive rounds: stop.
+  - from: in-review
+    on: review.done
+    if: '$count(last_blocking_ids) > 0 and out.review.blocking_ids = last_blocking_ids'
+    to: blocked
+  - from: in-review
+    on: review.done
+    loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
+    set: { reviewed_sha: out.review.reviewed_sha, last_blocking_ids: out.review.blocking_ids }
+    do: fix
+    to: changes-requested
+  - { from: in-review, on: review.error, to: failed }
+  - { from: in-review, on: publish.done, set: { pr_urls: out.publish.pr_urls }, do: summary }
+  - { from: in-review, on: publish.failed, to: failed }
+  - { from: in-review, on: summary.done, to: approved }
+  - { from: in-review, on: summary.error, to: approved }   # the PRs are open; the summary is best effort
+
+  - { from: approved, on: pr.merged, if: "$count(event.open_pr_urls) = 0", to: done }
