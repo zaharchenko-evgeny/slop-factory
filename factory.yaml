@@ -83,4 +83,4 @@ checks:
   - name: state-machine
     stage: pre-review
     mode: blocking
-    run: uv run --quiet factory/sm.py validate && uv run --quiet factory/tests/test_sm.py
+    run: uv run --quiet factory/sm.py validate && uv run --quiet factory/tests/test_sm.py && uv run --quiet factory/tests/test_tracker.py
