@@ -1,1 +1,6 @@
+# Factory run files: handoffs, logs, worktrees
 .factory/
+# Local IDE and agent state
+.idea/
+.pi/
+.DS_Store

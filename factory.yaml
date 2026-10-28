@@ -44,7 +44,7 @@ models:
   mid: anthropic/claude-sonnet-5-5
   strong: anthropic/claude-opus-5-5
   # The reviewer runs on a different model family from the developer.
-  review: openai/gpt-6.1-sol
+  review: anthropic/claude-haiku-5-5
 
 roles:
   router: { tier: cheap }

@@ -41,3 +41,11 @@ Out, with the issue that adds it:
 
 Done when: a ticket labelled `factory:ready` goes through developer → checks
 → reviewer → PR locally, and the router posts a summary on the ticket.
+
+Known gaps after the #13 trial run:
+
+- The reviewer runs on `anthropic/claude-haiku-5-5`, the same model family
+  as the developer, because pi has no working OpenAI login. Switch
+  `models.review` back to an OpenAI model once it has.
+- `skills.txt` is not enforced: role processes also see the user's global
+  skills.

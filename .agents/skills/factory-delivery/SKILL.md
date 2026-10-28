@@ -58,7 +58,9 @@ Follow the table in `workflows/delivery.md`. Local details:
 
 - **preflight**: `gh auth status`; the ticket has the `ready` stage label;
   `git ls-remote --heads origin "<branch>"` and `gh pr list --head "<branch>"`
-  are empty; `pi auth check --model <model>` for every model of the run.
+  are empty; for every model of the run, a one-line call succeeds:
+  `pi -p --no-mcp --no-session --no-tools --model <model> "Reply with OK."`.
+  `pi auth check` alone is not enough: it reports `ready` for an invalid key.
 - **start**: base branch is the ticket's `base:<branch>` line if present,
   else the repository default. Branch name from `branch_pattern` with a short slug of the title;
   `git worktree add -b "$BRANCH" "$WT" "origin/<base>"`.
