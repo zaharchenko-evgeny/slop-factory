@@ -47,7 +47,8 @@ is a preflight failure.
 
 ## Run a role
 
-Write `$RUN/<step>.in.md`, then run the agent action through the engine:
+Write `$RUN/<step>.in.md` (`--step X` reads `$RUN/X.in.md`; without it the step is the
+action), then run the agent action through the engine:
 
 ```bash
 uv run --quiet factory/run_role.py "$N" <action> [--step <step>]   # e.g. review_full --step review_full-2
@@ -55,11 +56,14 @@ uv run --quiet factory/run_role.py "$N" <action> [--step <step>]   # e.g. review
 
 It resolves the run dir, worktree, role files and model (`factory.yaml`, the
 ticket's risk from `$RUN/sm.json`) as absolute paths, runs intake in the
-factory root and every other action (summary and review included) inside
-`$WT`, and writes `$RUN/<step>.out.md` and `$RUN/<step>.log`. The handoff
+factory root, each reviewer in a private temporary dir outside the factory
+root (its own run dir and a detached checkout of `$WT`'s HEAD, recorded as
+`reviewed_sha`; parallel reviewers never share a path) and every other action
+(summary included) inside `$WT`, and writes `$RUN/<step>.out.md` and `$RUN/<step>.log`. The handoff
 must be the last fenced block of the output with nothing after it. An empty
-output, a missing handoff or text after it is logged in `<step>.log`; each call
-runs the model once (and the fallback once after an empty output), and exit 3
+output, a missing handoff, text after it or a bad first line is logged in
+`<step>.log`; each call runs the model once (and the mode's fallback once after
+any of these), and exit 3
 means feed `<action>.error`: the machine's `retry` reruns the action. On exit 0 the
 parsed handoff is in `$RUN/<step>.handoff.json`; build the event payload from
 it. For the summary it appends each PR's body and CI checks
@@ -130,7 +134,8 @@ Local details per action of `workflows/delivery.sm.yaml`:
   `ready` for an invalid key.
 - **intake split**: when slices are created from the router's `split:`, edit
   each comment whose items moved to a slice so its body starts with
-  `[factory] Moved to #<slice>.`; `run_role.py` leaves those comments out of
+  `[factory] Moved to #<slice>.`. Never mark the tracker state comment (the
+  one with the `factory-state` marker). `run_role.py` leaves those comments out of
   role inputs, so a slice's role sees only its own scope.
 - **start**: base branch is the ticket's `base:<branch>` line if present,
   else the repository default. Branch name:
@@ -139,7 +144,8 @@ Local details per action of `workflows/delivery.sm.yaml`:
   `git worktree add -b "$BRANCH" "$WT" "origin/<base>"`.
 - **checks**: run each `checks[].run` with `bash -c` inside `$WT`, with
   `FACTORY_BASE` set to the base branch. A check whose `requires:` command
-  is missing is `skipped`, not `pass`. Save the
+  is missing is `skipped`, not `pass`; other check runners ignore `requires:`,
+  so use only the driver's `checks` action or these exact rules. Save the
   output in `$RUN/checks-<round>.md`. Only `blocking` checks send the work
   back to the developer (`checks.failed`); report `advisory` failures in the summary.
 - **review**: `step.run` lists the reviewers of the fork `review`: one
@@ -149,8 +155,8 @@ Local details per action of `workflows/delivery.sm.yaml`:
   parallel) and feed each `<reviewer>.done|error`; the machine joins when all
   report. `run_role.py` picks each focus's model and fallback from
   `roles.reviewer.modes`. The payload is the handoff plus `blocking_ids`
-  (the `id`s under `blocking:`). `reviewed_sha` must equal
-  `git -C "$WT" rev-parse HEAD`. A handoff with `fallback_from` means the
+  (the `id`s under `blocking:`). `reviewed_sha` is the SHA
+  `run_role.py` checked out (`git -C "$WT" rev-parse HEAD`). A handoff with `fallback_from` means the
   reviewer switched models; say so in the PR body:
   `Review: <action> fell back from <fallback_from> to <model>`.
 - **publish**: `git -C "$WT" push -u origin "$BRANCH"`; `gh pr create` with

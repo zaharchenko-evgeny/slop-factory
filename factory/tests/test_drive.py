@@ -22,7 +22,8 @@ import drive  # noqa: E402
 import sm  # noqa: E402
 from local_tracker import ClaimError, LocalTracker  # noqa: E402
 
-# Replies with $STUB_DIR/reply-<mode> (mode = the input's first line); a missing file is empty output.
+# Replies with $STUB_DIR/reply-<mode>-<call> or reply-<mode> (mode = the input's first line); a
+# missing file is empty output.
 # The developer commits a file first. Counts calls per mode in $STUB_DIR/calls-<mode>, keeps the prompt.
 AGENT = """#!/bin/bash
 for a; do last=$a; done
@@ -31,7 +32,9 @@ mode=$(printf '%s\\n' "$last" | sed -n '1s/^mode: //p')
 echo x >> "$STUB_DIR/calls-$mode"
 printf '%s' "$last" > "$STUB_DIR/prompt-$mode"
 if [ "$mode" = implement ]; then echo hi > stub.txt; git add stub.txt; git commit -qm "#01 stub"; fi
-if [ -f "$STUB_DIR/reply-$mode" ]; then cat "$STUB_DIR/reply-$mode"; fi
+n=$(wc -l < "$STUB_DIR/calls-$mode" | tr -d ' ')
+if [ -f "$STUB_DIR/reply-$mode-$n" ]; then cat "$STUB_DIR/reply-$mode-$n"
+elif [ -f "$STUB_DIR/reply-$mode" ]; then cat "$STUB_DIR/reply-$mode"; fi
 """
 GH = """#!/bin/bash
 printf '%s\\n' "$@" > "$STUB_DIR/gh-$1-$2"
@@ -67,6 +70,7 @@ class DriveRun(unittest.TestCase):
         config["checks"] = CHECKS
         (self.root / "factory.yaml").write_text(yaml.safe_dump(config))
         shutil.copytree(sm.ROOT / "workflows", self.root / "workflows")
+        shutil.copytree(sm.ROOT / "roles", self.root / "roles")
         shutil.copy(sm.ROOT / ".gitignore", self.root)
         env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
                "GIT_COMMITTER_EMAIL": "t@t", "STUB_DIR": str(self.stub),
@@ -136,18 +140,29 @@ class DriveRun(unittest.TestCase):
         self.assertEqual((t["state"], self.calls("implement")), ("failed", 2))
         self.assertEqual(self.stages[-1], "failed")
 
+    def test_unfenced_review_falls_back_and_approves(self):
+        (self.stub / "reply-full-1").write_text("REVIEWER\nverdict: approved\n")  # no fence
+        t = self.go()
+        self.assertEqual((t["state"], self.calls("full")), ("approved", 2))  # one call per model
+        config = yaml.safe_load((self.root / "factory.yaml").read_text())
+        r = t["out"]["review_full"]
+        self.assertEqual((r["result"], r["fallback_from"], r["model"]),
+                         ("done", config["models"]["review"], config["models"]["cheap"]))
+        self.assertIn("fell back from", (self.stub / "gh-pr-create").read_text())
+
     def test_claim_released_at_blocked(self):
         (self.stub / "reply-implement").write_text("```text\nDEVELOPER\nstatus: blocked\nblocked_reason: x\n```\n")
         self.assertEqual(self.go()["state"], "blocked")
 
     def test_unsafe_base_fails_before_any_git_call(self):
+        path = self.tr.path("01")
+        original = path.read_text()
         for base in ("--upload-pack=touch /tmp/pwned31", "a/../b", "-x"):
             with self.subTest(base):
-                path = self.tr.path("01")
-                path.write_text(path.read_text().replace("Status: ready", "Status: ready", 1).replace(
-                    "## Comments", f"base: {base}\n\n## Comments", 1))
+                path.write_text(original.replace("## Comments", f"base: {base}\n\n## Comments", 1))
                 t = self.go()
                 self.assertEqual(t["state"], "blocked")  # preflight failed
+                self.assertIn(repr(base.split()[0]), json.dumps(t["out"]["preflight"]))
                 self.assertFalse((self.root / ".factory/worktrees/01").exists())
                 self.assertEqual(self.calls("intake"), 0)
                 self.tr.release("01", "executor-b")
