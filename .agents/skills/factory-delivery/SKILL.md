@@ -14,6 +14,20 @@ external writes.
 Read first: `factory.yaml`, `workflows/delivery.sm.yaml`, `workflows/delivery.md`, `AGENTS.md`,
 `docs/agents/issue-tracker.md`.
 
+## Run with the driver
+
+```bash
+uv run --quiet factory/drive.py run "$N"                       # GitHub Issues tracker
+uv run --quiet factory/drive.py run "$N" --tracker local:<effort dir>
+```
+
+It claims the ticket, runs every action the machine starts (preflight, start,
+checks and publish itself; agent actions through `run_role.py`), writes stage
+and vars after each step and releases the claim when the ticket reaches
+`approved`, `blocked` or `failed`. It prints the steps; exit 0 means
+`approved`. Then report (below), and post the summary, nits and cleanup by
+hand until #36. The sections below are the manual fallback.
+
 ## Set up the run
 
 ```bash
@@ -44,8 +58,9 @@ ticket's risk from `$RUN/sm.json`) as absolute paths, runs intake in the
 factory root and every other action (summary and review included) inside
 `$WT`, and writes `$RUN/<step>.out.md` and `$RUN/<step>.log`. The handoff
 must be the last fenced block of the output with nothing after it. An empty
-output, a missing handoff or text after it is logged in `<step>.log` and rerun
-once (the action's `retry`); exit 3 means feed `<action>.error`. On exit 0 the
+output, a missing handoff or text after it is logged in `<step>.log`; each call
+runs the model once (and the fallback once after an empty output), and exit 3
+means feed `<action>.error`: the machine's `retry` reruns the action. On exit 0 the
 parsed handoff is in `$RUN/<step>.handoff.json`; build the event payload from
 it. For the summary it appends each PR's body and CI checks
 (`gh pr view`, read-only) to the input. It needs only macOS `/bin/bash` 3.2
@@ -123,7 +138,8 @@ Local details per action of `workflows/delivery.sm.yaml`:
   `slug:` line, else a slug of the title);
   `git worktree add -b "$BRANCH" "$WT" "origin/<base>"`.
 - **checks**: run each `checks[].run` with `bash -c` inside `$WT`, with
-  `FACTORY_BASE` set to the base branch. Save the
+  `FACTORY_BASE` set to the base branch. A check whose `requires:` command
+  is missing is `skipped`, not `pass`. Save the
   output in `$RUN/checks-<round>.md`. Only `blocking` checks send the work
   back to the developer (`checks.failed`); report `advisory` failures in the summary.
 - **review**: `step.run` lists the reviewers of the fork `review`: one

@@ -95,6 +95,11 @@ class LocalTracker:
             head = head + line if head else line + "\n"
         self._write(nn, top + head + rest)
 
+    def issue(self, nn):
+        """The ticket's title (the `# Title` line) and body (the rest of the file)."""
+        first, _, body = self._read(nn).partition("\n")
+        return {"title": first.lstrip("#").strip(), "body": body}
+
     def get_state(self, nn):
         return self._field(nn, "Status")
 
