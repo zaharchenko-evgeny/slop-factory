@@ -46,3 +46,16 @@ blocking:
 nits:
   - <path:line> — <text>
 ```
+
+Example, the last block of your reply, fenced as here, nothing after it:
+
+```text
+REVIEWER
+verdict: approved
+reviewed_sha: 1a2b3c4
+risk: low
+docs_impact: no
+blocking:
+nits:
+  - factory/x.py:10 — name the constant
+```

@@ -54,6 +54,8 @@ fork) so a stopped run resumes.
 | `write_vars(t, v)` | Store the machine vars | create, or edit in place, that `[factory]` comment | rewrite that block |
 | `claim(t, e)` | Assign to executor `e`, then re-read; stop without writing if another executor holds it | `--add-assignee`, then re-read the assignees | under an `O_EXCL` lock file `issues/.NN.claim.lock`: check `claimed_by:`, then set it to `e` |
 | `release(t, e)` | Drop `e`'s claim | `--remove-assignee` | remove the `claimed_by:` line |
+| `set_review_labels(t, r, d)` | Set the risk from the review; mark docs impact | add the `tracker.risk_labels` label for `r`, remove the other risk label; add `tracker.docs_impact_label` when `d` | set `Risk: <r>`; set `Docs impact: yes` when `d` |
+| `comment(t, body)` | Post a comment (the router summary) | `gh issue comment` | append `body` under `## Comments` |
 | `frontier()` | Open `ready` tickets, every blocker closed, unclaimed, in map order | open issues with the `ready` label, no assignee, every native blocker closed | the frontier rule below |
 
 Rules:
@@ -71,7 +73,8 @@ Used for tests and offline runs. Same layout as the mattpocock local template:
   `.scratch/<effort>/issues/NN-slug.md`, numbered from `01`. Map order is
   file order.
 - Header: the first paragraph after the `# Title` line, only `Key: value`
-  lines: `Status: <stage>`, `Blocked by: NN, NN`, `claimed_by: <executor>`.
+  lines: `Status: <stage>`, `Blocked by: NN, NN`, `claimed_by: <executor>`,
+  `Risk: <low|high>`, `Docs impact: yes`.
 - Closed: `Status:` is `done` (or wayfinder's `resolved`, or `closed`). A
   missing blocker file keeps the ticket blocked.
 - Vars: a fenced `factory-state` block with JSON, before `## Comments`.

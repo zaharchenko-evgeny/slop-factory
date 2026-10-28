@@ -41,3 +41,19 @@ findings_addressed:   # fix mode only
   - <finding id>: <fixed in sha | rejected — reason>
 blocked_reason: <text, or none>
 ```
+
+Example, the last block of your reply, fenced as here, nothing after it:
+
+```text
+DEVELOPER
+status: done
+branch: ez/12-add-x
+commits:
+  - 1a2b3c4 #12 Add x
+files: factory/x.py
+checks:
+  - whitespace: pass — clean
+acceptance:
+  - x works: test_x passes
+blocked_reason: none
+```

@@ -106,6 +106,21 @@ class LocalTracker:
     def set_state(self, nn, state):
         self._set_field(nn, "Status", state)
 
+    def set_review_labels(self, nn, risk, docs_impact=False):
+        """The `Risk:` header field, and `Docs impact: yes` when asked."""
+        if risk not in ("low", "high"):
+            raise KeyError(f"ticket {nn}: unknown risk {risk!r}")
+        self._set_field(nn, "Risk", risk)
+        if docs_impact:
+            self._set_field(nn, "Docs impact", "yes")
+
+    def comment(self, nn, body):
+        """Append `body` under `## Comments` (added when missing)."""
+        text = self._read(nn).rstrip("\n")
+        if "\n## Comments" not in "\n" + text:
+            text += "\n\n## Comments"
+        self._write(nn, f"{text}\n\n{body.rstrip()}\n")
+
     def read_vars(self, nn):
         body, _ = self._split(self._read(nn), "\n## Comments")
         m = STATE_FENCE.search(body)

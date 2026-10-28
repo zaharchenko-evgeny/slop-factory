@@ -33,6 +33,19 @@ split: <none, or one line per proposed slice below>
 next: <delivery|designer|investigator|reviewer|blocked>
 ```
 
+Example, the last block of your reply, fenced as here, nothing after it:
+
+```text
+ROUTER-INTAKE
+kind: feature
+ready: yes
+missing: none
+risk: low
+size_estimate: ~120
+split: none
+next: delivery
+```
+
 ## Mode `summary`
 
 Input: the original request and the handoffs of the finished run.
