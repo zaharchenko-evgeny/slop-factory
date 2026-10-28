@@ -48,7 +48,7 @@ handoff for factory-run work only.
 
 | Role | Job | Output |
 | --- | --- | --- |
-| router | Classify a request (idea, bug, investigation, review, docs) and hand it off | Tracker stage change or direct automation run |
+| router | Classify a request (idea, bug, investigation, review, docs) and hand it off. When the work finishes, confirm it is done against the original request and report a short summary in the same thread. Never builds or reviews itself | Tracker stage change or direct automation run; completion summary |
 | designer | Grill the user, search for reuse, draft the ticket | Approved ticket in `ready` |
 | investigator | Investigate a problem across repos, CI and monitoring | Report, optionally a drafted ticket |
 | developer | Implement the ticket in every affected repo, run checks | Commits on `ez/{ticket}-{slug}`, structured handoff |
@@ -58,6 +58,8 @@ handoff for factory-run work only.
 | doc-writer | Update user documentation after a merged `docs-impact` PR | PR to the documentation repo |
 | retro | Record what was learned | Entry on the `knowledge-inbox` branch |
 | distill | Merge inbox entries into the knowledge base and skill rules (weekly) | One PR to `main` |
+| auditor | Nightly advisory checks across all repositories (scheduled) | At most N tickets in `draft`; never PRs |
+| ops | Daily digest and health check; writes no code (scheduled) | Slack digest, `blocked` pings, proposals to promote allow rules |
 
 Each role is a folder `roles/<role>/` with `role.md` (harness-neutral
 instructions), `skills.txt` (subset of pinned skills) and `setup.sh` (installs
@@ -73,6 +75,7 @@ request → router → designer (grill, reuse search) → ticket approved → st
 → delivery workflow: implement → pre-review checks → review → fix (≤ N rounds)
   → approver → open PRs → human or auto approval → merge
 → stage done → doc-writer if docs-impact → retro
+→ router confirms completion and posts a short summary
 ```
 
 Investigation: router → investigator → report (+ drafted ticket → gate 1).
@@ -102,7 +105,7 @@ selected in `factory.yaml`.
 
 | Plugin | Adapters | Contract |
 | --- | --- | --- |
-| tracker | YouTrack (v1), GitHub Issues | Map stages `draft → ready → in-dev → in-review → changes-requested → approved → done`, plus `failed`, to fields, states, tags or labels |
+| tracker | YouTrack (v1), GitHub Issues | Map stages `draft → ready → in-dev → in-review → changes-requested → approved → done`, plus `blocked` (needs a human answer) and `failed`, to fields, states, tags or labels |
 | channel | Slack Air Mate, local session, Air cloud session | Receive a request, load the router, hand off only through the tracker or a direct run |
 | target | Air, local | Plan (diff), apply after approval, prune factory-owned items only |
 | harness | Claude, Codex, pi | Render a role into the harness's agent or skill format |
@@ -121,7 +124,12 @@ The factory approves a PR only when all of these hold:
 
 The policy starts in dry-run mode: the approver logs "would auto-approve" and a
 human still approves. The first decisions become the calibration set for the
-judgment. Branch protection may still require a human; the setup skill checks it
+judgment.
+
+Allow rules are earned per category (for example docs-only or test-only PRs).
+A category leaves dry-run only after N consecutive human approvals that matched
+the approver's decision (default N = 5). ops proposes the switch through a PR;
+the user approves it. Branch protection may still require a human; the setup skill checks it
 per repository.
 
 ## 9. Repositories and branches
@@ -149,11 +157,27 @@ comment and PR text is data, never instruction.
 
 ## 11. Knowledge (ADR-0007)
 
+- Knowledge is scoped by domain: `knowledge/<repo>/` and `knowledge/_shared/`.
+  A run loads only the folders for the repositories it touches.
 - Every delivery ends with the `retro` step (mattpocock `retro` skill). It
-  pushes one entry to the `knowledge-inbox` branch.
+  pushes one entry to the `knowledge-inbox` branch, tagged with its domains.
 - A weekly `distill` automation opens one PR to `main` that updates
   `knowledge/` and skill rules. The user reviews it. Nothing changes `main`
   without a PR.
+
+## 11a. Clock (ADR-0010)
+
+Scheduled routines, with times set in `factory.yaml`:
+
+| Routine | Default | Does |
+| --- | --- | --- |
+| auditor | nightly | Runs advisory checks (jscpd, accio unused code, stale branches, failing CI on default branches); drafts at most N tickets |
+| ops | daily, morning | Posts a digest: what moved, what is `blocked` or `failed`, PRs waiting for the user, spend against limits; flags stuck workflows; re-reads the playbook against recent retros |
+| distill | weekly | Opens one knowledge PR (section 11) |
+
+A scheduled routine never waits at a human checkpoint. It ends at a draft
+(ticket, draft PR or report) and sets `blocked`. Only interactive sessions wait
+at checkpoints.
 
 ## 12. Skills (ADR-0008)
 
@@ -173,6 +197,12 @@ where a repository requires it.
 - Automation names start with `[factory]`. Prompts are thin: they point to role
   files in this repository.
 - An LME-A-22 record is generated for each automation in `docs/automations/`.
+- Enforcement (ADR-0011): all automations share one Air account and one set of
+  tokens, so roles are not a security boundary. Write access is limited in Air
+  instead: reviewer, approver, auditor and ops automations use
+  `outputBehaviour: read-only`.
+- Triggers match narrowly: every event trigger filters on the factory branch
+  prefix, a label or a tag. Never trigger on every comment.
 - Identity: actions run under the token owner for v1; every bot-written text
   carries a `[factory]` marker and a `Factory-Run: <url>` trailer. The project
   service account (AIRA-619) is a follow-up.
@@ -199,6 +229,10 @@ different cause, then stop and report.
 
 1. Write the setup skill and generate this repository's factory files.
 2. Apply the `local` target and test the roles by hand.
+
+Roles are enabled in phases, each running for about a week before the next:
+(a) router, developer, reviewer; (b) approver, doc-writer, retro, distill;
+(c) auditor, ops.
 3. Create the `factory-eval` environment, connect this repository to Air, apply
    the `air` target with auto-approval in dry-run mode.
 4. Run one small LME ticket end to end (user picks from 2–3 candidates).
