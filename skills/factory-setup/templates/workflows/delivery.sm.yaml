@@ -137,9 +137,8 @@ transitions:
     do: fix
     to: changes-requested
   - { from: in-review, on: review.failed, to: failed }   # a reviewer's handoff stayed missing after retry and fallback
-  - { from: in-review, on: publish.done, set: { pr_urls: out.publish.pr_urls }, do: summary }
+  # The driver runs the `summary` action after the ticket is approved (best effort, not an event).
+  - { from: in-review, on: publish.done, set: { pr_urls: out.publish.pr_urls }, to: approved }
   - { from: in-review, on: publish.failed, to: failed }
-  - { from: in-review, on: summary.done, to: approved }
-  - { from: in-review, on: summary.error, to: approved }   # the PRs are open; the summary is best effort
 
   - { from: approved, on: pr.merged, if: "$count(event.open_pr_urls) = 0", to: done }
