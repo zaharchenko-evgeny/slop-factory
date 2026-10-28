@@ -27,7 +27,7 @@ def render(a):
     out = {}
     for f in sorted(p for p in T.rglob("*") if p.is_file()):
         rel = f.relative_to(T).as_posix()
-        if rel == "roles/setup.sh":
+        if rel == "roles/setup.sh.tmpl":
             for role, tools in a["ROLES"].items():
                 out[f"roles/{role}/setup.sh"] = fill(f.read_text(), {**a, "ROLE": role, "TOOLS": tools})
         else:
