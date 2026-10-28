@@ -33,6 +33,7 @@
   "router": "git gh pi",
   "developer": "git pi",
   "reviewer": "git pi",
-  "approver": "git conftest decide"
+  "approver": "git conftest decide",
+  "doc-writer": "git pi"
  }
 }
