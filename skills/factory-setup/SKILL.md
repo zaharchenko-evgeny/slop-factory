@@ -5,7 +5,7 @@ description: Set up or update a team's agent software factory in its own reposit
 
 # Factory setup
 
-> Outline, status: draft. References are written; templates come with #16.
+> Outline, status: draft. References and templates are written.
 
 References (contract plus one section per adapter):
 
@@ -45,16 +45,45 @@ branch protection). Ask only for decisions.
 
 ## 2. Generate
 
-Write these files from `templates/`. Never overwrite a file that has local
-edits without showing the diff.
+Write these files from `templates/`, replacing every `{{NAME}}` placeholder
+with the interview answer (`render.py ANSWERS.json OUT_DIR` fills them; a
+missing answer is an error). Never overwrite a file that has local edits
+without showing the diff.
 
-- `factory.yaml`
-- `AGENTS.md`
-- `roles/<role>/{role.md,skills.txt,setup.sh}`
-- `workflows/delivery.md`
-- `policies/auto-approve.yaml`, `judgments/auto-approve.yaml`
+- `factory.yaml` ← `templates/factory.yaml`
+- `AGENTS.md`: the "Development workflow" section ← `templates/AGENTS.workflow.md`;
+  add the other sections from the interview (step 1.9)
+- `roles/_common.md`, `roles/_setup-common.sh`, `roles/<role>/role.md` for
+  router, developer and reviewer; `roles/<role>/setup.sh` ←
+  `templates/roles/setup.sh.tmpl`; `roles/<role>/skills.txt` from the interview
+- `workflows/delivery.sm.yaml`, `workflows/delivery.md`
+- `docs/agents/issue-tracker.md` (GitHub Issues and local markdown adapters)
+- `policies/auto-approve.rego`, `judgments/auto-approve.yaml` (arrive with the approver, #9)
 - `skills.lock`
 - `docs/automations/<name>.md` (one record per automation)
+
+Then run `sm.py validate` on the rendered `delivery.sm.yaml` with the rendered
+`factory.yaml`.
+
+Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
+`tests/test_templates.py` checks that they reproduce its files):
+
+| Placeholder | Meaning | Used in |
+| --- | --- | --- |
+| `PROJECT_NAME` | Project name in the header comment | `factory.yaml` |
+| `REPOSITORIES` | `repositories:` entries (name, url, default_branch, role), indented two spaces | `factory.yaml` |
+| `BRANCH_PREFIX` | Branch prefix before `/{ticket}-{slug}` | `factory.yaml`, developer `role.md` |
+| `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.yaml` |
+| `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG` | Developer and router model tiers | `factory.yaml` |
+| `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Reviewer models (different family from the developer) | `factory.yaml` |
+| `REVIEW_STRONG_NOTE` | Optional comment line above `review_strong` (may be empty) | `factory.yaml` |
+| `PR_APPROVAL_NOTE` | Optional trailing comment on `pr_approval` (may be empty) | `factory.yaml` |
+| `CHECKS_NOTE` | Comment lines above `checks:` about known limits | `factory.yaml` |
+| `PROJECT_CHECKS` | Project-specific check entries, after the generic ones | `factory.yaml` |
+| `DESIGN_REF` | Pointer to the design document, e.g. `(design §5)` | `workflows/delivery.md` |
+| `MAP_ISSUE_LINK` | Markdown link to the map issue | `AGENTS.workflow.md` |
+| `MODEL_POLICY` | One line on which models may be used | `AGENTS.workflow.md` |
+| `ROLE`, `TOOLS` | Role name and the tools its `setup.sh` needs; filled once per role from `ROLES` | `roles/setup.sh.tmpl` |
 
 ## 3. Plan and apply
 
