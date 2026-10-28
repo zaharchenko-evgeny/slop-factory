@@ -5,7 +5,15 @@ description: Set up or update a team's agent software factory in its own reposit
 
 # Factory setup
 
-> Outline, status: draft. Templates and references are not written yet.
+> Outline, status: draft. References are written; templates come with #16.
+
+References (contract plus one section per adapter):
+
+- [`references/trackers.md`](references/trackers.md)
+- [`references/channels.md`](references/channels.md)
+- [`references/targets.md`](references/targets.md)
+- [`references/harnesses.md`](references/harnesses.md)
+- [`references/checks.md`](references/checks.md)
 
 You build a software factory inside the current repository. The factory
 belongs to the team. Generate its files, then apply them to a target after the
