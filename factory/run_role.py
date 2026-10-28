@@ -15,10 +15,14 @@ Each reviewer is its own action, so several reviewers run as separate calls.
 Intake runs in the factory root, every other action in the ticket worktree.
 The output must end with the handoff: the last fenced block, with nothing
 after it. Each call runs the model once: an empty output or a missing or
-trailing-text handoff is logged and the call exits 3 (`<action>.error`); the
-engine's `retry` of the action is the only rerun. If the output was empty and
-the mode has a `fallback` tier, the same call runs once more on the fallback
-model; the switch is logged and kept in the handoff as `fallback_from`. A valid
+trailing-text handoff (or a bad first line) is logged; when the mode has a
+`fallback` tier the same call runs once more on the fallback model (the switch
+is logged and kept in the handoff as `fallback_from`), else the call exits 3
+(`<action>.error`) and the engine's `retry` of the action is the only rerun.
+A reviewer runs in a private temporary dir outside the factory root: its own
+run dir (copies of its role files, out and log, copied back to the shared run
+dir afterwards) and a detached checkout of the worktree's HEAD, recorded as the
+handoff's `reviewed_sha`; it sees only its own input. A valid
 handoff is also written as `<step>.handoff.json` (`handoff` = its first line,
 then each top-level `key: value`; a key with an indented block gets the block
 text). Every input gets the ticket re-read with `gh issue view --json
@@ -31,8 +35,10 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -124,29 +130,58 @@ def run(root, ticket, action, step=None, ticket_text=None):
         f"\n\n## Ticket (local tracker file, read just before this step)\n\n~~~~markdown\n{ticket_text}\n~~~~\n")
     if action == "summary" and tvars.get("pr_urls"):
         prompt += pr_data(tvars["pr_urls"])
+    if role != "reviewer":
+        return attempts(root, run_dir, cwd, step, action, role, (model, fallback), prompt, session, {})
+    # Each reviewer gets a private dir outside the factory root: its own run dir (role files, out,
+    # log) and a detached checkout of the reviewed SHA, so parallel reviewers never share a path.
+    # shortcut: no OS sandbox, a reviewer with bash can still read any absolute path; add one if
+    # reviewers start reaching outside their dir.
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=cwd, capture_output=True, text=True,
+                         check=True).stdout.strip()
+    private = Path(tempfile.mkdtemp(prefix=f"factory-{ticket}-{step}-")).resolve()
+    checkout = private / "checkout"
+    try:
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(checkout), sha], cwd=cwd,
+                       capture_output=True, text=True, check=True)
+        own = private / "run"
+        own.mkdir()
+        code = attempts(root, own, checkout, step, action, role, (model, fallback), prompt, session,
+                        {"reviewed_sha": sha})
+        for f in own.glob(f"{step}.*"):
+            shutil.copy(f, run_dir / f.name)
+        return code
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(checkout)], cwd=cwd, capture_output=True)
+        shutil.rmtree(private, ignore_errors=True)
+
+
+def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, extra):
+    """Run the model, then the fallback (if any) after any malformed handoff; write the handoff."""
     out, log = run_dir / f"{step}.out.md", run_dir / f"{step}.log"
-    err = None
-    for i, use in enumerate((model, fallback)):
-        if use is None or (i and str(err) != "empty output"):
+    prompts = [root / "roles/_common.md", root / "roles" / role / "role.md"]
+    if role == "reviewer":  # private copies: the reviewer gets no path into the factory root
+        prompts = [Path(shutil.copy(f, run_dir / f"{i}-{f.name}")) for i, f in enumerate(prompts)]
+    model = models[0]
+    for i, use in enumerate(models):
+        if use is None:
             break
         if i:
             with log.open("a") as e:
-                e.write(f"factory: {action} falls back from {model} to {fallback}\n")
+                e.write(f"factory: {action} falls back from {model} to {use}\n")
         cmd = [os.environ.get("FACTORY_AGENT", "pi"), "-p", "--no-mcp", "--model", use, *session,
-               "--tools", TOOLS[role], "--append-system-prompt", str(root / "roles/_common.md"),
-               "--append-system-prompt", str(root / "roles" / role / "role.md"), prompt]
+               "--tools", TOOLS[role], "--append-system-prompt", str(prompts[0]),
+               "--append-system-prompt", str(prompts[1]), prompt]
         with out.open("w") as o, log.open("a") as e:
             subprocess.run(cmd, cwd=cwd, stdout=o, stderr=e)
         try:
             handoff = parse_handoff(out.read_text())
-        except HandoffError as e_:
-            err = e_
+        except HandoffError as err:
             with log.open("a") as e:
                 e.write(f"factory: {err} from {action} on {use}\n")
             continue
         if i:
             handoff["fallback_from"] = model
-        handoff["model"] = use
+        handoff.update(extra, model=use)
         (run_dir / f"{step}.handoff.json").write_text(json.dumps(handoff, indent=2))
         return 0
     return 3

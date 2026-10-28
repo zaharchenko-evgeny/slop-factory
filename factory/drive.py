@@ -8,8 +8,9 @@
 The adapter supplies the factory operations of docs/agents/issue-tracker.md.
 `run` claims the ticket and executes every action the machine starts until it
 waits on a human or external actor (`approved`, `blocked`, `failed`): script
-actions here, agent actions through run_role.py. Stage and vars (with the `_run`
-state) are written through the adapter after each step; the run dir keeps
+actions here, agent actions through run_role.py (each reviewer in its own run
+dir and detached checkout, the fallback model after a malformed handoff). Stage
+and vars (with the `_run` state) are written through the adapter after each step; the run dir keeps
 `sm.json`, `<step>.in.md` and `checks-<round>.md`. `pi` and `gh` can be
 replaced with $FACTORY_AGENT and $FACTORY_GH.
 
@@ -230,7 +231,6 @@ class Delivery:
         h = json.loads((self.run_dir / f"{step}.handoff.json").read_text())
         if spec["role"] == "reviewer":
             h["blocking_ids"] = re.findall(r"^\s*-?\s*id:\s*(\S+)", h.get("blocking") or "", re.M)
-            h["reviewed_sha"] = sh(["git", "rev-parse", "HEAD"], self.wt).strip()
         if spec["role"] != "developer":
             return "done", h
         return (h["status"] if h.get("status") in ("done", "blocked") else "error"), h

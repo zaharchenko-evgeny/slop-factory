@@ -54,7 +54,7 @@ roles:
   router: { tier: cheap }
   developer: { tier: mid, tier_high_risk: strong }
   # One entry per reviewer focus (an action mode in workflows/delivery.sm.yaml).
-  # `fallback` runs the same focus when the reviewer's output stays empty after its retry.
+  # `fallback` reruns the same focus once when the reviewer's output has no valid handoff.
   reviewer:
     tools: read-only
     modes:

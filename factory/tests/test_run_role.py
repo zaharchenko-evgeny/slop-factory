@@ -9,8 +9,10 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -21,13 +23,24 @@ import run_role  # noqa: E402
 import sm  # noqa: E402
 
 # Before the call count reaches $STUB_OK_AT it prints nothing, or with STUB_PROSE=1 a handoff
-# followed by prose; records argv and cwd per call. preflight.py calls get $STUB_REPLY.
+# followed by prose, with STUB_UNFENCED=1 a handoff without a fence; records argv and cwd per call.
+# STUB_PEEK=1: a reviewer prints secret-<mode>, waits, then greps its dirs for secrets.
+# preflight.py calls get $STUB_REPLY.
 AGENT = """#!/bin/bash
 n=$(($(cat "$STUB_DIR/calls" 2>/dev/null || echo 0) + 1))
 echo "$n" > "$STUB_DIR/calls"
 pwd > "$STUB_DIR/cwd"
 printf '%s\\n' "$@" > "$STUB_DIR/argv"
 echo "stub stderr $n" >&2
+if [ -n "$STUB_PEEK" ]; then
+  mode=$(printf '%s\\n' "${@: -1}" | sed -n '1s/^mode: //p')
+  pwd > "$STUB_DIR/cwd-$mode"; git rev-parse HEAD > "$STUB_DIR/head-$mode"
+  echo "secret-$mode"; sleep 1
+  # Its own private dir, plus the shared run dir by the path that worked from the shared worktree.
+  grep -rho 'secret-[a-z_]*' .. ../../runs/9 2>/dev/null | sort -u > "$STUB_DIR/seen-$mode"
+  printf '```text\\nREVIEWER\\nverdict: approved\\n```\\n'; exit 0
+fi
+if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_UNFENCED" ]; then printf 'REVIEWER\\nverdict: approved\\n'; exit 0; fi
 if [ -n "${STUB_REPLY+x}" ]; then printf '%s' "$STUB_REPLY"; exit "${STUB_EXIT:-0}"; fi
 if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_PROSE" ]; then printf '```text\nREVIEWER\nverdict: approved\n```\nDone!\n'; fi
 if [ "$n" -ge "$STUB_OK_AT" ]; then printf '```text\\nREVIEWER\\nverdict: approved\\n```\\n'; fi
@@ -48,6 +61,10 @@ class RunRole(unittest.TestCase):
         self.wt = self.root / ".factory/worktrees/9"
         self.run_dir.mkdir(parents=True)
         self.wt.mkdir(parents=True)
+        shutil.copytree(sm.ROOT / "roles", self.root / "roles")
+        for cmd in (["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                                     "--allow-empty", "-m", "init"]):
+            subprocess.run(["git", *cmd], cwd=self.wt, check=True, capture_output=True)
         stub = self.root / "stub"
         stub.mkdir()
         for name, text in (("agent", AGENT), ("gh", GH)):
@@ -56,13 +73,14 @@ class RunRole(unittest.TestCase):
         self.stub = stub
         self.issue(["factory:in-dev"])
         os.environ.update(FACTORY_AGENT=str(stub / "agent"), FACTORY_GH=str(stub / "gh"), STUB_DIR=str(stub))
-        for k in ("STUB_PROSE", "STUB_REPLY", "STUB_EXIT"):
+        for k in ("STUB_PROSE", "STUB_REPLY", "STUB_EXIT", "STUB_UNFENCED", "STUB_PEEK"):
             os.environ.pop(k, None)
 
-    def go(self, action, ok_at, risk="low", pr_urls=()):
+    def go(self, action, ok_at, risk="low", pr_urls=(), write_input=True):
         os.environ["STUB_OK_AT"] = str(ok_at)
         (self.run_dir / "sm.json").write_text(json.dumps({"vars": {"risk": risk, "pr_urls": list(pr_urls)}}))
-        (self.run_dir / f"{action}.in.md").write_text("mode: test\n")
+        if write_input:
+            (self.run_dir / f"{action}.in.md").write_text("mode: test\n")
         return run_role.run(self.root, 9, action)
 
     def issue(self, labels, comments=()):
@@ -95,8 +113,10 @@ class RunRole(unittest.TestCase):
         self.assertEqual((self.calls(), self.argv_model()), (2, self.model("cheap")))
         self.assertIn(f"falls back from {self.model('review')} to {self.model('cheap')}",
                       (self.run_dir / "review_behaviour.log").read_text())
-        self.assertEqual(json.loads((self.run_dir / "review_behaviour.handoff.json").read_text()),
-                         {"handoff": "REVIEWER", "verdict": "approved", "fallback_from": self.model("review"),
+        h = json.loads((self.run_dir / "review_behaviour.handoff.json").read_text())
+        self.assertEqual(h.pop("reviewed_sha"), subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.wt,
+                                                               capture_output=True, text=True).stdout.strip())
+        self.assertEqual(h, {"handoff": "REVIEWER", "verdict": "approved", "fallback_from": self.model("review"),
                           "model": self.model("cheap")})
         self.assertEqual(self.go("review_structure_security", ok_at=99), 3)
         self.assertEqual(self.calls(), 4)  # 1 on the model, 1 on the fallback
@@ -107,17 +127,56 @@ class RunRole(unittest.TestCase):
             with self.subTest(action):
                 self.go(action, ok_at=1)
                 self.assertEqual(self.argv_model(), self.model(key))
-                self.assertIn(str(self.root / "roles/reviewer/role.md"), (self.stub / "argv").read_text())
+                argv = (self.stub / "argv").read_text()
+                self.assertIn("1-role.md", argv)  # a private copy of roles/reviewer/role.md
+                self.assertNotIn(str(self.root), argv)
 
     def test_handoff_followed_by_prose_is_rejected(self):
         os.environ["STUB_PROSE"] = "1"
-        self.assertEqual(self.go("review_full", ok_at=2), 3)
-        self.assertEqual(self.calls(), 1)  # not empty output: no fallback
-        self.assertIn("factory: text after the last fenced block from review_full",
-                      (self.run_dir / "review_full.log").read_text())
-        self.assertEqual(self.go("review_full", ok_at=2), 0)
-        self.assertEqual(json.loads((self.run_dir / "review_full.handoff.json").read_text()),
-                         {"handoff": "REVIEWER", "verdict": "approved", "model": self.model("review")})
+        self.assertEqual(self.go("implement", ok_at=2), 3)
+        self.assertEqual(self.calls(), 1)  # no fallback for the developer
+        self.assertIn("factory: text after the last fenced block from implement",
+                      (self.run_dir / "implement.log").read_text())
+        self.assertEqual(self.go("implement", ok_at=2), 0)
+
+    def test_malformed_handoff_runs_the_fallback_once(self):
+        for env in ("STUB_PROSE", "STUB_UNFENCED"):
+            with self.subTest(env):
+                (self.stub / "calls").unlink(missing_ok=True)
+                os.environ.pop("STUB_PROSE", None)
+                os.environ[env] = "1"
+                self.assertEqual(self.go("review_full", ok_at=2), 0)
+                self.assertEqual((self.calls(), self.argv_model()), (2, self.model("cheap")))
+                h = json.loads((self.run_dir / "review_full.handoff.json").read_text())
+                self.assertEqual((h["fallback_from"], h["model"]), (self.model("review"), self.model("cheap")))
+                self.assertIn(f"falls back from {self.model('review')} to {self.model('cheap')}",
+                              (self.run_dir / "review_full.log").read_text())
+
+    def test_parallel_reviewers_see_only_their_own_run_dir(self):
+        os.environ["STUB_PEEK"] = "1"
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.wt, capture_output=True, text=True).stdout.strip()
+        actions = ("review_behaviour", "review_structure_security")
+        for a in actions:
+            (self.run_dir / f"{a}.in.md").write_text(f"mode: {a}\n")
+        codes = {}
+        threads = [threading.Thread(target=lambda a=a: codes.__setitem__(a, self.go(a, 1, write_input=False)))
+                   for a in actions]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(codes, dict.fromkeys(actions, 0))
+        for a, other in (actions, actions[::-1]):
+            seen = (self.stub / f"seen-{a}").read_text()
+            self.assertIn(f"secret-{a}", seen)  # it can read its own output file
+            self.assertNotIn(f"secret-{other}", seen)  # but not the other reviewer's, written meanwhile
+            self.assertEqual((self.stub / f"head-{a}").read_text().strip(), sha)  # detached checkout at HEAD
+            cwd = Path((self.stub / f"cwd-{a}").read_text().strip())
+            self.assertFalse(cwd.is_relative_to(self.root) or cwd.exists())  # outside the root, removed after
+            self.assertEqual(json.loads((self.run_dir / f"{a}.handoff.json").read_text())["reviewed_sha"], sha)
+            self.assertIn(f"secret-{a}", (self.run_dir / f"{a}.out.md").read_text())  # copied back
+        worktrees = subprocess.run(["git", "worktree", "list"], cwd=self.wt, capture_output=True, text=True).stdout
+        self.assertEqual(len(worktrees.splitlines()), 1)
 
     def test_role_input_rereads_the_ticket_after_a_stage_change(self):
         self.go("implement", ok_at=1)
