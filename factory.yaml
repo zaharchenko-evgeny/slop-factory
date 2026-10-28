@@ -1,0 +1,82 @@
+# Offline Evaluation software factory. Roles and workflows read every
+# repository, tracker, model and harness name from this file (design §2).
+version: 1
+
+repositories:
+  - name: offline-eval-factory
+    url: https://github.com/zaharchenko-evgeny/offline-eval-factory
+    default_branch: main
+    role: primary
+
+branch_pattern: "ez/{ticket}-{slug}"
+commit_prefix: "#{ticket} "
+
+tracker:
+  adapter: github-issues
+  repository: zaharchenko-evgeny/offline-eval-factory
+  # Stage → label. Exactly one stage label is set on an issue at a time.
+  stages:
+    draft: factory:draft
+    ready: factory:ready
+    in-dev: factory:in-dev
+    in-review: factory:in-review
+    changes-requested: factory:changes-requested
+    approved: factory:approved
+    done: factory:done
+    blocked: factory:blocked
+    failed: factory:failed
+  review_trigger: factory:review
+  risk_labels: { low: "risk:low", high: "risk:high" }
+  docs_impact_label: docs-impact
+
+channels: [local]
+
+targets:
+  local:
+    harness: pi
+    skill: .agents/skills/factory-delivery
+    run_dir: .factory/runs      # handoffs per ticket, git-ignored
+    worktree_dir: .factory/worktrees
+
+# Model tiers (design §10a). Escalate one tier only after a failure.
+models:
+  cheap: anthropic/claude-haiku-5-5
+  mid: anthropic/claude-sonnet-5-5
+  strong: anthropic/claude-opus-5-5
+  # The reviewer runs on a different model family from the developer.
+  review: openai/gpt-5.5
+
+roles:
+  router: { tier: cheap }
+  developer: { tier: mid, tier_high_risk: strong }
+  reviewer: { tier: review, tools: read-only }
+
+gates:
+  ticket_approval: human
+  pr_approval: human          # auto-approval arrives with the approver role (#9)
+  # Until the factory gates are live, every external write (push, label,
+  # comment, PR) is shown to the user and waits for approval.
+  confirm_external_writes: true
+
+limits:
+  concurrent_deliveries: 2
+  fix_rounds: 3
+  runs_per_day: 20
+  environment_repair_attempts: 2
+
+# Pre-review checks, run from the ticket worktree. Non-zero exit = failure.
+# shortcut: ShellCheck runs only when installed and Betterleaks is not run
+# locally yet; #5 adds both as blocking CI gates.
+checks:
+  - name: whitespace
+    stage: pre-review
+    mode: blocking
+    run: git diff --check "origin/${FACTORY_BASE:-main}...HEAD"
+  - name: setup-scripts-parse
+    stage: pre-review
+    mode: blocking
+    run: for f in roles/*.sh roles/*/setup.sh; do bash -n "$f" || exit 1; done
+  - name: shellcheck
+    stage: pre-review
+    mode: advisory
+    run: command -v shellcheck >/dev/null || exit 0; shellcheck -x roles/*.sh roles/*/setup.sh
