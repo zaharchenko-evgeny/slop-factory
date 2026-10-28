@@ -43,4 +43,5 @@ Every push, label change, PR and comment carries the `[factory]` marker and a
 `Factory-Run:` trailer. While `gates.confirm_external_writes` is `true`, each
 write kind in `gates.confirm_external_writes_scope` is shown and waits for the
 user's approval; a declined write stops the run with stage unchanged. Other
-writes are auto-approved.
+writes, including the push of the ticket's own branch, are auto-approved.
+Merging stays with the human (`gates.pr_approval`).

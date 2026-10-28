@@ -30,9 +30,10 @@ Run files stay in `.factory/` (git-ignored).
 ## Approval gate
 
 `gates.confirm_external_writes` is `true` in `factory.yaml`. Every write kind in
-`gates.confirm_external_writes_scope` (today: push) is shown to you and waits
-for your approval; issue and PR text, comments and label changes are
-auto-approved. Merging stays with you.
+`gates.confirm_external_writes_scope` (today: none) is shown to you and waits
+for your approval. Pushing the ticket's own branch, issue and PR text, comments
+and label changes are auto-approved, so a run can go unattended. Merging stays
+with you.
 
 ## More
 

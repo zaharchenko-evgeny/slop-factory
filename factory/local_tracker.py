@@ -9,6 +9,8 @@ Only the header and that block are parsed: body and comments are data.
 import json
 import os
 import re
+import tempfile
+import time
 from pathlib import Path
 
 CLOSED = ("done", "resolved", "closed")
@@ -37,9 +39,32 @@ class LocalTracker:
 
     def _write(self, nn, text):
         p = self.path(nn)
-        tmp = p.with_suffix(".md.tmp")
-        tmp.write_text(text)
-        os.replace(tmp, p)
+        fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=f".{p.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(text)
+            os.replace(tmp, p)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+
+    def _locked(self, nn, fn, timeout=5.0):
+        """Run `fn` while holding the ticket's lock file (O_EXCL create), so a claim's
+        check and write cannot interleave with another executor's."""
+        lock = self.issues / f".{nn}.claim.lock"
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                break
+            except FileExistsError:
+                if time.monotonic() > deadline:
+                    raise ClaimError(f"ticket {nn}: lock {lock} held for {timeout}s; remove it if stale") from None
+                time.sleep(0.01)
+        try:
+            return fn()
+        finally:
+            lock.unlink()
 
     @staticmethod
     def _split(text, marker):
@@ -91,19 +116,21 @@ class LocalTracker:
         self._write(nn, body + comments)
 
     def claim(self, nn, executor):
-        """Assign, then re-read. Raise ClaimError, without writing, if another executor holds it."""
-        holder = self._field(nn, "claimed_by")
-        if holder and holder != executor:
-            raise ClaimError(f"ticket {nn}: claimed by {holder}")
-        if not holder:
-            self._set_field(nn, "claimed_by", executor)
-        holder = self._field(nn, "claimed_by")
-        if holder != executor:
-            raise ClaimError(f"ticket {nn}: claimed by {holder or 'nobody'} after re-read")
+        """Check and assign under the ticket lock. Raise ClaimError, without writing, if another
+        executor holds it."""
+        def take():
+            holder = self._field(nn, "claimed_by")
+            if holder and holder != executor:
+                raise ClaimError(f"ticket {nn}: claimed by {holder}")
+            if not holder:
+                self._set_field(nn, "claimed_by", executor)
+        self._locked(nn, take)
 
     def release(self, nn, executor):
-        if self._field(nn, "claimed_by") == executor:
-            self._set_field(nn, "claimed_by", "")
+        def drop():
+            if self._field(nn, "claimed_by") == executor:
+                self._set_field(nn, "claimed_by", "")
+        self._locked(nn, drop)
 
     def frontier(self):
         """Open `ready` tickets whose blockers are all closed and that nobody claimed, in file order."""
