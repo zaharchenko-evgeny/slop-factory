@@ -1,0 +1,55 @@
+name: quality-gates
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  agnix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      # Scans the whole tree; it picks up AGENTS.md, SKILL.md and roles/**/*.md.
+      - run: npx --yes agnix@0.59.3 .
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - run: find . -name setup.sh -not -path './.factory/*' -exec shellcheck -x {} +
+
+  jactionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - run: pipx run jactionlint==2.3.0 --shellcheck=
+
+  betterleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BETTERLEAKS_VERSION: 1.9.0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { fetch-depth: 0, persist-credentials: false }
+      - shell: bash
+        run: curl -sSfL "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz" | tar xz betterleaks
+      - name: Repository
+        run: ./betterleaks dir . --no-banner
+      - name: PR diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: ./betterleaks git . --no-banner --log-opts="${BASE_SHA}..HEAD"
