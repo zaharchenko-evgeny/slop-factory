@@ -51,8 +51,11 @@ printf '%s' "$last" > "$STUB_DIR/prompt-$mode"
 if [ "$mode" = implement ]; then echo hi > stub.txt; git add stub.txt; git commit -qm "#01 stub"; fi
 if [ "$mode" = fix ]; then echo fix >> stub.txt; git commit -qam "#01 fix"; fi
 n=$(wc -l < "$STUB_DIR/calls-$mode" | tr -d ' ')
-if [ -f "$STUB_DIR/reply-$mode-$n" ]; then cat "$STUB_DIR/reply-$mode-$n"
-elif [ -f "$STUB_DIR/reply-$mode" ]; then cat "$STUB_DIR/reply-$mode"; fi
+f=
+if [ -f "$STUB_DIR/reply-$mode-$n" ]; then f="$STUB_DIR/reply-$mode-$n"
+elif [ -f "$STUB_DIR/reply-$mode" ]; then f="$STUB_DIR/reply-$mode"; fi
+# pi --mode json: one assistant message_end with usage
+[ -n "$f" ] && python3 -c 'import json,sys; print(json.dumps({"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":open(sys.argv[1]).read()}],"usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":7,"cost":{"total":0.25}}}}))' "$f"
 """
 GH = """#!/bin/bash
 printf '%s\\n' "$@" > "$STUB_DIR/gh-$1-$2"
@@ -145,6 +148,15 @@ class DriveRun(unittest.TestCase):
     def calls(self, mode):
         p = self.stub / f"calls-{mode}"
         return len(p.read_text().split()) if p.exists() else 0
+
+    def test_records_cost_per_role(self):
+        self.go()
+        log = [json.loads(x) for x in (self.root / ".factory/runs/01/events.log").read_text().splitlines()]
+        self.assertEqual({r["role"] for r in log}, {"developer", "reviewer", "router"})
+        self.assertTrue(all(r["event"] == "usage" and r["cacheWrite"] == 7 for r in log))
+        table = drive.cost_table(self.root / ".factory/runs/01")
+        self.assertIn("implement", table)
+        self.assertIn(f"{0.25 * len(log):.3f}", table.splitlines()[-1])
 
     def test_delivers_ready_to_approved(self):
         t = self.go()

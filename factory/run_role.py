@@ -92,6 +92,39 @@ def parse_handoff(text):
     return out
 
 
+def parse_pi_output(raw):
+    """(final text, usage dict) from `pi --mode json` stdout. Output without JSON events is plain text."""
+    text, usage, seen = raw, dict.fromkeys(("input", "output", "cacheRead", "cacheWrite", "cost"), 0), False
+    for line in raw.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        msg = ev.get("message") if isinstance(ev, dict) else None
+        if ev.get("type") != "message_end" or not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        u = msg.get("usage") or {}
+        for k in usage:
+            usage[k] += (u.get("cost", {}).get("total", 0) if k == "cost" else u.get(k, 0)) or 0
+        parts = msg.get("content")
+        text = parts if isinstance(parts, str) else "".join(c.get("text", "") for c in parts or [] if c.get("type") == "text")
+        seen = True
+    return (text, usage) if seen else (raw, None)
+
+
+def skill_args(root, role):
+    """`--skill <dir>` for each name in the role's skills.txt, found where setup.sh looks."""
+    args = []
+    for name in (root / "roles" / role / "skills.txt").read_text().split():
+        for d in (root / ".agents/skills", Path.home() / ".agents/skills", Path.home() / ".pi/agent/skills",
+                  Path.home() / ".pi/agent/npm/node_modules"):
+            hit = next(d.glob(f"**/{name}/SKILL.md"), None) if d.is_dir() else None
+            if hit:
+                args += ["--skill", str(hit.parent)]
+                break
+    return args
+
+
 def pr_data(urls):
     gh = os.environ.get("FACTORY_GH", "gh")
     parts = []
@@ -157,7 +190,7 @@ def run(root, ticket, action, step=None, ticket_text=None):
         own = private / "run"
         own.mkdir()
         code = attempts(root, own, checkout, step, action, role, (model, fallback), prompt, session,
-                        {"reviewed_sha": sha}, keep_dir=run_dir)
+                        {"reviewed_sha": sha}, keep_dir=run_dir, events=run_dir)
         for f in own.glob(f"{step}.*"):
             shutil.copy(f, run_dir / f.name)
         return code
@@ -166,7 +199,7 @@ def run(root, ticket, action, step=None, ticket_text=None):
         shutil.rmtree(private, ignore_errors=True)
 
 
-def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, extra, keep_dir=None):
+def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, extra, keep_dir=None, events=None):
     """Run the model, then the fallback (if any) after any malformed handoff; write the handoff.
     Each attempt's output is also kept as `<step>-attempt<k>.out.md` in `keep_dir` (default: run_dir),
     numbered across fallbacks and the engine's retries."""
@@ -181,11 +214,17 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, ex
         if i:
             with log.open("a") as e:
                 e.write(f"factory: {action} falls back from {model} to {use}\n")
-        cmd = [os.environ.get("FACTORY_AGENT", "pi"), "-p", "--no-mcp", "--model", use, *session,
+        cmd = [os.environ.get("FACTORY_AGENT", "pi"), "-p", "--mode", "json", "--no-mcp", "--no-skills", "--no-extensions",
+               "--no-prompt-templates", *skill_args(root, role), "--model", use, *session,
                "--tools", TOOLS[role], "--append-system-prompt", str(prompts[0]),
                "--append-system-prompt", str(prompts[1]), prompt]
-        with out.open("w") as o, log.open("a") as e:
-            subprocess.run(cmd, cwd=cwd, stdout=o, stderr=e)
+        with log.open("a") as e:
+            raw = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=e, text=True).stdout
+        text, usage = parse_pi_output(raw)
+        out.write_text(text)
+        if usage:
+            with (events or run_dir).joinpath("events.log").open("a") as ev:  # one short append per call
+                ev.write(json.dumps({"event": "usage", "step": step, "role": role, "model": use, **usage}) + "\n")
         keep = keep_dir or run_dir
         k = 1 + len(list(keep.glob(f"{step}-attempt[0-9]*.out.md")))
         shutil.copy(out, keep / f"{step}-attempt{k}.out.md")
