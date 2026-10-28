@@ -33,6 +33,7 @@ if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_PROSE" ]; then printf '```text\nREV
 if [ "$n" -ge "$STUB_OK_AT" ]; then printf '```text\\nREVIEWER\\nverdict: approved\\n```\\n'; fi
 """
 GH = """#!/bin/bash
+if [ "$1" = issue ]; then cat "$STUB_DIR/issue.json"; exit; fi
 echo "{\\"url\\":\\"$3\\",\\"body\\":\\"Closes #9\\",\\"statusCheckRollup\\":[{\\"conclusion\\":\\"SUCCESS\\"}]}"
 """
 
@@ -53,6 +54,7 @@ class RunRole(unittest.TestCase):
             (stub / name).write_text(text)
             (stub / name).chmod(0o755)
         self.stub = stub
+        self.issue(["factory:in-dev"])
         os.environ.update(FACTORY_AGENT=str(stub / "agent"), FACTORY_GH=str(stub / "gh"), STUB_DIR=str(stub))
         for k in ("STUB_PROSE", "STUB_REPLY", "STUB_EXIT"):
             os.environ.pop(k, None)
@@ -62,6 +64,11 @@ class RunRole(unittest.TestCase):
         (self.run_dir / "sm.json").write_text(json.dumps({"vars": {"risk": risk, "pr_urls": list(pr_urls)}}))
         (self.run_dir / f"{action}.in.md").write_text("mode: test\n")
         return run_role.run(self.root, 9, action)
+
+    def issue(self, labels, comments=()):
+        (self.stub / "issue.json").write_text(json.dumps(
+            {"title": "T", "body": "B", "labels": [{"name": x} for x in labels],
+             "comments": [{"body": c} for c in comments]}))
 
     def calls(self):
         return int((self.stub / "calls").read_text())
@@ -113,6 +120,17 @@ class RunRole(unittest.TestCase):
         self.assertEqual(self.go("review_full", ok_at=99), 3)
         self.assertEqual(self.calls(), 4)  # not empty output: no fallback
         self.assertIn("(attempt 2/2); giving up", (self.run_dir / "review_full.log").read_text())
+
+    def test_role_input_rereads_the_ticket_after_a_stage_change(self):
+        self.go("implement", ok_at=1)
+        self.assertIn('"name": "factory:in-dev"', (self.stub / "argv").read_text())
+        self.issue(["factory:in-review"], ["[factory] Moved to #30: old scope", "keep me"])
+        self.go("review_full", ok_at=1)
+        argv = (self.stub / "argv").read_text()
+        self.assertIn('"name": "factory:in-review"', argv)
+        self.assertNotIn("factory:in-dev", argv)
+        self.assertIn("keep me", argv)
+        self.assertNotIn("old scope", argv)  # moved to a split slice
 
     def test_parse_handoff(self):
         h = run_role.parse_handoff("prose\n```text\nDEVELOPER\nstatus: done\ncommits:\n  - abc #9 x\n"

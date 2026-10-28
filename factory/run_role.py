@@ -20,7 +20,9 @@ has a `fallback` tier, the same attempts run on the fallback model; the switch
 is logged and kept in the handoff as `fallback_from`. Exit 3 then means
 `<action>.error`. A valid
 handoff is also written as `<step>.handoff.json` (`handoff` = its first line,
-then each top-level `key: value`; a key with an indented block gets the block text). The summary input gets each PR's body and CI checks,
+then each top-level `key: value`; a key with an indented block gets the block text). Every input
+gets the ticket re-read with `gh issue view --json title,body,comments,labels` (comments starting
+`[factory] Moved to #` left out); the summary input also gets each PR's body and CI checks,
 fetched read-only with `gh pr view`.
 """
 import argparse
@@ -81,6 +83,22 @@ def pr_data(urls):
     return "\n\n## PR data (gh pr view, read-only)\n\n```json\n" + "\n".join(parts) + "\n```\n"
 
 
+MOVED = "[factory] Moved to #"
+
+
+def ticket_data(repo, n):
+    """The ticket as it is now (`gh issue view`, read-only), re-read before every role input so the
+    stage labels are current. Comments marked as moved to a split slice are left out."""
+    gh = os.environ.get("FACTORY_GH", "gh")
+    r = subprocess.run([gh, "issue", "view", str(n), "-R", repo, "--json", "title,body,comments,labels"],
+                       capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit(f"run_role.py: gh issue view {n} failed: {r.stderr.strip()}")
+    t = json.loads(r.stdout)
+    t["comments"] = [c for c in t.get("comments") or [] if not (c.get("body") or "").startswith(MOVED)]
+    return "\n\n## Ticket (gh issue view, read just before this step)\n\n```json\n" + json.dumps(t, indent=2) + "\n```\n"
+
+
 def run(root, ticket, action, step=None):
     root = Path(root).resolve()
     config = yaml.safe_load((root / "factory.yaml").read_text())
@@ -99,7 +117,7 @@ def run(root, ticket, action, step=None):
     cwd = root if action == "intake" else root / local["worktree_dir"] / str(ticket)
     if not cwd.is_dir():
         raise SystemExit(f"run_role.py: {action} needs the worktree {cwd}")
-    prompt = (run_dir / f"{step}.in.md").read_text()
+    prompt = (run_dir / f"{step}.in.md").read_text() + ticket_data(config["tracker"]["repository"], ticket)
     if action == "summary" and tvars.get("pr_urls"):
         prompt += pr_data(tvars["pr_urls"])
     out, log = run_dir / f"{step}.out.md", run_dir / f"{step}.log"

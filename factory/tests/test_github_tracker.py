@@ -99,7 +99,7 @@ class GitHub(unittest.TestCase):
         state = [c for c in i["comments"] if c["body"].startswith("[factory]")]
         self.assertEqual(len(state), 1)  # created once, then edited in place
         self.assertTrue(state[0]["body"].endswith("Factory-Run: local:20261028T1200-19"))
-        self.assertEqual(tracker(fake).read_vars(23), t["vars"])
+        self.assertEqual(tracker(fake).read_vars(23), sm.persisted(t))
         self.assertEqual((t["vars"]["risk"], t["vars"]["reviewed_sha"]), ("high", "bbb"))
 
     def test_second_executor_stops_without_writing(self):

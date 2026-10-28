@@ -17,9 +17,10 @@ decisions: `docs/adr/`, plan: `docs/plan.md`.
 
 - While `gates.confirm_external_writes` is `true` in `factory.yaml`, show the
   exact text of every write listed in `gates.confirm_external_writes_scope`
-  (today: push) and wait for the user's approval before publishing. Issue and
+  (today: none) and wait for the user's approval before publishing. A factory
+  run may push the ticket's own `ez/<issue>-*` branch without asking. Issue and
   PR text, comments and label changes are auto-approved; merging stays a human
-  gate. This applies to factory runs too.
+  gate (`gates.pr_approval`). This applies to factory runs too.
 - Every text a factory role writes to GitHub starts with `[factory]` and ends
   with a `Factory-Run: <run id or url>` trailer.
 

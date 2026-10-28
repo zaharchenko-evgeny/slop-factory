@@ -28,7 +28,7 @@ mkdir -p "$RUN"
 ```
 
 Read the ticket with `gh issue view $N --json title,body,labels,url` and save
-it to `$RUN/ticket.json`. Run every role's `roles/<role>/setup.sh`; a failure
+it to `$RUN/ticket.json` (for the branch name and the report; role inputs re-read it). Run every role's `roles/<role>/setup.sh`; a failure
 is a preflight failure.
 
 ## Run a role
@@ -57,8 +57,10 @@ features here: no `declare -A`, no `mapfile`.
 | developer | `read,bash,edit,write,grep,find,ls` | `--session-id factory-$N-developer` (same id in fix mode, so it resumes) |
 | reviewer | `read,bash,grep,find,ls` | `--no-session` (always fresh) |
 
-The input file `<step>.in.md` holds: the mode, the ticket JSON, the base
-branch, and only the handoff blocks that step needs. Never pass a transcript.
+The input file `<step>.in.md` holds: the mode, the base branch, and only the
+handoff blocks that step needs. `run_role.py` appends the ticket, re-read with
+`gh issue view $N --json title,body,comments,labels` just before the step, so
+it carries the current stage; never paste an older copy. Never pass a transcript.
 Never give the reviewer the developer's handoff; give it its mode (the
 action's `mode`), the ticket, the branch, the base and, on a re-review, the
 last `reviewed_sha`. Never paste the diff instead: the reviewer reads the
@@ -78,6 +80,8 @@ adapter (`factory/github_tracker.py`), never a hand-written `gh issue edit`.
    fails, stop without writing: another executor holds the ticket.
 2. Start the ticket file from the tracker:
    `printf '{"state":"%s","vars":%s}' "$($TR get-state $N)" "$($TR read-vars $N)" > "$RUN/sm.json"`.
+   The stored vars carry the running actions and outputs under `_run`, so a
+   stopped run resumes: feed the results of the actions still in `pending`.
 3. Apply each event, starting with `stage.ready={run_id: "$RUN_ID"}`:
 
    ```bash
@@ -85,7 +89,7 @@ adapter (`factory/github_tracker.py`), never a hand-written `gh issue edit`.
    jq .ticket "$RUN/step.json" > "$RUN/sm.json"
    [ "$(jq -r .step.from "$RUN/step.json")" = "$(jq -r .step.to "$RUN/step.json")" ] ||
      $TR set-state $N "$(jq -r .step.to "$RUN/step.json")"
-   $TR write-vars $N "$(jq -c .ticket.vars "$RUN/sm.json")"
+   $TR write-vars $N "$(jq -c '.vars + {_run: {out, pending, retries, fork}}' "$RUN/sm.json")"
    ```
 
    `step.run` lists the actions to run next; run each (below) and feed its
@@ -109,8 +113,14 @@ Local details per action of `workflows/delivery.sm.yaml`:
   gets a non-empty, non-error reply to a one-line `pi -p` call (any reply, not
   only the exact text `OK`). `pi auth check` alone is not enough: it reports
   `ready` for an invalid key.
+- **intake split**: when slices are created from the router's `split:`, edit
+  each comment whose items moved to a slice so its body starts with
+  `[factory] Moved to #<slice>.`; `run_role.py` leaves those comments out of
+  role inputs, so a slice's role sees only its own scope.
 - **start**: base branch is the ticket's `base:<branch>` line if present,
-  else the repository default. Branch name from `branch_pattern` with a short slug of the title;
+  else the repository default. Branch name:
+  `BRANCH=$(uv run --quiet factory/drive.py branch "$N" "$RUN/ticket.json")` (the body's
+  `slug:` line, else a slug of the title);
   `git worktree add -b "$BRANCH" "$WT" "origin/<base>"`.
 - **checks**: run each `checks[].run` with `bash -c` inside `$WT`, with
   `FACTORY_BASE` set to the base branch. Save the
@@ -141,7 +151,8 @@ Local details per action of `workflows/delivery.sm.yaml`:
 
 Writes are: push, PR, issue or PR comment, label change, assignee change.
 While `gates.confirm_external_writes` is `true`, before each write of a kind in
-`gates.confirm_external_writes_scope` (today: push) show the user the exact
+`gates.confirm_external_writes_scope` (today: none; pushing the ticket's own
+`branch_pattern` branch needs no prompt, so runs can go unattended) show the user the exact
 command and full text, then wait for an explicit approval. Batch the writes of
 one step into one approval request. If the user declines, stop the run and
 leave the stage as it is. Other writes (issue and PR text, comments, labels,

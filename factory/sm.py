@@ -354,15 +354,27 @@ def validate(sm, config=None):
 # ---- Engine ----
 
 
+RUN_KEYS = ("out", "pending", "retries", "fork")
+
+
 def new_ticket(m, base=None):
-    base = base or {}
+    """A ticket from defaults, then the run state stored under the vars' `_run` key (see
+    `persisted`), then the other keys of `base`."""
+    base = copy.deepcopy(base or {})
+    vars_ = base.get("vars") or {}
     t = {"state": m["initial"], "vars": {k: copy.deepcopy(v["default"]) for k, v in m["vars"].items()},
          "out": {}, "pending": [], "retries": {}, "fork": None}
-    t.update({k: copy.deepcopy(v) for k, v in base.items() if k != "vars"})
-    t["vars"].update(copy.deepcopy(base.get("vars") or {}))
+    t.update({k: v for k, v in (vars_.pop("_run", None) or {}).items() if k in RUN_KEYS})
+    t.update({k: v for k, v in base.items() if k != "vars"})
+    t["vars"].update(vars_)
     if t["state"] not in m["states"]:
         raise SMError(f"ticket state {t['state']!r} is not a state")
     return t
+
+
+def persisted(t):
+    """The vars plus the running actions and their outputs under `_run`, so a stopped run resumes."""
+    return {**t["vars"], "_run": {k: t[k] for k in RUN_KEYS}}
 
 
 def join(fork, branch, result):

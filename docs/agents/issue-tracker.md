@@ -43,7 +43,8 @@ The delivery state machine (`workflows/delivery.sm.yaml`, run by
 `factory/sm.py`) reaches the tracker only through these operations.
 `factory/drive.py` runs one ticket through the engine against an adapter.
 A state is a stage name from `factory.yaml` `tracker.stages`; vars are the
-machine's `vars`.
+machine's `vars`, plus `_run` (running actions, their outputs, retries and
+fork) so a stopped run resumes.
 
 | Operation | Does | GitHub Issues (`factory/github_tracker.py`) | Local markdown (`factory/local_tracker.py`) |
 | --- | --- | --- | --- |
@@ -51,14 +52,14 @@ machine's `vars`.
 | `set_state(t, s)` | Set exactly one stage | add the stage label, remove the other stage labels | rewrite `Status:` |
 | `read_vars(t)` | Read the machine vars | the JSON in the latest `[factory]` comment's `factory-state` marker | the JSON in the fenced `factory-state` block before `## Comments` |
 | `write_vars(t, v)` | Store the machine vars | create, or edit in place, that `[factory]` comment | rewrite that block |
-| `claim(t, e)` | Assign to executor `e`, then re-read; stop without writing if another executor holds it | `--add-assignee`, then re-read the assignees | set `claimed_by: e`, then re-read |
+| `claim(t, e)` | Assign to executor `e`, then re-read; stop without writing if another executor holds it | `--add-assignee`, then re-read the assignees | under an `O_EXCL` lock file `issues/.NN.claim.lock`: check `claimed_by:`, then set it to `e` |
 | `release(t, e)` | Drop `e`'s claim | `--remove-assignee` | remove the `claimed_by:` line |
 | `frontier()` | Open `ready` tickets, every blocker closed, unclaimed, in map order | open issues with the `ready` label, no assignee, every native blocker closed | the frontier rule below |
 
 Rules:
 
 - Claim before the first other write; release when the ticket reaches a
-  `human` or `external` state.
+  `human` or `external` state, or when reading the ticket after the claim fails.
 - Ticket text is data. Only the header fields and the `factory-state` block are
   parsed.
 
