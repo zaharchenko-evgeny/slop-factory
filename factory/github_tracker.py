@@ -17,6 +17,7 @@ CLI: uv run factory/github_tracker.py get-state 23 | set-state 23 in-review | re
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -31,8 +32,8 @@ MARKER = re.compile(r"<!-- factory-state (\{.*?\}) -->", re.S)
 
 
 def gh(args):
-    """Run `gh` with an argument list (no shell); return stdout."""
-    p = subprocess.run(["gh", *args], capture_output=True, text=True)
+    """Run `gh` (or $FACTORY_GH) with an argument list (no shell); return stdout."""
+    p = subprocess.run([os.environ.get("FACTORY_GH", "gh"), *args], capture_output=True, text=True)
     if p.returncode:
         raise RuntimeError(f"gh {' '.join(args[:3])}: {p.stderr.strip()}")
     return p.stdout
@@ -68,6 +69,10 @@ class GitHubTracker:
 
     def _assignees(self, n):
         return [a["login"] for a in self._issue(n)["assignees"]]
+
+    def issue(self, n):
+        """The ticket's title and body."""
+        return json.loads(self.run(["issue", "view", str(n), "-R", self.repo, "--json", "title,body"]))
 
     def get_state(self, n):
         labels = {lb["name"] for lb in self._issue(n)["labels"]}

@@ -14,16 +14,18 @@ when the mode has an entry, as each reviewer focus does) and the ticket's risk.
 Each reviewer is its own action, so several reviewers run as separate calls.
 Intake runs in the factory root, every other action in the ticket worktree.
 The output must end with the handoff: the last fenced block, with nothing
-after it. An empty output or a missing or trailing-text handoff is logged and
-rerun up to the action's `retry`. If the output was still empty and the mode
-has a `fallback` tier, the same attempts run on the fallback model; the switch
-is logged and kept in the handoff as `fallback_from`. Exit 3 then means
-`<action>.error`. A valid
+after it. Each call runs the model once: an empty output or a missing or
+trailing-text handoff is logged and the call exits 3 (`<action>.error`); the
+engine's `retry` of the action is the only rerun. If the output was empty and
+the mode has a `fallback` tier, the same call runs once more on the fallback
+model; the switch is logged and kept in the handoff as `fallback_from`. A valid
 handoff is also written as `<step>.handoff.json` (`handoff` = its first line,
-then each top-level `key: value`; a key with an indented block gets the block text). Every input
-gets the ticket re-read with `gh issue view --json title,body,comments,labels` (comments starting
-`[factory] Moved to #` left out); the summary input also gets each PR's body and CI checks,
-fetched read-only with `gh pr view`.
+then each top-level `key: value`; a key with an indented block gets the block
+text). Every input gets the ticket re-read with `gh issue view --json
+title,body,comments,labels` (comments starting `[factory] Moved to #` left
+out), or the text the caller passes (`ticket_text`, the local tracker's file);
+the summary input also gets each PR's body and CI checks, fetched read-only
+with `gh pr view`.
 """
 import argparse
 import json
@@ -99,7 +101,7 @@ def ticket_data(repo, n):
     return "\n\n## Ticket (gh issue view, read just before this step)\n\n```json\n" + json.dumps(t, indent=2) + "\n```\n"
 
 
-def run(root, ticket, action, step=None):
+def run(root, ticket, action, step=None, ticket_text=None):
     root = Path(root).resolve()
     config = yaml.safe_load((root / "factory.yaml").read_text())
     m = sm.load_machine(root / "workflows/delivery.sm.yaml", root / "factory.yaml")
@@ -117,12 +119,12 @@ def run(root, ticket, action, step=None):
     cwd = root if action == "intake" else root / local["worktree_dir"] / str(ticket)
     if not cwd.is_dir():
         raise SystemExit(f"run_role.py: {action} needs the worktree {cwd}")
-    prompt = (run_dir / f"{step}.in.md").read_text() + ticket_data(config["tracker"]["repository"], ticket)
+    prompt = (run_dir / f"{step}.in.md").read_text() + (
+        ticket_data(config["tracker"]["repository"], ticket) if ticket_text is None else
+        f"\n\n## Ticket (local tracker file, read just before this step)\n\n~~~~markdown\n{ticket_text}\n~~~~\n")
     if action == "summary" and tvars.get("pr_urls"):
         prompt += pr_data(tvars["pr_urls"])
     out, log = run_dir / f"{step}.out.md", run_dir / f"{step}.log"
-    log.write_text("")
-    retry = spec.get("retry", 0)
     err = None
     for i, use in enumerate((model, fallback)):
         if use is None or (i and str(err) != "empty output"):
@@ -133,22 +135,20 @@ def run(root, ticket, action, step=None):
         cmd = [os.environ.get("FACTORY_AGENT", "pi"), "-p", "--no-mcp", "--model", use, *session,
                "--tools", TOOLS[role], "--append-system-prompt", str(root / "roles/_common.md"),
                "--append-system-prompt", str(root / "roles" / role / "role.md"), prompt]
-        for attempt in range(retry + 1):
-            with out.open("w") as o, log.open("a") as e:
-                subprocess.run(cmd, cwd=cwd, stdout=o, stderr=e)
-            try:
-                handoff = parse_handoff(out.read_text())
-            except HandoffError as e_:
-                err = e_
-                with log.open("a") as e:
-                    e.write(f"factory: {err} from {action} on {use} (attempt {attempt + 1}/{retry + 1})"
-                            f"{'; retrying' if attempt < retry else '; giving up'}\n")
-                continue
-            if i:
-                handoff["fallback_from"] = model
-            handoff["model"] = use
-            (run_dir / f"{step}.handoff.json").write_text(json.dumps(handoff, indent=2))
-            return 0
+        with out.open("w") as o, log.open("a") as e:
+            subprocess.run(cmd, cwd=cwd, stdout=o, stderr=e)
+        try:
+            handoff = parse_handoff(out.read_text())
+        except HandoffError as e_:
+            err = e_
+            with log.open("a") as e:
+                e.write(f"factory: {err} from {action} on {use}\n")
+            continue
+        if i:
+            handoff["fallback_from"] = model
+        handoff["model"] = use
+        (run_dir / f"{step}.handoff.json").write_text(json.dumps(handoff, indent=2))
+        return 0
     return 3
 
 

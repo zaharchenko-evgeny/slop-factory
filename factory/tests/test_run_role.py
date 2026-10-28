@@ -80,26 +80,26 @@ class RunRole(unittest.TestCase):
         argv = (self.stub / "argv").read_text().splitlines()
         return argv[argv.index("--model") + 1]
 
-    def test_empty_output_is_logged_and_retried_once(self):
-        self.assertEqual(self.go("review_full", ok_at=2), 0)
-        self.assertEqual(self.calls(), 2)
-        log = (self.run_dir / "review_full.log").read_text()
-        self.assertIn(f"factory: empty output from review_full on {self.model('review')} (attempt 1/2); retrying", log)
-        self.assertIn("stub stderr 2", log)
-        self.assertIn("verdict: approved", (self.run_dir / "review_full.out.md").read_text())
-        self.assertNotIn("fallback_from", json.loads((self.run_dir / "review_full.handoff.json").read_text()))
+    def test_empty_output_is_logged_and_runs_once(self):
+        self.assertEqual(self.go("implement", ok_at=2), 3)  # no fallback: the engine's retry reruns it
+        self.assertEqual(self.calls(), 1)
+        log = (self.run_dir / "implement.log").read_text()
+        self.assertIn(f"factory: empty output from implement on {self.model('mid')}", log)
+        self.assertIn("stub stderr 1", log)
+        self.assertEqual(self.go("implement", ok_at=2), 0)
+        self.assertIn("stub stderr 1", (self.run_dir / "implement.log").read_text())  # the log keeps both calls
+        self.assertNotIn("fallback_from", json.loads((self.run_dir / "implement.handoff.json").read_text()))
 
-    def test_empty_output_after_retry_runs_the_fallback(self):
-        self.assertEqual(self.go("review_behaviour", ok_at=3), 0)
-        self.assertEqual((self.calls(), self.argv_model()), (3, self.model("cheap")))
+    def test_empty_output_runs_the_fallback_once(self):
+        self.assertEqual(self.go("review_behaviour", ok_at=2), 0)
+        self.assertEqual((self.calls(), self.argv_model()), (2, self.model("cheap")))
         self.assertIn(f"falls back from {self.model('review')} to {self.model('cheap')}",
                       (self.run_dir / "review_behaviour.log").read_text())
         self.assertEqual(json.loads((self.run_dir / "review_behaviour.handoff.json").read_text()),
                          {"handoff": "REVIEWER", "verdict": "approved", "fallback_from": self.model("review"),
                           "model": self.model("cheap")})
         self.assertEqual(self.go("review_structure_security", ok_at=99), 3)
-        self.assertEqual(self.calls(), 7)  # 2 on the model, 2 on the fallback
-        self.assertIn("(attempt 2/2); giving up", (self.run_dir / "review_structure_security.log").read_text())
+        self.assertEqual(self.calls(), 4)  # 1 on the model, 1 on the fallback
 
     def test_each_reviewer_focus_gets_its_model(self):
         for action, key in [("review_full", "review"), ("review_behaviour", "review"),
@@ -109,17 +109,15 @@ class RunRole(unittest.TestCase):
                 self.assertEqual(self.argv_model(), self.model(key))
                 self.assertIn(str(self.root / "roles/reviewer/role.md"), (self.stub / "argv").read_text())
 
-    def test_handoff_followed_by_prose_is_rejected_and_retried_once(self):
+    def test_handoff_followed_by_prose_is_rejected(self):
         os.environ["STUB_PROSE"] = "1"
-        self.assertEqual(self.go("review_full", ok_at=2), 0)
-        self.assertEqual(self.calls(), 2)
+        self.assertEqual(self.go("review_full", ok_at=2), 3)
+        self.assertEqual(self.calls(), 1)  # not empty output: no fallback
         self.assertIn("factory: text after the last fenced block from review_full",
                       (self.run_dir / "review_full.log").read_text())
+        self.assertEqual(self.go("review_full", ok_at=2), 0)
         self.assertEqual(json.loads((self.run_dir / "review_full.handoff.json").read_text()),
                          {"handoff": "REVIEWER", "verdict": "approved", "model": self.model("review")})
-        self.assertEqual(self.go("review_full", ok_at=99), 3)
-        self.assertEqual(self.calls(), 4)  # not empty output: no fallback
-        self.assertIn("(attempt 2/2); giving up", (self.run_dir / "review_full.log").read_text())
 
     def test_role_input_rereads_the_ticket_after_a_stage_change(self):
         self.go("implement", ok_at=1)
