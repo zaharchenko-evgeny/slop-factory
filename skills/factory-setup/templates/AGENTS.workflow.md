@@ -28,7 +28,11 @@ change, whether you are a person, a pi session or a factory role.
    orchestrates runs scripts, git and `gh`, and never writes or reviews the
    code.
 5. **Merge gate.** A human merges the PR after CI passes and the reviewers
-   approve, then moves the ticket to `factory:done`.
+   approve, then moves the ticket to `factory:done`. A PR that passed alone
+   can still break the base together with another one: the factory re-runs
+   the blocking checks on the branch merged with the current base before
+   `approved`, and a failure (or failed CI) is a fix round. Merge PRs one at a
+   time, and update a branch that is behind the base first.
 6. **Record process gaps.** When a run needs a manual step or hits a factory
    defect, add one comment to the ticket that will fix it (or open a new
    ticket). Do not fix the factory inside an unrelated ticket.
