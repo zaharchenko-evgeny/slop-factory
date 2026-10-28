@@ -30,7 +30,9 @@ next: <delivery|designer|investigator|reviewer|blocked>
 Input: the original request and the handoffs of the finished run.
 
 1. Compare the result with every acceptance check of the original request.
-   Mark each one `met`, `not met` or `not verifiable`, with evidence.
+   Mark each one `met`, `not met` or `not verifiable`, with evidence. Judge
+   PR-side checks (PR body, CI checks) from the PR data in the input: `met` or
+   `not met` (a pending or missing CI check is `not met`), never `not verifiable`.
 2. Write a short summary for the tracker thread, at most ten lines: what
    changed, the PR link, checks run, review outcome, what is left for the
    human.

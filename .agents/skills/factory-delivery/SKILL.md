@@ -17,9 +17,10 @@ Read first: `factory.yaml`, `workflows/delivery.sm.yaml`, `workflows/delivery.md
 ## Set up the run
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"   # the factory root; every path below is absolute
 N=<ticket number>
-RUN=.factory/runs/$N            # handoffs and logs
-WT=.factory/worktrees/$N        # the ticket's worktree
+RUN=$PWD/.factory/runs/$N       # handoffs and logs (targets.local.run_dir)
+WT=$PWD/.factory/worktrees/$N   # the ticket's worktree (targets.local.worktree_dir)
 RUN_ID="local:$(date +%Y%m%dT%H%M%S)-$N"
 ME=$(gh api user --jq .login)     # the executor: claims are assignees
 TR="uv run --quiet factory/github_tracker.py"
@@ -32,15 +33,20 @@ is a preflight failure.
 
 ## Run a role
 
-Agent steps run inside the worktree (the repository root for intake), with the
-model from `factory.yaml` (`models.<tier>` of the role):
+Write `$RUN/<step>.in.md`, then run the agent action through the engine:
 
 ```bash
-pi -p --no-mcp --model "$MODEL" $SESSION_FLAGS --tools "$TOOLS" \
-  --append-system-prompt roles/_common.md \
-  --append-system-prompt roles/<role>/role.md \
-  "$(cat "$RUN/<step>.in.md")" > "$RUN/<step>.out.md" 2>"$RUN/<step>.log"
+uv run --quiet factory/run_role.py "$N" <action> [--step <step>]   # e.g. review --step review-2
 ```
+
+It resolves the run dir, worktree, role files and model (`factory.yaml`, the
+ticket's risk from `$RUN/sm.json`) as absolute paths, runs intake in the
+factory root and every other action (summary and review included) inside
+`$WT`, and writes `$RUN/<step>.out.md` and `$RUN/<step>.log`. An empty output
+is logged in `<step>.log` and rerun once (the action's `retry`); exit 3 means
+feed `<action>.error`. For the summary it appends each PR's body and CI checks
+(`gh pr view`, read-only) to the input. It needs only macOS `/bin/bash` 3.2
+features here: no `declare -A`, no `mapfile`.
 
 | Role | Tools | Session flags |
 | --- | --- | --- |
@@ -107,7 +113,7 @@ Local details per action of `workflows/delivery.sm.yaml`:
   title `#<N> <ticket title>` and a body with: what changed, checks, review
   verdict, `Closes #<N>` only if the router confirms completion,
   `[factory]` marker and `Factory-Run: $RUN_ID`.
-- **cleanup**: after publish, `git worktree remove "$WT"`. Keep `$RUN`.
+- **cleanup**: after the summary (it runs in `$WT`), `git worktree remove "$WT"`. Keep `$RUN`.
 
 ## External writes
 
