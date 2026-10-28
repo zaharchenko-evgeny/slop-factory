@@ -61,9 +61,15 @@ roles:
       structure-security: { tier: review_strong, fallback: cheap }  # risk high
   # Runs when a reviewer reports docs_impact, before the approver (workflows/delivery.sm.yaml `document`).
   doc-writer: { tier: mid }
+  # Records the run on the knowledge branch once CI clears the PR (workflows/delivery.sm.yaml `retro`).
+  retro: { tier: cheap }
   # Auto-approval (design §8): `tier` is the soft judgment's model, run by decisions-kit
   # `decide` with `engine`. Dry-run records the verdict only; a human still merges.
   approver: { tier: cheap, engine: {{DECISIONS_ENGINE}}, dry_run: true }
+
+# Retro entries (design §11, ADR-0007): pushed to `branch` under `<dir>/<repo>/`,
+# never to a default branch; a weekly distill opens the PR to it.
+knowledge: { branch: knowledge-inbox, dir: knowledge }
 
 gates:
   ticket_approval: human

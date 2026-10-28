@@ -48,7 +48,8 @@ import yaml
 import sm
 
 TOOLS = {"router": "read,grep,find,ls", "developer": "read,bash,edit,write,grep,find,ls",
-         "reviewer": "read,bash,grep,find,ls", "doc-writer": "read,bash,edit,write,grep,find,ls"}
+         "reviewer": "read,bash,grep,find,ls", "doc-writer": "read,bash,edit,write,grep,find,ls",
+         "retro": "read,grep,find,ls"}
 
 
 class HandoffError(ValueError):
@@ -56,7 +57,7 @@ class HandoffError(ValueError):
 
 
 HEADER = re.compile(r"[A-Z][A-Z-]*")
-KNOWN = re.compile(r"DEVELOPER|DOC-WRITER|REVIEWER|ROUTER-[A-Z]+")
+KNOWN = re.compile(r"DEVELOPER|DOC-WRITER|RETRO|REVIEWER|ROUTER-[A-Z]+")
 
 
 def parse_handoff(text):

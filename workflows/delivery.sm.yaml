@@ -46,6 +46,8 @@ actions:
   approve: { kind: script, role: approver }
   publish: { kind: script }
   ci: { kind: script, run: "blocking checks on the branch merged with the base, then the PR's CI checks" }
+  # The retro role (roles/retro/role.md) judges; the script writes the entry to factory.yaml `knowledge.branch`.
+  retro: { kind: script, role: retro, mode: record, retry: 1 }
   summary: { kind: agent, role: router, mode: summary, retry: 1 }
 
 states:
@@ -167,12 +169,15 @@ transitions:
   # Dry-run: either verdict publishes; the PR body and the ticket record it, a human still merges.
   - { from: in-review, on: approve.done, set: { approval: out.approve.verdict }, do: publish }
   - { from: in-review, on: approve.failed, to: failed }
-  # The driver runs the `summary` action after `ci` moves the ticket to approved (best effort, not an event).
+  # The driver runs the `summary` action after `retro` moves the ticket to approved (best effort, not an event).
   - { from: in-review, on: publish.done, set: { pr_urls: out.publish.pr_urls }, do: ci }
   - { from: in-review, on: publish.failed, to: failed }
   # Failed CI, or blocking checks failing on the merge with the base, is a fix round; pending CI stays as before.
-  - { from: in-review, on: ci.passed, to: approved }
-  - { from: in-review, on: ci.pending, to: approved }
+  # Passed or pending CI runs the retro, then the stage is approved; a failed retro does not hold the gate.
+  - { from: in-review, on: ci.passed, do: retro }
+  - { from: in-review, on: ci.pending, do: retro }
+  - { from: in-review, on: retro.done, to: approved }
+  - { from: in-review, on: retro.failed, to: approved }
   - from: in-review
     on: ci.failed
     loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }

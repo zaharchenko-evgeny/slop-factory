@@ -16,8 +16,10 @@ posts its verdict on the ticket (after the doc-writer, when a reviewer reported 
 docs-impact and posts the reviewers' nits as one PR comment; a later publish (after a fix round)
 pushes and rebuilds the PR body. `ci` runs the blocking checks on the branch merged with the base, then
 watches CI (`gh pr checks`, after waiting for the checks to register); a failure goes to a fix round with
-the failing job log (`ci-<round>.md`). The reviewers of a fork run in parallel. Once `ci` moves the
-ticket to `approved`, the driver runs the router summary (input: final stage, CI result, commits, event
+the failing job log (`ci-<round>.md`). Passed or pending CI runs the retro: the retro role's lessons and
+the run's numbers go into one entry under `knowledge/<repo>/`, pushed to factory.yaml `knowledge.branch`
+(never a default branch), and the stage moves to `approved`. The reviewers of a fork run in parallel. Once
+the retro moves the ticket to `approved`, the driver runs the router summary (input: final stage, CI result, commits, event
 log), posts its comment on the ticket, edits the PR body from `Refs #N` to `Closes #N` when the summary
 says `complete: yes`, and removes the worktree once CI passed. `pi` and `gh` can be replaced with
 $FACTORY_AGENT and $FACTORY_GH.
@@ -352,6 +354,78 @@ class Delivery:
             text += ["", f"## Failed log of run {run} (last 80 lines)", "~~~~", *log.splitlines()[-80:], "~~~~"]
         return "failed", "\n".join(text) + "\n"
 
+    def retro(self, t):
+        """One entry per run: the run's numbers and the retro role's lessons (after its retries; without
+        a handoff the entry has the numbers only), committed under `<dir>/<repo>/` on the knowledge branch."""
+        k, base = self.config["knowledge"], self.issue()[1]
+        defaults = {r["default_branch"] for r in self.config["repositories"]} | {base}
+        if k["branch"] in defaults or not SAFE_BRANCH.fullmatch(k["branch"]):
+            raise ValueError(f"knowledge branch {k['branch']!r} is unsafe or a default branch")
+        spec = self.m["actions"]["retro"]
+        for _ in range(1 + spec.get("retry", 0)):
+            result, h = self.agent(t, "retro", spec)
+            if result == "done":
+                break
+        else:
+            h = {}
+        repo = next(r for r in self.config["repositories"] if r.get("role") == "primary")["name"]
+        run_id = t["vars"]["run_id"] or self.run_id
+        rel = f"{k['dir']}/{repo}/retro-{self.nn}-{re.sub(r'[^A-Za-z0-9.-]+', '-', run_id)}.md"
+        text = "\n".join([f"# Retro: #{self.nn} {self.issue()[0]['title']}", "", f"run: {run_id}", "",
+                          self.run_numbers(t), "", "## Manual steps", "", (h.get("manual_steps") or "unknown").strip(),
+                          "", "## Lessons", "", (h.get("lessons") or "unknown").strip()]) + "\n"
+        msg = f"{self.config['commit_prefix'].format(ticket=self.nn)}Retro entry for run {run_id}"
+        self.push_file(k["branch"], base, rel, text, msg)
+        return "done", {"entry": rel, "branch": k["branch"]}
+
+    def run_numbers(self, t):
+        """Cost if recorded, wall time (since the run dir's oldest file), fix rounds, blocking findings and
+        reviewer agreement from every review handoff, and the approver's dry-run verdict, as markdown lines."""
+        files = [p for p in self.run_dir.iterdir() if p.is_file()]
+        wall = int(time.time() - min(p.stat().st_mtime for p in files))
+        log = self.run_dir / "events.log"
+        costs = [r["cost"] for r in map(json.loads, log.read_text().splitlines()) if r.get("event") == "usage"] \
+            if log.exists() else []
+        rounds, ids = {}, []
+        for p in sorted(self.run_dir.glob("review_*.handoff.json")):
+            action, _, n = p.name.removesuffix(".handoff.json").partition("-")
+            h = json.loads(p.read_text())
+            rounds.setdefault(int(n or 0), {})[action] = h.get("verdict")
+            ids += [i for i in re.findall(r"^\s*-?\s*id:\s*(\S+)", h.get("blocking") or "", re.M) if i not in ids]
+        shared = [set(v.values()) for v in rounds.values() if len(v) > 1]
+        a = t["out"].get("approve") or {}
+        return "\n".join([
+            f"- cost: {'$%.3f' % sum(costs) if costs else 'unknown'}",
+            f"- wall time: {wall // 60}m {wall % 60}s",
+            f"- fix rounds: {t['vars']['fix_round']}",
+            f"- blocking findings: {len(ids)}{' (' + ', '.join(ids) + ')' if ids else ''}",
+            f"- reviewer agreement: {sum(len(s) == 1 for s in shared)}/{len(shared)} rounds with several reviewers"
+            if shared else "- reviewer agreement: n/a (one reviewer per round)",
+            f"- approver (dry-run): {a.get('verdict', 'unknown')}{'; ' + '; '.join(a['reasons']) if a.get('reasons') else ''}",
+            f"- ci: {(t['out'].get('ci') or {}).get('result', 'unknown')}"])
+
+    def push_file(self, branch, base, rel, text, msg):
+        """Commit `rel` on `branch` (from origin/<base> when it does not exist yet) in a temporary detached
+        worktree and push it; after a rejected push (another run pushed first) rebase once and push again."""
+        tmp = self.wt.with_name(f"{self.nn}-retro")
+        if tmp.exists():
+            sh(["git", "worktree", "remove", "--force", str(tmp)], self.root)
+        start = branch if sh(["git", "ls-remote", "--heads", "origin", branch], self.root).strip() else base
+        sh(["git", "fetch", "origin", start], self.root)
+        sh(["git", "worktree", "add", "--detach", str(tmp), f"origin/{start}"], self.root)
+        try:
+            (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp / rel).write_text(text)
+            sh(["git", "add", rel], tmp)
+            sh(["git", "commit", "-qm", msg], tmp)
+            try:
+                sh(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], tmp)
+            except RuntimeError:
+                sh(["git", "pull", "--rebase", "origin", branch], tmp)
+                sh(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], tmp)
+        finally:
+            sh(["git", "worktree", "remove", "--force", str(tmp)], self.root)
+
     def summarize(self, t, trace):
         """After `ci` moved the ticket to `approved`: the router summary (with the action's retries),
         then `finish`. The summary is best effort: its result never changes the stage."""
@@ -429,10 +503,13 @@ class Delivery:
             blocks["checks"] = Path(out["ci"]["report"]).read_text()  # CI or the merge with the base failed
         elif action == "document":  # the reviewers' handoffs say what has docs impact
             blocks = {a: out[a] for a in REVIEWERS if a in out}
+        elif action == "retro":
+            blocks = {a: out[a] for a in ("implement", "fix", "checks", *REVIEWERS, "document", "approve", "ci") if a in out}
+            blocks["numbers"] = self.run_numbers(t)
         elif action == "summary":
             lines += [f"stage: {t['state']} (the summary runs after the stage change)",
                       f"ci: {(out.get('ci') or {}).get('ci', 'unknown')}"]
-            blocks = {a: out[a] for a in ("implement", "fix", "checks", *REVIEWERS, "document", "approve", "publish", "ci") if a in out}
+            blocks = {a: out[a] for a in ("implement", "fix", "checks", *REVIEWERS, "document", "approve", "publish", "ci", "retro") if a in out}
             blocks["commits"] = self.commits(t, base)
             blocks["events"] = "\n".join(map(event_line, self.trace))
             if cost_table(self.run_dir):
@@ -462,7 +539,7 @@ def run_ticket(root, nn, tracker, executor, run_id=None, resume=False):
     d = Delivery(root, nn, tracker, run_id or f"local:{time.strftime('%Y%m%dT%H%M%S')}-{nn}")
     t, trace = drive(d.m, tracker, nn, executor, execute=d, resume=resume)
     d.save(t)  # sm.json shows the final stage
-    if trace and trace[-1]["event"] in ("ci.passed", "ci.pending"):  # only the run that reached approved
+    if trace and trace[-1]["event"] in ("retro.done", "retro.failed"):  # only the run that reached approved
         d.summarize(t, trace)
     return t, trace
 

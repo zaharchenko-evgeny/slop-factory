@@ -51,9 +51,16 @@ class Delivery(unittest.TestCase):
         t, trace = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["ci"],
                                                            "vars": {"fix_round": 3}}), ["ci.failed"])
         self.assertEqual((t["state"], trace[-1]["note"]), ("blocked", "fix_round exhausted at 3"))
-        for result, state in (("pending", "approved"), ("error", "failed")):
-            t, _ = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["ci"]}), [f"ci.{result}"])
+        for events, state in ((["ci.pending", "retro.done"], "approved"), (["ci.error"], "failed")):
+            t, _ = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["ci"]}), events)
             self.assertEqual(t["state"], state)
+
+    def test_retro_runs_after_ci_then_approved(self):
+        t, trace = run_fixture(self.m, "approve-would.yaml")
+        self.assertEqual([(r["event"], r["run"], r["to"]) for r in trace[-2:]],
+                         [("ci.passed", ["retro"], "in-review"), ("retro.done", [], "approved")])
+        t, _ = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["retro"]}), ["retro.failed"])
+        self.assertEqual(t["state"], "approved")  # best effort: a failed retro does not hold the gate
 
     def test_review_then_approver_then_publish_for_both_verdicts(self):
         for name, verdict in (("approve-would.yaml", "would-auto-approve"), ("approve-needs-human.yaml", "needs-human")):

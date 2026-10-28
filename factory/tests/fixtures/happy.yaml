@@ -20,3 +20,4 @@ events:
   - approve.done: { verdict: needs-human, reasons: [risk is high] }
   - publish.done: { pr_urls: ["https://example.invalid/pr/1"] }
   - ci.passed
+  - retro.done

@@ -89,6 +89,7 @@ REPLIES = {
     "full": "```text\nREVIEWER\nverdict: approved\nreviewed_sha: x\nrisk: low\ndocs_impact: no\nblocking:\nnits:\n```\n",
     "behaviour": "```text\nREVIEWER\nverdict: approved\nrisk: high\ndocs_impact: no\n```\n",
     "structure-security": "```text\nREVIEWER\nverdict: approved\nrisk: high\ndocs_impact: no\n```\n",
+    "record": "```text\nRETRO\nmanual_steps: |\n  - none\nlessons: |\n  - navigation: point to x — y\n```\n",
     "summary": "```text\nROUTER-SUMMARY\ncomplete: yes\ncomment: |\n  [factory] Summary line.\n  Factory-Run: r1\n```\n",
 }
 CHECKS = [{"name": "has-file", "stage": "pre-review", "mode": "blocking", "run": "test -f stub.txt"},
@@ -153,7 +154,7 @@ class DriveRun(unittest.TestCase):
     def test_records_cost_per_role(self):
         self.go()
         log = [json.loads(x) for x in (self.root / ".factory/runs/01/events.log").read_text().splitlines()]
-        self.assertEqual({r["role"] for r in log}, {"developer", "reviewer", "router"})
+        self.assertEqual({r["role"] for r in log}, {"developer", "reviewer", "retro", "router"})
         self.assertTrue(all(r["event"] == "usage" and r["cacheWrite"] == 7 for r in log))
         table = drive.cost_table(self.root / ".factory/runs/01")
         self.assertIn("implement", table)
@@ -206,6 +207,23 @@ class DriveRun(unittest.TestCase):
         self.assertIn("docs_impact", (self.stub / "prompt-update").read_text())  # the reviewers' handoffs
         self.assertEqual(json.loads((self.root / ".factory/runs/01/approve-0.json").read_text())["paths"],
                          ["doc.md", "stub.txt"])  # the approver sees the doc commit
+
+    def test_retro_entry_pushed_to_knowledge_inbox(self):
+        t = self.go()
+        k = yaml.safe_load((self.root / "factory.yaml").read_text())["knowledge"]
+        rel = "knowledge/offline-eval-factory/retro-01-r1.md"
+        self.assertEqual((t["out"]["retro"]["result"], t["out"]["retro"]["entry"]), ("done", rel))
+        subprocess.run(["git", "fetch", "-q", "origin"], cwd=self.root, check=True)
+        entry = subprocess.run(["git", "show", f"origin/{k['branch']}:{rel}"], cwd=self.root, capture_output=True,
+                               text=True, check=True).stdout
+        for line in ("- cost: $", "- wall time: ", "- fix rounds: 0", "- blocking findings: 0",
+                     "- reviewer agreement: n/a", "- approver (dry-run): ", "- ci: passed", "navigation: point to x"):
+            self.assertIn(line, entry)
+        self.assertNotIn("knowledge", subprocess.run(["git", "ls-tree", "-r", "--name-only", "origin/main"],
+                                                     cwd=self.root, capture_output=True, text=True).stdout)
+        self.assertIn("## numbers", (self.stub / "prompt-record").read_text())
+        self.assertLess(self.stages.index("in-review"), len(self.stages) - 1)  # approved after the retro
+        self.assertIn("retro.done", (self.stub / "prompt-summary").read_text())
 
     def test_empty_first_preflight_reply_passes_on_retry(self):
         (self.stub / "preflight-empty-once").touch()

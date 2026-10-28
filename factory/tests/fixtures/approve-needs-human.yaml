@@ -9,3 +9,4 @@ events:
   - approve.done: { verdict: needs-human, reasons: ["touches .github/workflows/ci.yml"] }
   - publish.done: { pr_urls: ["https://example.invalid/pr/1"] }
   - ci.passed
+  - retro.done

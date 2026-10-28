@@ -53,7 +53,7 @@ class Tracker(unittest.TestCase):
                   {"start.done": {"branch": "b"}}, "implement.done", "checks.passed",
                   {"review_full.done": {"verdict": "approved", "reviewed_sha": "s", "risk": "high"}},
                   {"approve.done": {"verdict": "needs-human", "reasons": ["risk is high"]}},
-                  {"publish.done": {"pr_urls": ["u"]}}, "ci.passed"]
+                  {"publish.done": {"pr_urls": ["u"]}}, "ci.passed", "retro.done"]
         t, _ = drive(M, self.tr, "01", "executor-a", events)
         self.assertEqual(stages, ["ready", "in-dev", "in-review", "approved"])
         self.assertEqual(t["vars"]["risk"], "high")  # the review raised it

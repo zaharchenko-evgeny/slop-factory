@@ -30,8 +30,8 @@ change, whether you are a person, a pi session or a factory role.
    [factory.yaml](factory.yaml) → reviewers chosen by risk (one for
    `risk:low`, behaviour plus structure-security for `risk:high`, each in its
    own directory) → fix rounds → doc-writer when a reviewer reports docs impact →
-   approver (dry-run) → PR → router summary on the
-   ticket. Each role runs as its own `pi -p` process with the model from
+   approver (dry-run) → PR → retro entry on the knowledge branch → router
+   summary on the ticket. Each role runs as its own `pi -p` process with the model from
    `factory.yaml`. Whoever orchestrates runs scripts, git and `gh`, and never
    writes or reviews the code.
 5. **Merge gate.** A human merges the PR after CI passes and the reviewers
