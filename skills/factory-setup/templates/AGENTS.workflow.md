@@ -23,10 +23,10 @@ change, whether you are a person, a pi session or a factory role.
    developer in `.factory/worktrees/<issue>` → pre-review checks from
    [factory.yaml](factory.yaml) → reviewers chosen by risk (one for
    `risk:low`, behaviour plus structure-security for `risk:high`, each in its
-   own directory) → fix rounds → PR → router summary on the ticket. Each role
-   runs as its own `pi -p` process with the model from `factory.yaml`. Whoever
-   orchestrates runs scripts, git and `gh`, and never writes or reviews the
-   code.
+   own directory) → fix rounds → approver (dry-run) → PR → router summary on the
+   ticket. Each role runs as its own `pi -p` process with the model from
+   `factory.yaml`. Whoever orchestrates runs scripts, git and `gh`, and never
+   writes or reviews the code.
 5. **Merge gate.** A human merges the PR after CI passes and the reviewers
    approve, then moves the ticket to `factory:done`. A PR that passed alone
    can still break the base together with another one: the factory re-runs

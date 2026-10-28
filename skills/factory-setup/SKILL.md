@@ -54,11 +54,11 @@ without showing the diff.
 - `AGENTS.md`: the "Development workflow" section ← `templates/AGENTS.workflow.md`;
   add the other sections from the interview (step 1.9)
 - `roles/_common.md`, `roles/_setup-common.sh`, `roles/<role>/role.md` for
-  router, developer and reviewer; `roles/<role>/setup.sh` ←
+  router, developer, reviewer and approver; `roles/<role>/setup.sh` ←
   `templates/roles/setup.sh.tmpl`; `roles/<role>/skills.txt` from the interview
 - `workflows/delivery.sm.yaml`, `workflows/delivery.md`
 - `docs/agents/issue-tracker.md` (GitHub Issues and local markdown adapters)
-- `policies/auto-approve.rego`, `judgments/auto-approve.yaml` (arrive with the approver, #9)
+- `policies/auto-approve.rego`, `judgments/auto-approve.yaml` (the approver's hard and soft rules)
 - `skills.lock`
 - `docs/automations/<name>.md` (one record per automation)
 
@@ -82,6 +82,7 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | `PROJECT_CHECKS` | Project-specific check entries, after the generic ones | `factory.yaml` |
 | `DESIGN_REF` | Pointer to the design document, e.g. `(design §5)` | `workflows/delivery.md` |
 | `MAP_ISSUE_LINK` | Markdown link to the map issue | `AGENTS.workflow.md` |
+| `DECISIONS_ENGINE` | decisions-kit `decide` engine of the approver's soft judgment, e.g. `openai-decisions` | `factory.yaml` |
 | `MODEL_POLICY` | One line on which models may be used | `AGENTS.workflow.md` |
 | `ROLE`, `TOOLS` | Role name and the tools its `setup.sh` needs; filled once per role from `ROLES` | `roles/setup.sh.tmpl` |
 

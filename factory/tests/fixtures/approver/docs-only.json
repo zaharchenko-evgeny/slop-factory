@@ -1,0 +1,2 @@
+{"paths": ["docs/design.md", "README.md"], "lines_changed": 12, "ci": "passed", "risk": "low",
+ "reviews": [{"reviewer": "review_full", "verdict": "approved"}], "dependency_changes": []}

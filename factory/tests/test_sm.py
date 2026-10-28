@@ -46,7 +46,7 @@ class Delivery(unittest.TestCase):
         t, trace = run_fixture(self.m, "ci-fix.yaml")
         self.assertEqual([r["to"] for r in trace if r["to"] != r["from"]],
                          ["in-review", "changes-requested", "in-review", "approved"])
-        self.assertEqual(trace[6]["run"], ["review_behaviour", "review_structure_security"])  # re-review by risk
+        self.assertEqual(trace[7]["run"], ["review_behaviour", "review_structure_security"])  # re-review by risk
         self.assertEqual((t["state"], t["vars"]["fix_round"]), ("approved", 1))
         t, trace = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["ci"],
                                                            "vars": {"fix_round": 3}}), ["ci.failed"])
@@ -54,6 +54,17 @@ class Delivery(unittest.TestCase):
         for result, state in (("pending", "approved"), ("error", "failed")):
             t, _ = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["ci"]}), [f"ci.{result}"])
             self.assertEqual(t["state"], state)
+
+    def test_review_then_approver_then_publish_for_both_verdicts(self):
+        for name, verdict in (("approve-would.yaml", "would-auto-approve"), ("approve-needs-human.yaml", "needs-human")):
+            with self.subTest(verdict=verdict):
+                t, trace = run_fixture(self.m, name)
+                self.assertEqual([r["run"] for r in trace[1:3]], [["approve"], ["publish"]])
+                self.assertEqual((t["state"], t["vars"]["approval"], t["out"]["approve"]["verdict"]),
+                                 ("approved", verdict, verdict))  # dry-run: a human still merges
+        t, _ = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["approve"]}),
+                           ["approve.failed"])
+        self.assertEqual(t["state"], "failed")
 
     def test_fix_loop_to_exhaustion(self):
         t, trace = run_fixture(self.m, "fix-loop.yaml")
@@ -72,7 +83,7 @@ class Delivery(unittest.TestCase):
         self.assertEqual(trace[0]["run"], ["review_behaviour", "review_structure_security"])
         self.assertEqual((t["state"], t["pending"]), ("in-review", ["review_structure_security"]))
         t, _ = sm.step(self.m, t, "review_structure_security.done", {"verdict": "approved", "reviewed_sha": "s"})
-        self.assertEqual((t["pending"], t["vars"]["reviewed_sha"]), (["publish"], "s"))
+        self.assertEqual((t["pending"], t["vars"]["reviewed_sha"]), (["approve"], "s"))
         t, trace = self.review("low")
         self.assertEqual(trace[0]["run"], ["review_full"])
 
@@ -109,7 +120,7 @@ class Delivery(unittest.TestCase):
                                             for a in (["review_full"] if start == "low" else
                                                       ["review_behaviour", "review_structure_security"])])
                 self.assertEqual(t["vars"]["risk"], want)
-                self.assertEqual(t["pending"], ["publish" if verdict == "approved" else "fix"])
+                self.assertEqual(t["pending"], ["approve" if verdict == "approved" else "fix"])
 
     def test_reviewers_low_and_high_yield_high(self):
         for verdict in ("approved", "changes-requested"):

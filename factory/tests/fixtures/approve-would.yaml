@@ -1,0 +1,11 @@
+# Low risk, the reviewer approves, the approver (dry-run) would auto-approve:
+# publish runs, CI passes, and the ticket still waits for the human in `approved`.
+ticket:
+  state: in-dev
+  pending: [checks]
+events:
+  - checks.passed
+  - review_full.done: { verdict: approved, reviewed_sha: a1, risk: low }
+  - approve.done: { verdict: would-auto-approve, reasons: [] }
+  - publish.done: { pr_urls: ["https://example.invalid/pr/1"] }
+  - ci.passed

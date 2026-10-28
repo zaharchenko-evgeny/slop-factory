@@ -19,6 +19,7 @@ vars:
   branch: { type: string, default: "" }
   pr_urls: { type: list, default: [] }
   run_id: { type: string, default: "" }
+  approval: { type: string, default: "" }
 
 # External events from the tracker and the forge bridges.
 events: [stage.ready, pr.merged]
@@ -39,6 +40,8 @@ actions:
   review_behaviour: { kind: agent, role: reviewer, mode: behaviour, session: fresh, retry: 1 }
   review_structure_security: { kind: agent, role: reviewer, mode: structure-security, session: fresh, retry: 1 }
   fix: { kind: agent, role: developer, mode: fix, session: resume, retry: 1 }
+  # The approver role (roles/approver/role.md): hard rules, then the soft judgment; dry-run only.
+  approve: { kind: script, role: approver }
   publish: { kind: script }
   ci: { kind: script, run: "blocking checks on the branch merged with the base, then the PR's CI checks" }
   summary: { kind: agent, role: router, mode: summary, retry: 1 }
@@ -120,12 +123,12 @@ transitions:
     on: review.done
     if: '$not(out.review_full.verdict = "changes-requested" or out.review_behaviour.verdict = "changes-requested" or out.review_structure_security.verdict = "changes-requested") and (out.review_full.risk = "high" or out.review_behaviour.risk = "high" or out.review_structure_security.risk = "high")'
     set: { reviewed_sha: event.reviewed_sha, risk: '"high"' }
-    do: publish
+    do: approve
   - from: in-review
     on: review.done
     if: '$not(out.review_full.verdict = "changes-requested" or out.review_behaviour.verdict = "changes-requested" or out.review_structure_security.verdict = "changes-requested")'
     set: { reviewed_sha: event.reviewed_sha }
-    do: publish
+    do: approve
   # The same blocking findings in two consecutive rounds: stop.
   - from: in-review
     on: review.done
@@ -145,6 +148,9 @@ transitions:
     do: fix
     to: changes-requested
   - { from: in-review, on: review.failed, to: failed }   # a reviewer's handoff stayed missing after retry and fallback
+  # Dry-run: either verdict publishes; the PR body and the ticket record it, a human still merges.
+  - { from: in-review, on: approve.done, set: { approval: out.approve.verdict }, do: publish }
+  - { from: in-review, on: approve.failed, to: failed }
   # The driver runs the `summary` action after `ci` moves the ticket to approved (best effort, not an event).
   - { from: in-review, on: publish.done, set: { pr_urls: out.publish.pr_urls }, do: ci }
   - { from: in-review, on: publish.failed, to: failed }
