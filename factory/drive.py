@@ -12,12 +12,14 @@ actions here, agent actions through run_role.py (each reviewer in its own run
 dir and detached checkout, the fallback model after a malformed handoff). Stage
 and vars (with the `_run` state) are written through the adapter after each step; the run dir keeps
 `sm.json`, `<step>.in.md` and `checks-<round>.md`. Publish relabels the ticket's risk and
-docs-impact, posts the reviewers' nits as one PR comment and watches CI (`gh pr checks`, after
-waiting for the checks to register). The reviewers of a fork run in parallel. Once publish moves the
-ticket to `approved`, the driver runs the router summary (input: final stage, CI result, event log),
-posts its comment on the ticket, edits the PR body from
-`Refs #N` to `Closes #N` when the summary says `complete: yes`, and removes the worktree. `pi` and `gh` can be
-replaced with $FACTORY_AGENT and $FACTORY_GH.
+docs-impact and posts the reviewers' nits as one PR comment; a later publish (after a fix round)
+pushes and rebuilds the PR body. `ci` runs the blocking checks on the branch merged with the base, then
+watches CI (`gh pr checks`, after waiting for the checks to register); a failure goes to a fix round with
+the failing job log (`ci-<round>.md`). The reviewers of a fork run in parallel. Once `ci` moves the
+ticket to `approved`, the driver runs the router summary (input: final stage, CI result, commits, event
+log), posts its comment on the ticket, edits the PR body from `Refs #N` to `Closes #N` when the summary
+says `complete: yes`, and removes the worktree once CI passed. `pi` and `gh` can be replaced with
+$FACTORY_AGENT and $FACTORY_GH.
 
 CLI: uv run factory/drive.py run <ticket> [--tracker local:<effort dir>|github] [--executor NAME] [--resume]
      uv run factory/drive.py branch <ticket> <ticket.json>  prints the ticket's branch name.
@@ -169,8 +171,8 @@ class Delivery:
             return self.agent(t, action, spec)
         try:
             return getattr(self, action)(t)
-        except (RuntimeError, OSError, ValueError) as e:
-            return "failed", {"error": str(e)}
+        except (RuntimeError, OSError, ValueError) as e:  # for `ci`, failed means a fix round: not for this
+            return ("error" if action == "ci" else "failed"), {"error": str(e)}
 
     def issue(self):
         """(title and body, base branch): the body's `base:` line, else the primary repository's default."""
@@ -208,42 +210,85 @@ class Delivery:
         return "done", {"branch": b}
 
     def checks(self, t):
-        base, rows, report, failed = self.issue()[1], [], [], False
+        failed, rows, report = self.run_checks(self.wt, self.issue()[1])
+        path = self.run_dir / f"checks-{t['vars']['fix_round']}.md"
+        path.write_text(report)
+        return ("failed" if failed else "passed"), {"checks": rows, "report": str(path)}
+
+    def run_checks(self, cwd, base, blocking_only=False):
+        """Run the pre-review checks in `cwd`: (a blocking one failed, rows, markdown report)."""
+        rows, report, failed = [], [], False
         for c in self.config.get("checks") or []:
-            if c.get("stage", "pre-review") != "pre-review":
+            if c.get("stage", "pre-review") != "pre-review" or (blocking_only and c.get("mode") != "blocking"):
                 continue
             if c.get("requires") and not shutil.which(c["requires"]):
                 status, text = "skipped", f"{c['requires']} is not installed"
             else:
-                r = subprocess.run(["bash", "-c", c["run"]], cwd=self.wt, capture_output=True, text=True,
+                r = subprocess.run(["bash", "-c", c["run"]], cwd=cwd, capture_output=True, text=True,
                                    env={**os.environ, "FACTORY_BASE": base})
                 status, text = ("pass" if r.returncode == 0 else "fail"), r.stdout + r.stderr
             failed |= status == "fail" and c.get("mode") == "blocking"
             rows.append({"name": c["name"], "mode": c.get("mode"), "status": status})
             tail = "\n".join(text.rstrip().splitlines()[-15:])
             report.append(f"## {c['name']} ({c.get('mode')}): {status}\n~~~~\n{tail}\n~~~~\n")
-        path = self.run_dir / f"checks-{t['vars']['fix_round']}.md"
-        path.write_text("\n".join(report))
-        return ("failed" if failed else "passed"), {"checks": rows, "report": str(path)}
+        return failed, rows, "\n".join(report)
 
     def publish(self, t):
         i, base = self.issue()
         b, out = t["vars"]["branch"], t["out"]
         sh(["git", "push", "-u", "origin", b], self.wt)
+        if t["vars"]["pr_urls"]:  # after a fix round: the PR exists, rebuild its body
+            for url in t["vars"]["pr_urls"]:
+                sh([gh(), "pr", "edit", url, "--body", self.pr_body(t, i, base)], self.wt)
+            return "done", {"pr_urls": t["vars"]["pr_urls"]}
         reviews = [out[a] for a in REVIEWERS if a in out]
         self.tracker.set_review_labels(self.nn, t["vars"]["risk"], any(r.get("docs_impact") == "yes" for r in reviews))
         url = sh([gh(), "pr", "create", "--head", b, "--base", base, "--title", f"#{self.nn} {i['title']}",
-                  "--body", self.pr_body(t, i)], self.wt).strip().splitlines()[-1]
+                  "--body", self.pr_body(t, i, base)], self.wt).strip().splitlines()[-1]
         nits = [f"### {a}\n\n{out[a]['nits'].strip()}" for a in REVIEWERS
                 if (out.get(a) or {}).get("nits", "").strip() not in ("", "none")]
         if nits:
             body = "\n\n".join(["[factory] Review nits (advisory, not blocking)", *nits, self.trailer(t)])
             sh([gh(), "pr", "comment", url, "--body", body], self.wt)
-        return "done", {"pr_urls": [url], "ci": self.ci(url)}
+        return "done", {"pr_urls": [url]}
 
-    def ci(self, url):
-        """`passed`, `failed (...)` or `pending ...`: wait until CI has registered checks for the PR head
-        ("no checks reported" right after `gh pr create` is pending), watch them, then read them once more."""
+    def ci(self, t):
+        """`failed` when the blocking checks fail on the branch merged with the current base, else the PR's
+        CI result. A failure's report (`ci-<round>.md`) is the fix round's checks block."""
+        base = self.issue()[1]
+        status, text = self.merged_checks(base)
+        for url in t["vars"]["pr_urls"] if status == "passed" else ():
+            status, text = self.read_ci(url)
+            if status != "passed":
+                break
+        path = self.run_dir / f"ci-{t['vars']['fix_round']}.md"
+        path.write_text(text)
+        return status, {"ci": text.splitlines()[0] if text else status, "report": str(path)}
+
+    def merged_checks(self, base):
+        """(`passed` | `failed`, report): the blocking checks on HEAD merged with origin/<base>, in a
+        temporary detached worktree, so two PRs that pass alone cannot break the base together."""
+        tmp = self.wt.with_name(f"{self.nn}-merge")
+        sh(["git", "fetch", "origin", base], self.root)
+        if tmp.exists():
+            sh(["git", "worktree", "remove", "--force", str(tmp)], self.root)
+        sh(["git", "worktree", "add", "--detach", str(tmp), "HEAD"], self.wt)
+        try:
+            r = subprocess.run(["git", "-c", "user.name=factory", "-c", "user.email=factory@invalid", "merge",
+                                "--no-edit", f"origin/{base}"], cwd=tmp, capture_output=True, text=True)
+            if r.returncode:
+                return "failed", f"failed: the branch does not merge with origin/{base}\n\n{r.stdout}{r.stderr}"
+            failed, _, report = self.run_checks(tmp, base, blocking_only=True)
+        finally:
+            sh(["git", "worktree", "remove", "--force", str(tmp)], self.root)
+        if failed:
+            return "failed", f"failed: blocking checks on the branch merged with origin/{base}\n\n{report}"
+        return "passed", report
+
+    def read_ci(self, url):
+        """(`passed` | `pending` | `failed`, text): wait until CI has registered checks for the PR head
+        ("no checks reported" right after `gh pr create` is pending), watch them, then read them once more.
+        A failure's text has the `gh run view --log-failed` tail of each failed run."""
         # shortcut: waits at most CI_WAIT seconds, then reports CI as pending; raise it if CI gets slower.
         deadline = time.monotonic() + CI_WAIT
 
@@ -259,15 +304,22 @@ class Delivery:
             checks("--watch")
             r = checks()  # the --watch stream can still hold the first pending snapshot
         except subprocess.TimeoutExpired:
-            return f"pending after {CI_WAIT}s"
+            return "pending", f"pending after {CI_WAIT}s"
         if r.returncode == 0:
-            return "passed"
+            return "passed", "passed\n\n" + r.stdout
         if r.returncode == 8:  # gh: checks still pending
-            return "pending"
-        return f"failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[-300:]}"
+            return "pending", "pending\n\n" + r.stdout
+        text = [f"failed (exit {r.returncode}) at {url}", "", "~~~~", (r.stdout + r.stderr).strip(), "~~~~"]
+        runs = dict.fromkeys(re.findall(r"/actions/runs/(\d+)", "\n".join(
+            ln for ln in r.stdout.splitlines() if re.search(r"\sfail\s", ln))))
+        for run in runs:
+            log = subprocess.run([gh(), "run", "view", run, "--log-failed"], cwd=self.wt, capture_output=True,
+                                 text=True).stdout
+            text += ["", f"## Failed log of run {run} (last 80 lines)", "~~~~", *log.splitlines()[-80:], "~~~~"]
+        return "failed", "\n".join(text) + "\n"
 
     def summarize(self, t, trace):
-        """After publish moved the ticket to `approved`: the router summary (with the action's retries),
+        """After `ci` moved the ticket to `approved`: the router summary (with the action's retries),
         then `finish`. The summary is best effort: its result never changes the stage."""
         self.trace = trace
         self.save(t)
@@ -280,24 +332,29 @@ class Delivery:
 
     def finish(self, t, s):
         """After the summary: post its comment on the ticket, switch the PR body to `Closes #N` when the
-        summary says `complete: yes`, and remove the worktree (the run dir stays)."""
+        summary says `complete: yes`, and remove the worktree once CI passed (the run dir stays)."""
         if s.get("comment"):
             self.tracker.comment(self.nn, s["comment"])
         if s.get("complete") == "yes":
-            i = self.issue()[0]
+            i, base = self.issue()
             for url in t["vars"]["pr_urls"]:
-                sh([gh(), "pr", "edit", url, "--body", self.pr_body(t, i, closes=True)], self.root)
-        if self.wt.is_dir():
+                sh([gh(), "pr", "edit", url, "--body", self.pr_body(t, i, base, closes=True)], self.root)
+        if self.wt.is_dir() and (t["out"].get("ci") or {}).get("result") == "passed":
             sh(["git", "worktree", "remove", str(self.wt)], self.root)  # no --force: keep uncommitted work
 
     def trailer(self, t):
         return f"Factory-Run: {t['vars']['run_id'] or self.run_id}"
 
-    def pr_body(self, t, i, closes=False):
+    def commits(self, t, base):
+        """The branch's commits since origin/<base>, one `sha subject` per line (the developer's handoff
+        lists only its own round)."""
+        return sh(["git", "log", "--reverse", "--format=%h %s", f"origin/{base}..{t['vars']['branch']}"],
+                  self.root).strip()
+
+    def pr_body(self, t, i, base, closes=False):
         out, v = t["out"], t["vars"]
-        dev = out.get("fix") or out.get("implement") or {}
-        lines = [f"[factory] {i['title']}", "", "## What changed",
-                 dev.get("commits") or dev.get("files") or "See the commits.", "", "## Checks"]
+        lines = [f"[factory] {i['title']}", "", "## What changed", self.commits(t, base) or "See the commits.", "",
+                 "## Checks"]
         lines += [f"- {c['name']} ({c['mode']}): {c['status']}" for c in (out.get("checks") or {}).get("checks", [])]
         lines += ["", "## Review"]
         for a in (a for a in REVIEWERS if a in out):
@@ -317,21 +374,28 @@ class Delivery:
 
     def role_input(self, t, action, spec):
         v, out = t["vars"], t["out"]
-        lines = [f"mode: {spec.get('mode')}", f"ticket: {self.nn}", f"base: {self.issue()[1]}",
+        base = self.issue()[1]
+        lines = [f"mode: {spec.get('mode')}", f"ticket: {self.nn}", f"base: {base}",
                  f"run_id: {v['run_id'] or self.run_id}"]
         if v["branch"]:
             lines.append(f"branch: {v['branch']}")
         if spec["role"] == "reviewer" and v["reviewed_sha"]:
             lines.append(f"reviewed_sha: {v['reviewed_sha']} (re-review: read the changes since it)")
         blocks = {}
+        # A fix round's cause: failed checks, else blocking reviews, else failed CI (an older CI failure
+        # stays in out.ci, but a review that blocks after it is newer; publish needs every review approved).
+        reviews = {a: out[a] for a in REVIEWERS if (out.get(a) or {}).get("verdict") == "changes-requested"}
         if action == "fix" and (out.get("checks") or {}).get("result") == "failed":
             blocks["checks"] = Path(out["checks"]["report"]).read_text()
-        elif action == "fix":
-            blocks = {a: out[a] for a in REVIEWERS if (out.get(a) or {}).get("verdict") == "changes-requested"}
+        elif action == "fix" and reviews:
+            blocks = reviews
+        elif action == "fix" and (out.get("ci") or {}).get("result") == "failed":
+            blocks["checks"] = Path(out["ci"]["report"]).read_text()  # CI or the merge with the base failed
         elif action == "summary":
             lines += [f"stage: {t['state']} (the summary runs after the stage change)",
-                      f"ci: {(out.get('publish') or {}).get('ci', 'unknown')}"]
-            blocks = {a: out[a] for a in ("implement", "fix", "checks", *REVIEWERS, "publish") if a in out}
+                      f"ci: {(out.get('ci') or {}).get('ci', 'unknown')}"]
+            blocks = {a: out[a] for a in ("implement", "fix", "checks", *REVIEWERS, "publish", "ci") if a in out}
+            blocks["commits"] = self.commits(t, base)
             blocks["events"] = "\n".join(map(event_line, self.trace))
         for name, block in blocks.items():
             text = block if isinstance(block, str) else json.dumps(block, indent=2)
@@ -357,7 +421,8 @@ def run_ticket(root, nn, tracker, executor, run_id=None, resume=False):
     """Deliver ticket `nn` until the machine waits on a human or external actor. Return (ticket, trace)."""
     d = Delivery(root, nn, tracker, run_id or f"local:{time.strftime('%Y%m%dT%H%M%S')}-{nn}")
     t, trace = drive(d.m, tracker, nn, executor, execute=d, resume=resume)
-    if trace and trace[-1]["event"] == "publish.done":  # only the run that reached approved
+    d.save(t)  # sm.json shows the final stage
+    if trace and trace[-1]["event"] in ("ci.passed", "ci.pending"):  # only the run that reached approved
         d.summarize(t, trace)
     return t, trace
 

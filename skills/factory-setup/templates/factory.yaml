@@ -90,6 +90,6 @@ checks:
   - name: shellcheck
     stage: pre-review
     mode: advisory
-    requires: shellcheck
-    run: shellcheck -x roles/*.sh roles/*/setup.sh
+    requires: uvx
+    run: uvx --quiet --from shellcheck-py shellcheck -x roles/*.sh roles/*/setup.sh
 {{PROJECT_CHECKS}}

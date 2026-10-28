@@ -49,6 +49,7 @@ fi
 echo x >> "$STUB_DIR/calls-$mode"
 printf '%s' "$last" > "$STUB_DIR/prompt-$mode"
 if [ "$mode" = implement ]; then echo hi > stub.txt; git add stub.txt; git commit -qm "#01 stub"; fi
+if [ "$mode" = fix ]; then echo fix >> stub.txt; git commit -qam "#01 fix"; fi
 n=$(wc -l < "$STUB_DIR/calls-$mode" | tr -d ' ')
 if [ -f "$STUB_DIR/reply-$mode-$n" ]; then cat "$STUB_DIR/reply-$mode-$n"
 elif [ -f "$STUB_DIR/reply-$mode" ]; then cat "$STUB_DIR/reply-$mode"; fi
@@ -66,7 +67,11 @@ case "$1 $2" in
     if [ -f "$STUB_DIR/checks-register-at" ] && [ "$n" -lt "$(cat "$STUB_DIR/checks-register-at")" ]; then
       echo "no checks reported on the 'ez/01' branch" >&2; exit 1
     fi
+    if [ -f "$STUB_DIR/ci-fail-until" ] && [ "$n" -le "$(cat "$STUB_DIR/ci-fail-until")" ]; then
+      printf 'build\tfail\t1m\thttps://example.invalid/actions/runs/42/job/9\t\n'; exit 1
+    fi
     echo "build pass" ;;
+  "run view") echo "SC1083 in roles/x.sh line 3" ;;
   *) echo "stub gh: unexpected $*" >&2; exit 1 ;;
 esac
 """
@@ -150,7 +155,7 @@ class DriveRun(unittest.TestCase):
         self.assertIn("Refs #01", pr)
         self.assertIn("Factory-Run: r1", pr)
         self.assertIn("- tool (advisory): skipped", pr)
-        self.assertEqual(t["out"]["publish"]["ci"], "passed")
+        self.assertEqual((t["out"]["ci"]["result"], t["out"]["ci"]["ci"]), ("passed", "passed"))
         self.assertIn("https://example.invalid/pull/7", (self.stub / "gh-pr-checks").read_text())
         self.assertFalse((self.stub / "gh-pr-comment").exists())  # no nits
         edit = (self.stub / "gh-pr-edit").read_text()  # after the summary: complete yes
@@ -175,14 +180,14 @@ class DriveRun(unittest.TestCase):
         self.patch(drive, "CI_POLL", 0.01)
         (self.stub / "checks-register-at").write_text("3")  # two reads see no checks
         t = self.go()
-        self.assertEqual((t["out"]["publish"]["ci"], self.calls("checks")), ("passed", 5))  # 2 + watch + final
+        self.assertEqual((t["out"]["ci"]["result"], self.calls("checks")), ("passed", 5))  # 2 + watch + final
         self.tr.release("01", "executor-b")
         d = drive.Delivery(self.root, "01", self.tr, "r1")
         d.wt.mkdir()
         (self.stub / "calls-checks").unlink()
         (self.stub / "checks-register-at").write_text("999")
         self.patch(drive, "CI_WAIT", 0.3)
-        self.assertEqual(d.ci("https://example.invalid/pull/7"), "pending after 0.3s")
+        self.assertEqual(d.read_ci("https://example.invalid/pull/7"), ("pending", "pending after 0.3s"))
 
     def test_summary_runs_after_approved_with_stage_ci_and_events(self):
         self.go()
@@ -191,6 +196,55 @@ class DriveRun(unittest.TestCase):
         self.assertIn("ci: passed", prompt)
         self.assertIn("publish.done", prompt.split("## events", 1)[1])
         self.assertEqual(self.stages[-1], "approved")
+
+    def test_failed_ci_goes_to_fix_then_rereview_then_approved(self):
+        (self.stub / "reply-intake").write_text(REPLIES["intake"].replace("risk: low", "risk: high"))
+        (self.stub / "reply-fix").write_text(REPLIES["implement"])
+        (self.stub / "ci-fail-until").write_text("3")  # the first read, --watch and final read fail
+        wt = self.root / ".factory/worktrees/01"
+        finish = drive.Delivery.finish
+        seen = []
+        self.patch(drive.Delivery, "finish", lambda d, t, s: (seen.append(wt.is_dir()), finish(d, t, s)))
+        t = self.go()
+        self.assertEqual((t["state"], t["vars"]["fix_round"]), ("approved", 1))
+        self.assertEqual(self.stages, ["ready", "in-dev", "in-review", "changes-requested", "in-review", "approved"])
+        fix = (self.stub / "prompt-fix").read_text()
+        self.assertIn("## checks", fix)
+        self.assertIn("SC1083 in roles/x.sh line 3", fix)  # the failing job log
+        self.assertEqual((self.calls("behaviour"), self.calls("structure-security")), (2, 2))  # re-review
+        edit = (self.stub / "gh-pr-edit").read_text()  # last edit: the summary's Closes body
+        self.assertIn("#01 stub\n", edit.split("## What changed", 1)[1])
+        self.assertIn("#01 fix", edit)
+        self.assertIn("- Fix rounds: 1", edit)
+        self.assertIn("#01 fix", (self.stub / "prompt-summary").read_text().split("## commits", 1)[1])
+        self.assertEqual(seen, [True])
+        self.assertFalse(wt.exists())  # removed once CI is green
+        self.assertEqual(json.loads((self.root / ".factory/runs/01/sm.json").read_text())["state"], "approved")
+
+    def test_pending_ci_keeps_the_worktree(self):
+        self.patch(drive.Delivery, "read_ci", lambda d, url: ("pending", "pending"))
+        self.assertEqual(self.go()["state"], "approved")
+        self.assertTrue((self.root / ".factory/worktrees/01").is_dir())
+
+    def test_merge_with_base_runs_blocking_checks(self):
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.run_dir.mkdir(parents=True)
+        d.start({})
+        (d.wt / "stub.txt").write_text("branch\n")
+        git("add", "stub.txt", cwd=d.wt)
+        git("commit", "-qm", "#01 stub", cwd=d.wt)
+        status, report = d.merged_checks("main")
+        self.assertEqual(status, "passed", report)
+        self.assertIn("has-file (blocking): pass", report)
+        self.assertNotIn("tool (advisory)", report)
+        (self.root / "stub.txt").write_text("main\n")  # another PR merged a conflicting change
+        git("add", "stub.txt", cwd=self.root)
+        git("commit", "-qm", "other", cwd=self.root)
+        git("push", "-q", "origin", "main", cwd=self.root)
+        status, report = d.merged_checks("main")
+        self.assertEqual(status, "failed")
+        self.assertIn("does not merge with origin/main", report)
+        self.assertFalse(d.wt.with_name("01-merge").exists())
 
     def test_high_risk_reviewers_run_in_parallel(self):
         (self.stub / "reply-intake").write_text(REPLIES["intake"].replace("risk: low", "risk: high"))

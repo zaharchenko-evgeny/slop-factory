@@ -42,6 +42,19 @@ class Delivery(unittest.TestCase):
         t, _ = sm.step(self.m, t, "pr.merged", {"open_pr_urls": []})
         self.assertEqual(t["state"], "done")
 
+    def test_failed_ci_is_a_fix_round_then_approved(self):
+        t, trace = run_fixture(self.m, "ci-fix.yaml")
+        self.assertEqual([r["to"] for r in trace if r["to"] != r["from"]],
+                         ["in-review", "changes-requested", "in-review", "approved"])
+        self.assertEqual(trace[6]["run"], ["review_behaviour", "review_structure_security"])  # re-review by risk
+        self.assertEqual((t["state"], t["vars"]["fix_round"]), ("approved", 1))
+        t, trace = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["ci"],
+                                                           "vars": {"fix_round": 3}}), ["ci.failed"])
+        self.assertEqual((t["state"], trace[-1]["note"]), ("blocked", "fix_round exhausted at 3"))
+        for result, state in (("pending", "approved"), ("error", "failed")):
+            t, _ = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["ci"]}), [f"ci.{result}"])
+            self.assertEqual(t["state"], state)
+
     def test_fix_loop_to_exhaustion(self):
         t, trace = run_fixture(self.m, "fix-loop.yaml")
         self.assertEqual((t["state"], t["vars"]["fix_round"]), ("blocked", CONFIG["limits"]["fix_rounds"]))

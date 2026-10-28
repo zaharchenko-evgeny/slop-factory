@@ -23,7 +23,8 @@ vars:
 # External events from the tracker and the forge bridges.
 events: [stage.ready, pr.merged]
 
-# Results: script actions end `done` or `failed`; agent actions end with their
+# Results: script actions end `done` or `failed` (`ci`: `passed`, `pending`,
+# `failed`, or `error` when it cannot read CI); agent actions end with their
 # handoff status (`done`, `blocked`) or `error` for a missing or malformed
 # handoff, which `retry` reruns.
 actions:
@@ -39,6 +40,7 @@ actions:
   review_structure_security: { kind: agent, role: reviewer, mode: structure-security, session: fresh, retry: 1 }
   fix: { kind: agent, role: developer, mode: fix, session: resume, retry: 1 }
   publish: { kind: script }
+  ci: { kind: script, run: "blocking checks on the branch merged with the base, then the PR's CI checks" }
   summary: { kind: agent, role: router, mode: summary, retry: 1 }
 
 states:
@@ -94,6 +96,12 @@ transitions:
     if: 'out.review_structure_security.verdict = "changes-requested"'
     do: { parallel: [review_structure_security], join: all, name: review }
     to: in-review
+  # No reviewer blocked (a CI fix round): re-run the reviewers of the ticket's risk.
+  - from: changes-requested
+    on: checks.passed
+    if: 'risk = "high" and $not(out.review_full.verdict = "changes-requested")'
+    do: { parallel: [review_behaviour, review_structure_security], join: all, name: review }
+    to: in-review
   - { from: changes-requested, on: checks.passed, do: { parallel: [review_full], join: all, name: review }, to: in-review }
 
   # A failed blocking check sends the work back to the developer as a fix round.
@@ -137,8 +145,17 @@ transitions:
     do: fix
     to: changes-requested
   - { from: in-review, on: review.failed, to: failed }   # a reviewer's handoff stayed missing after retry and fallback
-  # The driver runs the `summary` action after the ticket is approved (best effort, not an event).
-  - { from: in-review, on: publish.done, set: { pr_urls: out.publish.pr_urls }, to: approved }
+  # The driver runs the `summary` action after `ci` moves the ticket to approved (best effort, not an event).
+  - { from: in-review, on: publish.done, set: { pr_urls: out.publish.pr_urls }, do: ci }
   - { from: in-review, on: publish.failed, to: failed }
+  # Failed CI, or blocking checks failing on the merge with the base, is a fix round; pending CI stays as before.
+  - { from: in-review, on: ci.passed, to: approved }
+  - { from: in-review, on: ci.pending, to: approved }
+  - from: in-review
+    on: ci.failed
+    loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
+    do: fix
+    to: changes-requested
+  - { from: in-review, on: ci.error, to: failed }
 
   - { from: approved, on: pr.merged, if: "$count(event.open_pr_urls) = 0", to: done }
