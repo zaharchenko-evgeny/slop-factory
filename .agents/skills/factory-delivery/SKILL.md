@@ -42,9 +42,12 @@ uv run --quiet factory/run_role.py "$N" <action> [--step <step>]   # e.g. review
 It resolves the run dir, worktree, role files and model (`factory.yaml`, the
 ticket's risk from `$RUN/sm.json`) as absolute paths, runs intake in the
 factory root and every other action (summary and review included) inside
-`$WT`, and writes `$RUN/<step>.out.md` and `$RUN/<step>.log`. An empty output
-is logged in `<step>.log` and rerun once (the action's `retry`); exit 3 means
-feed `<action>.error`. For the summary it appends each PR's body and CI checks
+`$WT`, and writes `$RUN/<step>.out.md` and `$RUN/<step>.log`. The handoff
+must be the last fenced block of the output with nothing after it. An empty
+output, a missing handoff or text after it is logged in `<step>.log` and rerun
+once (the action's `retry`); exit 3 means feed `<action>.error`. On exit 0 the
+parsed handoff is in `$RUN/<step>.handoff.json`; build the event payload from
+it. For the summary it appends each PR's body and CI checks
 (`gh pr view`, read-only) to the input. It needs only macOS `/bin/bash` 3.2
 features here: no `declare -A`, no `mapfile`.
 
@@ -59,14 +62,14 @@ branch, and only the handoff blocks that step needs. Never pass a transcript.
 Never give the reviewer the developer's handoff; give it the ticket, the
 branch, the base and, on a re-review, the last `reviewed_sha`.
 
-Take the handoff from the last fenced block of `<step>.out.md`. If it is
-missing or malformed, rerun the step once; then stop with stage `failed`.
+Never repair or accept a handoff `run_role.py` rejected; the machine turns
+`<action>.error` into stage `failed`.
 
 ## Drive the machine
 
 The machine decides every next step; never pick one from the table in
-`workflows/delivery.md`. Every tracker write goes through the adapter
-(`factory/github_tracker.py`), never a hand-written `gh issue edit`.
+`workflows/delivery.md`. Every stage, vars and claim write goes through the
+adapter (`factory/github_tracker.py`), never a hand-written `gh issue edit`.
 
 1. `$TR frontier` lists the tickets you may take; `$N` must be one of them
    (or already claimed by `$ME`). `$TR claim $N "$ME"`, the first write. If it
@@ -78,13 +81,16 @@ The machine decides every next step; never pick one from the table in
    ```bash
    uv run --quiet factory/sm.py next "$RUN/sm.json" "<event>" > "$RUN/step.json"
    jq .ticket "$RUN/step.json" > "$RUN/sm.json"
-   $TR set-state $N "$(jq -r .ticket.state "$RUN/sm.json")"   # only when it changed
+   [ "$(jq -r .step.from "$RUN/step.json")" = "$(jq -r .step.to "$RUN/step.json")" ] ||
+     $TR set-state $N "$(jq -r .step.to "$RUN/step.json")"
    $TR write-vars $N "$(jq -c .ticket.vars "$RUN/sm.json")"
    ```
 
    `step.run` lists the actions to run next; run each (below) and feed its
    result back as `<action>.done|failed|error` with the handoff fields as the
-   payload, e.g. `intake.done={ready: "yes", risk: high}`. Keep `$RUN/sm.json`:
+   payload, e.g. `intake.done={ready: "yes", risk: high}`. Set the stage after
+   every step, before you run the next actions: the stage is `in-review`
+   while the reviewer runs (in-dev → in-review → approved). Keep `$RUN/sm.json`:
    it holds the running actions and their outputs between steps.
 4. When `step.wait` is `human` or `external`, `$TR release $N "$ME"` and end
    the run. A non-zero `sm.py` exit is a workflow error: stop with `failed`.
@@ -97,9 +103,10 @@ Local details per action of `workflows/delivery.sm.yaml`:
 
 - **preflight**: `gh auth status`; the ticket has the `ready` stage label;
   `git ls-remote --heads origin "<branch>"` and `gh pr list --head "<branch>"`
-  are empty; for every model of the run, a one-line call succeeds:
-  `pi -p --no-mcp --no-session --no-tools --model <model> "Reply with OK."`.
-  `pi auth check` alone is not enough: it reports `ready` for an invalid key.
+  are empty; `uv run --quiet factory/preflight.py` passes: every role's model
+  gets a non-empty, non-error reply to a one-line `pi -p` call (any reply, not
+  only the exact text `OK`). `pi auth check` alone is not enough: it reports
+  `ready` for an invalid key.
 - **start**: base branch is the ticket's `base:<branch>` line if present,
   else the repository default. Branch name from `branch_pattern` with a short slug of the title;
   `git worktree add -b "$BRANCH" "$WT" "origin/<base>"`.
@@ -112,7 +119,11 @@ Local details per action of `workflows/delivery.sm.yaml`:
 - **publish**: `git -C "$WT" push -u origin "$BRANCH"`; `gh pr create` with
   title `#<N> <ticket title>` and a body with: what changed, checks, review
   verdict, `Closes #<N>` only if the router confirms completion,
-  `[factory]` marker and `Factory-Run: $RUN_ID`.
+  `[factory]` marker and `Factory-Run: $RUN_ID`. The machine raises the var
+  `risk` to the highest risk a reviewer reports; when it is higher than the
+  ticket's risk label (`tracker.risk_labels`), relabel the ticket
+  (`gh issue edit $N --add-label <new> --remove-label <old>`) and say so in the
+  PR body: `Risk: raised from <old> to <new> by the review`.
 - **cleanup**: after the summary (it runs in `$WT`), `git worktree remove "$WT"`. Keep `$RUN`.
 
 ## External writes

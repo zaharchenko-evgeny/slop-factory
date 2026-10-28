@@ -27,7 +27,7 @@ A tracker ticket in stage `ready`.
 | 5 | checks | script | Run every `pre-review` check from `factory.yaml` | a blocking check fails → back to step 4 in `fix` mode with the output; counts as a fix round |
 | 6 | review | agent: reviewer, fresh session, read-only | Review the diff since the base (re-review: since `reviewed_sha`) | — |
 | 7 | gateway | decision | `approved` → step 8. `changes-requested` → stage `changes-requested`, developer `fix` mode, then steps 5–6. Same blocking findings in two consecutive rounds, or more than `limits.fix_rounds` rounds → stage `blocked`, stop | |
-| 8 | publish | script | Push the branch; open one PR per repository, linked to the ticket; post nits once as one PR comment; set risk and docs-impact labels from the review; stage `approved` | stage `failed`, stop |
+| 8 | publish | script | Push the branch; open one PR per repository, linked to the ticket; post nits once as one PR comment; set risk and docs-impact labels from the review (a review that reports a higher risk relabels the ticket, noted in the PR body); stage `approved` | stage `failed`, stop |
 | 9 | summary | agent: router (`summary`) | Check the result against the original request; post the summary on the ticket | — |
 | 10 | merge | human | A human approves and merges the PR (gate 2). Stage `done` when every PR of the ticket is merged | |
 
