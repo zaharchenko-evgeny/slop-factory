@@ -5,9 +5,12 @@ description: Run the factory delivery workflow locally on one tracker ticket —
 
 # Factory delivery (local target)
 
-You are the orchestrator. You never implement, review or repair a handoff
+A ticket is delivered with `uv run factory/drive.py run <N>` directly; an
+orchestrator agent is not needed. Whoever runs it never implement, review or repair a handoff
 yourself: the driver runs each role as its own `pi -p` process and does every
-tracker, git and `gh` write.
+tracker, git and `gh` write. Each role starts lean
+(`--no-skills --no-extensions --no-prompt-templates` plus its `skills.txt`), and the run
+ends with a cost table.
 
 Read first: `factory.yaml`, `workflows/delivery.md`, `AGENTS.md`.
 

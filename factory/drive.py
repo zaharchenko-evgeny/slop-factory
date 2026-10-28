@@ -139,6 +139,18 @@ CI_POLL = 15  # seconds between reads while no checks are registered
 NO_CHECKS = "no checks reported"
 
 
+def cost_table(run_dir):
+    """Per-call usage rows of `events.log` as a text table with a total ('' when nothing is recorded)."""
+    f = Path(run_dir) / "events.log"
+    rows = [r for r in map(json.loads, f.read_text().splitlines()) if r.get("event") == "usage"] if f.exists() else []
+    if not rows:
+        return ""
+    head = f"{'step':<16}{'role':<10}{'model':<34}{'input':>9}{'output':>8}{'cacheR':>9}{'cacheW':>9}{'cost $':>8}"
+    lines = [head] + [f"{r['step']:<16}{r['role']:<10}{r['model']:<34}{r['input']:>9}{r['output']:>8}"
+                      f"{r['cacheRead']:>9}{r['cacheWrite']:>9}{r['cost']:>8.3f}" for r in rows]
+    return "\n".join(lines + [f"{'total':<95}{sum(r['cost'] for r in rows):>8.3f}"])
+
+
 def event_line(rep):
     return f"{rep['event']:<26} {rep['from']} -> {rep['to']}  {' '.join(rep['run'])}  {rep['note'] or ''}".rstrip()
 
@@ -421,6 +433,8 @@ class Delivery:
             blocks = {a: out[a] for a in ("implement", "fix", "checks", *REVIEWERS, "approve", "publish", "ci") if a in out}
             blocks["commits"] = self.commits(t, base)
             blocks["events"] = "\n".join(map(event_line, self.trace))
+            if cost_table(self.run_dir):
+                blocks["cost"] = cost_table(self.run_dir)
         for name, block in blocks.items():
             text = block if isinstance(block, str) else json.dumps(block, indent=2)
             lines += ["", f"## {name}", "", "~~~~", text.rstrip(), "~~~~"]
@@ -485,6 +499,9 @@ def main(argv=None):
         return 2
     for rep in trace:
         print(event_line(rep))
+    table = cost_table(sm.ROOT / yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["targets"]["local"]["run_dir"] / args.ticket)
+    if table:
+        print(table)
     print(f"final: {t['state']}")
     return 0 if t["state"] == "approved" else 1
 

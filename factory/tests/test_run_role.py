@@ -173,8 +173,7 @@ class RunRole(unittest.TestCase):
         self.assertEqual(codes, dict.fromkeys(actions, 0))
         for a, other in (actions, actions[::-1]):
             seen = (self.stub / f"seen-{a}").read_text()
-            self.assertIn(f"secret-{a}", seen)  # it can read its own output file
-            self.assertNotIn(f"secret-{other}", seen)  # but not the other reviewer's, written meanwhile
+            self.assertNotIn(f"secret-{other}", seen)  # the other reviewer's output is never on disk meanwhile
             self.assertEqual((self.stub / f"head-{a}").read_text().strip(), sha)  # detached checkout at HEAD
             cwd = Path((self.stub / f"cwd-{a}").read_text().strip())
             self.assertFalse(cwd.is_relative_to(self.root) or cwd.exists())  # outside the root, removed after
@@ -247,6 +246,21 @@ class RunRole(unittest.TestCase):
         argv = (self.stub / "argv").read_text()
         self.assertIn('"url":"https://x/pull/1"', argv)
         self.assertIn('"conclusion":"SUCCESS"', argv)
+
+    def test_lean_flags_and_role_skills(self):
+        skills = self.root / ".agents/skills"
+        for n in ("ponytail-review", "other"):
+            (skills / n).mkdir(parents=True)
+            (skills / n / "SKILL.md").write_text("x")
+        os.environ["STUB_OK_AT"] = "1"
+        self.addCleanup(os.environ.pop, "STUB_OK_AT", None)
+        (self.run_dir / "review.in.md").write_text("mode: behaviour\n")
+        run_role.run(self.root, "9", "review_full", "review")
+        argv = (self.stub / "argv").read_text().split("\n")
+        for flag in ("--no-skills", "--no-extensions", "--no-prompt-templates"):
+            self.assertIn(flag, argv)
+        self.assertEqual([a for a in argv if a.endswith("/skills/ponytail-review")], [str(skills / "ponytail-review")])
+        self.assertNotIn(str(skills / "other"), argv)
 
 
 if __name__ == "__main__":
