@@ -6,8 +6,10 @@ workflow graph. Names of repositories, stages, models and checks come from
 `factory.yaml`.
 
 The same loop is defined as a state machine in `workflows/delivery.sm.yaml`,
-checked and run by `factory/sm.py` (`validate`, `next`, `simulate`). Until the
-local skill switches to it (#20), keep this table and the machine in step.
+checked and run by `factory/sm.py` (`validate`, `next`, `simulate`);
+`factory/drive.py` runs it against a tracker through the operations in
+`docs/agents/issue-tracker.md`. Until the local skill switches to it, keep this
+table and the machine in step.
 
 ## Input
 
