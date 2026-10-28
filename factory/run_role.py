@@ -56,6 +56,7 @@ class HandoffError(ValueError):
 
 
 HEADER = re.compile(r"[A-Z][A-Z-]*")
+KNOWN = re.compile(r"DEVELOPER|REVIEWER|ROUTER-[A-Z]+")
 
 
 def parse_handoff(text):
@@ -67,8 +68,9 @@ def parse_handoff(text):
     if lines[-1].startswith("```"):
         start = next((i for i in range(len(lines) - 2, -1, -1) if lines[i].startswith("```")), None)
         body = [x for x in lines[start + 1:-1] if x.strip()] if start is not None else []
-    else:  # unfenced: from the last header line to the end; a fence or prose after it fails below
-        start = next((i for i in range(len(lines) - 1, -1, -1) if HEADER.fullmatch(lines[i].strip())), None)
+    else:  # unfenced: from the first known header line (column 0) to the end; any later line that is
+        # not a `key:` line, an indented continuation or a `- ` item, or any fence, fails below
+        start = next((i for i, x in enumerate(lines) if KNOWN.fullmatch(x)), None)
         if start is None or start == len(lines) - 1 or any(x.startswith("```") for x in lines[start:]):
             raise HandoffError("text after the last fenced block" if any(x.startswith("```") for x in lines)
                                else "no handoff block")
@@ -185,7 +187,7 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, ex
         with out.open("w") as o, log.open("a") as e:
             subprocess.run(cmd, cwd=cwd, stdout=o, stderr=e)
         keep = keep_dir or run_dir
-        k = 1 + len(list(keep.glob(f"{step}-attempt*.out.md")))
+        k = 1 + len(list(keep.glob(f"{step}-attempt[0-9]*.out.md")))
         shutil.copy(out, keep / f"{step}-attempt{k}.out.md")
         try:
             handoff = parse_handoff(out.read_text())

@@ -196,6 +196,11 @@ class RunRole(unittest.TestCase):
                              "checks": "- a: pass\n  b", "blocked_reason": "none"})
         self.assertEqual(run_role.parse_handoff("Done.\n\nREVIEWER\nverdict: approved\nnits:\n  - a\n"),
                          {"handoff": "REVIEWER", "verdict": "approved", "nits": "- a"})
+        h = run_role.parse_handoff("REVIEWER\nverdict: changes-requested\nrisk: high\n  OK\nrisk: low")
+        self.assertEqual((h["handoff"], h["verdict"]), ("REVIEWER", "changes-requested"))
+        for text, msg in [("", "empty"), ("REVIEWER\nverdict: changes-requested\nOK\nrisk: low", "malformed")]:
+            with self.subTest(text), self.assertRaisesRegex(run_role.HandoffError, msg):
+                run_role.parse_handoff(text)
         for text, msg in [("", "empty"), ("no block", "no handoff"), ("REVIEWER\nverdict: ok\nThanks!", "malformed"),
                           ("```text\nREVIEWER\nx: y\n```\nDEVELOPER", "text after"), ("```\nlower: x\n```", "handoff name"),
                           ("```text\nREVIEWER\n```\nok", "text after"), ("```text\nX\n!!\n```", "malformed")]:
