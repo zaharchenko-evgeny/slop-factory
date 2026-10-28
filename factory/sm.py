@@ -17,6 +17,7 @@ import copy
 import json
 import re
 import sys
+from collections.abc import Hashable
 from pathlib import Path
 
 import yaml
@@ -189,27 +190,45 @@ def lookup(config, dotted):
     return v
 
 
+def has(coll, x):
+    # Malformed YAML can put lists or mappings where a name belongs; they are never members.
+    return isinstance(x, Hashable) and x in coll
+
+
+def mapping(v):
+    return v if isinstance(v, dict) else {}
+
+
 def validate(sm, config=None):
     """Return the normalised machine, or raise SMError listing every problem."""
     if not isinstance(sm, dict):
         raise SMError("the machine must be a YAML mapping")
     errs, config = [], config or {}
+    for key in ("states", "vars", "actions"):
+        if sm.get(key) is not None and not isinstance(sm[key], dict):
+            errs.append(f"{key}: must be a mapping")
+    for key in ("transitions", "events"):
+        if sm.get(key) is not None and not isinstance(sm[key], list):
+            errs.append(f"{key}: must be a list")
+    if errs:
+        raise SMError("\n".join(errs))
     states = sm.get("states") or {}
     stages = lookup(config, "tracker.stages")
     for name, st in states.items():
-        if (st or {}).get("actor") not in ACTORS:
+        if not has(ACTORS, mapping(st).get("actor")):
             errs.append(f"state {name}: actor must be one of {', '.join(ACTORS)}")
         if stages and name not in stages:
             errs.append(f"state {name}: not a tracker stage in factory.yaml")
     if not states:
         errs.append("states: at least one state is required")
     initial = sm.get("initial")
-    if initial not in states:
+    if not has(states, initial):
         errs.append(f"initial: {initial!r} is not a state")
     variables = sm.get("vars") or {}
     for name, v in variables.items():
-        typ = TYPES.get((v or {}).get("type"))
-        if not IDENT.match(name) or name in ("out", "event"):
+        v = mapping(v)
+        typ = TYPES.get(v.get("type")) if has(TYPES, v.get("type")) else None
+        if not IDENT.match(str(name)) or name in ("out", "event"):
             errs.append(f"var {name}: not a valid name")
         if typ is None:
             errs.append(f"var {name}: type must be one of {', '.join(TYPES)}")
@@ -217,14 +236,20 @@ def validate(sm, config=None):
             errs.append(f"var {name}: default {v.get('default')!r} is not a {v['type']}")
     actions = sm.get("actions") or {}
     for name, a in actions.items():
-        retry = (a or {}).get("retry", 0)
-        if not IDENT.match(name):
+        retry = mapping(a).get("retry", 0)
+        if not IDENT.match(str(name)):
             errs.append(f"action {name}: not a valid name")
         if not type_ok(retry, int) or retry < 0:
             errs.append(f"action {name}: retry must be a non-negative integer")
-    events = set(sm.get("events") or [])
+    events = set()
+    for ev in sm.get("events") or []:
+        if isinstance(ev, str):
+            events.add(ev)
+        else:
+            errs.append(f"events: {ev!r} is not an event name")
     raw = sm.get("transitions") or []
-    forks = {t["do"]["name"] for t in raw if isinstance(t, dict) and isinstance(t.get("do"), dict) and "name" in t["do"]}
+    forks = {t["do"]["name"] for t in raw if isinstance(t, dict) and isinstance(t.get("do"), dict)
+             and isinstance(t["do"].get("name"), str)}
 
     def check_expr(src, where):
         try:
@@ -241,6 +266,9 @@ def validate(sm, config=None):
 
     transitions, edges = [], {s: set() for s in states}
     for i, t in enumerate(raw, 1):
+        if not isinstance(t, dict):
+            errs.append(f"transition {i}: must be a mapping with from, on and to or do, got {t!r}")
+            continue
         t = dict(t)
         if True in t:  # YAML 1.1 reads a bare `on` key as boolean true
             t["on"] = t.pop(True)
@@ -250,39 +278,43 @@ def validate(sm, config=None):
         for key in set(t) - TRANSITION_KEYS:
             errs.append(f"{where}: unknown key {key!r}")
         for s in src:
-            if s not in states:
+            if not has(states, s):
                 errs.append(f"{where}: from {s!r} is not a state")
+        src = [s for s in src if has(states, s)]
         to = t.get("to")
-        if to is not None and to not in states:
+        if to is not None and not has(states, to):
             errs.append(f"{where}: to {to!r} is not a state")
+            to = None
         on = t.get("on")
         action = str(on).rpartition(".")[0]
         if not isinstance(on, str) or not (action in actions or action in forks or on in events):
             errs.append(f"{where}: on must be <action>.<result> or a declared external event")
         guard = check_expr(t["if"], f"{where} if") if "if" in t else None
         sets = {}
-        for key, val in (t.get("set") or {}).items():
+        if t.get("set") is not None and not isinstance(t["set"], dict):
+            errs.append(f"{where}: set must be a mapping of var: expression")
+        for key, val in mapping(t.get("set")).items():
             if key not in variables:
                 errs.append(f"{where}: set {key!r} is not a declared var")
             sets[key] = check_expr(val, f"{where} set {key}")
         do = t.get("do")
         if isinstance(do, dict):
             branches = do.get("parallel")
-            if not isinstance(branches, list) or not branches or any(b not in actions for b in branches):
+            if not isinstance(branches, list) or not branches or any(not has(actions, b) for b in branches):
                 errs.append(f"{where}: do.parallel must be a non-empty list of declared actions")
             if do.get("join") not in JOINS:
                 errs.append(f"{where}: do.join must be one of {', '.join(JOINS)}")
-            if not IDENT.match(str(do.get("name"))) or do.get("name") in actions:
+            if not IDENT.match(str(do.get("name"))) or has(actions, do.get("name")):
                 errs.append(f"{where}: do.name must name the fork and differ from every action")
-        elif do is not None and do not in actions:
+        elif do is not None and not has(actions, do):
             errs.append(f"{where}: do {do!r} is not a declared action")
         targets = [to] if to else src
-        if do is not None and any(states.get(s, {}).get("actor") != "agent" for s in targets if s in states):
+        if do is not None and any(mapping(states[s]).get("actor") != "agent" for s in targets):
             errs.append(f"{where}: do runs only when the target state's actor is agent")
         loop = t.get("loop")
         if loop is not None:
             loop = dict(loop) if isinstance(loop, dict) else {}
-            counter = variables.get(loop.get("counter")) or {}
+            counter = mapping(variables.get(loop["counter"])) if has(variables, loop.get("counter")) else {}
             if counter.get("type") != "int":
                 errs.append(f"{where}: loop.counter must be a declared int var")
             if "max" not in loop:
@@ -292,11 +324,11 @@ def validate(sm, config=None):
                 if not type_ok(limit, int) or limit < 1:
                     errs.append(f"{where}: loop.max {loop['max']!r} does not resolve to a positive integer")
                 loop["max"] = limit
-            if loop.get("on_exhausted") not in states:
+            if not has(states, loop.get("on_exhausted")):
                 errs.append(f"{where}: loop.on_exhausted must be a state")
         for s in src:
             if s in edges:
-                edges[s].update(x for x in targets + [(loop or {}).get("on_exhausted")] if x in states)
+                edges[s].update(x for x in targets + [(loop or {}).get("on_exhausted")] if has(states, x))
         transitions.append({"from": src, "on": on, "if": guard, "set": sets, "do": do, "to": to, "loop": loop})
     if initial in states:
         seen, todo = {initial}, [initial]

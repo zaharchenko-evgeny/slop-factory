@@ -1,0 +1,10 @@
+# Invalid: a transition that is not a mapping.
+version: 1
+initial: in-review
+actions: { review: {} }
+states:
+  in-review: { actor: agent }
+  approved: { actor: human }
+transitions:
+  - oops
+  - { from: in-review, on: review.done, to: approved }

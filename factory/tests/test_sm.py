@@ -89,6 +89,9 @@ class Invalid(unittest.TestCase):
             "bad-guard.sm.yaml": r"function \$sum is outside the subset",
             "unreachable.sm.yaml": r"state failed: unreachable from in-review",
             "loop-no-max.sm.yaml": r"loop needs max",
+            "not-mapping.sm.yaml": r"transition 1: must be a mapping .* got 'oops'",
+            "unhashable.sm.yaml": r"from \['in-review'\] is not a state(.|\n)*loop.counter must be a declared int var"
+                                  r"(.|\n)*loop.on_exhausted must be a state",
         }
         for name, msg in cases.items():
             with self.subTest(name), self.assertRaisesRegex(sm.SMError, msg):
@@ -101,6 +104,12 @@ class Invalid(unittest.TestCase):
         msg = str(self.capture(base))
         for part in ("actor must be one of", "do 'deploy' is not a declared action"):
             self.assertIn(part, msg)
+
+    def test_malformed_shapes(self):
+        for raw in ({"states": [1]}, {"states": {"a": "x"}, "initial": "a", "vars": {"v": 1}, "actions": {"r": 2},
+                     "events": [[1]], "transitions": [{"from": "a", "on": "r.done", "set": [1], "do": {"name": [1]}}]}):
+            with self.subTest(raw):
+                self.capture(raw)
 
     def capture(self, raw):
         with self.assertRaises(sm.SMError) as ctx:
