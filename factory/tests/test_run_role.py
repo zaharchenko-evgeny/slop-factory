@@ -23,7 +23,7 @@ import run_role  # noqa: E402
 import sm  # noqa: E402
 
 # Before the call count reaches $STUB_OK_AT it prints nothing, or with STUB_PROSE=1 a handoff
-# followed by prose, with STUB_UNFENCED=1 a handoff without a fence; records argv and cwd per call.
+# followed by prose, with STUB_UNFENCED=1 an unfenced handoff followed by prose; records argv and cwd per call.
 # STUB_PEEK=1: a reviewer prints secret-<mode>, waits, then greps its dirs for secrets.
 # preflight.py calls get $STUB_REPLY.
 AGENT = """#!/bin/bash
@@ -40,7 +40,7 @@ if [ -n "$STUB_PEEK" ]; then
   grep -rho 'secret-[a-z_]*' .. ../../runs/9 2>/dev/null | sort -u > "$STUB_DIR/seen-$mode"
   printf '```text\\nREVIEWER\\nverdict: approved\\n```\\n'; exit 0
 fi
-if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_UNFENCED" ]; then printf 'REVIEWER\\nverdict: approved\\n'; exit 0; fi
+if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_UNFENCED" ]; then printf 'REVIEWER\\nverdict: approved\\nThanks!\\n'; exit 0; fi
 if [ -n "${STUB_REPLY+x}" ]; then printf '%s' "$STUB_REPLY"; exit "${STUB_EXIT:-0}"; fi
 if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_PROSE" ]; then printf '```text\nREVIEWER\nverdict: approved\n```\nDone!\n'; fi
 if [ "$n" -ge "$STUB_OK_AT" ]; then printf '```text\\nREVIEWER\\nverdict: approved\\n```\\n'; fi
@@ -194,7 +194,10 @@ class RunRole(unittest.TestCase):
                                    "checks:\n  - a: pass\n    b\nblocked_reason: none\n```\n\n")
         self.assertEqual(h, {"handoff": "DEVELOPER", "status": "done", "commits": "- abc #9 x",
                              "checks": "- a: pass\n  b", "blocked_reason": "none"})
-        for text, msg in [("", "empty"), ("no block", "no fenced"), ("```\nlower: x\n```", "handoff name"),
+        self.assertEqual(run_role.parse_handoff("Done.\n\nREVIEWER\nverdict: approved\nnits:\n  - a\n"),
+                         {"handoff": "REVIEWER", "verdict": "approved", "nits": "- a"})
+        for text, msg in [("", "empty"), ("no block", "no handoff"), ("REVIEWER\nverdict: ok\nThanks!", "malformed"),
+                          ("```text\nREVIEWER\nx: y\n```\nDEVELOPER", "text after"), ("```\nlower: x\n```", "handoff name"),
                           ("```text\nREVIEWER\n```\nok", "text after"), ("```text\nX\n!!\n```", "malformed")]:
             with self.subTest(text), self.assertRaisesRegex(run_role.HandoffError, msg):
                 run_role.parse_handoff(text)

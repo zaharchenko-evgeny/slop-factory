@@ -11,7 +11,10 @@ waits on a human or external actor (`approved`, `blocked`, `failed`): script
 actions here, agent actions through run_role.py (each reviewer in its own run
 dir and detached checkout, the fallback model after a malformed handoff). Stage
 and vars (with the `_run` state) are written through the adapter after each step; the run dir keeps
-`sm.json`, `<step>.in.md` and `checks-<round>.md`. `pi` and `gh` can be
+`sm.json`, `<step>.in.md` and `checks-<round>.md`. Publish relabels the ticket's risk and
+docs-impact, posts the reviewers' nits as one PR comment and watches CI (`gh pr checks`);
+after the summary the driver posts its comment on the ticket, edits the PR body from
+`Refs #N` to `Closes #N` when the summary says `complete: yes`, and removes the worktree. `pi` and `gh` can be
 replaced with $FACTORY_AGENT and $FACTORY_GH.
 
 CLI: uv run factory/drive.py run <ticket> [--tracker local:<effort dir>|github] [--executor NAME]
@@ -93,6 +96,7 @@ def gh():
 
 SAFE_BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
 REVIEWERS = ("review_full", "review_behaviour", "review_structure_security")
+CI_WAIT = 1800
 
 
 class Delivery:
@@ -178,16 +182,46 @@ class Delivery:
 
     def publish(self, t):
         i, base = self.issue()
-        b = t["vars"]["branch"]
+        b, out = t["vars"]["branch"], t["out"]
         sh(["git", "push", "-u", "origin", b], self.wt)
-        out = sh([gh(), "pr", "create", "--head", b, "--base", base, "--title", f"#{self.nn} {i['title']}",
-                  "--body", self.pr_body(t, i)], self.wt)
-        return "done", {"pr_urls": [out.strip().splitlines()[-1]]}
+        reviews = [out[a] for a in REVIEWERS if a in out]
+        self.tracker.set_review_labels(self.nn, t["vars"]["risk"], any(r.get("docs_impact") == "yes" for r in reviews))
+        url = sh([gh(), "pr", "create", "--head", b, "--base", base, "--title", f"#{self.nn} {i['title']}",
+                  "--body", self.pr_body(t, i)], self.wt).strip().splitlines()[-1]
+        nits = [f"### {a}\n\n{out[a]['nits'].strip()}" for a in REVIEWERS
+                if (out.get(a) or {}).get("nits", "").strip() not in ("", "none")]
+        if nits:
+            body = "\n\n".join(["[factory] Review nits (advisory, not blocking)", *nits, self.trailer(t)])
+            sh([gh(), "pr", "comment", url, "--body", body], self.wt)
+        # shortcut: waits at most CI_WAIT seconds, then reports CI as pending; raise it if CI gets slower.
+        try:
+            r = subprocess.run([gh(), "pr", "checks", url, "--watch"], cwd=self.wt, capture_output=True,
+                               text=True, timeout=CI_WAIT)
+            ci = "passed" if r.returncode == 0 else f"failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[-300:]}"
+        except subprocess.TimeoutExpired:
+            ci = f"pending after {CI_WAIT}s"
+        return "done", {"pr_urls": [url], "ci": ci}
 
-    def pr_body(self, t, i):
+    def finish(self, t):
+        """After the summary: post its comment on the ticket, switch the PR body to `Closes #N` when the
+        summary says `complete: yes`, and remove the worktree (the run dir stays)."""
+        s = t["out"].get("summary") or {}
+        if s.get("comment"):
+            self.tracker.comment(self.nn, s["comment"])
+        if s.get("complete") == "yes":
+            i = self.issue()[0]
+            for url in t["vars"]["pr_urls"]:
+                sh([gh(), "pr", "edit", url, "--body", self.pr_body(t, i, closes=True)], self.root)
+        if self.wt.is_dir():
+            sh(["git", "worktree", "remove", str(self.wt)], self.root)  # no --force: keep uncommitted work
+
+    def trailer(self, t):
+        return f"Factory-Run: {t['vars']['run_id'] or self.run_id}"
+
+    def pr_body(self, t, i, closes=False):
         out, v = t["out"], t["vars"]
         dev = out.get("fix") or out.get("implement") or {}
-        lines = [f"[factory] {i['title']}", "", f"Refs #{self.nn}", "", "## What changed",
+        lines = [f"[factory] {i['title']}", "", "## What changed",
                  dev.get("commits") or dev.get("files") or "See the commits.", "", "## Checks"]
         lines += [f"- {c['name']} ({c['mode']}): {c['status']}" for c in (out.get("checks") or {}).get("checks", [])]
         lines += ["", "## Review"]
@@ -196,7 +230,12 @@ class Delivery:
             lines.append(f"- {a}, {r.get('model')}: {r.get('verdict')}, risk {r.get('risk')}, at {r.get('reviewed_sha')}")
             if r.get("fallback_from"):
                 lines.append(f"  Review: {a} fell back from {r['fallback_from']} to {r.get('model')}")
-        lines += [f"- Fix rounds: {v['fix_round']}", "", f"Factory-Run: {v['run_id'] or self.run_id}"]
+        old = (out.get("intake") or {}).get("risk") or "low"
+        if v["risk"] != old:
+            lines.append(f"- Risk: raised from {old} to {v['risk']} by the review")
+        # The link stays last before the trailer: the driver swaps it for `Closes` after the summary.
+        lines += [f"- Fix rounds: {v['fix_round']}", "", f"{'Closes' if closes else 'Refs'} #{self.nn}", "",
+                  self.trailer(t)]
         return "\n".join(lines) + "\n"
 
     # ---- Agent actions ----
@@ -239,7 +278,10 @@ class Delivery:
 def run_ticket(root, nn, tracker, executor, run_id=None):
     """Deliver ticket `nn` until the machine waits on a human or external actor. Return (ticket, trace)."""
     d = Delivery(root, nn, tracker, run_id or f"local:{time.strftime('%Y%m%dT%H%M%S')}-{nn}")
-    return drive(d.m, tracker, nn, executor, execute=d)
+    t, trace = drive(d.m, tracker, nn, executor, execute=d)
+    if trace and trace[-1]["event"].startswith("summary."):  # only the run that reached the summary
+        d.finish(t)
+    return t, trace
 
 
 def main(argv=None):

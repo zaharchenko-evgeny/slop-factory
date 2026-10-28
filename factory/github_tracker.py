@@ -40,8 +40,10 @@ def gh(args):
 
 
 class GitHubTracker:
-    def __init__(self, repo, stages, map_label="factory:map", run=gh):
+    def __init__(self, repo, stages, map_label="factory:map", run=gh, risk_labels=None, docs_label="docs-impact"):
         self.repo, self.stages, self.map_label, self.run = repo, stages, map_label, run
+        self.risk_labels = risk_labels or {"low": "risk:low", "high": "risk:high"}
+        self.docs_label = docs_label
         self._login = None
 
     def login(self):
@@ -55,7 +57,8 @@ class GitHubTracker:
     @classmethod
     def from_config(cls, path=ROOT / "factory.yaml", run=gh):
         t = yaml.safe_load(Path(path).read_text())["tracker"]
-        return cls(t["repository"], t["stages"], t.get("map_label", "factory:map"), run)
+        return cls(t["repository"], t["stages"], t.get("map_label", "factory:map"), run,
+                   t.get("risk_labels"), t.get("docs_impact_label", "docs-impact"))
 
     def _issue(self, n):
         return json.loads(self.run(["issue", "view", str(n), "-R", self.repo, "--json", "state,labels,assignees"]))
@@ -88,6 +91,18 @@ class GitHubTracker:
             if label in labels and label != self.stages[state]:
                 flags += ["--remove-label", label]
         self._edit(n, *flags)
+
+    def set_review_labels(self, n, risk, docs_impact=False):
+        """Set the one `tracker.risk_labels` label for `risk`; add the docs-impact label when asked."""
+        labels = {lb["name"] for lb in self._issue(n)["labels"]}
+        flags = ["--add-label", self.risk_labels[risk]]  # KeyError for an unknown risk
+        flags += [f for r, lb in self.risk_labels.items() if r != risk and lb in labels for f in ("--remove-label", lb)]
+        if docs_impact:
+            flags += ["--add-label", self.docs_label]
+        self._edit(n, *flags)
+
+    def comment(self, n, body):
+        self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
 
     def _state_comment(self, n):
         """The latest `[factory]` comment by `login()` with a factory-state marker, as (id, vars),

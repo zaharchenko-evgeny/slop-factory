@@ -57,6 +57,18 @@ class Tracker(unittest.TestCase):
         self.assertEqual(stages, ["ready", "in-dev", "in-review", "approved"])
         self.assertEqual(t["vars"]["risk"], "high")  # the review raised it
 
+    def test_review_raising_risk_relabels_and_comments(self):
+        self.tr.set_review_labels("01", "low")
+        self.tr.set_review_labels("01", "high", docs_impact=True)
+        text = self.tr.path("01").read_text()
+        self.assertIn("Status: ready\nRisk: high\nDocs impact: yes\n\n", text)
+        self.assertNotIn("Risk: low", text)
+        with self.assertRaises(KeyError):
+            self.tr.set_review_labels("01", "medium")
+        self.tr.comment("01", "[factory] hi\n\nFactory-Run: r")
+        self.assertTrue(self.tr.path("01").read_text().endswith("## Comments\n\n[factory] hi\n\nFactory-Run: r\n"))
+        self.assertEqual(self.tr.get_state("01"), "ready")
+
     def test_second_executor_stops_without_writing(self):
         before = self.tr.path("04").read_bytes()
         with self.assertRaisesRegex(ClaimError, "claimed by executor-b"):

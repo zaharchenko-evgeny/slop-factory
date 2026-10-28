@@ -102,6 +102,13 @@ class GitHub(unittest.TestCase):
         self.assertEqual(tracker(fake).read_vars(23), sm.persisted(t))
         self.assertEqual((t["vars"]["risk"], t["vars"]["reviewed_sha"]), ("high", "bbb"))
 
+    def test_review_raising_risk_relabels_the_issue(self):
+        fake = FakeGh({23: {"labels": ["factory:approved", "risk:low"]}})
+        tracker(fake).set_review_labels(23, "high", docs_impact=True)
+        self.assertEqual(sorted(fake.issues[23]["labels"]), ["docs-impact", "factory:approved", "risk:high"])
+        tracker(fake).set_review_labels(23, "high")
+        self.assertEqual(sorted(fake.issues[23]["labels"]), ["docs-impact", "factory:approved", "risk:high"])
+
     def test_second_executor_stops_without_writing(self):
         fake = FakeGh({23: {"labels": ["factory:ready"], "assignees": ["executor-b"]}})
         with self.assertRaisesRegex(ClaimError, "claimed by executor-b"):

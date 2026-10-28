@@ -13,8 +13,9 @@ come from the machine, the model from factory.yaml (`roles.<role>.modes.<mode>`
 when the mode has an entry, as each reviewer focus does) and the ticket's risk.
 Each reviewer is its own action, so several reviewers run as separate calls.
 Intake runs in the factory root, every other action in the ticket worktree.
-The output must end with the handoff: the last fenced block, with nothing
-after it. Each call runs the model once: an empty output or a missing or
+The output must end with the handoff: the last fenced block, or a final
+unfenced block starting with its header line (`REVIEWER`), with nothing after
+it. Each attempt's output is kept as `<step>-attempt<k>.out.md`. Each call runs the model once: an empty output or a missing or
 trailing-text handoff (or a bad first line) is logged; when the mode has a
 `fallback` tier the same call runs once more on the fallback model (the switch
 is logged and kept in the handoff as `fallback_from`), else the call exits 3
@@ -54,17 +55,25 @@ class HandoffError(ValueError):
     pass
 
 
+HEADER = re.compile(r"[A-Z][A-Z-]*")
+
+
 def parse_handoff(text):
-    """The trailing fenced block as a dict; HandoffError when it is missing or text follows it."""
+    """The trailing handoff as a dict: the last fenced block, or the final unfenced block that starts
+    with its header line (`REVIEWER`); HandoffError when it is missing or text follows it."""
     lines = text.rstrip().splitlines()
     if not lines:
         raise HandoffError("empty output")
-    if not lines[-1].startswith("```"):
-        raise HandoffError("text after the last fenced block" if any(x.startswith("```") for x in lines)
-                           else "no fenced handoff block")
-    start = next((i for i in range(len(lines) - 2, -1, -1) if lines[i].startswith("```")), None)
-    body = [x for x in lines[start + 1:-1] if x.strip()] if start is not None else []
-    if not body or not re.fullmatch(r"[A-Z][A-Z-]*", body[0].strip()):
+    if lines[-1].startswith("```"):
+        start = next((i for i in range(len(lines) - 2, -1, -1) if lines[i].startswith("```")), None)
+        body = [x for x in lines[start + 1:-1] if x.strip()] if start is not None else []
+    else:  # unfenced: from the last header line to the end; a fence or prose after it fails below
+        start = next((i for i in range(len(lines) - 1, -1, -1) if HEADER.fullmatch(lines[i].strip())), None)
+        if start is None or start == len(lines) - 1 or any(x.startswith("```") for x in lines[start:]):
+            raise HandoffError("text after the last fenced block" if any(x.startswith("```") for x in lines)
+                               else "no handoff block")
+        body = [x for x in lines[start:] if x.strip()]
+    if not body or not HEADER.fullmatch(body[0].strip()):
         raise HandoffError("the last fenced block does not start with a handoff name like REVIEWER")
     out, key, blocks = {"handoff": body[0].strip()}, None, {}
     for line in body[1:]:
@@ -146,7 +155,7 @@ def run(root, ticket, action, step=None, ticket_text=None):
         own = private / "run"
         own.mkdir()
         code = attempts(root, own, checkout, step, action, role, (model, fallback), prompt, session,
-                        {"reviewed_sha": sha})
+                        {"reviewed_sha": sha}, keep_dir=run_dir)
         for f in own.glob(f"{step}.*"):
             shutil.copy(f, run_dir / f.name)
         return code
@@ -155,8 +164,10 @@ def run(root, ticket, action, step=None, ticket_text=None):
         shutil.rmtree(private, ignore_errors=True)
 
 
-def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, extra):
-    """Run the model, then the fallback (if any) after any malformed handoff; write the handoff."""
+def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, extra, keep_dir=None):
+    """Run the model, then the fallback (if any) after any malformed handoff; write the handoff.
+    Each attempt's output is also kept as `<step>-attempt<k>.out.md` in `keep_dir` (default: run_dir),
+    numbered across fallbacks and the engine's retries."""
     out, log = run_dir / f"{step}.out.md", run_dir / f"{step}.log"
     prompts = [root / "roles/_common.md", root / "roles" / role / "role.md"]
     if role == "reviewer":  # private copies: the reviewer gets no path into the factory root
@@ -173,6 +184,9 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, ex
                "--append-system-prompt", str(prompts[1]), prompt]
         with out.open("w") as o, log.open("a") as e:
             subprocess.run(cmd, cwd=cwd, stdout=o, stderr=e)
+        keep = keep_dir or run_dir
+        k = 1 + len(list(keep.glob(f"{step}-attempt*.out.md")))
+        shutil.copy(out, keep / f"{step}-attempt{k}.out.md")
         try:
             handoff = parse_handoff(out.read_text())
         except HandoffError as err:

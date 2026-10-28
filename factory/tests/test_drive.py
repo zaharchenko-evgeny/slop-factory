@@ -42,6 +42,8 @@ case "$1 $2" in
   "pr list") echo '[]' ;;
   "pr create") echo "https://example.invalid/pull/7" ;;
   "pr view") echo '{"url":"https://example.invalid/pull/7","statusCheckRollup":[]}' ;;
+  "pr comment"|"pr edit") ;;
+  "pr checks") echo "build pass" ;;
   *) echo "stub gh: unexpected $*" >&2; exit 1 ;;
 esac
 """
@@ -49,7 +51,7 @@ REPLIES = {
     "intake": "```text\nROUTER-INTAKE\nready: yes\nrisk: low\nnext: delivery\n```\n",
     "implement": "```text\nDEVELOPER\nstatus: done\ncommits:\n  - abc #01 stub\nblocked_reason: none\n```\n",
     "full": "```text\nREVIEWER\nverdict: approved\nreviewed_sha: x\nrisk: low\ndocs_impact: no\nblocking:\nnits:\n```\n",
-    "summary": "```text\nROUTER-SUMMARY\ncomplete: yes\n```\n",
+    "summary": "```text\nROUTER-SUMMARY\ncomplete: yes\ncomment: |\n  [factory] Summary line.\n  Factory-Run: r1\n```\n",
 }
 CHECKS = [{"name": "has-file", "stage": "pre-review", "mode": "blocking", "run": "test -f stub.txt"},
           {"name": "tool", "stage": "pre-review", "mode": "advisory", "requires": "no-such-tool-31", "run": "exit 1"}]
@@ -114,7 +116,7 @@ class DriveRun(unittest.TestCase):
         self.assertEqual(t["vars"]["branch"], branch)
         self.assertEqual(t["vars"]["pr_urls"], ["https://example.invalid/pull/7"])
         wt = self.root / ".factory/worktrees/01"
-        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=wt, capture_output=True, text=True).stdout.strip()
+        head = subprocess.run(["git", "rev-parse", branch], cwd=self.root, capture_output=True, text=True).stdout.strip()
         self.assertEqual(t["vars"]["reviewed_sha"], head)
         remote = subprocess.run(["git", "ls-remote", "--heads", "origin", branch], cwd=self.root,
                                 capture_output=True, text=True).stdout
@@ -123,6 +125,17 @@ class DriveRun(unittest.TestCase):
         self.assertIn("Refs #01", pr)
         self.assertIn("Factory-Run: r1", pr)
         self.assertIn("- tool (advisory): skipped", pr)
+        self.assertEqual(t["out"]["publish"]["ci"], "passed")
+        self.assertIn("https://example.invalid/pull/7", (self.stub / "gh-pr-checks").read_text())
+        self.assertFalse((self.stub / "gh-pr-comment").exists())  # no nits
+        edit = (self.stub / "gh-pr-edit").read_text()  # after the summary: complete yes
+        self.assertIn("Closes #01\n\nFactory-Run: r1", edit)
+        self.assertNotIn("Refs #01", edit)
+        self.assertFalse(wt.exists())  # worktree removed, run dir kept
+        self.assertTrue((self.root / ".factory/runs/01/summary.out.md").exists())
+        ticket = self.tr.path("01").read_text()
+        self.assertIn("[factory] Summary line.", ticket.split("## Comments", 1)[1])
+        self.assertIn("Risk: low", ticket)
         prompt = (self.stub / "prompt-implement").read_text()
         self.assertIn("mode: implement", prompt)
         self.assertIn("# Driven ticket", prompt)  # the local ticket file, not `gh issue view`
@@ -140,8 +153,13 @@ class DriveRun(unittest.TestCase):
         self.assertEqual((t["state"], self.calls("implement")), ("failed", 2))
         self.assertEqual(self.stages[-1], "failed")
 
-    def test_unfenced_review_falls_back_and_approves(self):
-        (self.stub / "reply-full-1").write_text("REVIEWER\nverdict: approved\n")  # no fence
+    def test_unfenced_review_is_accepted(self):
+        (self.stub / "reply-full").write_text("Looks fine.\nREVIEWER\nverdict: approved\nrisk: low\n")
+        t = self.go()
+        self.assertEqual((t["state"], self.calls("full")), ("approved", 1))
+
+    def test_prose_after_review_falls_back_and_approves(self):
+        (self.stub / "reply-full-1").write_text(REPLIES["full"] + "Thanks!\n")
         t = self.go()
         self.assertEqual((t["state"], self.calls("full")), ("approved", 2))  # one call per model
         config = yaml.safe_load((self.root / "factory.yaml").read_text())
@@ -149,6 +167,35 @@ class DriveRun(unittest.TestCase):
         self.assertEqual((r["result"], r["fallback_from"], r["model"]),
                          ("done", config["models"]["review"], config["models"]["cheap"]))
         self.assertIn("fell back from", (self.stub / "gh-pr-create").read_text())
+        run = self.root / ".factory/runs/01"
+        self.assertIn("Thanks!", (run / "review_full-attempt1.out.md").read_text())  # each attempt kept
+        self.assertTrue((run / "review_full-attempt2.out.md").exists())
+
+    def test_nits_posted_once_as_one_pr_comment(self):
+        (self.stub / "reply-full").write_text(REPLIES["full"].replace("nits:\n", "nits:\n  - a.py:1 — rename x\n"))
+        self.go()
+        body = (self.stub / "gh-pr-comment").read_text()
+        self.assertIn("a.py:1 — rename x", body)
+        self.assertTrue(body.startswith("pr\ncomment\nhttps://example.invalid/pull/7\n--body\n[factory]"))
+        self.assertTrue(body.rstrip().endswith("Factory-Run: r1"))
+
+    def test_incomplete_summary_keeps_refs(self):
+        (self.stub / "reply-summary").write_text("```text\nROUTER-SUMMARY\ncomplete: no\n```\n")
+        t = self.go()
+        self.assertEqual(t["state"], "approved")
+        self.assertFalse((self.stub / "gh-pr-edit").exists())
+        self.assertIn("Refs #01", (self.stub / "gh-pr-create").read_text())
+        self.assertFalse((self.root / ".factory/worktrees/01").exists())
+
+    def test_review_raising_risk_relabels_the_ticket(self):
+        (self.stub / "reply-full").write_text(REPLIES["full"].replace("risk: low", "risk: high")
+                                              .replace("docs_impact: no", "docs_impact: yes"))
+        t = self.go()
+        self.assertEqual((t["state"], t["vars"]["risk"]), ("approved", "high"))
+        ticket = self.tr.path("01").read_text()
+        self.assertIn("Risk: high", ticket)
+        self.assertIn("Docs impact: yes", ticket)
+        self.assertIn("- Risk: raised from low to high by the review", (self.stub / "gh-pr-create").read_text())
 
     def test_claim_released_at_blocked(self):
         (self.stub / "reply-implement").write_text("```text\nDEVELOPER\nstatus: blocked\nblocked_reason: x\n```\n")
