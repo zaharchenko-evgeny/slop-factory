@@ -8,8 +8,9 @@ workflow graph. Names of repositories, stages, models and checks come from
 The same loop is defined as a state machine in `workflows/delivery.sm.yaml`,
 checked and run by `factory/sm.py` (`validate`, `next`, `simulate`);
 `factory/drive.py` runs it against a tracker through the operations in
-`docs/agents/issue-tracker.md`. Until the local skill switches to it, keep this
-table and the machine in step.
+`docs/agents/issue-tracker.md`. The local skill runs the machine, so the
+machine is the definition of the order and the transitions; this table stays as
+the readable summary and the Air render source, kept in step with the machine.
 
 ## Input
 
@@ -40,5 +41,6 @@ pass these blocks, never transcripts. The developer resumes its own session in
 
 Every push, label change, PR and comment carries the `[factory]` marker and a
 `Factory-Run:` trailer. While `gates.confirm_external_writes` is `true`, each
-write is shown and waits for the user's approval; a declined write stops the
-run with stage unchanged.
+write kind in `gates.confirm_external_writes_scope` is shown and waits for the
+user's approval; a declined write stops the run with stage unchanged. Other
+writes are auto-approved.

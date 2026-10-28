@@ -16,8 +16,10 @@ decisions: `docs/adr/`, plan: `docs/plan.md`.
 ## Writes outside the repository
 
 - While `gates.confirm_external_writes` is `true` in `factory.yaml`, show the
-  exact text of every push, PR, issue comment and label change and wait for the
-  user's approval before publishing. This applies to factory runs too.
+  exact text of every write listed in `gates.confirm_external_writes_scope`
+  (today: push) and wait for the user's approval before publishing. Issue and
+  PR text, comments and label changes are auto-approved; merging stays a human
+  gate. This applies to factory runs too.
 - Every text a factory role writes to GitHub starts with `[factory]` and ends
   with a `Factory-Run: <run id or url>` trailer.
 
