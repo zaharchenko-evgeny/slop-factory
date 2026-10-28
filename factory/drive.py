@@ -359,7 +359,7 @@ class Delivery:
         a handoff the entry has the numbers only), committed under `<dir>/<repo>/` on the knowledge branch."""
         k, base = self.config["knowledge"], self.issue()[1]
         defaults = {r["default_branch"] for r in self.config["repositories"]} | {base}
-        if k["branch"] in defaults or not SAFE_BRANCH.fullmatch(k["branch"]):
+        if k["branch"] in defaults or not SAFE_BRANCH.fullmatch(k["branch"]) or ".." in k["branch"]:
             raise ValueError(f"knowledge branch {k['branch']!r} is unsafe or a default branch")
         spec = self.m["actions"]["retro"]
         for _ in range(1 + spec.get("retry", 0)):
@@ -369,6 +369,8 @@ class Delivery:
         else:
             h = {}
         repo = next(r for r in self.config["repositories"] if r.get("role") == "primary")["name"]
+        if ".." in k["dir"].split("/") or k["dir"].startswith("/"):
+            raise ValueError(f"knowledge dir {k['dir']!r} must stay inside the repository")
         run_id = t["vars"]["run_id"] or self.run_id
         rel = f"{k['dir']}/{repo}/retro-{self.nn}-{re.sub(r'[^A-Za-z0-9.-]+', '-', run_id)}.md"
         text = "\n".join([f"# Retro: #{self.nn} {self.issue()[0]['title']}", "", f"run: {run_id}", "",
@@ -391,7 +393,8 @@ class Delivery:
             action, _, n = p.name.removesuffix(".handoff.json").partition("-")
             h = json.loads(p.read_text())
             rounds.setdefault(int(n or 0), {})[action] = h.get("verdict")
-            ids += [i for i in re.findall(r"^\s*-?\s*id:\s*(\S+)", h.get("blocking") or "", re.M) if i not in ids]
+            ids += [f"{action}-{n or 0}:{i}" for i in dict.fromkeys(
+                re.findall(r"^\s*-?\s*id:\s*(\S+)", h.get("blocking") or "", re.M))]  # per reviewer and round
         shared = [set(v.values()) for v in rounds.values() if len(v) > 1]
         a = t["out"].get("approve") or {}
         return "\n".join([

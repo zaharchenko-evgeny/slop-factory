@@ -225,6 +225,15 @@ class DriveRun(unittest.TestCase):
         self.assertLess(self.stages.index("in-review"), len(self.stages) - 1)  # approved after the retro
         self.assertIn("retro.done", (self.stub / "prompt-summary").read_text())
 
+    def test_retro_counts_blocking_findings_per_reviewer_and_round(self):
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.run_dir.mkdir(parents=True)
+        block = {"verdict": "changes-requested", "blocking": "- id: B1\n  file: x"}
+        for name in ("review_behaviour", "review_structure_security", "review_behaviour-1"):
+            (d.run_dir / f"{name}.handoff.json").write_text(json.dumps(block))
+        t = sm.new_ticket(d.m)
+        self.assertIn("- blocking findings: 3 (", d.run_numbers(t))
+
     def test_empty_first_preflight_reply_passes_on_retry(self):
         (self.stub / "preflight-empty-once").touch()
         self.assertEqual(self.go()["state"], "approved")
