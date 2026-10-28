@@ -5,6 +5,10 @@ local skill runs it now, and the setup skill later renders it into an Air
 workflow graph. Names of repositories, stages, models and checks come from
 `factory.yaml`.
 
+The same loop is defined as a state machine in `workflows/delivery.sm.yaml`,
+checked and run by `factory/sm.py` (`validate`, `next`, `simulate`). Until the
+local skill switches to it (#20), keep this table and the machine in step.
+
 ## Input
 
 A tracker ticket in stage `ready`.

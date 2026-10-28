@@ -1,0 +1,10 @@
+# Invalid: $sum is outside the guard subset.
+version: 1
+initial: in-review
+vars: { fix_round: { type: int, default: 0 } }
+actions: { review: {} }
+states:
+  in-review: { actor: agent }
+  approved: { actor: human }
+transitions:
+  - { from: in-review, on: review.done, if: "$sum(out.review.scores) > 1", to: approved }

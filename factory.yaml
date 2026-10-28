@@ -80,3 +80,7 @@ checks:
     stage: pre-review
     mode: advisory
     run: command -v shellcheck >/dev/null || exit 0; shellcheck -x roles/*.sh roles/*/setup.sh
+  - name: state-machine
+    stage: pre-review
+    mode: blocking
+    run: uv run --quiet factory/sm.py validate && uv run --quiet factory/tests/test_sm.py
