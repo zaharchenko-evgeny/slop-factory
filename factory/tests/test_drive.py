@@ -384,6 +384,7 @@ class DriveRun(unittest.TestCase):
     def test_review_raising_risk_relabels_the_ticket(self):
         (self.stub / "reply-full").write_text(REPLIES["full"].replace("risk: low", "risk: high")
                                               .replace("docs_impact: no", "docs_impact: yes"))
+        (self.stub / "reply-update").write_text("```text\nDOC-WRITER\nstatus: done\nfiles: none\n```\n")
         t = self.go()
         self.assertEqual((t["state"], t["vars"]["risk"]), ("approved", "high"))
         ticket = self.tr.path("01").read_text()
