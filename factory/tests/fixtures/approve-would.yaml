@@ -5,7 +5,7 @@ ticket:
   pending: [checks]
 events:
   - checks.passed
-  - review_full.done: { verdict: approved, reviewed_sha: a1, risk: low }
+  - review_full.done: { verdict: approved, reviewed_sha: a1, risk: low, docs_impact: "no" }
   - approve.done: { verdict: would-auto-approve, reasons: [] }
   - publish.done: { pr_urls: ["https://example.invalid/pr/1"] }
   - ci.passed

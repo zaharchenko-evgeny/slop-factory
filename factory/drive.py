@@ -12,7 +12,7 @@ actions here, agent actions through run_role.py (each reviewer in its own run
 dir and detached checkout, the fallback model after a malformed handoff). Stage
 and vars (with the `_run` state) are written through the adapter after each step; the run dir keeps
 `sm.json`, `<step>.in.md` and `checks-<round>.md`. After every reviewer approves, the approver (factory/approver.py, dry-run)
-posts its verdict on the ticket and keeps the PR summary as `approve-<round>.json`. Publish relabels the ticket's risk and
+posts its verdict on the ticket (after the doc-writer, when a reviewer reported docs impact) and keeps the PR summary as `approve-<round>.json`. Publish relabels the ticket's risk and
 docs-impact and posts the reviewers' nits as one PR comment; a later publish (after a fix round)
 pushes and rebuilds the PR body. `ci` runs the blocking checks on the branch merged with the base, then
 watches CI (`gh pr checks`, after waiting for the checks to register); a failure goes to a fix round with
@@ -427,10 +427,12 @@ class Delivery:
             blocks = reviews
         elif action == "fix" and (out.get("ci") or {}).get("result") == "failed":
             blocks["checks"] = Path(out["ci"]["report"]).read_text()  # CI or the merge with the base failed
+        elif action == "document":  # the reviewers' handoffs say what has docs impact
+            blocks = {a: out[a] for a in REVIEWERS if a in out}
         elif action == "summary":
             lines += [f"stage: {t['state']} (the summary runs after the stage change)",
                       f"ci: {(out.get('ci') or {}).get('ci', 'unknown')}"]
-            blocks = {a: out[a] for a in ("implement", "fix", "checks", *REVIEWERS, "approve", "publish", "ci") if a in out}
+            blocks = {a: out[a] for a in ("implement", "fix", "checks", *REVIEWERS, "document", "approve", "publish", "ci") if a in out}
             blocks["commits"] = self.commits(t, base)
             blocks["events"] = "\n".join(map(event_line, self.trace))
             if cost_table(self.run_dir):
@@ -450,7 +452,7 @@ class Delivery:
         h = json.loads((self.run_dir / f"{step}.handoff.json").read_text())
         if spec["role"] == "reviewer":
             h["blocking_ids"] = re.findall(r"^\s*-?\s*id:\s*(\S+)", h.get("blocking") or "", re.M)
-        if spec["role"] != "developer":
+        if spec["role"] not in ("developer", "doc-writer"):
             return "done", h
         return (h["status"] if h.get("status") in ("done", "blocked") else "error"), h
 

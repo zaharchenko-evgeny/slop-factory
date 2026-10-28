@@ -1,0 +1,14 @@
+# High risk, both reviewers approve and one reports docs_impact: the doc-writer
+# updates the docs on the branch, then the approver and publish run as usual.
+ticket:
+  state: in-dev
+  vars: { risk: high }
+  pending: [checks]
+events:
+  - checks.passed
+  - review_behaviour.done: { verdict: approved, reviewed_sha: a1, risk: high, docs_impact: "no" }
+  - review_structure_security.done: { verdict: approved, reviewed_sha: a1, risk: high, docs_impact: "yes" }
+  - document.done: { status: done, files: README.md }
+  - approve.done: { verdict: needs-human, reasons: [risk is high] }
+  - publish.done: { pr_urls: ["https://example.invalid/pr/1"] }
+  - ci.passed

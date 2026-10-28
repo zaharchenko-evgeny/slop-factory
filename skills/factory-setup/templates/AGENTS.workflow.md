@@ -23,7 +23,8 @@ change, whether you are a person, a pi session or a factory role.
    developer in `.factory/worktrees/<issue>` → pre-review checks from
    [factory.yaml](factory.yaml) → reviewers chosen by risk (one for
    `risk:low`, behaviour plus structure-security for `risk:high`, each in its
-   own directory) → fix rounds → approver (dry-run) → PR → router summary on the
+   own directory) → fix rounds → doc-writer when a reviewer reports docs impact →
+   approver (dry-run) → PR → router summary on the
    ticket. Each role runs as its own `pi -p` process with the model from
    `factory.yaml`. Whoever orchestrates runs scripts, git and `gh`, and never
    writes or reviews the code.

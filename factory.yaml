@@ -62,6 +62,8 @@ roles:
       full: { tier: review, fallback: cheap }                    # risk low: one reviewer
       behaviour: { tier: review, fallback: cheap }               # risk high
       structure-security: { tier: review_strong, fallback: cheap }  # risk high
+  # Runs when a reviewer reports docs_impact, before the approver (workflows/delivery.sm.yaml `document`).
+  doc-writer: { tier: mid }
   # Auto-approval (design §8): `tier` is the soft judgment's model, run by decisions-kit
   # `decide` with `engine`. Dry-run records the verdict only; a human still merges.
   approver: { tier: cheap, engine: agent:claude, dry_run: true }

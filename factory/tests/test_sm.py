@@ -66,6 +66,16 @@ class Delivery(unittest.TestCase):
                            ["approve.failed"])
         self.assertEqual(t["state"], "failed")
 
+    def test_docs_impact_runs_the_doc_writer_before_the_approver(self):
+        t, trace = run_fixture(self.m, "docs-impact.yaml")
+        self.assertEqual([r["run"] for r in trace[2:5]], [["document"], ["approve"], ["publish"]])
+        self.assertEqual((t["state"], t["vars"]["risk"], t["vars"]["reviewed_sha"]), ("approved", "high", "a1"))
+        t, trace = run_fixture(self.m, "approve-would.yaml")  # docs_impact no: no doc-writer
+        self.assertNotIn(["document"], [r["run"] for r in trace])
+        for events, state in ((["document.blocked"], "blocked"), (["document.error"] * 2, "failed")):  # error retries once
+            t, _ = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["document"]}), events)
+            self.assertEqual(t["state"], state)
+
     def test_fix_loop_to_exhaustion(self):
         t, trace = run_fixture(self.m, "fix-loop.yaml")
         self.assertEqual((t["state"], t["vars"]["fix_round"]), ("blocked", CONFIG["limits"]["fix_rounds"]))

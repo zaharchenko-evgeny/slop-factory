@@ -50,6 +50,7 @@ echo x >> "$STUB_DIR/calls-$mode"
 printf '%s' "$last" > "$STUB_DIR/prompt-$mode"
 if [ "$mode" = implement ]; then echo hi > stub.txt; git add stub.txt; git commit -qm "#01 stub"; fi
 if [ "$mode" = fix ]; then echo fix >> stub.txt; git commit -qam "#01 fix"; fi
+if [ "$mode" = update ]; then echo doc > doc.md; git add doc.md; git commit -qm "#01 doc"; fi
 n=$(wc -l < "$STUB_DIR/calls-$mode" | tr -d ' ')
 f=
 if [ -f "$STUB_DIR/reply-$mode-$n" ]; then f="$STUB_DIR/reply-$mode-$n"
@@ -196,6 +197,15 @@ class DriveRun(unittest.TestCase):
         prompt = (self.stub / "prompt-implement").read_text()
         self.assertIn("mode: implement", prompt)
         self.assertIn("# Driven ticket", prompt)  # the local ticket file, not `gh issue view`
+
+    def test_docs_impact_runs_the_doc_writer_before_the_approver(self):
+        (self.stub / "reply-full").write_text(REPLIES["full"].replace("docs_impact: no", "docs_impact: yes"))
+        (self.stub / "reply-update").write_text("```text\nDOC-WRITER\nstatus: done\nfiles: doc.md\n```\n")
+        t = self.go()
+        self.assertEqual((t["state"], self.calls("update"), t["out"]["document"]["files"]), ("approved", 1, "doc.md"))
+        self.assertIn("docs_impact", (self.stub / "prompt-update").read_text())  # the reviewers' handoffs
+        self.assertEqual(json.loads((self.root / ".factory/runs/01/approve-0.json").read_text())["paths"],
+                         ["doc.md", "stub.txt"])  # the approver sees the doc commit
 
     def test_empty_first_preflight_reply_passes_on_retry(self):
         (self.stub / "preflight-empty-once").touch()
@@ -374,6 +384,7 @@ class DriveRun(unittest.TestCase):
     def test_review_raising_risk_relabels_the_ticket(self):
         (self.stub / "reply-full").write_text(REPLIES["full"].replace("risk: low", "risk: high")
                                               .replace("docs_impact: no", "docs_impact: yes"))
+        (self.stub / "reply-update").write_text("```text\nDOC-WRITER\nstatus: done\nfiles: none\n```\n")
         t = self.go()
         self.assertEqual((t["state"], t["vars"]["risk"]), ("approved", "high"))
         ticket = self.tr.path("01").read_text()

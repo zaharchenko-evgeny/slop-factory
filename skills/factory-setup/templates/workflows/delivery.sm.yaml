@@ -40,6 +40,8 @@ actions:
   review_behaviour: { kind: agent, role: reviewer, mode: behaviour, session: fresh, retry: 1 }
   review_structure_security: { kind: agent, role: reviewer, mode: structure-security, session: fresh, retry: 1 }
   fix: { kind: agent, role: developer, mode: fix, session: resume, retry: 1 }
+  # The doc-writer (roles/doc-writer/role.md) updates the docs on the branch when a reviewer reports docs_impact.
+  document: { kind: agent, role: doc-writer, mode: update, retry: 1 }
   # The approver role (roles/approver/role.md): hard rules, then the soft judgment; dry-run only.
   approve: { kind: script, role: approver }
   publish: { kind: script }
@@ -119,6 +121,17 @@ transitions:
   # Merge at the join: blocked when any reviewer blocks; the ticket's risk is
   # the highest any reviewer reports (high is the top, it never lowers). All
   # reviewers review HEAD, so the last report's reviewed_sha is the round's.
+  # Any reviewer's docs_impact runs the doc-writer before the approver.
+  - from: in-review
+    on: review.done
+    if: '$not(out.review_full.verdict = "changes-requested" or out.review_behaviour.verdict = "changes-requested" or out.review_structure_security.verdict = "changes-requested") and (out.review_full.risk = "high" or out.review_behaviour.risk = "high" or out.review_structure_security.risk = "high") and (out.review_full.docs_impact = "yes" or out.review_behaviour.docs_impact = "yes" or out.review_structure_security.docs_impact = "yes")'
+    set: { reviewed_sha: event.reviewed_sha, risk: '"high"' }
+    do: document
+  - from: in-review
+    on: review.done
+    if: '$not(out.review_full.verdict = "changes-requested" or out.review_behaviour.verdict = "changes-requested" or out.review_structure_security.verdict = "changes-requested") and (out.review_full.docs_impact = "yes" or out.review_behaviour.docs_impact = "yes" or out.review_structure_security.docs_impact = "yes")'
+    set: { reviewed_sha: event.reviewed_sha }
+    do: document
   - from: in-review
     on: review.done
     if: '$not(out.review_full.verdict = "changes-requested" or out.review_behaviour.verdict = "changes-requested" or out.review_structure_security.verdict = "changes-requested") and (out.review_full.risk = "high" or out.review_behaviour.risk = "high" or out.review_structure_security.risk = "high")'
@@ -148,6 +161,9 @@ transitions:
     do: fix
     to: changes-requested
   - { from: in-review, on: review.failed, to: failed }   # a reviewer's handoff stayed missing after retry and fallback
+  - { from: in-review, on: document.done, do: approve }
+  - { from: in-review, on: document.blocked, to: blocked }
+  - { from: in-review, on: document.error, to: failed }
   # Dry-run: either verdict publishes; the PR body and the ticket record it, a human still merges.
   - { from: in-review, on: approve.done, set: { approval: out.approve.verdict }, do: publish }
   - { from: in-review, on: approve.failed, to: failed }
