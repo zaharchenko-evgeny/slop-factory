@@ -7,7 +7,7 @@
 
 Usage: preflight.py [MODEL ...]. Without arguments it checks every model a role
 of factory.yaml uses. A model passes on exit 0 with a non-empty reply that is
-not an error ("OK", "OK." and "ok" all pass); exit 1 lists the failures.
+not an error ("OK", "OK." and "ok" all pass), on the first call or one retry; exit 1 lists the failures.
 """
 import os
 import re
@@ -31,9 +31,13 @@ def run_models(config):
     return sorted({config["models"][t] for t in tiers})
 
 
-def check(model):
-    r = subprocess.run([os.environ.get("FACTORY_AGENT", "pi"), "-p", "--no-mcp", "--no-session", "--no-tools",
-                        "--model", model, "Reply with OK."], capture_output=True, text=True)
+def check(model, tries=2):
+    """(ok, reply); a failed call is retried once, since one empty reply can be transient."""
+    for _ in range(tries):
+        r = subprocess.run([os.environ.get("FACTORY_AGENT", "pi"), "-p", "--no-mcp", "--no-session", "--no-tools",
+                            "--model", model, "Reply with OK."], capture_output=True, text=True)
+        if reply_ok(r.returncode, r.stdout):
+            break
     return reply_ok(r.returncode, r.stdout), (r.stdout.strip() or r.stderr.strip())[:200]
 
 

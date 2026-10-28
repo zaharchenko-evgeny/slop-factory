@@ -5,6 +5,8 @@
 # ///
 """End-to-end tests for `drive.py run` on the local-markdown tracker: stub `pi` and `gh`, a
 temporary factory root and a local bare repository as `origin`. Run: uv run factory/tests/test_drive.py"""
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -19,6 +21,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import drive  # noqa: E402
+import preflight  # noqa: E402
 import sm  # noqa: E402
 from local_tracker import ClaimError, LocalTracker  # noqa: E402
 
@@ -27,8 +30,22 @@ from local_tracker import ClaimError, LocalTracker  # noqa: E402
 # The developer commits a file first. Counts calls per mode in $STUB_DIR/calls-<mode>, keeps the prompt.
 AGENT = """#!/bin/bash
 for a; do last=$a; done
-if [ "$last" = "Reply with OK." ]; then echo OK; exit 0; fi
+if [ "$last" = "Reply with OK." ]; then
+  echo x >> "$STUB_DIR/calls-preflight"
+  if [ -f "$STUB_DIR/preflight-empty-once" ]; then rm "$STUB_DIR/preflight-empty-once"; exit 0; fi
+  echo OK; exit 0
+fi
 mode=$(printf '%s\\n' "$last" | sed -n '1s/^mode: //p')
+# Reviewers of the high-risk fork: record a start, wait (at most 10s) for the other one to start.
+if [ "$mode" = behaviour ] || [ "$mode" = structure-security ]; then
+  touch "$STUB_DIR/started-$mode"
+  for _ in $(seq 100); do
+    if [ -f "$STUB_DIR/started-behaviour" ] && [ -f "$STUB_DIR/started-structure-security" ]; then
+      echo "$mode" >> "$STUB_DIR/overlap"; break
+    fi
+    sleep 0.1
+  done
+fi
 echo x >> "$STUB_DIR/calls-$mode"
 printf '%s' "$last" > "$STUB_DIR/prompt-$mode"
 if [ "$mode" = implement ]; then echo hi > stub.txt; git add stub.txt; git commit -qm "#01 stub"; fi
@@ -43,7 +60,13 @@ case "$1 $2" in
   "pr create") echo "https://example.invalid/pull/7" ;;
   "pr view") echo '{"url":"https://example.invalid/pull/7","statusCheckRollup":[]}' ;;
   "pr comment"|"pr edit") ;;
-  "pr checks") echo "build pass" ;;
+  "pr checks")
+    echo x >> "$STUB_DIR/calls-checks"
+    n=$(wc -l < "$STUB_DIR/calls-checks" | tr -d ' ')
+    if [ -f "$STUB_DIR/checks-register-at" ] && [ "$n" -lt "$(cat "$STUB_DIR/checks-register-at")" ]; then
+      echo "no checks reported on the 'ez/01' branch" >&2; exit 1
+    fi
+    echo "build pass" ;;
   *) echo "stub gh: unexpected $*" >&2; exit 1 ;;
 esac
 """
@@ -51,6 +74,8 @@ REPLIES = {
     "intake": "```text\nROUTER-INTAKE\nready: yes\nrisk: low\nnext: delivery\n```\n",
     "implement": "```text\nDEVELOPER\nstatus: done\ncommits:\n  - abc #01 stub\nblocked_reason: none\n```\n",
     "full": "```text\nREVIEWER\nverdict: approved\nreviewed_sha: x\nrisk: low\ndocs_impact: no\nblocking:\nnits:\n```\n",
+    "behaviour": "```text\nREVIEWER\nverdict: approved\nrisk: high\ndocs_impact: no\n```\n",
+    "structure-security": "```text\nREVIEWER\nverdict: approved\nrisk: high\ndocs_impact: no\n```\n",
     "summary": "```text\nROUTER-SUMMARY\ncomplete: yes\ncomment: |\n  [factory] Summary line.\n  Factory-Run: r1\n```\n",
 }
 CHECKS = [{"name": "has-file", "stage": "pre-review", "mode": "blocking", "run": "test -f stub.txt"},
@@ -140,6 +165,57 @@ class DriveRun(unittest.TestCase):
         self.assertIn("mode: implement", prompt)
         self.assertIn("# Driven ticket", prompt)  # the local ticket file, not `gh issue view`
 
+    def test_empty_first_preflight_reply_passes_on_retry(self):
+        (self.stub / "preflight-empty-once").touch()
+        self.assertEqual(self.go()["state"], "approved")
+        config = yaml.safe_load((self.root / "factory.yaml").read_text())
+        self.assertEqual(self.calls("preflight"), len(preflight.run_models(config)) + 1)
+
+    def test_ci_without_registered_checks_is_pending_until_they_appear(self):
+        self.patch(drive, "CI_POLL", 0.01)
+        (self.stub / "checks-register-at").write_text("3")  # two reads see no checks
+        t = self.go()
+        self.assertEqual((t["out"]["publish"]["ci"], self.calls("checks")), ("passed", 5))  # 2 + watch + final
+        self.tr.release("01", "executor-b")
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.wt.mkdir()
+        (self.stub / "calls-checks").unlink()
+        (self.stub / "checks-register-at").write_text("999")
+        self.patch(drive, "CI_WAIT", 0.3)
+        self.assertEqual(d.ci("https://example.invalid/pull/7"), "pending after 0.3s")
+
+    def test_summary_runs_after_approved_with_stage_ci_and_events(self):
+        self.go()
+        prompt = (self.stub / "prompt-summary").read_text()
+        self.assertIn("stage: approved", prompt)
+        self.assertIn("ci: passed", prompt)
+        self.assertIn("publish.done", prompt.split("## events", 1)[1])
+        self.assertEqual(self.stages[-1], "approved")
+
+    def test_high_risk_reviewers_run_in_parallel(self):
+        (self.stub / "reply-intake").write_text(REPLIES["intake"].replace("risk: low", "risk: high"))
+        t = self.go()
+        self.assertEqual(t["state"], "approved")
+        self.assertEqual(sorted((self.stub / "overlap").read_text().split()), ["behaviour", "structure-security"])
+        self.assertIn("review_structure_security", (self.stub / "prompt-summary").read_text())
+
+    def test_claimed_ticket_exits_2_with_one_line(self):
+        self.tr.claim("01", "executor-b")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = drive.main(["run", "01", "--tracker", f"local:{self.tr.issues.parent}", "--executor", "executor-a"])
+        self.assertEqual((code, err.getvalue().count("\n")), (2, 1))
+        self.assertIn("claimed by executor-b", err.getvalue())
+        self.tr.release("01", "executor-b")
+        self.tr.set_state = lambda nn, st: (_ for _ in ()).throw(ValueError("unrelated"))
+        self.patch(drive, "LocalTracker", lambda _: self.tr)
+        with self.assertRaisesRegex(ValueError, "unrelated"):  # not mapped to exit 2
+            drive.main(["run", "01", "--tracker", f"local:{self.tr.issues.parent}", "--executor", "executor-a"])
+
+    def patch(self, obj, name, value):
+        self.addCleanup(setattr, obj, name, getattr(obj, name))
+        setattr(obj, name, value)
+
     def test_missing_tool_check_is_skipped(self):
         t = self.go()
         self.assertEqual(t["out"]["checks"]["checks"], [
@@ -160,7 +236,7 @@ class DriveRun(unittest.TestCase):
                                      "executor-a", "--resume"]), 2)  # held elsewhere: stop, no writes
         self.assertEqual(self.tr.path("01").read_text(), before)
         self.tr.release("01", "executor-b")
-        with self.assertRaises(ValueError):  # not failed: nothing to resume
+        with self.assertRaises(drive.ResumeError):  # not failed: nothing to resume
             drive.run_ticket(self.root, "01", self.tr, "executor-a", resume=True)
         (self.stub / "reply-implement").unlink()
         self.assertEqual(self.go()["state"], "failed")
