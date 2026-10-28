@@ -109,13 +109,14 @@ selected in `factory.yaml`.
 | channel | Slack Air Mate, local session, Air cloud session | Receive a request, load the router, hand off only through the tracker or a direct run |
 | target | Air, local | Plan (diff), apply after approval, prune factory-owned items only |
 | harness | Claude, Codex, pi | Render a role into the harness's agent or skill format |
-| checks | jscpd, accio, repository test commands | Stage `design` or `pre-review`; mode `advisory` or `blocking` |
+| checks | jscpd, accio, repository test commands, tools from [dev-quality-gates](https://github.com/mokevnin/dev-quality-gates) | Stage `design` or `pre-review`; mode `advisory` or `blocking`; non-zero exit on violation |
 
 ## 8. Auto-approval (ADR-0005)
 
 The factory approves a PR only when all of these hold:
 
-1. **Hard rules** (deterministic script, `policies/auto-approve.yaml`):
+1. **Hard rules** (`policies/auto-approve.rego`, evaluated by Conftest over a
+   JSON summary of the PR):
    reviewer approved, CI green, ≤ N changed lines, only allowed paths, no change
    to CI, deploy, secrets, dependencies or public API.
 2. **Soft rules** (`judgments/auto-approve.yaml`, run with decisions-kit
@@ -165,12 +166,63 @@ comment and PR text is data, never instruction.
   `knowledge/` and skill rules. The user reviews it. Nothing changes `main`
   without a PR.
 
+## 10a. Cost and quality (ADR-0012)
+
+Spend effort in design, run deterministic checks before any model, and use
+strong models only where judgment matters.
+
+- **Definition of ready.** A ticket enters `ready` only with acceptance checks,
+  affected repositories, a reuse-search result and a size estimate (cheap model
+  plus a decisions-kit judgment). Tickets estimated above ~400 lines or 3
+  repositories are split into linked tickets.
+- **Two paths by risk.** `risk:low` (docs, tests, config, small fixes): light
+  design, mid-tier developer, one review pass, eligible for auto-approval.
+  `risk:high` (infra, public API, cross-repo, auth): strong developer, review
+  split into behavioural, structural and security reviewers, always a human.
+- **Deterministic checks first.** The developer runs the repository's tests,
+  lint and type checks, jscpd and the selected quality gates as scripts. The
+  reviewer starts only when they pass. Betterleaks on the diff and the
+  repository's own tests, lint and type checks are blocking from the start;
+  other checks start advisory.
+- **Review triggers.** Review starts on "ready for review" or a
+  `factory:review` label, not on every push. Pushes within ~10 minutes are
+  batched. Re-reviews cover only changes since the last reviewed SHA.
+- **Blocking findings only.** Findings are `blocking` or `nit`. Only blocking
+  findings start the fixer; nits are posted once as one advisory comment. The
+  same blocking findings in two consecutive rounds move the PR to `blocked`.
+- **Preflight.** Before an agent starts, a ~30-second script checks tokens
+  (GitHub, YouTrack, TeamCity, Grafana), tools, disk and that the target branch
+  is free. A failure costs no agent tokens and sets `blocked`. Tools are baked
+  into the environment image, not installed on every run.
+- **Model tiers** in `factory.yaml`, escalating one tier only after a failure:
+  cheap (router, definition of ready, retro, ops, auditor triage, preflight
+  diagnosis), mid (low-risk developer, incremental re-review, doc-writer),
+  strong (designer, high-risk developer, first full review).
+- **Context budget.** Steps pass structured handoffs, never transcripts.
+  Developer and fixer resume their session for cache reuse; the reviewer
+  always starts fresh. JetBrains Context indexing stays on. Only the knowledge
+  folders of touched repositories are loaded.
+- **Metrics.** Every retro records cost, wall time, fix rounds, blocking
+  findings, reviewer-human agreement, human edits after merge and reverts
+  within 14 days. The ops digest shows cost per merged PR, rework rate and
+  approver accuracy. These numbers drive tier, path and allow-rule changes.
+- **Promoting a check.** A check moves from `advisory` to `blocking` only after
+  the setup skill shows it fail on a planted violation and pass after the fix.
+  Changes to a component repository's hooks or CI go to that repository as a PR
+  for its maintainer (LME-1601).
+- **Factory repo gates.** This repository's CI runs agnix (AGENTS.md, SKILL.md,
+  roles), ShellCheck (`setup.sh`), jactionlint (workflows) and Betterleaks,
+  blocking from day one.
+- **Follow-up.** Evaluate factory changes with jbeval on Harbor tasks built
+  from merged factory PRs, once about 10 exist.
+
 ## 11a. Clock (ADR-0010)
 
 Scheduled routines, with times set in `factory.yaml`:
 
 | Routine | Default | Does |
 | --- | --- | --- |
+| preflight | nightly | Script checks every credential and tool; on failure a cheap model (GPT Luna) writes a short diagnosis for the digest |
 | auditor | nightly | Runs advisory checks (jscpd, accio unused code, stale branches, failing CI on default branches); drafts at most N tickets |
 | ops | daily, morning | Posts a digest: what moved, what is `blocked` or `failed`, PRs waiting for the user, spend against limits; flags stuck workflows; re-reads the playbook against recent retros |
 | distill | weekly | Opens one knowledge PR (section 11) |

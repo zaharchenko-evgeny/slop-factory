@@ -22,7 +22,14 @@ Ask, one round at a time, with a recommended answer for each question:
 5. Models per role.
 6. Gates and auto-approval rules.
 7. Limits (concurrency, fix rounds, daily runs, paid runs).
-8. Checks per repository (`references/checks.md`).
+8. Checks per repository (`references/checks.md`). Use
+   [dev-quality-gates](https://github.com/mokevnin/dev-quality-gates) as the
+   tool catalog: follow its
+   [`docs/adopt.md`](https://raw.githubusercontent.com/mokevnin/dev-quality-gates/main/docs/adopt.md)
+   in plan mode for each repository, and propose only the entries that fit.
+   New checks start `advisory`. Before a check becomes `blocking`, show it fail
+   on a planted violation and pass after the fix. Changes to a component
+   repository's hooks or CI go to that repository as a PR.
 9. Project rules for `AGENTS.md`.
 
 Look up facts yourself (repo remotes, default branches, existing automations,
