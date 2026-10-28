@@ -51,17 +51,19 @@ def drive(m, tracker, nn, executor, results=(), execute=None):
         raise
     trace = []
     try:
-        items = iter(results)
-        while (item := next(items, None) or (execute and execute(ticket))) is not None:
+        items, end = iter(results), object()
+        while (item := next(items, end)) is not end or (item := execute and execute(ticket)) is not None:
             ticket, rep = sm.step(m, ticket, *sm.parse_event(item))
             trace.append(rep)
             tracker.set_state(nn, ticket["state"])
             tracker.write_vars(nn, sm.persisted(ticket))
             if rep["wait"]:
                 break
-    finally:
-        if m["states"][ticket["state"]]["actor"] != "agent":
-            tracker.release(nn, executor)
+    except BaseException:
+        tracker.release(nn, executor)  # an exception must not leave the ticket claimed
+        raise
+    if m["states"][ticket["state"]]["actor"] != "agent":
+        tracker.release(nn, executor)
     return ticket, trace
 
 
@@ -88,6 +90,7 @@ def gh():
     return os.environ.get("FACTORY_GH", "gh")
 
 
+SAFE_BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
 REVIEWERS = ("review_full", "review_behaviour", "review_structure_security")
 
 
@@ -123,7 +126,11 @@ class Delivery:
         i = self.tracker.issue(self.nn)
         m = re.search(r"^base:[ \t]*(\S+)", i.get("body") or "", re.M)
         primary = next(r for r in self.config["repositories"] if r.get("role") == "primary")
-        return i, m.group(1) if m else primary["default_branch"]
+        base = m.group(1) if m else primary["default_branch"]
+        # The body is untrusted: a leading `-` would reach git as an option (`--upload-pack=...`).
+        if not SAFE_BRANCH.fullmatch(base) or ".." in base:
+            raise ValueError(f"unsafe base branch {base!r} in the ticket")
+        return i, base
 
     def branch(self, i):
         return branch_name(self.config["branch_pattern"], self.nn, i["title"] or "", i.get("body") or "")
@@ -246,6 +253,8 @@ def main(argv=None):
     b.add_argument("ticket")
     b.add_argument("ticket_json")
     args = p.parse_args(argv)
+    if not args.ticket.isdigit():
+        p.error(f"ticket {args.ticket!r}: use the issue number")
     if args.cmd == "branch":
         pattern = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["branch_pattern"]
         t = json.loads(Path(args.ticket_json).read_text())

@@ -140,6 +140,31 @@ class DriveRun(unittest.TestCase):
         (self.stub / "reply-implement").write_text("```text\nDEVELOPER\nstatus: blocked\nblocked_reason: x\n```\n")
         self.assertEqual(self.go()["state"], "blocked")
 
+    def test_unsafe_base_fails_before_any_git_call(self):
+        for base in ("--upload-pack=touch /tmp/pwned31", "a/../b", "-x"):
+            with self.subTest(base):
+                path = self.tr.path("01")
+                path.write_text(path.read_text().replace("Status: ready", "Status: ready", 1).replace(
+                    "## Comments", f"base: {base}\n\n## Comments", 1))
+                t = self.go()
+                self.assertEqual(t["state"], "blocked")  # preflight failed
+                self.assertFalse((self.root / ".factory/worktrees/01").exists())
+                self.assertEqual(self.calls("intake"), 0)
+                self.tr.release("01", "executor-b")
+                self.tr.set_state("01", "ready")
+                self.tr.write_vars("01", {})
+
+    def test_exception_in_an_action_releases_the_claim(self):
+        (self.stub / "gh").write_text("#!/bin/bash\nexit 1\n")  # preflight's `gh pr list` fails: RuntimeError
+        self.assertEqual(self.go()["state"], "blocked")
+        self.tr.release("01", "executor-b")
+        self.tr.set_state("01", "ready")
+        self.tr.write_vars("01", {})
+        self.tr.set_state = lambda nn, st: (_ for _ in ()).throw(KeyError("boom"))  # raised inside the loop
+        with self.assertRaises(KeyError):
+            drive.run_ticket(self.root, "01", self.tr, "executor-a")
+        self.assertNotIn("claimed_by: executor-a", self.tr.path("01").read_text())
+
     def test_claim_held_elsewhere_stops_without_running(self):
         self.tr.claim("01", "executor-b")
         with self.assertRaises(ClaimError):
