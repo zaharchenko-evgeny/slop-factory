@@ -43,6 +43,18 @@ class Tracker(unittest.TestCase):
         self.assertTrue(text.endswith("## Comments\n"))
         self.assertEqual(self.tr.frontier(), ["06"])  # 01 left `ready`
 
+    def test_stage_sequence_in_dev_in_review_approved(self):
+        stages = []
+        set_state = self.tr.set_state
+        self.tr.set_state = lambda nn, s: (stages.append(s) if stages[-1:] != [s] else None, set_state(nn, s))
+        events = [{"stage.ready": {"run_id": "r"}}, "preflight.done", {"intake.done": {"ready": "yes", "risk": "low"}},
+                  {"start.done": {"branch": "b"}}, "implement.done", "checks.passed",
+                  {"review.done": {"verdict": "approved", "reviewed_sha": "s", "risk": "high"}},
+                  {"publish.done": {"pr_urls": ["u"]}}, "summary.done"]
+        t, _ = drive(M, self.tr, "01", "executor-a", events)
+        self.assertEqual(stages, ["ready", "in-dev", "in-review", "approved"])
+        self.assertEqual(t["vars"]["risk"], "high")  # the review raised it
+
     def test_second_executor_stops_without_writing(self):
         before = self.tr.path("04").read_bytes()
         with self.assertRaisesRegex(ClaimError, "claimed by executor-b"):

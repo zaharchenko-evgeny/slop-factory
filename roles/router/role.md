@@ -13,6 +13,11 @@ Input: a request (free text or a tracker issue).
    recommend stage `blocked` with the question to ask the human.
 3. Choose the risk path: `low` when the issue carries the low-risk label from
    `factory.yaml`, otherwise `high`.
+4. Estimate the size of the change in changed lines, counting tests and
+   fixtures, not only production code. Above about 400 lines, propose slices
+   in `split:`, each one a ticket that delivers on its own.
+5. End your reply with the handoff as the last fenced block and nothing after
+   it; trailing text makes the step fail and rerun.
 
 Handoff:
 
@@ -22,6 +27,9 @@ kind: <feature|bug|investigation|review|docs>
 ready: <yes|no>
 missing: <comma-separated list, or none>
 risk: <low|high>
+size_estimate: <changed lines, tests and fixtures included, e.g. ~150>
+split: <none, or one line per proposed slice below>
+  - <slice title> — <scope> (~<lines>)
 next: <delivery|designer|investigator|reviewer|blocked>
 ```
 

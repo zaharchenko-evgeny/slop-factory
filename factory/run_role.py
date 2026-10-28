@@ -11,15 +11,20 @@ worktree (`targets.local.worktree_dir/<ticket>`). It reads `<step>.in.md` and
 writes `<step>.out.md` and `<step>.log` in the run dir. Role, mode and retry
 come from the machine, the model from factory.yaml and the ticket's risk.
 Intake runs in the factory root, every other action in the ticket worktree.
-An empty output is logged and rerun up to the action's `retry`; exit 3 then
-means `<action>.error`. The summary input gets each PR's body and CI checks,
+The output must end with the handoff: the last fenced block, with nothing
+after it. An empty output or a missing or trailing-text handoff is logged and
+rerun up to the action's `retry`; exit 3 then means `<action>.error`. A valid
+handoff is also written as `<step>.handoff.json` (`handoff` = its first line,
+then each top-level `key: value`; a key with an indented block gets the block text). The summary input gets each PR's body and CI checks,
 fetched read-only with `gh pr view`.
 """
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import yaml
@@ -28,6 +33,37 @@ import sm
 
 TOOLS = {"router": "read,grep,find,ls", "developer": "read,bash,edit,write,grep,find,ls",
          "reviewer": "read,bash,grep,find,ls"}
+
+
+class HandoffError(ValueError):
+    pass
+
+
+def parse_handoff(text):
+    """The trailing fenced block as a dict; HandoffError when it is missing or text follows it."""
+    lines = text.rstrip().splitlines()
+    if not lines:
+        raise HandoffError("empty output")
+    if not lines[-1].startswith("```"):
+        raise HandoffError("text after the last fenced block" if any(x.startswith("```") for x in lines)
+                           else "no fenced handoff block")
+    start = next((i for i in range(len(lines) - 2, -1, -1) if lines[i].startswith("```")), None)
+    body = [x for x in lines[start + 1:-1] if x.strip()] if start is not None else []
+    if not body or not re.fullmatch(r"[A-Z][A-Z-]*", body[0].strip()):
+        raise HandoffError("the last fenced block does not start with a handoff name like REVIEWER")
+    out, key, blocks = {"handoff": body[0].strip()}, None, {}
+    for line in body[1:]:
+        m = re.match(r"([a-z_]+):(?:\s+(.*))?$", line)
+        if m:
+            key, value = m.group(1), (m.group(2) or "").strip()
+            out[key] = "" if value == "|" else value
+        elif key and (line[:1].isspace() or line.startswith("- ")):
+            blocks.setdefault(key, []).append(line)
+        else:
+            raise HandoffError(f"malformed handoff line {line!r}")
+    for k, block in blocks.items():
+        out[k] = textwrap.dedent("\n".join(block))
+    return out
 
 
 def pr_data(urls):
@@ -68,11 +104,15 @@ def run(root, ticket, action, step=None):
     for attempt in range(retry + 1):
         with out.open("w") as o, log.open("a") as e:
             subprocess.run(cmd, cwd=cwd, stdout=o, stderr=e)
-        if out.read_text().strip():
-            return 0
-        with log.open("a") as e:
-            e.write(f"factory: empty output from {action} (attempt {attempt + 1}/{retry + 1})"
-                    f"{'; retrying' if attempt < retry else '; giving up'}\n")
+        try:
+            handoff = parse_handoff(out.read_text())
+        except HandoffError as err:
+            with log.open("a") as e:
+                e.write(f"factory: {err} from {action} (attempt {attempt + 1}/{retry + 1})"
+                        f"{'; retrying' if attempt < retry else '; giving up'}\n")
+            continue
+        (run_dir / f"{step}.handoff.json").write_text(json.dumps(handoff, indent=2))
+        return 0
     return 3
 
 

@@ -52,6 +52,17 @@ class Delivery(unittest.TestCase):
         t, _ = sm.step(self.m, t, "review.done", {"verdict": "changes-requested", "blocking_ids": ["B1"]})
         self.assertEqual(t["state"], "blocked")
 
+    def test_review_raises_risk_never_lowers(self):
+        for verdict, reported, start, want in [("approved", "high", "low", "high"), ("approved", "low", "high", "high"),
+                                               ("changes-requested", "high", "low", "high"),
+                                               ("changes-requested", "low", "low", "low")]:
+            with self.subTest(verdict=verdict, reported=reported, start=start):
+                t = sm.new_ticket(self.m, {"state": "in-review", "pending": ["review"], "vars": {"risk": start}})
+                t, _ = sm.step(self.m, t, "review.done", {"verdict": verdict, "reviewed_sha": "s",
+                                                          "blocking_ids": ["B1"], "risk": reported})
+                self.assertEqual(t["vars"]["risk"], want)
+                self.assertEqual(t["pending"], ["publish" if verdict == "approved" else "fix"])
+
     def test_retry_exhausted_fails(self):
         t = sm.new_ticket(self.m, {"state": "in-dev", "pending": ["implement"]})
         t, _ = sm.simulate(self.m, t, ["implement.error", "implement.error"])

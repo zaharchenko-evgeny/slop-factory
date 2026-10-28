@@ -76,6 +76,12 @@ transitions:
   - { from: [in-dev, changes-requested], on: fix.blocked, to: blocked }
   - { from: [in-dev, changes-requested], on: fix.error, to: failed }
 
+  # A review that reports a higher risk than the ticket raises `risk` (high is the top).
+  - from: in-review
+    on: review.done
+    if: 'out.review.verdict = "approved" and out.review.risk = "high"'
+    set: { reviewed_sha: out.review.reviewed_sha, risk: '"high"' }
+    do: publish
   - from: in-review
     on: review.done
     if: 'out.review.verdict = "approved"'
@@ -86,6 +92,13 @@ transitions:
     on: review.done
     if: '$count(last_blocking_ids) > 0 and out.review.blocking_ids = last_blocking_ids'
     to: blocked
+  - from: in-review
+    on: review.done
+    if: 'out.review.risk = "high"'
+    loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
+    set: { reviewed_sha: out.review.reviewed_sha, last_blocking_ids: out.review.blocking_ids, risk: '"high"' }
+    do: fix
+    to: changes-requested
   - from: in-review
     on: review.done
     loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
