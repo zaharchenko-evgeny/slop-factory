@@ -47,7 +47,8 @@ models:
   strong: anthropic/claude-opus-5-5
   # Reviewers run on a different model family from the developer.
   review: hetzner/Qwen/Qwen3.6-27B-FP8
-  review_strong: google/gemini-3.1-pro-preview
+  # Only Anthropic and the local Qwen are available; structure-security uses Sonnet.
+  review_strong: anthropic/claude-sonnet-5-5
 
 roles:
   router: { tier: cheap }
