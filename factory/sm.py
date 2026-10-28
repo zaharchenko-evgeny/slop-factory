@@ -41,11 +41,11 @@ def type_ok(value, typ):
 
 # ---- Guards: a JSONata subset, so they compile to Air gateways unchanged ----
 
-SUBSET = "comparisons (= != < <= > >=), and, or, $not(), field paths, $count(), literals"
-FUNCS = ("$count", "$not")
+SUBSET = "comparisons (= != < <= > >=), and, or, $not(), field paths, $count(), $append(a, b), literals"
+FUNCS = {"$count": 1, "$not": 1, "$append": 2}
 TOKEN = re.compile(
     r"""(?:(?P<num>-?\d+(?:\.\d+)?)|(?P<str>"[^"]*"|'[^']*')|(?P<op>!=|<=|>=|=|<|>)"""
-    r"""|(?P<fn>\$[A-Za-z_]\w*)|(?P<name>[A-Za-z_]\w*)|(?P<punct>[().]))"""
+    r"""|(?P<fn>\$[A-Za-z_]\w*)|(?P<name>[A-Za-z_]\w*)|(?P<punct>[().,]))"""
 )
 
 
@@ -110,9 +110,12 @@ class Parser:
                 self.fail(f"function {val} is outside the subset")
             self.i += 1
             self.take("punct", "(")
-            arg = self.binary("or")
+            args = [self.binary("or")]
+            for _ in range(FUNCS[val] - 1):
+                self.take("punct", ",")
+                args.append(self.binary("or"))
             self.take("punct", ")")
-            return (val, arg)
+            return (val, *args)
         if (kind, val) == ("punct", "("):
             self.i += 1
             node = self.binary("or")
@@ -162,6 +165,11 @@ def evaluate(node, ctx):
     if tag == "$count":
         v = evaluate(node[1], ctx)
         return 0 if v is MISSING else len(v) if isinstance(v, list) else 1
+    if tag == "$append":  # JSONata: an undefined side yields the other, a scalar is a one-item list
+        a, b = (evaluate(x, ctx) for x in node[1:])
+        if a is MISSING or b is MISSING:
+            return a if b is MISSING else b
+        return (a if isinstance(a, list) else [a]) + (b if isinstance(b, list) else [b])
     if tag == "$not":
         return not truthy(evaluate(node[1], ctx))
     if tag == "and":

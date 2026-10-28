@@ -49,7 +49,7 @@ class Tracker(unittest.TestCase):
         self.tr.set_state = lambda nn, s: (stages.append(s) if stages[-1:] != [s] else None, set_state(nn, s))
         events = [{"stage.ready": {"run_id": "r"}}, "preflight.done", {"intake.done": {"ready": "yes", "risk": "low"}},
                   {"start.done": {"branch": "b"}}, "implement.done", "checks.passed",
-                  {"review.done": {"verdict": "approved", "reviewed_sha": "s", "risk": "high"}},
+                  {"review_full.done": {"verdict": "approved", "reviewed_sha": "s", "risk": "high"}},
                   {"publish.done": {"pr_urls": ["u"]}}, "summary.done"]
         t, _ = drive(M, self.tr, "01", "executor-a", events)
         self.assertEqual(stages, ["ready", "in-dev", "in-review", "approved"])

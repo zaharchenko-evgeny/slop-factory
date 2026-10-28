@@ -45,13 +45,22 @@ models:
   cheap: anthropic/claude-haiku-5-5
   mid: anthropic/claude-sonnet-5-5
   strong: anthropic/claude-opus-5-5
-  # The reviewer runs on a different model family from the developer.
+  # Reviewers run on a different model family from the developer.
   review: hetzner/Qwen/Qwen3.6-27B-FP8
+  # Only Anthropic and the local Qwen are available; structure-security uses Sonnet.
+  review_strong: anthropic/claude-sonnet-5-5
 
 roles:
   router: { tier: cheap }
   developer: { tier: mid, tier_high_risk: strong }
-  reviewer: { tier: review, tools: read-only }
+  # One entry per reviewer focus (an action mode in workflows/delivery.sm.yaml).
+  # `fallback` runs the same focus when the reviewer's output stays empty after its retry.
+  reviewer:
+    tools: read-only
+    modes:
+      full: { tier: review, fallback: cheap }                    # risk low: one reviewer
+      behaviour: { tier: review, fallback: cheap }               # risk high
+      structure-security: { tier: review_strong, fallback: cheap }  # risk high
 
 gates:
   ticket_approval: human

@@ -36,7 +36,7 @@ is a preflight failure.
 Write `$RUN/<step>.in.md`, then run the agent action through the engine:
 
 ```bash
-uv run --quiet factory/run_role.py "$N" <action> [--step <step>]   # e.g. review --step review-2
+uv run --quiet factory/run_role.py "$N" <action> [--step <step>]   # e.g. review_full --step review_full-2
 ```
 
 It resolves the run dir, worktree, role files and model (`factory.yaml`, the
@@ -59,8 +59,10 @@ features here: no `declare -A`, no `mapfile`.
 
 The input file `<step>.in.md` holds: the mode, the ticket JSON, the base
 branch, and only the handoff blocks that step needs. Never pass a transcript.
-Never give the reviewer the developer's handoff; give it the ticket, the
-branch, the base and, on a re-review, the last `reviewed_sha`.
+Never give the reviewer the developer's handoff; give it its mode (the
+action's `mode`), the ticket, the branch, the base and, on a re-review, the
+last `reviewed_sha`. Never paste the diff instead: the reviewer reads the
+changed files in `$WT`.
 
 Never repair or accept a handoff `run_role.py` rejected; the machine turns
 `<action>.error` into stage `failed`.
@@ -90,12 +92,12 @@ adapter (`factory/github_tracker.py`), never a hand-written `gh issue edit`.
    result back as `<action>.done|failed|error` with the handoff fields as the
    payload, e.g. `intake.done={ready: "yes", risk: high}`. Set the stage after
    every step, before you run the next actions: the stage is `in-review`
-   while the reviewer runs (in-dev → in-review → approved). Keep `$RUN/sm.json`:
+   while the reviewers run (in-dev → in-review → approved). Keep `$RUN/sm.json`:
    it holds the running actions and their outputs between steps.
 4. When `step.wait` is `human` or `external`, `$TR release $N "$ME"` and end
    the run. A non-zero `sm.py` exit is a workflow error: stop with `failed`.
 
-Reviewer selection stays as below until #25 moves it into the machine.
+The machine chooses the reviewers by `risk` (see **review** below).
 
 ## Actions
 
@@ -114,8 +116,17 @@ Local details per action of `workflows/delivery.sm.yaml`:
   `FACTORY_BASE` set to the base branch. Save the
   output in `$RUN/checks-<round>.md`. Only `blocking` checks send the work
   back to the developer (`checks.failed`); report `advisory` failures in the summary.
-- **review**: one reviewer at `models.review`. `reviewed_sha` must equal
-  `git -C "$WT" rev-parse HEAD`.
+- **review**: `step.run` lists the reviewers of the fork `review`: one
+  `review_full` on low risk; `review_behaviour` and
+  `review_structure_security` on high risk; on a re-review only those whose
+  last verdict blocked. Run each with its own step name (they may run in
+  parallel) and feed each `<reviewer>.done|error`; the machine joins when all
+  report. `run_role.py` picks each focus's model and fallback from
+  `roles.reviewer.modes`. The payload is the handoff plus `blocking_ids`
+  (the `id`s under `blocking:`). `reviewed_sha` must equal
+  `git -C "$WT" rev-parse HEAD`. A handoff with `fallback_from` means the
+  reviewer switched models; say so in the PR body:
+  `Review: <action> fell back from <fallback_from> to <model>`.
 - **publish**: `git -C "$WT" push -u origin "$BRANCH"`; `gh pr create` with
   title `#<N> <ticket title>` and a body with: what changed, checks, review
   verdict, `Closes #<N>` only if the router confirms completion,

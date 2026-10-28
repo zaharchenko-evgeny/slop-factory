@@ -26,7 +26,8 @@ def reply_ok(returncode, reply):
 
 
 def run_models(config):
-    tiers = {r[k] for r in config["roles"].values() for k in ("tier", "tier_high_risk") if k in r}
+    specs = [s for r in config["roles"].values() for s in [r, *(r.get("modes") or {}).values()]]
+    tiers = {s[k] for s in specs for k in ("tier", "tier_high_risk", "fallback") if k in s}
     return sorted({config["models"][t] for t in tiers})
 
 

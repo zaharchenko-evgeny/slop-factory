@@ -47,9 +47,43 @@ class Delivery(unittest.TestCase):
         self.assertEqual((t["state"], t["vars"]["fix_round"]), ("blocked", CONFIG["limits"]["fix_rounds"]))
         self.assertEqual(trace[-1]["note"], "fix_round exhausted at 3")
 
-    def test_same_findings_twice_blocks(self):
-        t = sm.new_ticket(self.m, {"state": "in-review", "pending": ["review"], "vars": {"last_blocking_ids": ["B1"]}})
-        t, _ = sm.step(self.m, t, "review.done", {"verdict": "changes-requested", "blocking_ids": ["B1"]})
+    def review(self, risk, *reports, base=None):
+        """From in-dev, pass the checks and feed each (reviewer action, payload) report."""
+        t = sm.new_ticket(self.m, {"state": "in-dev", "pending": ["checks"], **(base or {}),
+                                   "vars": {"risk": risk, **((base or {}).get("vars") or {})}})
+        t, trace = sm.simulate(self.m, t, ["checks.passed", *[{f"{a}.done": p} for a, p in reports]])
+        return t, trace
+
+    def test_high_risk_forks_two_reviewers_and_joins_when_both_report(self):
+        t, trace = self.review("high", ("review_behaviour", {"verdict": "approved", "reviewed_sha": "s"}))
+        self.assertEqual(trace[0]["run"], ["review_behaviour", "review_structure_security"])
+        self.assertEqual((t["state"], t["pending"]), ("in-review", ["review_structure_security"]))
+        t, _ = sm.step(self.m, t, "review_structure_security.done", {"verdict": "approved", "reviewed_sha": "s"})
+        self.assertEqual((t["pending"], t["vars"]["reviewed_sha"]), (["publish"], "s"))
+        t, trace = self.review("low")
+        self.assertEqual(trace[0]["run"], ["review_full"])
+
+    def test_rereview_runs_only_blocking_reviewers(self):
+        cr = {"verdict": "changes-requested", "reviewed_sha": "s", "blocking_ids": ["X"]}
+        ok = {"verdict": "approved", "reviewed_sha": "s"}
+        for behaviour, structure, want in [(cr, ok, ["review_behaviour"]), (ok, cr, ["review_structure_security"]),
+                                           (cr, cr, ["review_behaviour", "review_structure_security"])]:
+            with self.subTest(want=want):
+                t, _ = self.review("high", ("review_behaviour", behaviour), ("review_structure_security", structure))
+                self.assertEqual((t["state"], t["pending"]), ("changes-requested", ["fix"]))
+                t, trace = sm.simulate(self.m, t, ["fix.done", "checks.passed"])
+                self.assertEqual(trace[-1]["run"], want)
+        t, _ = self.review("low", ("review_full", cr))
+        t, trace = sm.simulate(self.m, t, ["fix.done", "checks.passed"])
+        self.assertEqual(trace[-1]["run"], ["review_full"])
+
+    def test_blocking_ids_merge_and_same_findings_twice_blocks(self):
+        t, _ = self.review("high", ("review_behaviour", {"verdict": "changes-requested", "blocking_ids": ["B1"]}),
+                           ("review_structure_security", {"verdict": "changes-requested", "blocking_ids": ["S1"],
+                                                          "reviewed_sha": "s"}))
+        self.assertEqual(t["vars"]["last_blocking_ids"], ["B1", "S1"])
+        t, _ = self.review("low", ("review_full", {"verdict": "changes-requested", "blocking_ids": ["B1"]}),
+                           base={"vars": {"last_blocking_ids": ["B1"]}})
         self.assertEqual(t["state"], "blocked")
 
     def test_review_raises_risk_never_lowers(self):
@@ -57,11 +91,28 @@ class Delivery(unittest.TestCase):
                                                ("changes-requested", "high", "low", "high"),
                                                ("changes-requested", "low", "low", "low")]:
             with self.subTest(verdict=verdict, reported=reported, start=start):
-                t = sm.new_ticket(self.m, {"state": "in-review", "pending": ["review"], "vars": {"risk": start}})
-                t, _ = sm.step(self.m, t, "review.done", {"verdict": verdict, "reviewed_sha": "s",
-                                                          "blocking_ids": ["B1"], "risk": reported})
+                t, _ = self.review(start, *[(a, {"verdict": verdict, "reviewed_sha": "s", "blocking_ids": ["B1"],
+                                                 "risk": reported})
+                                            for a in (["review_full"] if start == "low" else
+                                                      ["review_behaviour", "review_structure_security"])])
                 self.assertEqual(t["vars"]["risk"], want)
                 self.assertEqual(t["pending"], ["publish" if verdict == "approved" else "fix"])
+
+    def test_reviewers_low_and_high_yield_high(self):
+        for verdict in ("approved", "changes-requested"):
+            with self.subTest(verdict=verdict):
+                p = {"verdict": verdict, "reviewed_sha": "s", "blocking_ids": ["B1"]}
+                t, _ = self.review("low", ("review_full", {**p, "risk": "high"}))
+                self.assertEqual(t["vars"]["risk"], "high")
+                t = sm.new_ticket(self.m, {"state": "in-dev", "pending": ["checks"], "vars": {"risk": "high"}})
+                t, _ = sm.simulate(self.m, t, ["checks.passed", {"review_behaviour.done": {**p, "risk": "low"}},
+                                               {"review_structure_security.done": {**p, "risk": "high"}}])
+                self.assertEqual(t["vars"]["risk"], "high")
+
+    def test_reviewer_error_after_retry_fails(self):
+        t, _ = self.review("high", ("review_behaviour", {"verdict": "approved"}))
+        t, _ = sm.simulate(self.m, t, ["review_structure_security.error", "review_structure_security.error"])
+        self.assertEqual(t["state"], "failed")
 
     def test_retry_exhausted_fails(self):
         t = sm.new_ticket(self.m, {"state": "in-dev", "pending": ["implement"]})
@@ -71,6 +122,8 @@ class Delivery(unittest.TestCase):
     def test_unexpected_internal_event(self):
         with self.assertRaisesRegex(sm.SMError, "action review is not running"):
             sm.step(self.m, sm.new_ticket(self.m), "review.done")
+        with self.assertRaisesRegex(sm.SMError, "action review_full is not running"):
+            sm.step(self.m, sm.new_ticket(self.m), "review_full.done")
 
 
 class Fork(unittest.TestCase):
@@ -133,10 +186,14 @@ class Guards(unittest.TestCase):
         node = sm.compile_expr('$count(a.b) > 1 and ($not(c = "x") or d.missing = 1)')
         self.assertTrue(sm.evaluate(node, {"a": {"b": [1, 2]}, "c": "y", "d": {}}))
         self.assertFalse(sm.evaluate(node, {"a": {"b": [1, 2]}, "c": "x", "d": {}}))
+        node = sm.compile_expr("$append(a, $append(b, c))")
+        self.assertEqual(sm.evaluate(node, {"a": [1], "c": 2}), [1, 2])
+        self.assertIs(sm.evaluate(node, {}), sm.MISSING)
 
     def test_outside_subset_rejected(self):
         for src, msg in [("not x", r"use \$not"), ("a + 1", "unsupported character '\\+'"),
-                         ("a ~> $f", "unsupported character"), ("a = ", "unexpected end"), ("(a", "expected \\)")]:
+                         ("a ~> $f", "unsupported character"), ("a = ", "unexpected end"), ("(a", "expected \\)"),
+                         ("$append(a)", "expected ,")]:
             with self.subTest(src), self.assertRaisesRegex(sm.SMError, msg):
                 sm.compile_expr(src)
 

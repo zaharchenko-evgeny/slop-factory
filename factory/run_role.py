@@ -9,11 +9,16 @@ Usage: run_role.py <ticket> <action> [--step NAME]. The engine owns every path:
 the factory root, the run dir (`targets.local.run_dir/<ticket>`) and the
 worktree (`targets.local.worktree_dir/<ticket>`). It reads `<step>.in.md` and
 writes `<step>.out.md` and `<step>.log` in the run dir. Role, mode and retry
-come from the machine, the model from factory.yaml and the ticket's risk.
+come from the machine, the model from factory.yaml (`roles.<role>.modes.<mode>`
+when the mode has an entry, as each reviewer focus does) and the ticket's risk.
+Each reviewer is its own action, so several reviewers run as separate calls.
 Intake runs in the factory root, every other action in the ticket worktree.
 The output must end with the handoff: the last fenced block, with nothing
 after it. An empty output or a missing or trailing-text handoff is logged and
-rerun up to the action's `retry`; exit 3 then means `<action>.error`. A valid
+rerun up to the action's `retry`. If the output was still empty and the mode
+has a `fallback` tier, the same attempts run on the fallback model; the switch
+is logged and kept in the handoff as `fallback_from`. Exit 3 then means
+`<action>.error`. A valid
 handoff is also written as `<step>.handoff.json` (`handoff` = its first line,
 then each top-level `key: value`; a key with an indented block gets the block text). The summary input gets each PR's body and CI checks,
 fetched read-only with `gh pr view`.
@@ -86,8 +91,10 @@ def run(root, ticket, action, step=None):
     state_file = run_dir / "sm.json"
     tvars = json.loads(state_file.read_text())["vars"] if state_file.exists() else {}
     rcfg = config["roles"][role]
+    rcfg = (rcfg.get("modes") or {}).get(spec.get("mode")) or rcfg
     tier = rcfg.get("tier_high_risk") if spec.get("tier_by") == "risk" and tvars.get("risk") == "high" else None
     model = config["models"][tier or rcfg["tier"]]
+    fallback = config["models"][rcfg["fallback"]] if rcfg.get("fallback") else None
     session = (["--session-id", f"factory-{ticket}-{role}"] if role == "developer" else ["--no-session"])
     cwd = root if action == "intake" else root / local["worktree_dir"] / str(ticket)
     if not cwd.is_dir():
@@ -95,24 +102,35 @@ def run(root, ticket, action, step=None):
     prompt = (run_dir / f"{step}.in.md").read_text()
     if action == "summary" and tvars.get("pr_urls"):
         prompt += pr_data(tvars["pr_urls"])
-    cmd = [os.environ.get("FACTORY_AGENT", "pi"), "-p", "--no-mcp", "--model", model, *session,
-           "--tools", TOOLS[role], "--append-system-prompt", str(root / "roles/_common.md"),
-           "--append-system-prompt", str(root / "roles" / role / "role.md"), prompt]
     out, log = run_dir / f"{step}.out.md", run_dir / f"{step}.log"
     log.write_text("")
     retry = spec.get("retry", 0)
-    for attempt in range(retry + 1):
-        with out.open("w") as o, log.open("a") as e:
-            subprocess.run(cmd, cwd=cwd, stdout=o, stderr=e)
-        try:
-            handoff = parse_handoff(out.read_text())
-        except HandoffError as err:
+    err = None
+    for i, use in enumerate((model, fallback)):
+        if use is None or (i and str(err) != "empty output"):
+            break
+        if i:
             with log.open("a") as e:
-                e.write(f"factory: {err} from {action} (attempt {attempt + 1}/{retry + 1})"
-                        f"{'; retrying' if attempt < retry else '; giving up'}\n")
-            continue
-        (run_dir / f"{step}.handoff.json").write_text(json.dumps(handoff, indent=2))
-        return 0
+                e.write(f"factory: {action} falls back from {model} to {fallback}\n")
+        cmd = [os.environ.get("FACTORY_AGENT", "pi"), "-p", "--no-mcp", "--model", use, *session,
+               "--tools", TOOLS[role], "--append-system-prompt", str(root / "roles/_common.md"),
+               "--append-system-prompt", str(root / "roles" / role / "role.md"), prompt]
+        for attempt in range(retry + 1):
+            with out.open("w") as o, log.open("a") as e:
+                subprocess.run(cmd, cwd=cwd, stdout=o, stderr=e)
+            try:
+                handoff = parse_handoff(out.read_text())
+            except HandoffError as e_:
+                err = e_
+                with log.open("a") as e:
+                    e.write(f"factory: {err} from {action} on {use} (attempt {attempt + 1}/{retry + 1})"
+                            f"{'; retrying' if attempt < retry else '; giving up'}\n")
+                continue
+            if i:
+                handoff["fallback_from"] = model
+            handoff["model"] = use
+            (run_dir / f"{step}.handoff.json").write_text(json.dumps(handoff, indent=2))
+            return 0
     return 3
 
 
@@ -120,7 +138,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="run_role.py", description=__doc__.splitlines()[0])
     p.add_argument("ticket")
     p.add_argument("action", help="an agent action of workflows/delivery.sm.yaml")
-    p.add_argument("--step", help="file stem in the run dir, e.g. review-2 (default: the action)")
+    p.add_argument("--step", help="file stem in the run dir, e.g. review_full-2 (default: the action)")
     args = p.parse_args(argv)
     return run(sm.ROOT, args.ticket, args.action, args.step)
 

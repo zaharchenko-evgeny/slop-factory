@@ -66,29 +66,53 @@ class RunRole(unittest.TestCase):
     def calls(self):
         return int((self.stub / "calls").read_text())
 
-    def test_empty_output_is_logged_and_retried_once(self):
-        self.assertEqual(self.go("review", ok_at=2), 0)
-        self.assertEqual(self.calls(), 2)
-        log = (self.run_dir / "review.log").read_text()
-        self.assertIn("factory: empty output from review (attempt 1/2); retrying", log)
-        self.assertIn("stub stderr 2", log)
-        self.assertIn("verdict: approved", (self.run_dir / "review.out.md").read_text())
+    def model(self, key):
+        return sm.yaml.safe_load((self.root / "factory.yaml").read_text())["models"][key]
 
-    def test_empty_output_twice_is_an_error(self):
-        self.assertEqual(self.go("review", ok_at=99), 3)
+    def argv_model(self):
+        argv = (self.stub / "argv").read_text().splitlines()
+        return argv[argv.index("--model") + 1]
+
+    def test_empty_output_is_logged_and_retried_once(self):
+        self.assertEqual(self.go("review_full", ok_at=2), 0)
         self.assertEqual(self.calls(), 2)
-        self.assertIn("(attempt 2/2); giving up", (self.run_dir / "review.log").read_text())
+        log = (self.run_dir / "review_full.log").read_text()
+        self.assertIn(f"factory: empty output from review_full on {self.model('review')} (attempt 1/2); retrying", log)
+        self.assertIn("stub stderr 2", log)
+        self.assertIn("verdict: approved", (self.run_dir / "review_full.out.md").read_text())
+        self.assertNotIn("fallback_from", json.loads((self.run_dir / "review_full.handoff.json").read_text()))
+
+    def test_empty_output_after_retry_runs_the_fallback(self):
+        self.assertEqual(self.go("review_behaviour", ok_at=3), 0)
+        self.assertEqual((self.calls(), self.argv_model()), (3, self.model("cheap")))
+        self.assertIn(f"falls back from {self.model('review')} to {self.model('cheap')}",
+                      (self.run_dir / "review_behaviour.log").read_text())
+        self.assertEqual(json.loads((self.run_dir / "review_behaviour.handoff.json").read_text()),
+                         {"handoff": "REVIEWER", "verdict": "approved", "fallback_from": self.model("review"),
+                          "model": self.model("cheap")})
+        self.assertEqual(self.go("review_structure_security", ok_at=99), 3)
+        self.assertEqual(self.calls(), 7)  # 2 on the model, 2 on the fallback
+        self.assertIn("(attempt 2/2); giving up", (self.run_dir / "review_structure_security.log").read_text())
+
+    def test_each_reviewer_focus_gets_its_model(self):
+        for action, key in [("review_full", "review"), ("review_behaviour", "review"),
+                            ("review_structure_security", "review_strong")]:
+            with self.subTest(action):
+                self.go(action, ok_at=1)
+                self.assertEqual(self.argv_model(), self.model(key))
+                self.assertIn(str(self.root / "roles/reviewer/role.md"), (self.stub / "argv").read_text())
 
     def test_handoff_followed_by_prose_is_rejected_and_retried_once(self):
         os.environ["STUB_PROSE"] = "1"
-        self.assertEqual(self.go("review", ok_at=2), 0)
+        self.assertEqual(self.go("review_full", ok_at=2), 0)
         self.assertEqual(self.calls(), 2)
-        self.assertIn("factory: text after the last fenced block from review (attempt 1/2); retrying",
-                      (self.run_dir / "review.log").read_text())
-        self.assertEqual(json.loads((self.run_dir / "review.handoff.json").read_text()),
-                         {"handoff": "REVIEWER", "verdict": "approved"})
-        self.assertEqual(self.go("review", ok_at=99), 3)
-        self.assertIn("(attempt 2/2); giving up", (self.run_dir / "review.log").read_text())
+        self.assertIn("factory: text after the last fenced block from review_full",
+                      (self.run_dir / "review_full.log").read_text())
+        self.assertEqual(json.loads((self.run_dir / "review_full.handoff.json").read_text()),
+                         {"handoff": "REVIEWER", "verdict": "approved", "model": self.model("review")})
+        self.assertEqual(self.go("review_full", ok_at=99), 3)
+        self.assertEqual(self.calls(), 4)  # not empty output: no fallback
+        self.assertIn("(attempt 2/2); giving up", (self.run_dir / "review_full.log").read_text())
 
     def test_parse_handoff(self):
         h = run_role.parse_handoff("prose\n```text\nDEVELOPER\nstatus: done\ncommits:\n  - abc #9 x\n"
@@ -114,7 +138,8 @@ class RunRole(unittest.TestCase):
         argv = (self.stub / "argv").read_text().splitlines()
         self.assertEqual(argv[argv.index("--model") + 1], "m2")
         config = sm.yaml.safe_load((self.root / "factory.yaml").read_text())
-        self.assertIn(config["models"]["review"], preflight.run_models(config))
+        for key in ("review", "review_strong", "cheap"):
+            self.assertIn(config["models"][key], preflight.run_models(config))
 
     def test_worktree_cwd_absolute_prompts_and_model(self):
         self.go("implement", ok_at=1, risk="high")
