@@ -31,7 +31,10 @@ artefacts stay in `.factory/runs/<N>/`.
 
 If it stops in `blocked` or `failed`, do not continue by hand: report the last
 step and the reason from the printed trace and `.factory/runs/<N>/`
-(`<step>.log`, `<step>-attempt<k>.out.md`, `checks-<round>.md`).
+(`<step>.log`, `<step>-attempt<k>.out.md`, `checks-<round>.md`). Once the
+cause is fixed, `drive.py run "$N" --resume` restarts a `failed` ticket at the
+step that failed. Exit 2 with "claimed by" means another executor holds the
+ticket; nothing was written.
 
 ## External writes
 
