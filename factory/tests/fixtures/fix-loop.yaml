@@ -1,16 +1,17 @@
-# Changes requested with new findings every round: after limits.fix_rounds
-# fix rounds the next request goes to `blocked`.
+# Low risk: one reviewer requests changes with new findings every round; after
+# limits.fix_rounds fix rounds the next request goes to `blocked`.
 ticket:
-  state: in-review
-  pending: [review]
+  state: in-dev
+  pending: [checks]
 events:
-  - review.done: { verdict: changes-requested, reviewed_sha: a1, blocking_ids: [B1] }
+  - checks.passed
+  - review_full.done: { verdict: changes-requested, reviewed_sha: a1, blocking_ids: [B1] }
   - fix.done
   - checks.passed
-  - review.done: { verdict: changes-requested, reviewed_sha: a2, blocking_ids: [B2] }
+  - review_full.done: { verdict: changes-requested, reviewed_sha: a2, blocking_ids: [B2] }
   - fix.done
   - checks.passed
-  - review.done: { verdict: changes-requested, reviewed_sha: a3, blocking_ids: [B3] }
+  - review_full.done: { verdict: changes-requested, reviewed_sha: a3, blocking_ids: [B3] }
   - fix.done
   - checks.passed
-  - review.done: { verdict: changes-requested, reviewed_sha: a4, blocking_ids: [B4] }
+  - review_full.done: { verdict: changes-requested, reviewed_sha: a4, blocking_ids: [B4] }

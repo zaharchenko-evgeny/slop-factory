@@ -7,7 +7,7 @@
 #   or a declared external event. The first matching transition wins.
 # - Only `set:` (and a `loop:` counter) changes vars.
 # - Guards and `set:` values are a JSONata subset: comparisons, and, or,
-#   $not(), field paths, $count(), literals.
+#   $not(), field paths, $count(), $append(a, b), literals.
 version: 1
 initial: ready
 
@@ -32,7 +32,11 @@ actions:
   start: { kind: script }
   implement: { kind: agent, role: developer, mode: implement, tier_by: risk, retry: 1 }
   checks: { kind: script, run: "factory.yaml checks, stage pre-review; only blocking ones fail" }
-  review: { kind: agent, role: reviewer, session: fresh, retry: 1 }
+  # Reviewer focuses are modes of the reviewer role; factory.yaml
+  # `roles.reviewer.modes` gives each its model and fallback.
+  review_full: { kind: agent, role: reviewer, mode: full, session: fresh, retry: 1 }
+  review_behaviour: { kind: agent, role: reviewer, mode: behaviour, session: fresh, retry: 1 }
+  review_structure_security: { kind: agent, role: reviewer, mode: structure-security, session: fresh, retry: 1 }
   fix: { kind: agent, role: developer, mode: fix, session: resume, retry: 1 }
   publish: { kind: script }
   summary: { kind: agent, role: router, mode: summary, retry: 1 }
@@ -66,8 +70,33 @@ transitions:
   - { from: in-dev, on: implement.blocked, to: blocked }
   - { from: in-dev, on: implement.error, to: failed }
 
+  # Reviewers by risk: the fork `review` runs them and joins when all report.
+  # Each reviewer's latest handoff stays in out.<action> across rounds.
+  - from: in-dev
+    on: checks.passed
+    if: 'risk = "high"'
+    do: { parallel: [review_behaviour, review_structure_security], join: all, name: review }
+    to: in-review
+  - { from: in-dev, on: checks.passed, do: { parallel: [review_full], join: all, name: review }, to: in-review }
+  # A re-review runs only the reviewers whose latest verdict blocked.
+  - from: changes-requested
+    on: checks.passed
+    if: 'out.review_behaviour.verdict = "changes-requested" and out.review_structure_security.verdict = "changes-requested"'
+    do: { parallel: [review_behaviour, review_structure_security], join: all, name: review }
+    to: in-review
+  - from: changes-requested
+    on: checks.passed
+    if: 'out.review_behaviour.verdict = "changes-requested"'
+    do: { parallel: [review_behaviour], join: all, name: review }
+    to: in-review
+  - from: changes-requested
+    on: checks.passed
+    if: 'out.review_structure_security.verdict = "changes-requested"'
+    do: { parallel: [review_structure_security], join: all, name: review }
+    to: in-review
+  - { from: changes-requested, on: checks.passed, do: { parallel: [review_full], join: all, name: review }, to: in-review }
+
   # A failed blocking check sends the work back to the developer as a fix round.
-  - { from: [in-dev, changes-requested], on: checks.passed, do: review, to: in-review }
   - from: [in-dev, changes-requested]
     on: checks.failed
     loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
@@ -76,36 +105,38 @@ transitions:
   - { from: [in-dev, changes-requested], on: fix.blocked, to: blocked }
   - { from: [in-dev, changes-requested], on: fix.error, to: failed }
 
-  # A review that reports a higher risk than the ticket raises `risk` (high is the top).
+  # Merge at the join: blocked when any reviewer blocks; the ticket's risk is
+  # the highest any reviewer reports (high is the top, it never lowers). All
+  # reviewers review HEAD, so the last report's reviewed_sha is the round's.
   - from: in-review
     on: review.done
-    if: 'out.review.verdict = "approved" and out.review.risk = "high"'
-    set: { reviewed_sha: out.review.reviewed_sha, risk: '"high"' }
+    if: '$not(out.review_full.verdict = "changes-requested" or out.review_behaviour.verdict = "changes-requested" or out.review_structure_security.verdict = "changes-requested") and (out.review_full.risk = "high" or out.review_behaviour.risk = "high" or out.review_structure_security.risk = "high")'
+    set: { reviewed_sha: event.reviewed_sha, risk: '"high"' }
     do: publish
   - from: in-review
     on: review.done
-    if: 'out.review.verdict = "approved"'
-    set: { reviewed_sha: out.review.reviewed_sha }
+    if: '$not(out.review_full.verdict = "changes-requested" or out.review_behaviour.verdict = "changes-requested" or out.review_structure_security.verdict = "changes-requested")'
+    set: { reviewed_sha: event.reviewed_sha }
     do: publish
   # The same blocking findings in two consecutive rounds: stop.
   - from: in-review
     on: review.done
-    if: '$count(last_blocking_ids) > 0 and out.review.blocking_ids = last_blocking_ids'
+    if: '$count(last_blocking_ids) > 0 and $append(out.review_full.blocking_ids, $append(out.review_behaviour.blocking_ids, out.review_structure_security.blocking_ids)) = last_blocking_ids'
     to: blocked
   - from: in-review
     on: review.done
-    if: 'out.review.risk = "high"'
+    if: 'out.review_full.risk = "high" or out.review_behaviour.risk = "high" or out.review_structure_security.risk = "high"'
     loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
-    set: { reviewed_sha: out.review.reviewed_sha, last_blocking_ids: out.review.blocking_ids, risk: '"high"' }
+    set: { reviewed_sha: event.reviewed_sha, last_blocking_ids: '$append(out.review_full.blocking_ids, $append(out.review_behaviour.blocking_ids, out.review_structure_security.blocking_ids))', risk: '"high"' }
     do: fix
     to: changes-requested
   - from: in-review
     on: review.done
     loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
-    set: { reviewed_sha: out.review.reviewed_sha, last_blocking_ids: out.review.blocking_ids }
+    set: { reviewed_sha: event.reviewed_sha, last_blocking_ids: '$append(out.review_full.blocking_ids, $append(out.review_behaviour.blocking_ids, out.review_structure_security.blocking_ids))' }
     do: fix
     to: changes-requested
-  - { from: in-review, on: review.error, to: failed }
+  - { from: in-review, on: review.failed, to: failed }   # a reviewer's handoff stayed missing after retry and fallback
   - { from: in-review, on: publish.done, set: { pr_urls: out.publish.pr_urls }, do: summary }
   - { from: in-review, on: publish.failed, to: failed }
   - { from: in-review, on: summary.done, to: approved }

@@ -1,5 +1,7 @@
-# Today's delivery path, with one retried malformed intake handoff and one
-# failed check. `sm.py simulate` ends in `approved`, waiting for the human.
+# Today's delivery path on a high-risk ticket, with one retried malformed
+# intake handoff and one failed check. Review forks two reviewers and joins
+# when both report; the re-review runs only the one that blocked.
+# `sm.py simulate` ends in `approved`, waiting for the human.
 events:
   - stage.ready: { run_id: "local:20261028T1200-19" }
   - preflight.done
@@ -10,9 +12,10 @@ events:
   - checks.failed
   - fix.done
   - checks.passed
-  - review.done: { verdict: changes-requested, reviewed_sha: aaa, blocking_ids: [B1] }
+  - review_behaviour.done: { verdict: approved, reviewed_sha: aaa, risk: low }
+  - review_structure_security.done: { verdict: changes-requested, reviewed_sha: aaa, risk: high, blocking_ids: [S1] }
   - fix.done
   - checks.passed
-  - review.done: { verdict: approved, reviewed_sha: bbb }
+  - review_structure_security.done: { verdict: approved, reviewed_sha: bbb, risk: high }
   - publish.done: { pr_urls: ["https://example.invalid/pr/1"] }
   - summary.done
