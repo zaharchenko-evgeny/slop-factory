@@ -122,7 +122,9 @@ class DriveRun(unittest.TestCase):
         for mode, text in REPLIES.items():
             (self.stub / f"reply-{mode}").write_text(text)
         self.tr = LocalTracker(Path(shutil.copytree(HERE / "fixtures/effort", tmp / "effort")))
-        self.stages = []
+        self.stages, self.labels = [], 0
+        labels = self.tr.set_review_labels
+        self.tr.set_review_labels = lambda *a: (setattr(self, "labels", self.labels + 1), labels(*a))
         set_state = self.tr.set_state
         self.tr.set_state = lambda nn, s: (self.stages.append(s) if self.stages[-1:] != [s] else None,
                                            set_state(nn, s))
@@ -215,6 +217,7 @@ class DriveRun(unittest.TestCase):
         edit = (self.stub / "gh-pr-edit").read_text()  # last edit: the summary's Closes body
         self.assertIn("#01 stub\n", edit.split("## What changed", 1)[1])
         self.assertIn("#01 fix", edit)
+        self.assertEqual(self.labels, 2)  # set_review_labels on both publishes
         self.assertIn("- Fix rounds: 1", edit)
         self.assertIn("#01 fix", (self.stub / "prompt-summary").read_text().split("## commits", 1)[1])
         self.assertEqual(seen, [True])

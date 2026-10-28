@@ -95,7 +95,7 @@ checks:
     stage: pre-review
     mode: advisory
     requires: uvx
-    run: uvx --quiet --from shellcheck-py shellcheck -x roles/*.sh roles/*/setup.sh
+    run: uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck -x roles/*.sh roles/*/setup.sh
   - name: state-machine
     stage: pre-review
     mode: blocking

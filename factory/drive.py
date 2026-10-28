@@ -171,7 +171,8 @@ class Delivery:
             return self.agent(t, action, spec)
         try:
             return getattr(self, action)(t)
-        except (RuntimeError, OSError, ValueError) as e:  # for `ci`, failed means a fix round: not for this
+        except (RuntimeError, OSError, ValueError) as e:
+            # `ci` failed means a fix round, so its unexpected errors map to `error` (stage failed).
             return ("error" if action == "ci" else "failed"), {"error": str(e)}
 
     def issue(self):
@@ -237,12 +238,13 @@ class Delivery:
         i, base = self.issue()
         b, out = t["vars"]["branch"], t["out"]
         sh(["git", "push", "-u", "origin", b], self.wt)
+        reviews = [out[a] for a in REVIEWERS if a in out]
+        self.tracker.set_review_labels(self.nn, t["vars"]["risk"], any(r.get("docs_impact") == "yes" for r in reviews))
         if t["vars"]["pr_urls"]:  # after a fix round: the PR exists, rebuild its body
+            # shortcut: nits of a fix-round review are not posted again; post them if they matter.
             for url in t["vars"]["pr_urls"]:
                 sh([gh(), "pr", "edit", url, "--body", self.pr_body(t, i, base)], self.wt)
             return "done", {"pr_urls": t["vars"]["pr_urls"]}
-        reviews = [out[a] for a in REVIEWERS if a in out]
-        self.tracker.set_review_labels(self.nn, t["vars"]["risk"], any(r.get("docs_impact") == "yes" for r in reviews))
         url = sh([gh(), "pr", "create", "--head", b, "--base", base, "--title", f"#{self.nn} {i['title']}",
                   "--body", self.pr_body(t, i, base)], self.wt).strip().splitlines()[-1]
         nits = [f"### {a}\n\n{out[a]['nits'].strip()}" for a in REVIEWERS
@@ -313,6 +315,7 @@ class Delivery:
         runs = dict.fromkeys(re.findall(r"/actions/runs/(\d+)", "\n".join(
             ln for ln in r.stdout.splitlines() if re.search(r"\sfail\s", ln))))
         for run in runs:
+            # shortcut: no timeout on this read; add one if `gh run view` hangs.
             log = subprocess.run([gh(), "run", "view", run, "--log-failed"], cwd=self.wt, capture_output=True,
                                  text=True).stdout
             text += ["", f"## Failed log of run {run} (last 80 lines)", "~~~~", *log.splitlines()[-80:], "~~~~"]
