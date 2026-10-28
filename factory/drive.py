@@ -11,7 +11,8 @@ waits on a human or external actor (`approved`, `blocked`, `failed`): script
 actions here, agent actions through run_role.py (each reviewer in its own run
 dir and detached checkout, the fallback model after a malformed handoff). Stage
 and vars (with the `_run` state) are written through the adapter after each step; the run dir keeps
-`sm.json`, `<step>.in.md` and `checks-<round>.md`. Publish relabels the ticket's risk and
+`sm.json`, `<step>.in.md` and `checks-<round>.md`. After every reviewer approves, the approver (factory/approver.py, dry-run)
+posts its verdict on the ticket and keeps the PR summary as `approve-<round>.json`. Publish relabels the ticket's risk and
 docs-impact and posts the reviewers' nits as one PR comment; a later publish (after a fix round)
 pushes and rebuilds the PR body. `ci` runs the blocking checks on the branch merged with the base, then
 watches CI (`gh pr checks`, after waiting for the checks to register); a failure goes to a fix round with
@@ -39,6 +40,7 @@ from pathlib import Path
 
 import yaml
 
+import approver
 import preflight
 import run_role
 import sm
@@ -128,6 +130,10 @@ def gh():
 
 SAFE_BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
 REVIEWERS = ("review_full", "review_behaviour", "review_structure_security")
+
+
+def approval_lines(a):
+    return [f"- {r}" for r in a["reasons"]] or ["- Every hard and soft rule passed; a human still merges."]
 CI_WAIT = 1800  # seconds for CI to register and finish its checks
 CI_POLL = 15  # seconds between reads while no checks are registered
 NO_CHECKS = "no checks reported"
@@ -233,6 +239,19 @@ class Delivery:
             tail = "\n".join(text.rstrip().splitlines()[-15:])
             report.append(f"## {c['name']} ({c.get('mode')}): {status}\n~~~~\n{tail}\n~~~~\n")
         return failed, rows, "\n".join(report)
+
+    def approve(self, t):
+        """The approver (dry-run): record its verdict and reasons on the ticket; publish adds them to the PR."""
+        i, base = self.issue()
+        out = t["out"]
+        ci = "passed" if (out.get("checks") or {}).get("result") == "passed" else "unknown"
+        a = approver.decide(self.root, self.config, self.wt, base, {r: out[r] for r in REVIEWERS if r in out}, ci,
+                            t["vars"]["risk"], f"{i['title']}\n\n{i.get('body') or ''}")
+        path = self.run_dir / f"approve-{t['vars']['fix_round']}.json"
+        path.write_text(json.dumps(a["summary"], indent=2))
+        self.tracker.comment(self.nn, "\n".join([f"[factory] Approver (dry-run): {a['verdict']}", "",
+                                                 *approval_lines(a), "", self.trailer(t)]))
+        return "done", {"verdict": a["verdict"], "reasons": a["reasons"], "summary": str(path)}
 
     def publish(self, t):
         i, base = self.issue()
@@ -368,9 +387,11 @@ class Delivery:
         old = (out.get("intake") or {}).get("risk") or "low"
         if v["risk"] != old:
             lines.append(f"- Risk: raised from {old} to {v['risk']} by the review")
+        lines.append(f"- Fix rounds: {v['fix_round']}")
+        if out.get("approve"):
+            lines += ["", f"## Approver (dry-run): {out['approve']['verdict']}", "", *approval_lines(out["approve"])]
         # The link stays last before the trailer: the driver swaps it for `Closes` after the summary.
-        lines += [f"- Fix rounds: {v['fix_round']}", "", f"{'Closes' if closes else 'Refs'} #{self.nn}", "",
-                  self.trailer(t)]
+        lines += ["", f"{'Closes' if closes else 'Refs'} #{self.nn}", "", self.trailer(t)]
         return "\n".join(lines) + "\n"
 
     # ---- Agent actions ----
@@ -397,7 +418,7 @@ class Delivery:
         elif action == "summary":
             lines += [f"stage: {t['state']} (the summary runs after the stage change)",
                       f"ci: {(out.get('ci') or {}).get('ci', 'unknown')}"]
-            blocks = {a: out[a] for a in ("implement", "fix", "checks", *REVIEWERS, "publish", "ci") if a in out}
+            blocks = {a: out[a] for a in ("implement", "fix", "checks", *REVIEWERS, "approve", "publish", "ci") if a in out}
             blocks["commits"] = self.commits(t, base)
             blocks["events"] = "\n".join(map(event_line, self.trace))
         for name, block in blocks.items():

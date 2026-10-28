@@ -75,6 +75,10 @@ case "$1 $2" in
   *) echo "stub gh: unexpected $*" >&2; exit 1 ;;
 esac
 """
+# Every soft question decided `yes`.
+DECIDE = """#!/bin/bash
+echo '[{"questions": [{"id": "risk-low", "resolution": "decided", "answer": "yes"}]}]'
+"""
 REPLIES = {
     "intake": "```text\nROUTER-INTAKE\nready: yes\nrisk: low\nnext: delivery\n```\n",
     "implement": "```text\nDEVELOPER\nstatus: done\ncommits:\n  - abc #01 stub\nblocked_reason: none\n```\n",
@@ -103,10 +107,13 @@ class DriveRun(unittest.TestCase):
         (self.root / "factory.yaml").write_text(yaml.safe_dump(config))
         shutil.copytree(sm.ROOT / "workflows", self.root / "workflows")
         shutil.copytree(sm.ROOT / "roles", self.root / "roles")
+        for d in ("policies", "judgments"):
+            shutil.copytree(sm.ROOT / d, self.root / d)
         shutil.copy(sm.ROOT / ".gitignore", self.root)
         env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
                "GIT_COMMITTER_EMAIL": "t@t", "STUB_DIR": str(self.stub),
-               "FACTORY_AGENT": str(self.stub / "agent"), "FACTORY_GH": str(self.stub / "gh")}
+               "FACTORY_AGENT": str(self.stub / "agent"), "FACTORY_GH": str(self.stub / "gh"),
+               "FACTORY_DECIDE": str(self.stub / "decide")}
         for k, v in env.items():
             self.addCleanup(os.environ.pop, k, None)
         os.environ.update(env)
@@ -116,7 +123,7 @@ class DriveRun(unittest.TestCase):
         git("commit", "-qm", "init", cwd=self.root)
         git("remote", "add", "origin", str(tmp / "origin.git"), cwd=self.root)
         git("push", "-q", "origin", "main", cwd=self.root)
-        for name, text in (("agent", AGENT), ("gh", GH)):
+        for name, text in (("agent", AGENT), ("gh", GH), ("decide", DECIDE)):
             (self.stub / name).write_text(text)
             (self.stub / name).chmod(0o755)
         for mode, text in REPLIES.items():
@@ -160,6 +167,12 @@ class DriveRun(unittest.TestCase):
         self.assertEqual((t["out"]["ci"]["result"], t["out"]["ci"]["ci"]), ("passed", "passed"))
         self.assertIn("https://example.invalid/pull/7", (self.stub / "gh-pr-checks").read_text())
         self.assertFalse((self.stub / "gh-pr-comment").exists())  # no nits
+        # The approver (dry-run) runs before publish: its verdict is in the PR body and on the ticket.
+        verdict = "would-auto-approve" if shutil.which("conftest") else "needs-human"
+        self.assertEqual(t["vars"]["approval"], verdict)
+        self.assertIn(f"## Approver (dry-run): {verdict}", pr)
+        self.assertIn(f"[factory] Approver (dry-run): {verdict}", self.tr.path("01").read_text())
+        self.assertEqual(json.loads((self.root / ".factory/runs/01/approve-0.json").read_text())["paths"], ["stub.txt"])
         edit = (self.stub / "gh-pr-edit").read_text()  # after the summary: complete yes
         self.assertIn("Closes #01\n\nFactory-Run: r1", edit)
         self.assertNotIn("Refs #01", edit)

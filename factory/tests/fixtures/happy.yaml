@@ -17,5 +17,6 @@ events:
   - fix.done
   - checks.passed
   - review_structure_security.done: { verdict: approved, reviewed_sha: bbb, risk: high }
+  - approve.done: { verdict: needs-human, reasons: [risk is high] }
   - publish.done: { pr_urls: ["https://example.invalid/pr/1"] }
   - ci.passed

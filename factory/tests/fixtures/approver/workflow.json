@@ -1,0 +1,2 @@
+{"paths": [".github/workflows/ci.yml", "docs/ci.md"], "lines_changed": 8, "ci": "passed", "risk": "low",
+ "reviews": [{"reviewer": "review_full", "verdict": "approved"}], "dependency_changes": []}

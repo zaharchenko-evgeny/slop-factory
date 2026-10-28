@@ -14,7 +14,7 @@
  "MODEL_REVIEW": "hetzner/Qwen/Qwen3.6-27B-FP8",
  "MODEL_REVIEW_STRONG": "anthropic/claude-sonnet-5-5",
  "REVIEW_STRONG_NOTE": "  # Only Anthropic and the local Qwen are available; structure-security uses Sonnet.",
- "PR_APPROVAL_NOTE": "          # auto-approval arrives with the approver role (#9)",
+ "PR_APPROVAL_NOTE": "          # the approver runs in dry-run (roles.approver)",
  "CHECKS_NOTE": [
   "# shortcut: ShellCheck runs only when installed and Betterleaks is not run",
   "# locally yet; #5 adds both as blocking CI gates."
@@ -23,14 +23,16 @@
   "  - name: state-machine",
   "    stage: pre-review",
   "    mode: blocking",
-  "    run: uv run --quiet factory/sm.py validate && uv run --quiet factory/tests/test_sm.py && uv run --quiet factory/tests/test_tracker.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_run_role.py && uv run --quiet factory/tests/test_drive.py && uv run --quiet skills/factory-setup/tests/test_templates.py"
+  "    run: uv run --quiet factory/sm.py validate && uv run --quiet factory/tests/test_sm.py && uv run --quiet factory/tests/test_tracker.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_run_role.py && uv run --quiet factory/tests/test_drive.py && uv run --quiet factory/tests/test_approver.py && uv run --quiet skills/factory-setup/tests/test_templates.py"
  ],
  "DESIGN_REF": "(design §5, §6)",
  "MAP_ISSUE_LINK": "[#21](https://github.com/zaharchenko-evgeny/offline-eval-factory/issues/21)",
+ "DECISIONS_ENGINE": "agent:claude",
  "MODEL_POLICY": "Models: only Anthropic models and the local `hetzner/Qwen/Qwen3.6-27B-FP8`.",
  "ROLES": {
   "router": "git gh pi",
   "developer": "git pi",
-  "reviewer": "git pi"
+  "reviewer": "git pi",
+  "approver": "git conftest decide"
  }
 }

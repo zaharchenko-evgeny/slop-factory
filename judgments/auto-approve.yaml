@@ -1,0 +1,55 @@
+# Soft rules of auto-approval (design §8): may this PR merge without a human?
+# Input: the ticket, the PR summary (JSON) and the diff, written by factory/approver.py.
+# Every question must resolve to `decided` with `yes`; anything else means `needs-human`.
+# calibration: none yet; the approver stays in dry-run until about ten decisions are labelled
+name: auto-approve
+max_input_chars: 30000
+questions:
+  - id: risk-low
+    type: choice
+    instructions: >-
+      The input holds a ticket, a summary of the pull request that implements it, and its diff.
+      Decide whether the change is low risk: a mistake in it could not lose data, break other
+      users, weaken security or change behaviour the ticket does not ask for. Use only the input.
+    options:
+      - value: "yes"
+        description: The diff shows a low-risk change.
+      - value: "no"
+        description: The diff shows a change that could lose data, break users or weaken security.
+      - value: uncertain
+        description: The input does not show enough to tell, so a person must read the change.
+        abstain: true
+    thresholds:
+      confidence: 0.9
+  - id: intent-clear
+    type: choice
+    instructions: >-
+      The input holds a ticket, a summary of the pull request that implements it, and its diff.
+      Decide whether the ticket states clearly what to change and how to check it, so a reader
+      can tell whether the diff does it. Use only the input.
+    options:
+      - value: "yes"
+        description: The ticket states the change and its acceptance checks clearly.
+      - value: "no"
+        description: The ticket is vague or contradicts itself.
+      - value: uncertain
+        description: The input does not show enough to tell.
+        abstain: true
+    thresholds:
+      confidence: 0.9
+  - id: scope-limited
+    type: choice
+    instructions: >-
+      The input holds a ticket, a summary of the pull request that implements it, and its diff.
+      Decide whether every change in the diff serves the ticket, with nothing unrelated added.
+      Use only the input.
+    options:
+      - value: "yes"
+        description: Every change in the diff serves the ticket.
+      - value: "no"
+        description: The diff changes something the ticket does not ask for.
+      - value: uncertain
+        description: The input does not show enough to tell.
+        abstain: true
+    thresholds:
+      confidence: 0.9
