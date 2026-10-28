@@ -17,8 +17,9 @@ change, whether you are a person, a pi session or a factory role.
    blocked-by links, not text in the body. Tracker operations are in
    [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 2. **Stage labels.** A ticket carries exactly one `factory:*` stage label:
-   `draft → ready → in-dev → in-review → approved → done`, plus `blocked` and
-   `failed`. The next ticket to work on comes from the frontier: open, `ready`,
+   `draft → ready → in-dev → in-review → approved → done`, with
+   `changes-requested` for a fix round and `blocked` or `failed` when a run
+   stops. The next ticket to work on comes from the frontier: open, `ready`,
    every blocker closed, unclaimed (no assignee), in map order.
 3. **Split large tickets.** Above about 400 lines, or 3 repositories, split the
    ticket into linked sub-issues before starting. Deliver the first slice.
