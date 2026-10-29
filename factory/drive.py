@@ -18,8 +18,8 @@ pushes and rebuilds the PR body. `ci` runs the blocking checks on the branch mer
 watches CI (`gh pr checks`, after waiting for the checks to register); a failure goes to a fix round with
 the failing job log (`ci-<round>.md`). The reviewers of a fork run in parallel. Once `ci` moves the
 ticket to `approved`, the driver runs the router summary (input: final stage, CI result, commits, event
-log), posts its comment on the ticket, edits the PR body from `Refs #N` to `Closes #N` when the summary
-says `complete: yes`, and removes the worktree once CI passed. After `pr.merged` (stage `merged`) the retro
+log), posts its comment on the ticket, sets the PR body link to `Closes #N` (`Refs #N` when the summary says
+`complete: no` or the intake proposed a split), and removes the worktree once CI passed. After `pr.merged` (stage `merged`) the retro
 writes one entry: the run's numbers (cost, wall time, fix rounds, blocking findings, reviewer agreement,
 the approver's verdict) and the retro role's manual steps and lessons, under `knowledge/<repo>/` on
 factory.yaml `knowledge.branch` (never a default branch), pushed; then stage `done`, even if it failed. `pi` and `gh` can be replaced with
@@ -307,8 +307,12 @@ class Delivery:
                                    env={**os.environ, "FACTORY_BASE": base})
                 status, text = ("pass" if r.returncode == 0 else "fail"), r.stdout + r.stderr
             failed |= status == "fail" and c.get("mode") == "blocking"
+            skips = re.findall(r"skipped=(\d+)|^.*\.\.\. skipped '(.*)'$", text, re.M)
+            if skips:  # a passing check that skipped tests (e.g. a missing tool) did not run them all
+                text = f"NOTE: {len(skips)} skip report(s) in the output, those tests did not run\n" + text
             rows.append({"name": c["name"], "mode": c.get("mode"), "status": status})
-            tail = "\n".join(text.rstrip().splitlines()[-15:])
+            lines = text.rstrip().splitlines()
+            tail = "\n".join(lines[:1] * bool(skips) + lines[-15:])
             report.append(f"## {c['name']} ({c.get('mode')}): {status}\n~~~~\n{tail}\n~~~~\n")
         return failed, rows, "\n".join(report)
 
@@ -504,6 +508,15 @@ class Delivery:
         """The `on_enter` actions of the state the run stopped in, once and best effort: post an agent
         action's `comment` on the ticket. Clear them and return the ticket."""
         self.save(t)
+        split = (t["out"].get("intake") or {}).get("split") or "none"
+        if t["hooks"] and t["state"] == "blocked" and split != "none":
+            try:
+                self.tracker.comment(self.nn, "\n".join([
+                    "[factory] Intake stopped this ticket: it is above the size limit or needs a split."
+                    " Proposed slices (create them as linked sub-issues and retitle this ticket to the first one):",
+                    "", split, "", self.trailer(t)]))
+            except (Exception, SystemExit) as e:  # noqa: BLE001 best effort, like the other hooks
+                print(f"ticket {self.nn}: split comment failed: {e}", file=sys.stderr)
         for action in t["hooks"]:
             try:
                 h = self.attempt(t, action)
@@ -529,10 +542,11 @@ class Delivery:
         summary says `complete: yes`, and remove the worktree once CI passed (the run dir stays)."""
         if s.get("comment"):
             self.tracker.comment(self.nn, s["comment"])
-        if s.get("complete") == "yes":
+        if s.get("complete") in ("yes", "no"):  # the PR body starts with `Closes` unless the intake split
             i, base = self.issue()
             for url in t["vars"]["pr_urls"]:
-                sh([gh(), "pr", "edit", url, "--body", self.pr_body(t, i, base, closes=True)], self.root)
+                sh([gh(), "pr", "edit", url, "--body", self.pr_body(t, i, base, closes=s["complete"] == "yes")],
+                   self.root)
         if self.wt.is_dir() and (t["out"].get("ci") or {}).get("result") == "passed":
             sh(["git", "worktree", "remove", str(self.wt)], self.root)  # no --force: keep uncommitted work
 
@@ -545,11 +559,21 @@ class Delivery:
         return sh(["git", "log", "--reverse", "--format=%h %s", f"origin/{base}..{t['vars']['branch']}"],
                   self.root).strip()
 
-    def pr_body(self, t, i, base, closes=False):
+    @staticmethod
+    def acceptance(i):
+        """The ticket's acceptance checks: the bullets under its `Acceptance checks` heading or line."""
+        m = re.search(r"acceptance checks?:?\**[ \t]*\n(.*?)(?:\n\s*\n(?=\S)|\Z)", i.get("body") or "", re.I | re.S)
+        items = [ln.strip() for ln in (m.group(1) if m else "").splitlines() if ln.strip().startswith(("-", "*"))]
+        return items or ["See the ticket."]
+
+    def pr_body(self, t, i, base, closes=None):
         out, v = t["out"], t["vars"]
+        if closes is None:  # the ticket is not split further
+            closes = ((out.get("intake") or {}).get("split") or "none") == "none"
         lines = [f"[factory] {i['title']}", "", "## What changed", self.commits(t, base) or "See the commits.", "",
                  "## Checks"]
         lines += [f"- {c['name']} ({c['mode']}): {c['status']}" for c in (out.get("checks") or {}).get("checks", [])]
+        lines += ["", "## Acceptance", *self.acceptance(i)]
         lines += ["", "## Review"]
         for a in (a for a in REVIEWERS if a in out):
             r = out[a]

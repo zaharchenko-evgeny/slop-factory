@@ -80,6 +80,15 @@ transitions:
   - { from: ready, on: stage.ready, set: { run_id: event.run_id }, do: preflight }
   - { from: ready, on: preflight.done, do: intake }
   - { from: ready, on: preflight.failed, to: blocked }
+  # A split proposal (above ~400 lines) or `next: blocked` stops here; `hooks` posts the proposal.
+  - from: ready
+    on: intake.done
+    if: 'out.intake.ready = "yes" and out.intake.split != "none" and out.intake.split != null'
+    to: blocked
+  - from: ready
+    on: intake.done
+    if: 'out.intake.ready = "yes" and out.intake.next = "blocked"'
+    to: blocked
   - from: ready
     on: intake.done
     if: 'out.intake.ready = "yes"'
