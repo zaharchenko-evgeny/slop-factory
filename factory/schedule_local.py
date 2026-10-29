@@ -10,6 +10,7 @@ The job runs `uv run factory/drive.py loop --once` from the factory root every i
 Output goes to <run_dir>/loop/loop.log. `env_from_keychain` (variable → Keychain service) wraps the cycle
 in /bin/sh, which exports each variable from `security find-generic-password` at run time; a failed
 lookup logs the variable and service names and exits 1 before anything runs. Values never reach the plist.
+With `targets.local.model_access: central` model calls need no key, so `env_from_keychain` is ignored.
 
 CLI: uv run factory/schedule_local.py install | uninstall | status"""
 import os
@@ -43,13 +44,19 @@ def render(config: dict, root: Path = ROOT) -> dict:
              "uv", "run", "factory/drive.py", "loop", "--once"]
     return {
         "Label": sched["label"],
-        "ProgramArguments": wrap(cycle, sched.get("env_from_keychain") or {}),
+        "ProgramArguments": wrap(cycle, keychain(config)),
         "WorkingDirectory": str(root),
         "StartInterval": seconds(sched["interval"]),
         "EnvironmentVariables": {"PATH": os.path.expandvars(sched["path"])},
         "StandardOutPath": log,
         "StandardErrorPath": log,
     }
+
+
+def keychain(config: dict) -> dict:
+    """env_from_keychain, or nothing when model calls go through the Central proxy."""
+    local = config["targets"]["local"]
+    return {} if local.get("model_access") == "central" else local["schedule"].get("env_from_keychain") or {}
 
 
 def wrap(cycle: list[str], secrets: dict) -> list[str]:
@@ -108,7 +115,7 @@ def main(argv: list[str]) -> int:
         log = Path(job["StandardOutPath"])
         lines = log.read_text().splitlines() if log.exists() else []
         print("last cycle line: " + (lines[-1] if lines else "none"))
-        for var, service in (config["targets"]["local"]["schedule"].get("env_from_keychain") or {}).items():
+        for var, service in keychain(config).items():
             print(f"keychain {var} ({service}): {'yes' if keychain_has(str(service)) else 'no'}")
     return 0
 

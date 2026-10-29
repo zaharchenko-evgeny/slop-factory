@@ -43,12 +43,16 @@ targets:
     skill: .agents/skills/factory-delivery
     run_dir: .factory/runs      # handoffs per ticket, git-ignored
     worktree_dir: .factory/worktrees
+    # Claude access of role calls: `env` (the caller's ANTHROPIC_API_KEY) or `central` (the JetBrains
+    # Central proxy via `jbcentral`, no key; factory/model_access.py). The Air target does not use this.
+    model_access: {{MODEL_ACCESS}}
     # launchd job for `drive.py loop --once` (factory/schedule_local.py); `path` is the PATH the jobs need.
     schedule:
       label: {{SCHEDULE_LABEL}}
       interval: 10m
       path: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
-      # Env var → macOS Keychain service, read by the job at run time (names only, never values).
+      # Env var → macOS Keychain service, read by the job at run time (names only, never values);
+      # ignored with model_access: central.
       env_from_keychain:{{SCHEDULE_KEYCHAIN}}
 
 # Model tiers (design §10a). Escalate one tier only after a failure.

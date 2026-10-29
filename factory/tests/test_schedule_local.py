@@ -55,6 +55,12 @@ class Schedule(unittest.TestCase):
         self.assertIn("export ANTHROPIC_API_KEY", args[2])
         self.assertIn("exec /usr/bin/lockf -t 0 /f/.factory/runs/loop/loop.lock uv run factory/drive.py loop --once", args[2])
 
+    def test_central_access_needs_no_keychain(self):
+        cfg = copy.deepcopy(FIXTURE)
+        cfg["targets"]["local"].update(model_access="central")
+        cfg["targets"]["local"]["schedule"]["env_from_keychain"] = {"ANTHROPIC_API_KEY": "test-anthropic"}
+        self.assertEqual(schedule_local.render(cfg, Path("/f"))["ProgramArguments"][0], "/usr/bin/lockf")
+
     def run_stub(self, security: str) -> tuple[subprocess.CompletedProcess, Path]:
         d = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, d)

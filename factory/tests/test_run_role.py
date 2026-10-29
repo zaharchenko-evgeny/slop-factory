@@ -18,6 +18,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
+import model_access  # noqa: E402
 import preflight  # noqa: E402
 import run_role  # noqa: E402
 import sm  # noqa: E402
@@ -31,6 +32,7 @@ n=$(($(cat "$STUB_DIR/calls" 2>/dev/null || echo 0) + 1))
 echo "$n" > "$STUB_DIR/calls"
 pwd > "$STUB_DIR/cwd"
 printf '%s\\n' "$@" > "$STUB_DIR/argv"
+echo "${PI_CODING_AGENT_DIR:-none} ${ANTHROPIC_API_KEY:-none}" >> "$STUB_DIR/env"
 echo "stub stderr $n" >&2
 if [ -n "$STUB_PEEK" ]; then
   mode=$(printf '%s\\n' "${@: -1}" | sed -n '1s/^mode: //p')
@@ -44,6 +46,14 @@ if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_UNFENCED" ]; then printf 'REVIEWER\
 if [ -n "${STUB_REPLY+x}" ]; then printf '%s' "$STUB_REPLY"; exit "${STUB_EXIT:-0}"; fi
 if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_PROSE" ]; then printf '```text\nREVIEWER\nverdict: approved\n```\nDone!\n'; fi
 if [ "$n" -ge "$STUB_OK_AT" ]; then printf '```text\\nREVIEWER\\nverdict: approved\\n```\\n'; fi
+"""
+# `jbcentral status` reports the proxy running once $STUB_DIR/proxy-up exists; `proxy start` creates
+# it unless $STUB_DIR/proxy-broken exists. Every call is appended to $STUB_DIR/jbcentral.calls.
+JBCENTRAL = """#!/bin/bash
+echo "$*" >> "$STUB_DIR/jbcentral.calls"
+if [ "$1" = status ]; then
+  if [ -f "$STUB_DIR/proxy-up" ]; then printf '\\033[1mProxy     \\033[m running on port 1\\n'; else echo "Proxy     stopped"; fi
+elif [ "$1 $2" = "proxy start" ] && [ ! -f "$STUB_DIR/proxy-broken" ]; then touch "$STUB_DIR/proxy-up"; fi
 """
 GH = """#!/bin/bash
 if [ "$1" = issue ]; then cat "$STUB_DIR/issue.json"; exit; fi
@@ -67,12 +77,16 @@ class RunRole(unittest.TestCase):
             subprocess.run(["git", *cmd], cwd=self.wt, check=True, capture_output=True)
         stub = self.root / "stub"
         stub.mkdir()
-        for name, text in (("agent", AGENT), ("gh", GH)):
+        for name, text in (("agent", AGENT), ("gh", GH), ("jbcentral", JBCENTRAL)):
             (stub / name).write_text(text)
             (stub / name).chmod(0o755)
         self.stub = stub
+        config = sm.yaml.safe_load((self.root / "factory.yaml").read_text())
+        config["targets"]["local"]["model_access"] = "env"  # Central tests opt in
+        (self.root / "factory.yaml").write_text(sm.yaml.safe_dump(config))
         self.issue(["factory:in-dev"])
-        os.environ.update(FACTORY_AGENT=str(stub / "agent"), FACTORY_GH=str(stub / "gh"), STUB_DIR=str(stub))
+        os.environ.update(FACTORY_AGENT=str(stub / "agent"), FACTORY_GH=str(stub / "gh"), STUB_DIR=str(stub),
+                          FACTORY_JBCENTRAL=str(stub / "jbcentral"))
         for k in ("STUB_PROSE", "STUB_REPLY", "STUB_EXIT", "STUB_UNFENCED", "STUB_PEEK"):
             os.environ.pop(k, None)
 
@@ -262,6 +276,71 @@ class RunRole(unittest.TestCase):
         self.assertEqual([a for a in argv if a.endswith("/skills/ponytail-review")], [str(skills / "ponytail-review")])
         self.assertNotIn(str(skills / "other"), argv)
 
+
+    ROUTE_URL = "http://127.0.0.1:4242/wire/abc/claude-code/anthropic"
+
+    def central(self):
+        """Switch the copied factory.yaml to central, with a fake HOME holding the Central agent config
+        and a user models.json that has another provider."""
+        home = self.root / "home"
+        (home / ".claude").mkdir(parents=True)
+        (home / ".claude/settings.json").write_text(json.dumps({"env": {"ANTHROPIC_BASE_URL": self.ROUTE_URL}}))
+        (home / ".pi/agent").mkdir(parents=True)
+        (home / ".pi/agent/models.json").write_text(json.dumps(
+            {"providers": {"hetzner": {"baseUrl": "https://q", "apiKey": "k", "models": [{"id": "Q"}]}}}))
+        old = os.environ.get("HOME")
+        os.environ["HOME"] = str(home)
+        self.addCleanup(os.environ.__setitem__, "HOME", old)
+        config = sm.yaml.safe_load((self.root / "factory.yaml").read_text())
+        config["targets"]["local"]["model_access"] = "central"
+        (self.root / "factory.yaml").write_text(sm.yaml.safe_dump(config))
+        return config
+
+    def test_central_agent_dir_and_every_role_call_gets_it(self):
+        config = self.central()
+        (self.stub / "proxy-up").touch()
+        self.go("intake", ok_at=1)
+        self.go("review_behaviour", ok_at=1)  # a reviewer, in its private dir
+        os.environ.update(STUB_REPLY="OK", STUB_EXIT="0")
+        self.assertTrue(preflight.check("m", env=model_access.pi_env(config, self.root))[0])
+        agent = self.root / ".factory/pi-agent"
+        self.assertEqual(agent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((agent / "models.json").stat().st_mode & 0o777, 0o600)
+        providers = json.loads((agent / "models.json").read_text())["providers"]
+        self.assertEqual(providers["anthropic"], {"baseUrl": self.ROUTE_URL})
+        self.assertEqual(providers["hetzner"]["apiKey"], "k")
+        self.assertEqual((self.stub / "env").read_text().splitlines(),
+                         [f"{agent} {model_access.PLACEHOLDER_KEY}"] * 3)
+        self.assertNotIn("proxy start", (self.stub / "jbcentral.calls").read_text())
+
+    def test_central_preflight_starts_the_proxy_once(self):
+        config = self.central()
+        self.assertIn("PI_CODING_AGENT_DIR", model_access.pi_env(config, self.root))
+        calls = self.stub / "jbcentral.calls"
+        self.assertEqual(calls.read_text().splitlines(), ["status", "proxy start", "status"])
+        (self.stub / "proxy-up").unlink()
+        (self.stub / "proxy-broken").touch()
+        calls.unlink()
+        with self.assertRaisesRegex(model_access.ModelAccessError, r"\AJetBrains Central proxy is not running[^\n]*\Z"):
+            model_access.pi_env(config, self.root)
+        self.assertEqual(calls.read_text().splitlines(), ["status", "proxy start", "status"])
+        with self.assertRaises(SystemExit):  # a role call never reaches the model without the proxy
+            self.go("intake", ok_at=1)
+        self.assertFalse((self.stub / "env").exists())
+
+    def test_central_without_route_blocks(self):
+        config = self.central()
+        (self.stub / "proxy-up").touch()
+        (self.root / "home/.claude/settings.json").write_text("{}")
+        with self.assertRaisesRegex(model_access.ModelAccessError, "no JetBrains Central claude-code route"):
+            model_access.pi_env(config, self.root)
+
+    def test_env_access_passes_nothing(self):
+        if "PI_CODING_AGENT_DIR" in os.environ:
+            self.addCleanup(os.environ.__setitem__, "PI_CODING_AGENT_DIR", os.environ.pop("PI_CODING_AGENT_DIR"))
+        self.go("intake", ok_at=1)
+        self.assertEqual((self.stub / "env").read_text().split()[0], "none")
+        self.assertFalse((self.stub / "jbcentral.calls").exists())
 
 if __name__ == "__main__":
     unittest.main()

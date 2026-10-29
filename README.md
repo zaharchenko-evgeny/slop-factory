@@ -36,8 +36,17 @@ Run files stay in `.factory/` (git-ignored).
 never overlap. Log: `.factory/runs/loop/loop.log`. `status` shows whether the
 job is loaded and the last log line; `uninstall` removes it.
 
-launchd jobs do not inherit your shell's environment, so secrets come from the
-macOS Keychain: `targets.local.schedule.env_from_keychain` maps each variable to
+This repository sets `targets.local.model_access: central`: every role call and
+the model preflight reach Claude through the JetBrains Central proxy, so no
+Anthropic API key is needed. Preflight starts the proxy (`jbcentral proxy
+start`) when it is down, reads the claude-code route from the Central agent
+config (`~/.claude/settings.json`, written by `jbcentral add`) and writes
+`.factory/pi-agent/models.json`: your `~/.pi/agent/models.json` with only the
+`anthropic` base URL replaced. Each `pi` call gets `PI_CODING_AGENT_DIR` pointing
+there and a placeholder `ANTHROPIC_API_KEY`.
+
+With `model_access: env`, launchd jobs do not inherit your shell's environment,
+so secrets come from the macOS Keychain: `targets.local.schedule.env_from_keychain` maps each variable to
 a Keychain service, and every cycle exports it from `security
 find-generic-password` before it runs. A failed lookup logs the variable and
 service names and the cycle runs nothing. Store the key once (it prompts for
