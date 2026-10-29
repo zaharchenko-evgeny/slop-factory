@@ -48,6 +48,8 @@ targets:
       label: {{SCHEDULE_LABEL}}
       interval: 10m
       path: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+      # Env var → macOS Keychain service, read by the job at run time (names only, never values).
+      env_from_keychain:{{SCHEDULE_KEYCHAIN}}
 
 # Model tiers (design §10a). Escalate one tier only after a failure.
 models:

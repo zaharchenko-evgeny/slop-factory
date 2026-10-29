@@ -75,6 +75,7 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | `BRANCH_PREFIX` | Branch prefix before `/{ticket}-{slug}` | `factory.yaml`, developer `role.md` |
 | `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.yaml` |
 | `SCHEDULE_LABEL` | launchd label of the local loop schedule | `factory.yaml` |
+| `SCHEDULE_KEYCHAIN` | `env_from_keychain` value: ` {}` (default, none), or newline-led `VAR: keychain-service` lines indented eight spaces | `factory.yaml` |
 | `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG` | Developer and router model tiers | `factory.yaml` |
 | `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Reviewer models (different family from the developer) | `factory.yaml` |
 | `REVIEW_STRONG_NOTE` | Optional comment line above `review_strong` (may be empty) | `factory.yaml` |

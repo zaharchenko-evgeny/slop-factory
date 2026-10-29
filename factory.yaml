@@ -51,6 +51,9 @@ targets:
       label: com.offline-eval-factory.loop
       interval: 10m
       path: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+      # Env var → macOS Keychain service, read by the job at run time (names only, never values).
+      env_from_keychain:
+        ANTHROPIC_API_KEY: offline-eval-factory-anthropic
 
 # Model tiers (design §10a). Escalate one tier only after a failure.
 models:
@@ -122,4 +125,4 @@ checks:
   - name: state-machine
     stage: pre-review
     mode: blocking
-    run: uv run --quiet factory/sm.py validate && uv run --quiet factory/tests/test_sm.py && uv run --quiet factory/tests/test_tracker.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_run_role.py && uv run --quiet factory/tests/test_drive.py && uv run --quiet factory/tests/test_approver.py && uv run --quiet skills/factory-setup/tests/test_templates.py
+    run: uv run --quiet factory/sm.py validate && uv run --quiet factory/tests/test_sm.py && uv run --quiet factory/tests/test_tracker.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_run_role.py && uv run --quiet factory/tests/test_drive.py && uv run --quiet factory/tests/test_approver.py && uv run --quiet factory/tests/test_schedule_local.py && uv run --quiet skills/factory-setup/tests/test_templates.py
