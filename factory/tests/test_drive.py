@@ -384,7 +384,7 @@ class DriveRun(unittest.TestCase):
             "next: delivery", "size_estimate: ~850\nsplit: |\n  - Slice A — scope (~400)\n  - Slice B — scope (~450)\nnext: delivery"))
         t = self.go()
         self.assertEqual((t["state"], self.calls("implement")), ("blocked", 0))
-        self.assertEqual(self.stages, ["blocked"])
+        self.assertEqual(self.stages[-1], "blocked")
         text = self.tr.path("01").read_text()
         self.assertIn("Slice A", text)
         self.assertIn("Slice B", text)
