@@ -183,7 +183,8 @@ class DriveRun(unittest.TestCase):
                                 capture_output=True, text=True).stdout
         self.assertIn(head, remote)  # pushed
         pr = (self.stub / "gh-pr-create").read_text()
-        self.assertIn("Refs #01", pr)
+        self.assertIn("Closes #01", pr)
+        self.assertIn("## Acceptance\nSee the ticket.", pr)
         self.assertIn("Factory-Run: r1", pr)
         self.assertIn("- tool (advisory): skipped", pr)
         self.assertEqual((t["out"]["ci"]["result"], t["out"]["ci"]["ci"]), ("passed", "passed"))
@@ -374,6 +375,20 @@ class DriveRun(unittest.TestCase):
         self.assertIn("Thanks!", (run / "review_full-attempt1.out.md").read_text())  # each attempt kept
         self.assertTrue((run / "review_full-attempt2.out.md").exists())
 
+    def test_acceptance_lists_the_ticket_checks(self):
+        body = "Scope.\n\nAcceptance checks:\n- a works\n- b works\n\nAffected repositories: x.\n"
+        self.assertEqual(drive.Delivery.acceptance({"body": body}), ["- a works", "- b works"])
+
+    def test_intake_split_blocks_with_the_proposal(self):
+        (self.stub / "reply-intake").write_text(REPLIES["intake"].replace(
+            "next: delivery", "size_estimate: ~850\nsplit: |\n  - Slice A — scope (~400)\n  - Slice B — scope (~450)\nnext: delivery"))
+        t = self.go()
+        self.assertEqual((t["state"], self.calls("implement")), ("blocked", 0))
+        self.assertEqual(self.stages, ["blocked"])
+        text = self.tr.path("01").read_text()
+        self.assertIn("Slice A", text)
+        self.assertIn("Slice B", text)
+
     def test_nits_posted_once_as_one_pr_comment(self):
         (self.stub / "reply-full").write_text(REPLIES["full"].replace("nits:\n", "nits:\n  - a.py:1 — rename x\n"))
         self.go()
@@ -386,8 +401,8 @@ class DriveRun(unittest.TestCase):
         (self.stub / "reply-summary").write_text("```text\nROUTER-SUMMARY\ncomplete: no\n```\n")
         t = self.go()
         self.assertEqual(t["state"], "approved")
-        self.assertFalse((self.stub / "gh-pr-edit").exists())
-        self.assertIn("Refs #01", (self.stub / "gh-pr-create").read_text())
+        self.assertIn("Refs #01", (self.stub / "gh-pr-edit").read_text())
+        self.assertIn("Closes #01", (self.stub / "gh-pr-create").read_text())
         self.assertFalse((self.root / ".factory/worktrees/01").exists())
 
     def test_review_raising_risk_relabels_the_ticket(self):
