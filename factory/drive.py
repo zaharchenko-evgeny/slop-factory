@@ -276,8 +276,12 @@ class Delivery:
                                    env={**os.environ, "FACTORY_BASE": base})
                 status, text = ("pass" if r.returncode == 0 else "fail"), r.stdout + r.stderr
             failed |= status == "fail" and c.get("mode") == "blocking"
+            skips = re.findall(r"skipped=(\d+)|^.*\.\.\. skipped '(.*)'$", text, re.M)
+            if skips:  # a passing check that skipped tests (e.g. a missing tool) did not run them all
+                text = f"NOTE: {len(skips)} skip report(s) in the output, those tests did not run\n" + text
             rows.append({"name": c["name"], "mode": c.get("mode"), "status": status})
-            tail = "\n".join(text.rstrip().splitlines()[-15:])
+            lines = text.rstrip().splitlines()
+            tail = "\n".join(lines[:1] * bool(skips) + lines[-15:])
             report.append(f"## {c['name']} ({c.get('mode')}): {status}\n~~~~\n{tail}\n~~~~\n")
         return failed, rows, "\n".join(report)
 

@@ -379,6 +379,13 @@ class DriveRun(unittest.TestCase):
         body = "Scope.\n\nAcceptance checks:\n- a works\n- b works\n\nAffected repositories: x.\n"
         self.assertEqual(drive.Delivery.acceptance({"body": body}), ["- a works", "- b works"])
 
+    def test_checks_report_notes_skipped_tests(self):
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.config["checks"] = [{"name": "t", "stage": "pre-review", "mode": "blocking", "run": "echo 'OK (skipped=2)'"}]
+        failed, rows, report = d.run_checks(self.root, "main")
+        self.assertFalse(failed)
+        self.assertIn("NOTE: 1 skip report(s)", report)
+
     def test_intake_split_blocks_with_the_proposal(self):
         (self.stub / "reply-intake").write_text(REPLIES["intake"].replace(
             "next: delivery", "size_estimate: ~850\nsplit: |\n  - Slice A — scope (~400)\n  - Slice B — scope (~450)\nnext: delivery"))
