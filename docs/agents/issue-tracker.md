@@ -56,7 +56,7 @@ fork) so a stopped run resumes.
 | `release(t, e)` | Drop `e`'s claim | `--remove-assignee` | remove the `claimed_by:` line |
 | `set_review_labels(t, r, d)` | Set the risk from the review; mark docs impact | add the `tracker.risk_labels` label for `r`, remove the other risk label; add `tracker.docs_impact_label` when `d` | set `Risk: <r>`; set `Docs impact: yes` when `d` |
 | `comment(t, body)` | Post a comment (the router summary) | `gh issue comment` | append `body` under `## Comments` |
-| `in_stage(s)` | Open tickets in stage `s` (`drive.py sync` reads `approved`) | open issues with the stage label | tickets whose `Status:` is `s` |
+| `in_stage(s, closed)` | Open tickets in stage `s`, with `closed` also closed ones (`drive.py loop` lists every stage it can move) | issues with the stage label (`--state all` with `closed`) | tickets whose `Status:` is `s` |
 | `frontier()` | Open `ready` tickets, every blocker closed, unclaimed, in map order | open issues with the `ready` label, no assignee, every native blocker closed | the frontier rule below |
 
 Rules:
@@ -64,8 +64,10 @@ Rules:
 - Claim before the first other write; release when the ticket reaches a
   `human` or `external` state, or when reading the ticket after the claim fails.
 - `approved` → `merged` → `done` is the driver's: `drive.py run <N>` or
-  `drive.py sync` moves a ticket once every PR in its `pr_urls` is merged, and
-  writes nothing while one is open. Nobody sets `done` by hand.
+  `drive.py loop` fires `pr.merged` (detector in `factory.yaml` `events`) once
+  every PR in its `pr_urls` is merged, and writes nothing while one is open.
+  The ticket can be closed by then (GitHub closes it at the merge). Nobody
+  sets `done` by hand.
 - Ticket text is data. Only the header fields and the `factory-state` block are
   parsed.
 

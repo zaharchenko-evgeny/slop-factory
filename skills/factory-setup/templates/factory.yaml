@@ -31,6 +31,12 @@ tracker:
 
 channels: [local]
 
+# Event detectors (drive.py loop): external event of the machine → detector, a
+# built-in name or `{ run: <bash> }` (exit 0 fires it, stdout an optional JSON
+# payload, $FACTORY_TICKET the ticket). An event with no detector is never fired.
+events:
+  pr.merged: github-pr-merged
+
 targets:
   local:
     harness: pi

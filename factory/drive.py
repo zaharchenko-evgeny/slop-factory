@@ -22,13 +22,19 @@ log), posts its comment on the ticket, edits the PR body from `Refs #N` to `Clos
 says `complete: yes`, and removes the worktree once CI passed. `pi` and `gh` can be replaced with
 $FACTORY_AGENT and $FACTORY_GH.
 
-On a ticket in `approved`, `run` reads the ticket's PRs (`gh pr view --json state,mergedAt`): once every
-PR is merged it fires `pr.merged`, which moves the ticket through `merged` (post-merge actions) to `done`
-and releases the claim; while a PR is open it prints "waiting for merge" and writes nothing. `sync` does
-that for every open ticket in `approved`.
+When a step moves the ticket into a state with `on_enter` actions (e.g. `diagnose`, `notify`), the driver
+runs them once at the end of the run, posts an agent action's `comment` on the ticket, and clears them.
+
+In a human or external state, `run` polls the machine's external events on that state's transitions
+that have a detector in factory.yaml `events` (`github-pr-merged`: every PR in `pr_urls` is merged, read
+with `gh pr view --json state,mergedAt`; `{run: <bash>}`: exit 0). The first one detected is fired; with
+none it prints "waiting for <events>" and writes nothing. `loop` does this for every ticket whose stage
+the machine can move (open and closed), and runs the tickets in agent states (the initial state: the
+frontier), at most `limits.concurrent_deliveries` at a time and `limits.runs_per_day` per day, each at
+most once per call; it cycles until a cycle runs nothing and no event moved a ticket (`--once`: one cycle).
 
 CLI: uv run factory/drive.py run <ticket> [--tracker local:<effort dir>|github] [--executor NAME] [--resume]
-     uv run factory/drive.py sync [--tracker ...] [--executor NAME]
+     uv run factory/drive.py loop [--once] [--tracker ...] [--executor NAME]
      uv run factory/drive.py branch <ticket> <ticket.json>  prints the ticket's branch name.
 """
 import argparse
@@ -363,12 +369,39 @@ class Delivery:
         then `finish`. The summary is best effort: its result never changes the stage."""
         self.trace = trace
         self.save(t)
-        spec = self.m["actions"]["summary"]
-        for _ in range(1 + spec.get("retry", 0)):
-            result, h = self.agent(t, "summary", spec)
+        self.finish(t, self.attempt(t, "summary"))
+
+    def attempt(self, t, action):
+        """Run `action` outside the machine, with its retries: its handoff with `result`."""
+        for _ in range(1 + self.m["actions"][action].get("retry", 0)):
+            result, h = self.run(t, action)
             if result == "done":
                 break
-        self.finish(t, {"result": result, **h})
+        return {"result": result, **h}
+
+    def hooks(self, t):
+        """The `on_enter` actions of the state the run stopped in, once and best effort: post an agent
+        action's `comment` on the ticket. Clear them and return the ticket."""
+        self.save(t)
+        for action in t["hooks"]:
+            try:
+                h = self.attempt(t, action)
+                if h["result"] == "done" and h.get("comment"):
+                    self.tracker.comment(self.nn, h["comment"])
+            except (Exception, SystemExit) as e:  # noqa: BLE001 best effort: the stage is already written
+                print(f"ticket {self.nn}: {action} failed: {e}", file=sys.stderr)
+        return {**t, "hooks": []}
+
+    def notify(self, t):
+        """One line per `channels` entry; `local`: stdout and `notify.log` in the run dir."""
+        line = f"[factory] ticket {self.nn}: {t['state']} ({self.trailer(t)})"
+        for ch in self.config.get("channels") or []:
+            if ch != "local":
+                raise ValueError(f"no notifier for channel {ch!r}")
+            print(line)
+            with (self.run_dir / "notify.log").open("a") as f:
+                f.write(line + "\n")
+        return "done", {}
 
     def finish(self, t, s):
         """After the summary: post its comment on the ticket, switch the PR body to `Closes #N` when the
@@ -433,6 +466,9 @@ class Delivery:
             blocks = reviews
         elif action == "fix" and (out.get("ci") or {}).get("result") == "failed":
             blocks["checks"] = Path(out["ci"]["report"]).read_text()  # CI or the merge with the base failed
+        elif action == "diagnose":
+            lines.append(f"stage: {t['state']}")
+            blocks = {a: o for a, o in out.items() if a != "diagnose"}
         elif action == "document":  # the reviewers' handoffs say what has docs impact
             blocks = {a: out[a] for a in REVIEWERS if a in out}
         elif action == "summary":
@@ -470,31 +506,143 @@ def run_ticket(root, nn, tracker, executor, run_id=None, resume=False, results=(
     d.save(t)  # sm.json shows the final stage
     if trace and trace[-1]["event"] in ("ci.passed", "ci.pending"):  # only the run that reached approved
         d.summarize(t, trace)
+    if t["hooks"]:
+        t = d.hooks(t)
+        tracker.write_vars(nn, {**tracker.read_vars(nn), **sm.persisted(t)})  # keeps `_resume`
+        d.save(t)
     return t, trace
 
 
-def check_merged(root, nn, tracker, executor):
-    """A ticket in `approved`: fire `pr.merged` when every PR in its `pr_urls` is merged and return
-    (ticket, trace); return None, without any write, while a PR is open or none is recorded."""
-    urls = tracker.read_vars(nn).get("pr_urls") or []
-    prs = [json.loads(sh([gh(), "pr", "view", u, "--json", "state,mergedAt"], root)) for u in urls]
-    if not prs or any(p.get("state") != "MERGED" for p in prs):
-        return None
-    return run_ticket(root, nn, tracker, executor, results=[{"pr.merged": {"open_pr_urls": []}}])
+# ---- Event detectors: factory.yaml `events` maps an external event to one ----
 
 
-def sync(root, tracker, executor):
-    """`check_merged` for every open ticket in `approved`, one line each. Return 2 if any failed, else 0."""
-    code = 0
-    for nn in tracker.in_stage("approved"):
-        try:
-            done = check_merged(root, str(nn), tracker, executor)
-        except (ClaimError, RuntimeError, ValueError) as e:
-            print(f"ticket {nn}: error: {e}", file=sys.stderr)
-            code = 2
+def pr_merged(root, nn, vars_):
+    """Every PR in `pr_urls` is merged (none recorded: not detected)."""
+    prs = [json.loads(sh([gh(), "pr", "view", u, "--json", "state,mergedAt"], root)) for u in vars_.get("pr_urls") or []]
+    return {"open_pr_urls": []} if prs and all(p.get("state") == "MERGED" for p in prs) else None
+
+
+DETECTORS = {"github-pr-merged": pr_merged}
+
+
+def detect(root, nn, vars_, spec):
+    """The event's payload when its detector reports it, else None. `{run: <bash>}`: exit 0, stdout an
+    optional JSON payload; a string: a built-in detector."""
+    if isinstance(spec, dict) and isinstance(spec.get("run"), str):
+        r = subprocess.run(["bash", "-c", spec["run"]], cwd=root, capture_output=True, text=True,
+                           env={**os.environ, "FACTORY_TICKET": str(nn)})
+        return None if r.returncode else (json.loads(r.stdout) if r.stdout.strip() else {})
+    if spec not in DETECTORS:
+        raise ValueError(f"unknown event detector {spec!r}; use {', '.join(DETECTORS)} or {{run: <bash>}}")
+    return DETECTORS[spec](root, nn, vars_)
+
+
+def load(root):
+    root = Path(root)
+    return (yaml.safe_load((root / "factory.yaml").read_text()),
+            sm.load_machine(root / "workflows/delivery.sm.yaml", root / "factory.yaml"))
+
+
+def watched(m, config, state):
+    """The declared external events on `state`'s transitions that have a detector, in file order."""
+    det = config.get("events") or {}
+    return list(dict.fromkeys(tr["on"] for tr in m["transitions"]
+                              if state in tr["from"] and tr["on"] in m["events"] and tr["on"] in det))
+
+
+def poll(root, nn, tracker, executor):
+    """Fire the first watched event of the ticket's state that its detector reports: (ticket, trace).
+    None, without any write, when none is detected."""
+    config, m = load(root)
+    events = watched(m, config, tracker.get_state(nn))
+    vars_ = tracker.read_vars(nn) if events else {}
+    for ev in events:
+        payload = detect(root, nn, vars_, config["events"][ev])
+        if payload is not None:
+            return run_ticket(root, nn, tracker, executor, results=[{ev: payload}])
+    return None
+
+
+def runs_left(ledger, per_day):
+    """Runs still allowed in the last 24 hours (`ledger`: a JSON list of start times)."""
+    if per_day is None:
+        return float("inf")
+    now = time.time()
+    starts = [x for x in (json.loads(ledger.read_text()) if ledger.exists() else []) if x > now - 86400]
+    return max(0, per_day - len(starts))
+
+
+def record_runs(ledger, n):
+    now = time.time()
+    starts = [x for x in (json.loads(ledger.read_text()) if ledger.exists() else []) if x > now - 86400]
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(json.dumps(starts + [now] * n))
+
+
+ERRORS = (ClaimError, ResumeError, RuntimeError, ValueError, KeyError, OSError, sm.SMError)
+
+
+def loop(root, tracker, executor, once=False):
+    """Move every ticket the machine can move, one line each, until a cycle changes nothing
+    (`once`: one cycle). The loop itself never sets a stage. Return 2 if any ticket errored, else 0."""
+    root = Path(root)
+    config, m = load(root)
+    limits = config.get("limits") or {}
+    width = max(1, limits.get("concurrent_deliveries") or 1)
+    ledger = root / config["targets"]["local"]["run_dir"] / "loop-runs.json"
+    ran, code = set(), 0
+    while True:
+        moved, agent = False, []
+        for nn in tickets(m, config, tracker):
+            try:
+                state = tracker.get_state(nn)
+                if (m["states"].get(state) or {}).get("actor") == "agent":
+                    agent += [] if nn in ran or nn in agent else [nn]
+                    continue
+                done = poll(root, nn, tracker, executor)
+            except ERRORS as e:
+                print(f"ticket {nn}: error: {e}", file=sys.stderr)
+                code = 2
+                continue
+            if done is not None:
+                print(f"ticket {nn}: final: {done[0]['state']}")
+                moved |= done[0]["state"] != state
+        batch = agent[:int(min(width, runs_left(ledger, limits.get("runs_per_day"))))]
+        if batch:
+            record_runs(ledger, len(batch))
+            ran.update(batch)
+
+        def go(nn):
+            try:
+                return run_ticket(root, nn, tracker, executor)[0]["state"], None
+            except ERRORS as e:
+                return None, e
+        with ThreadPoolExecutor(max(1, len(batch))) as ex:
+            for nn, (state, err) in zip(batch, ex.map(go, batch)):
+                if isinstance(err, ClaimError):
+                    print(f"ticket {nn}: skipped: {err}")
+                elif err:
+                    print(f"ticket {nn}: error: {err}", file=sys.stderr)
+                    code = 2
+                else:
+                    print(f"ticket {nn}: final: {state}")
+        if once or not (moved or batch):
+            return code
+
+
+def tickets(m, config, tracker):
+    """Tickets (open and closed) in a state the loop can move: an agent state (the initial state: the
+    tracker's frontier) or a state with a watched event."""
+    out = []
+    for state, spec in m["states"].items():
+        if spec["actor"] == "agent" and state == m["initial"]:
+            found = tracker.frontier()
+        elif spec["actor"] == "agent" or watched(m, config, state):
+            found = tracker.in_stage(state, closed=True)
+        else:
             continue
-        print(f"ticket {nn}: " + ("waiting for merge" if done is None else f"final: {done[0]['state']}"))
-    return code
+        out += [str(n) for n in found if str(n) not in out]
+    return out
 
 
 def report_run(t, trace, run_dir):
@@ -512,7 +660,8 @@ def main(argv=None):
     r = sub.add_parser("run", help="deliver a ticket until it waits on a human or external actor")
     r.add_argument("ticket")
     r.add_argument("--resume", action="store_true", help="restart a failed ticket at the step that failed")
-    y = sub.add_parser("sync", help="move every open approved ticket whose PRs are all merged to done")
+    y = sub.add_parser("loop", help="run every ticket the state machine can move until nothing moves")
+    y.add_argument("--once", action="store_true", help="one cycle (was `sync`)")
     for sp in (r, y):
         sp.add_argument("--tracker", default="github", help="local:<effort dir> or github (default)")
         sp.add_argument("--executor", help="claim name (default: the gh login, or the OS user for local)")
@@ -520,7 +669,7 @@ def main(argv=None):
     b.add_argument("ticket")
     b.add_argument("ticket_json")
     args = p.parse_args(argv)
-    if args.cmd != "sync" and not args.ticket.isdigit():
+    if args.cmd != "loop" and not args.ticket.isdigit():
         p.error(f"ticket {args.ticket!r}: use the issue number")
     if args.cmd == "branch":
         pattern = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["branch_pattern"]
@@ -536,13 +685,15 @@ def main(argv=None):
     else:
         p.error(f"--tracker {args.tracker!r}: use local:<effort dir> or github")
     run_dir = sm.ROOT / yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["targets"]["local"]["run_dir"]
-    if args.cmd == "sync":
-        return sync(sm.ROOT, tracker, executor)
+    if args.cmd == "loop":
+        return loop(sm.ROOT, tracker, executor, once=args.once)
     try:
-        if not args.resume and tracker.get_state(args.ticket) == "approved":
-            done = check_merged(sm.ROOT, args.ticket, tracker, executor)
+        config, m = load(sm.ROOT)
+        events = [] if args.resume else watched(m, config, tracker.get_state(args.ticket))
+        if events:
+            done = poll(sm.ROOT, args.ticket, tracker, executor)
             if done is None:
-                print("waiting for merge")
+                print(f"waiting for {', '.join(events)}")
                 return 0
             t, trace = done
         else:

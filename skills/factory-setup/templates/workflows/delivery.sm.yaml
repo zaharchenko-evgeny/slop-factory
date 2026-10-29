@@ -7,6 +7,11 @@
 #   or a declared external event. The first matching transition wins.
 #   `enter` is built in: it fires once when a transition enters an agent state
 #   without starting an action (a pass-through state, e.g. `merged`).
+# - `on_enter` (human and external states only): actions the driver runs once
+#   when a ticket enters the state, best effort; their results fire no event.
+# - `drive.py loop` runs tickets in agent states and, in the other states,
+#   polls the external events of their transitions that have a detector in
+#   factory.yaml `events`.
 # - Only `set:` (and a `loop:` counter) changes vars.
 # - Guards and `set:` values are a JSONata subset: comparisons, and, or,
 #   $not(), field paths, $count(), $append(a, b), literals.
@@ -32,7 +37,7 @@ events: [stage.ready, pr.merged]
 # handoff, which `retry` reruns.
 actions:
   preflight: { kind: script }
-  intake: { kind: agent, role: router, mode: intake, retry: 1 }
+  intake: { kind: agent, role: router, mode: intake, cwd: root, retry: 1 }
   start: { kind: script }
   implement: { kind: agent, role: developer, mode: implement, tier_by: risk, retry: 1 }
   checks: { kind: script, run: "factory.yaml checks, stage pre-review; only blocking ones fail" }
@@ -49,17 +54,21 @@ actions:
   publish: { kind: script }
   ci: { kind: script, run: "blocking checks on the branch merged with the base, then the PR's CI checks" }
   summary: { kind: agent, role: router, mode: summary, retry: 1 }
+  # on_enter actions: `diagnose` posts a short reason on the ticket; `notify`
+  # sends one line to each factory.yaml `channels` entry.
+  diagnose: { kind: agent, role: router, mode: diagnose, cwd: root, retry: 1 }
+  notify: { kind: script }
 
 states:
   ready: { actor: agent }
   in-dev: { actor: agent }
   changes-requested: { actor: agent }
   in-review: { actor: agent }
-  approved: { actor: human }   # gate 2: a human approves and merges
+  approved: { actor: human, on_enter: [notify] }   # gate 2: a human approves and merges
   merged: { actor: agent }     # every PR merged: post-merge actions run here
   done: { actor: human }
-  blocked: { actor: human }
-  failed: { actor: human }
+  blocked: { actor: human, on_enter: [diagnose, notify] }
+  failed: { actor: human, on_enter: [diagnose, notify] }
 
 transitions:
   - { from: ready, on: stage.ready, set: { run_id: event.run_id }, do: preflight }
@@ -183,7 +192,7 @@ transitions:
     to: changes-requested
   - { from: in-review, on: ci.error, to: failed }
 
-  # `drive.py run` / `sync` fire pr.merged once every PR of the ticket is merged.
+  # `drive.py run` / `loop` fire pr.merged (detector in factory.yaml `events`) once every PR is merged.
   # Post-merge actions (none yet): set `do: <first>` here, chain them in `merged`,
   # and replace the `enter` transition with `{ from: merged, on: <last>.done, to: done }`.
   - { from: approved, on: pr.merged, if: "$count(event.open_pr_urls) = 0", to: merged }

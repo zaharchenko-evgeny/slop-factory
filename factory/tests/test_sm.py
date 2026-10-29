@@ -56,6 +56,19 @@ class Delivery(unittest.TestCase):
         self.assertEqual([(r["from"], r["to"], r["run"]) for r in trace],
                          [("approved", "merged", ["retro"]), ("merged", "done", [])])
 
+    def test_entering_a_state_sets_its_on_enter_hooks_once(self):
+        t, _ = sm.step(self.m, sm.new_ticket(self.m, {"state": "in-dev", "pending": ["implement"]}), "implement.blocked")
+        self.assertEqual((t["state"], t["hooks"]), ("blocked", ["diagnose", "notify"]))
+        t, _ = sm.step(self.m, {**t, "hooks": []}, "pr.merged", {"open_pr_urls": []})  # ignored: stays
+        self.assertEqual(t["hooks"], [])
+        raw = yaml.safe_load((sm.ROOT / "workflows/delivery.sm.yaml").read_text())
+        raw["states"]["in-dev"]["on_enter"] = ["notify"]
+        with self.assertRaisesRegex(sm.SMError, "on_enter runs only in human or external states"):
+            sm.validate(raw, CONFIG)
+        raw["states"]["in-dev"]["on_enter"] = ["nope"]
+        with self.assertRaisesRegex(sm.SMError, "on_enter must be a list of declared actions"):
+            sm.validate(raw, CONFIG)
+
     def test_failed_ci_is_a_fix_round_then_approved(self):
         t, trace = run_fixture(self.m, "ci-fix.yaml")
         self.assertEqual([r["to"] for r in trace if r["to"] != r["from"]],
