@@ -59,3 +59,27 @@ blocking:
 nits:
   - factory/x.py:10 — name the constant
 ```
+
+## JSON handoff
+
+The driver validates the handoff as JSON against `roles/reviewer/handoff.schema.json`; the field names are the keys of the Handoff block above, lists are arrays. An invalid one is rerun once with the error in the prompt. You have no write tool: end your reply with the handoff as one JSON object (the last object of your output; a ```json fence is fine). The fenced text format above stays accepted for one release.
+
+```json
+{
+  "handoff": "REVIEWER",
+  "verdict": "changes-requested",
+  "reviewed_sha": "1a2b3c4",
+  "risk": "low",
+  "docs_impact": "no",
+  "blocking": [
+    {
+      "id": "B1",
+      "file": "factory/x.py:10",
+      "finding": "the empty input crashes"
+    }
+  ],
+  "nits": [
+    "factory/x.py:12 — name the constant"
+  ]
+}
+```

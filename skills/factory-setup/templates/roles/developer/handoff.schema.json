@@ -1,0 +1,52 @@
+{
+ "DEVELOPER": {
+  "type": "object",
+  "required": [
+   "handoff",
+   "status",
+   "branch",
+   "commits",
+   "files",
+   "checks",
+   "acceptance",
+   "blocked_reason"
+  ],
+  "properties": {
+   "handoff": {
+    "enum": [
+     "DEVELOPER"
+    ]
+   },
+   "status": {
+    "enum": [
+     "done",
+     "blocked"
+    ]
+   },
+   "branch": {
+    "type": "string"
+   },
+   "commits": {
+    "type": "array"
+   },
+   "files": {
+    "type": [
+     "string",
+     "array"
+    ]
+   },
+   "checks": {
+    "type": "array"
+   },
+   "acceptance": {
+    "type": "array"
+   },
+   "findings_addressed": {
+    "type": "array"
+   },
+   "blocked_reason": {
+    "type": "string"
+   }
+  }
+ }
+}

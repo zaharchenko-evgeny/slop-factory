@@ -26,7 +26,7 @@ Read repository names, tracker stages, models, limits and checks from
 
 ## Output
 
-End with the structured handoff your role file defines, and nothing after it.
+End with the structured handoff your role file defines, as JSON (see its JSON handoff section).
 Hand off facts (files, commits, commands, results), not your reasoning.
 
 ## Secrets

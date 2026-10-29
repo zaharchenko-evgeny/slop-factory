@@ -34,6 +34,7 @@ pwd > "$STUB_DIR/cwd"
 printf '%s\\n' "$@" > "$STUB_DIR/argv"
 echo "${PI_CODING_AGENT_DIR:-none} ${ANTHROPIC_API_KEY:-none}" >> "$STUB_DIR/env"
 echo "stub stderr $n" >&2
+if [ -n "${STUB_FILE+x}" ] && [ -n "$FACTORY_HANDOFF" ]; then printf '%s' "$STUB_FILE" > "$FACTORY_HANDOFF"; fi
 if [ -n "$STUB_PEEK" ]; then
   mode=$(printf '%s\\n' "${@: -1}" | sed -n '1s/^mode: //p')
   pwd > "$STUB_DIR/cwd-$mode"; git rev-parse HEAD > "$STUB_DIR/head-$mode"
@@ -87,7 +88,7 @@ class RunRole(unittest.TestCase):
         self.issue(["factory:in-dev"])
         os.environ.update(FACTORY_AGENT=str(stub / "agent"), FACTORY_GH=str(stub / "gh"), STUB_DIR=str(stub),
                           FACTORY_JBCENTRAL=str(stub / "jbcentral"))
-        for k in ("STUB_PROSE", "STUB_REPLY", "STUB_EXIT", "STUB_UNFENCED", "STUB_PEEK"):
+        for k in ("STUB_PROSE", "STUB_REPLY", "STUB_EXIT", "STUB_UNFENCED", "STUB_PEEK", "STUB_FILE"):
             os.environ.pop(k, None)
 
     def go(self, action, ok_at, risk="low", pr_urls=(), write_input=True):
@@ -162,6 +163,44 @@ class RunRole(unittest.TestCase):
         self.assertIn("factory: text after the last fenced block from intake",
                       (self.run_dir / "intake.log").read_text())
         self.assertEqual(self.go("intake", ok_at=2), 0)
+
+    DEV = {"handoff": "DEVELOPER", "status": "done", "branch": "b", "commits": ["abc #9 x"], "files": "f",
+           "checks": [], "acceptance": [{"x": "met"}], "blocked_reason": "none"}
+
+    def test_json_handoff_file_is_valid_and_prose_is_ignored(self):
+        os.environ["STUB_FILE"] = "Here it is:\n" + json.dumps(self.DEV) + "\nbye"
+        os.environ["STUB_REPLY"] = "All done, see the file."
+        self.assertEqual(self.go("implement", ok_at=1), 0)
+        self.assertEqual(self.calls(), 1)
+        h = json.loads((self.run_dir / "implement.handoff.json").read_text())
+        self.assertEqual((h["handoff"], h["commits"], h["acceptance"]), ("DEVELOPER", "- abc #9 x", "- x: met"))
+        self.assertIn("handoff-draft.json", (self.stub / "argv").read_text())
+
+    def test_invalid_json_field_is_one_retry_with_the_error_then_fallback(self):
+        os.environ["STUB_FILE"] = json.dumps({**self.DEV, "status": "great"})
+        os.environ["STUB_REPLY"] = "done"
+        self.assertEqual(self.go("implement", ok_at=1), 3)
+        self.assertEqual(self.calls(), 4)  # model: 1 + 1 retry, fallback: 1 + 1 retry
+        argv = (self.stub / "argv").read_text()
+        self.assertIn("field 'status' must be one of done, blocked", argv)
+        self.assertIn("rejected", argv)
+        self.assertIn("invalid JSON handoff", (self.run_dir / "implement.log").read_text())
+
+    def test_invalid_json_retry_names_the_missing_field(self):
+        os.environ["STUB_FILE"] = json.dumps({"handoff": "DEVELOPER"})
+        os.environ["STUB_REPLY"] = "done"
+        self.assertEqual(self.go("implement", ok_at=1), 3)
+        self.assertIn("missing field 'branch'", (self.stub / "argv").read_text())
+
+    def test_reviewer_has_no_write_tool_and_its_last_json_object_is_accepted(self):
+        rev = {"handoff": "REVIEWER", "verdict": "approved", "risk": "low", "docs_impact": "no",
+               "blocking": [], "nits": ["a:1 — x"]}
+        os.environ["STUB_REPLY"] = 'Looks fine {not json}\n```json\n' + json.dumps(rev) + "\n```\nThanks"
+        self.assertEqual(self.go("review_full", ok_at=1), 0)
+        argv = (self.stub / "argv").read_text().splitlines()
+        self.assertNotIn("write", argv[argv.index("--tools") + 1].split(","))
+        h = json.loads((self.run_dir / "review_full.handoff.json").read_text())
+        self.assertEqual((h["verdict"], h["nits"], h["blocking"]), ("approved", "- a:1 — x", ""))
 
     def test_malformed_handoff_runs_the_fallback_once(self):
         for env in ("STUB_PROSE", "STUB_UNFENCED"):

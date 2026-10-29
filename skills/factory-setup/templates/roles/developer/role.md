@@ -57,3 +57,26 @@ acceptance:
   - x works: test_x passes
 blocked_reason: none
 ```
+
+## JSON handoff
+
+The driver validates the handoff as JSON against `roles/developer/handoff.schema.json`; the field names are the keys of the Handoff block above, lists are arrays. An invalid one is rerun once with the error in the prompt. Write it as JSON with your write tool to the file named by `$FACTORY_HANDOFF` (the prompt also gives the path), as the last thing you do; text around the object is ignored. The fenced text format above stays accepted for one release.
+
+```json
+{
+  "handoff": "DEVELOPER",
+  "status": "done",
+  "branch": "{{BRANCH_PREFIX}}/12-add-x",
+  "commits": [
+    "1a2b3c4 #12 Add x"
+  ],
+  "files": "factory/x.py",
+  "checks": [
+    "whitespace: pass — clean"
+  ],
+  "acceptance": [
+    "x works: test_x passes"
+  ],
+  "blocked_reason": "none"
+}
+```
