@@ -60,7 +60,7 @@ models:
   cheap: {{MODEL_CHEAP}}
   mid: {{MODEL_MID}}
   strong: {{MODEL_STRONG}}
-  # Reviewers run on a different model family from the developer.
+  # Reviewers run on a different model family from the developer when one is available.
   review: {{MODEL_REVIEW}}
 {{REVIEW_STRONG_NOTE}}
   review_strong: {{MODEL_REVIEW_STRONG}}
