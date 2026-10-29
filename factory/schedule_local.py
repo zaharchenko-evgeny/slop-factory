@@ -41,7 +41,7 @@ def render(config: dict, root: Path = ROOT) -> dict:
                              "uv", "run", "factory/drive.py", "loop", "--once"],
         "WorkingDirectory": str(root),
         "StartInterval": seconds(sched["interval"]),
-        "EnvironmentVariables": {"PATH": sched["path"]},
+        "EnvironmentVariables": {"PATH": os.path.expandvars(sched["path"])},
         "StandardOutPath": log,
         "StandardErrorPath": log,
     }

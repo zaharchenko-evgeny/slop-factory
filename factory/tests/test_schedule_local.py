@@ -4,6 +4,8 @@
 # dependencies = ["pyyaml>=6"]
 # ///
 """Tests for factory/schedule_local.py; launchd is never touched. Run: uv run factory/tests/test_schedule_local.py"""
+import copy
+import os
 import shutil
 import subprocess
 import sys
@@ -34,6 +36,12 @@ class Schedule(unittest.TestCase):
         self.assertEqual(job["ProgramArguments"][:4], ["/usr/bin/lockf", "-t", "0", "/f/.factory/runs/loop/loop.lock"])
         self.assertEqual(job["ProgramArguments"][4:], ["uv", "run", "factory/drive.py", "loop", "--once"])
         self.assertEqual(job["StandardOutPath"], "/f/.factory/runs/loop/loop.log")
+
+    def test_path_expands_home(self):
+        cfg = copy.deepcopy(FIXTURE)
+        cfg["targets"]["local"]["schedule"]["path"] = "$HOME/.local/bin:/b"
+        job = schedule_local.render(cfg, Path("/f"))
+        self.assertEqual(job["EnvironmentVariables"]["PATH"], os.path.expanduser("~") + "/.local/bin:/b")
 
     @unittest.skipUnless(shutil.which("lockf"), "needs lockf (macOS)")
     def test_second_cycle_exits_at_once(self):
