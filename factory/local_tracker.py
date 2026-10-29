@@ -152,6 +152,11 @@ class LocalTracker:
                 self._set_field(nn, "claimed_by", "")
         self._locked(nn, drop)
 
+    def in_stage(self, stage):
+        """Tickets whose `Status:` is `stage`, in file order."""
+        return [p.name.split("-", 1)[0] for p in sorted(self.issues.glob("[0-9]*-*.md"))
+                if self.get_state(p.name.split("-", 1)[0]) == stage]
+
     def frontier(self):
         """Open `ready` tickets whose blockers are all closed and that nobody claimed, in file order."""
         out = []

@@ -22,7 +22,13 @@ log), posts its comment on the ticket, edits the PR body from `Refs #N` to `Clos
 says `complete: yes`, and removes the worktree once CI passed. `pi` and `gh` can be replaced with
 $FACTORY_AGENT and $FACTORY_GH.
 
+On a ticket in `approved`, `run` reads the ticket's PRs (`gh pr view --json state,mergedAt`): once every
+PR is merged it fires `pr.merged`, which moves the ticket through `merged` (post-merge actions) to `done`
+and releases the claim; while a PR is open it prints "waiting for merge" and writes nothing. `sync` does
+that for every open ticket in `approved`.
+
 CLI: uv run factory/drive.py run <ticket> [--tracker local:<effort dir>|github] [--executor NAME] [--resume]
+     uv run factory/drive.py sync [--tracker ...] [--executor NAME]
      uv run factory/drive.py branch <ticket> <ticket.json>  prints the ticket's branch name.
 """
 import argparse
@@ -457,14 +463,47 @@ class Delivery:
         return (h["status"] if h.get("status") in ("done", "blocked") else "error"), h
 
 
-def run_ticket(root, nn, tracker, executor, run_id=None, resume=False):
+def run_ticket(root, nn, tracker, executor, run_id=None, resume=False, results=()):
     """Deliver ticket `nn` until the machine waits on a human or external actor. Return (ticket, trace)."""
     d = Delivery(root, nn, tracker, run_id or f"local:{time.strftime('%Y%m%dT%H%M%S')}-{nn}")
-    t, trace = drive(d.m, tracker, nn, executor, execute=d, resume=resume)
+    t, trace = drive(d.m, tracker, nn, executor, results, execute=d, resume=resume)
     d.save(t)  # sm.json shows the final stage
     if trace and trace[-1]["event"] in ("ci.passed", "ci.pending"):  # only the run that reached approved
         d.summarize(t, trace)
     return t, trace
+
+
+def check_merged(root, nn, tracker, executor):
+    """A ticket in `approved`: fire `pr.merged` when every PR in its `pr_urls` is merged and return
+    (ticket, trace); return None, without any write, while a PR is open or none is recorded."""
+    urls = tracker.read_vars(nn).get("pr_urls") or []
+    prs = [json.loads(sh([gh(), "pr", "view", u, "--json", "state,mergedAt"], root)) for u in urls]
+    if not prs or any(p.get("state") != "MERGED" for p in prs):
+        return None
+    return run_ticket(root, nn, tracker, executor, results=[{"pr.merged": {"open_pr_urls": []}}])
+
+
+def sync(root, tracker, executor):
+    """`check_merged` for every open ticket in `approved`, one line each. Return 2 if any failed, else 0."""
+    code = 0
+    for nn in tracker.in_stage("approved"):
+        try:
+            done = check_merged(root, str(nn), tracker, executor)
+        except (ClaimError, RuntimeError, ValueError) as e:
+            print(f"ticket {nn}: error: {e}", file=sys.stderr)
+            code = 2
+            continue
+        print(f"ticket {nn}: " + ("waiting for merge" if done is None else f"final: {done[0]['state']}"))
+    return code
+
+
+def report_run(t, trace, run_dir):
+    for rep in trace:
+        print(event_line(rep))
+    table = cost_table(run_dir)
+    if table:
+        print(table)
+    print(f"final: {t['state']}")
 
 
 def main(argv=None):
@@ -472,14 +511,16 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="deliver a ticket until it waits on a human or external actor")
     r.add_argument("ticket")
-    r.add_argument("--tracker", default="github", help="local:<effort dir> or github (default)")
-    r.add_argument("--executor", help="claim name (default: the gh login, or the OS user for local)")
     r.add_argument("--resume", action="store_true", help="restart a failed ticket at the step that failed")
+    y = sub.add_parser("sync", help="move every open approved ticket whose PRs are all merged to done")
+    for sp in (r, y):
+        sp.add_argument("--tracker", default="github", help="local:<effort dir> or github (default)")
+        sp.add_argument("--executor", help="claim name (default: the gh login, or the OS user for local)")
     b = sub.add_parser("branch", help="print the ticket's branch name")
     b.add_argument("ticket")
     b.add_argument("ticket_json")
     args = p.parse_args(argv)
-    if not args.ticket.isdigit():
+    if args.cmd != "sync" and not args.ticket.isdigit():
         p.error(f"ticket {args.ticket!r}: use the issue number")
     if args.cmd == "branch":
         pattern = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["branch_pattern"]
@@ -494,18 +535,23 @@ def main(argv=None):
         executor = args.executor or tracker.login()
     else:
         p.error(f"--tracker {args.tracker!r}: use local:<effort dir> or github")
+    run_dir = sm.ROOT / yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["targets"]["local"]["run_dir"]
+    if args.cmd == "sync":
+        return sync(sm.ROOT, tracker, executor)
     try:
-        t, trace = run_ticket(sm.ROOT, args.ticket, tracker, executor, resume=args.resume)
+        if not args.resume and tracker.get_state(args.ticket) == "approved":
+            done = check_merged(sm.ROOT, args.ticket, tracker, executor)
+            if done is None:
+                print("waiting for merge")
+                return 0
+            t, trace = done
+        else:
+            t, trace = run_ticket(sm.ROOT, args.ticket, tracker, executor, resume=args.resume)
     except (ClaimError, ResumeError) as e:  # a claim held elsewhere, or no resume point
         print(f"drive.py: error: {e}", file=sys.stderr)
         return 2
-    for rep in trace:
-        print(event_line(rep))
-    table = cost_table(sm.ROOT / yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["targets"]["local"]["run_dir"] / args.ticket)
-    if table:
-        print(table)
-    print(f"final: {t['state']}")
-    return 0 if t["state"] == "approved" else 1
+    report_run(t, trace, run_dir / args.ticket)
+    return 0 if t["state"] in ("approved", "done") else 1
 
 
 if __name__ == "__main__":

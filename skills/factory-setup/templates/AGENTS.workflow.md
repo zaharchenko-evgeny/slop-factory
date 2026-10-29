@@ -11,7 +11,7 @@ change, whether you are a person, a pi session or a factory role.
    blocked-by links, not text in the body. Tracker operations are in
    [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 2. **Stage labels.** A ticket carries exactly one `factory:*` stage label:
-   `draft → ready → in-dev → in-review → approved → done`, with
+   `draft → ready → in-dev → in-review → approved → merged → done`, with
    `changes-requested` for a fix round and `blocked` or `failed` when a run
    stops. The next ticket to work on comes from the frontier: open, `ready`,
    every blocker closed, unclaimed (no assignee), in map order.
@@ -29,7 +29,8 @@ change, whether you are a person, a pi session or a factory role.
    `factory.yaml`. Whoever orchestrates runs scripts, git and `gh`, and never
    writes or reviews the code.
 5. **Merge gate.** A human merges the PR after CI passes and the reviewers
-   approve, then moves the ticket to `factory:done`. A PR that passed alone
+   approve; `uv run factory/drive.py sync` then moves every
+   ticket whose PRs are all merged through `merged` to `factory:done`. A PR that passed alone
    can still break the base together with another one: the factory re-runs
    the blocking checks on the branch merged with the current base before
    `approved`, and a failure (or failed CI) is a fix round. Merge PRs one at a

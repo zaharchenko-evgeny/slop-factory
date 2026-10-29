@@ -153,6 +153,12 @@ class GitHubTracker:
         if executor in self._assignees(n):
             self._edit(n, "--remove-assignee", executor)
 
+    def in_stage(self, stage):
+        """Numbers of the open issues with the stage label of `stage`."""
+        found = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
+                                     self.stages[stage], "--json", "number", "--limit", "1000"]))
+        return sorted(i["number"] for i in found)
+
     def frontier(self):
         """Open `ready` issues, unassigned, every blocker closed, in map order, then by number."""
         ready = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",

@@ -63,7 +63,11 @@ printf '%s\\n' "$@" > "$STUB_DIR/gh-$1-$2"
 case "$1 $2" in
   "pr list") echo '[]' ;;
   "pr create") echo "https://example.invalid/pull/7" ;;
-  "pr view") echo '{"url":"https://example.invalid/pull/7","statusCheckRollup":[]}' ;;
+  "pr view")
+    if [ "$4" = --json ] && [ "$5" = state,mergedAt ]; then
+      if grep -qxF "$3" "$STUB_DIR/merged" 2>/dev/null; then echo '{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z"}'
+      else echo '{"state":"OPEN","mergedAt":null}'; fi
+    else echo '{"url":"https://example.invalid/pull/7","statusCheckRollup":[]}'; fi ;;
   "pr comment"|"pr edit") ;;
   "pr checks")
     echo x >> "$STUB_DIR/calls-checks"
@@ -421,6 +425,40 @@ class DriveRun(unittest.TestCase):
         with self.assertRaises(KeyError):
             drive.run_ticket(self.root, "01", self.tr, "executor-a")
         self.assertNotIn("claimed_by: executor-a", self.tr.path("01").read_text())
+
+    def approved(self, nn, *urls):
+        self.tr.set_state(nn, "approved")
+        self.tr.write_vars(nn, {"pr_urls": list(urls), "run_id": "r1"})
+
+    def test_unmerged_pr_waits_without_writes(self):
+        self.approved("01", "https://example.invalid/pull/7", "https://example.invalid/pull/8")
+        (self.stub / "merged").write_text("https://example.invalid/pull/7\n")  # one of two merged
+        before = self.tr.path("01").read_text()
+        self.patch(drive, "LocalTracker", lambda _: self.tr)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = drive.main(["run", "01", "--tracker", f"local:{self.tr.issues.parent}", "--executor", "executor-a"])
+        self.assertEqual((code, out.getvalue()), (0, "waiting for merge\n"))
+        self.assertEqual(self.tr.path("01").read_text(), before)
+        self.assertIn("state,mergedAt", (self.stub / "gh-pr-view").read_text())
+
+    def test_merged_pr_moves_the_ticket_to_done(self):
+        self.approved("01", "https://example.invalid/pull/7")
+        (self.stub / "merged").write_text("https://example.invalid/pull/7\n")
+        t, trace = drive.check_merged(self.root, "01", self.tr, "executor-a")
+        self.assertEqual((t["state"], trace[-1]["note"]), ("done", "through merged"))
+        self.assertEqual((self.tr.get_state("01"), self.stages[-1]), ("done", "done"))
+        self.assertNotIn("claimed_by: executor-a", self.tr.path("01").read_text())  # released by the driver
+
+    def test_sync_moves_every_merged_approved_ticket(self):
+        self.approved("01", "https://example.invalid/pull/7")
+        self.approved("06", "https://example.invalid/pull/9")
+        (self.stub / "merged").write_text("https://example.invalid/pull/7\nhttps://example.invalid/pull/9\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(drive.sync(self.root, self.tr, "executor-a"), 0)
+        self.assertEqual(out.getvalue(), "ticket 01: final: done\nticket 06: final: done\n")
+        self.assertEqual([self.tr.get_state(n) for n in ("01", "03", "06")], ["done", "in-dev", "done"])
 
     def test_claim_held_elsewhere_stops_without_running(self):
         self.tr.claim("01", "executor-b")
