@@ -51,6 +51,8 @@ printf '%s' "$last" > "$STUB_DIR/prompt-$mode"
 if [ "$mode" = implement ]; then echo hi > stub.txt; git add stub.txt; git commit -qm "#01 stub"; fi
 if [ "$mode" = fix ]; then echo fix >> stub.txt; git commit -qam "#01 fix"; fi
 if [ "$mode" = update ]; then echo doc > doc.md; git add doc.md; git commit -qm "#01 doc"; fi
+if [ "$mode" = merge ]; then mkdir -p knowledge/_shared; echo "- lesson" >> knowledge/_shared/lessons.md
+  if [ -f "$STUB_DIR/merge-outside" ]; then echo x > outside.txt; fi; fi
 n=$(wc -l < "$STUB_DIR/calls-$mode" | tr -d ' ')
 f=
 if [ -f "$STUB_DIR/reply-$mode-$n" ]; then f="$STUB_DIR/reply-$mode-$n"
@@ -94,6 +96,7 @@ REPLIES = {
     "behaviour": "```text\nREVIEWER\nverdict: approved\nrisk: high\ndocs_impact: no\n```\n",
     "structure-security": "```text\nREVIEWER\nverdict: approved\nrisk: high\ndocs_impact: no\n```\n",
     "record": "```text\nRETRO\nmanual_steps: |\n  - none\nlessons: |\n  - navigation: point to x — y\n```\n",
+    "merge": "```text\nDISTILL\nstatus: done\nfiles: knowledge/_shared/lessons.md\nsummary: |\n  - lesson (2 entries)\n```\n",
     "summary": "```text\nROUTER-SUMMARY\ncomplete: yes\ncomment: |\n  [factory] Summary line.\n  Factory-Run: r1\n```\n",
 }
 CHECKS = [{"name": "has-file", "stage": "pre-review", "mode": "blocking", "run": "test -f stub.txt"},
@@ -480,6 +483,62 @@ class DriveRun(unittest.TestCase):
         numbers = d.run_numbers(sm.new_ticket(d.m))
         self.assertIn("- blocking findings: 3 (", numbers)
         self.assertIn("- reviewer agreement: 1/1 rounds", numbers)
+
+    def inbox(self):
+        """Push the fixture retro entries to the knowledge branch, as the retro does."""
+        k = yaml.safe_load((self.root / "factory.yaml").read_text())["knowledge"]
+        git("checkout", "-qb", "inbox", cwd=self.root)
+        (self.root / "knowledge/offline-eval-factory").mkdir(parents=True)
+        for f in (HERE / "fixtures/inbox").iterdir():
+            shutil.copy(f, self.root / "knowledge/offline-eval-factory" / f.name)
+        git("add", "knowledge", cwd=self.root)
+        git("commit", "-qm", "entries", cwd=self.root)
+        git("push", "-q", "origin", f"HEAD:refs/heads/{k['branch']}", cwd=self.root)
+        git("checkout", "-q", "main", cwd=self.root)
+        return k
+
+    def remote(self, *args):
+        return subprocess.run(["git", *args], cwd=self.root, capture_output=True, text=True).stdout
+
+    def test_distill_opens_one_pr_from_inbox_entries(self):
+        self.assertIsNone(drive.distill(self.root))  # no inbox branch yet
+        k = self.inbox()
+        url = drive.distill(self.root, run_id="d1")
+        self.assertEqual((url, self.calls("merge")), ("https://example.invalid/pull/7", 1))
+        pr = (self.stub / "gh-pr-create").read_text().split("\n")
+        branch = pr[pr.index("--head") + 1]
+        self.assertTrue(branch.startswith(k["distill_branch"] + "-"))
+        self.assertEqual(pr[pr.index("--base") + 1], "main")
+        body = pr[pr.index("--body") + 1:]
+        self.assertTrue(body[0].startswith("[factory] Distill"))
+        self.assertIn("- knowledge/offline-eval-factory/retro-02-r2.md", body)
+        self.assertIn("Factory-Run: d1", body)
+        self.assertIn("SC2086", (self.stub / "prompt-merge").read_text())  # the entries are the input
+        self.assertNotIn("## Ticket", (self.stub / "prompt-merge").read_text())
+        git("fetch", "-q", "origin", cwd=self.root)
+        self.assertEqual(self.remote("show", f"origin/{branch}:knowledge/distilled.txt").split(),
+                         [f"knowledge/offline-eval-factory/retro-0{n}-r{n}.md" for n in (1, 2)])
+        self.assertIn("lesson", self.remote("show", f"origin/{branch}:knowledge/_shared/lessons.md"))
+        self.assertNotIn("retro-01", self.remote("ls-tree", "-r", "--name-only", f"origin/{branch}"))
+        self.assertNotIn("knowledge/", self.remote("ls-tree", "-r", "--name-only", "origin/main"))  # main untouched
+        self.assertFalse((self.root / ".factory/worktrees/distill").exists())
+        git("merge", "-q", f"origin/{branch}", cwd=self.root)  # the human merges the PR
+        git("push", "-q", "origin", "main", cwd=self.root)
+        self.assertIsNone(drive.distill(self.root))  # every entry is merged: no second PR
+        self.assertEqual(self.calls("merge"), 1)
+
+    def test_distill_rejects_edits_outside_the_knowledge_dir(self):
+        self.inbox()
+        (self.stub / "merge-outside").touch()
+        with self.assertRaisesRegex(ValueError, "outside knowledge/: outside.txt"):
+            drive.distill(self.root)
+        self.assertFalse((self.stub / "gh-pr-create").exists())
+
+    def test_loop_runs_distill_once_per_interval(self):
+        config = yaml.safe_load((self.root / "factory.yaml").read_text())
+        self.assertEqual([drive.distill_due(self.root, config) for _ in range(2)], [True, False])
+        config["knowledge"]["distill_every_days"] = 0
+        self.assertFalse(drive.distill_due(self.root, config))
 
     def only(self, *keep):
         """Drop the fixture tickets other than `keep`, so the loop sees only those."""

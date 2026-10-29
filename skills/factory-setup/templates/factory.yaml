@@ -81,13 +81,17 @@ roles:
   doc-writer: { tier: mid }
   # Records the run on the knowledge branch after the merge (workflows/delivery.sm.yaml `retro`).
   retro: { tier: cheap }
+  # Weekly, outside any ticket: merges the knowledge inbox into `knowledge/` as one PR (`drive.py distill`).
+  distill: { tier: mid }
   # Auto-approval (design §8): `tier` is the soft judgment's model, run by decisions-kit
   # `decide` with `engine`. Dry-run records the verdict only; a human still merges.
   approver: { tier: cheap, engine: {{DECISIONS_ENGINE}}, dry_run: true }
 
 # Retro entries (design §11, ADR-0007): pushed to `branch` under `<dir>/<repo>/`,
-# never to a default branch; a weekly distill opens the PR to it.
-knowledge: { branch: knowledge-inbox, dir: knowledge }
+# never to a default branch. The distill (`drive.py distill`, run by `drive.py loop` every
+# `distill_every_days`) opens one PR from `<distill_branch>-<date>` to the default branch with the
+# entries merged into `<dir>/` and listed in `<dir>/distilled.txt`.
+knowledge: { branch: knowledge-inbox, dir: knowledge, distill_branch: knowledge-distill, distill_every_days: 7 }
 
 gates:
   ticket_approval: human

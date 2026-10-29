@@ -1,6 +1,6 @@
 ---
 name: factory-setup
-description: Set up or update a team's agent software factory in its own repository — router, designer, developer, reviewer, approver, doc-writer and retro roles, a delivery workflow, and deployment to Air Cloud or local agents. Use when a team wants to create, change, deploy or check its software factory.
+description: Set up or update a team's agent software factory in its own repository — router, designer, developer, reviewer, approver, doc-writer, retro and distill roles, a delivery workflow, and deployment to Air Cloud or local agents. Use when a team wants to create, change, deploy or check its software factory.
 ---
 
 # Factory setup
@@ -54,7 +54,7 @@ without showing the diff.
 - `AGENTS.md`: the "Development workflow" section ← `templates/AGENTS.workflow.md`;
   add the other sections from the interview (step 1.9)
 - `roles/_common.md`, `roles/_setup-common.sh`, `roles/<role>/role.md` for
-  router, developer, reviewer, approver, doc-writer and retro; `roles/<role>/setup.sh` ←
+  router, developer, reviewer, approver, doc-writer, retro and distill; `roles/<role>/setup.sh` ←
   `templates/roles/setup.sh.tmpl`; `roles/<role>/skills.txt` from the interview
 - `workflows/delivery.sm.yaml`, `workflows/delivery.md`
 - `docs/agents/issue-tracker.md` (GitHub Issues and local markdown adapters)
