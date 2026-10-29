@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Run one agent action of the delivery machine as a `pi -p` process.
+"""Run one agent action of the delivery machine as a process of its role's harness (factory/harnesses.py).
 
 Usage: run_role.py <ticket> <action> [--step NAME]. The engine owns every path:
 the factory root, the run dir (`targets.local.run_dir/<ticket>`) and the
@@ -32,7 +32,7 @@ title,body,comments,labels` (comments starting `[factory] Moved to #` left
 out), or the text the caller passes (`ticket_text`, the local tracker's file);
 the summary input also gets each PR's body and CI checks, fetched read-only
 with `gh pr view`.
-Every pi call gets the environment of factory.yaml `targets.local.model_access` (factory/model_access.py).
+Every pi call (the default harness) gets the environment of factory.yaml `targets.local.model_access` (factory/model_access.py).
 """
 import argparse
 import json
@@ -47,6 +47,7 @@ from pathlib import Path
 
 import yaml
 
+import harnesses
 import model_access
 import sm
 
@@ -97,36 +98,20 @@ def parse_handoff(text):
 
 
 def parse_pi_output(raw):
-    """(final text, usage dict) from `pi --mode json` stdout. Output without JSON events is plain text."""
-    text, usage, seen = raw, dict.fromkeys(("input", "output", "cacheRead", "cacheWrite", "cost"), 0), False
-    for line in raw.splitlines():
-        try:
-            ev = json.loads(line)
-        except ValueError:
-            continue
-        msg = ev.get("message") if isinstance(ev, dict) else None
-        if ev.get("type") != "message_end" or not isinstance(msg, dict) or msg.get("role") != "assistant":
-            continue
-        u = msg.get("usage") or {}
-        for k in usage:
-            usage[k] += (u.get("cost", {}).get("total", 0) if k == "cost" else u.get(k, 0)) or 0
-        parts = msg.get("content")
-        text = parts if isinstance(parts, str) else "".join(c.get("text", "") for c in parts or [] if c.get("type") == "text")
-        seen = True
-    return (text, usage) if seen else (raw, None)
+    return harnesses.ADAPTERS["pi"].parse(raw)
 
 
-def skill_args(root, role):
-    """`--skill <dir>` for each name in the role's skills.txt, found where setup.sh looks."""
-    args = []
+def skill_dirs(root, role):
+    """The dir of each name in the role's skills.txt, found where setup.sh looks."""
+    dirs = []
     for name in (root / "roles" / role / "skills.txt").read_text().split():
         for d in (root / ".agents/skills", Path.home() / ".agents/skills", Path.home() / ".pi/agent/skills",
                   Path.home() / ".pi/agent/npm/node_modules"):
             hit = next(d.glob(f"**/{name}/SKILL.md"), None) if d.is_dir() else None
             if hit:
-                args += ["--skill", str(hit.parent)]
+                dirs.append(hit.parent)
                 break
-    return args
+    return dirs
 
 
 def pr_data(urls):
@@ -169,7 +154,8 @@ def run(root, ticket, action, step=None, ticket_text=None):
     tier = rcfg.get("tier_high_risk") if spec.get("tier_by") == "risk" and tvars.get("risk") == "high" else None
     model = config["models"][tier or rcfg["tier"]]
     fallback = config["models"][rcfg["fallback"]] if rcfg.get("fallback") else None
-    session = (["--session-id", f"factory-{ticket}-{role}"] if role == "developer" else ["--no-session"])
+    harness = harnesses.harness_of(config, role, spec.get("mode"))
+    ad = harnesses.adapter(harness)
     cwd = root if spec.get("cwd") == "root" else root / local["worktree_dir"] / str(ticket)
     if not cwd.is_dir():
         raise SystemExit(f"run_role.py: {action} needs the worktree {cwd}")
@@ -178,12 +164,14 @@ def run(root, ticket, action, step=None, ticket_text=None):
         f"\n\n## Ticket (local tracker file, read just before this step)\n\n~~~~markdown\n{ticket_text}\n~~~~\n")
     if action == "summary" and tvars.get("pr_urls"):
         prompt += pr_data(tvars["pr_urls"])
-    try:
-        env = {**os.environ, **model_access.pi_env(config, root)}
-    except model_access.ModelAccessError as e:
-        raise SystemExit(f"run_role.py: model access: {e}")
+    env = None
+    if harness == "pi":  # model_access only reroutes pi's Claude provider
+        try:
+            env = {**os.environ, **model_access.pi_env(config, root)}
+        except model_access.ModelAccessError as e:
+            raise SystemExit(f"run_role.py: model access: {e}")
     if role != "reviewer":
-        return attempts(root, run_dir, cwd, step, action, role, (model, fallback), prompt, session, {}, env=env)
+        return attempts(root, run_dir, cwd, step, action, role, (model, fallback), prompt, ticket, {}, adapter=ad, env=env)
     # Each reviewer gets a private dir outside the factory root: its own run dir (role files, out,
     # log) and a detached checkout of the reviewed SHA, so parallel reviewers never share a path.
     # shortcut: no OS sandbox, a reviewer with bash can still read any absolute path; add one if
@@ -197,8 +185,8 @@ def run(root, ticket, action, step=None, ticket_text=None):
                        capture_output=True, text=True, check=True)
         own = private / "run"
         own.mkdir()
-        code = attempts(root, own, checkout, step, action, role, (model, fallback), prompt, session,
-                        {"reviewed_sha": sha}, keep_dir=run_dir, events=run_dir, env=env)
+        code = attempts(root, own, checkout, step, action, role, (model, fallback), prompt, ticket,
+                        {"reviewed_sha": sha}, adapter=ad, keep_dir=run_dir, events=run_dir, env=env)
         for f in own.glob(f"{step}.*"):
             shutil.copy(f, run_dir / f.name)
         return code
@@ -207,8 +195,8 @@ def run(root, ticket, action, step=None, ticket_text=None):
         shutil.rmtree(private, ignore_errors=True)
 
 
-def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, extra, keep_dir=None, events=None,
-             env=None):
+def attempts(root, run_dir, cwd, step, action, role, models, prompt, ticket, extra, adapter=None, keep_dir=None,
+             events=None, env=None):
     """Run the model, then the fallback (if any) after any malformed handoff; write the handoff.
     Each attempt's output is also kept as `<step>-attempt<k>.out.md` in `keep_dir` (default: run_dir),
     numbered across fallbacks and the engine's retries."""
@@ -223,13 +211,11 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, ex
         if i:
             with log.open("a") as e:
                 e.write(f"factory: {action} falls back from {model} to {use}\n")
-        cmd = [os.environ.get("FACTORY_AGENT", "pi"), "-p", "--mode", "json", "--no-mcp", "--no-skills", "--no-extensions",
-               "--no-prompt-templates", *skill_args(root, role), "--model", use, *session,
-               "--tools", TOOLS[role], "--append-system-prompt", str(prompts[0]),
-               "--append-system-prompt", str(prompts[1]), prompt]
+        call = harnesses.Call(str(ticket), role, use, TOOLS[role], prompt, prompts, skill_dirs(root, role), run_dir, cwd)
         with log.open("a") as e:
-            raw = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=e, text=True, env=env).stdout
-        text, usage = parse_pi_output(raw)
+            raw = subprocess.run(adapter.command(call), cwd=cwd, stdout=subprocess.PIPE, stderr=e, text=True,
+                                 env=env).stdout
+        text, usage = adapter.parse(raw, call)
         out.write_text(text)
         if usage:
             with (events or run_dir).joinpath("events.log").open("a") as ev:  # one short append per call

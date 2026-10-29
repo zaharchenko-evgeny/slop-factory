@@ -66,24 +66,27 @@ models:
   review_strong: {{MODEL_REVIEW_STRONG}}
 
 roles:
-  router: { tier: cheap }
+  # `harness` (default: `targets.local.harness`, then pi): one of the harnesses in
+  # skills/factory-setup/references/harnesses.md. Model ids stay per role.
+  router: { harness: pi, tier: cheap }
   # `fallback` reruns the developer once, in its resumed session, after a malformed handoff.
-  developer: { tier: mid, tier_high_risk: strong, fallback: mid }
+  developer: { harness: pi, tier: mid, tier_high_risk: strong, fallback: mid }
   # One entry per reviewer focus (an action mode in workflows/delivery.sm.yaml).
   # `fallback` reruns the same focus once when the reviewer's output has no valid handoff.
   reviewer:
+    harness: pi
     tools: read-only
     modes:
       full: { tier: review, fallback: cheap }                    # risk low: one reviewer
       behaviour: { tier: review, fallback: cheap }               # risk high
       structure-security: { tier: review_strong, fallback: cheap }  # risk high
   # Runs when a reviewer reports docs_impact, before the approver (workflows/delivery.sm.yaml `document`).
-  doc-writer: { tier: mid }
+  doc-writer: { harness: pi, tier: mid }
   # Records the run on the knowledge branch after the merge (workflows/delivery.sm.yaml `retro`).
-  retro: { tier: cheap }
+  retro: { harness: pi, tier: cheap }
   # Auto-approval (design §8): `tier` is the soft judgment's model, run by decisions-kit
   # `decide` with `engine`. Dry-run records the verdict only; a human still merges.
-  approver: { tier: cheap, engine: {{DECISIONS_ENGINE}}, dry_run: true }
+  approver: { harness: pi, tier: cheap, engine: {{DECISIONS_ENGINE}}, dry_run: true }
 
 # Retro entries (design §11, ADR-0007): pushed to `branch` under `<dir>/<repo>/`,
 # never to a default branch; a weekly distill opens the PR to it.

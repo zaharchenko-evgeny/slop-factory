@@ -28,6 +28,8 @@ from pathlib import Path
 
 import yaml
 
+import harnesses
+
 ROOT = Path(__file__).resolve().parent.parent
 ACTORS = ("agent", "human", "external")
 JOINS = ("all", "any", "first")
@@ -357,6 +359,7 @@ def validate(sm, config=None):
                 seen.add(nxt)
                 todo.append(nxt)
         errs += [f"state {s}: unreachable from {initial}" for s in states if s not in seen]
+    errs += harnesses.config_errors(config)
     if errs:
         raise SMError("\n".join(errs))
     return {"initial": initial, "states": states, "vars": variables, "actions": actions,
