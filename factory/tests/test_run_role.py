@@ -277,6 +277,22 @@ class RunRole(unittest.TestCase):
         self.assertNotIn(str(skills / "other"), argv)
 
 
+    def test_other_harness_runs_and_logs_unknown_usage(self):
+        config = sm.yaml.safe_load((self.root / "factory.yaml").read_text())
+        for r in config["roles"].values():
+            r.pop("harness", None)
+        config["targets"]["local"]["harness"] = "claude-code"
+        (self.root / "factory.yaml").write_text(sm.yaml.safe_dump(config))
+        os.environ.update(STUB_REPLY=json.dumps({"type": "result", "session_id": "s", "usage": {"input_tokens": 4},
+                                                 "result": "```text\nREVIEWER\nverdict: approved\n```\n"}))
+        self.assertEqual(self.go("review_full", ok_at=1), 0)
+        argv = (self.stub / "argv").read_text().splitlines()
+        self.assertEqual((argv[0], argv[argv.index("--model") + 1]), ("-p", self.model("review")))
+        ev = json.loads((self.run_dir / "events.log").read_text())
+        self.assertEqual((ev["input"], ev["output"], ev["cost"]), (4, None, None))
+        self.assertEqual(self.go("implement", ok_at=1), 0)
+        self.assertIn("--session-id", (self.stub / "argv").read_text())
+
     ROUTE_URL = "http://127.0.0.1:4242/wire/abc/claude-code/anthropic"
 
     def central(self):
