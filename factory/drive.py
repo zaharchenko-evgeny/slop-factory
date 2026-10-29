@@ -231,10 +231,11 @@ class Delivery:
             env = model_access.pi_env(self.config, self.root)
         except model_access.ModelAccessError as e:
             return "failed", {"error": f"model access: {e}"}
-        checks = [(h, m, preflight.check(m, env=env, harness=h)) for h, m in preflight.run_pairs(self.config)]
-        stubs = [r for h, m, (ok, r) in checks if h in harnesses.STUBS]
-        if stubs:
+        pairs = preflight.run_pairs(self.config)
+        stubs = [harnesses.STUBS[h] for h, _ in pairs if h in harnesses.STUBS]
+        if stubs:  # one line, before any model call
             return "failed", {"error": stubs[0]}
+        checks = [(h, m, preflight.check(m, env=env, harness=h)) for h, m in pairs]
         bad = [m if h == "pi" else f"{h} {m}" for h, m, (ok, _) in checks if not ok]
         if bad:
             return "failed", {"error": f"models not ready: {', '.join(bad)}"}

@@ -21,34 +21,30 @@ stay per role. Adapters live in `factory/harnesses.py`; `run_role.py` and
   text (system prompt, resp. head of the prompt).
 - `junie`: stub. Preflight fails with one line until it is implemented.
 
-## Contract
-
-Render a role (`roles/_common.md`, `roles/<role>/role.md`, `skills.txt`) into
-the harness's agent or skill format, and run it headless.
+## Role contract
 
 - The role files stay harness-neutral; only the adapter knows the format.
-- Model comes from the role's tier in `factory.yaml`; tools come from the
-  role's `tools` setting (`read-only` means no write or shell tools).
+- Model comes from the role's tier in `factory.yaml`; tools come from the role.
 - A run takes a prompt, returns the final text, and writes no state outside
   its worktree and run directory.
 - Skills in `skills.txt` must be installed; setup reports missing ones.
+- `targets.local.model_access: central` applies to `pi` only.
+- A read-only reviewer on `claude-code` runs `git diff|log|show|status` only;
+  on `codex` it has a read-only sandbox, so the prompt must carry what it needs.
 
 ## Claude (`claude-code`)
 
-- Render each role as a subagent file in `.claude/agents/<role>.md`: front
-  matter with name, description, model and tools; body is the common rules plus
-  the role file.
-- Skills live in `.claude/skills/<name>/`.
-- Headless run: `claude -p --output-format json` with the role's model and allowed tools.
-- Read-only roles get read and search tools only.
+- Headless run: `claude -p --output-format json` with the role's model,
+  `--allowedTools` and the role files and skills as `--append-system-prompt`.
+- Read-only roles get read and search tools and read-only git; write tools are
+  disallowed.
 
 ## Codex (`codex`)
 
-- Rules go in `AGENTS.md`; render each role as a prompt file under
-  `.codex/prompts/<role>.md` (common rules plus the role file).
-- Headless run: `codex exec --json` with the role's model and a read-only sandbox for
-  read-only roles.
-- Skills are linked into the Codex skills directory.
+- Headless run: `codex exec --json` with the role's model and a read-only
+  sandbox for read-only roles. The developer gets `workspace-write` plus the
+  worktree's git dir as a writable root, and resumes with `codex exec resume`.
+- Role files and skills are the head of the prompt.
 
 ## pi (`pi`)
 

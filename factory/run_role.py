@@ -211,7 +211,7 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, ticket, ext
         if i:
             with log.open("a") as e:
                 e.write(f"factory: {action} falls back from {model} to {use}\n")
-        call = harnesses.Call(str(ticket), role, use, TOOLS[role], prompt, prompts, skill_dirs(root, role), run_dir)
+        call = harnesses.Call(str(ticket), role, use, TOOLS[role], prompt, prompts, skill_dirs(root, role), run_dir, cwd)
         with log.open("a") as e:
             raw = subprocess.run(adapter.command(call), cwd=cwd, stdout=subprocess.PIPE, stderr=e, text=True,
                                  env=env).stdout

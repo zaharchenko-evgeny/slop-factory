@@ -227,7 +227,6 @@ def validate(sm, config=None):
     for key in ("transitions", "events"):
         if sm.get(key) is not None and not isinstance(sm[key], list):
             errs.append(f"{key}: must be a list")
-    errs += harnesses.config_errors(config)
     if errs:
         raise SMError("\n".join(errs))
     states = sm.get("states") or {}

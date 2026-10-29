@@ -20,6 +20,7 @@ import yaml  # noqa: E402
 
 READ = "read,bash,grep,find,ls"
 WRITE_TOOLS = ("Bash", "Edit", "Write")
+DENIED = {"Edit", "Write", "NotebookEdit"}
 
 
 class Adapters(unittest.TestCase):
@@ -66,8 +67,9 @@ class Adapters(unittest.TestCase):
                          self.arg(cmd, "--session-id"))  # fix round resumes the same session
         ro = ad.command(self.call("reviewer", READ))
         allowed = self.arg(ro, "--allowedTools").split(",")
-        self.assertEqual(allowed, ["Read", "Grep", "Glob", "LS"])
-        self.assertTrue(set(WRITE_TOOLS) <= set(self.arg(ro, "--disallowedTools").split(",")))
+        self.assertEqual(allowed[:4], ["Read", "Grep", "Glob", "LS"])
+        self.assertEqual(allowed[4:], [f"Bash(git {g}:*)" for g in ("diff", "log", "show", "status")])
+        self.assertEqual(set(self.arg(ro, "--disallowedTools").split(",")), DENIED)
         self.assertNotIn("--session-id", ro)
         self.assertEqual(ad.parse("plain", None), ("plain", None))
 
@@ -90,6 +92,21 @@ class Adapters(unittest.TestCase):
         self.assertEqual(self.arg(ad.command(self.call("reviewer", READ)), "--sandbox"), "read-only")
         self.assertNotIn("resume", ad.command(self.call("reviewer", READ)))
 
+    def test_codex_developer_can_write_the_worktree_git_dir(self):
+        wt = self.tmp / "wt"
+        wt.mkdir()
+        (wt / ".git").write_text(f"gitdir: {self.tmp}/main/.git/worktrees/wt\n")
+        c = self.call()
+        c.cwd = wt
+        for cmd in (harnesses.ADAPTERS["codex"].command(c),):
+            self.assertIn(f'sandbox_workspace_write.writable_roots=["{self.tmp}/main/.git"]', cmd)
+        (self.tmp / "developer.session").write_text("t1")
+        self.assertIn(f'sandbox_workspace_write.writable_roots=["{self.tmp}/main/.git"]',
+                      harnesses.ADAPTERS["codex"].command(c))
+        r = self.call("reviewer", READ)
+        r.cwd = wt
+        self.assertFalse([a for a in harnesses.ADAPTERS["codex"].command(r) if "writable_roots" in a])
+
     def test_no_adapter_gives_a_reviewer_write_tools(self):
         for name in ("claude-code", "codex"):
             cmd = harnesses.ADAPTERS[name].command(self.call("reviewer", READ))
@@ -97,7 +114,7 @@ class Adapters(unittest.TestCase):
             self.assertNotIn("workspace-write", joined)
             self.assertNotIn("acceptEdits", joined)
             if name == "claude-code":
-                self.assertFalse(set(WRITE_TOOLS) & set(self.arg(cmd, "--allowedTools").split(",")))
+                self.assertFalse(set(WRITE_TOOLS) & set(self.arg(cmd, "--allowedTools").split(",")))  # no bare Bash
 
     def test_harness_resolution_junie_and_validate(self):
         config = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())

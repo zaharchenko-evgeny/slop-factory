@@ -276,7 +276,6 @@ class RunRole(unittest.TestCase):
         self.assertEqual([a for a in argv if a.endswith("/skills/ponytail-review")], [str(skills / "ponytail-review")])
         self.assertNotIn(str(skills / "other"), argv)
 
-
     def test_other_harness_runs_and_logs_unknown_usage(self):
         config = sm.yaml.safe_load((self.root / "factory.yaml").read_text())
         for r in config["roles"].values():

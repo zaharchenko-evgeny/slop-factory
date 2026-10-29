@@ -34,6 +34,7 @@ class Call:
     prompts: list  # role files (paths): common rules, then the role file
     skills: list = field(default_factory=list)  # skill dirs
     run_dir: Path = None  # where a resumable session id is kept
+    cwd: Path = None  # the checkout the call runs in
 
 
 def harness_of(config, role, mode=None):
@@ -106,7 +107,10 @@ CLAUDE_TOOLS = {"read": "Read", "bash": "Bash", "edit": "Edit", "write": "Write"
 class ClaudeCode:
     def command(self, c):
         names = [t for t in c.tools.split(",") if writes(c) or t not in ("bash", "edit", "write")]
-        allowed = ",".join(CLAUDE_TOOLS[t] for t in names)
+        allowed = [CLAUDE_TOOLS[t] for t in names]
+        if not writes(c) and "bash" in c.tools.split(","):  # a reviewer reads the diff: read-only git only
+            allowed += [f"Bash(git {g}:*)" for g in ("diff", "log", "show", "status")]
+        allowed = ",".join(allowed)
         sid = str(uuid.uuid5(uuid.NAMESPACE_URL, session_id(c)))
         marker = c.run_dir / f"{c.role}.session" if c.run_dir else None
         session = []
@@ -116,7 +120,7 @@ class ClaudeCode:
                "--append-system-prompt", system_text(c), "--allowedTools", allowed]
         if writes(c):
             return cmd + ["--permission-mode", "acceptEdits"]
-        return cmd + ["--disallowedTools", "Bash,Edit,Write,NotebookEdit"]
+        return cmd + ["--disallowedTools", "Edit,Write,NotebookEdit"]
 
     def parse(self, raw, call=None):
         try:
@@ -126,7 +130,7 @@ class ClaudeCode:
         for ev in data if isinstance(data, list) else [data]:
             if isinstance(ev, dict) and ev.get("type") == "result" and isinstance(ev.get("result"), str):
                 u = ev.get("usage") or {}
-                if call and call.role == "developer" and call.run_dir and not ev.get("is_error"):
+                if call and call.role == "developer" and call.run_dir and ev.get("session_id"):
                     (call.run_dir / f"{call.role}.session").write_text(str(ev.get("session_id") or ""))
                 return ev["result"], {"input": u.get("input_tokens"), "output": u.get("output_tokens"),
                                       "cacheRead": u.get("cache_read_input_tokens"),
@@ -138,6 +142,15 @@ class ClaudeCode:
         return [command_name("claude"), "-p", "Reply with OK.", "--model", model, "--allowedTools", "Read"]
 
 
+def git_roots(cwd):
+    """The common git dir of a linked worktree (its `.git` is a file), else nothing."""
+    try:
+        gitdir = (Path(cwd) / ".git").read_text().split("gitdir:", 1)[1].strip()
+    except (OSError, IndexError, TypeError):
+        return []
+    return [str(Path(gitdir).parent.parent)]
+
+
 class Codex:
     def command(self, c):
         sandbox = "workspace-write" if writes(c) else "read-only"
@@ -146,9 +159,14 @@ class Codex:
         thread = marker.read_text().strip() if c.role == "developer" and marker and marker.exists() else ""
         base = [command_name("codex"), "exec"]
         if thread:  # resume takes no --sandbox flag
-            return [*base, "resume", "--json", "--skip-git-repo-check", "-m", c.model, "-c",
-                    f'sandbox_mode="{sandbox}"', thread, prompt]
-        return [*base, "--json", "--skip-git-repo-check", "-m", c.model, "--sandbox", sandbox, prompt]
+            cfg = ["-c", f'sandbox_mode="{sandbox}"']
+        else:
+            cfg = ["--sandbox", sandbox]
+        roots = git_roots(c.cwd) if writes(c) else []
+        if roots:  # a worktree's git dir is outside its checkout: commits need it writable
+            cfg += ["-c", f"sandbox_workspace_write.writable_roots={json.dumps(roots)}"]
+        head = [*base, "resume"] if thread else base
+        return [*head, "--json", "--skip-git-repo-check", "-m", c.model, *cfg, *([thread] if thread else []), prompt]
 
     def parse(self, raw, call=None):
         text, usage, thread = raw, None, None
