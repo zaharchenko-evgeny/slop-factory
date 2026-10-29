@@ -30,6 +30,33 @@ def run_fixture(m, name, *extra):
 class Delivery(unittest.TestCase):
     m = sm.validate(yaml.safe_load((sm.ROOT / "workflows/delivery.sm.yaml").read_text()), CONFIG)
 
+    def blocked(self, **vars_):
+        return sm.new_ticket(self.m, {"state": "blocked", "vars": vars_})
+
+    def test_actionable_comment_resumes_a_blocked_ticket(self):
+        t, rep = sm.step(self.m, self.blocked(), "comment.added", {"actionable": "yes"})
+        self.assertEqual((t["state"], t["vars"]["resumes"], rep["wait"]), ("ready", 1, None))
+        t, _ = sm.step(self.m, t, "stage.ready", {"run_id": "r2"})
+        self.assertEqual(t["pending"], ["preflight"])
+
+    def test_non_actionable_comment_leaves_it_blocked(self):
+        t, rep = sm.step(self.m, self.blocked(), "comment.added", {"actionable": "no"})
+        self.assertEqual((t["state"], t["vars"]["resumes"], rep["wait"]), ("blocked", 0, "human"))
+
+    def test_resumes_are_capped(self):
+        cap = CONFIG["limits"]["resume_cap"]
+        t, rep = sm.step(self.m, self.blocked(resumes=cap), "comment.added", {"actionable": "yes"})
+        self.assertEqual((t["state"], rep["note"]), ("blocked", f"resumes exhausted at {cap}"))
+
+    def test_resume_cap_defaults_to_three(self):
+        config = {**CONFIG, "limits": {k: v for k, v in CONFIG["limits"].items() if k != "resume_cap"}}
+        m = sm.validate(yaml.safe_load((sm.ROOT / "workflows/delivery.sm.yaml").read_text()), config)
+        t, rep = sm.step(m, sm.new_ticket(m, {"state": "blocked", "vars": {"resumes": 3}}), "comment.added", {"actionable": "yes"})
+        self.assertEqual((t["state"], rep["note"]), ("blocked", "resumes exhausted at 3"))
+
+    def test_only_blocked_resumes_on_comment(self):
+        self.assertEqual({s for s, v in self.m["states"].items() if v.get("resume_on")}, {"blocked"})
+
     def test_happy_path(self):
         t, trace = run_fixture(self.m, "happy.yaml")
         self.assertEqual([r["to"] for r in trace if r["to"] != r["from"]],

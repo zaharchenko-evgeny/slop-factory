@@ -33,6 +33,7 @@ Status: **local** is implemented (#61, #68, #74). **Air** is planned (#4, #7,
 | `stage.ready` | Loop frontier scan every 10 min (launchd) | `issues.labeled` | `label = factory:ready` | `create-pr` (the driver opens the PR itself) or `read-only`; see open question 1 |
 | `ci.passed` / `ci.failed` / `ci.pending` | Read inside the run by `gh pr checks` after publish | Read inside the run; a late failure also fires `workflow_run.failed` → `drive.py run <ticket>` | `workflow_name` contains `quality-gates` | `push-to-source` |
 | Human review asks for changes | Not detected yet (planned) | `pull_request_review.submitted` | `review_state = changes_requested` | `push-to-source` |
+| `comment.added` (`blocked`, `resume_on: comment`) | `loop --once` rechecks new comments (router `recheck`, cheap); `yes` returns the ticket to `ready` | Air has no `issue_comment` trigger: the scheduled sweep (`loop --once`) covers it. Only OWNER, MEMBER and COLLABORATOR comments count; local comments count as OWNER | repository | any |
 | `pr.merged` | `github-pr-merged` detector in `loop --once` | `pull_request.merged` | repository | `read-only` only |
 | Daily collect, weekly improve (#63, #64), distill, safety sweep | `loop --once` opens due tickets | Scheduled trigger → `drive.py loop --once` | cron | any |
 | YouTrack ticket ready (#12) | YouTrack adapter frontier | YouTrack `issueUpdated:tagAdded` | exact, case-sensitive tag | `create-pr` |

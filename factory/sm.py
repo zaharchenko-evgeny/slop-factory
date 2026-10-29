@@ -200,11 +200,14 @@ def evaluate(node, ctx):
 # ---- Validation ----
 
 
+DEFAULT_LIMITS = {"limits.resume_cap": 3}  # factory.yaml paths with a default when the key is absent
+
+
 def lookup(config, dotted):
     v = config
     for key in dotted.split("."):
         v = v.get(key) if isinstance(v, dict) else None
-    return v
+    return DEFAULT_LIMITS.get(dotted) if v is None else v
 
 
 def has(coll, x):
@@ -240,6 +243,9 @@ def validate(sm, config=None):
             errs.append(f"state {name}: on_enter must be a list of declared actions")
         elif hooks and mapping(st).get("actor") == "agent":
             errs.append(f"state {name}: on_enter runs only in human or external states")
+        if mapping(st).get("resume_on") not in (None, "comment") or (
+                mapping(st).get("resume_on") and mapping(st).get("actor") != "human"):
+            errs.append(f"state {name}: resume_on must be `comment`, on a human state")
         if stages and name not in stages:
             errs.append(f"state {name}: not a tracker stage in factory.yaml")
     if not states:

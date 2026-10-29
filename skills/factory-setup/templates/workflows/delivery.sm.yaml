@@ -12,6 +12,10 @@
 # - `drive.py loop` runs tickets in agent states and, in the other states,
 #   polls the external events of their transitions that have a detector in
 #   factory.yaml `events`.
+# - `resume_on: comment` (human states): the driver also watches the ticket's comments. Each new one
+#   that is not a `[factory]` comment or from a `tracker.bot_logins` login is rechecked once (router
+#   `recheck`) and fired as `comment.added` with `actionable: yes|no`; `yes` returns the ticket to `ready`,
+#   at most `limits.resume_cap` times Only OWNER, MEMBER and COLLABORATOR comments count.
 # - Only `set:` (and a `loop:` counter) changes vars.
 # - Guards and `set:` values are a JSONata subset: comparisons, and, or,
 #   $not(), field paths, $count(), $append(a, b), literals.
@@ -27,9 +31,11 @@ vars:
   pr_urls: { type: list, default: [] }
   run_id: { type: string, default: "" }
   approval: { type: string, default: "" }
+  resumes: { type: int, default: 0 }
+  checked_comment: { type: int, default: 0 }   # id of the last comment rechecked
 
 # External events from the tracker and the forge bridges.
-events: [stage.ready, pr.merged]
+events: [stage.ready, pr.merged, comment.added]
 
 # Results: script actions end `done` or `failed` (`ci`: `passed`, `pending`,
 # `failed`, or `error` when it cannot read CI); agent actions end with their
@@ -67,6 +73,8 @@ actions:
   # sends one line to each factory.yaml `channels` entry.
   diagnose: { kind: agent, role: router, mode: diagnose, cwd: root, retry: 1 }
   notify: { kind: script }
+  # Cheap check of new comments in a `resume_on` state; run by the driver, outside the machine.
+  recheck: { kind: agent, role: router, mode: recheck, cwd: root, retry: 1 }
 
 states:
   ready: { actor: agent }
@@ -76,7 +84,7 @@ states:
   approved: { actor: human, on_enter: [notify] }   # gate 2: a human approves and merges
   merged: { actor: agent }     # every PR merged: post-merge actions (retro) run here
   done: { actor: human }
-  blocked: { actor: human, on_enter: [diagnose, notify] }
+  blocked: { actor: human, on_enter: [diagnose, notify], resume_on: comment }
   failed: { actor: human, on_enter: [diagnose, notify] }
 
 transitions:
@@ -220,3 +228,11 @@ transitions:
   - { from: approved, on: pr.merged, if: "$count(event.open_pr_urls) = 0", do: retro, to: merged }
   - { from: merged, on: retro.done, to: done }
   - { from: merged, on: retro.failed, to: done }
+
+  # A new actionable comment on a waiting ticket: back to `ready`, intake runs again; a non-actionable one
+  # matches nothing. At `limits.resume_cap` resumes the ticket stays for a person.
+  - from: blocked
+    on: comment.added
+    if: 'event.actionable = "yes"'
+    loop: { counter: resumes, max: limits.resume_cap, on_exhausted: blocked }
+    to: ready

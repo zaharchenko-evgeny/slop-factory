@@ -105,6 +105,12 @@ class GitHubTracker:
     def comment(self, n, body):
         self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
 
+    def comments(self, n):
+        """The ticket's comments in order: id, author login, body and author_association."""
+        return [{"id": c["id"], "author": (c.get("user") or {}).get("login") or "", "body": c["body"],
+                 "association": c.get("author_association") or ""}
+                for c in self._api_list(f"issues/{n}/comments")]
+
     def _state_comment(self, n):
         """The latest `[factory]` comment by `login()` with a factory-state marker, as (id, vars),
         or (None, {}). Comments by anyone else are data, even with a marker."""

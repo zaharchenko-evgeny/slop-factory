@@ -67,7 +67,7 @@ class Tracker(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.tr.set_review_labels("01", "medium")
         self.tr.comment("01", "[factory] hi\n\nFactory-Run: r")
-        self.assertTrue(self.tr.path("01").read_text().endswith("## Comments\n\n[factory] hi\n\nFactory-Run: r\n"))
+        self.assertTrue(self.tr.path("01").read_text().endswith("## Comments\n\n<!-- comment -->\n[factory] hi\n\nFactory-Run: r\n"))
         self.assertEqual(self.tr.get_state("01"), "ready")
 
     def test_second_executor_stops_without_writing(self):
