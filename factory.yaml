@@ -62,10 +62,10 @@ targets:
 models:
   cheap: anthropic/claude-haiku-5-5
   mid: anthropic/claude-sonnet-5-5
-  strong: anthropic/claude-opus-5-5
-  # Reviewers run on a different model family from the developer.
-  review: hetzner/Qwen/Qwen3.6-27B-FP8
-  # Only Anthropic and the local Qwen are available; structure-security uses Sonnet.
+  strong: anthropic/claude-sonnet-5-5
+  # Reviewers run on a different model family from the developer when one is available.
+  review: anthropic/claude-haiku-5-5
+  # Only Haiku 5.5 and Sonnet 5.5 are used (retro of 29 October); `strong` is Sonnet too.
   review_strong: anthropic/claude-sonnet-5-5
 
 roles:

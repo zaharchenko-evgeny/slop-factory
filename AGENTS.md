@@ -45,7 +45,7 @@ change, whether you are a person, a pi session or a factory role.
    defect, add one comment to the ticket that will fix it (or open a new
    ticket). Do not fix the factory inside an unrelated ticket.
 
-Models: only Anthropic models and the local `hetzner/Qwen/Qwen3.6-27B-FP8`.
+Models: only `anthropic/claude-haiku-5-5` and `anthropic/claude-sonnet-5-5`.
 
 ## Tracker and git
 
