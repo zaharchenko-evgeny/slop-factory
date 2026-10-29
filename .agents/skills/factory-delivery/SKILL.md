@@ -44,6 +44,10 @@ moves. Entering `blocked` or `failed` runs `diagnose` (a reason on the
 ticket) and `notify` once. Run
 artefacts stay in `.factory/runs/<N>/`.
 
+Schedule the loop locally: `uv run factory/schedule_local.py install` (launchd,
+every `targets.local.schedule.interval`, under `lockf`, log in
+`.factory/runs/loop/loop.log`), `status` (loaded? last cycle line), `uninstall`.
+
 If it stops in `blocked` or `failed`, do not continue by hand: report the last
 step and the reason from the printed trace and `.factory/runs/<N>/`
 (`<step>.log`, `<step>-attempt<k>.out.md`, `checks-<round>.md`). Once the

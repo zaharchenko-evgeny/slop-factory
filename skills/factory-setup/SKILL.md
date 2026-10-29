@@ -74,6 +74,7 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | `REPOSITORIES` | `repositories:` entries (name, url, default_branch, role), indented two spaces | `factory.yaml` |
 | `BRANCH_PREFIX` | Branch prefix before `/{ticket}-{slug}` | `factory.yaml`, developer `role.md` |
 | `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.yaml` |
+| `SCHEDULE_LABEL` | launchd label of the local loop schedule | `factory.yaml` |
 | `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG` | Developer and router model tiers | `factory.yaml` |
 | `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Reviewer models (different family from the developer) | `factory.yaml` |
 | `REVIEW_STRONG_NOTE` | Optional comment line above `review_strong` (may be empty) | `factory.yaml` |
