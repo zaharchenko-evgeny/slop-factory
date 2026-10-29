@@ -8,6 +8,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -114,27 +115,27 @@ class RunRole(unittest.TestCase):
         return argv[argv.index("--model") + 1]
 
     def test_empty_output_is_logged_and_runs_once(self):
-        self.assertEqual(self.go("intake", ok_at=2), 3)  # no fallback: the engine's retry reruns it
-        self.assertEqual(self.calls(), 1)
+        self.assertEqual(self.go("intake", ok_at=4), 3)  # one retry, no fallback: the engine's retry reruns it
+        self.assertEqual(self.calls(), 2)
         log = (self.run_dir / "intake.log").read_text()
         self.assertIn(f"factory: empty output from intake on {self.model('cheap')}", log)
         self.assertIn("stub stderr 1", log)
-        self.assertEqual(self.go("intake", ok_at=2), 0)
+        self.assertEqual(self.go("intake", ok_at=3), 0)
         self.assertIn("stub stderr 1", (self.run_dir / "intake.log").read_text())  # the log keeps both calls
         self.assertNotIn("fallback_from", json.loads((self.run_dir / "intake.handoff.json").read_text()))
 
     def test_developer_falls_back_in_its_session(self):
-        self.assertEqual(self.go("implement", ok_at=2), 0)
+        self.assertEqual(self.go("implement", ok_at=3), 0)  # model, its retry, then the fallback
         h = json.loads((self.run_dir / "implement.handoff.json").read_text())
-        self.assertEqual((self.calls(), h["fallback_from"], h["model"]), (2, self.model("mid"), self.model("mid")))
+        self.assertEqual((self.calls(), h["fallback_from"], h["model"]), (3, self.model("mid"), self.model("mid")))
 
     def test_empty_output_runs_the_fallback_once(self):
-        self.assertEqual(self.go("review_behaviour", ok_at=2), 0)
-        self.assertEqual((self.calls(), self.argv_model()), (2, self.model("cheap")))
+        self.assertEqual(self.go("review_behaviour", ok_at=3), 0)
+        self.assertEqual((self.calls(), self.argv_model()), (3, self.model("cheap")))
         ev = [json.loads(x) for x in (self.run_dir / "events.log").read_text().splitlines()]
         fb = next(e for e in ev if e["event"] == "fallback")
         self.assertEqual((fb["from"], fb["to"]), (self.model("review"), self.model("cheap")))
-        self.assertEqual([e["outcome"] for e in ev if e["event"] == "step.end"][:2], ["empty", "ok"])
+        self.assertEqual([e["outcome"] for e in ev if e["event"] == "step.end"][:3], ["empty", "empty", "ok"])
         self.assertTrue(all(e["ts"] for e in ev))
         self.assertIn(f"falls back from {self.model('review')} to {self.model('cheap')}",
                       (self.run_dir / "review_behaviour.log").read_text())
@@ -144,7 +145,7 @@ class RunRole(unittest.TestCase):
         self.assertEqual(h, {"handoff": "REVIEWER", "verdict": "approved", "fallback_from": self.model("review"),
                           "model": self.model("cheap")})
         self.assertEqual(self.go("review_structure_security", ok_at=99), 3)
-        self.assertEqual(self.calls(), 4)  # 1 on the model, 1 on the fallback
+        self.assertEqual(self.calls(), 7)  # 2 on the model, 2 on the fallback
 
     def test_each_reviewer_focus_gets_its_model(self):
         for action, key in [("review_full", "review"), ("review_behaviour", "review"),
@@ -158,11 +159,11 @@ class RunRole(unittest.TestCase):
 
     def test_handoff_followed_by_prose_is_rejected(self):
         os.environ["STUB_PROSE"] = "1"
-        self.assertEqual(self.go("intake", ok_at=2), 3)
-        self.assertEqual(self.calls(), 1)  # no fallback for the router
+        self.assertEqual(self.go("intake", ok_at=4), 3)
+        self.assertEqual(self.calls(), 2)  # one retry, no fallback for the router
         self.assertIn("factory: text after the last fenced block from intake",
                       (self.run_dir / "intake.log").read_text())
-        self.assertEqual(self.go("intake", ok_at=2), 0)
+        self.assertEqual(self.go("intake", ok_at=3), 0)
 
     DEV = {"handoff": "DEVELOPER", "status": "done", "branch": "b", "commits": ["abc #9 x"], "files": "f",
            "checks": [], "acceptance": [{"x": "met"}], "blocked_reason": "none"}
@@ -202,14 +203,23 @@ class RunRole(unittest.TestCase):
         h = json.loads((self.run_dir / "review_full.handoff.json").read_text())
         self.assertEqual((h["verdict"], h["nits"], h["blocking"]), ("approved", "- a:1 — x", ""))
 
+    def test_flat_keeps_blocking_ids_and_the_last_object_wins(self):
+        rev = {"handoff": "REVIEWER", "verdict": "changes-requested", "risk": "low", "docs_impact": "no",
+               "blocking": [{"id": "B1", "file": "a:1", "finding": "x"}, {"id": "B2", "file": "b:2", "finding": "y"}],
+               "nits": []}
+        os.environ["STUB_REPLY"] = "For example: " + json.dumps({"handoff": "REVIEWER"}) + " is the shape.\n" + json.dumps(rev)
+        self.assertEqual(self.go("review_full", ok_at=1), 0)
+        h = json.loads((self.run_dir / "review_full.handoff.json").read_text())
+        self.assertEqual(re.findall(r"^\s*-?\s*id:\s*(\S+)", h["blocking"], re.M), ["B1", "B2"])
+
     def test_malformed_handoff_runs_the_fallback_once(self):
         for env in ("STUB_PROSE", "STUB_UNFENCED"):
             with self.subTest(env):
                 (self.stub / "calls").unlink(missing_ok=True)
                 os.environ.pop("STUB_PROSE", None)
                 os.environ[env] = "1"
-                self.assertEqual(self.go("review_full", ok_at=2), 0)
-                self.assertEqual((self.calls(), self.argv_model()), (2, self.model("cheap")))
+                self.assertEqual(self.go("review_full", ok_at=3), 0)
+                self.assertEqual((self.calls(), self.argv_model()), (3, self.model("cheap")))
                 h = json.loads((self.run_dir / "review_full.handoff.json").read_text())
                 self.assertEqual((h["fallback_from"], h["model"]), (self.model("review"), self.model("cheap")))
                 self.assertIn(f"falls back from {self.model('review')} to {self.model('cheap')}",

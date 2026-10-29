@@ -16,7 +16,7 @@ An action with `cwd: root` (intake, diagnose) runs in the factory root, every ot
 action in the ticket worktree.
 The handoff is JSON validated against `roles/<role>/handoff.schema.json`: a role with a write tool writes
 it to the file named by $FACTORY_HANDOFF (`<step>.handoff-draft.json`, the path is also in its prompt), a read-only
-role ends its output with it; prose around it is ignored. An invalid one is rerun once with the error in the
+role ends its output with it; prose around it is ignored. An invalid or missing one is rerun once with the error in the
 prompt, then the fallback. The legacy text handoff stays accepted for one release: the last fenced block, or a final
 unfenced block starting with its header line (`REVIEWER`), with nothing after
 it. Each attempt's output is kept as `<step>-attempt<k>.out.md`. Each call runs the model once: an empty output or a missing or
@@ -67,7 +67,7 @@ class HandoffError(ValueError):
 
 
 class InvalidHandoff(HandoffError):
-    """A JSON handoff that is present but fails its schema: worth one retry with the error."""
+    """A JSON handoff that is present but fails its schema."""
 
 
 HEADER = re.compile(r"[A-Z][A-Z-]*")
@@ -309,20 +309,17 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, ticket, ext
             if usage:
                 runlog.emit(evlog, rid, "usage", step=step, role=role, model=use, **usage)
             shutil.copy(out, keep / f"{step}-attempt{k}.out.md")
-            invalid = False
             try:
                 handoff = json_handoff(role, root, text, hfile.read_text() if hfile.exists() else None)
                 if handoff is None:  # legacy fenced text, accepted for one release
                     handoff = parse_handoff(out.read_text())
             except HandoffError as err:
-                invalid = isinstance(err, InvalidHandoff)
                 with log.open("a") as e:
                     e.write(f"factory: {err} from {action} on {use}\n")
                 runlog.emit(evlog, rid, "step.end", step=step, role=role, model=use, attempt=k,
                             duration_s=round(time.monotonic() - t0, 1), outcome="empty" if not text.strip() else "bad-handoff")
                 retry_note = f"\n\n## Your previous handoff was rejected\n\n{err}. Fix it and write the handoff again.\n"
-                if invalid:
-                    continue
+                continue
             break
         else:
             handoff = None
