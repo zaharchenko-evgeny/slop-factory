@@ -660,6 +660,46 @@ class DriveRun(unittest.TestCase):
         self.assertIn("ticket 01: blocked", notes[0])
         self.assertEqual(self.tr.read_vars("01")["_run"]["hooks"], [])
 
+    def blocked_ticket(self):
+        self.only("01")
+        self.tr.set_state("01", "blocked")
+        self.tr.write_vars("01", {"checked_comment": 0})
+
+    def comment_loop(self, text, verdict):
+        (self.stub / "reply-recheck").write_text(f"```text\nROUTER-RECHECK\nactionable: {verdict}\nreason: r\n```\n")
+        self.tr.comment("01", text)
+        return self.loop()
+
+    def test_actionable_comment_resumes_a_blocked_ticket(self):
+        self.blocked_ticket()
+        out = self.comment_loop("The answer is 42.", "yes")
+        self.assertIn("ticket 01: final: approved", out)
+        self.assertEqual(self.calls("recheck"), 1)
+        self.assertEqual(self.calls("intake"), 1)
+        self.assertEqual(self.tr.read_vars("01")["resumes"], 1)
+        self.assertIn("The answer is 42.", (self.stub / "prompt-recheck").read_text())
+
+    def test_non_actionable_comment_stays_and_is_checked_once(self):
+        self.blocked_ticket()
+        self.assertEqual(self.comment_loop("thanks", "no"), "")
+        self.assertEqual(self.tr.get_state("01"), "blocked")
+        self.assertEqual(self.loop(), "")  # the same comment is not rechecked
+        self.assertEqual(self.calls("recheck"), 1)
+        self.assertEqual(self.tr.read_vars("01")["checked_comment"], 1)
+
+    def test_factory_comments_are_ignored(self):
+        self.blocked_ticket()
+        self.assertEqual(self.comment_loop("[factory] Blocked: x.\n\nFactory-Run: r1", "yes"), "")
+        self.assertEqual(self.calls("recheck"), 0)
+        self.assertEqual(self.tr.get_state("01"), "blocked")
+
+    def test_resume_cap_keeps_the_ticket_for_a_person(self):
+        self.blocked_ticket()
+        vars_ = self.tr.read_vars("01")
+        self.tr.write_vars("01", {**vars_, "resumes": 3})
+        self.assertEqual(self.comment_loop("here is more", "yes"), "ticket 01: final: blocked\n")
+        self.assertEqual(self.calls("intake"), 0)
+
     def test_loop_respects_runs_per_day(self):
         config = yaml.safe_load((self.root / "factory.yaml").read_text())
         config["limits"]["runs_per_day"] = 0

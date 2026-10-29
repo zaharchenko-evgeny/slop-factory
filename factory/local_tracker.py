@@ -121,6 +121,17 @@ class LocalTracker:
             text += "\n\n## Comments"
         self._write(nn, f"{text}\n\n{body.rstrip()}\n")
 
+    def comments(self, nn):
+        """The blank-line separated blocks under `## Comments`; the id is the 1-based position."""
+        _, tail = self._split(self._read(nn), "\n## Comments")
+        blocks = []
+        for b in (b.strip() for b in re.split(r"\n\s*\n", tail.partition("## Comments")[2]) if b.strip()):
+            if blocks and b.startswith("Factory-Run:"):  # the trailer belongs to the comment above
+                blocks[-1] += "\n\n" + b
+            else:
+                blocks.append(b)
+        return [{"id": i, "author": "", "body": b} for i, b in enumerate(blocks, 1)]
+
     def read_vars(self, nn):
         body, _ = self._split(self._read(nn), "\n## Comments")
         m = STATE_FENCE.search(body)

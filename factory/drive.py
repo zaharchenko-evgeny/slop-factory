@@ -28,6 +28,9 @@ $FACTORY_AGENT and $FACTORY_GH.
 When a step moves the ticket into a state with `on_enter` actions (e.g. `diagnose`, `notify`), the driver
 runs them once at the end of the run, posts an agent action's `comment` on the ticket, and clears them.
 
+A human state with `resume_on: comment` (`blocked`) also polls the ticket's comments (see
+workflows/delivery.sm.yaml): the new ones go to one cheap router `recheck`, then `comment.added` fires.
+
 In a human or external state, `run` polls the machine's external events on that state's transitions
 that have a detector in factory.yaml `events` (`github-pr-merged`: every PR in `pr_urls` is merged, read
 with `gh pr view --json state,mergedAt`; `{run: <bash>}`: exit 0). The first one detected is fired; with
@@ -191,6 +194,7 @@ class Delivery:
         self.wt = self.root / local["worktree_dir"] / str(nn)
         self.done = []  # (action, (result, payload)) of fork branches that ran together, not yet reported
         self.trace = []
+        self.comments = []  # the new comments of a `recheck`
 
     def __call__(self, t):
         if not t["pending"]:
@@ -614,6 +618,10 @@ class Delivery:
         elif action == "diagnose":
             lines.append(f"stage: {t['state']}")
             blocks = {a: o for a, o in out.items() if a != "diagnose"}
+        elif action == "recheck":  # the new comments, oldest first, are untrusted data
+            lines.append(f"stage: {t['state']}")
+            blocks = {"comments": "\n\n".join(f"#{c['id']} by {c['author'] or 'unknown'}:\n{c['body']}" for c in self.comments),
+                      **{a: o for a, o in out.items() if a in ("intake", "diagnose")}}
         elif action == "document":  # the reviewers' handoffs say what has docs impact
             blocks = {a: out[a] for a in REVIEWERS if a in out}
         elif action == "retro":
@@ -755,7 +763,10 @@ def run_ticket(root, nn, tracker, executor, run_id=None, resume=False, results=(
         d.summarize(t, trace)
     if t["hooks"]:
         t = d.hooks(t)
-        tracker.write_vars(nn, {**tracker.read_vars(nn), **sm.persisted(t)})  # keeps `_resume`
+        vars_ = {**tracker.read_vars(nn), **sm.persisted(t)}  # keeps `_resume`
+        if d.m["states"][t["state"]].get("resume_on"):  # comments up to now (diagnose's too) are not new
+            vars_["checked_comment"] = max((c["id"] for c in tracker.comments(nn)), default=0)
+        tracker.write_vars(nn, vars_)
         d.save(t)
     return t, trace
 
@@ -784,6 +795,27 @@ def detect(root, nn, vars_, spec):
     return DETECTORS[spec](root, nn, vars_)
 
 
+COMMENTS = "comment.added"  # fired for a state with `resume_on: comment`; no factory.yaml detector
+
+
+def comment_added(root, nn, tracker, config, m, state, vars_):
+    """Recheck the comments added since the last checked one (not `[factory]`, not a bot login) in one
+    cheap router call; record the newest id first, so each comment is checked once. None: nothing new."""
+    bots = (config["tracker"].get("bot_logins") or [])
+    new = [c for c in tracker.comments(nn) if c["id"] > (vars_.get("checked_comment") or 0)
+           and not c["body"].lstrip().startswith("[factory]") and c["author"] not in bots]
+    if not new:
+        return None
+    d = Delivery(root, nn, tracker, f"local:{time.strftime('%Y%m%dT%H%M%S')}-{nn}")
+    d.comments = new
+    t = sm.new_ticket(m, {"state": state, "vars": vars_})
+    d.save(t)
+    h = d.attempt(t, "recheck")
+    tracker.write_vars(nn, {**vars_, "checked_comment": max(c["id"] for c in new)})
+    yes = h["result"] == "done" and str(h.get("actionable")).lower() == "yes"
+    return {"actionable": "yes" if yes else "no", "reason": h.get("reason", ""), "comments": new}
+
+
 def load(root):
     root = Path(root)
     return (yaml.safe_load((root / "factory.yaml").read_text()),
@@ -793,18 +825,21 @@ def load(root):
 def watched(m, config, state):
     """The declared external events on `state`'s transitions that have a detector, in file order."""
     det = config.get("events") or {}
-    return list(dict.fromkeys(tr["on"] for tr in m["transitions"]
-                              if state in tr["from"] and tr["on"] in m["events"] and tr["on"] in det))
+    found = list(dict.fromkeys(tr["on"] for tr in m["transitions"]
+                               if state in tr["from"] and tr["on"] in m["events"] and tr["on"] in det))
+    return found + ([COMMENTS] if (m["states"].get(state) or {}).get("resume_on") == "comment" else [])
 
 
 def poll(root, nn, tracker, executor):
     """Fire the first watched event of the ticket's state that its detector reports: (ticket, trace).
     None, without any write, when none is detected."""
     config, m = load(root)
-    events = watched(m, config, tracker.get_state(nn))
+    state = tracker.get_state(nn)
+    events = watched(m, config, state)
     vars_ = tracker.read_vars(nn) if events else {}
     for ev in events:
-        payload = detect(root, nn, vars_, config["events"][ev])
+        payload = (comment_added(root, nn, tracker, config, m, state, vars_) if ev == COMMENTS
+                   else detect(root, nn, vars_, config["events"][ev]))
         if payload is not None:
             return run_ticket(root, nn, tracker, executor, results=[{ev: payload}])
     return None

@@ -112,5 +112,29 @@
     "type": "string"
    }
   }
+ },
+ "ROUTER-RECHECK": {
+  "type": "object",
+  "required": [
+   "handoff",
+   "actionable",
+   "reason"
+  ],
+  "properties": {
+   "handoff": {
+    "enum": [
+     "ROUTER-RECHECK"
+    ]
+   },
+   "actionable": {
+    "enum": [
+     "yes",
+     "no"
+    ]
+   },
+   "reason": {
+    "type": "string"
+   }
+  }
  }
 }
