@@ -309,6 +309,8 @@ Roles are enabled in phases, each running for about a week before the next:
 
 See [targets](targets.md) for how the state machine runs on the local and Air targets.
 
+See the [auto-approve and auto-merge recipe](recipes/auto-approve.md) for how to configure the approval gates.
+
 ## 16. Open checks
 
 | Topic | What to verify |
