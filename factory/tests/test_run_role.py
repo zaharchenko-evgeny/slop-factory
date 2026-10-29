@@ -287,7 +287,7 @@ class RunRole(unittest.TestCase):
         self.assertEqual(self.go("review_full", ok_at=1), 0)
         argv = (self.stub / "argv").read_text().splitlines()
         self.assertEqual((argv[0], argv[argv.index("--model") + 1]), ("-p", self.model("review")))
-        ev = json.loads((self.run_dir / "events.log").read_text())
+        ev = next(e for e in map(json.loads, (self.run_dir / "events.log").read_text().splitlines()) if e["event"] == "usage")
         self.assertEqual((ev["input"], ev["output"], ev["cost"]), (4, None, None))
         self.assertEqual(self.go("implement", ok_at=1), 0)
         self.assertIn("--session-id", (self.stub / "argv").read_text())

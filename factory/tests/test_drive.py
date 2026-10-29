@@ -9,6 +9,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -107,6 +108,11 @@ def git(*args, cwd):
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
 
 
+def strip_log(text):
+    """loop output without the `<timestamp> cycle=<id> ` prefix of each line."""
+    return re.sub(r"(?m)^\S+ cycle=\S+ ", "", text)
+
+
 class DriveRun(unittest.TestCase):
     def setUp(self):
         tmp = Path(tempfile.mkdtemp()).resolve()
@@ -162,6 +168,10 @@ class DriveRun(unittest.TestCase):
     def test_records_cost_per_role(self):
         self.go()
         log = [json.loads(x) for x in (self.root / ".factory/runs/01/events.log").read_text().splitlines()]
+        kinds = {r["event"] for r in log}
+        self.assertTrue({"usage", "step.start", "step.end", "transition"} <= kinds)
+        self.assertTrue(all(r["ts"] and r["run"] for r in log))
+        log = [r for r in log if r["event"] == "usage"]
         self.assertEqual({r["role"] for r in log}, {"developer", "reviewer", "router"})
         self.assertTrue(all(r["event"] == "usage" and r["cacheWrite"] == 7 for r in log))
         table = drive.cost_table(self.root / ".factory/runs/01")
@@ -550,7 +560,7 @@ class DriveRun(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(drive.loop(self.root, self.tr, "executor-a"), 0)
-        return "".join(x for x in out.getvalue().splitlines(True) if x.startswith("ticket "))  # no notify lines
+        return strip_log("".join(x for x in out.getvalue().splitlines(True) if " cycle=" in x))  # no notify lines
 
     def test_loop_once_moves_every_merged_approved_ticket(self):
         self.only("01", "05", "06")
@@ -560,7 +570,7 @@ class DriveRun(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(drive.loop(self.root, self.tr, "executor-a", once=True), 0)
-        self.assertEqual(out.getvalue(), "ticket 01: final: done\nticket 06: final: done\n")
+        self.assertEqual(strip_log(out.getvalue()), "ticket 01: final: done\nticket 06: final: done\n")
         self.assertEqual([self.tr.get_state(n) for n in ("01", "05", "06")], ["done", "done", "done"])
 
     def test_loop_leaves_an_unmerged_ticket_unchanged(self):
