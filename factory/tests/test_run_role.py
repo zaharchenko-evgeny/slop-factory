@@ -130,6 +130,11 @@ class RunRole(unittest.TestCase):
     def test_empty_output_runs_the_fallback_once(self):
         self.assertEqual(self.go("review_behaviour", ok_at=2), 0)
         self.assertEqual((self.calls(), self.argv_model()), (2, self.model("cheap")))
+        ev = [json.loads(x) for x in (self.run_dir / "events.log").read_text().splitlines()]
+        fb = next(e for e in ev if e["event"] == "fallback")
+        self.assertEqual((fb["from"], fb["to"]), (self.model("review"), self.model("cheap")))
+        self.assertEqual([e["outcome"] for e in ev if e["event"] == "step.end"][:2], ["empty", "ok"])
+        self.assertTrue(all(e["ts"] for e in ev))
         self.assertIn(f"falls back from {self.model('review')} to {self.model('cheap')}",
                       (self.run_dir / "review_behaviour.log").read_text())
         h = json.loads((self.run_dir / "review_behaviour.handoff.json").read_text())
@@ -287,7 +292,7 @@ class RunRole(unittest.TestCase):
         self.assertEqual(self.go("review_full", ok_at=1), 0)
         argv = (self.stub / "argv").read_text().splitlines()
         self.assertEqual((argv[0], argv[argv.index("--model") + 1]), ("-p", self.model("review")))
-        ev = json.loads((self.run_dir / "events.log").read_text())
+        ev = next(e for e in map(json.loads, (self.run_dir / "events.log").read_text().splitlines()) if e["event"] == "usage")
         self.assertEqual((ev["input"], ev["output"], ev["cost"]), (4, None, None))
         self.assertEqual(self.go("implement", ok_at=1), 0)
         self.assertIn("--session-id", (self.stub / "argv").read_text())

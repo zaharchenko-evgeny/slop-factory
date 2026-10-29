@@ -54,6 +54,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -63,6 +64,7 @@ import harnesses
 import model_access
 import preflight
 import run_role
+import runlog
 import sm
 from local_tracker import ClaimError, LocalTracker
 
@@ -73,14 +75,14 @@ class ResumeError(Exception):
 STOPWORDS = {"a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "with", "from", "by"}
 
 
-def drive(m, tracker, nn, executor, results=(), execute=None, resume=False):
+def drive(m, tracker, nn, executor, results=(), execute=None, resume=False, on_step=None):
     """Claim ticket `nn`, resume from the stored state, vars and run state (`sm.persisted`),
     apply each result with `sm.step`, write them back after every step, and release the claim
     once the ticket waits on a human or external actor, or when reading the ticket fails.
     A step that ends in `failed` also stores `_resume`: the stage and the actions that were running.
     `resume` restarts a `failed` ticket from it, with fresh retries.
     `results` items use sm.parse_event's forms; once they run out, `execute(ticket)` gives the
-    next one (None: stop). Return (ticket, trace)."""
+    next one (None: stop). `on_step(prev, ticket, report)` sees each applied event. Return (ticket, trace)."""
     tracker.claim(nn, executor)  # raises before any write when another executor holds it
     try:
         state, vars_ = tracker.get_state(nn), tracker.read_vars(nn)
@@ -102,6 +104,8 @@ def drive(m, tracker, nn, executor, results=(), execute=None, resume=False):
             prev = ticket
             ticket, rep = sm.step(m, ticket, *sm.parse_event(item))
             trace.append(rep)
+            if on_step:
+                on_step(prev, ticket, rep)
             tracker.set_state(nn, ticket["state"])
             tracker.write_vars(nn, {**sm.persisted(ticket), **(
                 {"_resume": resume_point(prev)} if ticket["state"] == "failed" else {})})
@@ -207,11 +211,38 @@ class Delivery:
         spec = self.m["actions"][action]
         if spec["kind"] != "script":
             return self.agent(t, action, spec)
+        t0 = time.monotonic()
         try:
             return getattr(self, action)(t)
         except (RuntimeError, OSError, ValueError) as e:
             # `ci` failed means a fix round, so its unexpected errors map to `error` (stage failed).
             return ("error" if action == "ci" else "failed"), {"error": str(e)}
+        finally:
+            if action == "ci":
+                self.emit("wait", what="ci", duration_s=round(time.monotonic() - t0, 1))
+
+    def emit(self, event, **fields):
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        runlog.emit(self.run_dir / "events.log", self.run_id, event, **fields)
+
+    def log_merge(self):
+        """The human merged: a `wait` (since the last stamped event, e.g. approval) and a `human` line."""
+        elog = self.run_dir / "events.log"
+        stamps = [e["ts"] for e in (json.loads(x) for x in elog.read_text().splitlines() if x.strip()) if e.get("ts")] \
+            if elog.exists() else []  # old logs have usage lines without ts
+        if stamps:
+            now = datetime.now(timezone.utc).isoformat()
+            self.emit("wait", what="merge", duration_s=round(runlog._secs(stamps[-1], now), 1))
+        sm_file = self.run_dir / "sm.json"
+        verdict = (json.loads(sm_file.read_text())["out"].get("approve") or {}).get("verdict") if sm_file.exists() else None
+        self.emit("human", what="merge", decision="merged", approver=verdict)
+
+    def on_step(self, prev, t, rep):
+        """Log the transition, and a retry when the engine counted one."""
+        self.emit("transition", **{"from": rep["from"], "on": rep["event"], "to": rep["to"], "note": rep["note"]})
+        for action, n in t["retries"].items():
+            if n > prev["retries"].get(action, 0):
+                self.emit("retry", action=action, count=n)
 
     def issue(self):
         """(title and body, base branch): the body's `base:` line, else the primary repository's default."""
@@ -716,7 +747,9 @@ def distill_due(root, config):
 def run_ticket(root, nn, tracker, executor, run_id=None, resume=False, results=()):
     """Deliver ticket `nn` until the machine waits on a human or external actor. Return (ticket, trace)."""
     d = Delivery(root, nn, tracker, run_id or f"local:{time.strftime('%Y%m%dT%H%M%S')}-{nn}")
-    t, trace = drive(d.m, tracker, nn, executor, results, execute=d, resume=resume)
+    if any("pr.merged" in r for r in results if isinstance(r, dict)):
+        d.log_merge()
+    t, trace = drive(d.m, tracker, nn, executor, results, execute=d, resume=resume, on_step=d.on_step)
     d.save(t)  # sm.json shows the final stage
     if trace and trace[-1]["event"] in ("ci.passed", "ci.pending"):  # only the run that reached approved
         d.summarize(t, trace)
@@ -800,6 +833,11 @@ def loop(root, tracker, executor, once=False):
     """Move every ticket the machine can move, one line each, until a cycle changes nothing
     (`once`: one cycle). The loop itself never sets a stage. Return 2 if any ticket errored, else 0."""
     root = Path(root)
+    cycle = time.strftime("%Y%m%dT%H%M%S")  # one id per loop call, on every line it prints
+
+    def say(msg, err=False):
+        print(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} cycle={cycle} {msg}",
+              file=sys.stderr if err else sys.stdout)
     config, m = load(root)
     limits = config.get("limits") or {}
     width = max(1, limits.get("concurrent_deliveries") or 1)
@@ -808,9 +846,9 @@ def loop(root, tracker, executor, once=False):
     if distill_due(root, config):  # the weekly distill rides on the loop's schedule
         try:
             if url := distill(root):
-                print(f"distill: opened {url}")
+                say(f"distill: opened {url}")
         except ERRORS as e:
-            print(f"distill: error: {e}", file=sys.stderr)
+            say(f"distill: error: {e}", err=True)
             code = 2
     while True:
         moved, agent = False, []
@@ -822,11 +860,11 @@ def loop(root, tracker, executor, once=False):
                     continue
                 done = poll(root, nn, tracker, executor)
             except ERRORS as e:
-                print(f"ticket {nn}: error: {e}", file=sys.stderr)
+                say(f"ticket {nn}: error: {e}", err=True)
                 code = 2
                 continue
             if done is not None:
-                print(f"ticket {nn}: final: {done[0]['state']}")
+                say(f"ticket {nn}: final: {done[0]['state']}")
                 moved |= done[0]["state"] != state
         batch = agent[:int(min(width, runs_left(ledger, limits.get("runs_per_day"))))]
         if batch:
@@ -841,12 +879,12 @@ def loop(root, tracker, executor, once=False):
         with ThreadPoolExecutor(max(1, len(batch))) as ex:
             for nn, (state, err) in zip(batch, ex.map(go, batch)):
                 if isinstance(err, ClaimError):
-                    print(f"ticket {nn}: skipped: {err}")
+                    say(f"ticket {nn}: skipped: {err}")
                 elif err:
-                    print(f"ticket {nn}: error: {err}", file=sys.stderr)
+                    say(f"ticket {nn}: error: {err}", err=True)
                     code = 2
                 else:
-                    print(f"ticket {nn}: final: {state}")
+                    say(f"ticket {nn}: final: {state}")
         if once or not (moved or batch):
             return code
 
@@ -887,6 +925,10 @@ def main(argv=None):
         sp.add_argument("--tracker", default="github", help="local:<effort dir> or github (default)")
         sp.add_argument("--executor", help="claim name (default: the gh login, or the OS user for local)")
     sub.add_parser("distill", help="open one PR that merges the knowledge-inbox entries into the knowledge base")
+    rp = sub.add_parser("report", help="per ticket: state, wall, agent and wait time, cost, fix rounds, retries, fallbacks")
+    rp.add_argument("--since", help="only tickets whose log starts on or after this date (ISO, e.g. 2026-10-29)")
+    rp.add_argument("--ticket", help="one ticket")
+    rp.add_argument("--json", action="store_true", help="JSON instead of the table")
     b = sub.add_parser("branch", help="print the ticket's branch name")
     b.add_argument("ticket")
     b.add_argument("ticket_json")
@@ -894,7 +936,12 @@ def main(argv=None):
     if args.cmd == "distill":
         print(distill(sm.ROOT) or "distill: no new entry, or a distill PR is open")
         return 0
-    if args.cmd != "loop" and not args.ticket.isdigit():
+    if args.cmd == "report":
+        rows = runlog.collect(sm.ROOT / yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["targets"]["local"]["run_dir"],
+                              args.since, args.ticket)
+        print(json.dumps(rows, indent=2) if args.json else runlog.table(rows))
+        return 0
+    if args.cmd not in ("loop", "report") and not args.ticket.isdigit():
         p.error(f"ticket {args.ticket!r}: use the issue number")
     if args.cmd == "branch":
         pattern = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["branch_pattern"]

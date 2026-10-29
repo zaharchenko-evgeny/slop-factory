@@ -44,12 +44,14 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 from pathlib import Path
 
 import yaml
 
 import harnesses
 import model_access
+import runlog
 import sm
 
 TOOLS = {"router": "read,grep,find,ls", "developer": "read,bash,edit,write,grep,find,ls",
@@ -171,8 +173,10 @@ def run(root, ticket, action, step=None, ticket_text=None):
             env = {**os.environ, **model_access.pi_env(config, root)}
         except model_access.ModelAccessError as e:
             raise SystemExit(f"run_role.py: model access: {e}")
+    rid = tvars.get("run_id") or ""
     if role != "reviewer":
-        return attempts(root, run_dir, cwd, step, action, role, (model, fallback), prompt, ticket, {}, adapter=ad, env=env)
+        return attempts(root, run_dir, cwd, step, action, role, (model, fallback), prompt, ticket, {}, adapter=ad, env=env,
+                        rid=rid)
     # Each reviewer gets a private dir outside the factory root: its own run dir (role files, out,
     # log) and a detached checkout of the reviewed SHA, so parallel reviewers never share a path.
     # shortcut: no OS sandbox, a reviewer with bash can still read any absolute path; add one if
@@ -187,7 +191,7 @@ def run(root, ticket, action, step=None, ticket_text=None):
         own = private / "run"
         own.mkdir()
         code = attempts(root, own, checkout, step, action, role, (model, fallback), prompt, ticket,
-                        {"reviewed_sha": sha}, adapter=ad, keep_dir=run_dir, events=run_dir, env=env)
+                        {"reviewed_sha": sha}, adapter=ad, keep_dir=run_dir, events=run_dir, env=env, rid=rid)
         for f in own.glob(f"{step}.*"):
             shutil.copy(f, run_dir / f.name)
         return code
@@ -197,7 +201,7 @@ def run(root, ticket, action, step=None, ticket_text=None):
 
 
 def attempts(root, run_dir, cwd, step, action, role, models, prompt, ticket, extra, adapter=None, keep_dir=None,
-             events=None, env=None):
+             events=None, env=None, rid=""):
     """Run the model, then the fallback (if any) after any malformed handoff; write the handoff.
     Each attempt's output is also kept as `<step>-attempt<k>.out.md` in `keep_dir` (default: run_dir),
     numbered across fallbacks and the engine's retries."""
@@ -206,30 +210,37 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, ticket, ext
     if role == "reviewer":  # private copies: the reviewer gets no path into the factory root
         prompts = [Path(shutil.copy(f, run_dir / f"{i}-{f.name}")) for i, f in enumerate(prompts)]
     model = models[0]
+    evlog = (events or run_dir) / "events.log"
     for i, use in enumerate(models):
         if use is None:
             break
         if i:
+            runlog.emit(evlog, rid, "fallback", step=step, role=role, **{"from": model, "to": use})
             with log.open("a") as e:
                 e.write(f"factory: {action} falls back from {model} to {use}\n")
         call = harnesses.Call(str(ticket), role, use, TOOLS[role], prompt, prompts, skill_dirs(root, role), run_dir, cwd)
+        keep = keep_dir or run_dir
+        k = 1 + len(list(keep.glob(f"{step}-attempt[0-9]*.out.md")))
+        runlog.emit(evlog, rid, "step.start", step=step, role=role, model=use, attempt=k)
+        t0 = time.monotonic()
         with log.open("a") as e:
             raw = subprocess.run(adapter.command(call), cwd=cwd, stdout=subprocess.PIPE, stderr=e, text=True,
                                  env=env).stdout
         text, usage = adapter.parse(raw, call)
         out.write_text(text)
         if usage:
-            with (events or run_dir).joinpath("events.log").open("a") as ev:  # one short append per call
-                ev.write(json.dumps({"event": "usage", "step": step, "role": role, "model": use, **usage}) + "\n")
-        keep = keep_dir or run_dir
-        k = 1 + len(list(keep.glob(f"{step}-attempt[0-9]*.out.md")))
+            runlog.emit(evlog, rid, "usage", step=step, role=role, model=use, **usage)
         shutil.copy(out, keep / f"{step}-attempt{k}.out.md")
         try:
             handoff = parse_handoff(out.read_text())
         except HandoffError as err:
             with log.open("a") as e:
                 e.write(f"factory: {err} from {action} on {use}\n")
+            runlog.emit(evlog, rid, "step.end", step=step, role=role, model=use, attempt=k,
+                        duration_s=round(time.monotonic() - t0, 1), outcome="empty" if not text.strip() else "bad-handoff")
             continue
+        runlog.emit(evlog, rid, "step.end", step=step, role=role, model=use, attempt=k,
+                    duration_s=round(time.monotonic() - t0, 1), outcome="ok")
         if i:
             handoff["fallback_from"] = model
         handoff.update(extra, model=use)

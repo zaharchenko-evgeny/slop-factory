@@ -14,6 +14,7 @@ References (contract plus one section per adapter):
 - [`references/targets.md`](references/targets.md)
 - [`references/harnesses.md`](references/harnesses.md)
 - [`references/checks.md`](references/checks.md)
+- [`references/run-log.md`](references/run-log.md)
 
 You build a software factory inside the current repository. The factory
 belongs to the team. Generate its files, then apply them to a target after the
