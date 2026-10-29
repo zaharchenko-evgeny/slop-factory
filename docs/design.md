@@ -307,6 +307,8 @@ Roles are enabled in phases, each running for about a week before the next:
 4. Run one small LME ticket end to end (user picks from 2–3 candidates).
 5. Connect the Air Mate bot in Slack.
 
+See [targets](targets.md) for how the state machine runs on the local and Air targets.
+
 ## 16. Open checks
 
 | Topic | What to verify |

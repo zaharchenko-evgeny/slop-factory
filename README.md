@@ -70,6 +70,8 @@ with you.
 
 ## More
 
+- [Targets: local and Air Cloud](docs/targets.md)
+
 - [Design](docs/design.md)
 - [Plan](docs/plan.md)
 - [Delivery workflow](workflows/delivery.md)
