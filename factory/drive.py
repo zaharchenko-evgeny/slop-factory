@@ -802,7 +802,13 @@ def comment_added(root, nn, tracker, config, m, state, vars_):
     """Recheck the comments added since the last checked one (not `[factory]`, not a bot login) in one
     cheap router call; record the newest id first, so each comment is checked once. None: nothing new."""
     bots = (config["tracker"].get("bot_logins") or [])
-    new = [c for c in tracker.comments(nn) if c["id"] > (vars_.get("checked_comment") or 0)
+    every = tracker.comments(nn)
+    if "checked_comment" not in vars_:  # a ticket that waited before this existed: nothing is new yet
+        tracker.write_vars(nn, {**vars_, "checked_comment": max((c["id"] for c in every), default=0)})
+        return None
+    if (vars_.get("resumes") or 0) >= config["limits"]["resume_cap"]:  # a resume could not happen: skip the call
+        return None
+    new = [c for c in every if c["id"] > (vars_.get("checked_comment") or 0)
            and not c["body"].lstrip().startswith("[factory]") and c["author"] not in bots]
     if not new:
         return None
@@ -811,9 +817,11 @@ def comment_added(root, nn, tracker, config, m, state, vars_):
     t = sm.new_ticket(m, {"state": state, "vars": vars_})
     d.save(t)
     h = d.attempt(t, "recheck")
+    if h["result"] != "done":  # not judged: leave the comments unchecked, the next sweep retries
+        return None
     tracker.write_vars(nn, {**vars_, "checked_comment": max(c["id"] for c in new)})
-    yes = h["result"] == "done" and str(h.get("actionable")).lower() == "yes"
-    return {"actionable": "yes" if yes else "no", "reason": h.get("reason", ""), "comments": new}
+    return {"actionable": "yes" if str(h.get("actionable")).lower() == "yes" else "no",
+            "reason": h.get("reason", ""), "comments": new}
 
 
 def load(root):

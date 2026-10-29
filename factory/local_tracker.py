@@ -20,6 +20,9 @@ HEAD = re.compile(rf"((?:#[^\n]*\n)?\n*)((?:{FIELD})+)?")
 STATE_FENCE = re.compile(r"^```factory-state\n(.*?)^```\n", re.M | re.S)
 
 
+COMMENT_MARK = "<!-- comment -->"
+
+
 class ClaimError(Exception):
     pass
 
@@ -119,17 +122,13 @@ class LocalTracker:
         text = self._read(nn).rstrip("\n")
         if "\n## Comments" not in "\n" + text:
             text += "\n\n## Comments"
-        self._write(nn, f"{text}\n\n{body.rstrip()}\n")
+        self._write(nn, f"{text}\n\n{COMMENT_MARK}\n{body.rstrip()}\n")
 
     def comments(self, nn):
-        """The blank-line separated blocks under `## Comments`; the id is the 1-based position."""
+        """The blocks under `## Comments`, split at the marker line `comment()` writes; the id is the
+        1-based position (text before the first marker is one older comment)."""
         _, tail = self._split(self._read(nn), "\n## Comments")
-        blocks = []
-        for b in (b.strip() for b in re.split(r"\n\s*\n", tail.partition("## Comments")[2]) if b.strip()):
-            if blocks and b.startswith("Factory-Run:"):  # the trailer belongs to the comment above
-                blocks[-1] += "\n\n" + b
-            else:
-                blocks.append(b)
+        blocks = [b.strip() for b in tail.partition("## Comments")[2].split(COMMENT_MARK) if b.strip()]
         return [{"id": i, "author": "", "body": b} for i, b in enumerate(blocks, 1)]
 
     def read_vars(self, nn):

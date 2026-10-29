@@ -693,11 +693,32 @@ class DriveRun(unittest.TestCase):
         self.assertEqual(self.calls("recheck"), 0)
         self.assertEqual(self.tr.get_state("01"), "blocked")
 
+    def test_failed_recheck_is_retried_and_multi_paragraph_comment_is_one(self):
+        self.blocked_ticket()
+        self.tr.comment("01", "[factory] Blocked.\n\nFactory-Run: r1")
+        self.tr.comment("01", "Use option B.\n\nIt matches the ADR.")
+        (self.stub / "reply-recheck").write_text("no handoff")
+        self.assertEqual(self.loop(), "")
+        self.assertEqual(self.tr.read_vars("01")["checked_comment"], 0)  # not judged, not checked
+        before = self.calls("recheck")
+        (self.stub / "reply-recheck").write_text("```text\nROUTER-RECHECK\nactionable: yes\nreason: r\n```\n")
+        self.assertIn("approved", self.loop())  # retried: one comment, judged yes
+        self.assertEqual(self.calls("recheck"), before + 1)
+
+    def test_ticket_without_baseline_checks_nothing_yet(self):
+        self.only("01")
+        self.tr.set_state("01", "blocked")
+        self.tr.comment("01", "old human comment")
+        self.assertEqual(self.loop(), "")
+        self.assertEqual(self.calls("recheck"), 0)
+        self.assertEqual(self.tr.read_vars("01")["checked_comment"], 1)
+
     def test_resume_cap_keeps_the_ticket_for_a_person(self):
         self.blocked_ticket()
         vars_ = self.tr.read_vars("01")
         self.tr.write_vars("01", {**vars_, "resumes": 3})
-        self.assertEqual(self.comment_loop("here is more", "yes"), "ticket 01: final: blocked\n")
+        self.assertEqual(self.comment_loop("here is more", "yes"), "")  # not even rechecked
+        self.assertEqual(self.calls("recheck"), 0)
         self.assertEqual(self.calls("intake"), 0)
 
     def test_loop_respects_runs_per_day(self):
