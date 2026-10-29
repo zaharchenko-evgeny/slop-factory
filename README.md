@@ -36,6 +36,21 @@ Run files stay in `.factory/` (git-ignored).
 never overlap. Log: `.factory/runs/loop/loop.log`. `status` shows whether the
 job is loaded and the last log line; `uninstall` removes it.
 
+launchd jobs do not inherit your shell's environment, so secrets come from the
+macOS Keychain: `targets.local.schedule.env_from_keychain` maps each variable to
+a Keychain service, and every cycle exports it from `security
+find-generic-password` before it runs. A failed lookup logs the variable and
+service names and the cycle runs nothing. Store the key once (it prompts for
+the value):
+
+```sh
+security add-generic-password -s offline-eval-factory-anthropic -a "$USER" -w
+```
+
+To rotate it, add `-U` to the same command to update the item in place. The
+next cycle picks up the new value; no reinstall is needed. `status` reports,
+for each variable, whether its Keychain item exists.
+
 ## Approval gate
 
 `gates.confirm_external_writes` is `true` in `factory.yaml`. Every write kind in

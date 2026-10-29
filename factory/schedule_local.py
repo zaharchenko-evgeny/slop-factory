@@ -7,12 +7,16 @@
 
 The job runs `uv run factory/drive.py loop --once` from the factory root every interval under
 `lockf -t 0`, so a cycle started while another runs exits at once (75) without running the driver.
-Output goes to <run_dir>/loop/loop.log.
+Output goes to <run_dir>/loop/loop.log. `env_from_keychain` (variable → Keychain service) wraps the cycle
+in /bin/sh, which exports each variable from `security find-generic-password` at run time; a failed
+lookup logs the variable and service names and exits 1 before anything runs. Values never reach the plist.
 
 CLI: uv run factory/schedule_local.py install | uninstall | status"""
 import os
+import getpass
 import plistlib
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -35,16 +39,37 @@ def render(config: dict, root: Path = ROOT) -> dict:
     sched = local["schedule"]
     loop_dir = root / local.get("run_dir", ".factory/runs") / "loop"
     log = str(loop_dir / "loop.log")
+    cycle = ["/usr/bin/lockf", "-t", "0", str(loop_dir / "loop.lock"),
+             "uv", "run", "factory/drive.py", "loop", "--once"]
     return {
         "Label": sched["label"],
-        "ProgramArguments": ["/usr/bin/lockf", "-t", "0", str(loop_dir / "loop.lock"),
-                             "uv", "run", "factory/drive.py", "loop", "--once"],
+        "ProgramArguments": wrap(cycle, sched.get("env_from_keychain") or {}),
         "WorkingDirectory": str(root),
         "StartInterval": seconds(sched["interval"]),
         "EnvironmentVariables": {"PATH": os.path.expandvars(sched["path"])},
         "StandardOutPath": log,
         "StandardErrorPath": log,
     }
+
+
+def wrap(cycle: list[str], secrets: dict) -> list[str]:
+    """The cycle as is, or a /bin/sh script that exports each Keychain secret first."""
+    if not secrets:
+        return cycle
+    lines = []
+    for var, service in secrets.items():
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(var)):
+            raise SystemExit(f"bad env_from_keychain variable: {var!r}")
+        svc = shlex.quote(str(service))
+        fail = shlex.quote(f"keychain lookup failed: {var} (service {service})")
+        lines.append(f'{var}=$(security find-generic-password -s {svc} -a "$(id -un)" -w 2>/dev/null)'
+                     f" || {{ echo {fail}; exit 1; }}; export {var}")
+    return ["/bin/sh", "-c", "\n".join([*lines, "exec " + shlex.join(cycle)])]
+
+
+def keychain_has(service: str) -> bool:
+    return subprocess.run(["security", "find-generic-password", "-s", service, "-a", getpass.getuser()],
+                          capture_output=True).returncode == 0
 
 
 def plist_path(label: str) -> Path:
@@ -83,6 +108,8 @@ def main(argv: list[str]) -> int:
         log = Path(job["StandardOutPath"])
         lines = log.read_text().splitlines() if log.exists() else []
         print("last cycle line: " + (lines[-1] if lines else "none"))
+        for var, service in (config["targets"]["local"]["schedule"].get("env_from_keychain") or {}).items():
+            print(f"keychain {var} ({service}): {'yes' if keychain_has(str(service)) else 'no'}")
     return 0
 
 
