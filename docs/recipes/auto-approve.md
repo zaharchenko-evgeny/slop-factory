@@ -113,7 +113,7 @@ is a one-line change.
 `drive.py report` (#83) helps here: it lists each ticket's approval verdict
 next to its outcome.
 
-## Layer 3: the combine rule 
+## Layer 3: the combine rule
 
 ```yaml
 roles:
