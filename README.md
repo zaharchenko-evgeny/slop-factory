@@ -35,7 +35,7 @@ Run files stay in `.factory/` (git-ignored).
 `uv run factory/schedule_local.py install` writes a launchd LaunchAgent
 (`targets.local.schedule` in `factory.yaml`: label, interval, `PATH`) that runs
 `uv run factory/drive.py loop --once` every interval under `lockf`, so cycles
-never overlap. Log: `.factory/runs/loop/loop.log`. `status` shows whether the
+never overlap. Log: `.factory/runs/loop/loop.log` (lines carry a timestamp and cycle id, see the run-log reference). `status` shows whether the
 job is loaded and the last log line; `uninstall` removes it.
 
 This repository sets `targets.local.model_access: central`: every role call and
