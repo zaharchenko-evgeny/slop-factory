@@ -15,7 +15,7 @@
 # - `resume_on: comment` (human states): the driver also watches the ticket's comments. Each new one
 #   that is not a `[factory]` comment or from a `tracker.bot_logins` login is rechecked once (router
 #   `recheck`) and fired as `comment.added` with `actionable: yes|no`; `yes` returns the ticket to `ready`,
-#   at most `limits.resume_cap` times.
+#   at most `limits.resume_cap` times Only OWNER, MEMBER and COLLABORATOR comments count.
 # - Only `set:` (and a `loop:` counter) changes vars.
 # - Guards and `set:` values are a JSONata subset: comparisons, and, or,
 #   $not(), field paths, $count(), $append(a, b), literals.
