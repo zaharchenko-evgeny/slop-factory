@@ -29,7 +29,8 @@ handoff is also written as `<step>.handoff.json` (`handoff` = its first line,
 then each top-level `key: value`; a key with an indented block gets the block
 text). Every input gets the ticket re-read with `gh issue view --json
 title,body,comments,labels` (comments starting `[factory] Moved to #` left
-out), or the text the caller passes (`ticket_text`, the local tracker's file);
+out), or the text the caller passes (`ticket_text`, the local tracker's file), or nothing for an
+action with `ticket: none` (distill, which runs in `<worktree_dir>/distill`);
 the summary input also gets each PR's body and CI checks, fetched read-only
 with `gh pr view`.
 Every pi call (the default harness) gets the environment of factory.yaml `targets.local.model_access` (factory/model_access.py).
@@ -53,7 +54,7 @@ import sm
 
 TOOLS = {"router": "read,grep,find,ls", "developer": "read,bash,edit,write,grep,find,ls",
          "reviewer": "read,bash,grep,find,ls", "doc-writer": "read,bash,edit,write,grep,find,ls",
-         "retro": "read,grep,find,ls"}
+         "retro": "read,grep,find,ls", "distill": "read,edit,write,grep,find,ls"}
 
 
 class HandoffError(ValueError):
@@ -61,7 +62,7 @@ class HandoffError(ValueError):
 
 
 HEADER = re.compile(r"[A-Z][A-Z-]*")
-KNOWN = re.compile(r"DEVELOPER|DOC-WRITER|RETRO|REVIEWER|ROUTER-[A-Z]+")
+KNOWN = re.compile(r"DEVELOPER|DISTILL|DOC-WRITER|RETRO|REVIEWER|ROUTER-[A-Z]+")
 
 
 def parse_handoff(text):
@@ -159,7 +160,7 @@ def run(root, ticket, action, step=None, ticket_text=None):
     cwd = root if spec.get("cwd") == "root" else root / local["worktree_dir"] / str(ticket)
     if not cwd.is_dir():
         raise SystemExit(f"run_role.py: {action} needs the worktree {cwd}")
-    prompt = (run_dir / f"{step}.in.md").read_text() + (
+    prompt = (run_dir / f"{step}.in.md").read_text() + ("" if spec.get("ticket") == "none" else
         ticket_data(config["tracker"]["repository"], ticket) if ticket_text is None else
         f"\n\n## Ticket (local tracker file, read just before this step)\n\n~~~~markdown\n{ticket_text}\n~~~~\n")
     if action == "summary" and tvars.get("pr_urls"):

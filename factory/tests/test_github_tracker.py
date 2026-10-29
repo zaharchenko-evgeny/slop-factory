@@ -180,7 +180,9 @@ class GitHub(unittest.TestCase):
     def test_loop_once_moves_a_closed_approved_issue_to_done(self):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
-        shutil.copy(sm.ROOT / "factory.yaml", tmp)
+        config = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())
+        config["knowledge"]["distill_every_days"] = 0  # no git repository here: no distill
+        (tmp / "factory.yaml").write_text(yaml.safe_dump(config))
         shutil.copytree(sm.ROOT / "workflows", tmp / "workflows")
         stub = tmp / "gh"  # `gh pr view`: every PR merged
         stub.write_text('#!/bin/bash\necho \'{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z"}\'\n')

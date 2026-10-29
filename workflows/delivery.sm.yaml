@@ -57,6 +57,9 @@ actions:
   # The retro role (roles/retro/role.md) judges in the factory root (the worktree is gone after the
   # merge); the script writes the entry to factory.yaml `knowledge.branch`, never a default branch.
   retro: { kind: script, role: retro, mode: record, cwd: root, retry: 1 }
+  # Weekly, outside any ticket (`drive.py distill`): the distill role (roles/distill/role.md) merges the
+  # knowledge inbox in its own worktree; the script opens one PR to the default branch. No ticket input.
+  distill: { kind: agent, role: distill, mode: merge, ticket: none, retry: 1 }
   # on_enter actions: `diagnose` posts a short reason on the ticket; `notify`
   # sends one line to each factory.yaml `channels` entry.
   diagnose: { kind: agent, role: router, mode: diagnose, cwd: root, retry: 1 }

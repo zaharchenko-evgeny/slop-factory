@@ -35,9 +35,12 @@ none it prints "waiting for <events>" and writes nothing. `loop` does this for e
 the machine can move (open and closed), and runs the tickets in agent states (the initial state: the
 frontier), at most `limits.concurrent_deliveries` at a time and `limits.runs_per_day` per day, each at
 most once per call; it cycles until a cycle runs nothing and no event moved a ticket (`--once`: one cycle).
+`loop` first runs `distill` once per factory.yaml `knowledge.distill_every_days` (weekly): one PR to the
+default branch that merges the new knowledge-inbox entries into the knowledge dir (the distill role).
 
 CLI: uv run factory/drive.py run <ticket> [--tracker local:<effort dir>|github] [--executor NAME] [--resume]
      uv run factory/drive.py loop [--once] [--tracker ...] [--executor NAME]
+     uv run factory/drive.py distill  opens the distill PR now, if there is a new inbox entry.
      uv run factory/drive.py branch <ticket> <ticket.json>  prints the ticket's branch name.
 """
 import argparse
@@ -382,9 +385,7 @@ class Delivery:
         """One entry per run: the run's numbers and the retro role's lessons (after its retries; without
         a handoff the entry has the numbers only), committed under `<dir>/<repo>/` on the knowledge branch."""
         k, base = self.config["knowledge"], self.issue()[1]
-        defaults = {r["default_branch"] for r in self.config["repositories"]} | {base}
-        if k["branch"] in defaults or not SAFE_BRANCH.fullmatch(k["branch"]) or ".." in k["branch"]:
-            raise ValueError(f"knowledge branch {k['branch']!r} is unsafe or a default branch")
+        knowledge_branch(self.config, k["branch"], base)
         spec = self.m["actions"]["retro"]
         for _ in range(1 + spec.get("retry", 0)):
             result, h = self.agent(t, "retro", spec)
@@ -392,9 +393,8 @@ class Delivery:
                 break
         else:
             h = {}
-        repo = next(r for r in self.config["repositories"] if r.get("role") == "primary")["name"]
-        if ".." in k["dir"].split("/") or k["dir"].startswith("/"):
-            raise ValueError(f"knowledge dir {k['dir']!r} must stay inside the repository")
+        repo = primary(self.config)["name"]
+        knowledge_dir(k)
         run_id = t["vars"]["run_id"] or self.run_id
         rel = f"{k['dir']}/{repo}/retro-{self.nn}-{re.sub(r'[^A-Za-z0-9.-]+', '-', run_id)}.md"
         text = "\n".join([f"# Retro: #{self.nn} {self.issue()[0]['title']}", "", f"run: {run_id}", "",
@@ -593,6 +593,102 @@ class Delivery:
         return (h["status"] if h.get("status") in ("done", "blocked") else "error"), h
 
 
+def primary(config):
+    return next(r for r in config["repositories"] if r.get("role") == "primary")
+
+
+def knowledge_branch(config, name, base):
+    """`name`, or ValueError when it is unsafe or a default branch (knowledge never goes there directly)."""
+    if name in {r["default_branch"] for r in config["repositories"]} | {base} or not SAFE_BRANCH.fullmatch(name) \
+            or ".." in name:
+        raise ValueError(f"knowledge branch {name!r} is unsafe or a default branch")
+    return name
+
+
+def knowledge_dir(k):
+    if ".." in k["dir"].split("/") or k["dir"].startswith("/") or not k["dir"].strip("/"):
+        raise ValueError(f"knowledge dir {k['dir']!r} must stay inside the repository")
+    return k["dir"].strip("/")
+
+
+DISTILLED = "distilled.txt"  # under the knowledge dir on the default branch: the entries already merged
+
+
+def distill(root, run_id=None):
+    """Open one PR to the default branch that merges the new knowledge-inbox entries (the retro entries
+    on `knowledge.branch` not listed in `<dir>/distilled.txt` on the default branch) into `<dir>/`: the
+    distill role edits a worktree of `<distill_branch>-<date>`, the driver rejects edits outside `<dir>/`,
+    lists the entries in `distilled.txt`, commits, pushes and runs `gh pr create`. Return the PR url, or
+    None when there is no new entry or a distill PR is still open. The default branch is never written."""
+    root = Path(root).resolve()
+    config, m = load(root)
+    k, base = config["knowledge"], primary(config)["default_branch"]
+    inbox, prefix, kdir = knowledge_branch(config, k["branch"], base), knowledge_branch(
+        config, k["distill_branch"], base), knowledge_dir(k)
+    if not sh(["git", "ls-remote", "--heads", "origin", inbox], root).strip():
+        return None
+    sh(["git", "fetch", "origin", base, inbox], root)
+    seen = subprocess.run(["git", "show", f"origin/{base}:{kdir}/{DISTILLED}"], cwd=root, capture_output=True,
+                          text=True).stdout.split()
+    new = [p for p in sh(["git", "ls-tree", "-r", "--name-only", f"origin/{inbox}", "--", f"{kdir}/"], root).split()
+           if re.fullmatch(rf"{re.escape(kdir)}/[^/]+/retro-[^/]+\.md", p) and p not in seen]
+    prs = json.loads(sh([gh(), "pr", "list", "--base", base, "--state", "open", "--json", "url,headRefName"], root)
+                     or "[]")
+    if not new or any(p["headRefName"].startswith(f"{prefix}-") for p in prs):
+        return None
+    run_id = run_id or f"local:{time.strftime('%Y%m%dT%H%M%S')}-distill"
+    branch, local = f"{prefix}-{time.strftime('%Y%m%d')}", config["targets"]["local"]
+    run_dir, wt = root / local["run_dir"] / "distill", root / local["worktree_dir"] / "distill"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    lines = ["mode: merge", f"run_id: {run_id}", f"knowledge_dir: {kdir}",
+             f"repositories: {', '.join(r['name'] for r in config['repositories'])}"]
+    for p in new:
+        lines += ["", f"## {p}", "", "~~~~", sh(["git", "show", f"origin/{inbox}:{p}"], root).rstrip(), "~~~~"]
+    (run_dir / "distill.in.md").write_text("\n".join(lines) + "\n")
+    if wt.exists():
+        sh(["git", "worktree", "remove", "--force", str(wt)], root)
+    sh(["git", "worktree", "add", "-B", branch, str(wt), f"origin/{base}"], root)
+    try:
+        for _ in range(1 + m["actions"]["distill"].get("retry", 0)):
+            try:
+                if not run_role.run(root, "distill", "distill"):
+                    break
+            except SystemExit as e:  # model access or a missing worktree
+                raise RuntimeError(str(e)) from e
+        else:
+            raise RuntimeError("the distill role gave no handoff")
+        h = json.loads((run_dir / "distill.handoff.json").read_text())
+        if h.get("status") != "done":
+            raise RuntimeError(f"distill {h.get('status')}: {h.get('blocked_reason')}")
+        outside = [ln[3:] for ln in sh(["git", "status", "--porcelain", "-uall"], wt).splitlines()
+                   if not ln[3:].startswith(f"{kdir}/")]
+        if outside:
+            raise ValueError(f"distill changed files outside {kdir}/: {', '.join(outside)}")
+        (wt / kdir).mkdir(parents=True, exist_ok=True)
+        (wt / kdir / DISTILLED).write_text("\n".join(sorted({*seen, *new})) + "\n")
+        sh(["git", "add", "-A", "--", kdir], wt)
+        sh(["git", "commit", "-qm", f"Distill {len(new)} knowledge-inbox entries"], wt)
+        sh(["git", "push", "-u", "origin", branch], wt)
+        body = "\n".join(["[factory] Distill: the knowledge-inbox entries merged into the knowledge base.", "",
+                          "## Entries", *[f"- {p}" for p in new], "", "## Lessons", "",
+                          (h.get("summary") or "none").strip(), "", f"Factory-Run: {run_id}"]) + "\n"
+        return sh([gh(), "pr", "create", "--head", branch, "--base", base, "--title",
+                   f"Distill {len(new)} knowledge-inbox entries", "--body", body], wt).strip().splitlines()[-1]
+    finally:
+        sh(["git", "worktree", "remove", "--force", str(wt)], root)
+
+
+def distill_due(root, config):
+    """True at most once per `knowledge.distill_every_days` (unset: never); records the attempt."""
+    days = (config.get("knowledge") or {}).get("distill_every_days")
+    f = Path(root) / config["targets"]["local"]["run_dir"] / "distill" / "last.json"
+    if not days or (f.exists() and time.time() - json.loads(f.read_text()) < days * 86400):
+        return False
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(time.time()))
+    return True
+
+
 def run_ticket(root, nn, tracker, executor, run_id=None, resume=False, results=()):
     """Deliver ticket `nn` until the machine waits on a human or external actor. Return (ticket, trace)."""
     d = Delivery(root, nn, tracker, run_id or f"local:{time.strftime('%Y%m%dT%H%M%S')}-{nn}")
@@ -685,6 +781,13 @@ def loop(root, tracker, executor, once=False):
     width = max(1, limits.get("concurrent_deliveries") or 1)
     ledger = root / config["targets"]["local"]["run_dir"] / "loop-runs.json"
     ran, code = set(), 0
+    if distill_due(root, config):  # the weekly distill rides on the loop's schedule
+        try:
+            if url := distill(root):
+                print(f"distill: opened {url}")
+        except ERRORS as e:
+            print(f"distill: error: {e}", file=sys.stderr)
+            code = 2
     while True:
         moved, agent = False, []
         for nn in tickets(m, config, tracker):
@@ -759,10 +862,14 @@ def main(argv=None):
     for sp in (r, y):
         sp.add_argument("--tracker", default="github", help="local:<effort dir> or github (default)")
         sp.add_argument("--executor", help="claim name (default: the gh login, or the OS user for local)")
+    sub.add_parser("distill", help="open one PR that merges the knowledge-inbox entries into the knowledge base")
     b = sub.add_parser("branch", help="print the ticket's branch name")
     b.add_argument("ticket")
     b.add_argument("ticket_json")
     args = p.parse_args(argv)
+    if args.cmd == "distill":
+        print(distill(sm.ROOT) or "distill: no new entry, or a distill PR is open")
+        return 0
     if args.cmd != "loop" and not args.ticket.isdigit():
         p.error(f"ticket {args.ticket!r}: use the issue number")
     if args.cmd == "branch":

@@ -36,6 +36,17 @@ A tracker ticket in stage `ready`.
 | 13 | merged | script | `drive.py run <N>` (or `drive.py loop` for every ticket, open or closed) polls the detector of `pr.merged` (`factory.yaml` `events`: `github-pr-merged` reads the ticket's PRs with `gh pr view`); once every PR is merged it fires `pr.merged`: stage `merged` and the `retro` (`roles/retro/role.md`, `record`): one entry per run with cost if recorded, wall time, fix rounds, blocking findings, reviewer agreement, the approver's dry-run verdict, manual steps and the retro role's lessons, written under `knowledge/<repo>/` and pushed to the `knowledge` branch from `factory.yaml`, never to a default branch; then stage `done` (also when the retro fails: best effort) and the claim released. While a PR is open: "waiting for pr.merged", nothing written | |
 | — | on entering `approved`, `blocked`, `failed` | `on_enter` actions | Run once by the driver when the ticket enters the state: `notify` (one line per `channels` entry) on all three, and `diagnose` (router, posts a short reason on the ticket) on `blocked` and `failed` | best effort, the stage stays |
 
+## Distill
+
+Outside any ticket, `drive.py loop` runs `drive.py distill` once every
+`knowledge.distill_every_days` (weekly). When the `knowledge` branch holds retro
+entries that `<dir>/distilled.txt` on the default branch does not list, and no
+distill PR is open, the distill role (`roles/distill/role.md`, `merge`) merges
+them into `<dir>/` in a worktree of `<distill_branch>-<date>`; the script rejects
+edits outside `<dir>/`, lists the entries in `distilled.txt`, pushes the branch
+and opens one PR to the default branch. A human reviews and merges it; the
+default branch is never written directly.
+
 ## Handoffs
 
 Each agent step ends with the structured block its role file defines. Steps
@@ -48,5 +59,5 @@ Every push, label change, PR and comment carries the `[factory]` marker and a
 `Factory-Run:` trailer. While `gates.confirm_external_writes` is `true`, each
 write kind in `gates.confirm_external_writes_scope` is shown and waits for the
 user's approval; a declined write stops the run with stage unchanged. Other
-writes, including the push of the ticket's own branch and of the retro entry, are auto-approved.
+writes, including the push of the ticket's own branch, of the retro entry and of the distill branch, are auto-approved.
 Merging stays with the human (`gates.pr_approval`).

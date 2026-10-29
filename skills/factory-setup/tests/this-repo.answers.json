@@ -38,6 +38,7 @@
   "reviewer": "git pi",
   "approver": "git conftest decide",
   "doc-writer": "git pi",
-  "retro": "git pi"
+  "retro": "git pi",
+  "distill": "git pi"
  }
 }
