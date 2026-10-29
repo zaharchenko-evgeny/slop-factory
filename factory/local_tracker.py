@@ -99,9 +99,10 @@ class LocalTracker:
         self._write(nn, top + head + rest)
 
     def issue(self, nn):
-        """The ticket's title (the `# Title` line) and body (the rest of the file)."""
+        """The ticket's title (the `# Title` line), body (the rest of the file) and labels (the `labels:` field, comma-separated)."""
         first, _, body = self._read(nn).partition("\n")
-        return {"title": first.lstrip("#").strip(), "body": body}
+        return {"title": first.lstrip("#").strip(), "body": body,
+                "labels": [x.strip() for x in self._field(nn, "labels").split(",") if x.strip()]}
 
     def get_state(self, nn):
         return self._field(nn, "Status")

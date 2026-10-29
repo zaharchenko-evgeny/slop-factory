@@ -29,6 +29,7 @@ tracker:
   risk_labels: { low: "risk:low", high: "risk:high" }
   docs_impact_label: docs-impact
   bot_logins: []   # comment authors that never resume a waiting ticket
+  hold_label: factory:hold   # a ticket with this label never auto-merges
 
 channels: [local]
 
@@ -89,7 +90,10 @@ roles:
   distill: { harness: pi, tier: mid }
   # Auto-approval (design §8): `tier` is the soft judgment's model, run by decisions-kit
   # `decide` with `engine`. Dry-run records the verdict only; a human still merges.
-  approver: { harness: pi, tier: cheap, engine: {{DECISIONS_ENGINE}}, dry_run: true }
+  # Auto-merge (docs/recipes/auto-approve.md): needs `dry_run: false`. `max_risk`: the highest risk that may merge;
+  # `require`: `hard-rules` or `judgment` (needs a calibrated judgment), or a mapping per risk level.
+  approver:
+    { harness: pi, tier: cheap, engine: {{DECISIONS_ENGINE}}, dry_run: true, auto_merge: { enabled: false, max_risk: low, require: judgment } }
 
 # Retro entries (design §11, ADR-0007): pushed to `branch` under `<dir>/<repo>/`,
 # never to a default branch. The distill (`drive.py distill`, run by `drive.py loop` every

@@ -72,6 +72,7 @@ case "$1 $2" in
       else echo '{"state":"OPEN","mergedAt":null}'; fi
     else echo '{"url":"https://example.invalid/pull/7","statusCheckRollup":[]}'; fi ;;
   "pr comment"|"pr edit") ;;
+  "pr merge") echo "$@" >> "$STUB_DIR/gh-merges" ;;
   "pr checks")
     echo x >> "$STUB_DIR/calls-checks"
     n=$(wc -l < "$STUB_DIR/calls-checks" | tr -d ' ')
@@ -300,6 +301,67 @@ class DriveRun(unittest.TestCase):
         self.patch(drive.Delivery, "read_ci", lambda d, url: ("pending", "pending"))
         self.assertEqual(self.go()["state"], "approved")
         self.assertTrue((self.root / ".factory/worktrees/01").is_dir())
+
+    def auto_merge(self, labels=""):
+        config = yaml.safe_load((self.root / "factory.yaml").read_text())
+        config["roles"]["approver"].update(dry_run=False, auto_merge={"enabled": True, "max_risk": "low",
+                                                                      "require": "hard-rules"})
+        (self.root / "factory.yaml").write_text(yaml.safe_dump(config))
+        if labels:
+            self.tr.path("01").write_text(self.tr.path("01").read_text().replace("\n\n", f"\n\nlabels: {labels}\n", 1))
+
+    @unittest.skipUnless(shutil.which("conftest"), "conftest is not installed")
+    def test_auto_merge_merges_then_retro_then_done(self):
+        self.auto_merge()
+        t = self.go()
+        self.assertEqual((t["state"], t["vars"]["approval"], t["out"]["ci"]["merge"]), ("done", "auto-approve", "yes"))
+        self.assertIn(f"--match-head-commit {t['vars']['reviewed_sha']}", (self.stub / "gh-merges").read_text())
+        self.assertEqual(self.stages[-2:], ["merged", "done"])
+
+    @unittest.skipUnless(shutil.which("conftest"), "conftest is not installed")
+    def test_hold_label_and_pending_ci_go_to_the_human_gate(self):
+        self.auto_merge("factory:hold")
+        self.assertEqual(self.go()["state"], "approved")
+        self.assertFalse((self.stub / "gh-merges").exists())
+
+    @unittest.skipUnless(shutil.which("conftest"), "conftest is not installed")
+    def test_pending_ci_does_not_auto_merge(self):
+        self.auto_merge()
+        self.patch(drive.Delivery, "read_ci", lambda d, url: ("pending", "pending"))
+        self.assertEqual(self.go()["state"], "approved")
+        self.assertFalse((self.stub / "gh-merges").exists())
+
+    def test_merge_action_refuses_a_moved_head_or_base(self):
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.run_dir.mkdir(parents=True)
+        d.start({})
+        (d.wt / "stub.txt").write_text("branch\n")
+        git("add", "stub.txt", cwd=d.wt)
+        git("commit", "-qm", "#01 stub", cwd=d.wt)
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=d.wt, capture_output=True, text=True).stdout.strip()
+        t = {"vars": {"reviewed_sha": "0" * 40, "pr_urls": ["https://example.invalid/pull/7"]}}
+        self.assertEqual(d.merge(t)[0], "moved")  # head is not the reviewed one
+        t["vars"]["reviewed_sha"] = head
+        self.assertEqual(d.merge(t), ("done", {"merged": ["https://example.invalid/pull/7"]}))
+        self.assertIn(f"https://example.invalid/pull/7 --merge --match-head-commit {head}",
+                      (self.stub / "gh-merges").read_text())
+        moved = d.merged_checks
+        def base_moves(base):
+            r = moved(base)
+            (self.root / "other.txt").write_text("x\n")
+            git("add", "other.txt", cwd=self.root)
+            git("commit", "-qm", "other", cwd=self.root)
+            git("push", "-q", "origin", "main", cwd=self.root)
+            return r
+        d.merged_checks = base_moves
+        (self.stub / "gh-merges").unlink()
+        self.assertEqual(d.merge(t)[0], "moved")  # base moved during the checks
+        self.assertFalse((self.stub / "gh-merges").exists())
+        d.merged_checks = moved
+        issue = self.tr.issue
+        self.tr.issue = lambda nn: {**issue(nn), "labels": ["factory:hold"]}  # held while the checks ran
+        self.assertEqual(d.merge(t), ("failed", {"error": "the ticket is on hold"}))
+        self.assertFalse((self.stub / "gh-merges").exists())
 
     def test_merge_with_base_runs_blocking_checks(self):
         d = drive.Delivery(self.root, "01", self.tr, "r1")

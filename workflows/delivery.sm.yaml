@@ -58,6 +58,9 @@ actions:
   # The approver role (roles/approver/role.md): hard rules, then the soft judgment; dry-run only.
   approve: { kind: script, role: approver }
   publish: { kind: script }
+  # Auto-merge (roles.approver.auto_merge): blocking checks on the branch merged with the base, then `gh pr merge`
+  # pinned to the reviewed head. Results: `done`, `moved` (head or base changed), `failed`.
+  merge: { kind: script }
   ci: { kind: script, run: "blocking checks on the branch merged with the base, then the PR's CI checks" }
   summary: { kind: agent, role: router, mode: summary, retry: 1 }
   # The retro role (roles/retro/role.md) judges in the factory root (the worktree is gone after the
@@ -206,6 +209,8 @@ transitions:
   - { from: in-review, on: publish.done, set: { pr_urls: out.publish.pr_urls }, do: ci }
   - { from: in-review, on: publish.failed, to: failed }
   # Failed CI, or blocking checks failing on the merge with the base, is a fix round; pending CI stays as before.
+  # `out.ci.merge` is `yes` when auto-merge is enabled, the risk is within max_risk and the ticket has no hold label.
+  - { from: in-review, on: ci.passed, if: 'approval = "auto-approve" and out.ci.merge = "yes"', do: merge }
   - { from: in-review, on: ci.passed, to: approved }
   - { from: in-review, on: ci.pending, to: approved }
   - from: in-review
@@ -214,6 +219,9 @@ transitions:
     do: fix
     to: changes-requested
   - { from: in-review, on: ci.error, to: failed }
+  - { from: in-review, on: merge.done, do: retro, to: merged }
+  - { from: in-review, on: merge.moved, to: approved }   # a human decides
+  - { from: in-review, on: merge.failed, to: approved }
 
   # `drive.py run` / `loop` fire pr.merged (detector in factory.yaml `events`) once every PR is merged.
   # Post-merge: the retro records the run; best effort, a failed retro still ends `done`.
