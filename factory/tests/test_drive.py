@@ -357,6 +357,11 @@ class DriveRun(unittest.TestCase):
         (self.stub / "gh-merges").unlink()
         self.assertEqual(d.merge(t)[0], "moved")  # base moved during the checks
         self.assertFalse((self.stub / "gh-merges").exists())
+        d.merged_checks = moved
+        issue = self.tr.issue
+        self.tr.issue = lambda nn: {**issue(nn), "labels": ["factory:hold"]}  # held while the checks ran
+        self.assertEqual(d.merge(t), ("failed", {"error": "the ticket is on hold"}))
+        self.assertFalse((self.stub / "gh-merges").exists())
 
     def test_merge_with_base_runs_blocking_checks(self):
         d = drive.Delivery(self.root, "01", self.tr, "r1")

@@ -382,6 +382,8 @@ class Delivery:
             return "failed", {"error": text.splitlines()[0]}
         if sh(["git", "rev-parse", f"origin/{base}"], self.root) != before:
             return "moved", {"error": f"origin/{base} moved during the checks"}
+        if self.config["tracker"].get("hold_label", "factory:hold") in (self.issue()[0].get("labels") or ()):
+            return "failed", {"error": "the ticket is on hold"}  # added while the checks ran
         for url in t["vars"]["pr_urls"]:
             sh([gh(), "pr", "merge", url, "--merge", "--match-head-commit", sha], self.root)
         return "done", {"merged": t["vars"]["pr_urls"]}
