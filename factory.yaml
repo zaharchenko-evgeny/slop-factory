@@ -46,6 +46,11 @@ targets:
     skill: .agents/skills/factory-delivery
     run_dir: .factory/runs      # handoffs per ticket, git-ignored
     worktree_dir: .factory/worktrees
+    # launchd job for `drive.py loop --once` (factory/schedule_local.py); `path` is the PATH the jobs need.
+    schedule:
+      label: com.offline-eval-factory.loop
+      interval: 10m
+      path: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 
 # Model tiers (design §10a). Escalate one tier only after a failure.
 models:
