@@ -73,6 +73,7 @@ with you.
 ## More
 
 - [Targets: local and Air Cloud](docs/targets.md)
+- [Recipe: auto-approve and auto-merge](docs/recipes/auto-approve.md)
 
 - [Design](docs/design.md)
 - [Plan](docs/plan.md)
