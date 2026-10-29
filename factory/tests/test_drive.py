@@ -9,6 +9,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -107,6 +108,11 @@ def git(*args, cwd):
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
 
 
+def strip_log(text):
+    """loop output without the `<timestamp> cycle=<id> ` prefix of each line."""
+    return re.sub(r"(?m)^\S+ cycle=\S+ ", "", text)
+
+
 class DriveRun(unittest.TestCase):
     def setUp(self):
         tmp = Path(tempfile.mkdtemp()).resolve()
@@ -162,11 +168,32 @@ class DriveRun(unittest.TestCase):
     def test_records_cost_per_role(self):
         self.go()
         log = [json.loads(x) for x in (self.root / ".factory/runs/01/events.log").read_text().splitlines()]
+        kinds = {r["event"] for r in log}
+        self.assertTrue({"usage", "step.start", "step.end", "transition"} <= kinds)
+        self.assertTrue(all(r["ts"] and r["run"] for r in log))
+        log = [r for r in log if r["event"] == "usage"]
         self.assertEqual({r["role"] for r in log}, {"developer", "reviewer", "router"})
         self.assertTrue(all(r["event"] == "usage" and r["cacheWrite"] == 7 for r in log))
         table = drive.cost_table(self.root / ".factory/runs/01")
         self.assertIn("implement", table)
         self.assertIn(f"{0.25 * len(log):.3f}", table.splitlines()[-1])
+
+    def test_retry_wait_and_human_events(self):
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.run_dir.mkdir(parents=True)
+        log = d.run_dir / "events.log"
+        log.write_text(json.dumps({"event": "usage", "step": "x", "role": "developer", "model": "m", "cost": 1}) + "\n")
+        d.log_merge()  # an old usage-only log must not break the merge path
+        self.assertEqual([json.loads(x)["event"] for x in log.read_text().splitlines()], ["usage", "human"])
+        d.emit("transition", **{"from": "a", "to": "b"})
+        d.log_merge()
+        d.on_step({"retries": {}}, {"retries": {"implement": 1}}, {"from": "a", "event": "e", "to": "a", "note": None})
+        d.ci = lambda t: ("passed", {})
+        d.run({"vars": {}}, "ci")
+        ev = [json.loads(x) for x in log.read_text().splitlines()]
+        self.assertTrue({"usage", "human", "wait", "retry", "transition"} <= {e["event"] for e in ev})
+        self.assertEqual({e["what"] for e in ev if e["event"] == "wait"}, {"merge", "ci"})
+        self.assertTrue(all(e["run"] == "r1" and e["ts"] for e in ev[1:]))
 
     def test_delivers_ready_to_approved(self):
         t = self.go()
@@ -550,7 +577,7 @@ class DriveRun(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(drive.loop(self.root, self.tr, "executor-a"), 0)
-        return "".join(x for x in out.getvalue().splitlines(True) if x.startswith("ticket "))  # no notify lines
+        return strip_log("".join(x for x in out.getvalue().splitlines(True) if " cycle=" in x))  # no notify lines
 
     def test_loop_once_moves_every_merged_approved_ticket(self):
         self.only("01", "05", "06")
@@ -560,7 +587,7 @@ class DriveRun(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(drive.loop(self.root, self.tr, "executor-a", once=True), 0)
-        self.assertEqual(out.getvalue(), "ticket 01: final: done\nticket 06: final: done\n")
+        self.assertEqual(strip_log(out.getvalue()), "ticket 01: final: done\nticket 06: final: done\n")
         self.assertEqual([self.tr.get_state(n) for n in ("01", "05", "06")], ["done", "done", "done"])
 
     def test_loop_leaves_an_unmerged_ticket_unchanged(self):

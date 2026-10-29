@@ -21,7 +21,9 @@ Project rules are in `AGENTS.md`.
 2. Put the `factory:ready` label on the issue. That label starts a run.
 3. Deliver the ticket directly: `uv run factory/drive.py run <N>`. No
    orchestrator agent is needed; the command prints a per-role cost table at
-   the end (also in `.factory/runs/<N>/events.log`).
+   the end (also in `.factory/runs/<N>/events.log`). `uv run factory/drive.py report`
+   prints time and cost per ticket; the event schema is in
+   [skills/factory-setup/references/run-log.md](skills/factory-setup/references/run-log.md).
 4. The driver follows [workflows/delivery.md](workflows/delivery.md): router
    intake, developer in `.factory/worktrees/<n>`, pre-review checks from
    `factory.yaml`, an independent reviewer, fix rounds, then the PR.
@@ -33,7 +35,7 @@ Run files stay in `.factory/` (git-ignored).
 `uv run factory/schedule_local.py install` writes a launchd LaunchAgent
 (`targets.local.schedule` in `factory.yaml`: label, interval, `PATH`) that runs
 `uv run factory/drive.py loop --once` every interval under `lockf`, so cycles
-never overlap. Log: `.factory/runs/loop/loop.log`. `status` shows whether the
+never overlap. Log: `.factory/runs/loop/loop.log` (lines carry a timestamp and cycle id, see the run-log reference). `status` shows whether the
 job is loaded and the last log line; `uninstall` removes it.
 
 This repository sets `targets.local.model_access: central`: every role call and
