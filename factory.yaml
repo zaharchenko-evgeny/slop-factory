@@ -50,7 +50,7 @@ targets:
     schedule:
       label: com.offline-eval-factory.loop
       interval: 10m
-      path: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+      path: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 
 # Model tiers (design §10a). Escalate one tier only after a failure.
 models:
