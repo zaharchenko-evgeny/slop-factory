@@ -6,6 +6,7 @@
   "    default_branch: main",
   "    role: primary"
  ],
+ "SCHEDULE_LABEL": "com.offline-eval-factory.loop",
  "BRANCH_PREFIX": "ez",
  "TRACKER_REPOSITORY": "zaharchenko-evgeny/offline-eval-factory",
  "MODEL_CHEAP": "anthropic/claude-haiku-5-5",
