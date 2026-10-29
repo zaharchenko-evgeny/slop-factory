@@ -59,6 +59,7 @@ from pathlib import Path
 import yaml
 
 import approver
+import harnesses
 import model_access
 import preflight
 import run_role
@@ -233,7 +234,12 @@ class Delivery:
             env = model_access.pi_env(self.config, self.root)
         except model_access.ModelAccessError as e:
             return "failed", {"error": f"model access: {e}"}
-        bad = [m for m in preflight.run_models(self.config) if not preflight.check(m, env=env)[0]]
+        pairs = preflight.run_pairs(self.config)
+        stubs = [harnesses.STUBS[h] for h, _ in pairs if h in harnesses.STUBS]
+        if stubs:  # one line, before any model call
+            return "failed", {"error": stubs[0]}
+        checks = [(h, m, preflight.check(m, env=env, harness=h)) for h, m in pairs]
+        bad = [m if h == "pi" else f"{h} {m}" for h, m, (ok, _) in checks if not ok]
         if bad:
             return "failed", {"error": f"models not ready: {', '.join(bad)}"}
         b = self.branch(self.issue()[0])

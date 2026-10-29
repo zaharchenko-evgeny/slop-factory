@@ -1,35 +1,50 @@
 # Harnesses
 
-Selected by `targets.<name>.harness` in `factory.yaml`.
+Selected per role by `roles.<role>.harness` (a reviewer mode may set its own) in
+`factory.yaml`, defaulting to `targets.local.harness`, then `pi`. Values: `pi`,
+`claude-code`, `codex`, `junie`; an unknown value fails `sm.py validate`. Model ids
+stay per role. Adapters live in `factory/harnesses.py`; `run_role.py` and
+`preflight.py` dispatch through them.
 
-## Contract
+## Adapter contract (local target)
 
-Render a role (`roles/_common.md`, `roles/<role>/role.md`, `skills.txt`) into
-the harness's agent or skill format, and run it headless.
+- `command`: argv from model, tools, session, skills, role files and prompt.
+- `parse`: final text plus usage (`input`, `output`, `cacheRead`, `cacheWrite`,
+  `cost`) written to the run's `events.log`; a value the harness does not report
+  is `null` (unknown), never 0.
+- `probe`: the preflight call per (harness, model).
+- A role without edit/write tools is read-only: no bash, write or edit tool on
+  `claude-code` and `codex` (`--allowedTools` read tools, `--sandbox read-only`).
+- The developer session resumes across fix rounds (`pi --session-id`,
+  `claude --session-id` then `--resume`, `codex exec resume <thread>`).
+- `claude-code` and `codex` get the role files and each skill's `SKILL.md` as
+  text (system prompt, resp. head of the prompt).
+- `junie`: stub. Preflight fails with one line until it is implemented.
+
+## Role contract
 
 - The role files stay harness-neutral; only the adapter knows the format.
-- Model comes from the role's tier in `factory.yaml`; tools come from the
-  role's `tools` setting (`read-only` means no write or shell tools).
+- Model comes from the role's tier in `factory.yaml`; tools come from the role.
 - A run takes a prompt, returns the final text, and writes no state outside
   its worktree and run directory.
 - Skills in `skills.txt` must be installed; setup reports missing ones.
+- `targets.local.model_access: central` applies to `pi` only.
+- A read-only reviewer on `claude-code` runs `git diff|log|show|status` only;
+  on `codex` it has a read-only sandbox, so the prompt must carry what it needs.
 
-## Claude (`claude`)
+## Claude (`claude-code`)
 
-- Render each role as a subagent file in `.claude/agents/<role>.md`: front
-  matter with name, description, model and tools; body is the common rules plus
-  the role file.
-- Skills live in `.claude/skills/<name>/`.
-- Headless run: `claude -p` with the role's model and allowed tools.
-- Read-only roles get read and search tools only.
+- Headless run: `claude -p --output-format json` with the role's model,
+  `--allowedTools` and the role files and skills as `--append-system-prompt`.
+- Read-only roles get read and search tools and read-only git; write tools are
+  disallowed.
 
 ## Codex (`codex`)
 
-- Rules go in `AGENTS.md`; render each role as a prompt file under
-  `.codex/prompts/<role>.md` (common rules plus the role file).
-- Headless run: `codex exec` with the role's model and a read-only sandbox for
-  read-only roles.
-- Skills are linked into the Codex skills directory.
+- Headless run: `codex exec --json` with the role's model and a read-only
+  sandbox for read-only roles. The developer gets `workspace-write` plus the
+  worktree's git dir as a writable root, and resumes with `codex exec resume`.
+- Role files and skills are the head of the prompt.
 
 ## pi (`pi`)
 
