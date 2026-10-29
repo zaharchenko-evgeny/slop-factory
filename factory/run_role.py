@@ -14,7 +14,10 @@ when the mode has an entry, as each reviewer focus does) and the ticket's risk.
 Each reviewer is its own action, so several reviewers run as separate calls.
 An action with `cwd: root` (intake, diagnose) runs in the factory root, every other
 action in the ticket worktree.
-The output must end with the handoff: the last fenced block, or a final
+The handoff is JSON validated against `roles/<role>/handoff.schema.json`: a role with a write tool writes
+it to the file named by $FACTORY_HANDOFF (`<step>.handoff-draft.json`, the path is also in its prompt), a read-only
+role ends its output with it; prose around it is ignored. An invalid or missing one is rerun once with the error in the
+prompt, then the fallback. The legacy text handoff stays accepted for one release: the last fenced block, or a final
 unfenced block starting with its header line (`REVIEWER`), with nothing after
 it. Each attempt's output is kept as `<step>-attempt<k>.out.md`. Each call runs the model once: an empty output or a missing or
 trailing-text handoff (or a bad first line) is logged; when the mode has a
@@ -63,6 +66,10 @@ class HandoffError(ValueError):
     pass
 
 
+class InvalidHandoff(HandoffError):
+    """A JSON handoff that is present but fails its schema."""
+
+
 HEADER = re.compile(r"[A-Z][A-Z-]*")
 KNOWN = re.compile(r"DEVELOPER|DISTILL|DOC-WRITER|RETRO|REVIEWER|ROUTER-[A-Z]+")
 
@@ -98,6 +105,68 @@ def parse_handoff(text):
     for k, block in blocks.items():
         out[k] = textwrap.dedent("\n".join(block))
     return out
+
+
+WRITERS = ("developer", "doc-writer", "distill")  # roles with a write tool: they write $FACTORY_HANDOFF
+TYPES = {"string": str, "array": list, "object": dict}
+
+
+def json_objects(text):
+    """Every top-level JSON object in `text`, prose and fences around them skipped."""
+    dec, i, out = json.JSONDecoder(), 0, []
+    while (i := text.find("{", i)) != -1:
+        try:
+            obj, i = dec.raw_decode(text, i)
+            out.append(obj)
+        except ValueError:
+            i += 1
+    return out
+
+
+def validate(obj, schema):
+    """Errors of `obj` against the subset of JSON Schema the handoff schemas use: required, enum and
+    type (a name or a list of names) per property."""
+    errors = [f"missing field {k!r}" for k in schema.get("required", []) if k not in obj]
+    for k, p in schema.get("properties", {}).items():
+        if k not in obj:
+            continue
+        types = [p["type"]] if isinstance(p.get("type"), str) else p.get("type", [])
+        if "enum" in p and obj[k] not in p["enum"]:
+            errors.append(f"field {k!r} must be one of {', '.join(p['enum'])}, not {obj[k]!r}")
+        elif types and not any(isinstance(obj[k], TYPES[t]) for t in types):
+            errors.append(f"field {k!r} must be of type {' or '.join(types)}")
+    return errors
+
+
+def flat(v):
+    """A JSON value as the text the key: value format gives (a list is `- ` lines, a dict one item)."""
+    if not isinstance(v, list):
+        return str(v)
+    def item(x):
+        if not isinstance(x, dict):
+            return f"- {x}"
+        rows = [f"{k}: {flat(y)}" for k, y in x.items()]
+        return "\n".join(f"{'- ' if i == 0 else '  '}{r}" for i, r in enumerate(rows))
+    return "\n".join(item(x) for x in v)
+
+
+def json_handoff(role, root, text, file_text=None):
+    """None when the output has no JSON handoff (the legacy text format is tried), else the handoff dict;
+    HandoffError with the validation errors when it is invalid. The file wins over the output text."""
+    found = [o for o in json_objects(file_text if file_text is not None else text) if isinstance(o, dict)]
+    found = [o for o in found if "handoff" in o]
+    if not found:
+        if file_text is None:
+            return None
+        raise InvalidHandoff("the handoff file holds no JSON object with a `handoff` field")
+    obj = found[-1]
+    schemas = json.loads((root / "roles" / role / "handoff.schema.json").read_text())
+    if obj["handoff"] not in schemas:
+        raise InvalidHandoff(f"unknown handoff {obj['handoff']!r}, one of {', '.join(schemas)}")
+    errors = validate(obj, schemas[obj["handoff"]])
+    if errors:
+        raise InvalidHandoff("invalid JSON handoff: " + "; ".join(errors))
+    return {k: v if k == "handoff" else flat(v) for k, v in obj.items()}
 
 
 def parse_pi_output(raw):
@@ -210,6 +279,11 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, ticket, ext
     if role == "reviewer":  # private copies: the reviewer gets no path into the factory root
         prompts = [Path(shutil.copy(f, run_dir / f"{i}-{f.name}")) for i, f in enumerate(prompts)]
     model = models[0]
+    hfile = run_dir / f"{step}.handoff-draft.json"
+    extra_env = {"FACTORY_HANDOFF": str(hfile)} if role in WRITERS else {}
+    note = (f"\n\n## Handoff\n\nWrite the handoff as one JSON object (schema in your role file) to {hfile} with "
+            "your write tool, as the last thing you do.\n" if extra_env else
+            "\n\n## Handoff\n\nEnd your reply with the handoff as one JSON object (schema in your role file).\n")
     evlog = (events or run_dir) / "events.log"
     for i, use in enumerate(models):
         if use is None:
@@ -218,26 +292,38 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, ticket, ext
             runlog.emit(evlog, rid, "fallback", step=step, role=role, **{"from": model, "to": use})
             with log.open("a") as e:
                 e.write(f"factory: {action} falls back from {model} to {use}\n")
-        call = harnesses.Call(str(ticket), role, use, TOOLS[role], prompt, prompts, skill_dirs(root, role), run_dir, cwd)
-        keep = keep_dir or run_dir
-        k = 1 + len(list(keep.glob(f"{step}-attempt[0-9]*.out.md")))
-        runlog.emit(evlog, rid, "step.start", step=step, role=role, model=use, attempt=k)
-        t0 = time.monotonic()
-        with log.open("a") as e:
-            raw = subprocess.run(adapter.command(call), cwd=cwd, stdout=subprocess.PIPE, stderr=e, text=True,
-                                 env=env).stdout
-        text, usage = adapter.parse(raw, call)
-        out.write_text(text)
-        if usage:
-            runlog.emit(evlog, rid, "usage", step=step, role=role, model=use, **usage)
-        shutil.copy(out, keep / f"{step}-attempt{k}.out.md")
-        try:
-            handoff = parse_handoff(out.read_text())
-        except HandoffError as err:
+        retry_note, handoff = "", None
+        for _ in range(2):  # a JSON handoff that fails its schema gets one retry with the error in the prompt
+            call = harnesses.Call(str(ticket), role, use, TOOLS[role], prompt + note + retry_note, prompts,
+                                  skill_dirs(root, role), run_dir, cwd)
+            keep = keep_dir or run_dir
+            k = 1 + len(list(keep.glob(f"{step}-attempt[0-9]*.out.md")))
+            runlog.emit(evlog, rid, "step.start", step=step, role=role, model=use, attempt=k)
+            t0 = time.monotonic()
+            hfile.unlink(missing_ok=True)
             with log.open("a") as e:
-                e.write(f"factory: {err} from {action} on {use}\n")
-            runlog.emit(evlog, rid, "step.end", step=step, role=role, model=use, attempt=k,
-                        duration_s=round(time.monotonic() - t0, 1), outcome="empty" if not text.strip() else "bad-handoff")
+                raw = subprocess.run(adapter.command(call), cwd=cwd, stdout=subprocess.PIPE, stderr=e, text=True,
+                                     env={**(env or os.environ), **extra_env} if extra_env else env).stdout
+            text, usage = adapter.parse(raw, call)
+            out.write_text(text)
+            if usage:
+                runlog.emit(evlog, rid, "usage", step=step, role=role, model=use, **usage)
+            shutil.copy(out, keep / f"{step}-attempt{k}.out.md")
+            try:
+                handoff = json_handoff(role, root, text, hfile.read_text() if hfile.exists() else None)
+                if handoff is None:  # legacy fenced text, accepted for one release
+                    handoff = parse_handoff(out.read_text())
+            except HandoffError as err:
+                with log.open("a") as e:
+                    e.write(f"factory: {err} from {action} on {use}\n")
+                runlog.emit(evlog, rid, "step.end", step=step, role=role, model=use, attempt=k,
+                            duration_s=round(time.monotonic() - t0, 1), outcome="empty" if not text.strip() else "bad-handoff")
+                retry_note = f"\n\n## Your previous handoff was rejected\n\n{err}. Fix it and write the handoff again.\n"
+                continue
+            break
+        else:
+            handoff = None
+        if handoff is None:
             continue
         runlog.emit(evlog, rid, "step.end", step=step, role=role, model=use, attempt=k,
                     duration_s=round(time.monotonic() - t0, 1), outcome="ok")

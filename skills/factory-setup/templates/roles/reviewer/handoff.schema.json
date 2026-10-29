@@ -1,0 +1,47 @@
+{
+ "REVIEWER": {
+  "type": "object",
+  "required": [
+   "handoff",
+   "verdict",
+   "risk",
+   "docs_impact",
+   "blocking",
+   "nits"
+  ],
+  "properties": {
+   "handoff": {
+    "enum": [
+     "REVIEWER"
+    ]
+   },
+   "verdict": {
+    "enum": [
+     "approved",
+     "changes-requested"
+    ]
+   },
+   "reviewed_sha": {
+    "type": "string"
+   },
+   "risk": {
+    "enum": [
+     "low",
+     "high"
+    ]
+   },
+   "docs_impact": {
+    "enum": [
+     "yes",
+     "no"
+    ]
+   },
+   "blocking": {
+    "type": "array"
+   },
+   "nits": {
+    "type": "array"
+   }
+  }
+ }
+}

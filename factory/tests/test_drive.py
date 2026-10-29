@@ -355,7 +355,7 @@ class DriveRun(unittest.TestCase):
     def test_empty_agent_output_runs_at_most_twice(self):
         (self.stub / "reply-implement").unlink()
         t = self.go()
-        self.assertEqual((t["state"], self.calls("implement")), ("failed", 4))  # 2 runs, each model + fallback
+        self.assertEqual((t["state"], self.calls("implement")), ("failed", 8))  # 2 runs, each model + fallback, each with one handoff retry
         self.assertEqual(self.stages[-1], "failed")
 
     def test_resume_restarts_a_failed_ticket_at_the_failed_step(self):
@@ -373,7 +373,7 @@ class DriveRun(unittest.TestCase):
         self.assertEqual(self.tr.read_vars("01")["_resume"]["state"], "in-dev")
         (self.stub / "reply-implement").write_text(REPLIES["implement"])
         t, _ = drive.run_ticket(self.root, "01", self.tr, "executor-a", run_id="r1", resume=True)
-        self.assertEqual((t["state"], self.calls("implement"), self.calls("intake")), ("approved", 5, 1))
+        self.assertEqual((t["state"], self.calls("implement"), self.calls("intake")), ("approved", 9, 1))
         self.assertEqual(self.stages, ["ready", "in-dev", "failed", "in-dev", "in-review", "approved"])
         self.assertNotIn("_resume", self.tr.read_vars("01"))
 
@@ -390,9 +390,10 @@ class DriveRun(unittest.TestCase):
         self.assertEqual((t["state"], self.calls("full")), ("approved", 1))
 
     def test_prose_after_review_falls_back_and_approves(self):
-        (self.stub / "reply-full-1").write_text(REPLIES["full"] + "Thanks!\n")
+        for n in (1, 2):  # the model and its handoff retry
+            (self.stub / f"reply-full-{n}").write_text(REPLIES["full"] + "Thanks!\n")
         t = self.go()
-        self.assertEqual((t["state"], self.calls("full")), ("approved", 2))  # one call per model
+        self.assertEqual((t["state"], self.calls("full")), ("approved", 3))  # model, its retry, fallback
         config = yaml.safe_load((self.root / "factory.yaml").read_text())
         r = t["out"]["review_full"]
         self.assertEqual((r["result"], r["fallback_from"], r["model"]),
@@ -400,7 +401,7 @@ class DriveRun(unittest.TestCase):
         self.assertIn("fell back from", (self.stub / "gh-pr-create").read_text())
         run = self.root / ".factory/runs/01"
         self.assertIn("Thanks!", (run / "review_full-attempt1.out.md").read_text())  # each attempt kept
-        self.assertTrue((run / "review_full-attempt2.out.md").exists())
+        self.assertTrue((run / "review_full-attempt3.out.md").exists())
 
     def test_acceptance_lists_the_ticket_checks(self):
         body = "Scope.\n\nAcceptance checks:\n- a works\n- b works\n\nAffected repositories: x.\n"

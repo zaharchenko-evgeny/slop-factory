@@ -1,0 +1,40 @@
+{
+ "DISTILL": {
+  "type": "object",
+  "required": [
+   "handoff",
+   "status",
+   "files",
+   "summary",
+   "blocked_reason"
+  ],
+  "properties": {
+   "handoff": {
+    "enum": [
+     "DISTILL"
+    ]
+   },
+   "status": {
+    "enum": [
+     "done",
+     "blocked"
+    ]
+   },
+   "files": {
+    "type": [
+     "string",
+     "array"
+    ]
+   },
+   "summary": {
+    "type": [
+     "string",
+     "array"
+    ]
+   },
+   "blocked_reason": {
+    "type": "string"
+   }
+  }
+ }
+}
