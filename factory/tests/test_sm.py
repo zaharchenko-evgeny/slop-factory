@@ -87,6 +87,20 @@ class Delivery(unittest.TestCase):
             t, _ = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["ci"]}), [f"ci.{result}"])
             self.assertEqual(t["state"], state)
 
+    def test_auto_merge_goes_to_merge_then_merged_else_approved(self):
+        ticket = {"state": "in-review", "pending": ["ci"], "vars": {"approval": "auto-approve"}}
+        for event, merge, run, state in [("ci.passed", "yes", ["merge"], "in-review"), ("ci.passed", "no", [], "approved"),
+                                         ("ci.pending", "yes", [], "approved")]:
+            t, trace = sm.simulate(self.m, sm.new_ticket(self.m, ticket), [{event: {"merge": merge}}])
+            self.assertEqual((trace[-1]["run"], t["state"]), (run, state), (event, merge))
+        t, _ = sm.simulate(self.m, sm.new_ticket(self.m, {**ticket, "vars": {"approval": "would-auto-approve"}}),
+                           [{"ci.passed": {"merge": "yes"}}])
+        self.assertEqual(t["state"], "approved")  # only a live auto-approve merges
+        for result, state, run in (("done", "merged", ["retro"]), ("moved", "approved", []), ("failed", "approved", [])):
+            t, trace = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "in-review", "pending": ["merge"]}),
+                                   [f"merge.{result}"])
+            self.assertEqual((t["state"], trace[-1]["run"]), (state, run))
+
     def test_review_then_approver_then_publish_for_both_verdicts(self):
         for name, verdict in (("approve-would.yaml", "would-auto-approve"), ("approve-needs-human.yaml", "needs-human")):
             with self.subTest(verdict=verdict):

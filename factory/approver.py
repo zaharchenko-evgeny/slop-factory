@@ -32,7 +32,23 @@ def git(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
 
 
-def summarize(wt, base, reviews, ci, risk):
+RISKS = ["low", "medium", "high"]
+
+
+def require(cfg, risk):
+    """What auto-merge needs at `risk`: `hard-rules` or `judgment` (the default); `require` may map a level to one."""
+    r = (cfg.get("auto_merge") or {}).get("require", "judgment")
+    return r.get(risk, "judgment") if isinstance(r, dict) else r
+
+
+def may_merge(cfg, risk, labels, hold="factory:hold"):
+    """Auto-merge is on, `risk` is within `max_risk` and the ticket is not on hold."""
+    am = cfg["roles"]["approver"].get("auto_merge") or {}
+    return bool(am.get("enabled")) and hold not in labels and risk in RISKS and (
+        RISKS.index(risk) <= RISKS.index(am.get("max_risk", "low")))
+
+
+def summarize(wt, base, reviews, ci, risk, labels=(), complexity=""):
     """The PR summary the hard rules read. `reviews` maps a reviewer to its handoff."""
     rng = f"origin/{base}...HEAD"
     paths, lines = [], 0
@@ -46,7 +62,7 @@ def summarize(wt, base, reviews, ci, risk):
             deps.append(path)
     return {"paths": paths, "lines_changed": lines, "ci": ci, "risk": risk,
             "reviews": [{"reviewer": a, "verdict": r.get("verdict")} for a, r in reviews.items()],
-            "dependency_changes": deps}
+            "dependency_changes": deps, "labels": list(labels), "complexity": complexity}
 
 
 def hard(root, summary):
@@ -89,15 +105,20 @@ def soft(root, text, engine, model):
         [] if questions else ["decide returned no answers"])
 
 
-def decide(root, config, wt, base, reviews, ci, risk, ticket):
-    """{verdict, reasons, summary} for the branch in `wt`; `ticket` is the ticket's title and body."""
+def decide(root, config, wt, base, reviews, ci, risk, ticket, labels=(), complexity=""):
+    """{verdict, reasons, summary} for the branch in `wt`; `ticket` is the ticket's title and body.
+    Dry-run: `would-auto-approve`. Live (`dry_run: false`, needs `auto_merge.enabled`): `auto-approve`, and only
+    `require: hard-rules` may approve; a level that needs the judgment is `needs-human` until it is calibrated."""
     cfg = config["roles"]["approver"]
-    if not cfg.get("dry_run", True):
-        raise ValueError("roles.approver.dry_run: false is not supported until the judgment is calibrated")
-    summary = summarize(wt, base, reviews, ci, risk)
+    dry = cfg.get("dry_run", True)
+    if not dry and not (cfg.get("auto_merge") or {}).get("enabled"):
+        raise ValueError("roles.approver.dry_run: false needs roles.approver.auto_merge.enabled")
+    summary = summarize(wt, base, reviews, ci, risk, labels, complexity)
     reasons = hard(root, summary)
-    if not reasons:
+    if not dry and not reasons and require(cfg, risk) != "hard-rules":
+        reasons = [f"require: {require(cfg, risk)} at risk {risk}: the judgment is not calibrated"]
+    elif not reasons and dry:
         diff = git(wt, "diff", f"origin/{base}...HEAD")
         text = f"## Ticket\n\n{ticket}\n\n## PR summary\n\n{json.dumps(summary, indent=2)}\n\n## Diff\n\n{diff}"
         reasons = soft(root, text, cfg["engine"], config["models"][cfg["tier"]])
-    return {"verdict": "needs-human" if reasons else "would-auto-approve", "reasons": reasons, "summary": summary}
+    return {"verdict": "needs-human" if reasons else "would-auto-approve" if dry else "auto-approve", "reasons": reasons, "summary": summary}

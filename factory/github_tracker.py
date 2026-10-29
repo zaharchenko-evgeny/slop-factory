@@ -74,8 +74,9 @@ class GitHubTracker:
         return [a["login"] for a in self._issue(n)["assignees"]]
 
     def issue(self, n):
-        """The ticket's title and body."""
-        return json.loads(self.run(["issue", "view", str(n), "-R", self.repo, "--json", "title,body"]))
+        """The ticket's title, body and label names."""
+        i = json.loads(self.run(["issue", "view", str(n), "-R", self.repo, "--json", "title,body,labels"]))
+        return {**i, "labels": [lb["name"] for lb in i.get("labels") or []]}
 
     def get_state(self, n):
         labels = {lb["name"] for lb in self._issue(n)["labels"]}
