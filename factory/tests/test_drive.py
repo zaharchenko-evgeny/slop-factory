@@ -178,6 +178,23 @@ class DriveRun(unittest.TestCase):
         self.assertIn("implement", table)
         self.assertIn(f"{0.25 * len(log):.3f}", table.splitlines()[-1])
 
+    def test_retry_wait_and_human_events(self):
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.run_dir.mkdir(parents=True)
+        log = d.run_dir / "events.log"
+        log.write_text(json.dumps({"event": "usage", "step": "x", "role": "developer", "model": "m", "cost": 1}) + "\n")
+        d.log_merge()  # an old usage-only log must not break the merge path
+        self.assertEqual([json.loads(x)["event"] for x in log.read_text().splitlines()], ["usage", "human"])
+        d.emit("transition", **{"from": "a", "to": "b"})
+        d.log_merge()
+        d.on_step({"retries": {}}, {"retries": {"implement": 1}}, {"from": "a", "event": "e", "to": "a", "note": None})
+        d.ci = lambda t: ("passed", {})
+        d.run({"vars": {}}, "ci")
+        ev = [json.loads(x) for x in log.read_text().splitlines()]
+        self.assertTrue({"usage", "human", "wait", "retry", "transition"} <= {e["event"] for e in ev})
+        self.assertEqual({e["what"] for e in ev if e["event"] == "wait"}, {"merge", "ci"})
+        self.assertTrue(all(e["run"] == "r1" and e["ts"] for e in ev[1:]))
+
     def test_delivers_ready_to_approved(self):
         t = self.go()
         self.assertEqual(self.stages, ["ready", "in-dev", "in-review", "approved"])

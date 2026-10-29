@@ -21,7 +21,9 @@ Project rules are in `AGENTS.md`.
 2. Put the `factory:ready` label on the issue. That label starts a run.
 3. Deliver the ticket directly: `uv run factory/drive.py run <N>`. No
    orchestrator agent is needed; the command prints a per-role cost table at
-   the end (also in `.factory/runs/<N>/events.log`).
+   the end (also in `.factory/runs/<N>/events.log`). `uv run factory/drive.py report`
+   prints time and cost per ticket; the event schema is in
+   [skills/factory-setup/references/run-log.md](skills/factory-setup/references/run-log.md).
 4. The driver follows [workflows/delivery.md](workflows/delivery.md): router
    intake, developer in `.factory/worktrees/<n>`, pre-review checks from
    `factory.yaml`, an independent reviewer, fix rounds, then the PR.

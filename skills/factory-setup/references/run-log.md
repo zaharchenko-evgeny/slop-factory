@@ -14,6 +14,8 @@ UTC), `run` (the run id) and `event`:
 | `wait` | what (`ci`, `merge`), duration_s |
 | `human` | what (`merge`), decision, approver (the approver's verdict) |
 
+The `merge` wait runs from the last timestamped event of the run (the approval) to the merge.
+
 `loop.log` lines start with `<ISO timestamp> cycle=<cycle id> `.
 
 `drive.py report [--since DATE] [--ticket N] [--json]` prints per ticket the

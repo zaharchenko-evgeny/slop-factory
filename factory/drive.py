@@ -225,6 +225,18 @@ class Delivery:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         runlog.emit(self.run_dir / "events.log", self.run_id, event, **fields)
 
+    def log_merge(self):
+        """The human merged: a `wait` (since the last stamped event, e.g. approval) and a `human` line."""
+        elog = self.run_dir / "events.log"
+        stamps = [e["ts"] for e in (json.loads(x) for x in elog.read_text().splitlines() if x.strip()) if e.get("ts")] \
+            if elog.exists() else []  # old logs have usage lines without ts
+        if stamps:
+            now = datetime.now(timezone.utc).isoformat()
+            self.emit("wait", what="merge", duration_s=round(runlog._secs(stamps[-1], now), 1))
+        sm_file = self.run_dir / "sm.json"
+        verdict = (json.loads(sm_file.read_text())["out"].get("approve") or {}).get("verdict") if sm_file.exists() else None
+        self.emit("human", what="merge", decision="merged", approver=verdict)
+
     def on_step(self, prev, t, rep):
         """Log the transition, and a retry when the engine counted one."""
         self.emit("transition", **{"from": rep["from"], "on": rep["event"], "to": rep["to"], "note": rep["note"]})
@@ -711,14 +723,8 @@ def distill_due(root, config):
 def run_ticket(root, nn, tracker, executor, run_id=None, resume=False, results=()):
     """Deliver ticket `nn` until the machine waits on a human or external actor. Return (ticket, trace)."""
     d = Delivery(root, nn, tracker, run_id or f"local:{time.strftime('%Y%m%dT%H%M%S')}-{nn}")
-    if any("pr.merged" in (r if isinstance(r, dict) else {}) for r in results):  # the human merged: log it
-        elog = d.run_dir / "events.log"
-        last = [json.loads(x)["ts"] for x in elog.read_text().splitlines() if x.strip()] if elog.exists() else []
-        if last:
-            d.emit("wait", what="merge", duration_s=round(runlog._secs(last[-1], datetime.now(timezone.utc).isoformat()), 1))
-        verdict = (json.loads((d.run_dir / "sm.json").read_text())["out"].get("approve") or {}).get("verdict") \
-            if (d.run_dir / "sm.json").exists() else None
-        d.emit("human", what="merge", decision="merged", approver=verdict)
+    if any("pr.merged" in r for r in results if isinstance(r, dict)):
+        d.log_merge()
     t, trace = drive(d.m, tracker, nn, executor, results, execute=d, resume=resume, on_step=d.on_step)
     d.save(t)  # sm.json shows the final stage
     if trace and trace[-1]["event"] in ("ci.passed", "ci.pending"):  # only the run that reached approved

@@ -42,13 +42,15 @@ def summarize(ticket_dir):
             k = f"{e['role']}/{e['model']}"
             by[k] = by.get(k, 0) + (e.get("cost") or 0)
     out = t.get("out") or {}
+    start = min(stamped) if stamped else None
+    if start is None and ev:  # no timestamps (old log): the file's mtime
+        start = datetime.fromtimestamp(log.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
     reasons = [str(h.get(k)) for h in out.values() if isinstance(h, dict) for k in ("blocked_reason", "error")
                if h.get(k) and h.get(k) != "none"]
     reasons += [e["note"] for e in ev if e["event"] == "transition" and e.get("note") and e["to"] in ("blocked", "failed")]
     return {
         "ticket": d.name, "state": t.get("state") or "unknown",
-        "start": min(stamped) if stamped else datetime.fromtimestamp(
-            log.stat().st_mtime, timezone.utc).isoformat(timespec="seconds") if ev else None,
+        "start": start,
         "wall_s": _secs(min(stamped), max(stamped)) if len(stamped) > 1 else None,
         "active_s": sum(e["duration_s"] for e in ends) if ends else None,
         "wait_s": sum(e["duration_s"] for e in ev if e["event"] == "wait") if stamped else None,
@@ -61,8 +63,8 @@ def summarize(ticket_dir):
 
 
 def collect(run_dir, since=None, ticket=None):
-    rows = [summarize(p) for p in sorted(Path(run_dir).glob("[0-9]*"), key=lambda p: int(p.name)) if p.is_dir()
-            and (ticket is None or p.name == str(ticket))]
+    rows = [summarize(p) for p in sorted((q for q in Path(run_dir).glob("[0-9]*") if q.name.isdigit()), key=lambda q: int(q.name))
+            if p.is_dir() and (ticket is None or int(p.name) == int(ticket))]
     return [r for r in rows if since is None or (r["start"] or "") >= since]
 
 
@@ -80,6 +82,7 @@ def table(rows):
                      f"{c:>9}{r['fix_rounds']:>5}{r['retries']:>6}{r['fallbacks']:>6}")
         lines += [f"        {k}: ${v:.3f}" for k, v in r["cost"].items()]
         lines += [f"        reason: {x}" for x in r["reasons"]]
-    known = lambda k: sum(r[k] for r in rows if r[k] is not None)  # noqa: E731 unknown counts as nothing here
+    def known(k):  # unknown values count as nothing in the total
+        return sum(r[k] for r in rows if r[k] is not None)
     return "\n".join(lines + [f"{'total':<28}{_t(known('wall_s')):>9}{_t(known('active_s')):>9}{_t(known('wait_s')):>9}"
                               f"{known('cost_total'):>9.3f}{known('fix_rounds'):>5}{known('retries'):>6}{known('fallbacks'):>6}"])
