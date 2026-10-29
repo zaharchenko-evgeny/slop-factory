@@ -113,6 +113,7 @@ class DriveRun(unittest.TestCase):
         self.stub.mkdir()
         config = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())
         config["checks"] = CHECKS
+        config["targets"]["local"]["model_access"] = "env"  # central is tested in test_run_role.py
         (self.root / "factory.yaml").write_text(yaml.safe_dump(config))
         shutil.copytree(sm.ROOT / "workflows", self.root / "workflows")
         shutil.copytree(sm.ROOT / "roles", self.root / "roles")

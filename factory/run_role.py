@@ -32,6 +32,7 @@ title,body,comments,labels` (comments starting `[factory] Moved to #` left
 out), or the text the caller passes (`ticket_text`, the local tracker's file);
 the summary input also gets each PR's body and CI checks, fetched read-only
 with `gh pr view`.
+Every pi call gets the environment of factory.yaml `targets.local.model_access` (factory/model_access.py).
 """
 import argparse
 import json
@@ -46,6 +47,7 @@ from pathlib import Path
 
 import yaml
 
+import model_access
 import sm
 
 TOOLS = {"router": "read,grep,find,ls", "developer": "read,bash,edit,write,grep,find,ls",
@@ -176,8 +178,12 @@ def run(root, ticket, action, step=None, ticket_text=None):
         f"\n\n## Ticket (local tracker file, read just before this step)\n\n~~~~markdown\n{ticket_text}\n~~~~\n")
     if action == "summary" and tvars.get("pr_urls"):
         prompt += pr_data(tvars["pr_urls"])
+    try:
+        env = {**os.environ, **model_access.pi_env(config, root)}
+    except model_access.ModelAccessError as e:
+        raise SystemExit(f"run_role.py: model access: {e}")
     if role != "reviewer":
-        return attempts(root, run_dir, cwd, step, action, role, (model, fallback), prompt, session, {})
+        return attempts(root, run_dir, cwd, step, action, role, (model, fallback), prompt, session, {}, env=env)
     # Each reviewer gets a private dir outside the factory root: its own run dir (role files, out,
     # log) and a detached checkout of the reviewed SHA, so parallel reviewers never share a path.
     # shortcut: no OS sandbox, a reviewer with bash can still read any absolute path; add one if
@@ -192,7 +198,7 @@ def run(root, ticket, action, step=None, ticket_text=None):
         own = private / "run"
         own.mkdir()
         code = attempts(root, own, checkout, step, action, role, (model, fallback), prompt, session,
-                        {"reviewed_sha": sha}, keep_dir=run_dir, events=run_dir)
+                        {"reviewed_sha": sha}, keep_dir=run_dir, events=run_dir, env=env)
         for f in own.glob(f"{step}.*"):
             shutil.copy(f, run_dir / f.name)
         return code
@@ -201,7 +207,8 @@ def run(root, ticket, action, step=None, ticket_text=None):
         shutil.rmtree(private, ignore_errors=True)
 
 
-def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, extra, keep_dir=None, events=None):
+def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, extra, keep_dir=None, events=None,
+             env=None):
     """Run the model, then the fallback (if any) after any malformed handoff; write the handoff.
     Each attempt's output is also kept as `<step>-attempt<k>.out.md` in `keep_dir` (default: run_dir),
     numbered across fallbacks and the engine's retries."""
@@ -221,7 +228,7 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, session, ex
                "--tools", TOOLS[role], "--append-system-prompt", str(prompts[0]),
                "--append-system-prompt", str(prompts[1]), prompt]
         with log.open("a") as e:
-            raw = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=e, text=True).stdout
+            raw = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=e, text=True, env=env).stdout
         text, usage = parse_pi_output(raw)
         out.write_text(text)
         if usage:
