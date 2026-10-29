@@ -12,7 +12,8 @@ writes `<step>.out.md` and `<step>.log` in the run dir. Role, mode and retry
 come from the machine, the model from factory.yaml (`roles.<role>.modes.<mode>`
 when the mode has an entry, as each reviewer focus does) and the ticket's risk.
 Each reviewer is its own action, so several reviewers run as separate calls.
-Intake runs in the factory root, every other action in the ticket worktree.
+An action with `cwd: root` (intake, diagnose) runs in the factory root, every other
+action in the ticket worktree.
 The output must end with the handoff: the last fenced block, or a final
 unfenced block starting with its header line (`REVIEWER`), with nothing after
 it. Each attempt's output is kept as `<step>-attempt<k>.out.md`. Each call runs the model once: an empty output or a missing or
@@ -166,7 +167,7 @@ def run(root, ticket, action, step=None, ticket_text=None):
     model = config["models"][tier or rcfg["tier"]]
     fallback = config["models"][rcfg["fallback"]] if rcfg.get("fallback") else None
     session = (["--session-id", f"factory-{ticket}-{role}"] if role == "developer" else ["--no-session"])
-    cwd = root if action == "intake" else root / local["worktree_dir"] / str(ticket)
+    cwd = root if spec.get("cwd") == "root" else root / local["worktree_dir"] / str(ticket)
     if not cwd.is_dir():
         raise SystemExit(f"run_role.py: {action} needs the worktree {cwd}")
     prompt = (run_dir / f"{step}.in.md").read_text() + (

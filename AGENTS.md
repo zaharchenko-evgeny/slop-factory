@@ -35,7 +35,7 @@ change, whether you are a person, a pi session or a factory role.
    `factory.yaml`. Whoever orchestrates runs scripts, git and `gh`, and never
    writes or reviews the code.
 5. **Merge gate.** A human merges the PR after CI passes and the reviewers
-   approve; `uv run factory/drive.py sync` then moves every
+   approve; `uv run factory/drive.py loop --once` then moves every
    ticket whose PRs are all merged through `merged` to `factory:done`. A PR that passed alone
    can still break the base together with another one: the factory re-runs
    the blocking checks on the branch merged with the current base before

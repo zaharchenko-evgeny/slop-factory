@@ -23,6 +23,8 @@ Selected by `channels` (a list) in `factory.yaml`.
 - The session loads the router role (`roles/router/role.md`) and runs the
   delivery skill for a ready ticket.
 - No config beyond listing `local`.
+- Notifications: the machine's `notify` action prints one `[factory]` line
+  and appends it to `.factory/runs/<ticket>/notify.log`.
 
 ## Air session (`air-session`)
 

@@ -152,8 +152,9 @@ class LocalTracker:
                 self._set_field(nn, "claimed_by", "")
         self._locked(nn, drop)
 
-    def in_stage(self, stage):
-        """Tickets whose `Status:` is `stage`, in file order."""
+    def in_stage(self, stage, closed=False):
+        """Tickets whose `Status:` is `stage`, in file order (a local ticket is never closed: `closed` is
+        accepted for the adapter interface)."""
         return [p.name.split("-", 1)[0] for p in sorted(self.issues.glob("[0-9]*-*.md"))
                 if self.get_state(p.name.split("-", 1)[0]) == stage]
 

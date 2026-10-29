@@ -438,27 +438,94 @@ class DriveRun(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = drive.main(["run", "01", "--tracker", f"local:{self.tr.issues.parent}", "--executor", "executor-a"])
-        self.assertEqual((code, out.getvalue()), (0, "waiting for merge\n"))
+        self.assertEqual((code, out.getvalue()), (0, "waiting for pr.merged\n"))
         self.assertEqual(self.tr.path("01").read_text(), before)
         self.assertIn("state,mergedAt", (self.stub / "gh-pr-view").read_text())
 
     def test_merged_pr_moves_the_ticket_to_done(self):
         self.approved("01", "https://example.invalid/pull/7")
         (self.stub / "merged").write_text("https://example.invalid/pull/7\n")
-        t, trace = drive.check_merged(self.root, "01", self.tr, "executor-a")
+        t, trace = drive.poll(self.root, "01", self.tr, "executor-a")
         self.assertEqual((t["state"], trace[-1]["note"]), ("done", "through merged"))
         self.assertEqual((self.tr.get_state("01"), self.stages[-1]), ("done", "done"))
         self.assertNotIn("claimed_by: executor-a", self.tr.path("01").read_text())  # released by the driver
 
-    def test_sync_moves_every_merged_approved_ticket(self):
+    def only(self, *keep):
+        """Drop the fixture tickets other than `keep`, so the loop sees only those."""
+        for f in self.tr.issues.glob("*.md"):
+            if f.name.split("-", 1)[0] not in keep:
+                f.unlink()
+
+    def loop(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(drive.loop(self.root, self.tr, "executor-a"), 0)
+        return "".join(x for x in out.getvalue().splitlines(True) if x.startswith("ticket "))  # no notify lines
+
+    def test_loop_once_moves_every_merged_approved_ticket(self):
+        self.only("01", "05", "06")
         self.approved("01", "https://example.invalid/pull/7")
         self.approved("06", "https://example.invalid/pull/9")
         (self.stub / "merged").write_text("https://example.invalid/pull/7\nhttps://example.invalid/pull/9\n")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(drive.sync(self.root, self.tr, "executor-a"), 0)
+            self.assertEqual(drive.loop(self.root, self.tr, "executor-a", once=True), 0)
         self.assertEqual(out.getvalue(), "ticket 01: final: done\nticket 06: final: done\n")
-        self.assertEqual([self.tr.get_state(n) for n in ("01", "03", "06")], ["done", "in-dev", "done"])
+        self.assertEqual([self.tr.get_state(n) for n in ("01", "05", "06")], ["done", "done", "done"])
+
+    def test_loop_leaves_an_unmerged_ticket_unchanged(self):
+        self.only("01", "05")
+        self.approved("01", "https://example.invalid/pull/7")
+        before = [f.read_text() for f in sorted(self.tr.issues.glob("*.md"))]
+        self.assertEqual(self.loop(), "")
+        self.assertEqual([f.read_text() for f in sorted(self.tr.issues.glob("*.md"))], before)
+
+    def test_loop_drives_a_custom_human_state_and_event(self):
+        """A machine with a `qa-review` human state and a `qa.passed` event: no driver change needed."""
+        config = yaml.safe_load((self.root / "factory.yaml").read_text())
+        config["tracker"]["stages"]["qa-review"] = "factory:qa-review"
+        config["events"]["qa.passed"] = {"run": 'test -f "$STUB_DIR/qa-ok-$FACTORY_TICKET"'}
+        (self.root / "factory.yaml").write_text(yaml.safe_dump(config))
+        path = self.root / "workflows/delivery.sm.yaml"
+        machine = yaml.safe_load(path.read_text())
+        machine["states"]["qa-review"] = {"actor": "human"}
+        machine["events"].append("qa.passed")
+        for tr in machine["transitions"]:
+            if tr.get(True) in ("ci.passed", "ci.pending") and tr.get("to") == "approved":
+                tr["to"] = "qa-review"
+        machine["transitions"].append({"from": "qa-review", "on": "qa.passed", "to": "approved"})
+        path.write_text(yaml.safe_dump(machine, sort_keys=False))
+        self.only("01")
+        self.assertEqual(self.loop(), "ticket 01: final: qa-review\n")  # ran once, then waits for QA
+        self.assertEqual(self.loop(), "")
+        (self.stub / "qa-ok-01").touch()
+        self.assertEqual(self.loop(), "ticket 01: final: approved\n")
+        (self.stub / "merged").write_text("https://example.invalid/pull/7\n")
+        self.assertEqual(self.loop(), "ticket 01: final: done\n")
+        self.assertEqual(self.stages, ["ready", "in-dev", "in-review", "qa-review", "approved", "done"])
+
+    def test_entering_blocked_runs_diagnose_and_notify_once(self):
+        (self.stub / "reply-implement").write_text("```text\nDEVELOPER\nstatus: blocked\nblocked_reason: x\n```\n")
+        (self.stub / "reply-diagnose").write_text(
+            "```text\nROUTER-DIAGNOSE\nstep: implement\ncomment: |\n  [factory] Blocked: x.\n  Factory-Run: r1\n```\n")
+        self.only("01")
+        out = self.loop()
+        self.assertIn("ticket 01: final: blocked", out)
+        self.assertEqual(self.loop(), "")  # the next cycles poll nothing and run nothing
+        self.assertEqual(self.calls("diagnose"), 1)
+        self.assertIn("stage: blocked", (self.stub / "prompt-diagnose").read_text())
+        self.assertEqual(self.tr.path("01").read_text().count("[factory] Blocked: x."), 1)
+        notes = (self.root / ".factory/runs/01/notify.log").read_text().splitlines()
+        self.assertEqual(len(notes), 1)
+        self.assertIn("ticket 01: blocked", notes[0])
+        self.assertEqual(self.tr.read_vars("01")["_run"]["hooks"], [])
+
+    def test_loop_respects_runs_per_day(self):
+        config = yaml.safe_load((self.root / "factory.yaml").read_text())
+        config["limits"]["runs_per_day"] = 0
+        (self.root / "factory.yaml").write_text(yaml.safe_dump(config))
+        self.only("01")
+        self.assertEqual((self.loop(), self.tr.get_state("01")), ("", "ready"))
 
     def test_claim_held_elsewhere_stops_without_running(self):
         self.tr.claim("01", "executor-b")

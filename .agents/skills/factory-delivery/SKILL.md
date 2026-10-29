@@ -33,9 +33,14 @@ fix round with the failing log, then a re-review and a rebuilt PR body), then,
 after the stage moves to `approved`, the summary (posted on the ticket; the PR
 body becomes `Closes #N` when it says `complete: yes`) and, once CI passed, the
 worktree cleanup. The reviewers of a high-risk fork run in parallel. It prints each step and exits 0 at `approved`. After the human merges,
-`drive.py run "$N"` on the `approved` ticket (or `drive.py sync` for all of
-them) moves it through `merged` to `done`; while a PR is open it prints
-"waiting for merge" and writes nothing. Run
+`drive.py run "$N"` on the `approved` ticket (or `drive.py loop --once` for all
+of them) moves it through `merged` to `done`; while a PR is open it prints
+"waiting for pr.merged" and writes nothing. `drive.py loop` keeps every ticket
+moving from the machine alone: it runs tickets in agent states (frontier
+first) within `limits.concurrent_deliveries` and `limits.runs_per_day`, polls
+the `factory.yaml` `events` detectors of the others, and stops when nothing
+moves. Entering `blocked` or `failed` runs `diagnose` (a reason on the
+ticket) and `notify` once. Run
 artefacts stay in `.factory/runs/<N>/`.
 
 If it stops in `blocked` or `failed`, do not continue by hand: report the last

@@ -13,6 +13,9 @@ and `set`, moves to `to` (default: stay) and starts `do`. Internal events are
 the engine waits for an external event. A transition that enters an agent state
 without starting an action is followed, in the same step, by the built-in event
 `enter` when a transition from that state matches it (a pass-through state).
+A human or external state may list `on_enter` actions: a step that moves a
+ticket into it sets `hooks` to them, and the driver runs them once (best
+effort, their results fire no event), e.g. a notification.
 See workflows/delivery.sm.yaml.
 """
 import argparse
@@ -226,9 +229,15 @@ def validate(sm, config=None):
         raise SMError("\n".join(errs))
     states = sm.get("states") or {}
     stages = lookup(config, "tracker.stages")
+    actions = sm.get("actions") or {}
     for name, st in states.items():
         if not has(ACTORS, mapping(st).get("actor")):
             errs.append(f"state {name}: actor must be one of {', '.join(ACTORS)}")
+        hooks = mapping(st).get("on_enter", [])
+        if not isinstance(hooks, list) or any(not has(actions, a) for a in hooks):
+            errs.append(f"state {name}: on_enter must be a list of declared actions")
+        elif hooks and mapping(st).get("actor") == "agent":
+            errs.append(f"state {name}: on_enter runs only in human or external states")
         if stages and name not in stages:
             errs.append(f"state {name}: not a tracker stage in factory.yaml")
     if not states:
@@ -246,7 +255,6 @@ def validate(sm, config=None):
             errs.append(f"var {name}: type must be one of {', '.join(TYPES)}")
         elif not type_ok(v.get("default"), typ):
             errs.append(f"var {name}: default {v.get('default')!r} is not a {v['type']}")
-    actions = sm.get("actions") or {}
     for name, a in actions.items():
         retry = mapping(a).get("retry", 0)
         if not IDENT.match(str(name)):
@@ -352,13 +360,13 @@ def validate(sm, config=None):
     if errs:
         raise SMError("\n".join(errs))
     return {"initial": initial, "states": states, "vars": variables, "actions": actions,
-            "forks": forks, "transitions": transitions}
+            "forks": forks, "events": sorted(events), "transitions": transitions}
 
 
 # ---- Engine ----
 
 
-RUN_KEYS = ("out", "pending", "retries", "fork")
+RUN_KEYS = ("out", "pending", "retries", "fork", "hooks")
 
 
 def new_ticket(m, base=None):
@@ -367,7 +375,7 @@ def new_ticket(m, base=None):
     base = copy.deepcopy(base or {})
     vars_ = base.get("vars") or {}
     t = {"state": m["initial"], "vars": {k: copy.deepcopy(v["default"]) for k, v in m["vars"].items()},
-         "out": {}, "pending": [], "retries": {}, "fork": None}
+         "out": {}, "pending": [], "retries": {}, "fork": None, "hooks": []}
     t.update({k: v for k, v in (vars_.pop("_run", None) or {}).items() if k in RUN_KEYS})
     t.update({k: v for k, v in base.items() if k != "vars"})
     t["vars"].update(vars_)
@@ -433,6 +441,8 @@ def step(m, ticket, event, payload=None):
                 t, after = step(m, t, ENTER)
                 if not (after["note"] or "").startswith("ignored"):  # a transition matched: report the pass-through
                     rep = report(m, t, src, event, f"through {mid}")
+            if t["state"] != src:
+                t["hooks"] = list(m["states"][t["state"]].get("on_enter", []))
             return t, rep
     if internal:
         raise SMError(f"event {event} in state {src}: no transition matches")

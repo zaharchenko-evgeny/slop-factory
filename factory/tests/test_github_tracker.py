@@ -5,8 +5,11 @@
 # ///
 """Unit tests for factory/github_tracker.py with a stubbed gh. Run: uv run factory/tests/test_github_tracker.py"""
 import json
+import os
 import re
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,6 +18,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import sm  # noqa: E402
+import drive as driver  # noqa: E402
 from drive import drive  # noqa: E402
 from github_tracker import GitHubTracker  # noqa: E402
 from local_tracker import ClaimError  # noqa: E402
@@ -51,9 +55,10 @@ class FakeGh:
                     i[key].remove(val)
             return ""
         if args[:2] == ["issue", "list"]:
-            label = args[args.index("--label") + 1]
+            label, state = args[args.index("--label") + 1], args[args.index("--state") + 1]
             return json.dumps([{"number": n, "assignees": [{"login": a} for a in i["assignees"]]}
-                               for n, i in self.issues.items() if i["state"] == "OPEN" and label in i["labels"]])
+                               for n, i in self.issues.items()
+                               if (state == "all" or i["state"] == "OPEN") and label in i["labels"]])
         if args[:2] == ["api", "--paginate"]:
             path = args[2]
             if m := re.fullmatch(rf"repos/{REPO}/issues/(\d+)/comments", path):
@@ -171,6 +176,24 @@ class GitHub(unittest.TestCase):
         }, subs={10: [3, 1]})
         self.assertEqual(tracker(fake).frontier(), [3, 1, 7])
         self.assertEqual(fake.writes, [])
+
+    def test_loop_once_moves_a_closed_approved_issue_to_done(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        shutil.copy(sm.ROOT / "factory.yaml", tmp)
+        shutil.copytree(sm.ROOT / "workflows", tmp / "workflows")
+        stub = tmp / "gh"  # `gh pr view`: every PR merged
+        stub.write_text('#!/bin/bash\necho \'{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z"}\'\n')
+        stub.chmod(0o755)
+        self.addCleanup(os.environ.pop, "FACTORY_GH", None)
+        os.environ["FACTORY_GH"] = str(stub)
+        state = '[factory] s\n<!-- factory-state {"pr_urls": ["https://x/pull/1"], "run_id": "r1"} -->'
+        fake = FakeGh({30: {"labels": ["factory:approved"], "state": "CLOSED",  # GitHub closed it at merge
+                            "comments": [{"id": 1, "body": state, "user": {"login": "bot"}}]},
+                       31: {"labels": ["factory:done"], "state": "CLOSED"}})
+        self.assertEqual(driver.loop(tmp, tracker(fake), "bot", once=True), 0)
+        self.assertEqual((fake.issues[30]["labels"], fake.issues[30]["assignees"]), (["factory:done"], []))
+        self.assertFalse([w for w in fake.writes if "31" in w])
 
 
 if __name__ == "__main__":

@@ -70,3 +70,23 @@ comment: |
 
   Factory-Run: <run id>
 ```
+
+## Mode `diagnose`
+
+Input: the stage the ticket stopped in (`blocked` or `failed`) and the outputs
+of the run's actions.
+
+1. Find the step that stopped the run and its cause, from the outputs only.
+2. Write at most three lines for the tracker thread: the cause and what a
+   human has to do to unblock the ticket.
+
+Handoff:
+
+```text
+ROUTER-DIAGNOSE
+step: <action that stopped the run>
+comment: |
+  [factory] <the cause and the next human step>
+
+  Factory-Run: <run id>
+```
