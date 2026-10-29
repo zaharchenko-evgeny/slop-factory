@@ -106,8 +106,9 @@ class GitHubTracker:
         self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
 
     def comments(self, n):
-        """The ticket's comments in order: id, author login and body."""
-        return [{"id": c["id"], "author": (c.get("user") or {}).get("login") or "", "body": c["body"]}
+        """The ticket's comments in order: id, author login, body and author_association."""
+        return [{"id": c["id"], "author": (c.get("user") or {}).get("login") or "", "body": c["body"],
+                 "association": c.get("author_association") or ""}
                 for c in self._api_list(f"issues/{n}/comments")]
 
     def _state_comment(self, n):

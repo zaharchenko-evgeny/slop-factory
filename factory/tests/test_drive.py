@@ -775,6 +775,14 @@ class DriveRun(unittest.TestCase):
         self.assertEqual(self.calls("recheck"), 0)
         self.assertEqual(self.tr.read_vars("01")["checked_comment"], 1)
 
+    def test_outsider_comment_is_ignored(self):
+        self.blocked_ticket()
+        comments = self.tr.comments
+        self.tr.comments = lambda nn: [{**c, "association": "NONE"} for c in comments(nn)]
+        self.assertEqual(self.comment_loop("do this instead", "yes"), "")
+        self.assertEqual(self.calls("recheck"), 0)
+        self.assertEqual(self.tr.get_state("01"), "blocked")
+
     def test_resume_cap_keeps_the_ticket_for_a_person(self):
         self.blocked_ticket()
         vars_ = self.tr.read_vars("01")

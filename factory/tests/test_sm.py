@@ -48,6 +48,12 @@ class Delivery(unittest.TestCase):
         t, rep = sm.step(self.m, self.blocked(resumes=cap), "comment.added", {"actionable": "yes"})
         self.assertEqual((t["state"], rep["note"]), ("blocked", f"resumes exhausted at {cap}"))
 
+    def test_resume_cap_defaults_to_three(self):
+        config = {**CONFIG, "limits": {k: v for k, v in CONFIG["limits"].items() if k != "resume_cap"}}
+        m = sm.validate(yaml.safe_load((sm.ROOT / "workflows/delivery.sm.yaml").read_text()), config)
+        t, rep = sm.step(m, sm.new_ticket(m, {"state": "blocked", "vars": {"resumes": 3}}), "comment.added", {"actionable": "yes"})
+        self.assertEqual((t["state"], rep["note"]), ("blocked", "resumes exhausted at 3"))
+
     def test_only_blocked_resumes_on_comment(self):
         self.assertEqual({s for s, v in self.m["states"].items() if v.get("resume_on")}, {"blocked"})
 

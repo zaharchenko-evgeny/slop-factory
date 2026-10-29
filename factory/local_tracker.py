@@ -130,7 +130,7 @@ class LocalTracker:
         1-based position (text before the first marker is one older comment)."""
         _, tail = self._split(self._read(nn), "\n## Comments")
         blocks = [b.strip() for b in tail.partition("## Comments")[2].split(COMMENT_MARK) if b.strip()]
-        return [{"id": i, "author": "", "body": b} for i, b in enumerate(blocks, 1)]
+        return [{"id": i, "author": "", "association": "OWNER", "body": b} for i, b in enumerate(blocks, 1)]
 
     def read_vars(self, nn):
         body, _ = self._split(self._read(nn), "\n## Comments")

@@ -200,11 +200,14 @@ def evaluate(node, ctx):
 # ---- Validation ----
 
 
+DEFAULT_LIMITS = {"limits.resume_cap": 3}  # factory.yaml paths with a default when the key is absent
+
+
 def lookup(config, dotted):
     v = config
     for key in dotted.split("."):
         v = v.get(key) if isinstance(v, dict) else None
-    return v
+    return DEFAULT_LIMITS.get(dotted) if v is None else v
 
 
 def has(coll, x):

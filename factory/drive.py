@@ -824,18 +824,22 @@ def detect(root, nn, vars_, spec):
 COMMENTS = "comment.added"  # fired for a state with `resume_on: comment`; no factory.yaml detector
 
 
+TRUSTED = ("OWNER", "MEMBER", "COLLABORATOR")  # GitHub author_association of comments that may resume
+
+
 def comment_added(root, nn, tracker, config, m, state, vars_):
     """Recheck the comments added since the last checked one (not `[factory]`, not a bot login) in one
     cheap router call; record the newest id first, so each comment is checked once. None: nothing new."""
     bots = (config["tracker"].get("bot_logins") or [])
+    if (vars_.get("resumes") or 0) >= sm.lookup(config, "limits.resume_cap"):  # no resume possible: skip the reads and the call
+        return None
     every = tracker.comments(nn)
     if "checked_comment" not in vars_:  # a ticket that waited before this existed: nothing is new yet
         tracker.write_vars(nn, {**vars_, "checked_comment": max((c["id"] for c in every), default=0)})
         return None
-    if (vars_.get("resumes") or 0) >= config["limits"]["resume_cap"]:  # a resume could not happen: skip the call
-        return None
     new = [c for c in every if c["id"] > (vars_.get("checked_comment") or 0)
-           and not c["body"].lstrip().startswith("[factory]") and c["author"] not in bots]
+           and not c["body"].lstrip().startswith("[factory]") and c["author"] not in bots
+           and c.get("association") in TRUSTED]  # outsiders cannot resume a ticket (and spend runs)
     if not new:
         return None
     d = Delivery(root, nn, tracker, f"local:{time.strftime('%Y%m%dT%H%M%S')}-{nn}")
