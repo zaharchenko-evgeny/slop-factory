@@ -28,6 +28,7 @@ tracker:
   review_trigger: factory:review
   risk_labels: { low: "risk:low", high: "risk:high" }
   docs_impact_label: docs-impact
+  bot_logins: []   # comment authors that never resume a waiting ticket
 
 channels: [local]
 
@@ -108,6 +109,7 @@ gates:
 limits:
   concurrent_deliveries: 2
   fix_rounds: 3
+  resume_cap: 3   # comment resumes of a waiting ticket before it stays for a person
   runs_per_day: 20
   environment_repair_attempts: 2
 

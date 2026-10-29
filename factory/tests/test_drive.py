@@ -681,7 +681,7 @@ class DriveRun(unittest.TestCase):
 
     def test_non_actionable_comment_stays_and_is_checked_once(self):
         self.blocked_ticket()
-        self.assertEqual(self.comment_loop("thanks", "no"), "")
+        self.assertEqual(self.comment_loop("thanks", "no"), "ticket 01: final: blocked\n")
         self.assertEqual(self.tr.get_state("01"), "blocked")
         self.assertEqual(self.loop(), "")  # the same comment is not rechecked
         self.assertEqual(self.calls("recheck"), 1)
