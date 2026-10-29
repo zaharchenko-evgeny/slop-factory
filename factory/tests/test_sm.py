@@ -39,8 +39,22 @@ class Delivery(unittest.TestCase):
         self.assertEqual((t["vars"]["risk"], t["vars"]["reviewed_sha"], t["vars"]["fix_round"]), ("high", "bbb", 2))
         t, rep = sm.step(self.m, t, "pr.merged", {"open_pr_urls": ["x"]})
         self.assertEqual((t["state"], rep["note"]), ("approved", "ignored: no transition matches"))
-        t, _ = sm.step(self.m, t, "pr.merged", {"open_pr_urls": []})
-        self.assertEqual(t["state"], "done")
+        t, rep = sm.step(self.m, t, "pr.merged", {"open_pr_urls": []})
+        self.assertEqual((t["state"], rep["note"], rep["wait"]), ("done", "through merged", "human"))
+
+    def test_post_merge_action_runs_in_merged(self):
+        raw = yaml.safe_load((sm.ROOT / "workflows/delivery.sm.yaml").read_text())
+        raw["actions"]["retro"] = {"kind": "agent", "role": "retro"}
+        for tr in raw["transitions"]:
+            if tr.get(True) == "pr.merged":  # YAML 1.1 reads a bare `on` key as true
+                tr["do"] = "retro"
+            if tr.get(True) == "enter":
+                tr[True] = "retro.done"
+        m = sm.validate(raw, CONFIG)
+        t, trace = sm.simulate(m, sm.new_ticket(m, {"state": "approved"}), [{"pr.merged": {"open_pr_urls": []}},
+                                                                            "retro.done"])
+        self.assertEqual([(r["from"], r["to"], r["run"]) for r in trace],
+                         [("approved", "merged", ["retro"]), ("merged", "done", [])])
 
     def test_failed_ci_is_a_fix_round_then_approved(self):
         t, trace = run_fixture(self.m, "ci-fix.yaml")

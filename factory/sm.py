@@ -10,7 +10,10 @@ in file order, whose `from`, `on` and `if` match. The transition applies `loop`
 and `set`, moves to `to` (default: stay) and starts `do`. Internal events are
 `<action>.<result>`; their payload is the action's handoff, kept in
 `out.<action>`. Actions run only in agent states; in human and external states
-the engine waits for an external event. See workflows/delivery.sm.yaml.
+the engine waits for an external event. A transition that enters an agent state
+without starting an action is followed, in the same step, by the built-in event
+`enter` when a transition from that state matches it (a pass-through state).
+See workflows/delivery.sm.yaml.
 """
 import argparse
 import copy
@@ -29,6 +32,7 @@ TYPES = {"int": int, "string": str, "list": list, "bool": bool, "map": dict}
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 TRANSITION_KEYS = {"from", "on", "if", "do", "set", "to", "loop"}
 MISSING = object()
+ENTER = "enter"  # built-in event: fired once when a transition enters an agent state with nothing to run
 
 
 class SMError(Exception):
@@ -295,7 +299,7 @@ def validate(sm, config=None):
             to = None
         on = t.get("on")
         action = str(on).rpartition(".")[0]
-        if not isinstance(on, str) or not (action in actions or action in forks or on in events):
+        if not isinstance(on, str) or not (action in actions or action in forks or on in events or on == ENTER):
             errs.append(f"{where}: on must be <action>.<result> or a declared external event")
         guard = check_expr(t["if"], f"{where} if") if "if" in t else None
         sets = {}
@@ -423,7 +427,13 @@ def step(m, ticket, event, payload=None):
     ctx = {**t["vars"], "out": t["out"], "event": payload}
     for tr in m["transitions"]:
         if src in tr["from"] and tr["on"] == event and (tr["if"] is None or truthy(evaluate(tr["if"], ctx))):
-            return fire(m, t, tr, ctx, src, event)
+            t, rep = fire(m, t, tr, ctx, src, event)
+            mid = t["state"]
+            if event != ENTER and not t["pending"] and m["states"][mid]["actor"] == "agent":
+                t, after = step(m, t, ENTER)
+                if not (after["note"] or "").startswith("ignored"):  # a transition matched: report the pass-through
+                    rep = report(m, t, src, event, f"through {mid}")
+            return t, rep
     if internal:
         raise SMError(f"event {event} in state {src}: no transition matches")
     return t, report(m, t, src, event, "ignored: no transition matches")

@@ -5,6 +5,8 @@
 #   actions only in `agent` states and waits in `human` and `external` states.
 # - `on` is `<action>.<result>` (the action's handoff becomes `out.<action>`)
 #   or a declared external event. The first matching transition wins.
+#   `enter` is built in: it fires once when a transition enters an agent state
+#   without starting an action (a pass-through state, e.g. `merged`).
 # - Only `set:` (and a `loop:` counter) changes vars.
 # - Guards and `set:` values are a JSONata subset: comparisons, and, or,
 #   $not(), field paths, $count(), $append(a, b), literals.
@@ -54,6 +56,7 @@ states:
   changes-requested: { actor: agent }
   in-review: { actor: agent }
   approved: { actor: human }   # gate 2: a human approves and merges
+  merged: { actor: agent }     # every PR merged: post-merge actions run here
   done: { actor: human }
   blocked: { actor: human }
   failed: { actor: human }
@@ -180,4 +183,8 @@ transitions:
     to: changes-requested
   - { from: in-review, on: ci.error, to: failed }
 
-  - { from: approved, on: pr.merged, if: "$count(event.open_pr_urls) = 0", to: done }
+  # `drive.py run` / `sync` fire pr.merged once every PR of the ticket is merged.
+  # Post-merge actions (none yet): set `do: <first>` here, chain them in `merged`,
+  # and replace the `enter` transition with `{ from: merged, on: <last>.done, to: done }`.
+  - { from: approved, on: pr.merged, if: "$count(event.open_pr_urls) = 0", to: merged }
+  - { from: merged, on: enter, to: done }

@@ -22,6 +22,7 @@ tracker:
     in-review: factory:in-review
     changes-requested: factory:changes-requested
     approved: factory:approved
+    merged: factory:merged
     done: factory:done
     blocked: factory:blocked
     failed: factory:failed
