@@ -93,6 +93,7 @@ REPLIES = {
     "full": "```text\nREVIEWER\nverdict: approved\nreviewed_sha: x\nrisk: low\ndocs_impact: no\nblocking:\nnits:\n```\n",
     "behaviour": "```text\nREVIEWER\nverdict: approved\nrisk: high\ndocs_impact: no\n```\n",
     "structure-security": "```text\nREVIEWER\nverdict: approved\nrisk: high\ndocs_impact: no\n```\n",
+    "record": "```text\nRETRO\nmanual_steps: |\n  - none\nlessons: |\n  - navigation: point to x — y\n```\n",
     "summary": "```text\nROUTER-SUMMARY\ncomplete: yes\ncomment: |\n  [factory] Summary line.\n  Factory-Run: r1\n```\n",
 }
 CHECKS = [{"name": "has-file", "stage": "pre-review", "mode": "blocking", "run": "test -f stub.txt"},
@@ -446,9 +447,38 @@ class DriveRun(unittest.TestCase):
         self.approved("01", "https://example.invalid/pull/7")
         (self.stub / "merged").write_text("https://example.invalid/pull/7\n")
         t, trace = drive.poll(self.root, "01", self.tr, "executor-a")
-        self.assertEqual((t["state"], trace[-1]["note"]), ("done", "through merged"))
-        self.assertEqual((self.tr.get_state("01"), self.stages[-1]), ("done", "done"))
+        self.assertEqual([(r["event"], r["to"]) for r in trace], [("pr.merged", "merged"), ("retro.done", "done")])
+        self.assertEqual((self.tr.get_state("01"), self.stages[-2:]), ("done", ["merged", "done"]))
         self.assertNotIn("claimed_by: executor-a", self.tr.path("01").read_text())  # released by the driver
+
+    def test_retro_entry_pushed_to_knowledge_inbox_after_the_merge(self):
+        self.go()
+        self.tr.release("01", "executor-b")
+        self.assertFalse((self.stub / "calls-record").exists())  # not before the merge
+        (self.stub / "merged").write_text("https://example.invalid/pull/7\n")
+        t, _ = drive.poll(self.root, "01", self.tr, "executor-a")
+        k = yaml.safe_load((self.root / "factory.yaml").read_text())["knowledge"]
+        rel = "knowledge/offline-eval-factory/retro-01-r1.md"
+        self.assertEqual((t["state"], t["out"]["retro"]["result"], t["out"]["retro"]["entry"]), ("done", "done", rel))
+        git("fetch", "-q", "origin", cwd=self.root)
+        entry = subprocess.run(["git", "show", f"origin/{k['branch']}:{rel}"], cwd=self.root, capture_output=True,
+                               text=True, check=True).stdout
+        for line in ("- cost: $", "- wall time: ", "- fix rounds: 0", "- blocking findings: 0",
+                     "- reviewer agreement: n/a", "- approver (dry-run): ", "- ci: passed", "navigation: point to x"):
+            self.assertIn(line, entry)
+        self.assertNotIn("knowledge/", subprocess.run(["git", "ls-tree", "-r", "--name-only", "origin/main"],
+                                                      cwd=self.root, capture_output=True, text=True).stdout)
+        self.assertIn("## numbers", (self.stub / "prompt-record").read_text())
+
+    def test_retro_counts_blocking_findings_per_reviewer_and_round(self):
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.run_dir.mkdir(parents=True)
+        block = {"verdict": "changes-requested", "blocking": "- id: B1\n  file: x"}
+        for name in ("review_behaviour", "review_structure_security", "review_behaviour-1"):
+            (d.run_dir / f"{name}.handoff.json").write_text(json.dumps(block))
+        numbers = d.run_numbers(sm.new_ticket(d.m))
+        self.assertIn("- blocking findings: 3 (", numbers)
+        self.assertIn("- reviewer agreement: 1/1 rounds", numbers)
 
     def only(self, *keep):
         """Drop the fixture tickets other than `keep`, so the loop sees only those."""
@@ -502,7 +532,7 @@ class DriveRun(unittest.TestCase):
         self.assertEqual(self.loop(), "ticket 01: final: approved\n")
         (self.stub / "merged").write_text("https://example.invalid/pull/7\n")
         self.assertEqual(self.loop(), "ticket 01: final: done\n")
-        self.assertEqual(self.stages, ["ready", "in-dev", "in-review", "qa-review", "approved", "done"])
+        self.assertEqual(self.stages, ["ready", "in-dev", "in-review", "qa-review", "approved", "merged", "done"])
 
     def test_entering_blocked_runs_diagnose_and_notify_once(self):
         (self.stub / "reply-implement").write_text("```text\nDEVELOPER\nstatus: blocked\nblocked_reason: x\n```\n")

@@ -6,7 +6,7 @@
 # - `on` is `<action>.<result>` (the action's handoff becomes `out.<action>`)
 #   or a declared external event. The first matching transition wins.
 #   `enter` is built in: it fires once when a transition enters an agent state
-#   without starting an action (a pass-through state, e.g. `merged`).
+#   without starting an action (a pass-through state).
 # - `on_enter` (human and external states only): actions the driver runs once
 #   when a ticket enters the state, best effort; their results fire no event.
 # - `drive.py loop` runs tickets in agent states and, in the other states,
@@ -54,6 +54,9 @@ actions:
   publish: { kind: script }
   ci: { kind: script, run: "blocking checks on the branch merged with the base, then the PR's CI checks" }
   summary: { kind: agent, role: router, mode: summary, retry: 1 }
+  # The retro role (roles/retro/role.md) judges in the factory root (the worktree is gone after the
+  # merge); the script writes the entry to factory.yaml `knowledge.branch`, never a default branch.
+  retro: { kind: script, role: retro, mode: record, cwd: root, retry: 1 }
   # on_enter actions: `diagnose` posts a short reason on the ticket; `notify`
   # sends one line to each factory.yaml `channels` entry.
   diagnose: { kind: agent, role: router, mode: diagnose, cwd: root, retry: 1 }
@@ -65,7 +68,7 @@ states:
   changes-requested: { actor: agent }
   in-review: { actor: agent }
   approved: { actor: human, on_enter: [notify] }   # gate 2: a human approves and merges
-  merged: { actor: agent }     # every PR merged: post-merge actions run here
+  merged: { actor: agent }     # every PR merged: post-merge actions (retro) run here
   done: { actor: human }
   blocked: { actor: human, on_enter: [diagnose, notify] }
   failed: { actor: human, on_enter: [diagnose, notify] }
@@ -193,7 +196,7 @@ transitions:
   - { from: in-review, on: ci.error, to: failed }
 
   # `drive.py run` / `loop` fire pr.merged (detector in factory.yaml `events`) once every PR is merged.
-  # Post-merge actions (none yet): set `do: <first>` here, chain them in `merged`,
-  # and replace the `enter` transition with `{ from: merged, on: <last>.done, to: done }`.
-  - { from: approved, on: pr.merged, if: "$count(event.open_pr_urls) = 0", to: merged }
-  - { from: merged, on: enter, to: done }
+  # Post-merge: the retro records the run; best effort, a failed retro still ends `done`.
+  - { from: approved, on: pr.merged, if: "$count(event.open_pr_urls) = 0", do: retro, to: merged }
+  - { from: merged, on: retro.done, to: done }
+  - { from: merged, on: retro.failed, to: done }
