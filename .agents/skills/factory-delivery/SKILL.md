@@ -34,7 +34,8 @@ after the stage moves to `approved`, the summary (posted on the ticket; the PR
 body becomes `Closes #N` when it says `complete: yes`) and, once CI passed, the
 worktree cleanup. The reviewers of a high-risk fork run in parallel. It prints each step and exits 0 at `approved`. After the human merges,
 `drive.py run "$N"` on the `approved` ticket (or `drive.py loop --once` for all
-of them) moves it through `merged` to `done`; while a PR is open it prints
+of them) moves it through `merged` (the retro entry, pushed to the
+`knowledge` branch) to `done`; while a PR is open it prints
 "waiting for pr.merged" and writes nothing. `drive.py loop` keeps every ticket
 moving from the machine alone: it runs tickets in agent states (frontier
 first) within `limits.concurrent_deliveries` and `limits.runs_per_day`, polls

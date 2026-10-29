@@ -40,21 +40,26 @@ class Delivery(unittest.TestCase):
         t, rep = sm.step(self.m, t, "pr.merged", {"open_pr_urls": ["x"]})
         self.assertEqual((t["state"], rep["note"]), ("approved", "ignored: no transition matches"))
         t, rep = sm.step(self.m, t, "pr.merged", {"open_pr_urls": []})
-        self.assertEqual((t["state"], rep["note"], rep["wait"]), ("done", "through merged", "human"))
+        self.assertEqual((t["state"], t["pending"]), ("merged", ["retro"]))
 
-    def test_post_merge_action_runs_in_merged(self):
+    def test_retro_runs_after_approved_in_merged(self):
+        for result in ("done", "failed"):  # best effort: a failed retro still ends done
+            t, trace = sm.simulate(self.m, sm.new_ticket(self.m, {"state": "approved"}),
+                                   [{"pr.merged": {"open_pr_urls": []}}, f"retro.{result}"])
+            self.assertEqual([(r["from"], r["to"], r["run"]) for r in trace],
+                             [("approved", "merged", ["retro"]), ("merged", "done", [])])
+            self.assertEqual(trace[-1]["wait"], "human")
+
+    def test_enter_passes_through_an_agent_state_without_actions(self):
         raw = yaml.safe_load((sm.ROOT / "workflows/delivery.sm.yaml").read_text())
-        raw["actions"]["retro"] = {"kind": "agent", "role": "retro"}
         for tr in raw["transitions"]:
             if tr.get(True) == "pr.merged":  # YAML 1.1 reads a bare `on` key as true
-                tr["do"] = "retro"
-            if tr.get(True) == "enter":
-                tr[True] = "retro.done"
+                tr.pop("do")
+            if tr.get(True) == "retro.done":
+                tr[True] = "enter"
         m = sm.validate(raw, CONFIG)
-        t, trace = sm.simulate(m, sm.new_ticket(m, {"state": "approved"}), [{"pr.merged": {"open_pr_urls": []}},
-                                                                            "retro.done"])
-        self.assertEqual([(r["from"], r["to"], r["run"]) for r in trace],
-                         [("approved", "merged", ["retro"]), ("merged", "done", [])])
+        t, rep = sm.step(m, sm.new_ticket(m, {"state": "approved"}), "pr.merged", {"open_pr_urls": []})
+        self.assertEqual((t["state"], rep["note"], rep["wait"]), ("done", "through merged", "human"))
 
     def test_entering_a_state_sets_its_on_enter_hooks_once(self):
         t, _ = sm.step(self.m, sm.new_ticket(self.m, {"state": "in-dev", "pending": ["implement"]}), "implement.blocked")
