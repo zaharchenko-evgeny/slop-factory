@@ -322,10 +322,11 @@ class Delivery:
         out = t["out"]
         ci = "passed" if (out.get("checks") or {}).get("result") == "passed" else "unknown"
         a = approver.decide(self.root, self.config, self.wt, base, {r: out[r] for r in REVIEWERS if r in out}, ci,
-                            t["vars"]["risk"], f"{i['title']}\n\n{i.get('body') or ''}")
+                            t["vars"]["risk"], f"{i['title']}\n\n{i.get('body') or ''}",
+                            i.get("labels") or (), (out.get("intake") or {}).get("complexity") or "")
         path = self.run_dir / f"approve-{t['vars']['fix_round']}.json"
         path.write_text(json.dumps(a["summary"], indent=2))
-        self.tracker.comment(self.nn, "\n".join([f"[factory] Approver (dry-run): {a['verdict']}", "",
+        self.tracker.comment(self.nn, "\n".join([f"[factory] Approver{' (dry-run)' * bool(self.config['roles']['approver'].get('dry_run', True))}: {a['verdict']}", "",
                                                  *approval_lines(a), "", self.trailer(t)]))
         return "done", {"verdict": a["verdict"], "reasons": a["reasons"], "summary": str(path)}
 
@@ -360,7 +361,30 @@ class Delivery:
                 break
         path = self.run_dir / f"ci-{t['vars']['fix_round']}.md"
         path.write_text(text)
-        return status, {"ci": text.splitlines()[0] if text else status, "report": str(path)}
+        hold = self.config["tracker"].get("hold_label", "factory:hold")
+        merge = status == "passed" and approver.may_merge(self.config, t["vars"]["risk"],
+                                                          self.issue()[0].get("labels") or (), hold)
+        return status, {"ci": text.splitlines()[0] if text else status, "report": str(path),
+                        "merge": "yes" if merge else "no"}
+
+    def merge(self, t):
+        """Auto-merge: `moved` when the branch head or the base is not the one that was reviewed and checked,
+        `failed` when the blocking checks fail on the branch merged with the base, else merge every PR
+        pinned to the reviewed head (`gh` refuses a moved head: `failed`). A ticket that did not merge goes to `approved`."""
+        base, sha = self.issue()[1], t["vars"]["reviewed_sha"]
+        sh(["git", "fetch", "origin", base], self.root)
+        before = sh(["git", "rev-parse", f"origin/{base}"], self.root)
+        if sh(["git", "rev-parse", "HEAD"], self.wt).strip() != sha:
+            return "moved", {"error": f"the branch head is not the reviewed {sha}"}
+        status, text = self.merged_checks(base)
+        sh(["git", "fetch", "origin", base], self.root)
+        if status != "passed":
+            return "failed", {"error": text.splitlines()[0]}
+        if sh(["git", "rev-parse", f"origin/{base}"], self.root) != before:
+            return "moved", {"error": f"origin/{base} moved during the checks"}
+        for url in t["vars"]["pr_urls"]:
+            sh([gh(), "pr", "merge", url, "--merge", "--match-head-commit", sha], self.root)
+        return "done", {"merged": t["vars"]["pr_urls"]}
 
     def merged_checks(self, base):
         """(`passed` | `failed`, report): the blocking checks on HEAD merged with origin/<base>, in a
@@ -751,7 +775,7 @@ def run_ticket(root, nn, tracker, executor, run_id=None, resume=False, results=(
         d.log_merge()
     t, trace = drive(d.m, tracker, nn, executor, results, execute=d, resume=resume, on_step=d.on_step)
     d.save(t)  # sm.json shows the final stage
-    if trace and trace[-1]["event"] in ("ci.passed", "ci.pending"):  # only the run that reached approved
+    if trace and trace[-1]["event"] in ("ci.passed", "ci.pending", "merge.moved", "merge.failed"):  # only the run that reached approved
         d.summarize(t, trace)
     if t["hooks"]:
         t = d.hooks(t)

@@ -139,10 +139,35 @@ class Decide(Env):
         self.assertEqual((a["verdict"], a["reasons"]), ("needs-human", ["touches .github/workflows/ci.yml"]))
         self.assertFalse((self.tmp / "decide-args").exists())  # soft rules only after the hard ones pass
 
-    def test_dry_run_off_is_refused(self):
+    def live(self, **am):
+        a = {**CONFIG["roles"]["approver"], "dry_run": False, "auto_merge": {"enabled": True, **am}}
+        return {**CONFIG, "roles": {**CONFIG["roles"], "approver": a}}
+
+    def test_dry_run_off_needs_auto_merge_enabled(self):
         config = {**CONFIG, "roles": {**CONFIG["roles"], "approver": {**CONFIG["roles"]["approver"], "dry_run": False}}}
         with self.assertRaises(ValueError):
             approver.decide(sm.ROOT, config, self.wt, "main", {}, "passed", "low", "ticket")
+
+    @unittest.skipUnless(shutil.which("conftest"), "conftest is not installed; skipping the verdict test")
+    def test_live_hard_rules_approve_without_the_judge_and_judgment_waits(self):
+        self.commit({"docs/x.md": "doc\n"})
+        reviews = {"review_full": {"verdict": "approved"}}
+        a = approver.decide(sm.ROOT, self.live(require="hard-rules"), self.wt, "main", reviews, "passed", "low", "t",
+                            ["x"], "low")
+        self.assertEqual((a["verdict"], a["reasons"], a["summary"]["labels"], a["summary"]["complexity"]),
+                         ("auto-approve", [], ["x"], "low"))
+        self.assertFalse((self.tmp / "decide-args").exists())  # the judge did not run
+        for require in ("judgment", {"low": "judgment"}):
+            a = approver.decide(sm.ROOT, self.live(require=require), self.wt, "main", reviews, "passed", "low", "t")
+            self.assertEqual(a["verdict"], "needs-human")
+
+    def test_may_merge_checks_enabled_risk_and_hold(self):
+        on = self.live(max_risk="low")
+        self.assertTrue(approver.may_merge(on, "low", []))
+        self.assertFalse(approver.may_merge(on, "low", ["factory:hold"]))
+        self.assertFalse(approver.may_merge(on, "medium", []))
+        self.assertFalse(approver.may_merge(CONFIG, "low", []))  # default: disabled
+        self.assertEqual(approver.require({"auto_merge": {"require": {"low": "hard-rules"}}}, "low"), "hard-rules")
 
 
 if __name__ == "__main__":

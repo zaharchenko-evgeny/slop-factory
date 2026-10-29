@@ -6,8 +6,8 @@ auto-merge on safely.
 
 Status:
 
-- **Exists now:** the hard rules, the LLM judge, and the approver in dry-run. The verdict is recorded on the PR and the ticket, and a person still merges.
-- **Planned in #91:** the `auto_merge` setting, the `merge` action, the `factory:hold` label, and the `labels` and `complexity` facts.
+- **Exists now:** the hard rules, the LLM judge, the approver, the `auto_merge` setting, the `merge` action, the `factory:hold` label, and the `labels` and `complexity` facts (#91). `dry_run: false` is accepted with `require: hard-rules`; a level that needs `judgment` stays `needs-human` until the judgment is calibrated. `auto_merge.enabled` is `false` by default.
+- `complexity` is read from the intake handoff when it reports one (#88), else it is empty.
 
 ## How the approver decides
 
@@ -34,7 +34,7 @@ are no reasons. Otherwise it is `needs-human`.
  "dependency_changes": [], "labels": ["..."], "complexity": "low"}
 ```
 
-`labels` and `complexity` are added in #91. Today's rules deny a PR when:
+Today's rules deny a PR when:
 
 - there is no reviewer report, or a reviewer did not approve
 - CI did not pass
@@ -113,7 +113,7 @@ is a one-line change.
 `drive.py report` (#83) helps here: it lists each ticket's approval verdict
 next to its outcome.
 
-## Layer 3: the combine rule (#91)
+## Layer 3: the combine rule 
 
 ```yaml
 roles:
@@ -134,7 +134,7 @@ roles:
 | `hard-rules` | the Rego rules pass, CI passed, every reviewer approved | now |
 | `judgment` | all of the above, and every judge question is `decided` `yes` | after calibration |
 
-## What happens on a merge (#91)
+## What happens on a merge
 
 In the delivery workflow, a new transition comes before the human gate:
 
@@ -163,4 +163,4 @@ The `merge` action:
 - **The gate cannot loosen itself.** `policies/`, `judgments/` and `factory.yaml` are on the blocked list, so any change to the criteria, including one the factory proposes in its weekly improvement (#64), needs a person to merge it (ADR-0007).
 - **Kill switches.** The `factory:hold` label on a ticket, or `enabled: false`, sends every PR to a person.
 - **Fail closed.** A missing `conftest` or `decide`, an unavailable engine, or unreadable output is a reason, never an approval.
-- **Two human gates** (ADR-0001) are amended in #91: gate 2 is a human merge unless this policy passes.
+- **Two human gates** (ADR-0001) are amended (#91): gate 2 is a human merge unless this policy passes.
