@@ -55,7 +55,7 @@ import yaml
 import harnesses
 import model_access
 import runlog
-import sm
+import sm_v1 as sm
 
 TOOLS = {"router": "read,grep,find,ls", "developer": "read,bash,edit,write,grep,find,ls",
          "reviewer": "read,bash,grep,find,ls", "doc-writer": "read,bash,edit,write,grep,find,ls",
@@ -215,7 +215,7 @@ def ticket_data(repo, n):
 def run(root, ticket, action, step=None, ticket_text=None):
     root = Path(root).resolve()
     config = yaml.safe_load((root / "factory.yaml").read_text())
-    m = sm.load_machine(root / "workflows/delivery.sm.yaml", root / "factory.yaml")
+    m = sm.load_machine(root / "workflows/delivery.v1.sm.yaml", root / "factory.yaml")
     spec, local = m["actions"][action], config["targets"]["local"]
     role, step = spec["role"], step or action
     run_dir = root / local["run_dir"] / str(ticket)
@@ -338,7 +338,7 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, ticket, ext
 def main(argv=None):
     p = argparse.ArgumentParser(prog="run_role.py", description=__doc__.splitlines()[0])
     p.add_argument("ticket")
-    p.add_argument("action", help="an agent action of workflows/delivery.sm.yaml")
+    p.add_argument("action", help="an agent action of workflows/delivery.v1.sm.yaml")
     p.add_argument("--step", help="file stem in the run dir, e.g. review_full-2 (default: the action)")
     args = p.parse_args(argv)
     return run(sm.ROOT, args.ticket, args.action, args.step)

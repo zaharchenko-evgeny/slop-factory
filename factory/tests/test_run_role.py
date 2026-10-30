@@ -22,7 +22,7 @@ sys.path.insert(0, str(HERE.parent))
 import model_access  # noqa: E402
 import preflight  # noqa: E402
 import run_role  # noqa: E402
-import sm  # noqa: E402
+import sm_v1 as sm  # noqa: E402
 
 # Before the call count reaches $STUB_OK_AT it prints nothing, or with STUB_PROSE=1 a handoff
 # followed by prose, with STUB_UNFENCED=1 an unfenced handoff followed by prose; records argv and cwd per call.

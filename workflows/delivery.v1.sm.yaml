@@ -1,0 +1,238 @@
+# Delivery workflow as a state machine. `factory/sm.py validate` checks it;
+# `sm.py next` and `sm.py simulate` run it. Semantics: factory/sm.py docstring.
+#
+# - States are tracker stages (factory.yaml `tracker.stages`). The engine runs
+#   actions only in `agent` states and waits in `human` and `external` states.
+# - `on` is `<action>.<result>` (the action's handoff becomes `out.<action>`)
+#   or a declared external event. The first matching transition wins.
+#   `enter` is built in: it fires once when a transition enters an agent state
+#   without starting an action (a pass-through state).
+# - `on_enter` (human and external states only): actions the driver runs once
+#   when a ticket enters the state, best effort; their results fire no event.
+# - `drive.py loop` runs tickets in agent states and, in the other states,
+#   polls the external events of their transitions that have a detector in
+#   factory.yaml `events`.
+# - `resume_on: comment` (human states): the driver also watches the ticket's comments. Each new one
+#   that is not a `[factory]` comment or from a `tracker.bot_logins` login is rechecked once (router
+#   `recheck`) and fired as `comment.added` with `actionable: yes|no`; `yes` returns the ticket to `ready`,
+#   at most `limits.resume_cap` times Only OWNER, MEMBER and COLLABORATOR comments count.
+# - Only `set:` (and a `loop:` counter) changes vars.
+# - Guards and `set:` values are a JSONata subset: comparisons, and, or,
+#   $not(), field paths, $count(), $append(a, b), literals.
+version: 1
+initial: ready
+
+vars:
+  fix_round: { type: int, default: 0 }
+  reviewed_sha: { type: string, default: "" }
+  last_blocking_ids: { type: list, default: [] }
+  risk: { type: string, default: "low" }
+  branch: { type: string, default: "" }
+  pr_urls: { type: list, default: [] }
+  run_id: { type: string, default: "" }
+  approval: { type: string, default: "" }
+  resumes: { type: int, default: 0 }
+  checked_comment: { type: int, default: 0 }   # id of the last comment rechecked
+
+# External events from the tracker and the forge bridges.
+events: [stage.ready, pr.merged, comment.added]
+
+# Results: script actions end `done` or `failed` (`ci`: `passed`, `pending`,
+# `failed`, or `error` when it cannot read CI); agent actions end with their
+# handoff status (`done`, `blocked`) or `error` for a missing or malformed
+# handoff, which `retry` reruns.
+actions:
+  preflight: { kind: script }
+  intake: { kind: agent, role: router, mode: intake, cwd: root, retry: 1 }
+  start: { kind: script }
+  implement: { kind: agent, role: developer, mode: implement, tier_by: risk, retry: 1 }
+  checks: { kind: script, run: "factory.yaml checks, stage pre-review; only blocking ones fail" }
+  # Reviewer focuses are modes of the reviewer role; factory.yaml
+  # `roles.reviewer.modes` gives each its model and fallback.
+  review_full: { kind: agent, role: reviewer, mode: full, session: fresh, retry: 1 }
+  review_behaviour: { kind: agent, role: reviewer, mode: behaviour, session: fresh, retry: 1 }
+  review_structure_security: { kind: agent, role: reviewer, mode: structure-security, session: fresh, retry: 1 }
+  fix: { kind: agent, role: developer, mode: fix, session: resume, retry: 1 }
+  # The doc-writer (roles/doc-writer/role.md) updates the docs on the branch when a reviewer reports docs_impact.
+  document: { kind: agent, role: doc-writer, mode: update, retry: 1 }
+  # The approver role (roles/approver/role.md): hard rules, then the soft judgment; dry-run only.
+  approve: { kind: script, role: approver }
+  publish: { kind: script }
+  # Auto-merge (roles.approver.auto_merge): blocking checks on the branch merged with the base, then `gh pr merge`
+  # pinned to the reviewed head. Results: `done`, `moved` (head or base changed), `failed`.
+  merge: { kind: script }
+  ci: { kind: script, run: "blocking checks on the branch merged with the base, then the PR's CI checks" }
+  summary: { kind: agent, role: router, mode: summary, retry: 1 }
+  # The retro role (roles/retro/role.md) judges in the factory root (the worktree is gone after the
+  # merge); the script writes the entry to factory.yaml `knowledge.branch`, never a default branch.
+  retro: { kind: script, role: retro, mode: record, cwd: root, retry: 1 }
+  # Weekly, outside any ticket (`drive.py distill`): the distill role (roles/distill/role.md) merges the
+  # knowledge inbox in its own worktree; the script opens one PR to the default branch. No ticket input.
+  distill: { kind: agent, role: distill, mode: merge, ticket: none, retry: 1 }
+  # on_enter actions: `diagnose` posts a short reason on the ticket; `notify`
+  # sends one line to each factory.yaml `channels` entry.
+  diagnose: { kind: agent, role: router, mode: diagnose, cwd: root, retry: 1 }
+  notify: { kind: script }
+  # Cheap check of new comments in a `resume_on` state; run by the driver, outside the machine.
+  recheck: { kind: agent, role: router, mode: recheck, cwd: root, retry: 1 }
+
+states:
+  ready: { actor: agent }
+  in-dev: { actor: agent }
+  changes-requested: { actor: agent }
+  in-review: { actor: agent }
+  approved: { actor: human, on_enter: [notify] }   # gate 2: a human approves and merges
+  merged: { actor: agent }     # every PR merged: post-merge actions (retro) run here
+  done: { actor: human }
+  blocked: { actor: human, on_enter: [diagnose, notify], resume_on: comment }
+  failed: { actor: human, on_enter: [diagnose, notify] }
+
+transitions:
+  - { from: ready, on: stage.ready, set: { run_id: event.run_id }, do: preflight }
+  - { from: ready, on: preflight.done, do: intake }
+  - { from: ready, on: preflight.failed, to: blocked }
+  # A split proposal (above ~400 lines) or `next: blocked` stops here; `hooks` posts the proposal.
+  - from: ready
+    on: intake.done
+    if: 'out.intake.ready = "yes" and out.intake.split != "none" and out.intake.split != null'
+    to: blocked
+  - from: ready
+    on: intake.done
+    if: 'out.intake.ready = "yes" and out.intake.next = "blocked"'
+    to: blocked
+  - from: ready
+    on: intake.done
+    if: 'out.intake.ready = "yes"'
+    set: { risk: out.intake.risk }
+    do: start
+    to: in-dev
+  - { from: ready, on: intake.done, to: blocked }   # not ready: the question goes on the ticket
+  - { from: ready, on: intake.error, to: failed }
+
+  - { from: in-dev, on: start.done, set: { branch: out.start.branch }, do: implement }
+  - { from: in-dev, on: start.failed, to: failed }
+  - { from: in-dev, on: implement.done, do: checks }
+  - { from: in-dev, on: implement.blocked, to: blocked }
+  - { from: in-dev, on: implement.error, to: failed }
+
+  # Reviewers by risk: the fork `review` runs them and joins when all report.
+  # Each reviewer's latest handoff stays in out.<action> across rounds.
+  - from: in-dev
+    on: checks.passed
+    if: 'risk = "high"'
+    do: { parallel: [review_behaviour, review_structure_security], join: all, name: review }
+    to: in-review
+  - { from: in-dev, on: checks.passed, do: { parallel: [review_full], join: all, name: review }, to: in-review }
+  # A re-review runs only the reviewers whose latest verdict blocked.
+  - from: changes-requested
+    on: checks.passed
+    if: 'out.review_behaviour.verdict = "changes-requested" and out.review_structure_security.verdict = "changes-requested"'
+    do: { parallel: [review_behaviour, review_structure_security], join: all, name: review }
+    to: in-review
+  - from: changes-requested
+    on: checks.passed
+    if: 'out.review_behaviour.verdict = "changes-requested"'
+    do: { parallel: [review_behaviour], join: all, name: review }
+    to: in-review
+  - from: changes-requested
+    on: checks.passed
+    if: 'out.review_structure_security.verdict = "changes-requested"'
+    do: { parallel: [review_structure_security], join: all, name: review }
+    to: in-review
+  # No reviewer blocked (a CI fix round): re-run the reviewers of the ticket's risk.
+  - from: changes-requested
+    on: checks.passed
+    if: 'risk = "high" and $not(out.review_full.verdict = "changes-requested")'
+    do: { parallel: [review_behaviour, review_structure_security], join: all, name: review }
+    to: in-review
+  - { from: changes-requested, on: checks.passed, do: { parallel: [review_full], join: all, name: review }, to: in-review }
+
+  # A failed blocking check sends the work back to the developer as a fix round.
+  - from: [in-dev, changes-requested]
+    on: checks.failed
+    loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
+    do: fix
+  - { from: [in-dev, changes-requested], on: fix.done, do: checks }
+  - { from: [in-dev, changes-requested], on: fix.blocked, to: blocked }
+  - { from: [in-dev, changes-requested], on: fix.error, to: failed }
+
+  # Merge at the join: blocked when any reviewer blocks; the ticket's risk is
+  # the highest any reviewer reports (high is the top, it never lowers). All
+  # reviewers review HEAD, so the last report's reviewed_sha is the round's.
+  # Any reviewer's docs_impact runs the doc-writer before the approver.
+  - from: in-review
+    on: review.done
+    if: '$not(out.review_full.verdict = "changes-requested" or out.review_behaviour.verdict = "changes-requested" or out.review_structure_security.verdict = "changes-requested") and (out.review_full.risk = "high" or out.review_behaviour.risk = "high" or out.review_structure_security.risk = "high") and (out.review_full.docs_impact = "yes" or out.review_behaviour.docs_impact = "yes" or out.review_structure_security.docs_impact = "yes")'
+    set: { reviewed_sha: event.reviewed_sha, risk: '"high"' }
+    do: document
+  - from: in-review
+    on: review.done
+    if: '$not(out.review_full.verdict = "changes-requested" or out.review_behaviour.verdict = "changes-requested" or out.review_structure_security.verdict = "changes-requested") and (out.review_full.docs_impact = "yes" or out.review_behaviour.docs_impact = "yes" or out.review_structure_security.docs_impact = "yes")'
+    set: { reviewed_sha: event.reviewed_sha }
+    do: document
+  - from: in-review
+    on: review.done
+    if: '$not(out.review_full.verdict = "changes-requested" or out.review_behaviour.verdict = "changes-requested" or out.review_structure_security.verdict = "changes-requested") and (out.review_full.risk = "high" or out.review_behaviour.risk = "high" or out.review_structure_security.risk = "high")'
+    set: { reviewed_sha: event.reviewed_sha, risk: '"high"' }
+    do: approve
+  - from: in-review
+    on: review.done
+    if: '$not(out.review_full.verdict = "changes-requested" or out.review_behaviour.verdict = "changes-requested" or out.review_structure_security.verdict = "changes-requested")'
+    set: { reviewed_sha: event.reviewed_sha }
+    do: approve
+  # The same blocking findings in two consecutive rounds: stop.
+  - from: in-review
+    on: review.done
+    if: '$count(last_blocking_ids) > 0 and $append(out.review_full.blocking_ids, $append(out.review_behaviour.blocking_ids, out.review_structure_security.blocking_ids)) = last_blocking_ids'
+    to: blocked
+  - from: in-review
+    on: review.done
+    if: 'out.review_full.risk = "high" or out.review_behaviour.risk = "high" or out.review_structure_security.risk = "high"'
+    loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
+    set: { reviewed_sha: event.reviewed_sha, last_blocking_ids: '$append(out.review_full.blocking_ids, $append(out.review_behaviour.blocking_ids, out.review_structure_security.blocking_ids))', risk: '"high"' }
+    do: fix
+    to: changes-requested
+  - from: in-review
+    on: review.done
+    loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
+    set: { reviewed_sha: event.reviewed_sha, last_blocking_ids: '$append(out.review_full.blocking_ids, $append(out.review_behaviour.blocking_ids, out.review_structure_security.blocking_ids))' }
+    do: fix
+    to: changes-requested
+  - { from: in-review, on: review.failed, to: failed }   # a reviewer's handoff stayed missing after retry and fallback
+  - { from: in-review, on: document.done, do: approve }
+  - { from: in-review, on: document.blocked, to: blocked }
+  - { from: in-review, on: document.error, to: failed }
+  # Dry-run: either verdict publishes; the PR body and the ticket record it, a human still merges.
+  - { from: in-review, on: approve.done, set: { approval: out.approve.verdict }, do: publish }
+  - { from: in-review, on: approve.failed, to: failed }
+  # The driver runs the `summary` action after `ci` moves the ticket to approved (best effort, not an event).
+  - { from: in-review, on: publish.done, set: { pr_urls: out.publish.pr_urls }, do: ci }
+  - { from: in-review, on: publish.failed, to: failed }
+  # Failed CI, or blocking checks failing on the merge with the base, is a fix round; pending CI stays as before.
+  # `out.ci.merge` is `yes` when auto-merge is enabled, the risk is within max_risk and the ticket has no hold label.
+  - { from: in-review, on: ci.passed, if: 'approval = "auto-approve" and out.ci.merge = "yes"', do: merge }
+  - { from: in-review, on: ci.passed, to: approved }
+  - { from: in-review, on: ci.pending, to: approved }
+  - from: in-review
+    on: ci.failed
+    loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
+    do: fix
+    to: changes-requested
+  - { from: in-review, on: ci.error, to: failed }
+  - { from: in-review, on: merge.done, do: retro, to: merged }
+  - { from: in-review, on: merge.moved, to: approved }   # a human decides
+  - { from: in-review, on: merge.failed, to: approved }
+
+  # `drive.py run` / `loop` fire pr.merged (detector in factory.yaml `events`) once every PR is merged.
+  # Post-merge: the retro records the run; best effort, a failed retro still ends `done`.
+  - { from: approved, on: pr.merged, if: "$count(event.open_pr_urls) = 0", do: retro, to: merged }
+  - { from: merged, on: retro.done, to: done }
+  - { from: merged, on: retro.failed, to: done }
+
+  # A new actionable comment on a waiting ticket: back to `ready`, intake runs again; a non-actionable one
+  # matches nothing. At `limits.resume_cap` resumes the ticket stays for a person.
+  - from: blocked
+    on: comment.added
+    if: 'event.actionable = "yes"'
+    loop: { counter: resumes, max: limits.resume_cap, on_exhausted: blocked }
+    to: ready

@@ -19,7 +19,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import approver  # noqa: E402
-import sm  # noqa: E402
+import sm_v1 as sm  # noqa: E402
 
 FIX = HERE / "fixtures/approver"
 CONFIG = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())

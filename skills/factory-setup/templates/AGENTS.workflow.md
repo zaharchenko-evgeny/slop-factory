@@ -18,8 +18,8 @@ change, whether you are a person, a pi session or a factory role.
 3. **Split large tickets.** Above about 400 lines, or 3 repositories, split the
    ticket into linked sub-issues before starting. Deliver the first slice.
 4. **Deliver through the factory.** A ticket in `ready` runs through
-   [workflows/delivery.sm.yaml](workflows/delivery.sm.yaml), driven by
-   `factory/sm.py` and the `factory-delivery` skill: router intake →
+   [workflows/delivery.v1.sm.yaml](workflows/delivery.v1.sm.yaml), driven by
+   `factory/sm_v1.py` and the `factory-delivery` skill: router intake →
    developer in `.factory/worktrees/<issue>` → pre-review checks from
    [factory.yaml](factory.yaml) → reviewers chosen by risk (one for
    `risk:low`, behaviour plus structure-security for `risk:high`, each in its
