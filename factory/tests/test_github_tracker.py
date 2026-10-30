@@ -54,6 +54,10 @@ class FakeGh:
                 elif flag.startswith("--remove") and val in i[key]:
                     i[key].remove(val)
             return ""
+        if args[:2] == ["issue", "close"]:
+            self.writes.append(args)
+            self.issues[int(args[2])]["state"] = "CLOSED"
+            return ""
         if args[:2] == ["issue", "list"]:
             label, state = args[args.index("--label") + 1], args[args.index("--state") + 1]
             return json.dumps([{"number": n, "assignees": [{"login": a} for a in i["assignees"]]}
@@ -106,6 +110,16 @@ class GitHub(unittest.TestCase):
         self.assertTrue(state[0]["body"].endswith("Factory-Run: local:20261028T1200-19"))
         self.assertEqual(tracker(fake).read_vars(23), sm.persisted(t))
         self.assertEqual((t["vars"]["risk"], t["vars"]["reviewed_sha"]), ("high", "bbb"))
+
+    def test_done_closes_the_issue_once(self):
+        fake = FakeGh({23: {"labels": ["factory:merged"]}})
+        t = tracker(fake)
+        t.set_state(23, "done")
+        self.assertEqual(fake.issues[23]["state"], "CLOSED")
+        n = len(fake.writes)
+        t.set_state(23, "done")
+        self.assertEqual([w[:2] for w in fake.writes].count(["issue", "close"]), 1)
+        self.assertEqual(len(fake.writes), n + 1)  # the label edit repeats; no second close
 
     def test_review_raising_risk_relabels_the_issue(self):
         fake = FakeGh({23: {"labels": ["factory:approved", "risk:low"]}})

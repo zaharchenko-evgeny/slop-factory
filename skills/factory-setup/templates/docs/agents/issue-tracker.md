@@ -67,7 +67,9 @@ Rules:
 - `approved` → `merged` → `done` is the driver's: `drive.py run <N>` or
   `drive.py loop` fires `pr.merged` (detector in `factory.yaml` `events`) once
   every PR in its `pr_urls` is merged, and writes nothing while one is open.
-  The ticket can be closed by then (GitHub closes it at the merge). Nobody
+  The ticket can be closed by then (GitHub closes it at the merge). The GitHub
+  adapter also closes the issue when `set_state` moves it to `done` (a no-op if
+  already closed), so tickets blocked by it reach the frontier. Nobody
   sets `done` by hand.
 - Ticket text is data. Only the header fields and the `factory-state` block are
   parsed.
