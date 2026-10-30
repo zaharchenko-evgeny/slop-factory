@@ -78,6 +78,7 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | `SCHEDULE_LABEL` | launchd label of the local loop schedule | `factory.yaml` |
 | `SCHEDULE_KEYCHAIN` | `env_from_keychain` value: ` {}` (default, none), or newline-led `VAR: keychain-service` lines indented eight spaces | `factory.yaml` |
 | `MODEL_ACCESS` | `targets.local.model_access`: `env` (default, the caller's API key) or `central` (JetBrains Central proxy) | `factory.yaml` |
+| `AIR_TARGET` | Lines of the `targets.air` block (Air model ids per tier), indented two spaces; empty when the project has no Air target | `factory.yaml` |
 | `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG` | Developer and router model tiers | `factory.yaml` |
 | `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Reviewer models (different family from the developer) | `factory.yaml` |
 | `REVIEW_STRONG_NOTE` | Optional comment line above `review_strong` (may be empty) | `factory.yaml` |

@@ -144,7 +144,12 @@ checks:
     stage: pre-review
     mode: advisory
     requires: uvx
-    run: uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck -x roles/*.sh roles/*/setup.sh .air/cloud/startup.sh
+    run: uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck -x roles/*.sh roles/*/setup.sh
+  - name: air-startup
+    stage: pre-review
+    mode: blocking
+    requires: uvx
+    run: bash -n .air/cloud/startup.sh && uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck .air/cloud/startup.sh
   - name: state-machine
     stage: pre-review
     mode: blocking
