@@ -86,12 +86,15 @@ class GitHubTracker:
         return found[0] if found else ""
 
     def set_state(self, n, state):
-        labels = {lb["name"] for lb in self._issue(n)["labels"]}
+        issue = self._issue(n)
+        labels = {lb["name"] for lb in issue["labels"]}
         flags = ["--add-label", self.stages[state]]  # KeyError for a non-stage
         for label in self.stages.values():
             if label in labels and label != self.stages[state]:
                 flags += ["--remove-label", label]
         self._edit(n, *flags)
+        if state == "done" and issue.get("state", "OPEN") == "OPEN":  # unblocks the tickets blocked by this one
+            self.run(["issue", "close", str(n), "-R", self.repo])
 
     def set_review_labels(self, n, risk, docs_impact=False):
         """Set the one `tracker.risk_labels` label for `risk`; add the docs-impact label when asked."""
