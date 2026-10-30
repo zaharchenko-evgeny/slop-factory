@@ -56,6 +56,7 @@ targets:
       # Env var → macOS Keychain service, read by the job at run time (names only, never values);
       # ignored with model_access: central.
       env_from_keychain:{{SCHEDULE_KEYCHAIN}}
+{{AIR_TARGET}}
 
 # Model tiers (design §10a). Escalate one tier only after a failure.
 models:

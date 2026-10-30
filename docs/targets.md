@@ -54,7 +54,7 @@ name prefix, so only factory-owned automations are planned, updated or pruned.
 | Harness | `pi` for every role (`roles.<role>.harness`) | `claude-code` or `codex` adapter (#76) with the models Air provides |
 | Model access | JetBrains Central proxy (`model_access: central`) | Air's own model access |
 | Secrets | none for models; `gh` login of the user | Project environment secrets, names only: `GITHUB_TOKEN`, decisions-kit auth |
-| Tools | installed on the machine | installed in the environment's setup script: `uv`, `gh`, `conftest`, `decide`, the harness CLI |
+| Tools | installed on the machine | installed in the environment's setup script: `uv`, `gh`, `conftest`, `decide`, the harness CLI; `.air/cloud/startup.sh` installs `conftest` and `decide`, and `JetBrains/jbeval` is an additional repository of every automation that runs the approver |
 | Logs | `.factory/runs/<N>/`, `.factory/runs/loop/loop.log` | Run page in Air plus the same run files in the run's workspace |
 
 ## Known Air limits that shape the design
