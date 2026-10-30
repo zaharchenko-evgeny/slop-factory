@@ -174,10 +174,10 @@ def parse_pi_output(raw):
 
 
 def skill_dirs(root, role):
-    """The dir of each name in the role's skills.txt, found where setup.sh looks."""
+    """The dir of each name in the role's skills.txt, from skills/vendor/ first, then where setup.sh looks."""
     dirs = []
     for name in (root / "roles" / role / "skills.txt").read_text().split():
-        for d in (root / ".agents/skills", Path.home() / ".agents/skills", Path.home() / ".pi/agent/skills",
+        for d in (root / "skills/vendor", root / ".agents/skills", Path.home() / ".agents/skills", Path.home() / ".pi/agent/skills",
                   Path.home() / ".pi/agent/npm/node_modules"):
             hit = next(d.glob(f"**/{name}/SKILL.md"), None) if d.is_dir() else None
             if hit:

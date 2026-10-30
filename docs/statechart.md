@@ -123,6 +123,11 @@ ticket number and the event kind. Both read the current truth from GitHub.
 7. Consume the trigger. A command label is removed before the work starts, and an intent is cleared
    when `dispatch` applies it. A duplicate delivery then finds nothing to consume.
 
+`gate.py check` (#107) returns the role's vendored skills next to `role_file`: `"skills":
+["skills/vendor/<name>", ...]`, one per name in `roles/<role>/skills.txt`. The agent reads `role_file`, then each
+`<dir>/SKILL.md`, and resolves the skill's relative links against its directory. Vendored skills stay out of
+`.claude/skills/` and `.agents/skills/`, so no role auto-loads another role's skills.
+
 `end` checks that the lease ref still points to its own commit, then reads the handoff, evaluates the
 guards, writes the vars comment, sets the next state label and command labels with new nonces, runs the
 `on_enter` actions of the new state, and deletes the lease. If the lease is gone, the sweep has already

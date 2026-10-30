@@ -1,0 +1,82 @@
+{
+  "skills": {
+    "diagnosing-bugs": {
+      "source": "mattpocock/skills",
+      "commit": "a496f5513d4a",
+      "path": "skills/engineering/diagnosing-bugs",
+      "license": "MIT",
+      "sha256": "29faf0d352422aa58beb0ce4666a49bdfdd5d2cc065c9dfe9be7b7e89fbdf584"
+    },
+    "domain-modeling": {
+      "source": "mattpocock/skills",
+      "commit": "a496f5513d4a",
+      "path": "skills/engineering/domain-modeling",
+      "license": "MIT",
+      "sha256": "18a9314d338b8135e4108d1d31d2fd57ad289cf8bf31d2acd6a6f3053ac22a38"
+    },
+    "ponytail": {
+      "source": "npm:@dietrichgebert/ponytail",
+      "version": "5.3.2",
+      "path": "skills/ponytail",
+      "license": "MIT",
+      "sha256": "b40d655883ea462755ae12373b59833fce20ba256bc06b0bc4e08dc59ba2ca5d"
+    },
+    "ponytail-review": {
+      "source": "npm:@dietrichgebert/ponytail",
+      "version": "5.3.2",
+      "path": "skills/ponytail-review",
+      "license": "MIT",
+      "sha256": "0a56beb5b3b9b89b363ce5d0a9ae5263cd431a6ecc9b3f57d7e795a889d626fd"
+    },
+    "principle-test-behavior-not-implementation": {
+      "source": "cursor/plugins",
+      "commit": "4dd1d05818d1",
+      "path": "pstack/skills/principle-test-behavior-not-implementation",
+      "license": "MIT",
+      "sha256": "c8b25ca3336056109d6eaf5a973e676945b389ab3d03a12ae8c8ba360869ee21"
+    },
+    "retro": {
+      "source": "mattpocock/skills",
+      "commit": "a496f5513d4a",
+      "path": "skills/engineering/retro",
+      "license": "MIT",
+      "sha256": "09c4f9fe72fc5bc8e486a2bbb32dd785ca6264c56a53dd1bf9a334af72586efd"
+    },
+    "tdd": {
+      "source": "cursor/plugins",
+      "commit": "4dd1d05818d1",
+      "path": "pstack/skills/tdd",
+      "license": "MIT",
+      "sha256": "5cb44876b687184a55d1e4355a830374ccd5e0e4c361d19e8f5928d3496704b1"
+    },
+    "technical-writing": {
+      "source": "cursor/plugins",
+      "commit": "4dd1d05818d1",
+      "path": "pstack/skills/technical-writing",
+      "license": "MIT",
+      "sha256": "f726f6d06c9969cecafc57c7bda1cd189f10947c54807089f7d134fd10fda378"
+    },
+    "to-tickets": {
+      "source": "mattpocock/skills",
+      "commit": "a496f5513d4a",
+      "path": "skills/engineering/to-tickets",
+      "license": "MIT",
+      "override": "Step 5 publishes tickets to the tracker; the router skips it and hands the tickets to the workflow (roles/router/role.md).",
+      "sha256": "6eccfac132d92b949821d154679adc7f597bfc3e8c929f3c03786b92f91b961f"
+    },
+    "unslop": {
+      "source": "cursor/plugins",
+      "commit": "4dd1d05818d1",
+      "path": "pstack/skills/unslop",
+      "license": "MIT",
+      "sha256": "e7713c9212c094596766638b2faf63036b26cfa2fb485802eb9e954ffacde372"
+    },
+    "writing-for-agents": {
+      "source": "mattpocock/skills",
+      "commit": "a496f5513d4a",
+      "path": "skills/productivity/writing-for-agents",
+      "license": "MIT",
+      "sha256": "dc53f07d1f662137317789b9b5d74cfcc26dbcfc15038a7faf676c844d8638e8"
+    }
+  }
+}
