@@ -1,6 +1,6 @@
 # ADR-0011: Enforce write limits in Air, not in prompts
 
-Status: accepted (28 Oct 2026)
+Status: accepted (28 Oct 2026). The enforcement part is superseded by ADR-0013: `read-only` does not limit labels, so the step script is the gate.
 
 Context: all automations run under the same Air account and tokens. A role boundary written in a prompt does not stop a role from writing.
 
