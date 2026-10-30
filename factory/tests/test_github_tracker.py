@@ -17,13 +17,13 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-import sm  # noqa: E402
+import sm_v1 as sm  # noqa: E402
 import drive as driver  # noqa: E402
 from drive import drive  # noqa: E402
 from github_tracker import GitHubTracker  # noqa: E402
 from local_tracker import ClaimError  # noqa: E402
 
-M = sm.load_machine(sm.ROOT / "workflows/delivery.sm.yaml", sm.ROOT / "factory.yaml")
+M = sm.load_machine(sm.ROOT / "workflows/delivery.v1.sm.yaml", sm.ROOT / "factory.yaml")
 STAGES = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["tracker"]["stages"]
 REPO = "o/r"
 

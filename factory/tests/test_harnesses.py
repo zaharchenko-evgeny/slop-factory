@@ -15,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import harnesses  # noqa: E402
 import preflight  # noqa: E402
-import sm  # noqa: E402
+import sm_v1 as sm  # noqa: E402
 import yaml  # noqa: E402
 
 READ = "read,bash,grep,find,ls"
@@ -127,7 +127,7 @@ class Adapters(unittest.TestCase):
         self.assertEqual(harnesses.config_errors(config), [])
         config["roles"]["developer"]["harness"] = "emacs"
         self.assertIn("unknown harness 'emacs'", harnesses.config_errors(config)[0])
-        machine = yaml.safe_load((sm.ROOT / "workflows/delivery.sm.yaml").read_text())
+        machine = yaml.safe_load((sm.ROOT / "workflows/delivery.v1.sm.yaml").read_text())
         with self.assertRaisesRegex(sm.SMError, "unknown harness 'emacs'"):
             sm.validate(machine, config)
         config["roles"]["developer"]["harness"] = "junie"

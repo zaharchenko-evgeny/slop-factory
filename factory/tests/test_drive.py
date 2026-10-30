@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import drive  # noqa: E402
 import preflight  # noqa: E402
-import sm  # noqa: E402
+import sm_v1 as sm  # noqa: E402
 from local_tracker import ClaimError, LocalTracker  # noqa: E402
 
 # Replies with $STUB_DIR/reply-<mode>-<call> or reply-<mode> (mode = the input's first line); a
@@ -688,7 +688,7 @@ class DriveRun(unittest.TestCase):
         config["tracker"]["stages"]["qa-review"] = "factory:qa-review"
         config["events"]["qa.passed"] = {"run": 'test -f "$STUB_DIR/qa-ok-$FACTORY_TICKET"'}
         (self.root / "factory.yaml").write_text(yaml.safe_dump(config))
-        path = self.root / "workflows/delivery.sm.yaml"
+        path = self.root / "workflows/delivery.v1.sm.yaml"
         machine = yaml.safe_load(path.read_text())
         machine["states"]["qa-review"] = {"actor": "human"}
         machine["events"].append("qa.passed")

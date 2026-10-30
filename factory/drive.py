@@ -29,7 +29,7 @@ When a step moves the ticket into a state with `on_enter` actions (e.g. `diagnos
 runs them once at the end of the run, posts an agent action's `comment` on the ticket, and clears them.
 
 A human state with `resume_on: comment` (`blocked`) also polls the ticket's comments (see
-workflows/delivery.sm.yaml): the new ones go to one cheap router `recheck`, then `comment.added` fires.
+workflows/delivery.v1.sm.yaml): the new ones go to one cheap router `recheck`, then `comment.added` fires.
 
 In a human or external state, `run` polls the machine's external events on that state's transitions
 that have a detector in factory.yaml `events` (`github-pr-merged`: every PR in `pr_urls` is merged, read
@@ -68,7 +68,7 @@ import model_access
 import preflight
 import run_role
 import runlog
-import sm
+import sm_v1 as sm
 from local_tracker import ClaimError, LocalTracker
 
 class ResumeError(Exception):
@@ -188,7 +188,7 @@ class Delivery:
     def __init__(self, root, nn, tracker, run_id):
         self.root, self.nn, self.tracker, self.run_id = Path(root).resolve(), nn, tracker, run_id
         self.config = yaml.safe_load((self.root / "factory.yaml").read_text())
-        self.m = sm.load_machine(self.root / "workflows/delivery.sm.yaml", self.root / "factory.yaml")
+        self.m = sm.load_machine(self.root / "workflows/delivery.v1.sm.yaml", self.root / "factory.yaml")
         local = self.config["targets"]["local"]
         self.run_dir = self.root / local["run_dir"] / str(nn)
         self.wt = self.root / local["worktree_dir"] / str(nn)
@@ -857,7 +857,7 @@ def comment_added(root, nn, tracker, config, m, state, vars_):
 def load(root):
     root = Path(root)
     return (yaml.safe_load((root / "factory.yaml").read_text()),
-            sm.load_machine(root / "workflows/delivery.sm.yaml", root / "factory.yaml"))
+            sm.load_machine(root / "workflows/delivery.v1.sm.yaml", root / "factory.yaml"))
 
 
 def watched(m, config, state):

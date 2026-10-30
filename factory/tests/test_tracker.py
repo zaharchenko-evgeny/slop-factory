@@ -16,12 +16,12 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-import sm  # noqa: E402
+import sm_v1 as sm  # noqa: E402
 from drive import branch_name, drive  # noqa: E402
 from local_tracker import ClaimError, LocalTracker  # noqa: E402
 
 FIX = HERE / "fixtures"
-M = sm.load_machine(sm.ROOT / "workflows/delivery.sm.yaml", sm.ROOT / "factory.yaml")
+M = sm.load_machine(sm.ROOT / "workflows/delivery.v1.sm.yaml", sm.ROOT / "factory.yaml")
 
 
 class Tracker(unittest.TestCase):

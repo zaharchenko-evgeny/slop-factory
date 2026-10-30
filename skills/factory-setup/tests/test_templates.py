@@ -31,7 +31,7 @@ class Templates(unittest.TestCase):
                 cur = (ROOT / "AGENTS.md").read_text()
                 want = cur[cur.index("## Development workflow"):cur.index("## Tracker and git")]
             else:
-                want = (ROOT / rel).read_text()
+                want = (ROOT / rel.replace("delivery.sm", "delivery.v1.sm")).read_text()  # the setup skill still renders the v1 machine
             self.assertEqual(text.rstrip("\n"), want.rstrip("\n"), rel)
 
     def test_templates_name_no_project_value(self):
@@ -51,7 +51,7 @@ class Templates(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             for rel in ("factory.yaml", "workflows/delivery.sm.yaml"):
                 (Path(d) / Path(rel).name).write_text(OUT[rel])
-            r = subprocess.run(["uv", "run", "--quiet", str(ROOT / "factory/sm.py"), "--sm", f"{d}/delivery.sm.yaml",
+            r = subprocess.run(["uv", "run", "--quiet", str(ROOT / "factory/sm_v1.py"), "--sm", f"{d}/delivery.sm.yaml",
                                 "--config", f"{d}/factory.yaml", "validate"], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
