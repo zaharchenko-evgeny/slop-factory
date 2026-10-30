@@ -175,32 +175,56 @@ ends. Locally this works today: `fix` has `session: resume`, and the harnesses p
 `--session-id factory-<n>-developer` (pi) or `--resume` (claude-code). In the step design every step is
 a separate run, and an Air run starts on a fresh machine, so the session must travel with the ticket.
 
+Air can continue an automation run's session (*proven*, 30 October, run `b725cf7e`). Each run reports
+its Agent Spawner `sessionId` (`air-automations get_run`). `air-cloud resume_task` with that
+`sessionId` and a prompt restarted the finished codex session: it answered from its earlier context, and
+its context grew from 24.5k to 29k tokens. Three limits follow:
+
+- Only the run's owner can resume it (AIRA-1548 asks for a service account). An Air run has no Air
+  token, so the step that resumes runs with the owner's Air credential: the local sweep, or an Air step
+  with the owner's token as a secret.
+- A resumed session is not an automation run. No `push-to-source` happens at its end, so the agent pushes
+  the fix itself with `gh`, and `dispatch` sees the `synchronize` event as usual. Whether the
+  workspace and its credentials are still there after a long pause is an open check.
+- `resume_task` takes a model (`sessionConfigOptions.model`), so a resumed session can change tier.
+
 The developer step records a session pointer in the vars comment:
 
 ```json
-{"session": {"harness": "pi", "model": "anthropic/claude-sonnet-5-5", "id": "factory-112-developer",
-             "executor": "local:ez-mac", "blob": "refs/factory/112/session", "round": 1}}
+{"session": {"target": "air", "harness": "codex", "model": "anthropic/claude-sonnet-5-5",
+             "id": "d24bc908-...", "round": 1}}
 ```
 
-`fix` and `update` pick the first of these that works:
+### Which fix runs where
 
-| Level | When | Local | Air |
-|---|---|---|---|
-| 1. Resume in place | same executor, session file present | `--session-id` / `--resume`, as today | continue the previous Air session, if Air allows an automation to do that (open check) |
-| 2. Resume from the blob | the session was exported | download the blob into the harness's session dir, then resume | the same, in the run's workspace |
-| 3. Fresh session with a handoff | no session reachable, or round ≥ 2 | prompt gets `context.md`, the findings and the PR diff | the same |
+A fix does not always need the session that wrote the code. A cheap model can fix a typo, a lint
+failure or a missing test name in a fresh session, and it reads only the findings and the diff. A
+change to behaviour or design needs the author's context. The guard decides from the reviewers' JSON
+markers and the CI result, not from a model's opinion:
 
-- **The blob.** At the end of `implement` and `fix`, `step.py end` exports the harness session file,
-  runs betterleaks on it, and stores it as a git blob on `refs/factory/<n>/session`, one ref per ticket,
-  replaced each round. If the scan finds anything, the step skips the export, and the next round
-  falls to level 3. The sweep deletes the ref when the ticket ends.
+| Fix round | Signal | Runs as |
+|---|---|---|
+| Small | every finding has `severity: minor`, or CI failed only on lint or format, and the findings name at most `limits.small_fix_files` files (default 3) | fresh session, `cheap` tier, with the findings, the diff and `context.md` |
+| Substantial | any `severity: blocking` finding, a failing test, or a conflict in a file the PR changed | the developer's session resumed, same model |
+| Repeated | the same `blocking_ids` as the previous round | fresh session on the developer's tier, one tier up when `escalate` is on |
+| Session gone | resume fails, or `round` > `limits.resume_rounds` | fresh session on the developer's tier, with `context.md` |
+
+The reviewer marker gains one field per finding, `severity: blocking | minor`. The reviewer already
+decides that today in prose. A small fix that fails its checks becomes a substantial round, so a wrong
+"small" costs one cheap attempt.
+
+How each target resumes:
+
+| | Local | Air |
+|---|---|---|
+| Resume | pi `--session-id factory-<n>-developer`, claude-code `--resume`, as today | `resume_task(sessionId, prompt, model)`, called by the step with the owner's credential |
+| Who pushes | the driver, as today | the resumed agent, with `gh` |
+| Fresh session | `run_role.py` with `context.md` | a `factory:fix-<tier>` automation run with `context.md` |
+
 - **The handoff.** Every developer step also writes `context.md`: decisions, rejected approaches, files
-  touched, open doubts. It goes into the handoff JSON (#84), so level 3 always has it.
-- **Round 2 starts fresh.** A resumed session also keeps its own mistakes. When the same
-  `blocking_ids` come back, a fresh session reading the handoff has a better chance of escaping. So
-  round 1 resumes and later rounds use level 3. `limits.resume_rounds` (default 1) sets the number.
-- **A tier climb resumes with the new model.** pi and claude-code accept a different model on resume.
-  Whether quality holds is an open check.
+  touched, open doubts. It goes into the handoff JSON (#84), so a fresh session always has it.
+- **No session blobs.** Air keeps its own sessions, so the factory does not copy session files into git
+  refs. This drops the blob level and its secret-scanning step.
 
 ## Merge conflicts: detected by the sweep, resolved by the developer
 
@@ -316,7 +340,7 @@ These slices come after #106 to #109. Each ends in a state you can check with `s
 2. Complexity labels, tiered command labels and escalation (#88, second half).
 3. `routine.sm.yaml`, the schedule table in the sweep, and `distill` moved onto it. The `distill` command is then deleted.
 4. `collect`, `digest` and `audit` as routines (#63, #10).
-5. Session pointer, blob and handoff (#113), then conflict detection and `update` (#114).
+5. Session pointer, fix routing and handoff (#113), then conflict detection and `update` (#114).
 6. `merging` and the gap check (#91's merge step on `step.py`, and #64's gap rule).
 7. Bug path: `reproduce`, `diagnose`, `verify` (#95).
 8. `evals` and the `improve` routine with probing and adoption (#96, #64, #65).
@@ -332,13 +356,11 @@ These slices come after #106 to #109. Each ends in a state you can check with `s
    `tier_climbs` limit would let a ticket climb and still get its full fix rounds.
 4. **The improver role.** It is new. The distill role could do it instead, with a different mode. That
    choice can wait for slice 7.
-5. **Session blobs in the repository.** They are scanned and deleted at the end, but they still put
-   model transcripts into git refs. The alternative is level 1 and level 3 only, giving up a resumed
-   session on Air.
+5. **The owner's Air credential for resumes.** Until AIRA-1548 gives a service account, a resume on
+   Air acts as you. The alternative is to resume only from the local sweep.
 
 ## Open checks for the new parts
 
-- Whether an Air automation can continue an earlier Air session.
-- Whether a pi or claude-code session file resumes on another machine. Claude-code keys sessions by the working directory path.
+- How long a finished Air session stays resumable, and whether its workspace and `gh` login survive.
 - Whether `push-to-source` accepts a merge commit from main.
 - Whether a resumed session on a higher-tier model keeps its quality. `drive.py report` compares rounds.
