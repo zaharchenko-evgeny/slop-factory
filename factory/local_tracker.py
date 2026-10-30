@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 CLOSED = ("done", "resolved", "closed")
+RED = "Main is red"  # title prefix of the owner ticket of a red base branch
 FIELD = r"[A-Za-z][A-Za-z_ ]*:[^\n]*\n"
 # `# Title` line, blank lines, then a paragraph made only of `Key: value` lines.
 HEAD = re.compile(rf"((?:#[^\n]*\n)?\n*)((?:{FIELD})+)?")
@@ -169,8 +170,34 @@ class LocalTracker:
         return [p.name.split("-", 1)[0] for p in sorted(self.issues.glob("[0-9]*-*.md"))
                 if self.get_state(p.name.split("-", 1)[0]) == stage]
 
+    def open_red(self):
+        """Numbers of the open tickets titled `Main is red...`."""
+        return [p.name.split("-", 1)[0] for p in sorted(self.issues.glob("[0-9]*-*.md"))
+                if p.read_text().startswith(f"# {RED}") and self.get_state(p.name.split("-", 1)[0]) not in CLOSED]
+
+    def find_open(self, title):
+        """The number of the open ticket with exactly this title, or None."""
+        return next((n for n in self.open_red() if self.issue(n)["title"] == title), None)
+
+    def create_issue(self, title, body, risk="low", stage="ready"):
+        """A new ticket file; returns its number."""
+        nums = [int(p.name.split("-", 1)[0]) for p in self.issues.glob("[0-9]*-*.md")]
+        nn = f"{max(nums, default=0) + 1:02d}"
+        slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:40]
+        (self.issues / f"{nn}-{slug}.md").write_text(f"# {title}\n\nStatus: {stage}\nRisk: {risk}\n\n{body}\n")
+        return nn
+
+    def add_blocker(self, nn, blocker):
+        old = self._field(nn, "Blocked by")
+        self._set_field(nn, "Blocked by", f"{old}, {blocker}" if old else str(blocker))
+
     def frontier(self):
-        """Open `ready` tickets whose blockers are all closed and that nobody claimed, in file order."""
+        """Open `ready` tickets whose blockers are all closed and that nobody claimed, in file order.
+        While a `Main is red` ticket is open, only that ticket."""
+        red = self.open_red()
+        return [n for n in self._frontier() if not red or n in red]
+
+    def _frontier(self):
         out = []
         for p in sorted(self.issues.glob("[0-9]*-*.md")):
             nn = p.name.split("-", 1)[0]

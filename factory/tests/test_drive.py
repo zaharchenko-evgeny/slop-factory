@@ -397,6 +397,69 @@ class DriveRun(unittest.TestCase):
         self.assertEqual(sorted((self.stub / "overlap").read_text().split()), ["behaviour", "structure-security"])
         self.assertIn("review_structure_security", (self.stub / "prompt-summary").read_text())
 
+    def red_checks(self, on_base):
+        """One blocking check: fails on the base too (`on_base`), or only on the branch (no stub.txt yet)."""
+        config = yaml.safe_load((self.root / "factory.yaml").read_text())
+        config["checks"] = [{"name": "gate", "stage": "pre-review", "mode": "blocking",
+                             "run": "exit 1" if on_base else "test ! -f stub.txt"}]
+        (self.root / "factory.yaml").write_text(yaml.safe_dump(config))
+
+    def test_red_on_base_parks_the_ticket_on_one_owner_ticket(self):
+        self.red_checks(True)
+        self.only("01")
+        t = self.go()
+        self.assertEqual(t["state"], "waiting-main")
+        self.assertEqual(t["out"]["checks"]["main_red"], "main_red: gate")
+        owner = t["out"]["checks"]["owner"]
+        self.assertEqual(self.tr.issue(owner)["title"], "Main is red: gate")
+        self.assertEqual(self.tr.get_state(owner), "ready")
+        self.assertIn("Risk: low", self.tr.path(owner).read_text())
+        self.assertIn("gate (blocking): fail", self.tr.path(owner).read_text())
+        self.assertIn(owner, self.tr._field("01", "Blocked by"))
+        self.assertEqual(self.calls("diagnose") + self.calls("fix"), 0)
+        self.assertFalse((self.root / ".factory/runs/01/notify.log").exists())
+        # a second waiting ticket reuses the owner; the frontier holds everything but the owner
+        self.assertEqual(self.tr.find_open("Main is red: gate"), owner)
+        self.assertEqual(self.tr.frontier(), [owner])
+
+    def test_red_on_branch_only_is_a_fix_round(self):
+        self.red_checks(False)
+        self.only("01")
+        t = self.go()
+        self.assertNotEqual(t["state"], "waiting-main")
+        self.assertGreaterEqual(self.calls("fix"), 1)
+        self.assertIsNone(self.tr.find_open("Main is red: gate"))
+
+    def test_existing_owner_is_reused_and_waiting_ticket_resumes(self):
+        self.red_checks(True)
+        self.only("01")
+        owner = self.tr.create_issue("Main is red: gate", "x", stage="approved")
+        self.assertEqual(self.go()["out"]["checks"]["owner"], owner)
+        self.assertEqual(len(list(self.tr.issues.glob("*.md"))), 2)
+        # the owner is still open: the detector does not fire; once it is done, the sweep resumes 01
+        self.tr.release("01", "executor-b")
+        self.patch(drive, "detect", lambda *a: None)
+        self.assertEqual(self.loop(), "")
+        self.assertEqual(self.tr.get_state("01"), "waiting-main")
+        self.patch(drive, "detect", lambda *a: {})
+        self.tr.set_state(owner, "done")
+        self.assertIn("ticket 01:", self.loop())
+        log = (self.root / ".factory/runs/01/events.log").read_text()
+        self.assertRegex(log, r'"from": "waiting-main".*"on": "main.green".*"to": "ready"')  # resumed (red again: parked again)
+
+    def test_start_after_main_red_merges_the_fixed_base(self):
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.run_dir.mkdir(parents=True)
+        d.start({"out": {}})
+        (self.root / "fix.txt").write_text("fixed\n")
+        git("add", "fix.txt", cwd=self.root)
+        git("commit", "-qm", "fix main", cwd=self.root)
+        git("push", "-q", "origin", "main", cwd=self.root)
+        d.start({"out": {}})
+        self.assertFalse((d.wt / "fix.txt").exists())  # a plain restart keeps the branch as is
+        d.start({"out": {"checks": {"main_red": "main_red: gate"}}})
+        self.assertTrue((d.wt / "fix.txt").exists())
+
     def test_claimed_ticket_exits_2_with_one_line(self):
         self.tr.claim("01", "executor-b")
         err = io.StringIO()
