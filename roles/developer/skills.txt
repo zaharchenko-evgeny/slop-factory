@@ -1,2 +1,4 @@
 ponytail
 tdd
+diagnosing-bugs
+principle-test-behavior-not-implementation

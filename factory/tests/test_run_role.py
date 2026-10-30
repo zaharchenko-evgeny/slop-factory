@@ -316,7 +316,9 @@ class RunRole(unittest.TestCase):
         self.assertIn('"conclusion":"SUCCESS"', argv)
 
     def test_lean_flags_and_role_skills(self):
-        skills = self.root / ".agents/skills"
+        skills = self.root / "skills/vendor"
+        (self.root / ".agents/skills/ponytail-review").mkdir(parents=True)
+        (self.root / ".agents/skills/ponytail-review/SKILL.md").write_text("installed")
         for n in ("ponytail-review", "other"):
             (skills / n).mkdir(parents=True)
             (skills / n / "SKILL.md").write_text("x")
@@ -327,7 +329,7 @@ class RunRole(unittest.TestCase):
         argv = (self.stub / "argv").read_text().split("\n")
         for flag in ("--no-skills", "--no-extensions", "--no-prompt-templates"):
             self.assertIn(flag, argv)
-        self.assertEqual([a for a in argv if a.endswith("/skills/ponytail-review")], [str(skills / "ponytail-review")])
+        self.assertEqual([a for a in argv if a.endswith("/ponytail-review")], [str(skills / "ponytail-review")])
         self.assertNotIn(str(skills / "other"), argv)
 
     def test_other_harness_runs_and_logs_unknown_usage(self):

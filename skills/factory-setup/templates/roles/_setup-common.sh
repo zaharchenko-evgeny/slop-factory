@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared checks for roles/<role>/setup.sh: required tools and skills.
-# shortcut: only verifies installed skills; vendoring and pinning through
-# skills.lock come with the setup skill templates (#6).
+# Skills come from skills/vendor/ (pinned in skills.lock, ADR-0008); installed
+# folders are a fallback for skills that are not vendored.
 set -euo pipefail
 
 need_tools() {
@@ -16,6 +16,7 @@ need_tools() {
 }
 
 # Skill directories searched, in pi's discovery order.
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 skill_dirs=(".agents/skills" "$HOME/.agents/skills" "$HOME/.pi/agent/skills" "$HOME/.pi/agent/npm/node_modules")
 
 need_skills() {
@@ -23,6 +24,7 @@ need_skills() {
   while IFS= read -r s; do
     [ -z "$s" ] && continue
     found=no
+    [ -f "$repo_root/skills/vendor/$s/SKILL.md" ] && continue
     for d in "${skill_dirs[@]}"; do
       if [ -d "$d" ] && find "$d" -path "*/$s/SKILL.md" -print -quit 2>/dev/null | grep -q .; then
         found=yes
