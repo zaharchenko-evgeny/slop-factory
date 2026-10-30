@@ -322,7 +322,10 @@ class RunRole(unittest.TestCase):
                 unittest.mock.patch.object(preflight.model_access, "pi_env", return_value={}):  # no jbcentral in CI
             self.assertEqual(preflight.main(["m1", "m2"]), 1)
             os.environ.update(STUB_REPLY="OK", STUB_EXIT="0")
-            self.assertEqual(preflight.main(["m1", "m2"]), 0)
+            rc = preflight.main(["m1", "m2"])
+        self.assertEqual(rc, 0, printed.getvalue())
+        with contextlib.redirect_stdout(printed):
+            pass
         self.assertIn("FAIL m2: 'OK'", printed.getvalue())
         argv = (self.stub / "argv").read_text().splitlines()
         self.assertEqual(argv[argv.index("--model") + 1], "m2")
