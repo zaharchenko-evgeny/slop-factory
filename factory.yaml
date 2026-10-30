@@ -59,6 +59,13 @@ targets:
       # Env var → macOS Keychain service, read by the job at run time (names only, never values);
       # ignored with model_access: central.
       env_from_keychain: {}
+  # Air model ids per tier. Only the Air target reads `targets.air.models`; local runs use `models`.
+  # Air ids differ from local ones: `[1m]` suffix, no Haiku 5.5.
+  air:
+    models:
+      cheap: codex/gpt-6-luna
+      mid: claude/claude-sonnet-5-5[1m]
+      strong: claude/claude-sonnet-5-5[1m]
 
 # Model tiers (design §10a). Escalate one tier only after a failure.
 models:
@@ -137,8 +144,8 @@ checks:
     stage: pre-review
     mode: advisory
     requires: uvx
-    run: uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck -x roles/*.sh roles/*/setup.sh
+    run: uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck -x roles/*.sh roles/*/setup.sh .air/cloud/startup.sh
   - name: state-machine
     stage: pre-review
     mode: blocking
-    run: uv run --quiet factory/sm.py validate && uv run --quiet factory/tests/test_sm.py && uv run --quiet factory/tests/test_tracker.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_run_role.py && uv run --quiet factory/tests/test_harnesses.py && uv run --quiet factory/tests/test_drive.py && uv run --quiet factory/tests/test_runlog.py && uv run --quiet factory/tests/test_approver.py && uv run --quiet factory/tests/test_schedule_local.py && uv run --quiet skills/factory-setup/tests/test_templates.py
+    run: uv run --quiet factory/sm.py validate && uv run --quiet factory/tests/test_sm.py && uv run --quiet factory/tests/test_tracker.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_run_role.py && uv run --quiet factory/tests/test_harnesses.py && uv run --quiet factory/tests/test_drive.py && uv run --quiet factory/tests/test_runlog.py && uv run --quiet factory/tests/test_approver.py && uv run --quiet factory/tests/test_schedule_local.py && uv run --quiet factory/tests/test_air_startup.py && uv run --quiet skills/factory-setup/tests/test_templates.py
