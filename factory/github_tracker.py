@@ -25,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-from local_tracker import ClaimError
+from local_tracker import RED, ClaimError
 
 ROOT = Path(__file__).resolve().parent.parent
 MARKER = re.compile(r"<!-- factory-state (\{.*?\}) -->", re.S)
@@ -169,8 +169,37 @@ class GitHubTracker:
                                      self.stages[stage], "--json", "number", "--limit", "1000"]))
         return sorted(i["number"] for i in found)
 
+    def _open_titled(self, prefix):
+        found = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--search",
+                                     f"{prefix} in:title", "--json", "number,title", "--limit", "100"]))
+        return [i for i in found if i["title"].startswith(prefix)]
+
+    def open_red(self):
+        """Numbers of the open issues titled `Main is red...`."""
+        return [i["number"] for i in self._open_titled(RED)]
+
+    def find_open(self, title):
+        """The number of the open issue with exactly this title, or None."""
+        return next((i["number"] for i in self._open_titled(title) if i["title"] == title), None)
+
+    def create_issue(self, title, body, risk="low", stage="ready"):
+        """Open an issue with the risk and stage labels; returns its number."""
+        url = self.run(["issue", "create", "-R", self.repo, "--title", title, "--body", body,
+                        "--label", self.risk_labels[risk], "--label", self.stages[stage]]).strip()
+        return int(url.rsplit("/", 1)[1])
+
+    def add_blocker(self, n, blocker):
+        """Native dependency: issue `n` is blocked by `blocker`."""
+        bid = self.run(["api", f"repos/{self.repo}/issues/{blocker}", "--jq", ".id"]).strip()
+        self.run(["api", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={bid}"])
+
     def frontier(self):
-        """Open `ready` issues, unassigned, every blocker closed, in map order, then by number."""
+        """Open `ready` issues, unassigned, every blocker closed, in map order, then by number.
+        While a `Main is red` issue is open, only that issue."""
+        red = self.open_red()
+        return [n for n in self._frontier() if not red or n in red]
+
+    def _frontier(self):
         ready = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
                                      self.stages["ready"], "--json", "number,assignees", "--limit", "1000"]))
         maps = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",

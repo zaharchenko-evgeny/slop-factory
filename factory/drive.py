@@ -71,6 +71,9 @@ import runlog
 import sm_v1 as sm
 from local_tracker import ClaimError, LocalTracker
 
+MAIN_RED = "Main is red"
+
+
 class ResumeError(Exception):
     """--resume on a ticket that has no resume point."""
 
@@ -293,16 +296,59 @@ class Delivery:
         return "done", {"branch": b}
 
     def checks(self, t):
-        failed, rows, report = self.run_checks(self.wt, self.issue()[1])
+        base = self.issue()[1]
+        failed, rows, report = self.run_checks(self.wt, base)
         path = self.run_dir / f"checks-{t['vars']['fix_round']}.md"
         path.write_text(report)
+        if failed and not (self.issue()[0]["title"] or "").startswith(MAIN_RED):
+            names = [r["name"] for r in rows if r["status"] == "fail" and r["mode"] == "blocking"]
+            red = self.red_on_base(base, names)
+            if red:
+                name, text, commit = red
+                owner = self.park(name, text, commit)
+                return "main_red", {"check": name, "main_red": f"main_red: {name}", "owner": owner,
+                                    "checks": rows, "report": str(path)}
         return ("failed" if failed else "passed"), {"checks": rows, "report": str(path)}
 
-    def run_checks(self, cwd, base, blocking_only=False):
+    def red_on_base(self, base, names):
+        """Rerun the failed blocking checks on origin/<base> in a detached worktree: (check, report, breaking
+        commit) of the first one that fails there, else None. Measured, not inferred from the diff."""
+        tmp = self.wt.with_name(f"{self.nn}-base")
+        sh(["git", "fetch", "origin", base], self.root)
+        if tmp.exists():
+            sh(["git", "worktree", "remove", "--force", str(tmp)], self.root)
+        sh(["git", "worktree", "add", "--detach", str(tmp), f"origin/{base}"], self.root)
+        try:
+            for name in names:
+                failed, _, report = self.run_checks(tmp, base, only=[name])
+                if failed:
+                    files = [f for f in dict.fromkeys(re.findall(r"[\w./-]+\.\w+", report)) if (tmp / f).is_file()]
+                    try:
+                        commit = sh(["git", "log", "-1", "--format=%h %s", f"origin/{base}", "--", *files], self.root).strip()
+                    except (RuntimeError, OSError):
+                        commit = ""
+                    return name, report, commit or "unknown"
+        finally:
+            sh(["git", "worktree", "remove", "--force", str(tmp)], self.root)
+        return None
+
+    def park(self, name, report, commit):
+        """The open `Main is red: <check>` ticket (created when missing); this ticket is blocked by it."""
+        title = f"{MAIN_RED}: {name}"
+        owner = self.tracker.find_open(title)
+        if owner is None:
+            owner = self.tracker.create_issue(
+                title, f"[factory] Check `{name}` fails on the base branch.\n\nLast commit on the files involved: "
+                       f"{commit}\n\n{report}\n\nFactory-Run: {self.run_id}", "low", "ready")
+        self.tracker.add_blocker(self.nn, owner)
+        return str(owner)
+
+    def run_checks(self, cwd, base, blocking_only=False, only=None):
         """Run the pre-review checks in `cwd`: (a blocking one failed, rows, markdown report)."""
         rows, report, failed = [], [], False
         for c in self.config.get("checks") or []:
-            if c.get("stage", "pre-review") != "pre-review" or (blocking_only and c.get("mode") != "blocking"):
+            if c.get("stage", "pre-review") != "pre-review" or (blocking_only and c.get("mode") != "blocking") \
+                    or (only is not None and c["name"] not in only):
                 continue
             if c.get("requires") and not shutil.which(c["requires"]):
                 status, text = "skipped", f"{c['requires']} is not installed"
