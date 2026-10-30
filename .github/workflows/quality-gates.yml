@@ -54,6 +54,7 @@ jobs:
     if: github.event_name == 'push'
     needs: factory-checks
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     continue-on-error: true
     permissions:
       actions: write
@@ -62,6 +63,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       # A PR green only against an old main must turn red before anyone merges it.
+      # The rerun fallback replays the run's original commit, so it may not see the new main.
       # A branch older than the workflow_dispatch trigger returns 422: re-run its latest run instead.
       - name: Re-run on open factory PRs
         shell: bash
