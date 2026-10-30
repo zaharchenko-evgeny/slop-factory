@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / ".air/cloud/startup.sh"
 
 STUBS = {
-    "curl": 'echo curl >> "$LOG"\ntmp=$(mktemp -d); printf "#!/bin/sh\\n" > "$tmp/conftest"; tar -cz -C "$tmp" conftest\n',
+    "curl": 'echo curl >> "$LOG"\ntmp=$(mktemp -d); printf "#!/bin/sh\\n" > "$tmp/conftest"; chmod +x "$tmp/conftest"; tar -cz -C "$tmp" conftest\n',
     "git": 'echo git "$@" >> "$LOG"\n',
     "uv": 'echo uv "$@" >> "$LOG"\nprintf "#!/bin/sh\\n" > "$HOME/.local/bin/decide"; chmod +x "$HOME/.local/bin/decide"\n',
 }
