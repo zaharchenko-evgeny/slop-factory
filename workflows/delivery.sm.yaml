@@ -32,6 +32,7 @@ vars:
   full_blocks: { type: bool, default: false }
   behaviour_blocks: { type: bool, default: false }
   security_blocks: { type: bool, default: false }
+  human_pending: { type: bool, default: false }   # a human review asked for changes outside `approved`
 
 states:
   draft: { label: "factory:draft" }
@@ -98,6 +99,9 @@ transitions:
   # risk is sticky: a join that sees high (now or earlier) sets it high; a lower report never lowers it.
   - { from: in-review, event: join, if: 'event.blocks = true and (event.risk = "high" or risk = "high")', set: { risk: '"high"', approval: '""', full_blocks: event.full_blocks, behaviour_blocks: event.behaviour_blocks, security_blocks: event.security_blocks }, inc: [fix_round], labels: [factory:fix], to: changes-requested }
   - { from: in-review, event: join, if: 'event.blocks = true', set: { approval: '""', full_blocks: event.full_blocks, behaviour_blocks: event.behaviour_blocks, security_blocks: event.security_blocks }, inc: [fix_round], labels: [factory:fix], to: changes-requested }
+  # A pending human review becomes a fix round at the join or when the ticket would enter approved (problem 23).
+  - { from: in-review, event: join, if: 'human_pending = true and fix_round >= max_rounds', to: blocked }
+  - { from: in-review, event: join, if: 'human_pending = true', set: { human_pending: false, approval: '""' }, inc: [fix_round], labels: [factory:fix], to: changes-requested }
   - { from: in-review, event: join, if: '(event.docs_impact = "yes" or docs_impact = "yes") and (event.risk = "high" or risk = "high")', set: { risk: '"high"', docs_impact: '"yes"', full_blocks: false, behaviour_blocks: false, security_blocks: false }, labels: [factory:document] }
   - { from: in-review, event: join, if: 'event.docs_impact = "yes" or docs_impact = "yes"', set: { docs_impact: '"yes"', full_blocks: false, behaviour_blocks: false, security_blocks: false }, labels: [factory:document] }
   - { from: in-review, event: join, if: 'event.risk = "high" or risk = "high"', set: { risk: '"high"', full_blocks: false, behaviour_blocks: false, security_blocks: false }, labels: [factory:approve] }
@@ -108,10 +112,13 @@ transitions:
   - { from: in-review, event: approve, set: { approval: event.verdict } }
 
   # Every ci transition needs the approver's verdict for the round (problem 19).
+  - { from: in-review, event: ci, if: 'approval != "" and human_pending = true and fix_round >= max_rounds', to: blocked }
+  - { from: in-review, event: ci, if: 'approval != "" and human_pending = true', set: { human_pending: false, approval: '""' }, inc: [fix_round], labels: [factory:fix], to: changes-requested }
   - { from: in-review, event: ci, if: 'approval != "" and event.state = "failed" and fix_round >= max_rounds', to: blocked }
   - { from: in-review, event: ci, if: 'approval != "" and event.state = "failed"', set: { approval: '""' }, inc: [fix_round], labels: [factory:fix], to: changes-requested }
   - { from: in-review, event: ci, if: 'approval != ""', to: approved }
 
+  - { from: [in-dev, in-review, changes-requested], event: human_review, set: { human_pending: true } }
   - { from: approved, event: human_review, if: 'fix_round >= max_rounds', to: blocked }
   - { from: approved, event: human_review, set: { approval: '""' }, inc: [fix_round], labels: [factory:fix], to: changes-requested }
 
