@@ -91,12 +91,19 @@ esac
 DECIDE = """#!/bin/bash
 echo '[{"questions": [{"id": "risk-low", "resolution": "decided", "answer": "yes"}]}]'
 """
+def review(risk, docs="no", findings=()):
+    """A reviewer's JSON handoff reply."""
+    v = "changes-requested" if any(f["severity"] == "blocking" for f in findings) else "approved"
+    return json.dumps({"handoff": "REVIEWER", "verdict": v, "reviewed_sha": "x", "risk": risk, "docs_impact": docs,
+                       "findings": list(findings)}) + "\n"
+
+
 REPLIES = {
     "intake": "```text\nROUTER-INTAKE\nready: yes\nrisk: low\nnext: delivery\n```\n",
     "implement": "```text\nDEVELOPER\nstatus: done\ncommits:\n  - abc #01 stub\nblocked_reason: none\n```\n",
-    "full": "```text\nREVIEWER\nverdict: approved\nreviewed_sha: x\nrisk: low\ndocs_impact: no\nblocking:\nnits:\n```\n",
-    "behaviour": "```text\nREVIEWER\nverdict: approved\nrisk: high\ndocs_impact: no\n```\n",
-    "structure-security": "```text\nREVIEWER\nverdict: approved\nrisk: high\ndocs_impact: no\n```\n",
+    "full": review("low"),
+    "behaviour": review("high"),
+    "structure-security": review("high"),
     "record": "```text\nRETRO\nmanual_steps: |\n  - none\nlessons: |\n  - navigation: point to x — y\n```\n",
     "merge": "```text\nDISTILL\nstatus: done\nfiles: knowledge/_shared/lessons.md\nsummary: |\n  - lesson (2 entries)\n```\n",
     "summary": "```text\nROUTER-SUMMARY\ncomplete: yes\ncomment: |\n  [factory] Summary line.\n  Factory-Run: r1\n```\n",
@@ -237,7 +244,7 @@ class DriveRun(unittest.TestCase):
         self.assertIn("# Driven ticket", prompt)  # the local ticket file, not `gh issue view`
 
     def test_docs_impact_runs_the_doc_writer_before_the_approver(self):
-        (self.stub / "reply-full").write_text(REPLIES["full"].replace("docs_impact: no", "docs_impact: yes"))
+        (self.stub / "reply-full").write_text(review("low", "yes"))
         (self.stub / "reply-update").write_text("```text\nDOC-WRITER\nstatus: done\nfiles: doc.md\n```\n")
         t = self.go()
         self.assertEqual((t["state"], self.calls("update"), t["out"]["document"]["files"]), ("approved", 1, "doc.md"))
@@ -446,20 +453,20 @@ class DriveRun(unittest.TestCase):
         self.assertEqual((p["state"], p["run"]["pending"]), ("in-review", ["b", "c"]))
         self.assertEqual(p["run"]["fork"]["results"], {"a": "done", "b": None, "c": None})
 
-    def test_unfenced_review_is_accepted(self):
+    def test_text_review_is_rejected(self):
         (self.stub / "reply-full").write_text("Looks fine.\nREVIEWER\nverdict: approved\nrisk: low\n")
         t = self.go()
-        self.assertEqual((t["state"], self.calls("full")), ("approved", 1))
+        self.assertNotEqual(self.calls("full"), 1)  # no valid handoff: retry, fallback
 
-    def test_prose_after_review_falls_back_and_approves(self):
+    def test_text_review_falls_back_and_approves(self):
         for n in (1, 2):  # the model and its handoff retry
-            (self.stub / f"reply-full-{n}").write_text(REPLIES["full"] + "Thanks!\n")
+            (self.stub / f"reply-full-{n}").write_text("REVIEWER\nverdict: approved\nThanks!\n")
         t = self.go()
         self.assertEqual((t["state"], self.calls("full")), ("approved", 3))  # model, its retry, fallback
         config = yaml.safe_load((self.root / "factory.yaml").read_text())
         r = t["out"]["review_full"]
         self.assertEqual((r["result"], r["fallback_from"], r["model"]),
-                         ("done", config["models"]["review"], config["models"]["cheap"]))
+                         ("done", config["models"]["review_strong"], config["models"]["cheap"]))
         self.assertIn("fell back from", (self.stub / "gh-pr-create").read_text())
         run = self.root / ".factory/runs/01"
         self.assertIn("Thanks!", (run / "review_full-attempt1.out.md").read_text())  # each attempt kept
@@ -487,7 +494,7 @@ class DriveRun(unittest.TestCase):
         self.assertIn("Slice B", text)
 
     def test_nits_posted_once_as_one_pr_comment(self):
-        (self.stub / "reply-full").write_text(REPLIES["full"].replace("nits:\n", "nits:\n  - a.py:1 — rename x\n"))
+        (self.stub / "reply-full").write_text(review("low", findings=[{"id": "M1", "file": "a.py:1", "finding": "rename x", "case": "", "severity": "minor"}]))
         self.go()
         body = (self.stub / "gh-pr-comment").read_text()
         self.assertIn("a.py:1 — rename x", body)
@@ -503,8 +510,7 @@ class DriveRun(unittest.TestCase):
         self.assertFalse((self.root / ".factory/worktrees/01").exists())
 
     def test_review_raising_risk_relabels_the_ticket(self):
-        (self.stub / "reply-full").write_text(REPLIES["full"].replace("risk: low", "risk: high")
-                                              .replace("docs_impact: no", "docs_impact: yes"))
+        (self.stub / "reply-full").write_text(review("high", "yes"))
         (self.stub / "reply-update").write_text("```text\nDOC-WRITER\nstatus: done\nfiles: none\n```\n")
         t = self.go()
         self.assertEqual((t["state"], t["vars"]["risk"]), ("approved", "high"))
@@ -586,10 +592,15 @@ class DriveRun(unittest.TestCase):
                                                       cwd=self.root, capture_output=True, text=True).stdout)
         self.assertIn("## numbers", (self.stub / "prompt-record").read_text())
 
+    def test_blocking_ids_name_id_and_file_of_blocking_findings(self):
+        f = [{"id": "B1", "file": "a.py:1", "finding": "x", "case": "c", "severity": "blocking"},
+             {"id": "M1", "file": "b.py:2", "finding": "y", "case": "", "severity": "minor"}]
+        self.assertEqual(drive.blocking_ids({"findings": f}), ["B1 a.py:1"])
+
     def test_retro_counts_blocking_findings_per_reviewer_and_round(self):
         d = drive.Delivery(self.root, "01", self.tr, "r1")
         d.run_dir.mkdir(parents=True)
-        block = {"verdict": "changes-requested", "blocking": "- id: B1\n  file: x"}
+        block = {"verdict": "changes-requested", "findings": [{"id": "B1", "file": "x", "finding": "f", "case": "c", "severity": "blocking"}]}
         for name in ("review_behaviour", "review_structure_security", "review_behaviour-1"):
             (d.run_dir / f"{name}.handoff.json").write_text(json.dumps(block))
         numbers = d.run_numbers(sm.new_ticket(d.m))

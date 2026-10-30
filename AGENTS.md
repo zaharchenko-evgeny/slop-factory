@@ -45,7 +45,7 @@ change, whether you are a person, a pi session or a factory role.
    defect, add one comment to the ticket that will fix it (or open a new
    ticket). Do not fix the factory inside an unrelated ticket.
 
-Models: only `anthropic/claude-haiku-5-5` and `anthropic/claude-sonnet-5-5`.
+Models: local tiers are Anthropic only (`anthropic/claude-haiku-5-5` and `anthropic/claude-sonnet-5-5`); Air tiers come from `targets.air.models` in `factory.yaml`.
 
 ## Tracker and git
 

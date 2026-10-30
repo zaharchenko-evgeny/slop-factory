@@ -36,7 +36,7 @@
  "DESIGN_REF": "(design §5, §6)",
  "MAP_ISSUE_LINK": "[#21](https://github.com/zaharchenko-evgeny/offline-eval-factory/issues/21)",
  "DECISIONS_ENGINE": "agent:claude",
- "MODEL_POLICY": "Models: only `anthropic/claude-haiku-5-5` and `anthropic/claude-sonnet-5-5`.",
+ "MODEL_POLICY": "Models: local tiers are Anthropic only (`anthropic/claude-haiku-5-5` and `anthropic/claude-sonnet-5-5`); Air tiers come from `targets.air.models` in `factory.yaml`.",
  "ROLES": {
   "router": "git gh pi",
   "developer": "git pi",
@@ -53,6 +53,9 @@
   "    models:",
   "      cheap: codex/gpt-6-luna",
   "      mid: claude/claude-sonnet-5-5[1m]",
-  "      strong: claude/claude-sonnet-5-5[1m]"
+  "      strong: claude/claude-sonnet-5-5[1m]",
+  "      # Review tiers use another model family than the developer (claude).",
+  "      review: codex/gpt-6-luna",
+  "      review_strong: codex/gpt-6-luna"
  ]
 }

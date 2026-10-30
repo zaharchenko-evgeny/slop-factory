@@ -42,12 +42,14 @@ if [ -n "$STUB_PEEK" ]; then
   echo "secret-$mode"; sleep 1
   # Its own private dir, plus the shared run dir by the path that worked from the shared worktree.
   grep -rho 'secret-[a-z_]*' .. ../../runs/9 2>/dev/null | sort -u > "$STUB_DIR/seen-$mode"
-  printf '```text\\nREVIEWER\\nverdict: approved\\n```\\n'; exit 0
+  printf '%s\\n' '{"handoff":"REVIEWER","verdict":"approved","risk":"low","docs_impact":"no","findings":[]}'; exit 0
 fi
 if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_UNFENCED" ]; then printf 'REVIEWER\\nverdict: approved\\nThanks!\\n'; exit 0; fi
 if [ -n "${STUB_REPLY+x}" ]; then printf '%s' "$STUB_REPLY"; exit "${STUB_EXIT:-0}"; fi
 if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_PROSE" ]; then printf '```text\nREVIEWER\nverdict: approved\n```\nDone!\n'; fi
-if [ "$n" -ge "$STUB_OK_AT" ]; then printf '```text\\nREVIEWER\\nverdict: approved\\n```\\n'; fi
+mode=$(printf '%s\\n' "${@: -1}" | sed -n '1s/^mode: //p')
+case "$mode" in full|behaviour|structure-security) ok='{"handoff":"REVIEWER","verdict":"approved","risk":"low","docs_impact":"no","findings":[]}' ;; *) ok=$(printf '```text\\nREVIEWER\\nverdict: approved\\n```\\n') ;; esac
+if [ "$n" -ge "$STUB_OK_AT" ]; then printf '%s\\n' "$ok"; fi
 """
 # `jbcentral status` reports the proxy running once $STUB_DIR/proxy-up exists; `proxy start` creates
 # it unless $STUB_DIR/proxy-broken exists. Every call is appended to $STUB_DIR/jbcentral.calls.
@@ -96,7 +98,7 @@ class RunRole(unittest.TestCase):
         os.environ["STUB_OK_AT"] = str(ok_at)
         (self.run_dir / "sm.json").write_text(json.dumps({"vars": {"risk": risk, "pr_urls": list(pr_urls)}}))
         if write_input:
-            (self.run_dir / f"{action}.in.md").write_text("mode: test\n")
+            (self.run_dir / f"{action}.in.md").write_text(f"mode: {action.removeprefix('review_').replace('_', '-')}\n")
         return run_role.run(self.root, 9, action)
 
     def issue(self, labels, comments=()):
@@ -142,13 +144,14 @@ class RunRole(unittest.TestCase):
         h = json.loads((self.run_dir / "review_behaviour.handoff.json").read_text())
         self.assertEqual(h.pop("reviewed_sha"), subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.wt,
                                                                capture_output=True, text=True).stdout.strip())
-        self.assertEqual(h, {"handoff": "REVIEWER", "verdict": "approved", "fallback_from": self.model("review"),
+        self.assertEqual(h, {"handoff": "REVIEWER", "verdict": "approved", "risk": "low", "docs_impact": "no",
+                          "findings": [], "fallback_from": self.model("review"),
                           "model": self.model("cheap")})
         self.assertEqual(self.go("review_structure_security", ok_at=99), 3)
         self.assertEqual(self.calls(), 7)  # 2 on the model, 2 on the fallback
 
     def test_each_reviewer_focus_gets_its_model(self):
-        for action, key in [("review_full", "review"), ("review_behaviour", "review"),
+        for action, key in [("review_full", "review_strong"), ("review_behaviour", "review"),
                             ("review_structure_security", "review_strong")]:
             with self.subTest(action):
                 self.go(action, ok_at=1)
@@ -193,24 +196,53 @@ class RunRole(unittest.TestCase):
         self.assertEqual(self.go("implement", ok_at=1), 3)
         self.assertIn("missing field 'branch'", (self.stub / "argv").read_text())
 
+    REV = {"handoff": "REVIEWER", "verdict": "approved", "risk": "low", "docs_impact": "no", "findings": []}
+    BLOCK = {"id": "B1", "file": "a:1", "finding": "x", "case": "empty input", "severity": "blocking"}
+
     def test_reviewer_has_no_write_tool_and_its_last_json_object_is_accepted(self):
-        rev = {"handoff": "REVIEWER", "verdict": "approved", "risk": "low", "docs_impact": "no",
-               "blocking": [], "nits": ["a:1 — x"]}
+        minor = {"id": "M1", "file": "a:1", "finding": "x", "case": "", "severity": "minor"}
+        rev = {**self.REV, "findings": [minor]}
         os.environ["STUB_REPLY"] = 'Looks fine {not json}\n```json\n' + json.dumps(rev) + "\n```\nThanks"
         self.assertEqual(self.go("review_full", ok_at=1), 0)
         argv = (self.stub / "argv").read_text().splitlines()
         self.assertNotIn("write", argv[argv.index("--tools") + 1].split(","))
         h = json.loads((self.run_dir / "review_full.handoff.json").read_text())
-        self.assertEqual((h["verdict"], h["nits"], h["blocking"]), ("approved", "- a:1 — x", ""))
+        self.assertEqual((h["verdict"], h["findings"]), ("approved", [minor]))
 
-    def test_flat_keeps_blocking_ids_and_the_last_object_wins(self):
-        rev = {"handoff": "REVIEWER", "verdict": "changes-requested", "risk": "low", "docs_impact": "no",
-               "blocking": [{"id": "B1", "file": "a:1", "finding": "x"}, {"id": "B2", "file": "b:2", "finding": "y"}],
-               "nits": []}
+    def test_findings_stay_typed_and_the_last_object_wins(self):
+        b2 = {**self.BLOCK, "id": "B2", "file": "b:2"}
+        rev = {**self.REV, "verdict": "changes-requested", "findings": [self.BLOCK, b2]}
         os.environ["STUB_REPLY"] = "For example: " + json.dumps({"handoff": "REVIEWER"}) + " is the shape.\n" + json.dumps(rev)
         self.assertEqual(self.go("review_full", ok_at=1), 0)
         h = json.loads((self.run_dir / "review_full.handoff.json").read_text())
-        self.assertEqual(re.findall(r"^\s*-?\s*id:\s*(\S+)", h["blocking"], re.M), ["B1", "B2"])
+        self.assertEqual([f["id"] for f in h["findings"]], ["B1", "B2"])
+
+    def test_reviewer_schema_rejections(self):
+        schema = json.loads((sm.ROOT / "roles/reviewer/handoff.schema.json").read_text())["REVIEWER"]
+        no_case = {k: v for k, v in self.BLOCK.items() if k != "case"}
+        sec = {**self.BLOCK, "severity": "minor", "finding": "unfiltered comment author is a security hole"}
+        for name, obj, msg in [
+                ("string finding", {**self.REV, "findings": ["a:1 — x"]}, "must be an object"),
+                ("blocking without case", {**self.REV, "verdict": "changes-requested", "findings": [no_case]}, "needs a non-empty 'case'"),
+                ("empty case", {**self.REV, "verdict": "changes-requested", "findings": [{**self.BLOCK, "case": " "}]}, "needs a non-empty 'case'"),
+                ("approved with blocking", {**self.REV, "findings": [self.BLOCK]}, "must be 'changes-requested'"),
+                ("changes without blocking", {**self.REV, "verdict": "changes-requested"}, "must be 'approved'"),
+                ("bad severity", {**self.REV, "findings": [{**self.BLOCK, "severity": "nit"}]}, "must be one of blocking, minor"),
+                ("old blocking/nits", {k: v for k, v in self.REV.items() if k != "findings"}, "missing field 'findings'")]:
+            with self.subTest(name):
+                self.assertTrue(any(msg in e for e in run_role.validate(obj, schema)), run_role.validate(obj, schema))
+        self.assertEqual(run_role.validate({**self.REV, "verdict": "changes-requested", "findings": [self.BLOCK]}, schema), [])
+        # replay of the #94 behaviour handoff: the security hole filed as a nit is rejected
+        replay = {**self.REV, "findings": [sec]}
+        self.assertTrue(any("names security or data loss" in e for e in run_role.validate(replay, schema)))
+
+    def test_reviewer_retry_gets_the_parser_error(self):
+        sec = {**self.BLOCK, "severity": "minor", "finding": "comment author is not filtered: security"}
+        os.environ["STUB_REPLY"] = json.dumps({**self.REV, "findings": [sec]})
+        self.assertEqual(self.go("review_full", ok_at=1), 3)
+        argv = (self.stub / "argv").read_text()
+        self.assertIn("rejected", argv)
+        self.assertIn("findings[0]. is minor but names security or data loss".replace("[0].", "[0]"), argv)
 
     def test_malformed_handoff_runs_the_fallback_once(self):
         for env in ("STUB_PROSE", "STUB_UNFENCED"):
@@ -221,8 +253,8 @@ class RunRole(unittest.TestCase):
                 self.assertEqual(self.go("review_full", ok_at=3), 0)
                 self.assertEqual((self.calls(), self.argv_model()), (3, self.model("cheap")))
                 h = json.loads((self.run_dir / "review_full.handoff.json").read_text())
-                self.assertEqual((h["fallback_from"], h["model"]), (self.model("review"), self.model("cheap")))
-                self.assertIn(f"falls back from {self.model('review')} to {self.model('cheap')}",
+                self.assertEqual((h["fallback_from"], h["model"]), (self.model("review_strong"), self.model("cheap")))
+                self.assertIn(f"falls back from {self.model('review_strong')} to {self.model('cheap')}",
                               (self.run_dir / "review_full.log").read_text())
 
     def test_parallel_reviewers_see_only_their_own_run_dir(self):
@@ -337,12 +369,13 @@ class RunRole(unittest.TestCase):
         config["targets"]["local"]["harness"] = "claude-code"
         (self.root / "factory.yaml").write_text(sm.yaml.safe_dump(config))
         os.environ.update(STUB_REPLY=json.dumps({"type": "result", "session_id": "s", "usage": {"input_tokens": 4},
-                                                 "result": "```text\nREVIEWER\nverdict: approved\n```\n"}))
+                                                 "result": json.dumps(self.REV)}))
         self.assertEqual(self.go("review_full", ok_at=1), 0)
         argv = (self.stub / "argv").read_text().splitlines()
-        self.assertEqual((argv[0], argv[argv.index("--model") + 1]), ("-p", self.model("review")))
+        self.assertEqual((argv[0], argv[argv.index("--model") + 1]), ("-p", self.model("review_strong")))
         ev = next(e for e in map(json.loads, (self.run_dir / "events.log").read_text().splitlines()) if e["event"] == "usage")
         self.assertEqual((ev["input"], ev["output"], ev["cost"]), (4, None, None))
+        os.environ["STUB_REPLY"] = json.dumps({"type": "result", "session_id": "s", "result": json.dumps(self.DEV)})
         self.assertEqual(self.go("implement", ok_at=1), 0)
         self.assertIn("--session-id", (self.stub / "argv").read_text())
 

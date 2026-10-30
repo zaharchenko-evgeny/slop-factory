@@ -17,7 +17,7 @@ action in the ticket worktree.
 The handoff is JSON validated against `roles/<role>/handoff.schema.json`: a role with a write tool writes
 it to the file named by $FACTORY_HANDOFF (`<step>.handoff-draft.json`, the path is also in its prompt), a read-only
 role ends its output with it; prose around it is ignored. An invalid or missing one is rerun once with the error in the
-prompt, then the fallback. The legacy text handoff stays accepted for one release: the last fenced block, or a final
+prompt, then the fallback. The legacy text handoff stays accepted for one release (not for the reviewer, whose `findings` are typed items): the last fenced block, or a final
 unfenced block starting with its header line (`REVIEWER`), with nothing after
 it. Each attempt's output is kept as `<step>-attempt<k>.out.md`. Each call runs the model once: an empty output or a missing or
 trailing-text handoff (or a bad first line) is logged; when the mode has a
@@ -123,18 +123,44 @@ def json_objects(text):
     return out
 
 
-def validate(obj, schema):
-    """Errors of `obj` against the subset of JSON Schema the handoff schemas use: required, enum and
-    type (a name or a list of names) per property."""
-    errors = [f"missing field {k!r}" for k in schema.get("required", []) if k not in obj]
+RISKY = re.compile(r"security|data[- ]loss|injection|secret|credential", re.I)
+
+
+def validate(obj, schema, path=""):
+    """Errors of `obj` against the subset of JSON Schema the handoff schemas use: required, enum, type
+    (a name or a list of names) and `items` per property. Two extensions: `x-blocking-needs: F` (an item
+    with severity blocking must have a non-empty F) and `x-verdict-from: L` (the verdict is
+    changes-requested exactly when list L has a blocking item); a minor item that names security or
+    data loss is rejected (a security or data-loss finding is always blocking)."""
+    errors = [f"missing field {path}{k!r}" for k in schema.get("required", []) if k not in obj]
     for k, p in schema.get("properties", {}).items():
         if k not in obj:
             continue
         types = [p["type"]] if isinstance(p.get("type"), str) else p.get("type", [])
         if "enum" in p and obj[k] not in p["enum"]:
-            errors.append(f"field {k!r} must be one of {', '.join(p['enum'])}, not {obj[k]!r}")
+            errors.append(f"field {path}{k!r} must be one of {', '.join(p['enum'])}, not {obj[k]!r}")
         elif types and not any(isinstance(obj[k], TYPES[t]) for t in types):
-            errors.append(f"field {k!r} must be of type {' or '.join(types)}")
+            errors.append(f"field {path}{k!r} must be of type {' or '.join(types)}")
+        elif "items" in p:
+            for n, x in enumerate(obj[k]):
+                where = f"{path}{k}[{n}]."
+                if not isinstance(x, dict):
+                    errors.append(f"{where[:-1]} must be an object, not {x!r}")
+                    continue
+                errors += validate(x, p["items"], where)
+                need = p["items"].get("x-blocking-needs")
+                if x.get("severity") == "blocking" and need and not str(x.get(need) or "").strip():
+                    errors.append(f"{where[:-1]} is blocking and needs a non-empty {need!r}")
+                if x.get("severity") == "minor" and RISKY.search(f"{x.get('finding')} {x.get(need)}"):
+                    errors.append(f"{where[:-1]} is minor but names security or data loss: make it blocking "
+                                  "(never defer it to another reviewer)")
+    src = schema.get("x-verdict-from")
+    if src and isinstance(obj.get(src), list) and "verdict" in obj:
+        blocking = any(isinstance(x, dict) and x.get("severity") == "blocking" for x in obj[src])
+        want = "changes-requested" if blocking else "approved"
+        if obj["verdict"] in ("approved", "changes-requested") and obj["verdict"] != want:
+            errors.append(f"verdict {obj['verdict']!r} disagrees with the severities: it must be {want!r}"
+                          f" ({'has' if blocking else 'no'} blocking finding)")
     return errors
 
 
@@ -166,7 +192,7 @@ def json_handoff(role, root, text, file_text=None):
     errors = validate(obj, schemas[obj["handoff"]])
     if errors:
         raise InvalidHandoff("invalid JSON handoff: " + "; ".join(errors))
-    return {k: v if k == "handoff" else flat(v) for k, v in obj.items()}
+    return {k: v if k in ("handoff", "findings") else flat(v) for k, v in obj.items()}
 
 
 def parse_pi_output(raw):
@@ -311,7 +337,9 @@ def attempts(root, run_dir, cwd, step, action, role, models, prompt, ticket, ext
             shutil.copy(out, keep / f"{step}-attempt{k}.out.md")
             try:
                 handoff = json_handoff(role, root, text, hfile.read_text() if hfile.exists() else None)
-                if handoff is None:  # legacy fenced text, accepted for one release
+                if handoff is None and role == "reviewer":
+                    raise HandoffError("no JSON handoff: end your reply with one JSON object")
+                if handoff is None:  # legacy fenced text of the other roles, accepted for one release
                     handoff = parse_handoff(out.read_text())
             except HandoffError as err:
                 with log.open("a") as e:

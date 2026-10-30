@@ -80,7 +80,7 @@ roles:
     harness: pi
     tools: read-only
     modes:
-      full: { tier: review, fallback: cheap }                    # risk low: one reviewer
+      full: { tier: review_strong, fallback: cheap }             # risk low: one reviewer, covers every focus
       behaviour: { tier: review, fallback: cheap }               # risk high
       structure-security: { tier: review_strong, fallback: cheap }  # risk high
   # Runs when a reviewer reports docs_impact, before the approver (workflows/delivery.sm.yaml `document`).

@@ -66,6 +66,9 @@ targets:
       cheap: codex/gpt-6-luna
       mid: claude/claude-sonnet-5-5[1m]
       strong: claude/claude-sonnet-5-5[1m]
+      # Review tiers use another model family than the developer (claude).
+      review: codex/gpt-6-luna
+      review_strong: codex/gpt-6-luna
 
 # Model tiers (design §10a). Escalate one tier only after a failure.
 models:
@@ -89,7 +92,7 @@ roles:
     harness: pi
     tools: read-only
     modes:
-      full: { tier: review, fallback: cheap }                    # risk low: one reviewer
+      full: { tier: review_strong, fallback: cheap }             # risk low: one reviewer, covers every focus
       behaviour: { tier: review, fallback: cheap }               # risk high
       structure-security: { tier: review_strong, fallback: cheap }  # risk high
   # Runs when a reviewer reports docs_impact, before the approver (workflows/delivery.sm.yaml `document`).

@@ -6,9 +6,9 @@
    "verdict",
    "risk",
    "docs_impact",
-   "blocking",
-   "nits"
+   "findings"
   ],
+  "x-verdict-from": "findings",
   "properties": {
    "handoff": {
     "enum": [
@@ -36,11 +36,38 @@
      "no"
     ]
    },
-   "blocking": {
-    "type": "array"
-   },
-   "nits": {
-    "type": "array"
+   "findings": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "id",
+      "file",
+      "finding",
+      "severity"
+     ],
+     "x-blocking-needs": "case",
+     "properties": {
+      "id": {
+       "type": "string"
+      },
+      "file": {
+       "type": "string"
+      },
+      "finding": {
+       "type": "string"
+      },
+      "case": {
+       "type": "string"
+      },
+      "severity": {
+       "enum": [
+        "blocking",
+        "minor"
+       ]
+      }
+     }
+    }
    }
   }
  }
