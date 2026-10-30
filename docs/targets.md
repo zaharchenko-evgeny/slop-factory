@@ -25,6 +25,7 @@ spike results are on #4.
 | `merged` | agent | Post-merge actions (retro), then `done` | Same run as the merge trigger |
 | `done` | human | Final | Final |
 | `blocked` | human | `diagnose` and `notify` run once; waits for a person | Same actions; a person sets `ready` again, which fires the `ready` trigger |
+| `waiting-main` | external | A blocking check fails on the ticket's branch and on the base too: the ticket is blocked by the open `Main is red: <check>` owner ticket (created `risk:low`, `ready` when missing). No `diagnose` or `notify`. The frontier starts nothing else while an owner ticket is open | Same; the scheduled sweep resumes it |
 | `failed` | human | Same as `blocked`; `drive.py run N --resume` restarts | `--resume` from a manual run or a webhook |
 
 ## External events
@@ -35,6 +36,7 @@ spike results are on #4.
 | `ci.passed` / `ci.failed` / `ci.pending` | Read inside the run by `gh pr checks` after publish | Read inside the run; a late failure also fires `workflow_run.failed` → `drive.py run <ticket>` | `workflow_name` contains `quality-gates` | `push-to-source` |
 | Human review asks for changes | Not detected yet (planned) | `pull_request_review.submitted` | `review_state = changes_requested` | `push-to-source` |
 | `comment.added` (`blocked`, `resume_on: comment`) | `loop --once` rechecks new comments (router `recheck`, cheap); `yes` returns the ticket to `ready` | Air has no `issue_comment` trigger: the scheduled sweep (`loop --once`) covers it. Only OWNER, MEMBER and COLLABORATOR comments count; local comments count as OWNER | repository | any |
+| `main.green` (`waiting-main`) | `main.green` detector in `factory.yaml` (GitHub: every blocker of the ticket is closed) in `loop --once`; moves the ticket to `ready` and the next start merges the fixed base into its worktree. Not detected on the local tracker | Scheduled sweep → `drive.py loop --once` | repository | any |
 | `pr.merged` | `github-pr-merged` detector in `loop --once` | `pull_request.merged` | repository | `read-only` only |
 | Daily collect, weekly improve (#63, #64), distill, safety sweep | `loop --once` opens due tickets | Scheduled trigger → `drive.py loop --once` | cron | any |
 | YouTrack ticket ready (#12) | YouTrack adapter frontier | YouTrack `issueUpdated:tagAdded` | exact, case-sensitive tag | `create-pr` |
