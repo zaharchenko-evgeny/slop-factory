@@ -444,7 +444,21 @@ class DriveRun(unittest.TestCase):
         self.patch(drive, "detect", lambda *a: {})
         self.tr.set_state(owner, "done")
         self.assertIn("ticket 01:", self.loop())
-        self.assertIn("ready", self.stages)
+        log = (self.root / ".factory/runs/01/events.log").read_text()
+        self.assertRegex(log, r'"from": "waiting-main".*"on": "main.green".*"to": "ready"')  # resumed (red again: parked again)
+
+    def test_start_after_main_red_merges_the_fixed_base(self):
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.run_dir.mkdir(parents=True)
+        d.start({"out": {}})
+        (self.root / "fix.txt").write_text("fixed\n")
+        git("add", "fix.txt", cwd=self.root)
+        git("commit", "-qm", "fix main", cwd=self.root)
+        git("push", "-q", "origin", "main", cwd=self.root)
+        d.start({"out": {}})
+        self.assertFalse((d.wt / "fix.txt").exists())  # a plain restart keeps the branch as is
+        d.start({"out": {"checks": {"main_red": "main_red: gate"}}})
+        self.assertTrue((d.wt / "fix.txt").exists())
 
     def test_claimed_ticket_exits_2_with_one_line(self):
         self.tr.claim("01", "executor-b")

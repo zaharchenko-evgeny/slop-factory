@@ -293,6 +293,12 @@ class Delivery:
         if not self.wt.is_dir():
             sh(["git", "fetch", "origin", base], self.root)
             sh(["git", "worktree", "add", "-b", b, str(self.wt), f"origin/{base}"], self.root)
+        elif (t["out"].get("checks") or {}).get("main_red"):  # resumed from waiting-main: take the fixed base
+            sh(["git", "fetch", "origin", base], self.root)
+            r = subprocess.run(["git", "-c", "user.name=factory", "-c", "user.email=factory@invalid", "merge",
+                                "--no-edit", f"origin/{base}"], cwd=self.wt, capture_output=True, text=True)
+            if r.returncode:  # a conflict is the developer's to resolve
+                subprocess.run(["git", "merge", "--abort"], cwd=self.wt, capture_output=True)
         return "done", {"branch": b}
 
     def checks(self, t):
@@ -302,7 +308,10 @@ class Delivery:
         path.write_text(report)
         if failed and not (self.issue()[0]["title"] or "").startswith(MAIN_RED):
             names = [r["name"] for r in rows if r["status"] == "fail" and r["mode"] == "blocking"]
-            red = self.red_on_base(base, names)
+            try:
+                red = self.red_on_base(base, names)
+            except (RuntimeError, OSError):  # no measurement: a normal fix round
+                red = None
             if red:
                 name, text, commit = red
                 owner = self.park(name, text, commit)
