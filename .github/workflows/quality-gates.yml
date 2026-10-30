@@ -49,15 +49,30 @@ jobs:
 
           Factory-Run: ${GITHUB_RUN_ID}"
           fi
+  # Separate from the blocking checks: its failure never turns factory-checks red or opens a Main is red ticket.
+  rerun-open-prs:
+    if: github.event_name == 'push'
+    needs: factory-checks
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      actions: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
       # A PR green only against an old main must turn red before anyone merges it.
+      # A branch older than the workflow_dispatch trigger returns 422: re-run its latest run instead.
       - name: Re-run on open factory PRs
-        if: always() && github.event_name == 'push'
         shell: bash
         run: |
-          set -o pipefail
           gh pr list --state open --base main --json headRefName --jq '.[].headRefName | select(startswith("ez/"))' |
-            while read -r ref; do gh workflow run quality-gates.yml --ref "$ref" || echo "dispatch failed: $ref" >> failed.txt; done
-          if [ -f failed.txt ]; then cat failed.txt; exit 1; fi
+            while read -r ref; do
+              gh workflow run quality-gates.yml --ref "$ref" 2>/dev/null && continue
+              id=$(gh run list --workflow quality-gates.yml --branch "$ref" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+              if [ -n "$id" ] && gh run rerun "$id"; then continue; fi
+              echo "::warning::could not re-run quality-gates on $ref"
+            done
   agnix:
     runs-on: ubuntu-latest
     timeout-minutes: 10
