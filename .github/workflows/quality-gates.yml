@@ -30,8 +30,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { fetch-depth: 0, persist-credentials: false }
       - run: pipx install uv
+      # A re-run on a PR head tests it merged with the current main, like the pull_request event does.
+      - name: Merge main
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: git -c user.name=ci -c user.email=ci@example.invalid merge --no-edit origin/main
       - id: checks
-        run: uv run --quiet factory/run_checks.py --mode blocking 2>&1 | tee checks.log; exit "${PIPESTATUS[0]}"
+        run: uv run --quiet factory/run_checks.py --mode blocking --strict 2>&1 | tee checks.log; exit "${PIPESTATUS[0]}"
       # No branch protection (private repository): a red main is owned by one ticket.
       - name: Open or reuse the Main is red ticket
         if: failure() && github.event_name == 'push'
@@ -47,12 +51,13 @@ jobs:
           fi
       # A PR green only against an old main must turn red before anyone merges it.
       - name: Re-run on open factory PRs
-        if: github.event_name == 'push'
+        if: always() && github.event_name == 'push'
         shell: bash
         run: |
           set -o pipefail
           gh pr list --state open --base main --json headRefName --jq '.[].headRefName | select(startswith("ez/"))' |
-            while read -r ref; do gh workflow run quality-gates.yml --ref "$ref"; done
+            while read -r ref; do gh workflow run quality-gates.yml --ref "$ref" || echo "dispatch failed: $ref" >> failed.txt; done
+          if [ -f failed.txt ]; then cat failed.txt; exit 1; fi
   agnix:
     runs-on: ubuntu-latest
     timeout-minutes: 10

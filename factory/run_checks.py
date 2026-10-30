@@ -5,7 +5,7 @@
 # ///
 """Run the `checks` of factory.yaml: the one list for the factory driver and GitHub CI.
 
-Usage: run_checks.py [--mode blocking|advisory] [--only NAME ...]
+Usage: run_checks.py [--mode blocking|advisory] [--only NAME ...] [--strict]
 Prints each check's name and result; exits 1 at the first failing blocking check.
 """
 import argparse
@@ -51,12 +51,14 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["blocking", "advisory"])
     ap.add_argument("--only", nargs="*")
+    ap.add_argument("--strict", action="store_true", help="a skipped blocking check fails too (CI)")
     a = ap.parse_args(argv)
     config = yaml.safe_load((ROOT / "factory.yaml").read_text())
     base = os.environ.get("FACTORY_BASE") or config["repositories"][0].get("default_branch", "main")
     failed, rows, report = run_checks(config, ROOT, base, a.mode, a.only, stop=True)
     for r in rows:
         print(f"{r['name']}: {r['status']}")
+    failed |= a.strict and any(r["status"] == "skipped" and r["mode"] == "blocking" for r in rows)
     if failed:
         print("\n" + report, file=sys.stderr)
     return 1 if failed else 0
