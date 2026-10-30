@@ -43,7 +43,7 @@ change, whether you are a person, a pi session or a factory role.
    time, and update a branch that is behind the base first. GitHub cannot
    require status checks here (private repository, no Pro), so a human merges
    only a PR whose `factory-checks` ran after the latest push to `main`; a push
-   to `main` re-runs it on every open `ez/*` PR, and a red `main` opens the
+   to `main` re-runs it on every open factory PR, and a red `main` opens the
    `Main is red: <check>` ticket.
 6. **Record process gaps.** When a run needs a manual step or hits a factory
    defect, add one comment to the ticket that will fix it (or open a new

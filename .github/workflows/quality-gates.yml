@@ -48,7 +48,9 @@ jobs:
       # A PR green only against an old main must turn red before anyone merges it.
       - name: Re-run on open factory PRs
         if: github.event_name == 'push'
+        shell: bash
         run: |
+          set -o pipefail
           gh pr list --state open --base main --json headRefName --jq '.[].headRefName | select(startswith("ez/"))' |
             while read -r ref; do gh workflow run quality-gates.yml --ref "$ref"; done
   agnix:
