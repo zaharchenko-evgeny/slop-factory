@@ -5,8 +5,11 @@ local skill runs it now, and the setup skill later renders it into an Air
 workflow graph. Names of repositories, stages, models and checks come from
 `factory.yaml`.
 
-The same loop is defined as a state machine in `workflows/delivery.sm.yaml`,
-checked and run by `factory/sm.py` (`validate`, `next`, `simulate`);
+The running loop is defined as a state machine in `workflows/delivery.v1.sm.yaml`,
+checked and run by `factory/sm_v1.py` (`validate`, `next`, `simulate`). The
+state chart as a transition table (`docs/statechart.md`) is in
+`workflows/delivery.sm.yaml`, checked by `factory/sm.py` (`validate`,
+`simulate`); it replaces the v1 file when the local driver moves to it;
 `factory/drive.py` runs it against a tracker through the operations in
 `docs/agents/issue-tracker.md`; `drive.py run <N>` executes its actions until
 the ticket waits on a human. The local skill runs the machine, so the

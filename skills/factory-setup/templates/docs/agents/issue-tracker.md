@@ -39,8 +39,8 @@ Read it as in **Read an issue** above.
 
 ## Factory operations
 
-The delivery state machine (`workflows/delivery.sm.yaml`, run by
-`factory/sm.py`) reaches the tracker only through these operations.
+The delivery state machine (`workflows/delivery.v1.sm.yaml`, run by
+`factory/sm_v1.py`; the new table in `workflows/delivery.sm.yaml` replaces it later) reaches the tracker only through these operations.
 `factory/drive.py` runs one ticket through the engine against an adapter.
 A state is a stage name from `factory.yaml` `tracker.stages`; vars are the
 machine's `vars`, plus `_run` (running actions, their outputs, retries and
