@@ -180,9 +180,9 @@ its Agent Spawner `sessionId` (`air-automations get_run`). `air-cloud resume_tas
 `sessionId` and a prompt restarted the finished codex session: it answered from its earlier context, and
 its context grew from 24.5k to 29k tokens. Three limits follow:
 
-- Only the run's owner can resume it (AIRA-1548 asks for a service account). An Air run has no Air
-  token, so the step that resumes runs with the owner's Air credential: the local sweep, or an Air step
-  with the owner's token as a secret.
+- Only the run's owner can resume it (AIRA-1548 asks for a service account). The factory does not hold
+  the owner's Air credential, so **Air does not resume until AIRA-1548 lands** (#116). Until then a
+  substantial round on Air starts a fresh session on the developer's model with `context.md`.
 - A resumed session is not an automation run. No `push-to-source` happens at its end, so the agent pushes
   the fix itself with `gh`, and `dispatch` sees the `synchronize` event as usual. Whether the
   workspace and its credentials are still there after a long pause is an open check.
@@ -217,8 +217,8 @@ How each target resumes:
 
 | | Local | Air |
 |---|---|---|
-| Resume | pi `--session-id factory-<n>-developer`, claude-code `--resume`, as today | `resume_task(sessionId, prompt, model)`, called by the step with the owner's credential |
-| Who pushes | the driver, as today | the resumed agent, with `gh` |
+| Resume | pi `--session-id factory-<n>-developer`, claude-code `--resume`, as today | none yet; after AIRA-1548, `resume_task(sessionId, prompt, model)` with a service account (#116) |
+| Who pushes | the driver, as today | the platform (`push-to-source`); after #116, the resumed agent with `gh` |
 | Fresh session | `run_role.py` with `context.md` | a `factory:fix-<tier>` automation run with `context.md` |
 
 - **The handoff.** Every developer step also writes `context.md`: decisions, rejected approaches, files
@@ -356,8 +356,7 @@ These slices come after #106 to #109. Each ends in a state you can check with `s
    `tier_climbs` limit would let a ticket climb and still get its full fix rounds.
 4. **The improver role.** It is new. The distill role could do it instead, with a different mode. That
    choice can wait for slice 7.
-5. **The owner's Air credential for resumes.** Until AIRA-1548 gives a service account, a resume on
-   Air acts as you. The alternative is to resume only from the local sweep.
+5. **Air resumes wait for AIRA-1548** (decided 30 October). No step holds the owner's Air credential.
 
 ## Open checks for the new parts
 
