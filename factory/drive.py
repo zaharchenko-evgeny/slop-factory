@@ -42,7 +42,7 @@ most once per call; it cycles until a cycle runs nothing and no event moved a ti
 default branch that merges the new knowledge-inbox entries into the knowledge dir (the distill role).
 
 CLI: uv run factory/drive.py run <ticket> [--tracker local:<effort dir>|github] [--executor NAME] [--resume]
-     uv run factory/drive.py loop [--once] [--tracker ...] [--executor NAME]
+     uv run factory/drive.py loop [--once] [--issue N ...] [--tracker ...] [--executor NAME]
      uv run factory/drive.py distill  opens the distill PR now, if there is a new inbox entry.
      uv run factory/drive.py branch <ticket> <ticket.json>  prints the ticket's branch name.
 """
@@ -908,9 +908,9 @@ def record_runs(ledger, n):
 ERRORS = (ClaimError, ResumeError, RuntimeError, ValueError, KeyError, OSError, sm.SMError)
 
 
-def loop(root, tracker, executor, once=False):
+def loop(root, tracker, executor, once=False, only=None):
     """Move every ticket the machine can move, one line each, until a cycle changes nothing
-    (`once`: one cycle). The loop itself never sets a stage. Return 2 if any ticket errored, else 0."""
+    (`once`: one cycle; `only`: ticket numbers to restrict to). The loop itself never sets a stage. Return 2 if any ticket errored, else 0."""
     root = Path(root)
     cycle = time.strftime("%Y%m%dT%H%M%S")  # one id per loop call, on every line it prints
 
@@ -932,6 +932,8 @@ def loop(root, tracker, executor, once=False):
     while True:
         moved, agent = False, []
         for nn in tickets(m, config, tracker):
+            if only and int(nn) not in only:
+                continue
             try:
                 state = tracker.get_state(nn)
                 if (m["states"].get(state) or {}).get("actor") == "agent":
@@ -1000,6 +1002,7 @@ def main(argv=None):
     r.add_argument("--resume", action="store_true", help="restart a failed ticket at the step that failed")
     y = sub.add_parser("loop", help="run every ticket the state machine can move until nothing moves")
     y.add_argument("--once", action="store_true", help="one cycle (was `sync`)")
+    y.add_argument("--issue", type=int, action="append", help="only this ticket number (repeatable)")
     for sp in (r, y):
         sp.add_argument("--tracker", default="github", help="local:<effort dir> or github (default)")
         sp.add_argument("--executor", help="claim name (default: the gh login, or the OS user for local)")
@@ -1037,7 +1040,7 @@ def main(argv=None):
         p.error(f"--tracker {args.tracker!r}: use local:<effort dir> or github")
     run_dir = sm.ROOT / yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["targets"]["local"]["run_dir"]
     if args.cmd == "loop":
-        return loop(sm.ROOT, tracker, executor, once=args.once)
+        return loop(sm.ROOT, tracker, executor, once=args.once, only=set(args.issue or ()))
     try:
         config, m = load(sm.ROOT)
         events = [] if args.resume else watched(m, config, tracker.get_state(args.ticket))

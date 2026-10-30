@@ -809,6 +809,12 @@ class DriveRun(unittest.TestCase):
         self.only("01")
         self.assertEqual((self.loop(), self.tr.get_state("01")), ("", "ready"))
 
+    def test_loop_only_skips_other_tickets(self):
+        self.only("01")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(drive.loop(self.root, self.tr, "executor-a", only={7}), 0)
+        self.assertEqual((self.tr.get_state("01"), self.calls("intake")), ("ready", 0))
+
     def test_claim_held_elsewhere_stops_without_running(self):
         self.tr.claim("01", "executor-b")
         with self.assertRaises(ClaimError):
