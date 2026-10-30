@@ -95,15 +95,13 @@ transitions:
   - { from: in-review, event: [review_full, review_behaviour, review_structure_security] }
   - { from: in-review, event: join, if: 'event.missing > 0' }
   - { from: in-review, event: join, if: 'event.blocks = true and (event.same_ids = true or fix_round >= max_rounds)', to: blocked }
-  - from: in-review
-    event: join
-    if: 'event.blocks = true'
-    set: { risk: event.risk, approval: '""', full_blocks: event.full_blocks, behaviour_blocks: event.behaviour_blocks, security_blocks: event.security_blocks }
-    inc: [fix_round]
-    labels: [factory:fix]
-    to: changes-requested
-  - { from: in-review, event: join, if: 'event.docs_impact = "yes" or docs_impact = "yes"', set: { risk: event.risk, docs_impact: '"yes"', full_blocks: false, behaviour_blocks: false, security_blocks: false }, labels: [factory:document] }
-  - { from: in-review, event: join, set: { risk: event.risk, full_blocks: false, behaviour_blocks: false, security_blocks: false }, labels: [factory:approve] }
+  # risk is sticky: a join that sees high (now or earlier) sets it high; a lower report never lowers it.
+  - { from: in-review, event: join, if: 'event.blocks = true and (event.risk = "high" or risk = "high")', set: { risk: '"high"', approval: '""', full_blocks: event.full_blocks, behaviour_blocks: event.behaviour_blocks, security_blocks: event.security_blocks }, inc: [fix_round], labels: [factory:fix], to: changes-requested }
+  - { from: in-review, event: join, if: 'event.blocks = true', set: { approval: '""', full_blocks: event.full_blocks, behaviour_blocks: event.behaviour_blocks, security_blocks: event.security_blocks }, inc: [fix_round], labels: [factory:fix], to: changes-requested }
+  - { from: in-review, event: join, if: '(event.docs_impact = "yes" or docs_impact = "yes") and (event.risk = "high" or risk = "high")', set: { risk: '"high"', docs_impact: '"yes"', full_blocks: false, behaviour_blocks: false, security_blocks: false }, labels: [factory:document] }
+  - { from: in-review, event: join, if: 'event.docs_impact = "yes" or docs_impact = "yes"', set: { docs_impact: '"yes"', full_blocks: false, behaviour_blocks: false, security_blocks: false }, labels: [factory:document] }
+  - { from: in-review, event: join, if: 'event.risk = "high" or risk = "high"', set: { risk: '"high"', full_blocks: false, behaviour_blocks: false, security_blocks: false }, labels: [factory:approve] }
+  - { from: in-review, event: join, set: { full_blocks: false, behaviour_blocks: false, security_blocks: false }, labels: [factory:approve] }
 
   - { from: in-review, event: document, if: 'event.result != "done"', to: blocked }
   - { from: in-review, event: document, set: { intent: '"approve"' } }

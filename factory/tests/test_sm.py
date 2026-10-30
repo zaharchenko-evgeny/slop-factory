@@ -125,6 +125,18 @@ class Simulate(unittest.TestCase):
                        "ci={state: passed}"])
         self.assertEqual((t["state"], rows[-1][3]), ("in-review", "ignored: no transition matches"))
 
+    def test_risk_never_goes_down(self):  # B2: a low report after high keeps high
+        t = sm.new_ticket(M, "in-review", {"risk": "high"})
+        t, _ = sm.step(M, t, "join", {"missing": 0, "blocks": False, "risk": "low", "docs_impact": "no"})
+        self.assertEqual(t["vars"]["risk"], "high")
+        t, _ = sm.step(M, sm.new_ticket(M, "in-review"), "join", {"missing": 0, "blocks": False, "risk": "high", "docs_impact": "no"})
+        self.assertEqual(t["vars"]["risk"], "high")
+
+    def test_needs_human_verdict_still_waits_for_a_human(self):  # dry-run: either verdict reaches approved, a human merges
+        t, _ = run(["human_ready", "intake={result: start, risk: low}", "implement={result: done}", "dispatch={expected: true}",
+                    JOIN_OK % "low", "approve={verdict: needs-human}", "ci={state: passed}"])
+        self.assertEqual(t["state"], "approved")
+
     def test_fix_rounds_are_bounded(self):
         t = sm.new_ticket(M, "in-review", {"fix_round": 3, "risk": "high"})
         t, _ = sm.step(M, t, "join", {"missing": 0, "blocks": True, "same_ids": False, "risk": "high"})
