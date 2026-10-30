@@ -52,7 +52,6 @@ import getpass
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -67,6 +66,7 @@ import harnesses
 import model_access
 import preflight
 import run_role
+import run_checks
 import runlog
 import sm_v1 as sm
 from local_tracker import ClaimError, LocalTracker
@@ -353,27 +353,8 @@ class Delivery:
         return str(owner)
 
     def run_checks(self, cwd, base, blocking_only=False, only=None):
-        """Run the pre-review checks in `cwd`: (a blocking one failed, rows, markdown report)."""
-        rows, report, failed = [], [], False
-        for c in self.config.get("checks") or []:
-            if c.get("stage", "pre-review") != "pre-review" or (blocking_only and c.get("mode") != "blocking") \
-                    or (only is not None and c["name"] not in only):
-                continue
-            if c.get("requires") and not shutil.which(c["requires"]):
-                status, text = "skipped", f"{c['requires']} is not installed"
-            else:
-                r = subprocess.run(["bash", "-c", c["run"]], cwd=cwd, capture_output=True, text=True,
-                                   env={**os.environ, "FACTORY_BASE": base})
-                status, text = ("pass" if r.returncode == 0 else "fail"), r.stdout + r.stderr
-            failed |= status == "fail" and c.get("mode") == "blocking"
-            skips = re.findall(r"skipped=(\d+)|^.*\.\.\. skipped '(.*)'$", text, re.M)
-            if skips:  # a passing check that skipped tests (e.g. a missing tool) did not run them all
-                text = f"NOTE: {len(skips)} skip report(s) in the output, those tests did not run\n" + text
-            rows.append({"name": c["name"], "mode": c.get("mode"), "status": status})
-            lines = text.rstrip().splitlines()
-            tail = "\n".join(lines[:1] * bool(skips) + lines[-15:])
-            report.append(f"## {c['name']} ({c.get('mode')}): {status}\n~~~~\n{tail}\n~~~~\n")
-        return failed, rows, "\n".join(report)
+        """Run the pre-review checks in `cwd` (factory/run_checks.py): (a blocking one failed, rows, report)."""
+        return run_checks.run_checks(self.config, cwd, base, "blocking" if blocking_only else None, only)
 
     def approve(self, t):
         """The approver (dry-run): record its verdict and reasons on the ticket; publish adds them to the PR."""

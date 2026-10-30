@@ -207,6 +207,7 @@ class GitHub(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp)
         config = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())
         config["knowledge"]["distill_every_days"] = 0  # no git repository here: no distill
+        config["targets"]["local"]["model_access"] = "env"  # central needs jbcentral, absent in CI
         (tmp / "factory.yaml").write_text(yaml.safe_dump(config))
         shutil.copytree(sm.ROOT / "workflows", tmp / "workflows")
         stub = tmp / "gh"  # `gh pr view`: every PR merged
