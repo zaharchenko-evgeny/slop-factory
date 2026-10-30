@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import unittest.mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -317,7 +318,8 @@ class RunRole(unittest.TestCase):
             with self.subTest(reply=reply, code=code):
                 os.environ.update(STUB_REPLY=reply, STUB_EXIT=str(code))
                 self.assertEqual(preflight.check("m")[0], ok)
-        with contextlib.redirect_stdout(io.StringIO()) as printed:
+        with contextlib.redirect_stdout(io.StringIO()) as printed, \
+                unittest.mock.patch.object(preflight.model_access, "pi_env", return_value={}):  # no jbcentral in CI
             self.assertEqual(preflight.main(["m1", "m2"]), 1)
             os.environ.update(STUB_REPLY="OK", STUB_EXIT="0")
             self.assertEqual(preflight.main(["m1", "m2"]), 0)
