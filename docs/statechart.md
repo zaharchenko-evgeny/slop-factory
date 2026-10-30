@@ -4,6 +4,8 @@ Status is proposed in #100 (30 October 2026). Once accepted, it replaces the for
 `workflows/delivery.sm.yaml` and supersedes ADR-0003. Every claim marked *proven* has a run linked from
 #4 or #100. A claim marked *unverified* is a design assumption that the first implementation ticket checks.
 
+The [proposed whole-factory chart](statechart-proposed.md) extends this one with triage outcomes, auto-merge, routines and the learning loops.
+
 ## What changes
 
 Today one `drive.py run` walks a ticket from `ready` to `approved`. It keeps fork, join and loop state in

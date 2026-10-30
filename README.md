@@ -73,6 +73,7 @@ with you.
 ## More
 
 - [Targets: local and Air Cloud](docs/targets.md)
+- [Delivery state chart](docs/statechart.md) and the [proposed whole-factory chart](docs/statechart-proposed.md)
 - [Recipe: auto-approve and auto-merge](docs/recipes/auto-approve.md)
 
 - [Design](docs/design.md)
