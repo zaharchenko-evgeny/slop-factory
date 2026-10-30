@@ -85,18 +85,12 @@ Review only: router → reviewer run on a given PR.
 A bug uses the feature flow with a lighter design step: reproduction, root cause
 hypothesis, acceptance check.
 
-## 6. Orchestration (ADR-0003)
+## 6. Orchestration (ADR-0013)
 
-- **Air Workflow** runs the per-ticket loop (`agentTask`, `gateway`,
-  `humanTask` nodes). Its state lives in the workflow instance.
-- **Air automations** are event bridges only: tracker stage `ready` → start the
-  workflow; PR review submitted → fixer; PR merged → doc-writer and stage
-  `done`; weekly schedule → distill.
-- **Locally** the same workflow is a skill that drives pi, Claude or Codex
-  subagents.
-
-`workflows/delivery.md` is the single definition; the setup skill renders it
-into an Air workflow graph and into the local skill.
+The tracker label is the ticket's state. Each GitHub event starts one step that
+runs one role, and the step script decides the next state. The chart, the
+events, and the automations are in [the delivery state chart](statechart.md).
+Both targets run the same steps; locally `drive.py loop` polls the events.
 
 ## 7. Plugins (ADR-0004)
 
@@ -266,10 +260,10 @@ where a repository requires it.
 - Automation names start with `[factory]`. Prompts are thin: they point to role
   files in this repository.
 - An LME-A-22 record is generated for each automation in `docs/automations/`.
-- Enforcement (ADR-0011): all automations share one Air account and one set of
-  tokens, so roles are not a security boundary. Write access is limited in Air
-  instead: reviewer, approver, auditor and ops automations use
-  `outputBehaviour: read-only`.
+- Enforcement (ADR-0013): all automations share one Air account and one set of
+  tokens, so roles are not a security boundary. `read-only` limits version
+  control only, so `factory/step.py` checks every transition. Reviewer, approver,
+  auditor and ops automations still use `outputBehaviour: read-only`.
 - Triggers match narrowly: every event trigger filters on the factory branch
   prefix, a label or a tag. Never trigger on every comment.
 - Identity: actions run under the token owner for v1; every bot-written text

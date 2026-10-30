@@ -7,9 +7,10 @@ the ticket, reads its state from the tracker, runs the actions of `agent`
 states, and stops at a `human` or `external` state. No target moves a card
 itself.
 
-Status: **local** is implemented (#61, #68, #74). **Air** is planned (#4, #7,
-#8); this page is the plan, checked against Air documentation on 29 October
-2026 (AIR-A-14, AIRA-865, AIRA-991, AIRA-1141, AIRA-1476).
+Status: **local** is implemented (#61, #68, #74). **Air** is planned (#7, #8).
+The Air automations follow [the delivery state chart](statechart.md) (ADR-0013),
+which replaces the Air rows below once its implementation tickets land. The
+spike results are on #4.
 
 ## States
 

@@ -1,6 +1,6 @@
 # ADR-0003: Air Workflow for the loop, automations as event bridges
 
-Status: accepted (28 Oct 2026)
+Status: superseded by ADR-0013 (#100)
 
 Options: (a) chain automations through tracker tags, as JetFlow does; (b) Air Workflow for the per-ticket loop, automations only for events.
 
