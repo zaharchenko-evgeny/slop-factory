@@ -347,8 +347,9 @@ class Delivery:
             return "done", {"pr_urls": t["vars"]["pr_urls"]}
         url = sh([gh(), "pr", "create", "--head", b, "--base", base, "--title", f"#{self.nn} {i['title']}",
                   "--body", self.pr_body(t, i, base)], self.wt).strip().splitlines()[-1]
-        nits = [f"### {a}\n\n{out[a]['nits'].strip()}" for a in REVIEWERS
-                if (out.get(a) or {}).get("nits", "").strip() not in ("", "none")]
+        nits = [f"### {a}\n\n" + "\n".join(f"- {x['file']} — {x['finding']}" for x in minor)
+                for a in REVIEWERS if (minor := [x for x in (out.get(a) or {}).get("findings", [])
+                                                 if x["severity"] == "minor"])]
         if nits:
             body = "\n\n".join(["[factory] Review nits (advisory, not blocking)", *nits, self.trailer(t)])
             sh([gh(), "pr", "comment", url, "--body", body], self.wt)
@@ -484,7 +485,7 @@ class Delivery:
             h = json.loads(p.read_text())
             rounds.setdefault(int(n or 0), {})[action] = h.get("verdict")
             ids += [f"{action}-{n or 0}:{i}" for i in dict.fromkeys(
-                re.findall(r"^\s*-?\s*id:\s*(\S+)", h.get("blocking") or "", re.M))]  # per reviewer and round
+                x["id"] for x in h.get("findings", []) if x["severity"] == "blocking")]  # per reviewer and round
         shared = [set(v.values()) for v in rounds.values() if len(v) > 1]
         a = t["out"].get("approve") or {}
         return "\n".join([
@@ -676,10 +677,15 @@ class Delivery:
             return "error", {}
         h = json.loads((self.run_dir / f"{step}.handoff.json").read_text())
         if spec["role"] == "reviewer":
-            h["blocking_ids"] = re.findall(r"^\s*-?\s*id:\s*(\S+)", h.get("blocking") or "", re.M)
+            h["blocking_ids"] = blocking_ids(h)
         if spec["role"] not in ("developer", "doc-writer"):
             return "done", h
         return (h["status"] if h.get("status") in ("done", "blocked") else "error"), h
+
+
+def blocking_ids(handoff):
+    """`<id> <file>` of each blocking finding: what the "same findings twice" guard compares."""
+    return [f"{x['id']} {x['file']}" for x in handoff.get("findings", []) if x["severity"] == "blocking"]
 
 
 def primary(config):

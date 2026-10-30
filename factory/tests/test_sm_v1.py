@@ -171,7 +171,7 @@ class Delivery(unittest.TestCase):
         self.assertEqual(trace[0]["run"], ["review_full"])
 
     def test_rereview_runs_only_blocking_reviewers(self):
-        cr = {"verdict": "changes-requested", "reviewed_sha": "s", "blocking_ids": ["X"]}
+        cr = {"verdict": "changes-requested", "reviewed_sha": "s", "blocking_ids": ["X f.py:1"]}
         ok = {"verdict": "approved", "reviewed_sha": "s"}
         for behaviour, structure, want in [(cr, ok, ["review_behaviour"]), (ok, cr, ["review_structure_security"]),
                                            (cr, cr, ["review_behaviour", "review_structure_security"])]:
@@ -185,12 +185,12 @@ class Delivery(unittest.TestCase):
         self.assertEqual(trace[-1]["run"], ["review_full"])
 
     def test_blocking_ids_merge_and_same_findings_twice_blocks(self):
-        t, _ = self.review("high", ("review_behaviour", {"verdict": "changes-requested", "blocking_ids": ["B1"]}),
-                           ("review_structure_security", {"verdict": "changes-requested", "blocking_ids": ["S1"],
+        t, _ = self.review("high", ("review_behaviour", {"verdict": "changes-requested", "blocking_ids": ["B1 a.py:1"]}),
+                           ("review_structure_security", {"verdict": "changes-requested", "blocking_ids": ["S1 b.py:2"],
                                                           "reviewed_sha": "s"}))
-        self.assertEqual(t["vars"]["last_blocking_ids"], ["B1", "S1"])
-        t, _ = self.review("low", ("review_full", {"verdict": "changes-requested", "blocking_ids": ["B1"]}),
-                           base={"vars": {"last_blocking_ids": ["B1"]}})
+        self.assertEqual(t["vars"]["last_blocking_ids"], ["B1 a.py:1", "S1 b.py:2"])
+        t, _ = self.review("low", ("review_full", {"verdict": "changes-requested", "blocking_ids": ["B1 a.py:1"]}),
+                           base={"vars": {"last_blocking_ids": ["B1 a.py:1"]}})
         self.assertEqual(t["state"], "blocked")
 
     def test_review_raises_risk_never_lowers(self):
@@ -198,7 +198,7 @@ class Delivery(unittest.TestCase):
                                                ("changes-requested", "high", "low", "high"),
                                                ("changes-requested", "low", "low", "low")]:
             with self.subTest(verdict=verdict, reported=reported, start=start):
-                t, _ = self.review(start, *[(a, {"verdict": verdict, "reviewed_sha": "s", "blocking_ids": ["B1"],
+                t, _ = self.review(start, *[(a, {"verdict": verdict, "reviewed_sha": "s", "blocking_ids": ["B1 a.py:1"],
                                                  "risk": reported})
                                             for a in (["review_full"] if start == "low" else
                                                       ["review_behaviour", "review_structure_security"])])
@@ -208,7 +208,7 @@ class Delivery(unittest.TestCase):
     def test_reviewers_low_and_high_yield_high(self):
         for verdict in ("approved", "changes-requested"):
             with self.subTest(verdict=verdict):
-                p = {"verdict": verdict, "reviewed_sha": "s", "blocking_ids": ["B1"]}
+                p = {"verdict": verdict, "reviewed_sha": "s", "blocking_ids": ["B1 a.py:1"]}
                 t, _ = self.review("low", ("review_full", {**p, "risk": "high"}))
                 self.assertEqual(t["vars"]["risk"], "high")
                 t = sm.new_ticket(self.m, {"state": "in-dev", "pending": ["checks"], "vars": {"risk": "high"}})

@@ -61,7 +61,8 @@ class StartupTest(unittest.TestCase):
 
     def test_air_models_in_config(self):
         m = yaml.safe_load((ROOT / "factory.yaml").read_text())["targets"]["air"]["models"]
-        self.assertEqual(set(m), {"cheap", "mid", "strong"})
+        self.assertEqual(set(m), {"cheap", "mid", "strong", "review", "review_strong"})
+        self.assertNotEqual(m["review"].split("/")[0], m["mid"].split("/")[0])
 
 
 if __name__ == "__main__":
