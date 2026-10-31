@@ -26,20 +26,23 @@ PREFIX = "[factory:"
 PROMPT = (
     "Save the trigger payload (the <trigger_event> JSON) to a file. "
     "Run `uv run factory/gate.py check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
-    "Otherwise read `role_file` and every skill it lists, and do the role's work. "
-    "Then run `uv run factory/gate.py apply --node {node}{sel} --event <file> --outcome <outcome> --payload <file>` "
-    "with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) "
-    "plus every field the outcome's effects name (for example `tier`, `reason`)."
+    "Otherwise read `role_file` and every skill it lists, and do the role's work on the `branch` of the output "
+    "(create it from the default branch when it does not exist; the platform pushes). "
+    "Write the role's handoff to `handoff_path`, then run "
+    "`uv run factory/gate.py apply --node {node}{sel} --event <file> --handoff <handoff_path>`."
 )
+BOT_FILTERED = ("review-", "join")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
 
-def trigger(text: str, tier: str | None) -> dict:
+def trigger(text: str, tier: str | None, pr_author: str | None = None) -> dict:
     """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations)."""
     event, _, arg = str(text).partition(" ")
     arg = arg.replace("<tier>", tier or "")
     labeled = event.startswith("issues.") or event.startswith("pull_request.labeled")
-    return {"triggerType": "EVENT", "source": "github", "eventType": event,
-            "filters": {"label": arg} if labeled and arg else {}}
+    filters = {"label": arg} if labeled and arg else {}
+    if pr_author and event.startswith("pull_request"):
+        filters["pr_author"] = pr_author
+    return {"triggerType": "EVENT", "source": "github", "eventType": event, "filters": filters}
 
 
 def repository(r: dict) -> dict:
@@ -47,6 +50,12 @@ def repository(r: dict) -> dict:
     url = r["url"].rstrip("/")
     return {"fullName": "/".join(url.split("/")[-2:]), "cloneUrl": url + ".git", "browseUrl": url,
             "provider": "github" if "github.com" in url else "other"}
+
+
+# A script node runs no agent work: the gate's sweep decides every scripted step (join, waiting reviewers,
+# merged to done) from facts, so the automation only runs it.
+SCRIPT_PROMPT = ("Run `uv run factory/gate.py sweep` once and report its JSON output. Do nothing else: "
+                 "change no file, label, comment or review yourself.")
 
 
 def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str, str | None]]:
@@ -65,6 +74,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     envs_def = nodes.get("environments") or {}
     scheds = nodes.get("schedules") or {}
+    bot = config["targets"]["air"]["bot_login"]
     automations, used = [], []
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human":
@@ -80,7 +90,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     trig.append({"triggerType": "SCHEDULED", "cronExpression": scheds[str(t)[9:]]["cron"],
                                  "timezone": "UTC"})
                 elif str(t) != "manual":
-                    trig.append(trigger(t, tier_arg))
+                    trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None))
             automations.append({
                 "name": f"{PREFIX}{aname}]",
                 "triggers": trig,
@@ -88,7 +98,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{PREFIX}{env}] env",
-                "prompt": PROMPT.format(node=name, sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else "")),
+                "prompt": SCRIPT_PROMPT if n["role"] == "script" else PROMPT.format(
+                    node=name, sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else "")),
             })
     envs = []
     for env in used:

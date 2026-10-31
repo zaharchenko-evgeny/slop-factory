@@ -188,6 +188,55 @@ class LoopTest(unittest.TestCase):
         self.assertTrue(loop.cron_due("*/10 * * * *", last, now))
         self.assertFalse(loop.cron_due("0 7 * * *", last, now))
 
+    def test_drop_stale_fix_label_from_pr(self):
+        self.t.tickets[1]["pr"] = 5
+        calls = []
+        self.t.apply = lambda e: calls.append(e) or False
+        loop.drop_stale_commands(self.t, 1, [])
+        self.assertIn({"kind": "unlabel", "ticket": 1, "value": "factory:fix-mid", "on": "pr"}, calls)
+
+    def test_closed_ticket_only_reaches_sweep(self):
+        ran = []
+
+        class T(MemoryTracker):
+            def sweep_tickets(self, stages):
+                return [1]
+
+        tr = T({1: {"stage": "ready", "head": "abc"}})
+        argv = ["--once", "--issue", "0"]
+        orig = loop.tick
+        loop.tick = lambda *a, **kw: ran.append(kw["closed"]) or {"ran": [], "due": [], "errors": []}
+        import gate_github
+        orig_cfg = gate_github.GitHubGateTracker.from_config
+        gate_github.GitHubGateTracker.from_config = classmethod(lambda cls: tr)
+        import github_tracker
+        orig_gh = github_tracker.gh
+        github_tracker.gh = lambda args: "[]"
+        try:
+            loop.main(["--once"])
+        finally:
+            loop.tick, gate_github.GitHubGateTracker.from_config, github_tracker.gh = orig, orig_cfg, orig_gh
+        self.assertEqual(ran, [[1]])
+        res = loop.tick(tr, [1], NODES, CONFIG, run_role=self.run_role, closed=[1],
+                        last=datetime(2026, 1, 1), now=datetime(2026, 1, 1, 0, 1))
+        self.assertEqual((res["ran"], self.calls), ([], []))
+
+    def test_default_run_role_reads_a_real_handoff(self):
+        import run_role
+        root = Path(tempfile.mkdtemp())
+        (root / "factory.yaml").write_text("targets: {local: {run_dir: runs}}\n")
+        h = {"handoff": "ROUTER-INTAKE", "kind": "bug", "ready": "yes", "split": "none", "risk": "low", "size_estimate": "~100"}
+
+        def fake(root_, ticket, node):
+            (root / "runs" / str(ticket) / f"{node}.handoff.json").write_text(json.dumps(h))
+            return False
+        orig, run_role.run = run_role.run, fake
+        try:
+            outcome, payload = loop.default_run_role("intake", {"ticket": 3}, root=root)
+        finally:
+            run_role.run = orig
+        self.assertEqual((outcome, payload["tier"], payload["complexity"]), ("proceed", "cheap", "small"))
+
 
 if __name__ == "__main__":
     unittest.main()

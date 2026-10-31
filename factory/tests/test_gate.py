@@ -208,5 +208,94 @@ class CliAndValidate(unittest.TestCase):
         self.assertTrue(any("unknown `when` key bogus" in e for e in nodes.validate(n, CONFIG)))
 
 
+PR = {"number": 9, "updated_at": "2026-10-31T10:00:00Z", "head": {"ref": "ez/7-x", "sha": "abc"}}
+TRIGGERS = {  # recorded webhook payloads, trimmed to the fields the gate reads
+    "issues": {"action": "labeled", "issue": {"number": 7, "updated_at": "2026-10-31T09:00:00Z"},
+               "sender": {"login": "me"}},
+    "pull_request": {"action": "opened", "pull_request": PR},
+    "pull_request_review": {"action": "submitted", "pull_request": PR,
+                            "review": {"submitted_at": "2026-10-31T11:00:00Z"}},
+}
+
+
+class TriggerTest(unittest.TestCase):
+    def run_main(self, argv):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = gate.main(argv)
+        return code, json.loads(out.getvalue())
+
+    def test_check_resolves_ticket_and_head_from_raw_payloads(self):
+        want = {"issues": (None, "issues:2026-10-31T09:00:00Z"), "pull_request": ("abc", "pull_request:2026-10-31T10:00:00Z"),
+                "pull_request_review": ("abc", "pull_request_review:2026-10-31T11:00:00Z")}
+        for name, payload in TRIGGERS.items():
+            ev = gate.read(self.file(payload), "event", raw=True)
+            self.assertEqual((ev["ticket"], ev["head"], ev["id"]), (7, *want[name]), name)
+
+    def file(self, obj):
+        d = Path(tempfile.mkdtemp())
+        (d / "f.json").write_text(json.dumps(obj))
+        return d / "f.json"
+
+    def test_pr_without_ez_branch_exits_10(self):
+        f = self.file({"pull_request": {**PR, "head": {"ref": "main", "sha": "a"}}})
+        code, out = self.run_main(["check", "--node", "intake", "--event", str(f), "--tracker", "memory:" + str(self.file({}))])
+        self.assertEqual((code, out["go"]), (10, False))
+
+    def test_check_branch_from_title_or_pr(self):
+        tr = self.file({"7": {"stage": "ready", "head": "abc", "title": "Add the widget thing"}})
+        code, out = self.run_main(["check", "--node", "intake", "--event", str(self.file(TRIGGERS["issues"])), "--tracker", f"memory:{tr}"])
+        self.assertEqual((out["branch"], out["handoff_path"]), ("ez/7-add-widget-thing", ".factory/handoff/intake.json"))
+        tr = self.file({"7": {"stage": "ready", "head": "abc", "title": "t", "branch": "ez/7-x"}})
+        code, out = self.run_main(["check", "--node", "intake", "--event", str(self.file(TRIGGERS["pull_request"])), "--tracker", f"memory:{tr}"])
+        self.assertEqual((code, out["branch"]), (0, "ez/7-x"))
+
+    def test_apply_handoff_router_intake(self):
+        h = {"handoff": "ROUTER-INTAKE", "kind": "feature", "ready": "yes", "split": "none", "risk": "high",
+             "size_estimate": "~250", "missing": "none", "next": "delivery"}
+        tr = self.file({"7": {"stage": "ready", "head": "abc"}})
+        code, out = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(h)),
+                                   "--event", str(self.file(TRIGGERS["issues"])), "--tracker", f"memory:{tr}"])
+        t = json.loads(tr.read_text())["7"]
+        self.assertEqual((code, t["stage"]), (0, "in-dev"))
+        self.assertEqual(t["fields"]["risk"], "high")
+        self.assertEqual(t["fields"]["complexity"], "medium")
+        self.assertIn(["label", '"factory:implement-mid"'], t["log"])
+
+    def test_check_on_recorded_payload_and_other_handoffs(self):
+        tr = MemoryTracker({7: {"stage": "ready", "head": "abc", "title": "t"}})
+        for payload in TRIGGERS.values():
+            ev = gate.read(self.file(payload), "event", raw=True)
+            code, out = gate.check("intake", {**ev, "head": None}, tr, NODES, CONFIG)
+            self.assertEqual((code, out["ticket"], out["branch"]), (0, 7, "ez/7-t"))
+        grill = {"handoff": "ROUTER-INTAKE", "kind": "feature", "ready": "no", "missing": "acceptance check 2",
+                 "risk": "low", "size_estimate": "~120", "split": "none", "next": "blocked"}
+        tr = self.file({"7": {"stage": "ready", "head": "abc"}})
+        ev = str(self.file(TRIGGERS["issues"]))
+        code, _ = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(grill)), "--event", ev, "--tracker", f"memory:{tr}"])
+        self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "needs-answers"))
+        split = {**grill, "ready": "yes", "missing": "none", "split": "\n  - First — scope (~100)\n  - Second — more (~90)"}
+        tr = self.file({"7": {"stage": "ready", "head": "abc"}})
+        code, _ = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(split)), "--event", ev, "--tracker", f"memory:{tr}"])
+        self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "split"))
+        self.assertEqual([c["title"] for c in gate.intake_fields(split)["children"]], ["First", "Second"])
+        tr = self.file({"7": {"stage": "in-dev", "head": "abc"}})
+        blocked = {"handoff": "DEVELOPER", "status": "blocked", "branch": "ez/7-x", "blocked_reason": "ambiguous acceptance"}
+        code, _ = self.run_main(["apply", "--node", "implement", "--handoff", str(self.file(blocked)), "--event", ev, "--tracker", f"memory:{tr}"])
+        self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "blocked"))
+
+    def test_bug_intake_proceeds(self):
+        h = {"handoff": "ROUTER-INTAKE", "kind": "bug", "ready": "yes", "split": "none"}
+        self.assertEqual(gate.outcome_of(h), "proceed")
+
+    def test_join_tier_from_complexity_label(self):
+        facts = {"round_complete": True, "round_verdict": "changes", "attrs": ["complexity:large"]}
+        self.assertEqual(gate.join_decision(facts), ("changes", {"tier": "strong"}))
+        self.assertEqual(gate.join_decision({**facts, "attrs": []})[1], {"tier": "mid"})
+        self.assertIsNone(gate.join_decision({**facts, "round_complete": False}))
+
+
 if __name__ == "__main__":
     unittest.main()

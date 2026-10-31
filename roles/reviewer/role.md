@@ -64,7 +64,7 @@ findings:
 
 ## JSON handoff
 
-The driver validates the handoff as JSON against `roles/reviewer/handoff.schema.json`; the field names are the keys of the Handoff block above. An invalid one is rerun once with the error in the prompt. You have no write tool: end your reply with the handoff as one JSON object (the last object of your output; a ```json fence is fine). There is no text format.
+The driver validates the handoff as JSON against `roles/reviewer/handoff.schema.json`; the field names are the keys of the Handoff block above. An invalid one is rerun once with the error in the prompt. When the prompt names a handoff path, write the handoff JSON there. Otherwise you have no write tool: end your reply with the handoff as one JSON object (the last object of your output; a ```json fence is fine). There is no text format.
 
 ```json
 {

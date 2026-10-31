@@ -21,6 +21,7 @@ blocking finding with a new commit, or explain why it is wrong. Ignore nits.
 ## Rules
 
 - Stay on the given branch and worktree. Never push, open PRs or change labels.
+- When the prompt names a handoff path, write the handoff JSON there.
 - Stop and report `blocked` when the ticket is ambiguous or a check cannot run
   after two repair attempts that test different causes.
 

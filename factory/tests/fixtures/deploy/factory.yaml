@@ -2,6 +2,7 @@ repositories:
   - { name: main, url: https://example.com/o/main, role: primary }
 targets:
   air:
+    bot_login: jetbrains-air[bot]
     models: { cheap: codex/small, mid: "claude/mid[1m]", strong: claude/big, review: codex/rev, review_strong: codex/rev2 }
 roles:
   router: { tier: cheap }
