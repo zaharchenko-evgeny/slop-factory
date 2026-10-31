@@ -74,7 +74,7 @@ nodes:
   adopt:
     enabled: false
     triggers: ["pull_request.labeled factory:adopt"]
-    when: { stage: none, same-repo: true, draft: false }
+    when: { stage: none }
     role: router
     tier: cheap
     output: read-only
@@ -84,7 +84,7 @@ nodes:
     pilot: true
     focuses: [full, behaviour, structure-security]
     triggers: ["pull_request.opened", "pull_request.synchronize"]
-    when: { stage: in-review, focus: required-by-risk, marked-review-at-head: false, open-fix: false }
+    when: { stage: in-review, focus: required-by-risk }
     role: reviewer
     output: read-only
     outcomes:
