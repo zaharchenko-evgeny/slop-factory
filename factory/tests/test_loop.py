@@ -7,6 +7,7 @@
 import copy
 import json
 import sys
+import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -94,6 +95,41 @@ class LoopTest(unittest.TestCase):
     def test_quiet_tick_reports_no_due_nodes(self):
         res = loop.tick(MemoryTracker({}), [], NODES, CONFIG, run_role=self.run_role, last=None)
         self.assertEqual((res["ran"], res["due"]), ([], []))
+
+    def test_intake_handoff_without_complexity_or_tier_proceeds(self):
+        h = {"handoff": "ROUTER-INTAKE", "kind": "feature", "ready": "yes", "split": "none", "risk": "high",
+             "size_estimate": "~250", "missing": "none", "next": "delivery"}
+        res = loop.tick(self.t, [1], NODES, CONFIG, run_role=lambda n, c: (loop.outcome_of(h), {**loop.intake_fields(h), **h}),
+                        last=datetime(2026, 1, 1), now=datetime(2026, 1, 1, 0, 1))
+        self.assertEqual((res["ran"], res["errors"]), ([("intake", 1, "proceed")], []))
+        self.assertEqual(self.t.tickets[1]["stage"], "in-dev")
+
+    def test_due_node_that_applies_nothing_is_not_rerun(self):
+        self.t.tickets[1]["stage"] = "in-review"
+        calls = []
+        def rr(node, check):
+            calls.append(node)
+            return "answered", {}  # NO_GO: stage not in from
+        kw = {"last": datetime(2026, 1, 1, 0, 0), "now": datetime(2026, 1, 1, 0, 10)}
+        res = loop.tick(self.t, [1], NODES, CONFIG, run_role=rr, **kw)
+        self.assertEqual((calls, res["due"]), (["sweep"], ["sweep"]))
+        with tempfile.TemporaryDirectory() as d:
+            stamp = Path(d) / "loop" / "last-tick"
+            loop.update_stamp(stamp, res, True)
+            self.assertFalse(stamp.exists())  # restricted tick
+            loop.update_stamp(stamp, {"due": []}, False)
+            self.assertFalse(stamp.exists())  # nothing ran
+            loop.update_stamp(stamp, res, False, now=1000.0)
+            self.assertEqual(stamp.read_text(), "1000.0")
+
+    def test_system_exit_does_not_stop_the_tick(self):
+        t = MemoryTracker({7: {"stage": "in-dev", "head": "a"}, 8: {"stage": "in-dev", "head": "b"}})
+        def rr(node, check):
+            if check["ticket"] == 7:
+                raise SystemExit("no worktree")
+            return "done", {}
+        res = loop.tick(t, [7, 8], NODES, CONFIG, run_role=rr, last=datetime(2026, 1, 1), now=datetime(2026, 1, 1, 0, 1))
+        self.assertEqual(([e[1] for e in res["errors"]], res["ran"]), ([7], [("implement", 8, "done")]))
 
     def test_outcome_of(self):
         self.assertEqual(loop.outcome_of({"handoff": "REVIEWER", "verdict": "approved"}), "approve")

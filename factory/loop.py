@@ -83,7 +83,16 @@ def default_run_role(node, check, root=ROOT):
     if run_role.run(root, check["ticket"], node):
         return None, {}
     h = json.loads((d / f"{node}.handoff.json").read_text())
-    return outcome_of(h), h
+    return outcome_of(h), {**intake_fields(h), **h}
+
+
+def intake_fields(h):
+    """The fields `intake`'s proceed outcome needs and the router handoff lacks: complexity and tier from the size."""
+    if h.get("handoff") != "ROUTER-INTAKE":
+        return {}
+    n = int("".join(c for c in str(h.get("size_estimate", "")) if c.isdigit()) or 0)
+    return {"complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
+            "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong"}
 
 
 def outcome_of(h):
@@ -93,6 +102,8 @@ def outcome_of(h):
     if h.get("verdict"):
         return "approve" if h["verdict"] == "approved" else "changes"
     if h.get("handoff") == "ROUTER-INTAKE":
+        if h.get("kind") == "bug" and h.get("ready") == "yes":
+            return "bug"
         return "proceed" if h.get("ready") == "yes" and h.get("split") in (None, "none") else (
             "split" if h.get("split") not in (None, "none") else "grill")
     return h.get("status")
@@ -134,21 +145,28 @@ def tick(tracker, tickets, nodes, config, run_role=default_run_role, scripts=Non
                 outcome, extra = scripts[name](chk["context"]) if is_script else run_role(name, chk)
                 if outcome is None:
                     continue
+                if is_due:
+                    due_ran.add(name)  # a due node that ran is handled, applied or not
                 payload = {**extra, "ticket": n, "event": event, "head": head}
                 missing = chk["context"]["focus_missing"]
                 if missing and "focus" not in payload:
                     payload["focus"] = missing[0]
                 code, res = gate.apply(name, outcome, payload, view, nodes)
-            except Exception as e:  # one ticket's error never stops the others
+            except (Exception, SystemExit) as e:  # one ticket's error never stops the others
                 errors.append((name, n, f"{type(e).__name__}: {e}"))
                 continue
             if code != gate.GO:
                 continue  # stale head or duplicate: nothing was applied
             ran.append((name, n, outcome))
             moved.add(n)
-            if is_due:
-                due_ran.add(name)
     return {"ran": ran, "due": sorted(due_ran), "errors": errors}
+
+
+def update_stamp(stamp, res, restricted, now=None):
+    """Write the last-tick time only after an unrestricted tick in which a due schedule node ran."""
+    if res["due"] and not restricted:
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(str(now or time.time()))
 
 
 def main(argv):
@@ -175,9 +193,7 @@ def main(argv):
         print(*r)
     for r in res["errors"]:
         print("error", *r, file=sys.stderr)
-    if res["due"] and not a.node and not a.issue:
-        stamp.parent.mkdir(parents=True, exist_ok=True)
-        stamp.write_text(str(time.time()))
+    update_stamp(stamp, res, bool(a.node or a.issue))
     return 0
 
 
