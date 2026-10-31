@@ -29,7 +29,9 @@ M = "<!-- factory:review focus=full round=1 verdict=approve -->"
 class FakeGh:
     """The gh calls of the adapter over one ticket (7) with a PR on ez/7-x; records writes."""
 
-    def __init__(self, labels=("factory:in-review", "risk:low"), reviews=(), comments=(), checks=("success",), sub=()):
+    def __init__(self, labels=("factory:in-review", "risk:low"), reviews=(), comments=(), checks=("success",), sub=(), requested=()):
+        self.requested = list(requested)
+        self.roles = {"alice": "write", "bob": "admin", "eve": "read"}
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
         self.blocked = [{"state": "open", "id": 1}, {"state": "closed", "id": 2}]
@@ -50,7 +52,14 @@ class FakeGh:
                 {"number": 9, "state": "open", "head": head("ez/7-gone", None)}))
         if a.endswith("/pulls/5"):
             return json.dumps({"number": 5, "merged": self.merged, "mergeable": True, "head": {"sha": "h1", "ref": "ez/7-x"},
-                               "requested_reviewers": [{"login": "alice"}]})
+                               "requested_reviewers": [{"login": u} for u in self.requested]})
+        if a.endswith("/commits/h1"):
+            return json.dumps({"commit": {"committer": {"date": "2026-01-02T00:00:00Z"}}})
+        if "/collaborators/" in a:
+            who = a.split("/collaborators/")[1].split("/")[0]
+            if who not in self.roles:
+                raise RuntimeError("404")
+            return json.dumps({"role_name": self.roles[who]})
         if a.endswith("/pulls/5/reviews"):
             return "\n".join(json.dumps(r) for r in self.reviews)
         if a.endswith(("issues/7", "issues/5")):
@@ -74,8 +83,9 @@ class FakeGh:
         return json.dumps({"id": 999}) if a.endswith("/issues POST") else ""
 
 
-def review(author, body, commit="h1", state="COMMENTED"):
-    return {"user": {"login": author}, "body": body, "commit_id": commit, "state": state}
+def review(author, body, commit="h1", state="COMMENTED", assoc="OWNER", at="2026-01-02T01:00:00Z"):
+    return {"user": {"login": author, "type": "Bot" if author.endswith("[bot]") else "User"}, "body": body,
+            "commit_id": commit, "state": state, "author_association": assoc, "submitted_at": at}
 
 
 def tr(gh):
@@ -88,14 +98,16 @@ def eff(kind, value, **kw):
 
 class FactsTest(unittest.TestCase):
     def test_facts(self):
-        gh = FakeGh(reviews=[review(BOT, M)])
+        gh = FakeGh(reviews=[review(BOT, M)], requested=["alice"])
         f = tr(gh).facts(7)
         self.assertEqual((f["stage"], f["attrs"], f["blockers_open"]), ("in-review", ["risk:low"], 1))
         self.assertEqual((f["pr"], f["head"], f["mergeable"], f["ci"]), (5, "h1", True, "green"))  # branch, not ez/70-
         self.assertEqual(f["requested_reviewers"], ["alice"])
         self.assertEqual((f["reviews"][0]["author"], f["reviews"][0]["state"], f["reviews"][0]["commit_id"]), (BOT, "COMMENTED", "h1"))
         self.assertEqual((f["reviews"][0]["focus"], f["reviews"][0]["round"], f["seen"]), ("full", 1, []))
-        self.assertEqual((f["focus_missing"], f["round_complete"], f["round_head"]), ([], True, "h1"))
+        self.assertEqual((f["focus_missing"], f["round_complete"], f["round_head"]), ([], False, "h1"))  # alice is still requested
+        f = tr(FakeGh(reviews=[review(BOT, M)])).facts(7)
+        self.assertEqual((f["round_complete"], f["round_verdict"]), (True, "approve"))
 
     def test_human_marker_is_not_an_agent_review(self):
         f = tr(FakeGh(reviews=[review("mallory", M)])).facts(7)
@@ -201,9 +213,11 @@ class EffectsTest(unittest.TestCase):
         self.assertIn("labels[]=factory:draft", gh.writes[0])
 
     def test_fix_rounds_grow_per_reviewed_head(self):
-        self.assertEqual(tr(FakeGh(reviews=[review(BOT, M)])).facts(7)["fix_rounds"], 0)
-        self.assertEqual(tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)["fix_rounds"], 1)
-        gh = FakeGh(reviews=[review(BOT, M, commit="old")])
+        C = M.replace("approve", "changes")
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, C), review(BOT, C)])).facts(7)["fix_rounds"], 2)
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)["fix_rounds"], 0)
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, C, commit="old")])).facts(7)["fix_rounds"], 1)
+        gh = FakeGh(reviews=[review(BOT, C, commit="old")])
         tr(gh).apply(eff("review", "approve-at-head", focus="full"))
         self.assertIn("round=2", gh.writes[0][-1])
 
@@ -222,6 +236,119 @@ class EffectsTest(unittest.TestCase):
         gh = FakeGh()
         self.assertFalse(tr(gh).apply(eff("seen", "e1")))
         self.assertEqual(gh.writes, [])
+
+
+C = M.replace("approve", "changes")
+HUMAN = [None, "APPROVED", "CHANGES_REQUESTED"]
+
+
+def join(gh, **kw):
+    t = tr(gh)
+    return t.apply({"ticket": 7, "kind": "join", "value": "all-approve", **kw}), len(gh.writes)
+
+
+class JoinTest(unittest.TestCase):
+    def arrive(self, order, human_state, agent_body):
+        """Reviews arrive one by one; alice is requested until her review. Returns the joined gh."""
+        gh = FakeGh()
+        gh.requested = ["alice"]
+        for who in order:
+            if who == "agent":
+                gh.reviews.append(review(BOT, agent_body))
+            else:
+                gh.requested = []
+                gh.reviews.append(review("alice", "", state=human_state))
+            join(gh)
+        return gh
+
+    def test_every_arrival_order(self):
+        for order in (["agent", "human"], ["human", "agent"]):
+            for human, agent, stage, fix in (
+                    ("APPROVED", M, "approved", False), ("CHANGES_REQUESTED", M, "changes-requested", True),
+                    ("APPROVED", C, "changes-requested", True), ("CHANGES_REQUESTED", C, "changes-requested", True)):
+                with self.subTest(order=order, human=human, agent=agent[-16:]):
+                    gh = self.arrive(order, human, agent)
+                    self.assertEqual(STAGES[stage] in gh.labels, True)
+                    self.assertEqual(sum(x.startswith("factory:fix-") for x in gh.labels), int(fix))
+                    self.assertEqual(len(gh.writes), 2 if fix else 1)  # nothing written before the last review
+
+    def test_open_round_does_nothing(self):
+        gh = FakeGh(reviews=[review(BOT, M)], requested=["alice"])
+        self.assertEqual(join(gh), (False, 0))
+        gh = FakeGh(reviews=[review(BOT, M)], checks=["success", None])
+        self.assertEqual(join(gh), (False, 0))
+
+    def test_red_ci_is_a_fix(self):
+        gh = FakeGh(reviews=[review(BOT, M)], checks=["failure"])
+        self.assertTrue(join(gh)[0])
+        self.assertIn("factory:fix-mid", gh.labels)
+        self.assertEqual(gh.writes[0][:3], ["pr", "edit", "5"])
+
+    def test_simultaneous_last_reviews_one_label(self):
+        gh = FakeGh(reviews=[review(BOT, C)])
+        join(gh, tier="cheap")
+        n = len(gh.writes)
+        self.assertEqual(join(gh, tier="cheap"), (False, n))  # the second join finds the stage set
+        self.assertEqual([x for x in gh.labels if x.startswith("factory:fix-")], ["factory:fix-cheap"])
+
+    def test_unmarked_reviews(self):
+        gh = FakeGh(reviews=[review(BOT, M), review("bob", "", state="CHANGES_REQUESTED")])
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # a person blocks, even unrequested
+        gh = FakeGh(reviews=[review(BOT, M), review("eve", "", state="CHANGES_REQUESTED")])
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")  # no write access
+        bot = review("other[bot]", "", state="CHANGES_REQUESTED", assoc="NONE")
+        gh = FakeGh(reviews=[review(BOT, M), bot, review(BOT, "no marker", state="CHANGES_REQUESTED")])
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_verdict"], f["ignored_reviews"]), ("approve", ["other[bot]", BOT]))
+        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, trusted_bots=["other[bot]"])
+        self.assertEqual(t.facts(7)["round_verdict"], "changes")
+
+    def test_late_human_review_counts_in_the_next_round(self):
+        gh = FakeGh(reviews=[review(BOT, C)])
+        join(gh)  # round 1 ends: fix label, changes-requested
+        self.assertIn("factory:changes-requested", gh.labels)
+        gh.labels = ["factory:in-review", "risk:low"]  # the fix pushed; head is still h1 in the stub, the review names h0
+        gh.reviews = [review(BOT, M), review("alice", "", commit="h0", state="CHANGES_REQUESTED")]  # round 2 agent approve
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # the late review is counted now
+
+    def test_commented_review_leaves_a_required_human_pending(self):
+        gh = FakeGh(reviews=[review(BOT, M), review("alice", "thanks", state="COMMENTED")], requested=["alice"])
+        self.assertEqual(tr(gh).facts(7)["round_complete"], False)
+        gh.requested = []  # she reviewed: GitHub dropped the request
+        gh.reviews.append(review("alice", "", state="APPROVED"))
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
+
+    def test_earlier_round_changes_do_not_block_this_round(self):
+        old = "2026-01-01T00:00:00Z"  # before the head's push (2026-01-02)
+        gh = FakeGh(reviews=[review("alice", "", commit="h0", state="CHANGES_REQUESTED", at=old), review(BOT, M)])
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")  # not re-requested, so not asked again
+        gh.requested = ["alice"]  # re-requested: blocks until she reviews
+        self.assertEqual(tr(gh).facts(7)["round_complete"], False)
+        gh.requested = []
+        gh.reviews.append(review("alice", "", commit="h0", state="CHANGES_REQUESTED", at="2026-01-02T03:00:00Z"))
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # a late review counts in this round
+
+    def test_human_approval_of_round_1_does_not_block_round_2(self):
+        gh = FakeGh(reviews=[review("alice", "", commit="h0", state="APPROVED", at="2026-01-01T00:00:00Z"), review(BOT, M)])
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
+
+    def test_permission_lookup_failure_is_not_no_access(self):
+        gh = FakeGh(reviews=[review(BOT, M), review("zed", "", state="CHANGES_REQUESTED")])
+        gh.roles = {}
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")  # 404: not a collaborator
+        orig = gh.__call__
+        class Boom(FakeGh):
+            def __call__(self, args):
+                if any("/collaborators/" in x for x in args):
+                    raise RuntimeError("HTTP 403 rate limit")
+                return FakeGh.__call__(self, args)
+        b = Boom(reviews=gh.reviews)
+        with self.assertRaises(RuntimeError):
+            tr(b).facts(7)
+
+    def test_fix_does_not_start_while_round_open(self):
+        f = tr(FakeGh(reviews=[review(BOT, C)], requested=["alice"])).facts(7)
+        self.assertFalse(gate.holds({"round": "complete"}, f, {}))
 
 
 class GateTest(unittest.TestCase):

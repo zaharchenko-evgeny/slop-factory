@@ -145,6 +145,8 @@ def apply(name, outcome, payload, tracker, nodes):
             e["event"] = payload.get("event")
         if e["kind"] == "review":
             e["focus"], e["round"] = payload.get("focus"), payload.get("round")
+        if e["kind"] == "join":
+            e["tier"] = payload.get("tier")
         if e["kind"] == "comment" and payload.get("run_id"):
             e["run_id"] = payload["run_id"]
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
