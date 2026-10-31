@@ -1,0 +1,151 @@
+# The factory as nodes (ADR-0014). One node = triggers + one condition (`when`) + role, tier,
+# environment + outcomes. `uv run factory/nodes.py validate` checks it; `chart` derives the stage chart.
+# Stage names are keys of `tracker.stages` in factory.yaml. `from: [none]` = a PR with no stage label.
+# Nodes marked `enabled: false` need a later slice. `pilot: true` = delivered by the pilot.
+environments:
+  default: { repository: primary, startup: .air/cloud/startup.sh }
+adapters:
+  ticket: github-issues   # stage, fields, labels, blockers
+  pr: github              # state, head, CI, reviews by head SHA
+schedules:
+  sweep: { cron: "*/10 * * * *" }
+  routines: { cron: "0 6 * * *" }
+nodes:
+  human:
+    triggers: ["manual"]
+    when: { actor: human }
+    role: human
+    outcomes:
+      ready: { from: [draft, needs-answers, not-actionable, blocked, failed], effects: [{ stage: ready }] }
+  intake:
+    pilot: true
+    triggers: ["issues.labeled factory:ready"]
+    when: { stage: ready, blockers: closed }
+    role: router
+    tier: cheap
+    output: read-only
+    outcomes:
+      proceed: { effects: [{ set-field: risk }, { set-field: complexity }, { label: "factory:implement-<tier>" }, { stage: in-dev }] }
+      grill: { effects: [{ comment: questions }, { stage: needs-answers }] }
+      split: { effects: [{ create-issues: children }, { stage: split }] }
+      not-actionable: { effects: [{ comment: reason }, { stage: not-actionable }] }
+      bug: { effects: [{ stage: reproduce }] }
+  reproduce:
+    enabled: false
+    triggers: ["issues.labeled factory:reproduce"]
+    when: { stage: reproduce }
+    role: developer
+    tier: mid
+    output: read-only
+    outcomes:
+      reproduced: { effects: [{ stage: diagnose }] }
+      not-reproduced: { effects: [{ comment: questions }, { stage: needs-answers }] }
+  diagnose:
+    enabled: false
+    triggers: ["issues.labeled factory:diagnose"]
+    when: { stage: diagnose }
+    role: developer
+    tier: mid
+    output: read-only
+    outcomes:
+      diagnosed: { effects: [{ comment: diagnosis }, { stage: verify }] }
+  verify:
+    enabled: false
+    triggers: ["issues.labeled factory:verify"]
+    when: { stage: verify }
+    role: router
+    tier: cheap
+    output: read-only
+    outcomes:
+      bug: { effects: [{ stage: in-dev }] }
+      intended: { effects: [{ comment: reason }, { stage: not-actionable }] }
+  implement:
+    pilot: true
+    tiers: [cheap, mid, strong]
+    triggers: ["issues.labeled factory:implement-<tier>"]
+    when: { stage: in-dev }
+    role: developer
+    output: create-pr
+    outcomes:
+      done: { effects: [{ stage: in-review }] }
+      error: { effects: [{ label: "factory:implement-<next tier>" }, { stage: in-dev }] }
+      blocked: { effects: [{ comment: reason }, { stage: blocked }] }
+      failed: { effects: [{ comment: reason }, { stage: failed }] }
+  adopt:
+    enabled: false
+    triggers: ["pull_request.labeled factory:adopt"]
+    when: { stage: none, same-repo: true, draft: false }
+    role: router
+    tier: cheap
+    output: read-only
+    outcomes:
+      adopted: { from: [none], effects: [{ set-field: risk }, { stage: in-review }] }
+  review:
+    pilot: true
+    focuses: [full, behaviour, structure-security]
+    triggers: ["pull_request.opened", "pull_request.synchronize"]
+    when: { stage: in-review, focus: required-by-risk, marked-review-at-head: false, open-fix: false }
+    role: reviewer
+    output: read-only
+    outcomes:
+      approve: { effects: [{ review: approve-at-head }, { join: all-approve }] }
+      changes: { effects: [{ review: request-changes-at-head }, { join: all-approve }] }
+  join:
+    pilot: true
+    triggers: ["pull_request_review.submitted", "workflow_run.completed"]
+    when: { stage: in-review, round: complete-at-head }
+    role: script
+    output: read-only
+    outcomes:
+      changes: { effects: [{ label: "factory:fix-<tier>" }, { stage: changes-requested }] }
+      approved: { effects: [{ stage: approved }] }
+  fix:
+    pilot: true
+    tiers: [cheap, mid, strong]
+    triggers: ["pull_request.labeled factory:fix-<tier>"]
+    when: { stage: changes-requested, round: complete, fix-rounds: below-cap }
+    role: developer
+    output: push-to-source
+    outcomes:
+      done: { effects: [{ stage: in-review }] }
+      blocked: { from: [changes-requested], effects: [{ comment: reason }, { stage: blocked }] }
+  merge:
+    enabled: false
+    triggers: ["pull_request.labeled factory:merge"]
+    when: { stage: approved, round: complete-at-head, ci: green }
+    role: script
+    output: read-only
+    outcomes:
+      merged: { from: [approved], effects: [{ merge: match-head }, { stage: merging }] }
+      update-or-hold: { from: [approved], effects: [{ comment: reason }, { stage: approved }] }
+      fix: { from: [approved], effects: [{ label: "factory:fix-<tier>" }, { stage: changes-requested }] }
+  merging:
+    enabled: false
+    triggers: ["workflow_run.completed"]
+    when: { stage: merging }
+    role: script
+    output: read-only
+    outcomes:
+      merged: { effects: [{ stage: merged }] }
+      moved: { effects: [{ stage: approved }] }
+  sweep:
+    pilot: true
+    triggers: ["schedule sweep"]
+    when: { always: true }
+    role: retro
+    output: as-instructed
+    outcomes:
+      answered: { from: [needs-answers], effects: [{ stage: ready }] }
+      children-done: { from: [split], effects: [{ stage: done }] }
+      child-failed: { from: [split], effects: [{ stage: blocked }] }
+      conflict: { from: [approved], effects: [{ label: "factory:update-cheap" }, { stage: changes-requested }] }
+      merged: { from: [approved], effects: [{ stage: merged }] }
+      retro: { from: [merged], effects: [{ comment: retro }, { stage: done }] }
+  routines:
+    enabled: false
+    triggers: ["schedule routines"]
+    when: { due: true }
+    role: distill
+    output: push-to-new-branch
+    outcomes:
+      proposed: { effects: [{ comment: report }] }
