@@ -68,8 +68,13 @@ class MemoryTracker:
         return True
 
     def _drop(self, t, value):
-        entry = ["label", json.dumps(value, sort_keys=True)]
         log = t.setdefault("log", [])
+        if value.endswith("*"):  # every label with the prefix
+            gone = [x for x in log if x[0] == "label" and json.loads(x[1]).startswith(value[:-1])]
+            for x in gone:
+                log.remove(x)
+            return bool(gone)
+        entry = ["label", json.dumps(value, sort_keys=True)]
         if entry not in log:
             return False
         log.remove(entry)

@@ -96,17 +96,25 @@ class GitHubGateTracker:
                 return False
             raise  # any other failure must not drop a blocking review: the join fails and is retried
 
-    def _earlier(self, r, reviews, head):
-        """True when change request `r` belongs to an earlier round, which already counted it: it names an
-        older commit and came no later than that round closed. A round closed with its last agent review at that
-        commit, else with the push of the current head. A request sent during a fix counts in the next round."""
+    def _fix_writes(self, pr):
+        """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
+        the label when it finishes, so every round adds it again)."""
+        return [e["created_at"] for e in self._list(f"issues/{pr}/events")
+                if e.get("event") == "labeled" and (e.get("label") or {}).get("name", "").startswith("factory:fix-")]
+
+    def _earlier(self, r, head, fix_writes):
+        """True when change request `r` was counted by an earlier round: it names an older commit and a join
+        started a fix round at or after it, so the fix was given it. A request sent during a fix, or with no
+        fix round after it, counts now. Without any join write (a person pushed by hand), the push of the
+        current head ends the earlier round."""
         if r["commit_id"] == head:
             return False
-        closed = max((x["submitted_at"] or "" for x in reviews if x["agent"] and x["commit_id"] == r["commit_id"]),
-                     default="") or self._api(f"commits/{head}")["commit"]["committer"]["date"]
-        return (r["submitted_at"] or "") <= closed
+        at = r["submitted_at"] or ""
+        if fix_writes:
+            return any(t >= at for t in fix_writes)
+        return at <= self._api(f"commits/{head}")["commit"]["committer"]["date"]
 
-    def _round(self, reviews, required, head, requested, ci):
+    def _round(self, reviews, required, head, requested, ci, pr=None):
         """(complete, verdict, ignored) of the round at `head`: marked agent reviews of every required focus at
         head, no requested reviewer left (GitHub drops a person on review and adds them back on a re-request), CI
         concluded. A person (with write access) or trusted bot blocks with a latest CHANGES_REQUESTED on head or
@@ -118,7 +126,10 @@ class GitHubGateTracker:
         complete = all(x in at_head for x in required) and not requested and ci in ("green", "red")
         if not complete:
             return False, None, ignored
-        late = [r for r in others.values() if r["verdict"] == "changes" and not self._earlier(r, reviews, head)]
+        late = [r for r in others.values() if r["verdict"] == "changes"]
+        if any(r["commit_id"] != head for r in late):
+            writes = self._fix_writes(pr) if pr is not None else []
+            late = [r for r in late if not self._earlier(r, head, writes)]
         changes = ci == "red" or any(at_head[x]["verdict"] != "approve" for x in required) or bool(late)
         return True, "changes" if changes else "approve", ignored
 
@@ -145,7 +156,7 @@ class GitHubGateTracker:
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
             ci = self._ci(head)
-            complete, verdict, ignored = self._round(reviews, required, head, requested, ci)
+            complete, verdict, ignored = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), ci=ci, reviews=reviews,
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored,
@@ -182,10 +193,12 @@ class GitHubGateTracker:
                 target = pr["number"]
             elif on != "issue":
                 raise ValueError(f"{kind}: bad target: {on}")
-            has = value in self._labels(target)
+            labels = self._labels(target)
             if kind == "label":
-                return not has and self._edit(target, [value], on=on)
-            return has and self._edit(target, remove=[value], on=on)
+                return value not in labels and self._edit(target, [value], on=on)
+            # `prefix-*` removes every label with that prefix (a command label of any tier)
+            gone = [x for x in labels if x.startswith(value[:-1])] if value.endswith("*") else [value] if value in labels else []
+            return bool(gone) and self._edit(target, remove=gone, on=on)
         if kind == "set-field":  # an attribute label `<field>:<value>`; one value per field
             (k, v), = value.items()
             have = [x for x in self._labels(n) if x.startswith(f"{k}:")]

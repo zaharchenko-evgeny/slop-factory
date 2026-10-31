@@ -75,7 +75,7 @@ nodes:
     role: developer
     output: create-pr
     outcomes:
-      done: { effects: [{ stage: in-review }] }
+      done: { effects: [{ unlabel: "factory:implement-*" }, { stage: in-review }] }
       error: { effects: [{ label: "factory:implement-<next tier>" }, { stage: in-dev }] }
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
       failed: { effects: [{ comment: reason }, { stage: failed }] }
@@ -129,7 +129,8 @@ nodes:
     role: developer
     output: push-to-source
     outcomes:
-      done: { effects: [{ stage: in-review }] }
+      # The command label goes: the next round's join adds it again, and only an added label starts the node.
+      done: { effects: [{ unlabel: "factory:fix-*", "on": pr }, { stage: in-review }] }
       blocked: { from: [changes-requested], effects: [{ comment: reason }, { stage: blocked }] }
   merge:
     enabled: false

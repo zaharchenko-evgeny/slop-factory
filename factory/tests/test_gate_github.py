@@ -64,6 +64,9 @@ class FakeGh:
             if who not in self.roles:
                 raise RuntimeError("404")
             return json.dumps({"role_name": self.roles[who]})
+        if a.endswith("issues/5/events"):
+            return "\n".join(json.dumps({"event": "labeled", "label": {"name": "factory:fix-mid"}, "created_at": t})
+                             for t in getattr(self, "fix_events", []))
         if a.endswith("/pulls/5/reviews"):
             return "\n".join(json.dumps(r) for r in self.reviews)
         if a.endswith(("issues/7", "issues/5")):
@@ -318,8 +321,27 @@ class JoinTest(unittest.TestCase):
                       review("alice", "", commit="h0", state="CHANGES_REQUESTED", at="2026-01-02T02:00:00Z"),  # during the fix
                       review(BOT, M, at="2026-01-02T03:00:00Z")]  # round 2: the agent approves h1
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # the late review counts in round 2
-        gh.reviews[1]["submitted_at"] = "2026-01-02T00:30:00Z"  # before round 1 closed: round 1 counted it
+        gh.fix_events = ["2026-01-02T01:30:00Z"]  # round 1's join started the fix at 01:30; alice came at 02:00
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # sent during the fix: counts in round 2
+        gh.fix_events = ["2026-01-02T02:30:00Z"]  # the join ran after alice: the fix was given her request
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
+
+    def test_fix_done_removes_its_command_label_so_round_2_can_add_it_again(self):
+        gh = FakeGh(labels=["factory:changes-requested", "risk:low", "factory:fix-mid"])  # the stub shares labels
+        self.assertTrue(tr(gh).apply({"ticket": 7, "kind": "unlabel", "value": "factory:fix-*", "on": "pr"}))
+        self.assertIn("--remove-label", gh.writes[0])
+        self.assertIn("factory:fix-mid", gh.writes[0])
+
+    def test_change_request_counted_by_round_1_does_not_block_round_2(self):
+        # B2 of #183: the bot reviews first, the human second; round 1 counts her request, round 2 must not loop on it
+        gh = FakeGh(reviews=[review(BOT, M, commit="h0", at="2026-01-02T01:00:00Z"),
+                             review("alice", "", commit="h0", state="CHANGES_REQUESTED", at="2026-01-02T02:00:00Z"),
+                             review(BOT, M, at="2026-01-02T04:00:00Z")])
+        gh.fix_events = ["2026-01-02T02:05:00Z"]  # round 1's join started the fix after her request
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_complete"], f["round_verdict"]), (True, "approve"))
+        gh.requested = ["alice"]  # re-requested: she blocks until she reviews again
+        self.assertFalse(tr(gh).facts(7)["round_complete"])
 
     def test_commented_review_leaves_a_required_human_pending(self):
         gh = FakeGh(reviews=[review(BOT, M), review("alice", "thanks", state="COMMENTED")], requested=["alice"])
