@@ -48,13 +48,23 @@ class LoopTest(unittest.TestCase):
         self.assertEqual(self.t.tickets[1]["stage"], "in-dev")
         self.tick()
         self.assertEqual(self.t.tickets[1]["stage"], "in-review")
-        self.t.tickets[1].update(round_complete=True, round_head="abc", ci="green")
+        self.t.tickets[1].update(round_complete=True, round_head="abc", ci="green", round_verdict="approve")
         self.tick()
         self.assertEqual(self.t.tickets[1]["stage"], "approved")
         self.assertEqual(self.calls, ["intake", "implement"])
 
+    def test_join_follows_round_verdict_not_agent_reviews_only(self):
+        # B1 of #183: a human change request or red CI makes changes, even when every agent review approves
+        self.t.tickets[1].update(stage="in-review", round_complete=True, round_head="abc", ci="red", round_verdict="changes")
+        self.assertEqual(self.tick()["ran"], [("join", 1, "changes")])
+        self.assertEqual(self.t.tickets[1]["stage"], "changes-requested")
+
+    def test_join_waits_while_round_open(self):
+        self.t.tickets[1].update(stage="in-review", round_complete=False, round_verdict=None)
+        self.assertEqual(self.tick()["ran"], [])
+
     def test_join_script_approves_without_run_role(self):
-        self.t.tickets[1].update(stage="in-review", round_complete=True, round_head="abc", ci="green")
+        self.t.tickets[1].update(stage="in-review", round_complete=True, round_head="abc", ci="green", round_verdict="approve")
         res = self.tick()
         self.assertEqual(res["ran"], [("join", 1, "approved")])
         self.assertEqual(self.t.tickets[1]["stage"], "approved")

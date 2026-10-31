@@ -8,6 +8,7 @@ A marker `<!-- factory:review focus=<f> round=<n> verdict=approve|changes -->` c
 """
 import json
 import re
+import sys
 from pathlib import Path
 
 import yaml
@@ -18,10 +19,12 @@ MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(ap
 FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
 GOOD_CI = {"success", "neutral", "skipped"}
+WRITE = {"admin", "maintain", "write"}  # repository roles with write access
 
 
 class GitHubGateTracker:
-    def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh):
+    def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=()):
+        self.trusted = set(trusted_bots)
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, run
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
@@ -32,7 +35,8 @@ class GitHubGateTracker:
         if not bot:
             raise ValueError("factory.yaml: targets.air.bot_login is not set")
         t = c["tracker"]
-        return cls(t["repository"], t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run)
+        return cls(t["repository"], t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run,
+                   (c.get("reviews") or {}).get("trusted_bots") or [])
 
     # --- reads
     def _api(self, path, *flags):
@@ -79,8 +83,61 @@ class GitHubGateTracker:
             verdict = (m[3] if agent else {"APPROVED": "approve", "CHANGES_REQUESTED": "changes"}.get(r["state"]))
             out.append({"author": r["user"]["login"], "state": r["state"], "commit_id": r["commit_id"],
                         "focus": m[1] if m else None, "round": int(m[2]) if m else None,
-                        "verdict": verdict, "agent": agent})
+                        "verdict": verdict, "agent": agent, "assoc": r.get("author_association"), "submitted_at": r.get("submitted_at"),
+                        "bot": r["user"].get("type") == "Bot" or r["user"]["login"].endswith("[bot]")})
         return out
+
+    def _can_write(self, login):
+        """Write access from the collaborator permission API (author_association says nothing about the role)."""
+        try:
+            return self._api(f"collaborators/{login}/permission").get("role_name") in WRITE
+        except Exception as e:
+            if "404" in str(e):  # a stranger is no collaborator
+                return False
+            raise  # any other failure must not drop a blocking review: the join fails and is retried
+
+    def _fix_writes(self, pr):
+        """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
+        the label when it finishes, so every round adds it again)."""
+        return [e["created_at"] for e in self._list(f"issues/{pr}/events")
+                if e.get("event") == "labeled" and (e.get("label") or {}).get("name", "").startswith("factory:fix-")]
+
+    def _earlier(self, r, head, fix_writes):
+        """True when change request `r` was counted by an earlier round: it names an older commit and a join
+        started a fix round at or after it, so the fix was given it. A request sent during a fix, or with no
+        fix round after it, counts now. Without any join write (a person pushed by hand), the push of the
+        current head ends the earlier round."""
+        if r["commit_id"] == head:
+            return False
+        at = r["submitted_at"] or ""
+        if fix_writes:
+            return any(t >= at for t in fix_writes)
+        return at <= self._api(f"commits/{head}")["commit"]["committer"]["date"]
+
+    def _round(self, reviews, required, head, requested, ci, pr=None):
+        """(complete, verdict, ignored, waiting) of the round at `head`. `waiting`: people whose change request a
+        fix already received and who have not decided again; the round stays open until they do. The round is marked agent reviews of every required focus at
+        head, no requested reviewer left (GitHub drops a person on review and adds them back on a re-request), CI
+        concluded. A person (with write access) or trusted bot blocks with a latest CHANGES_REQUESTED on head or
+        submitted since the round started; COMMENTED never counts."""
+        at_head = {r["focus"]: r for r in reviews if r["agent"] and r["commit_id"] == head}
+        others = {r["author"]: r for r in reviews if not r["agent"] and r["verdict"]
+                  and (r["author"] in self.trusted if r["bot"] else self._can_write(r["author"]))}
+        ignored = [r["author"] for r in reviews if r["bot"] and not r["agent"] and r["author"] not in self.trusted]
+        complete = all(x in at_head for x in required) and not requested and ci in ("green", "red")
+        if not complete:
+            return False, None, ignored, []
+        late = [r for r in others.values() if r["verdict"] == "changes"]
+        if any(r["commit_id"] != head for r in late):
+            writes = self._fix_writes(pr) if pr is not None else []
+            # A request a fix already received stays open until its author decides again: the round waits.
+            # A trusted bot cannot be asked again, so its handled request counts as resolved instead.
+            waiting = [r["author"] for r in late if self._earlier(r, head, writes) and not r["bot"]]
+            late = [r for r in late if not (r["bot"] and self._earlier(r, head, writes))]
+            if waiting:
+                return False, None, ignored, waiting
+        changes = ci == "red" or any(at_head[x]["verdict"] != "approve" for x in required) or bool(late)
+        return True, "changes" if changes else "approve", ignored, []
 
     def facts(self, n):
         issue = self._api(f"issues/{n}")
@@ -92,7 +149,8 @@ class GitHubGateTracker:
         required, pr = FOCUSES[risk], self._pr(n)
         f = {"stage": stage, "attrs": [x for x in labels if x not in by_label], "blockers_open": len(blockers),
              "head": None, "pr": None, "mergeable": None, "ci": "none", "reviews": [], "requested_reviewers": [],
-             "focus_missing": [], "round_complete": False, "round_head": None, "fix_rounds": 0,
+             "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
+             "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
              "issue_state": issue.get("state", "open")}
         if stage == "split":
@@ -102,13 +160,15 @@ class GitHubGateTracker:
             head, reviews = pr["head"]["sha"], self._reviews(pr)
             latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
             heads = {latest[x]["commit_id"] for x in required if x in latest}
-            complete = all(x in latest for x in required)
+            requested = [u["login"] for u in pr.get("requested_reviewers") or []]
+            ci = self._ci(head)
+            complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
-            f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), ci=self._ci(head), reviews=reviews,
-                     requested_reviewers=[u["login"] for u in pr.get("requested_reviewers") or []],
+            f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), ci=ci, reviews=reviews,
+                     requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
-                     round_complete=complete, round_head=heads.pop() if complete and len(heads) == 1 else None,
-                     fix_rounds=len({r["commit_id"] for r in reviews if r["agent"]} | {head}) - 1)  # one per reviewed head
+                     round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
+                     fix_rounds=sum(1 for r in reviews if r["agent"] and r["verdict"] == "changes"))  # bot change requests
         return f
 
     # --- effects: read the target first, write only when it differs
@@ -119,8 +179,10 @@ class GitHubGateTracker:
 
     def apply(self, e):
         n, kind, value = e["ticket"], e["kind"], e["value"]
-        if kind in ("seen", "join"):
+        if kind == "seen":
             return False  # no hidden state: conditions catch a duplicate
+        if kind == "join":
+            return self._join(n, e.get("tier") or "mid")
         if kind == "stage":
             want, have = self.stages[value], [x for x in self._labels(n) if x in self.stages.values()]
             closed = False
@@ -137,10 +199,12 @@ class GitHubGateTracker:
                 target = pr["number"]
             elif on != "issue":
                 raise ValueError(f"{kind}: bad target: {on}")
-            has = value in self._labels(target)
+            labels = self._labels(target)
             if kind == "label":
-                return not has and self._edit(target, [value], on=on)
-            return has and self._edit(target, remove=[value], on=on)
+                return value not in labels and self._edit(target, [value], on=on)
+            # `prefix-*` removes every label with that prefix (a command label of any tier)
+            gone = [x for x in labels if x.startswith(value[:-1])] if value.endswith("*") else [value] if value in labels else []
+            return bool(gone) and self._edit(target, remove=gone, on=on)
         if kind == "set-field":  # an attribute label `<field>:<value>`; one value per field
             (k, v), = value.items()
             have = [x for x in self._labels(n) if x.startswith(f"{k}:")]
@@ -156,6 +220,8 @@ class GitHubGateTracker:
             return True
         if kind == "review":
             return self._review(n, e)
+        if kind == "request-reviewers":
+            return self._rerequest(n)
         if kind == "create-issues":
             return self._create(n, value)
         if kind == "merge":
@@ -168,6 +234,39 @@ class GitHubGateTracker:
                       "--match-head-commit", pr["head"]["sha"]])
             return True
         raise ValueError(f"unknown effect: {kind}")
+
+    def _join(self, n, tier):
+        """Nothing while the round is open; else changes -> PR label fix-<tier> + stage changes-requested, approve -> approved."""
+        f = self.facts(n)
+        for who in f["ignored_reviews"]:
+            print(f"join: ignored unmarked bot review by {who}", file=sys.stderr)
+        if f["stage"] == "in-review" and f["waiting_reviewers"]:
+            return self._rerequest(n, f["waiting_reviewers"])  # nothing moves until they decide again
+        if not f["round_complete"] or f["stage"] != "in-review":
+            return False
+        if f["round_verdict"] == "approve":
+            return self.apply({"ticket": n, "kind": "stage", "value": "approved"})
+        wrote = self.apply({"ticket": n, "kind": "label", "value": f"factory:fix-{tier}", "on": "pr"})
+        return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote
+
+    def _rerequest(self, n, only=None):
+        """Ask again every person whose latest non-COMMENTED review requests changes, so the next round waits
+        for them (the `fix` node's `done`, after the push: a request at join time would hold the fix itself)."""
+        pr = self._pr(n)
+        if pr is None:
+            return False
+        latest = {}
+        for r in self._reviews(pr):
+            if not r["agent"] and not r["bot"] and r["verdict"]:
+                latest[r["author"]] = r["verdict"]
+        requested = {u["login"] for u in pr.get("requested_reviewers") or []}
+        who = [a for a, v in latest.items() if v == "changes" and a not in requested and (only is None or a in only)
+               and self._can_write(a)]
+        if not who:
+            return False
+        self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/requested_reviewers",
+                  *[x for a in who for x in ("-f", f"reviewers[]={a}")]])
+        return True
 
     def _review(self, n, e):
         pr, focus = self._pr(n), e.get("focus")

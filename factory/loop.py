@@ -52,9 +52,8 @@ def cron_due(expr, last, now):
 
 
 def script_join(ctx):
-    """The `join` node: approved when every review at the head approves, else changes."""
-    head = [r for r in ctx["reviews"] if r["agent"] and r["commit_id"] == ctx["head"]]
-    return ("approved" if head and all(r["verdict"] == "approve" for r in head) else "changes"), {"tier": "mid"}
+    """The `join` node: the shared rule in gate.join_decision (agents, humans and CI)."""
+    return gate.join_decision(ctx) or (None, {})
 
 
 def script_sweep(facts):
