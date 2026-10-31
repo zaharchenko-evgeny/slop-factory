@@ -66,11 +66,19 @@ class GitHubGateTracker:
         return self._api(f"pulls/{prs[-1]['number']}") if prs else None
 
     def _ci(self, sha):
-        out = self.run(["api", "--paginate", f"repos/{self.repo}/commits/{sha}/check-runs", "--jq", ".check_runs[]"])
-        runs = [json.loads(x) for x in out.splitlines() if x.strip()]
-        done = [r["conclusion"] for r in runs]
-        if not runs:
+        """CI at `sha` from the Actions workflow runs (the Air GitHub App has Actions: read, not Checks: read, so
+        check-runs answers 403 in a run). Per workflow the latest run counts, so a rerun replaces a failure."""
+        out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs?head_sha={sha}&per_page=100",
+                        "--jq", ".workflow_runs[]"])
+        latest = {}
+        for r in (json.loads(x) for x in out.splitlines() if x.strip()):
+            key = (r.get("workflow_id"), r.get("event"))
+            if key not in latest or (r.get("run_number"), r.get("run_attempt", 1)) > (
+                    latest[key].get("run_number"), latest[key].get("run_attempt", 1)):
+                latest[key] = r
+        if not latest:
             return "none"
+        done = [r.get("conclusion") if r.get("status") == "completed" else None for r in latest.values()]
         if any(c in BAD_CI for c in done):
             return "red"
         return "green" if all(c in GOOD_CI for c in done) else "pending"

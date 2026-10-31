@@ -41,8 +41,10 @@ class FakeGh:
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
         a = a + " POST" if "POST" in args else a
         assert args[:2] != ["api", "user"], "gh api user must never be called"
-        if "check-runs" in a:
-            return "\n".join(json.dumps({"conclusion": c}) for c in self.checks)
+        if "actions/runs?head_sha=" in a:  # one workflow per entry of `checks`; None = still running
+            return "\n".join(json.dumps({"workflow_id": k, "event": "pull_request", "run_number": 1,
+                                          "status": "completed" if c else "in_progress", "conclusion": c})
+                             for k, c in enumerate(self.checks))
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
             return "\n".join(json.dumps(p) for p in (
@@ -127,6 +129,16 @@ class FactsTest(unittest.TestCase):
         self.assertEqual(tr(FakeGh(checks=["success", "failure"])).facts(7)["ci"], "red")
         self.assertEqual(tr(FakeGh(checks=["success", None])).facts(7)["ci"], "pending")
         self.assertEqual(tr(FakeGh(checks=[])).facts(7)["ci"], "none")
+
+    def test_ci_rerun_replaces_a_failure(self):
+        class Rerun(FakeGh):
+            def __call__(self, args):
+                if any("actions/runs?head_sha=" in x for x in args):
+                    return "\n".join(json.dumps({"workflow_id": 1, "event": "pull_request", "run_number": 1,
+                                                  "run_attempt": n, "status": "completed", "conclusion": c})
+                                      for n, c in ((1, "failure"), (2, "success")))
+                return FakeGh.__call__(self, args)
+        self.assertEqual(tr(Rerun()).facts(7)["ci"], "green")
         f = tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)
         self.assertEqual((f["focus_missing"], f["round_head"]), (["full"], "old"))
 
