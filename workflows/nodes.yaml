@@ -154,14 +154,16 @@ nodes:
   sweep:
     pilot: true
     triggers: ["schedule sweep"]
-    when: { always: true }
-    role: retro
-    output: as-instructed
+    when: { always: true }   # the script picks each ticket's outcome from its facts (pr-state, children, round)
+    role: script
+    tier: cheap   # Air automation model; it does no work: the automation runs `uv run factory/gate.py sweep`
+    run: uv run factory/gate.py sweep
+    output: read-only
     outcomes:
-      answered: { from: [needs-answers], effects: [{ stage: ready }] }
+      answered: { enabled: false, from: [needs-answers], effects: [{ stage: ready }] }
       children-done: { from: [split], effects: [{ stage: done }] }
       child-failed: { from: [split], effects: [{ stage: blocked }] }
-      conflict: { from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
+      conflict: { enabled: false, from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [approved], effects: [{ stage: merged }] }
       retro: { from: [merged], effects: [{ comment: retro }, { stage: done }] }
   routines:
