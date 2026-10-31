@@ -33,7 +33,7 @@ class FakeGh:
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
         self.blocked = [{"state": "open", "id": 1}, {"state": "closed", "id": 2}]
-        self.open_issues = []
+        self.open_issues, self.state, self.sub_state = [], "open", ["open"] * 9
 
     def __call__(self, args):
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
@@ -48,13 +48,17 @@ class FakeGh:
                 {"number": 6, "state": "open", "head": head("ez/70-other", REPO)},
                 {"number": 8, "state": "open", "head": head("ez/7-fork", "evil/r")},
                 {"number": 9, "state": "open", "head": head("ez/7-gone", None)}))
+        if "issues?state=" in a and "labels=" in a:
+            want = a.split("labels=")[1].split("&")[0]
+            on = want in self.labels and (self.state == "open" or "state=all" in a)
+            return json.dumps({"number": 7}) if on else ""
         if a.endswith("/pulls/5"):
-            return json.dumps({"number": 5, "merged": self.merged, "mergeable": True, "head": {"sha": "h1", "ref": "ez/7-x"},
+            return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "head": {"sha": "h1", "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": "alice"}]})
         if a.endswith("/pulls/5/reviews"):
             return "\n".join(json.dumps(r) for r in self.reviews)
         if a.endswith(("issues/7", "issues/5")):
-            return json.dumps({"labels": [{"name": x} for x in self.labels]})
+            return json.dumps({"labels": [{"name": x} for x in self.labels], "state": self.state})
         if a.endswith("issues/7/dependencies/blocked_by"):
             return "\n".join(json.dumps(b) for b in self.blocked)
         if a.endswith("issues/7/comments"):
@@ -62,8 +66,10 @@ class FakeGh:
         if a.endswith("issues?state=open&per_page=100"):
             return "\n".join(json.dumps(i) for i in self.open_issues)
         if a.endswith("issues/7/sub_issues"):
-            return "\n".join(json.dumps({"title": t}) for t in self.sub)
+            return "\n".join(json.dumps({"title": t, "state": st}) for t, st in zip(self.sub, self.sub_state))
         self.writes.append(args)
+        if args[1] == "close":
+            self.state = "closed"
         if args[1] == "edit":
             it = iter(args[5:])
             for flag, v in zip(it, it):
@@ -222,6 +228,73 @@ class EffectsTest(unittest.TestCase):
         gh = FakeGh()
         self.assertFalse(tr(gh).apply(eff("seen", "e1")))
         self.assertEqual(gh.writes, [])
+
+
+class SweepTest(unittest.TestCase):
+    def run_sweep(self, gh, dry=False):
+        return gate.sweep(tr(gh), nodes.load(), dry)
+
+    def test_merged_pr_walks_approved_to_done_one_stage_per_sweep(self):
+        gh = FakeGh(labels=["factory:approved", "risk:low"], reviews=[review(BOT, M)])
+        gh.merged, gh.state = True, "closed"  # a closed issue in approved is still found
+        res, failed = self.run_sweep(gh)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in res], [(7, "merged")])
+        self.assertEqual(sorted(gh.labels), ["factory:merged", "risk:low"])
+        res, _ = self.run_sweep(gh)
+        self.assertEqual([r["outcome"] for r in res], ["retro"])
+        self.assertEqual(sorted(gh.labels), ["factory:done", "risk:low"])
+        comments = [w for w in gh.writes if w[:2] == ["issue", "comment"]]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("Retro: PR #5 merged; fix rounds 0; reviews 1 (1 approve, 0 changes)", comments[0][-1])
+        self.assertTrue(comments[0][-1].endswith("Factory-Run: sweep:retro"))
+        n = len(gh.writes)
+        self.assertEqual(self.run_sweep(gh), ([], False))  # no new facts: nothing written
+        self.assertEqual(len(gh.writes), n)
+
+    def test_done_closes_an_open_issue(self):
+        gh = FakeGh(labels=["factory:merged", "risk:low"])
+        gh.merged = True
+        self.run_sweep(gh)
+        self.assertEqual(gh.state, "closed")
+        self.assertIn(["issue", "close", "7", "-R", REPO], gh.writes)
+
+    def test_retro_without_pr(self):
+        gh = FakeGh(labels=["factory:merged"])
+        gh.__class__.__call__, orig = (lambda self, a: "" if any(x.endswith("state=all&per_page=100") for x in a) else orig(self, a)), gh.__class__.__call__
+        try:
+            self.run_sweep(gh)
+        finally:
+            gh.__class__.__call__ = orig
+        self.assertIn("Retro: no PR found;", [w for w in gh.writes if w[:2] == ["issue", "comment"]][0][-1])
+
+    def test_dry_run_writes_nothing_and_open_pr_waits(self):
+        gh = FakeGh(labels=["factory:approved"])
+        self.assertEqual(self.run_sweep(gh)[0], [])  # PR still open
+        gh.merged = True
+        res, _ = self.run_sweep(gh, dry=True)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in res], [(7, "merged")])
+        self.assertEqual(gh.writes, [])
+
+    def test_split_waits_for_children(self):
+        gh = FakeGh(labels=["factory:split"], sub=["a", "b"])
+        gh.sub_state = ["closed", "open"]
+        self.assertEqual(self.run_sweep(gh)[0], [])
+        gh.sub_state = ["closed", "closed"]
+        self.assertEqual([r["outcome"] for r in self.run_sweep(gh)[0]], ["children-done"])
+        self.assertEqual(sorted(gh.labels), ["factory:done"])
+
+    def test_in_review_complete_round_runs_join_and_disabled_outcomes_refuse(self):
+        gh = FakeGh(reviews=[review(BOT, M)])
+        res, _ = self.run_sweep(gh)
+        self.assertEqual([(r["node"], r["outcome"]) for r in res], [("join", "approved")])
+        self.assertEqual(sorted(gh.labels), ["factory:approved", "risk:low"])
+        with self.assertRaises(gate.Bad):
+            gate.apply("sweep", "conflict", {"ticket": 7}, tr(gh), nodes.load())
+
+    def test_pr_state_condition(self):
+        self.assertTrue(gate.holds({"pr-state": "merged"}, {"pr_state": "merged"}, {}))
+        with self.assertRaises(gate.Bad):
+            gate.holds({"pr-state": "x"}, {"pr_state": "merged"}, {})
 
 
 class GateTest(unittest.TestCase):

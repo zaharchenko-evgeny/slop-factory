@@ -57,7 +57,13 @@ def script_join(ctx):
     return ("approved" if head and all(r["verdict"] == "approve" for r in head) else "changes"), {"tier": "mid"}
 
 
-SCRIPTS = {"join": script_join}
+def script_sweep(facts):
+    """The sweep node's own outcomes (merged, retro, children-done); the join backstop stays with the join node."""
+    plan = gate.sweep_plan(facts)
+    return (plan[1], plan[2]) if plan and plan[0] == "sweep" else (None, {})
+
+
+SCRIPTS = {"join": script_join, "sweep": script_sweep}
 
 
 class Due:
@@ -205,6 +211,7 @@ def main(argv):
                              "--limit", "200", "--json", "number,labels"]))
         stages = set(config["tracker"]["stages"].values())
         tickets = [i["number"] for i in out if stages & {x["name"] for x in i["labels"]}]
+        tickets += [n for n in tracker.sweep_tickets(gate.SWEEP_STAGES) if n not in tickets]  # closed approved/merged/split too
     res = tick(tracker, tickets, nodes_mod.load(), config, last=last, only_node=a.node)
     for r in res["ran"]:
         print(*r)

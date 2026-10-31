@@ -7,6 +7,7 @@
 
 Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py apply --node N --outcome O --payload FILE [--tracker github|memory:FILE]
+       gate.py sweep [--tracker github] [--dry-run]   (no agent: lists the tickets itself, one stage per ticket)
 Exit 0 go / done, 10 no go (stale, duplicate or the node no longer matches), 2 bad event, payload, node
 or outcome, 1 a failing effect (the stage is untouched: it is the last effect).
 An event is JSON {id, ticket, head?, actor?}. A payload is JSON {ticket, event?, head?, actor?, ...}
@@ -61,6 +62,9 @@ def holds(when, facts, event):
             return facts["ci"] == want
         if key == "actor":
             return event.get("actor") == want
+        if key == "pr-state":
+            value(want, ("open", "merged", "closed", "none"))
+            return facts.get("pr_state", "none") == want
         if key == "always":
             return bool(want)
         return bool(facts["due"]) == bool(want)  # due
@@ -137,6 +141,8 @@ def apply(name, outcome, payload, tracker, nodes):
     if outcome not in node["outcomes"]:
         raise Bad(f"unknown outcome: {outcome}")
     out = node["outcomes"][outcome]
+    if out.get("enabled") is False:
+        raise Bad(f"disabled outcome: {outcome}")
     ticket = payload["ticket"]
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
@@ -155,10 +161,55 @@ def apply(name, outcome, payload, tracker, nodes):
     return GO, {"applied": True, "written": [e["kind"] for e in effects if tracker.apply(e)]}
 
 
+SWEEP_STAGES = ("approved", "merged", "split", "in-review")
+
+
+def sweep_plan(facts):
+    """(node, outcome, payload) of the first outcome whose facts hold, else None."""
+    stage = facts["stage"]
+    if stage == "approved" and facts.get("pr_state") == "merged":
+        return "sweep", "merged", {}
+    if stage == "merged":
+        agent = [r for r in facts["reviews"] if r["agent"]]
+        pr = f"PR #{facts['pr']} {facts['pr_state']}" if facts["pr"] else "no PR found"
+        text = (f"Retro: {pr}; fix rounds {facts['fix_rounds']}; "
+                f"reviews {len(agent)} ({sum(r['verdict'] == 'approve' for r in agent)} approve, "
+                f"{sum(r['verdict'] == 'changes' for r in agent)} changes)")
+        return "sweep", "retro", {"retro": text, "run_id": "sweep:retro"}
+    if stage == "split" and facts.get("children_total") and facts["children_open"] == 0:
+        return "sweep", "children-done", {}
+    if stage == "in-review" and facts["round_complete"] and facts["round_head"] == facts["head"]:
+        changes = any(r["agent"] and r["commit_id"] == facts["head"] and r["verdict"] == "changes" for r in facts["reviews"])
+        return "join", "changes" if changes else "approved", {"tier": "mid"}
+    return None
+
+
+def sweep(tracker, nodes, dry_run=False):
+    """One pass: each listed ticket moves at most one stage. Returns (results, failed)."""
+    results, failed = [], False
+    for n in tracker.sweep_tickets(SWEEP_STAGES):
+        try:
+            facts = tracker.facts(n)
+            plan = sweep_plan(facts)
+            if plan is None:
+                continue
+            node, outcome, payload = plan
+            r = {"ticket": n, "stage": facts["stage"], "node": node, "outcome": outcome}
+            if not dry_run:
+                code, out = apply(node, outcome, {"ticket": n, **payload}, tracker, nodes)
+                r.update(applied=out["applied"], written=out.get("written", []))
+            results.append(r)
+        except Exception as e:  # one ticket failing does not stop the others
+            failed = True
+            results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+    return results, failed
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply"])
-    p.add_argument("--node", required=True)
+    p.add_argument("cmd", choices=["check", "apply", "sweep"])
+    p.add_argument("--node", default="")
+    p.add_argument("--dry-run", action="store_true")
     p.add_argument("--event")
     p.add_argument("--outcome")
     p.add_argument("--payload")
@@ -170,7 +221,7 @@ def main(argv):
         return BAD
     path = ""
     try:
-        kind, _, path = a.tracker.partition(":")
+        kind, _, path = (a.tracker or ("github" if a.cmd == "sweep" else "")).partition(":")
         if kind == "github" and not path:
             tracker = GitHubGateTracker.from_config()
         elif kind == "memory" and path:
@@ -182,6 +233,14 @@ def main(argv):
             raise Bad("--tracker is github or memory:FILE")
         nodes = nodes_mod.load(a.nodes)
         config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+        if a.cmd == "sweep":
+            if not hasattr(tracker, "sweep_tickets"):
+                raise Bad("sweep needs --tracker github")
+            results, failed = sweep(tracker, nodes, a.dry_run)
+            print(json.dumps({"dry_run": a.dry_run, "sweep": results}))
+            return FAILED if failed else GO
+        if not a.node:
+            raise Bad("--node is required")
         if a.cmd == "check":
             code, out = check(a.node, read(a.event or "", "event"), tracker, nodes, config)
         else:

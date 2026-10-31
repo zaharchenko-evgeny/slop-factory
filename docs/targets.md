@@ -90,7 +90,7 @@ Probed on 31 October with personal probe automations on `ez/152-probes` (model c
 
 Other findings and their consequences for the design (#150, #159):
 
-- Concurrent runs of one automation are real: the join and the merge train must be idempotent and keyed by head SHA. The pilot sweep merges nothing (dry-run).
+- Concurrent runs of one automation are real: the join and the merge train must be idempotent and keyed by head SHA. The pilot sweep merges nothing (dry-run). The `sweep` node is a script, not an agent: the Air automation runs `uv run factory/gate.py sweep` (model `cheap`, does no work). The script lists the issues itself, open or closed, in `approved`, `merged` or `split`, plus `in-review` for the join backstop, and moves each ticket at most one stage per run (`approved` with a merged PR → `merged`; `merged` → one retro comment, `done`, issue closed; `split` with all children closed → `done`). A run with no new facts writes nothing; `--dry-run` prints the plan. The `conflict` and `answered` outcomes are disabled for the pilot.
 - In a run `gh` acts as `jetbrains-air[bot]` through `GH_TOKEN`; `gh api user` answers 403, so a role must not call it.
 - The `create-pr` agent named its branch `ez/152-probe-p5` from AGENTS.md, so the gate must check branch naming, not assume it.
 - `result.summary` was null for 2 of 5 finished runs: the node's handoff goes through `gate apply`, not the run summary.
