@@ -87,35 +87,28 @@ class GitHubGateTracker:
                 return False
             raise  # any other failure must not drop a blocking review: the join fails and is retried
 
-    def _asked(self, pr):
-        """Every person ever asked to review the PR (timeline); a removed request does not release them."""
-        return {e["requested_reviewer"]["login"] for e in self._list(f"issues/{pr['number']}/timeline")
-                if e.get("event") == "review_requested" and e.get("requested_reviewer")}
-
-    def _asked_reviewed(self, reviews, head, asked, at_head):
-        """Each person asked has a review of this round: on the head, or submitted since the round started (the first
-        agent review at head, else the head commit's date). A review of an earlier round never counts."""
-        if not asked:
-            return True
-        start = min((r["submitted_at"] for r in at_head.values() if r["submitted_at"]), default=None) \
+    def _start(self, head, at_head):
+        """The round's start: the first agent review at head, else the head commit's date."""
+        return min((r["submitted_at"] for r in at_head.values() if r["submitted_at"]), default=None) \
             or self._api(f"commits/{head}")["commit"]["committer"]["date"]
-        return all(any(r["author"] == u and r["state"] != "PENDING" and (
-            r["commit_id"] == head or (r["submitted_at"] or "") >= start) for r in reviews) for u in asked)
 
-    def _round(self, reviews, required, head, requested, ci, asked=()):
+    def _round(self, reviews, required, head, requested, ci):
         """(complete, verdict, ignored) of the round at `head`: marked agent reviews of every required focus at
-        head, no requested reviewer left, CI concluded. Humans (with write access) and trusted bots count by
-        their latest APPROVED/CHANGES_REQUESTED, whatever commit it names (a late review lands in the next round)."""
+        head, no requested reviewer left (GitHub drops a person on review and adds them back on a re-request), CI
+        concluded. A person (with write access) or trusted bot blocks with a latest CHANGES_REQUESTED on head or
+        submitted since the round started; COMMENTED never counts."""
         at_head = {r["focus"]: r for r in reviews if r["agent"] and r["commit_id"] == head}
         others = {r["author"]: r for r in reviews if not r["agent"] and r["verdict"]
                   and (r["author"] in self.trusted if r["bot"] else self._can_write(r["author"]))}
         ignored = [r["author"] for r in reviews if r["bot"] and not r["agent"] and r["author"] not in self.trusted]
-        complete = (all(x in at_head for x in required) and not requested and ci in ("green", "red")
-                    and self._asked_reviewed(reviews, head, asked, at_head))
+        complete = all(x in at_head for x in required) and not requested and ci in ("green", "red")
         if not complete:
             return False, None, ignored
-        changes = ci == "red" or any(at_head[x]["verdict"] != "approve" for x in required) \
-            or any(r["verdict"] == "changes" for r in others.values())
+        late = [r for r in others.values() if r["verdict"] == "changes"]
+        if any(r["commit_id"] != head for r in late):  # a change request of an earlier round does not block this one
+            start = self._start(head, at_head)
+            late = [r for r in late if r["commit_id"] == head or (r["submitted_at"] or "") >= start]
+        changes = ci == "red" or any(at_head[x]["verdict"] != "approve" for x in required) or bool(late)
         return True, "changes" if changes else "approve", ignored
 
     def facts(self, n):
@@ -136,7 +129,7 @@ class GitHubGateTracker:
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
             ci = self._ci(head)
-            complete, verdict, ignored = self._round(reviews, required, head, requested, ci, self._asked(pr))
+            complete, verdict, ignored = self._round(reviews, required, head, requested, ci)
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), ci=ci, reviews=reviews,
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],

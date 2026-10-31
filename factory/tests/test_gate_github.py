@@ -30,7 +30,7 @@ class FakeGh:
     """The gh calls of the adapter over one ticket (7) with a PR on ez/7-x; records writes."""
 
     def __init__(self, labels=("factory:in-review", "risk:low"), reviews=(), comments=(), checks=("success",), sub=(), requested=()):
-        self.requested, self.asked = list(requested), list(requested)
+        self.requested = list(requested)
         self.roles = {"alice": "write", "bob": "admin", "eve": "read"}
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
@@ -55,8 +55,6 @@ class FakeGh:
                                "requested_reviewers": [{"login": u} for u in self.requested]})
         if a.endswith("/commits/h1"):
             return json.dumps({"commit": {"committer": {"date": "2026-01-02T00:00:00Z"}}})
-        if a.endswith("/timeline"):
-            return "\n".join(json.dumps({"event": "review_requested", "requested_reviewer": {"login": u}}) for u in self.asked)
         if "/collaborators/" in a:
             who = a.split("/collaborators/")[1].split("/")[0]
             if who not in self.roles:
@@ -313,24 +311,25 @@ class JoinTest(unittest.TestCase):
         gh.reviews = [review(BOT, M), review("alice", "", commit="h0", state="CHANGES_REQUESTED")]  # round 2 agent approve
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # the late review is counted now
 
-    def test_removed_request_does_not_release_a_human(self):
-        gh = FakeGh(reviews=[review(BOT, M)])
-        gh.asked = ["alice"]  # asked once, request removed, never reviewed
+    def test_commented_review_leaves_a_required_human_pending(self):
+        gh = FakeGh(reviews=[review(BOT, M), review("alice", "thanks", state="COMMENTED")], requested=["alice"])
         self.assertEqual(tr(gh).facts(7)["round_complete"], False)
+        gh.requested = []  # she reviewed: GitHub dropped the request
         gh.reviews.append(review("alice", "", state="APPROVED"))
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
 
-    def test_earlier_round_review_does_not_complete_this_one(self):
+    def test_earlier_round_changes_do_not_block_this_round(self):
         old = "2026-01-01T00:00:00Z"  # before the head's push (2026-01-02)
-        gh = FakeGh(reviews=[review("alice", "", commit="h0", state="APPROVED", at=old)])
-        gh.asked = ["alice"]  # round 1 approved by alice; the fix pushed h1; her request was removed
-        self.assertEqual(tr(gh).facts(7)["round_complete"], False)  # no agent review yet: start = push of h1
-        gh.reviews.append(review(BOT, M, at="2026-01-02T02:00:00Z"))
-        self.assertEqual(tr(gh).facts(7)["round_complete"], False)  # start = the agent review; alice's is older
-        gh.reviews.append(review("alice", "", commit="h0", state="APPROVED", at="2026-01-02T03:00:00Z"))
-        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")  # she reviewed again since the start
-        gh.reviews[0:3] = [review("alice", "", commit="h0", state="APPROVED", at=old), review(BOT, M)]
-        gh.asked = []  # no longer asked at all
+        gh = FakeGh(reviews=[review("alice", "", commit="h0", state="CHANGES_REQUESTED", at=old), review(BOT, M)])
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")  # not re-requested, so not asked again
+        gh.requested = ["alice"]  # re-requested: blocks until she reviews
+        self.assertEqual(tr(gh).facts(7)["round_complete"], False)
+        gh.requested = []
+        gh.reviews.append(review("alice", "", commit="h0", state="CHANGES_REQUESTED", at="2026-01-02T03:00:00Z"))
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # a late review counts in this round
+
+    def test_human_approval_of_round_1_does_not_block_round_2(self):
+        gh = FakeGh(reviews=[review("alice", "", commit="h0", state="APPROVED", at="2026-01-01T00:00:00Z"), review(BOT, M)])
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
 
     def test_permission_lookup_failure_is_not_no_access(self):
