@@ -347,6 +347,27 @@ class JoinTest(unittest.TestCase):
         self.assertFalse(tr(gh).apply({"ticket": 7, "kind": "request-reviewers", "value": "changes"}))  # already asked
         self.assertFalse(tr(gh).facts(7)["round_complete"])  # round 2 waits for her
 
+    def test_sweep_asks_waiting_reviewers_again_after_a_comment(self):
+        # final review of #183, B1: a comment after the re-request drops her from requested_reviewers
+        gh = FakeGh(reviews=[review(BOT, M, commit="h0", at="2026-01-02T01:00:00Z"),
+                             review("alice", "", commit="h0", state="CHANGES_REQUESTED", at="2026-01-02T02:00:00Z"),
+                             review(BOT, M, at="2026-01-02T04:00:00Z"),
+                             review("alice", "looking", state="COMMENTED", at="2026-01-02T05:00:00Z")])
+        gh.fix_events, gh.requested = ["2026-01-02T02:05:00Z"], []
+        res, _ = gate.sweep(tr(gh), nodes.load())
+        self.assertEqual([(r["node"], r["outcome"]) for r in res], [("sweep", "waiting")])
+        self.assertTrue(any("reviewers[]=alice" in " ".join(w) for w in gh.writes))
+        self.assertIn("factory:in-review", gh.labels)  # nothing moved
+
+    def test_trusted_bot_handled_request_does_not_wait(self):
+        # final review of #183, B2: a bot cannot be re-requested, so its handled request is resolved
+        bot = review("rev[bot]", "", commit="h0", state="CHANGES_REQUESTED", assoc="NONE", at="2026-01-02T02:00:00Z")
+        gh = FakeGh(reviews=[bot, review(BOT, M, at="2026-01-02T04:00:00Z")])
+        gh.fix_events = ["2026-01-02T02:05:00Z"]
+        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, trusted_bots=["rev[bot]"])
+        f = t.facts(7)
+        self.assertEqual((f["round_complete"], f["waiting_reviewers"], f["round_verdict"]), (True, [], "approve"))
+
     def test_change_request_counted_by_round_1_does_not_block_round_2(self):
         # B2 of #183: the bot reviews first, the human second; round 1 counts her request, round 2 must not loop on it
         gh = FakeGh(reviews=[review(BOT, M, commit="h0", at="2026-01-02T01:00:00Z"),

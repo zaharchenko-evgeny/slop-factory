@@ -131,7 +131,9 @@ class GitHubGateTracker:
         if any(r["commit_id"] != head for r in late):
             writes = self._fix_writes(pr) if pr is not None else []
             # A request a fix already received stays open until its author decides again: the round waits.
-            waiting = [r["author"] for r in late if self._earlier(r, head, writes)]
+            # A trusted bot cannot be asked again, so its handled request counts as resolved instead.
+            waiting = [r["author"] for r in late if self._earlier(r, head, writes) and not r["bot"]]
+            late = [r for r in late if not (r["bot"] and self._earlier(r, head, writes))]
             if waiting:
                 return False, None, ignored, waiting
         changes = ci == "red" or any(at_head[x]["verdict"] != "approve" for x in required) or bool(late)

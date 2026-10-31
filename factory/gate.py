@@ -204,6 +204,8 @@ def sweep_plan(facts):
         return "sweep", "retro", {"retro": text, "run_id": "sweep:retro"}
     if stage == "split" and facts.get("children_total") and facts["children_open"] == 0:
         return "sweep", "children-done", {}
+    if stage == "in-review" and facts.get("waiting_reviewers"):
+        return "sweep", "waiting", {}  # ask them again; nothing moves until they decide
     if stage == "in-review" and (j := join_decision(facts)):
         return "join", *j
     return None
