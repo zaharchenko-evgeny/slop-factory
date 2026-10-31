@@ -96,10 +96,15 @@ class GitHubGateTracker:
                 return False
             raise  # any other failure must not drop a blocking review: the join fails and is retried
 
-    def _start(self, head, at_head):
-        """The round's start: the first agent review at head, else the head commit's date."""
-        return min((r["submitted_at"] for r in at_head.values() if r["submitted_at"]), default=None) \
-            or self._api(f"commits/{head}")["commit"]["committer"]["date"]
+    def _earlier(self, r, reviews, head):
+        """True when change request `r` belongs to an earlier round, which already counted it: it names an
+        older commit and came no later than that round closed. A round closed with its last agent review at that
+        commit, else with the push of the current head. A request sent during a fix counts in the next round."""
+        if r["commit_id"] == head:
+            return False
+        closed = max((x["submitted_at"] or "" for x in reviews if x["agent"] and x["commit_id"] == r["commit_id"]),
+                     default="") or self._api(f"commits/{head}")["commit"]["committer"]["date"]
+        return (r["submitted_at"] or "") <= closed
 
     def _round(self, reviews, required, head, requested, ci):
         """(complete, verdict, ignored) of the round at `head`: marked agent reviews of every required focus at
@@ -113,10 +118,7 @@ class GitHubGateTracker:
         complete = all(x in at_head for x in required) and not requested and ci in ("green", "red")
         if not complete:
             return False, None, ignored
-        late = [r for r in others.values() if r["verdict"] == "changes"]
-        if any(r["commit_id"] != head for r in late):  # a change request of an earlier round does not block this one
-            start = self._start(head, at_head)
-            late = [r for r in late if r["commit_id"] == head or (r["submitted_at"] or "") >= start]
+        late = [r for r in others.values() if r["verdict"] == "changes" and not self._earlier(r, reviews, head)]
         changes = ci == "red" or any(at_head[x]["verdict"] != "approve" for x in required) or bool(late)
         return True, "changes" if changes else "approve", ignored
 

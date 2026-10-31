@@ -314,8 +314,12 @@ class JoinTest(unittest.TestCase):
         join(gh)  # round 1 ends: fix label, changes-requested
         self.assertIn("factory:changes-requested", gh.labels)
         gh.labels = ["factory:in-review", "risk:low"]  # the fix pushed; head is still h1 in the stub, the review names h0
-        gh.reviews = [review(BOT, M), review("alice", "", commit="h0", state="CHANGES_REQUESTED")]  # round 2 agent approve
-        self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # the late review is counted now
+        gh.reviews = [review(BOT, C, commit="h0", at="2026-01-02T01:00:00Z"),  # round 1 closes at 01:00
+                      review("alice", "", commit="h0", state="CHANGES_REQUESTED", at="2026-01-02T02:00:00Z"),  # during the fix
+                      review(BOT, M, at="2026-01-02T03:00:00Z")]  # round 2: the agent approves h1
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # the late review counts in round 2
+        gh.reviews[1]["submitted_at"] = "2026-01-02T00:30:00Z"  # before round 1 closed: round 1 counted it
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
 
     def test_commented_review_leaves_a_required_human_pending(self):
         gh = FakeGh(reviews=[review(BOT, M), review("alice", "thanks", state="COMMENTED")], requested=["alice"])
