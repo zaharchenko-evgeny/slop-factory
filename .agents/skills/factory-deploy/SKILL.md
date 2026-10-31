@@ -1,6 +1,6 @@
 ---
 name: factory-deploy
-description: Deploy the factory nodes to Air Cloud: render the plan with deploy.py, compare it with the existing [factory:*] automations and environments through the air-automations and air-cloud MCP, and apply the creates, updates and deletes. Use when the user asks to deploy, sync or update the factory on Air.
+description: "Deploy the factory nodes to Air Cloud: render the plan with deploy.py, compare it with the existing [factory:*] automations and environments through the air-automations and air-cloud MCP, and apply the creates, updates and deletes. Use when the user asks to deploy, sync or update the factory on Air."
 ---
 
 # Factory deploy (Air target)
