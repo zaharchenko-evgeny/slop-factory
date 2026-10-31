@@ -284,3 +284,51 @@ Each slice is a factory ticket under #100 and ends in a state that can be checke
 4. The Air target (#7): render the automations in the table from `delivery.sm.yaml` and `factory.yaml`.
 5. The sweep on both targets.
 6. The first ticket delivered end to end in Air (#8).
+
+## Node chart
+
+Generated from `workflows/nodes.yaml` by `uv run factory/nodes.py chart` (ADR-0014); a test fails when it is stale.
+
+<!-- nodes-chart -->
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> draft
+    draft --> ready: human: ready
+    needs_answers --> ready: human: ready
+    not_actionable --> ready: human: ready
+    blocked --> ready: human: ready
+    failed --> ready: human: ready
+    ready --> in_dev: intake (P): proceed
+    ready --> needs_answers: intake (P): grill
+    ready --> split: intake (P): split
+    ready --> not_actionable: intake (P): not-actionable
+    ready --> reproduce: intake (P): bug
+    reproduce --> diagnose: reproduce: reproduced
+    reproduce --> needs_answers: reproduce: not-reproduced
+    diagnose --> verify: diagnose: diagnosed
+    verify --> in_dev: verify: bug
+    verify --> not_actionable: verify: intended
+    in_dev --> in_review: implement (P): done
+    in_dev --> in_dev: implement (P): error
+    in_dev --> blocked: implement (P): blocked
+    in_dev --> failed: implement (P): failed
+    [*] --> in_review: adopt: adopted
+    in_review --> changes_requested: join (P): changes
+    in_review --> approved: join (P): approved
+    changes_requested --> in_review: fix (P): done
+    changes_requested --> blocked: fix (P): blocked
+    approved --> merging: merge: merged
+    approved --> approved: merge: update-or-hold
+    approved --> changes_requested: merge: fix
+    merging --> merged: merging: merged
+    merging --> approved: merging: moved
+    needs_answers --> ready: sweep (P): answered
+    split --> done: sweep (P): children-done
+    split --> blocked: sweep (P): child-failed
+    approved --> changes_requested: sweep (P): conflict
+    approved --> merged: sweep (P): merged
+    merged --> done: sweep (P): retro
+    done --> [*]
+```
+<!-- /nodes-chart -->
