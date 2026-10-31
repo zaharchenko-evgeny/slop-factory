@@ -162,10 +162,17 @@ class EffectsTest(unittest.TestCase):
 
     def test_create_issues_retry_converges(self):
         gh = FakeGh()
-        gh.open_issues = [{"id": 999, "title": "A"}]  # created by a run that died before linking
+        gh.open_issues = [{"id": 999, "title": "A", "body": "x\n\n<!-- factory:child of=7 -->"}]  # created by a run that died before linking
         self.assertTrue(tr(gh).apply(eff("create-issues", ["A"])))
         self.assertEqual([w[2] for w in gh.writes], ["POST", "POST"])
         self.assertTrue(all("issues/7/" in w[3] for w in gh.writes))  # linked, not created again
+
+    def test_create_issues_does_not_adopt_foreign_issue(self):
+        gh = FakeGh()
+        gh.open_issues = [{"id": 555, "title": "A", "body": "<!-- factory:child of=10 -->"}, {"id": 556, "title": "A", "body": ""}]
+        self.assertTrue(tr(gh).apply(eff("create-issues", ["A"])))
+        self.assertIn("title=A", gh.writes[0])  # a new issue, carrying this ticket's marker
+        self.assertIn("factory:child of=7", gh.writes[0][-1])
 
     def test_fix_rounds_grow_per_reviewed_head(self):
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, M)])).facts(7)["fix_rounds"], 0)

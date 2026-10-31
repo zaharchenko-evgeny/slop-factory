@@ -47,7 +47,7 @@ class GitHubGateTracker:
     def _pr(self, n):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""
         prs = [p for p in self._list("pulls?state=all&per_page=100") if p["head"]["ref"].startswith(f"ez/{n}-")
-               and (p["head"].get("repo") or {}).get("full_name") == self.repo]  # never a fork's PR
+               and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.repo.lower()]  # never a fork's PR
         prs.sort(key=lambda p: (p["state"] == "open", p["number"]))
         return self._api(f"pulls/{prs[-1]['number']}") if prs else None
 
@@ -153,7 +153,9 @@ class GitHubGateTracker:
         """Per child: reuse an open issue of that title, then add each link that is missing (a retry converges)."""
         subs = {c["title"] for c in self._list(f"issues/{n}/sub_issues")}
         blockers = {b["id"] for b in self._list(f"issues/{n}/dependencies/blocked_by")}
-        open_issues = {i["title"]: i for i in reversed(self._list("issues?state=open&per_page=100")) if "pull_request" not in i}
+        mark = f"<!-- factory:child of={n} -->"  # only an issue this ticket created is reused
+        open_issues = {i["title"]: i for i in reversed(self._list("issues?state=open&per_page=100"))
+                       if "pull_request" not in i and mark in (i.get("body") or "")}
         wrote = False
         for c in children:
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
@@ -162,7 +164,7 @@ class GitHubGateTracker:
                 continue
             if new is None:
                 new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
-                                           "-f", f"body={c.get('body', '')}"]))
+                                           "-f", f"body={c.get('body', '')}\n\n{mark}"]))
             if c["title"] not in subs:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
             if new["id"] not in blockers:
