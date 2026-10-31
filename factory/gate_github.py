@@ -115,7 +115,8 @@ class GitHubGateTracker:
         return at <= self._api(f"commits/{head}")["commit"]["committer"]["date"]
 
     def _round(self, reviews, required, head, requested, ci, pr=None):
-        """(complete, verdict, ignored) of the round at `head`: marked agent reviews of every required focus at
+        """(complete, verdict, ignored, waiting) of the round at `head`. `waiting`: people whose change request a
+        fix already received and who have not decided again; the round stays open until they do. The round is marked agent reviews of every required focus at
         head, no requested reviewer left (GitHub drops a person on review and adds them back on a re-request), CI
         concluded. A person (with write access) or trusted bot blocks with a latest CHANGES_REQUESTED on head or
         submitted since the round started; COMMENTED never counts."""
@@ -125,13 +126,16 @@ class GitHubGateTracker:
         ignored = [r["author"] for r in reviews if r["bot"] and not r["agent"] and r["author"] not in self.trusted]
         complete = all(x in at_head for x in required) and not requested and ci in ("green", "red")
         if not complete:
-            return False, None, ignored
+            return False, None, ignored, []
         late = [r for r in others.values() if r["verdict"] == "changes"]
         if any(r["commit_id"] != head for r in late):
             writes = self._fix_writes(pr) if pr is not None else []
-            late = [r for r in late if not self._earlier(r, head, writes)]
+            # A request a fix already received stays open until its author decides again: the round waits.
+            waiting = [r["author"] for r in late if self._earlier(r, head, writes)]
+            if waiting:
+                return False, None, ignored, waiting
         changes = ci == "red" or any(at_head[x]["verdict"] != "approve" for x in required) or bool(late)
-        return True, "changes" if changes else "approve", ignored
+        return True, "changes" if changes else "approve", ignored, []
 
     def facts(self, n):
         issue = self._api(f"issues/{n}")
@@ -144,7 +148,7 @@ class GitHubGateTracker:
         f = {"stage": stage, "attrs": [x for x in labels if x not in by_label], "blockers_open": len(blockers),
              "head": None, "pr": None, "mergeable": None, "ci": "none", "reviews": [], "requested_reviewers": [],
              "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
-             "ignored_reviews": [], "fix_rounds": 0,
+             "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
              "issue_state": issue.get("state", "open")}
         if stage == "split":
@@ -156,10 +160,10 @@ class GitHubGateTracker:
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
             ci = self._ci(head)
-            complete, verdict, ignored = self._round(reviews, required, head, requested, ci, pr["number"])
+            complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), ci=ci, reviews=reviews,
-                     requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored,
+                     requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
                      fix_rounds=sum(1 for r in reviews if r["agent"] and r["verdict"] == "changes"))  # bot change requests
@@ -234,6 +238,8 @@ class GitHubGateTracker:
         f = self.facts(n)
         for who in f["ignored_reviews"]:
             print(f"join: ignored unmarked bot review by {who}", file=sys.stderr)
+        if f["stage"] == "in-review" and f["waiting_reviewers"]:
+            return self._rerequest(n, f["waiting_reviewers"])  # nothing moves until they decide again
         if not f["round_complete"] or f["stage"] != "in-review":
             return False
         if f["round_verdict"] == "approve":
@@ -241,7 +247,7 @@ class GitHubGateTracker:
         wrote = self.apply({"ticket": n, "kind": "label", "value": f"factory:fix-{tier}", "on": "pr"})
         return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote
 
-    def _rerequest(self, n):
+    def _rerequest(self, n, only=None):
         """Ask again every person whose latest non-COMMENTED review requests changes, so the next round waits
         for them (the `fix` node's `done`, after the push: a request at join time would hold the fix itself)."""
         pr = self._pr(n)
@@ -252,7 +258,8 @@ class GitHubGateTracker:
             if not r["agent"] and not r["bot"] and r["verdict"]:
                 latest[r["author"]] = r["verdict"]
         requested = {u["login"] for u in pr.get("requested_reviewers") or []}
-        who = [a for a, v in latest.items() if v == "changes" and a not in requested and self._can_write(a)]
+        who = [a for a, v in latest.items() if v == "changes" and a not in requested and (only is None or a in only)
+               and self._can_write(a)]
         if not who:
             return False
         self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/requested_reviewers",

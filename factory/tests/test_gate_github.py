@@ -324,7 +324,8 @@ class JoinTest(unittest.TestCase):
         gh.fix_events = ["2026-01-02T01:30:00Z"]  # round 1's join started the fix at 01:30; alice came at 02:00
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # sent during the fix: counts in round 2
         gh.fix_events = ["2026-01-02T02:30:00Z"]  # the join ran after alice: the fix was given her request
-        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_complete"], f["waiting_reviewers"]), (False, ["alice"]))  # she decides again
 
     def test_fix_done_removes_its_command_label_so_round_2_can_add_it_again(self):
         gh = FakeGh(labels=["factory:changes-requested", "risk:low", "factory:fix-mid"])  # the stub shares labels
@@ -353,7 +354,14 @@ class JoinTest(unittest.TestCase):
                              review(BOT, M, at="2026-01-02T04:00:00Z")])
         gh.fix_events = ["2026-01-02T02:05:00Z"]  # round 1's join started the fix after her request
         f = tr(gh).facts(7)
-        self.assertEqual((f["round_complete"], f["round_verdict"]), (True, "approve"))
+        self.assertEqual((f["round_complete"], f["waiting_reviewers"]), (False, ["alice"]))  # waits, no loop
+        self.assertTrue(join(gh)[0])  # the join asks her again and moves nothing
+        self.assertTrue(any("reviewers[]=alice" in " ".join(w) for w in gh.writes))
+        self.assertNotIn("factory:approved", gh.labels)
+        gh.reviews.append(review("alice", "still looking", state="COMMENTED", at="2026-01-02T05:00:00Z"))
+        self.assertFalse(tr(gh).facts(7)["round_complete"])  # a comment is no new decision
+        gh.reviews.append(review("alice", "", state="APPROVED", at="2026-01-02T06:00:00Z"))
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
         gh.requested = ["alice"]  # re-requested: she blocks until she reviews again
         self.assertFalse(tr(gh).facts(7)["round_complete"])
 
@@ -379,15 +387,13 @@ class JoinTest(unittest.TestCase):
         gh.reviews.append(review("alice", "", state="APPROVED", at="2026-01-02T04:00:00Z"))
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
 
-    def test_earlier_round_changes_do_not_block_this_round(self):
-        old = "2026-01-01T00:00:00Z"  # before the head's push (2026-01-02)
+    def test_earlier_round_change_request_waits_for_its_author(self):
+        old = "2026-01-01T00:00:00Z"  # before the head's push (2026-01-02): an earlier round had it
         gh = FakeGh(reviews=[review("alice", "", commit="h0", state="CHANGES_REQUESTED", at=old), review(BOT, M)])
-        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")  # not re-requested, so not asked again
-        gh.requested = ["alice"]  # re-requested: blocks until she reviews
-        self.assertEqual(tr(gh).facts(7)["round_complete"], False)
-        gh.requested = []
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_complete"], f["waiting_reviewers"]), (False, ["alice"]))  # never approves
         gh.reviews.append(review("alice", "", commit="h0", state="CHANGES_REQUESTED", at="2026-01-02T03:00:00Z"))
-        self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # a late review counts in this round
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # a new request counts in this round
 
     def test_human_approval_of_round_1_does_not_block_round_2(self):
         gh = FakeGh(reviews=[review("alice", "", commit="h0", state="APPROVED", at="2026-01-01T00:00:00Z"), review(BOT, M)])
