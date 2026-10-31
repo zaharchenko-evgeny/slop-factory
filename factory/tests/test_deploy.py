@@ -71,12 +71,12 @@ class PlanTest(unittest.TestCase):
         names = {a["name"] for a in plan["automations"]}
         self.assertTrue(all(x.startswith("[factory:") for x in names))
         pilot = {f"[factory:{x}]" for x in (
-            "intake", "join", "recheck", "sweep",
+            "intake", "join", "sweep",
             *(f"{b}-{t}" for b in ("implement", "fix") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security")))}
         self.assertEqual(names, pilot)
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
-                         {"intake", "implement", "review", "join", "recheck", "fix", "sweep"})
+                         {"intake", "implement", "review", "join", "fix", "sweep"})
         self.assertEqual(deploy.plan_air(n, config), plan)
 
     def test_local_is_launchd_job(self):

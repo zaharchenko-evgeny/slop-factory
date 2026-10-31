@@ -110,16 +110,6 @@ nodes:
     outcomes:
       changes: { effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
       approved: { ci: [green, pending], else: changes, effects: [{ stage: approved }] }
-  recheck:
-    # CI completion has no trigger of its own: the sweep schedule re-runs the join decision, gated like join.
-    pilot: true
-    triggers: ["schedule sweep"]
-    when: { stage: [in-review, approved], round: complete-at-head, ci: [green, pending, red] }
-    role: script
-    output: read-only
-    outcomes:
-      changes: { from: [in-review, approved], effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
-      approved: { from: [in-review], ci: [green, pending], else: changes, effects: [{ stage: approved }] }
   fix:
     pilot: true
     tiers: [cheap, mid, strong]
