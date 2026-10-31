@@ -31,6 +31,12 @@ class PlanTest(unittest.TestCase):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
 
+    def test_script_nodes_only_run_the_sweep(self):
+        plan = json.loads((FIX / "air-plan.json").read_text())
+        a = {x["name"]: x for x in plan["automations"]}
+        self.assertEqual(a["[factory:sweep]"]["prompt"], deploy.SCRIPT_PROMPT)
+        self.assertIn("gate.py check --node intake", a["[factory:intake]"]["prompt"])
+
     def test_air_shape_and_no_github_token(self):
         plan = json.loads((FIX / "air-plan.json").read_text())
         a = {x["name"]: x for x in plan["automations"]}

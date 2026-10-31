@@ -52,6 +52,12 @@ def repository(r: dict) -> dict:
             "provider": "github" if "github.com" in url else "other"}
 
 
+# A script node runs no agent work: the gate's sweep decides every scripted step (join, waiting reviewers,
+# merged to done) from facts, so the automation only runs it.
+SCRIPT_PROMPT = ("Run `uv run factory/gate.py sweep` once and report its JSON output. Do nothing else: "
+                 "change no file, label, comment or review yourself.")
+
+
 def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str, str | None]]:
     """(automation suffix, tier of the node, model tier, focus) per tier or focus of the node."""
     role = roles.get(n["role"], {})
@@ -92,7 +98,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{PREFIX}{env}] env",
-                "prompt": PROMPT.format(node=name, sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else "")),
+                "prompt": SCRIPT_PROMPT if n["role"] == "script" else PROMPT.format(
+                    node=name, sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else "")),
             })
     envs = []
     for env in used:
