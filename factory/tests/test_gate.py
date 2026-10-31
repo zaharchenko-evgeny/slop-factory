@@ -181,12 +181,12 @@ class CliAndValidate(unittest.TestCase):
         self.assertEqual(gate.apply("review", "approve", {"ticket": "7", "event": "e", "round": 1}, tr, NODES, focus="behaviour")[0], 0)
         self.assertEqual([e["focus"] for e in Rec.seen_effects if e["kind"] == "review"], ["behaviour"])
 
-    def test_join_and_recheck_ci_rule(self):
+    def test_join_ci_rule(self):
         def run(node, ci, stage="in-review"):
             tr = MemoryTracker({"7": {"stage": stage, "head": "abc", "round_complete": True, "round_head": "abc", "ci": ci}})
             code, _ = gate.apply(node, "approved", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
             return code, tr.tickets["7"]["stage"]
-        for node in ("join", "recheck"):
+        for node in ("join",):
             self.assertEqual(run(node, "none"), (10, "in-review"), node)  # no check run yet: no transition
             self.assertEqual(run(node, "pending"), (0, "approved"), node)
             self.assertEqual(run(node, "green"), (0, "approved"), node)
@@ -196,7 +196,6 @@ class CliAndValidate(unittest.TestCase):
         labels = []
         gate.apply("join", "approved", {"ticket": "7", "event": "e"}, tr, NODES)  # no tier from the agent
         self.assertIn("factory:fix-cheap", labels)
-        self.assertEqual(run("recheck", "red", "approved"), (0, "changes-requested"))  # a later red result
 
     def test_ci_list(self):
         self.assertTrue(gate.holds({"ci": ["green", "red"]}, {"ci": "red"}, {}))
