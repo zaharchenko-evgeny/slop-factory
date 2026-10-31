@@ -329,6 +329,8 @@ stateDiagram-v2
     approved --> changes_requested: sweep (P): conflict
     approved --> merged: sweep (P): merged
     merged --> done: sweep (P): retro
+    in_review --> changes_requested: sweep (P): join-changes
+    in_review --> approved: sweep (P): join-approved
     done --> [*]
 ```
 <!-- /nodes-chart -->

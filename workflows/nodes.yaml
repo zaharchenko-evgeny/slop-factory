@@ -147,6 +147,9 @@ nodes:
       conflict: { from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [approved], effects: [{ stage: merged }] }
       retro: { from: [merged], effects: [{ comment: retro }, { stage: done }] }
+      # CI completion has no trigger of its own: the sweep re-runs the join decision for in-review PRs.
+      join-changes: { from: [in-review], effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
+      join-approved: { from: [in-review], effects: [{ stage: approved }] }
   routines:
     enabled: false
     triggers: ["schedule routines"]

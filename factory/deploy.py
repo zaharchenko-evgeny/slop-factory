@@ -27,7 +27,8 @@ PROMPT = (
     "Save the trigger payload (the <trigger_event> JSON) to a file. "
     "Run `uv run factory/gate.py check --node {node} --event <file>`; on exit 10 stop and report why. "
     "Otherwise read `role_file` and every skill it lists, and do the role's work. "
-    "Then run `uv run factory/gate.py apply` with your outcome and payload."
+    "Then run `uv run factory/gate.py apply --node {node} --event <file> --outcome <outcome> --payload <file>` "
+    "with the outcome name of the node and the payload file of your handoff."
 )
 
 
