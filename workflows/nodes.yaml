@@ -3,7 +3,13 @@
 # Stage names are keys of `tracker.stages` in factory.yaml. `from: [none]` = a PR with no stage label.
 # Nodes marked `enabled: false` need a later slice. `pilot: true` = delivered by the pilot.
 environments:
-  default: { repository: primary, startup: .air/cloud/startup.sh }
+  # `secrets` are names only; `domains` the network allow-list; `vm` the machine size (deploy.py plan).
+  default:
+    repository: primary
+    startup: .air/cloud/startup.sh
+    secrets: [GITHUB_TOKEN]
+    domains: [github.com, api.github.com, objects.githubusercontent.com, astral.sh, pypi.org, files.pythonhosted.org]
+    vm: default
 adapters:
   ticket: github-issues   # stage, fields, labels, blockers
   pr: github              # state, head, CI, reviews by head SHA
