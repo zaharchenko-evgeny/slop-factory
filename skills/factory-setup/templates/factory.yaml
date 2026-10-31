@@ -24,6 +24,14 @@ tracker:
     blocked: factory:blocked
     waiting-main: factory:waiting-main
     failed: factory:failed
+    # Stages of the node chart (workflows/nodes.yaml); the pilot uses none of them.
+    needs-answers: factory:needs-answers
+    split: factory:split
+    not-actionable: factory:not-actionable
+    reproduce: factory:reproduce
+    diagnose: factory:diagnose
+    verify: factory:verify
+    merging: factory:merging
   # The map issue; its sub-issues give the frontier order.
   map_label: factory:map
   review_trigger: factory:review
