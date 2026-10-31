@@ -61,6 +61,7 @@ jobs:
       pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}  # no checkout here, so gh needs the repository named
     steps:
       # A PR green only against an old main must turn red before anyone merges it.
       # The rerun fallback replays the run's original commit, so it may not see the new main.
