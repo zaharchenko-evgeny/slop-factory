@@ -35,7 +35,7 @@ vars:
   checked_comment: { type: int, default: 0 }   # id of the last comment rechecked
 
 # External events from the tracker and the forge bridges.
-events: [stage.ready, pr.merged, comment.added]
+events: [stage.ready, pr.merged, comment.added, main.green]
 
 # Results: script actions end `done` or `failed` (`ci`: `passed`, `pending`,
 # `failed`, or `error` when it cannot read CI); agent actions end with their
@@ -84,6 +84,8 @@ states:
   approved: { actor: human, on_enter: [notify] }   # gate 2: a human approves and merges
   merged: { actor: agent }     # every PR merged: post-merge actions (retro) run here
   done: { actor: human }
+  # A blocking check fails on the base too: parked on the `Main is red` ticket; no person is asked.
+  waiting-main: { actor: external }
   blocked: { actor: human, on_enter: [diagnose, notify], resume_on: comment }
   failed: { actor: human, on_enter: [diagnose, notify] }
 
@@ -152,6 +154,8 @@ transitions:
     on: checks.failed
     loop: { counter: fix_round, max: limits.fix_rounds, on_exhausted: blocked }
     do: fix
+  - { from: [in-dev, changes-requested], on: checks.main_red, to: waiting-main }
+  - { from: waiting-main, on: main.green, to: ready }   # the fix merged: the sweep resumes it
   - { from: [in-dev, changes-requested], on: fix.done, do: checks }
   - { from: [in-dev, changes-requested], on: fix.blocked, to: blocked }
   - { from: [in-dev, changes-requested], on: fix.error, to: failed }

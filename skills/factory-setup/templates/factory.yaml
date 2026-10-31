@@ -22,6 +22,7 @@ tracker:
     merged: factory:merged
     done: factory:done
     blocked: factory:blocked
+    waiting-main: factory:waiting-main
     failed: factory:failed
   # The map issue; its sub-issues give the frontier order.
   map_label: factory:map
@@ -38,6 +39,8 @@ channels: [local]
 # payload, $FACTORY_TICKET the ticket). An event with no detector is never fired.
 events:
   pr.merged: github-pr-merged
+  # Every blocker of the waiting ticket (the `Main is red` ticket) is closed: the fix merged.
+  main.green: { run: 'set -o pipefail; open=$(gh api --paginate repos/{{TRACKER_REPOSITORY}}/issues/$FACTORY_TICKET/dependencies/blocked_by --jq "select(.state==\"open\")") || exit 1; [ -z "$open" ]' }
 
 targets:
   local:

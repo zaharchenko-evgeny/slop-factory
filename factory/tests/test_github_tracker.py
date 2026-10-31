@@ -58,6 +58,10 @@ class FakeGh:
             self.writes.append(args)
             self.issues[int(args[2])]["state"] = "CLOSED"
             return ""
+        if args[:2] == ["issue", "list"] and "--search" in args:
+            prefix = args[args.index("--search") + 1].removesuffix(" in:title")
+            return json.dumps([{"number": n, "title": i.get("title", "")} for n, i in self.issues.items()
+                               if i["state"] == "OPEN" and prefix in i.get("title", "")])
         if args[:2] == ["issue", "list"]:
             label, state = args[args.index("--label") + 1], args[args.index("--state") + 1]
             return json.dumps([{"number": n, "assignees": [{"login": a} for a in i["assignees"]]}
@@ -191,11 +195,19 @@ class GitHub(unittest.TestCase):
         self.assertEqual(tracker(fake).frontier(), [3, 1, 7])
         self.assertEqual(fake.writes, [])
 
+    def test_frontier_held_while_main_is_red(self):
+        fake = FakeGh({1: {"labels": ["factory:ready"]},
+                       2: {"labels": ["factory:ready"], "title": "Main is red: gate"}})
+        self.assertEqual(tracker(fake).frontier(), [2])
+        fake.issues[2]["state"] = "CLOSED"
+        self.assertEqual(tracker(fake).frontier(), [1])
+
     def test_loop_once_moves_a_closed_approved_issue_to_done(self):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
         config = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())
         config["knowledge"]["distill_every_days"] = 0  # no git repository here: no distill
+        config["targets"]["local"]["model_access"] = "env"  # central needs jbcentral, absent in CI
         (tmp / "factory.yaml").write_text(yaml.safe_dump(config))
         shutil.copytree(sm.ROOT / "workflows", tmp / "workflows")
         stub = tmp / "gh"  # `gh pr view`: every PR merged

@@ -52,7 +52,6 @@ import getpass
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -67,9 +66,13 @@ import harnesses
 import model_access
 import preflight
 import run_role
+import run_checks
 import runlog
 import sm_v1 as sm
 from local_tracker import ClaimError, LocalTracker
+
+MAIN_RED = "Main is red"
+
 
 class ResumeError(Exception):
     """--resume on a ticket that has no resume point."""
@@ -218,7 +221,7 @@ class Delivery:
         t0 = time.monotonic()
         try:
             return getattr(self, action)(t)
-        except (RuntimeError, OSError, ValueError) as e:
+        except Exception as e:  # noqa: BLE001 a bug in a step must not crash the driver
             # `ci` failed means a fix round, so its unexpected errors map to `error` (stage failed).
             return ("error" if action == "ci" else "failed"), {"error": str(e)}
         finally:
@@ -290,35 +293,68 @@ class Delivery:
         if not self.wt.is_dir():
             sh(["git", "fetch", "origin", base], self.root)
             sh(["git", "worktree", "add", "-b", b, str(self.wt), f"origin/{base}"], self.root)
+        elif (t["out"].get("checks") or {}).get("main_red"):  # resumed from waiting-main: take the fixed base
+            sh(["git", "fetch", "origin", base], self.root)
+            r = subprocess.run(["git", "-c", "user.name=factory", "-c", "user.email=factory@invalid", "merge",
+                                "--no-edit", f"origin/{base}"], cwd=self.wt, capture_output=True, text=True)
+            if r.returncode:  # a conflict is the developer's to resolve
+                subprocess.run(["git", "merge", "--abort"], cwd=self.wt, capture_output=True)
         return "done", {"branch": b}
 
     def checks(self, t):
-        failed, rows, report = self.run_checks(self.wt, self.issue()[1])
+        base = self.issue()[1]
+        failed, rows, report = self.run_checks(self.wt, base)
         path = self.run_dir / f"checks-{t['vars']['fix_round']}.md"
         path.write_text(report)
+        if failed and not (self.issue()[0]["title"] or "").startswith(MAIN_RED):
+            names = [r["name"] for r in rows if r["status"] == "fail" and r["mode"] == "blocking"]
+            try:
+                red = self.red_on_base(base, names)
+            except (RuntimeError, OSError):  # no measurement: a normal fix round
+                red = None
+            if red:
+                name, text, commit = red
+                owner = self.park(name, text, commit)
+                return "main_red", {"check": name, "main_red": f"main_red: {name}", "owner": owner,
+                                    "checks": rows, "report": str(path)}
         return ("failed" if failed else "passed"), {"checks": rows, "report": str(path)}
 
-    def run_checks(self, cwd, base, blocking_only=False):
-        """Run the pre-review checks in `cwd`: (a blocking one failed, rows, markdown report)."""
-        rows, report, failed = [], [], False
-        for c in self.config.get("checks") or []:
-            if c.get("stage", "pre-review") != "pre-review" or (blocking_only and c.get("mode") != "blocking"):
-                continue
-            if c.get("requires") and not shutil.which(c["requires"]):
-                status, text = "skipped", f"{c['requires']} is not installed"
-            else:
-                r = subprocess.run(["bash", "-c", c["run"]], cwd=cwd, capture_output=True, text=True,
-                                   env={**os.environ, "FACTORY_BASE": base})
-                status, text = ("pass" if r.returncode == 0 else "fail"), r.stdout + r.stderr
-            failed |= status == "fail" and c.get("mode") == "blocking"
-            skips = re.findall(r"skipped=(\d+)|^.*\.\.\. skipped '(.*)'$", text, re.M)
-            if skips:  # a passing check that skipped tests (e.g. a missing tool) did not run them all
-                text = f"NOTE: {len(skips)} skip report(s) in the output, those tests did not run\n" + text
-            rows.append({"name": c["name"], "mode": c.get("mode"), "status": status})
-            lines = text.rstrip().splitlines()
-            tail = "\n".join(lines[:1] * bool(skips) + lines[-15:])
-            report.append(f"## {c['name']} ({c.get('mode')}): {status}\n~~~~\n{tail}\n~~~~\n")
-        return failed, rows, "\n".join(report)
+    def red_on_base(self, base, names):
+        """Rerun the failed blocking checks on origin/<base> in a detached worktree: (check, report, breaking
+        commit) of the first one that fails there, else None. Measured, not inferred from the diff."""
+        tmp = self.wt.with_name(f"{self.nn}-base")
+        sh(["git", "fetch", "origin", base], self.root)
+        if tmp.exists():
+            sh(["git", "worktree", "remove", "--force", str(tmp)], self.root)
+        sh(["git", "worktree", "add", "--detach", str(tmp), f"origin/{base}"], self.root)
+        try:
+            for name in names:
+                failed, _, report = self.run_checks(tmp, base, only=[name])
+                if failed:
+                    files = [f for f in dict.fromkeys(re.findall(r"[\w./-]+\.\w+", report)) if (tmp / f).is_file()]
+                    try:
+                        commit = sh(["git", "log", "-1", "--format=%h %s", f"origin/{base}", "--", *files], self.root).strip()
+                    except (RuntimeError, OSError):
+                        commit = ""
+                    return name, report, commit or "unknown"
+        finally:
+            sh(["git", "worktree", "remove", "--force", str(tmp)], self.root)
+        return None
+
+    def park(self, name, report, commit):
+        """The open `Main is red: <check>` ticket (created when missing); this ticket is blocked by it."""
+        title = f"{MAIN_RED}: {name}"
+        owner = self.tracker.find_open(title)
+        if owner is None:
+            owner = self.tracker.create_issue(
+                title, f"[factory] Check `{name}` fails on the base branch.\n\nLast commit on the files involved: "
+                       f"{commit}\n\n{report}\n\nFactory-Run: {self.run_id}", "low", "ready")
+        self.tracker.add_blocker(self.nn, owner)
+        return str(owner)
+
+    def run_checks(self, cwd, base, blocking_only=False, only=None):
+        """Run the pre-review checks in `cwd` (factory/run_checks.py): (a blocking one failed, rows, report)."""
+        return run_checks.run_checks(self.config, cwd, base, "blocking" if blocking_only else None, only)
 
     def approve(self, t):
         """The approver (dry-run): record its verdict and reasons on the ticket; publish adds them to the PR."""
@@ -348,8 +384,7 @@ class Delivery:
         url = sh([gh(), "pr", "create", "--head", b, "--base", base, "--title", f"#{self.nn} {i['title']}",
                   "--body", self.pr_body(t, i, base)], self.wt).strip().splitlines()[-1]
         nits = [f"### {a}\n\n" + "\n".join(f"- {x['file']} — {x['finding']}" for x in minor)
-                for a in REVIEWERS if (minor := [x for x in (out.get(a) or {}).get("findings", [])
-                                                 if x["severity"] == "minor"])]
+                for a in REVIEWERS if (minor := [x for x in findings(out.get(a) or {}) if x["severity"] == "minor"])]
         if nits:
             body = "\n\n".join(["[factory] Review nits (advisory, not blocking)", *nits, self.trailer(t)])
             sh([gh(), "pr", "comment", url, "--body", body], self.wt)
@@ -485,7 +520,7 @@ class Delivery:
             h = json.loads(p.read_text())
             rounds.setdefault(int(n or 0), {})[action] = h.get("verdict")
             ids += [f"{action}-{n or 0}:{i}" for i in dict.fromkeys(
-                x["id"] for x in h.get("findings", []) if x["severity"] == "blocking")]  # per reviewer and round
+                x["id"] or "?" for x in findings(h) if x["severity"] == "blocking")]  # per reviewer and round
         shared = [set(v.values()) for v in rounds.values() if len(v) > 1]
         a = t["out"].get("approve") or {}
         return "\n".join([
@@ -639,7 +674,7 @@ class Delivery:
         if action == "fix" and (out.get("checks") or {}).get("result") == "failed":
             blocks["checks"] = Path(out["checks"]["report"]).read_text()
         elif action == "fix" and reviews:
-            blocks = reviews
+            blocks = {a: {**o, "findings": findings(o)} for a, o in reviews.items()}
         elif action == "fix" and (out.get("ci") or {}).get("result") == "failed":
             blocks["checks"] = Path(out["ci"]["report"]).read_text()  # CI or the merge with the base failed
         elif action == "diagnose":
@@ -671,21 +706,34 @@ class Delivery:
     def agent(self, t, action, spec):
         n = t["vars"]["fix_round"]
         step = f"{action}-{n}" if n else action
-        (self.run_dir / f"{step}.in.md").write_text(self.role_input(t, action, spec))
-        text = self.tracker.path(self.nn).read_text() if isinstance(self.tracker, LocalTracker) else None
-        if run_role.run(self.root, self.nn, action, step, ticket_text=text):
-            return "error", {}
-        h = json.loads((self.run_dir / f"{step}.handoff.json").read_text())
-        if spec["role"] == "reviewer":
-            h["blocking_ids"] = blocking_ids(h)
+        try:
+            (self.run_dir / f"{step}.in.md").write_text(self.role_input(t, action, spec))
+            text = self.tracker.path(self.nn).read_text() if isinstance(self.tracker, LocalTracker) else None
+            if run_role.run(self.root, self.nn, action, step, ticket_text=text):
+                return "error", {}
+            h = json.loads((self.run_dir / f"{step}.handoff.json").read_text())
+            if spec["role"] == "reviewer":
+                h["blocking_ids"] = blocking_ids(h)
+        except Exception as e:  # noqa: BLE001 a bug in a role step is that step's error, not a driver crash
+            return "error", {"error": f"{type(e).__name__}: {e}"}
         if spec["role"] not in ("developer", "doc-writer"):
             return "done", h
         return (h["status"] if h.get("status") in ("done", "blocked") else "error"), h
 
 
+def findings(handoff):
+    """The typed findings of a reviewer handoff. Handoffs from before the typed findings hold plain strings in
+    `blocking` (blocking, no id) and `nits` (minor); a string in `findings` counts as blocking."""
+    def typed(x, severity):
+        return x if isinstance(x, dict) else {"id": "", "file": "", "finding": str(x), "case": "", "severity": severity}
+    return [typed(x, "blocking") for x in handoff.get("findings") or []] \
+        + [typed(x, "blocking") for x in handoff.get("blocking") or []] \
+        + [typed(x, "minor") for x in handoff.get("nits") or []]
+
+
 def blocking_ids(handoff):
     """`<id> <file>` of each blocking finding: what the "same findings twice" guard compares."""
-    return [f"{x['id']} {x['file']}" for x in handoff.get("findings", []) if x["severity"] == "blocking"]
+    return [f"{x['id']} {x['file']}" for x in findings(handoff) if x["severity"] == "blocking"]
 
 
 def primary(config):
