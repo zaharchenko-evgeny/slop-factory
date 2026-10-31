@@ -82,10 +82,17 @@ class GitHubGateTracker:
         """Write access from the collaborator permission API (author_association says nothing about the role)."""
         try:
             return self._api(f"collaborators/{login}/permission").get("role_name") in WRITE
-        except Exception:  # 404 for a stranger, 403 without rights: no access
-            return False
+        except Exception as e:
+            if "404" in str(e):  # a stranger is no collaborator
+                return False
+            raise  # any other failure must not drop a blocking review: the join fails and is retried
 
-    def _round(self, reviews, required, head, requested, ci):
+    def _asked(self, pr):
+        """Every person ever asked to review the PR (timeline); a removed request does not release them."""
+        return {e["requested_reviewer"]["login"] for e in self._list(f"issues/{pr['number']}/timeline")
+                if e.get("event") == "review_requested" and e.get("requested_reviewer")}
+
+    def _round(self, reviews, required, head, requested, ci, asked=()):
         """(complete, verdict, ignored) of the round at `head`: marked agent reviews of every required focus at
         head, no requested reviewer left, CI concluded. Humans (with write access) and trusted bots count by
         their latest APPROVED/CHANGES_REQUESTED, whatever commit it names (a late review lands in the next round)."""
@@ -93,7 +100,8 @@ class GitHubGateTracker:
         others = {r["author"]: r for r in reviews if not r["agent"] and r["verdict"]
                   and (r["author"] in self.trusted if r["bot"] else self._can_write(r["author"]))}
         ignored = [r["author"] for r in reviews if r["bot"] and not r["agent"] and r["author"] not in self.trusted]
-        complete = (all(x in at_head for x in required) and not requested and ci in ("green", "red"))
+        complete = (all(x in at_head for x in required) and not requested and ci in ("green", "red")
+                    and all(any(r["author"] == u and r["state"] != "PENDING" for r in reviews) for u in asked))
         if not complete:
             return False, None, ignored
         changes = ci == "red" or any(at_head[x]["verdict"] != "approve" for x in required) \
@@ -118,7 +126,7 @@ class GitHubGateTracker:
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
             ci = self._ci(head)
-            complete, verdict, ignored = self._round(reviews, required, head, requested, ci)
+            complete, verdict, ignored = self._round(reviews, required, head, requested, ci, self._asked(pr))
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), ci=ci, reviews=reviews,
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],

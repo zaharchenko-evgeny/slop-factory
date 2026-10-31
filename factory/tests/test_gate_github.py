@@ -30,7 +30,7 @@ class FakeGh:
     """The gh calls of the adapter over one ticket (7) with a PR on ez/7-x; records writes."""
 
     def __init__(self, labels=("factory:in-review", "risk:low"), reviews=(), comments=(), checks=("success",), sub=(), requested=()):
-        self.requested = list(requested)
+        self.requested, self.asked = list(requested), list(requested)
         self.roles = {"alice": "write", "bob": "admin", "eve": "read"}
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
@@ -53,6 +53,8 @@ class FakeGh:
         if a.endswith("/pulls/5"):
             return json.dumps({"number": 5, "merged": self.merged, "mergeable": True, "head": {"sha": "h1", "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": u} for u in self.requested]})
+        if a.endswith("/timeline"):
+            return "\n".join(json.dumps({"event": "review_requested", "requested_reviewer": {"login": u}}) for u in self.asked)
         if "/collaborators/" in a:
             who = a.split("/collaborators/")[1].split("/")[0]
             if who not in self.roles:
@@ -308,6 +310,27 @@ class JoinTest(unittest.TestCase):
         gh.labels = ["factory:in-review", "risk:low"]  # the fix pushed; head is still h1 in the stub, the review names h0
         gh.reviews = [review(BOT, M), review("alice", "", commit="h0", state="CHANGES_REQUESTED")]  # round 2 agent approve
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # the late review is counted now
+
+    def test_removed_request_does_not_release_a_human(self):
+        gh = FakeGh(reviews=[review(BOT, M)])
+        gh.asked = ["alice"]  # asked once, request removed, never reviewed
+        self.assertEqual(tr(gh).facts(7)["round_complete"], False)
+        gh.reviews.append(review("alice", "", state="APPROVED"))
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
+
+    def test_permission_lookup_failure_is_not_no_access(self):
+        gh = FakeGh(reviews=[review(BOT, M), review("zed", "", state="CHANGES_REQUESTED")])
+        gh.roles = {}
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")  # 404: not a collaborator
+        orig = gh.__call__
+        class Boom(FakeGh):
+            def __call__(self, args):
+                if any("/collaborators/" in x for x in args):
+                    raise RuntimeError("HTTP 403 rate limit")
+                return FakeGh.__call__(self, args)
+        b = Boom(reviews=gh.reviews)
+        with self.assertRaises(RuntimeError):
+            tr(b).facts(7)
 
     def test_fix_does_not_start_while_round_open(self):
         f = tr(FakeGh(reviews=[review(BOT, C)], requested=["alice"])).facts(7)
