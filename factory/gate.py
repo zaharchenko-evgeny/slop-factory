@@ -132,7 +132,7 @@ def apply(name, outcome, payload, tracker, nodes):
     for e in effects:
         if e["kind"] == "stage":
             e["event"] = payload.get("event")
-    why = matches(node, tracker.facts(ticket), payload, out)
+    why = matches(node, tracker.facts(ticket), {**payload, "id": payload.get("event")}, out)
     if why:
         return NO_GO, {"applied": False, "reason": why}
     return GO, {"applied": True, "written": [e["kind"] for e in effects if tracker.apply(e)]}

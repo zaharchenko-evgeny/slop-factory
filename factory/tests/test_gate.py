@@ -71,6 +71,14 @@ def tests_for(cls, tid):
             self.assertEqual(self.check(tr, self.ev())[1]["reason"], "duplicate event")
             self.assertEqual(self.check(tr, self.ev())[0], 10)
 
+        def test_duplicate_event_on_apply(self):
+            tr = self.tr()
+            self.assertEqual(self.apply(tr)[0], 0)
+            tr.set_stage(tr.tickets[tid], "ready")
+            code, out = self.apply(tr)
+            self.assertEqual((code, out["reason"]), (10, "duplicate event"))
+            self.assertEqual(tr.facts(tid)["stage"], "ready")
+
         def test_apply_twice_is_noop(self):
             tr = self.tr()
             self.assertEqual(self.apply(tr)[0], 0)
