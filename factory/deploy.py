@@ -32,12 +32,19 @@ PROMPT = (
 
 
 def trigger(text: str, tier: str | None) -> dict:
-    """`issues.labeled factory:ready` → event plus filters; `schedule sweep` → cron is added by the caller."""
+    """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations)."""
     event, _, arg = str(text).partition(" ")
     arg = arg.replace("<tier>", tier or "")
-    if event.startswith("issues.") or event.startswith("pull_request.labeled"):
-        return {"event": event, "filters": {"label": arg} if arg else {}}
-    return {"event": event, "filters": {}}
+    labeled = event.startswith("issues.") or event.startswith("pull_request.labeled")
+    return {"triggerType": "EVENT", "source": "github", "eventType": event,
+            "filters": {"label": arg} if labeled and arg else {}}
+
+
+def repository(r: dict) -> dict:
+    """The `repository` input of create_automation from a factory.yaml repository."""
+    url = r["url"].rstrip("/")
+    return {"fullName": "/".join(url.split("/")[-2:]), "cloneUrl": url + ".git", "browseUrl": url,
+            "provider": "github" if "github.com" in url else "other"}
 
 
 def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str]]:
@@ -68,15 +75,16 @@ def plan_air(nodes: dict, config: dict) -> dict:
             trig = []
             for t in n["triggers"]:
                 if str(t).startswith("schedule "):
-                    trig.append({"event": "schedule", "cron": scheds[str(t)[9:]]["cron"], "filters": {}})
+                    trig.append({"triggerType": "SCHEDULED", "cronExpression": scheds[str(t)[9:]]["cron"],
+                                 "timezone": "UTC"})
                 elif str(t) != "manual":
                     trig.append(trigger(t, tier_arg))
             automations.append({
                 "name": f"{PREFIX}{aname}]",
                 "triggers": trig,
-                "triggerVcs": {"outputBehaviour": n.get("output", "read-only")},
-                "agent": agent,
-                "model": model,
+                "triggerVcs": [{"outputBehaviour": n.get("output", "read-only")}],
+                "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
+                "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{PREFIX}{env}] env",
                 "prompt": PROMPT.format(node=name),
             })

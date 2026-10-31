@@ -7,7 +7,7 @@ environments:
   default:
     repository: primary
     startup: .air/cloud/startup.sh
-    secrets: [GITHUB_TOKEN]
+    secrets: []   # gh is jetbrains-air[bot] through the platform's GH_TOKEN
     domains: [github.com, api.github.com, objects.githubusercontent.com, astral.sh, pypi.org, files.pythonhosted.org]
     vm: default
 adapters:
@@ -98,7 +98,7 @@ nodes:
       changes: { effects: [{ review: request-changes-at-head }, { join: all-approve }] }
   join:
     pilot: true
-    triggers: ["pull_request_review.submitted", "workflow_run.completed"]
+    triggers: ["pull_request_review.submitted"]   # CI completion is picked up by the sweep
     when: { stage: in-review, round: complete-at-head }
     role: script
     output: read-only

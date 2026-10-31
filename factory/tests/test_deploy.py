@@ -31,6 +31,22 @@ class PlanTest(unittest.TestCase):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
 
+    def test_air_shape_and_no_github_token(self):
+        plan = json.loads((FIX / "air-plan.json").read_text())
+        a = {x["name"]: x for x in plan["automations"]}
+        self.assertEqual(a["[factory:sweep]"]["triggers"],
+                         [{"triggerType": "SCHEDULED", "cronExpression": "*/10 * * * *", "timezone": "UTC"}])
+        t = a["[factory:intake]"]["triggers"][0]
+        self.assertEqual((t["triggerType"], t["source"]), ("EVENT", "github"))
+        self.assertEqual(set(a["[factory:intake]"]["agentAndModel"]), {"id", "name", "isDefault", "agentId"})
+        self.assertEqual(set(a["[factory:intake]"]["repository"]), {"fullName", "cloneUrl", "browseUrl", "provider"})
+        self.assertEqual(a["[factory:intake]"]["triggerVcs"], [{"outputBehaviour": "read-only"}])
+        for e in deploy.plan_air(nodes.load(), yaml.safe_load((ROOT / "factory.yaml").read_text()))["environments"]:
+            self.assertNotIn("GITHUB_TOKEN", e["secrets"])
+        join = next(x for x in deploy.plan_air(nodes.load(), yaml.safe_load((ROOT / "factory.yaml").read_text()))
+                    ["automations"] if x["name"] == "[factory:join]")
+        self.assertEqual([x["eventType"] for x in join["triggers"]], ["pull_request_review.submitted"])
+
     def test_real_plan_is_prefixed_and_covers_pilot(self):
         config = yaml.safe_load((ROOT / "factory.yaml").read_text())
         n = nodes.load()

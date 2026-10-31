@@ -23,9 +23,10 @@ Run from the factory root. Whoever runs this applies the plan and changes no cod
 2. List what exists: air-automations `list_automations` and air-cloud environment configs; keep only names starting with `[factory:`.
 3. Diff by name, per kind (environments first, because an automation names its environment):
    - in the plan, not listed: **create**.
-   - in both, any field different (triggers, filters, `triggerVcs.outputBehaviour`, agent, model, prompt, variables, secret names, domains, VM, startup): **update**.
+   - in both, any field different (triggers, filters, `triggerVcs`, `agentAndModel`, `repository`, prompt, variables, secret names, domains, VM, startup): **update**.
    - listed, not in the plan: **delete** (an automation first, then its environment).
    - identical: **unchanged**.
+   An automation in the plan is exactly the `create_automation` input of air-automations.
    Resolve `environmentConfigId` (the environment's name in the plan) to the real id before create or update.
 4. Dry run: print one line per item, `create|update|delete|unchanged <name>`, with the changed fields for updates. Stop here when `--dry-run` was asked for.
 5. Apply the approved creates, updates and deletes through the MCP tools, environments before automations on create and update, after them on delete.

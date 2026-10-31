@@ -1,113 +1,199 @@
 {
   "automations": [
     {
-      "agent": "codex",
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "small",
+        "isDefault": false,
+        "name": "small"
+      },
       "environmentConfigId": "[factory:default] env",
-      "model": "small",
       "name": "[factory:intake]",
       "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node intake --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
-      "triggerVcs": {
-        "outputBehaviour": "read-only"
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
       },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        }
+      ],
       "triggers": [
         {
-          "event": "issues.labeled",
+          "eventType": "issues.labeled",
           "filters": {
             "label": "factory:ready"
-          }
+          },
+          "source": "github",
+          "triggerType": "EVENT"
         }
       ]
     },
     {
-      "agent": "codex",
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "small",
+        "isDefault": false,
+        "name": "small"
+      },
       "environmentConfigId": "[factory:default] env",
-      "model": "small",
       "name": "[factory:implement-cheap]",
       "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
-      "triggerVcs": {
-        "outputBehaviour": "create-pr"
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
       },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "create-pr"
+        }
+      ],
       "triggers": [
         {
-          "event": "issues.labeled",
+          "eventType": "issues.labeled",
           "filters": {
             "label": "factory:implement-cheap"
-          }
+          },
+          "source": "github",
+          "triggerType": "EVENT"
         }
       ]
     },
     {
-      "agent": "claude",
+      "agentAndModel": {
+        "agentId": "claude",
+        "id": "mid[1m]",
+        "isDefault": false,
+        "name": "mid[1m]"
+      },
       "environmentConfigId": "[factory:default] env",
-      "model": "mid[1m]",
       "name": "[factory:implement-mid]",
       "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
-      "triggerVcs": {
-        "outputBehaviour": "create-pr"
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
       },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "create-pr"
+        }
+      ],
       "triggers": [
         {
-          "event": "issues.labeled",
+          "eventType": "issues.labeled",
           "filters": {
             "label": "factory:implement-mid"
-          }
+          },
+          "source": "github",
+          "triggerType": "EVENT"
         }
       ]
     },
     {
-      "agent": "codex",
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "rev2",
+        "isDefault": false,
+        "name": "rev2"
+      },
       "environmentConfigId": "[factory:default] env",
-      "model": "rev2",
       "name": "[factory:review-full]",
       "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node review --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
-      "triggerVcs": {
-        "outputBehaviour": "read-only"
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
       },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        }
+      ],
       "triggers": [
         {
-          "event": "pull_request.opened",
-          "filters": {}
+          "eventType": "pull_request.opened",
+          "filters": {},
+          "source": "github",
+          "triggerType": "EVENT"
         },
         {
-          "event": "pull_request.synchronize",
-          "filters": {}
+          "eventType": "pull_request.synchronize",
+          "filters": {},
+          "source": "github",
+          "triggerType": "EVENT"
         }
       ]
     },
     {
-      "agent": "codex",
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "rev",
+        "isDefault": false,
+        "name": "rev"
+      },
       "environmentConfigId": "[factory:default] env",
-      "model": "rev",
       "name": "[factory:review-behaviour]",
       "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node review --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
-      "triggerVcs": {
-        "outputBehaviour": "read-only"
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
       },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        }
+      ],
       "triggers": [
         {
-          "event": "pull_request.opened",
-          "filters": {}
+          "eventType": "pull_request.opened",
+          "filters": {},
+          "source": "github",
+          "triggerType": "EVENT"
         },
         {
-          "event": "pull_request.synchronize",
-          "filters": {}
+          "eventType": "pull_request.synchronize",
+          "filters": {},
+          "source": "github",
+          "triggerType": "EVENT"
         }
       ]
     },
     {
-      "agent": "codex",
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "small",
+        "isDefault": false,
+        "name": "small"
+      },
       "environmentConfigId": "[factory:default] env",
-      "model": "small",
       "name": "[factory:sweep]",
       "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node sweep --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
-      "triggerVcs": {
-        "outputBehaviour": "as-instructed"
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
       },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "as-instructed"
+        }
+      ],
       "triggers": [
         {
-          "cron": "*/10 * * * *",
-          "event": "schedule",
-          "filters": {}
+          "cronExpression": "*/10 * * * *",
+          "timezone": "UTC",
+          "triggerType": "SCHEDULED"
         }
       ]
     }
@@ -119,9 +205,7 @@
       ],
       "name": "[factory:default] env",
       "repository": "https://example.com/o/main",
-      "secrets": [
-        "GITHUB_TOKEN"
-      ],
+      "secrets": [],
       "startup": ".air/cloud/startup.sh",
       "variables": {
         "FACTORY_ENV": "default"
