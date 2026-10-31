@@ -32,7 +32,8 @@ class FakeGh:
     def __init__(self, labels=("factory:in-review", "risk:low"), reviews=(), comments=(), checks=("success",), sub=()):
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
-        self.blocked = [{"state": "open"}, {"state": "closed"}]
+        self.blocked = [{"state": "open", "id": 1}, {"state": "closed", "id": 2}]
+        self.open_issues = []
 
     def __call__(self, args):
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
@@ -41,8 +42,12 @@ class FakeGh:
         if "check-runs" in a:
             return "\n".join(json.dumps({"conclusion": c}) for c in self.checks)
         if a.endswith("pulls?state=all&per_page=100"):
-            return json.dumps({"number": 5, "state": "open", "head": {"ref": "ez/7-x"}}) + "\n" + \
-                json.dumps({"number": 6, "state": "open", "head": {"ref": "ez/70-other"}})
+            head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
+            return "\n".join(json.dumps(p) for p in (
+                {"number": 5, "state": "open", "head": head("ez/7-x", REPO)},
+                {"number": 6, "state": "open", "head": head("ez/70-other", REPO)},
+                {"number": 8, "state": "open", "head": head("ez/7-fork", "evil/r")},
+                {"number": 9, "state": "open", "head": head("ez/7-gone", None)}))
         if a.endswith("/pulls/5"):
             return json.dumps({"number": 5, "merged": self.merged, "mergeable": True, "head": {"sha": "h1", "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": "alice"}]})
@@ -54,6 +59,8 @@ class FakeGh:
             return "\n".join(json.dumps(b) for b in self.blocked)
         if a.endswith("issues/7/comments"):
             return "\n".join(json.dumps({"body": c}) for c in self.comments)
+        if a.endswith("issues?state=open&per_page=100"):
+            return "\n".join(json.dumps(i) for i in self.open_issues)
         if a.endswith("issues/7/sub_issues"):
             return "\n".join(json.dumps({"title": t}) for t in self.sub)
         self.writes.append(args)
@@ -152,6 +159,23 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(len(gh.writes), 3)  # create, sub-issue link, blocked-by link
         self.assertIn("issue_id=999", gh.writes[2])
         self.assertFalse(tr(FakeGh(sub=["old"])).apply(eff("create-issues", ["old"])))
+
+    def test_create_issues_retry_converges(self):
+        gh = FakeGh()
+        gh.open_issues = [{"id": 999, "title": "A"}]  # created by a run that died before linking
+        self.assertTrue(tr(gh).apply(eff("create-issues", ["A"])))
+        self.assertEqual([w[2] for w in gh.writes], ["POST", "POST"])
+        self.assertTrue(all("issues/7/" in w[3] for w in gh.writes))  # linked, not created again
+
+    def test_fix_rounds_grow_per_reviewed_head(self):
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, M)])).facts(7)["fix_rounds"], 0)
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)["fix_rounds"], 1)
+        gh = FakeGh(reviews=[review(BOT, M, commit="old")])
+        tr(gh).apply(eff("review", "approve-at-head", focus="full"))
+        self.assertIn("round=2", gh.writes[0][-1])
+
+    def test_fork_pr_is_ignored(self):
+        self.assertEqual(tr(FakeGh()).facts(7)["pr"], 5)
 
     def test_merge(self):
         gh = FakeGh()

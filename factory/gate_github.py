@@ -46,7 +46,8 @@ class GitHubGateTracker:
 
     def _pr(self, n):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""
-        prs = [p for p in self._list("pulls?state=all&per_page=100") if p["head"]["ref"].startswith(f"ez/{n}-")]
+        prs = [p for p in self._list("pulls?state=all&per_page=100") if p["head"]["ref"].startswith(f"ez/{n}-")
+               and (p["head"].get("repo") or {}).get("full_name") == self.repo]  # never a fork's PR
         prs.sort(key=lambda p: (p["state"] == "open", p["number"]))
         return self._api(f"pulls/{prs[-1]['number']}") if prs else None
 
@@ -89,7 +90,7 @@ class GitHubGateTracker:
                      requested_reviewers=[u["login"] for u in pr.get("requested_reviewers") or []],
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if complete and len(heads) == 1 else None,
-                     fix_rounds=max([r["round"] for r in latest.values()] + [1]) - 1)
+                     fix_rounds=len({r["commit_id"] for r in reviews if r["agent"]} | {head}) - 1)  # one per reviewed head
         return f
 
     # --- effects: read the target first, write only when it differs
@@ -149,16 +150,22 @@ class GitHubGateTracker:
         return True
 
     def _create(self, n, children):
-        have = {c["title"] for c in self._list(f"issues/{n}/sub_issues")}
+        """Per child: reuse an open issue of that title, then add each link that is missing (a retry converges)."""
+        subs = {c["title"] for c in self._list(f"issues/{n}/sub_issues")}
+        blockers = {b["id"] for b in self._list(f"issues/{n}/dependencies/blocked_by")}
+        open_issues = {i["title"]: i for i in reversed(self._list("issues?state=open&per_page=100")) if "pull_request" not in i}
         wrote = False
         for c in children:
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
-            if c["title"] in have:
+            new = open_issues.get(c["title"])
+            if c["title"] in subs and (new is None or new["id"] in blockers):
                 continue
-            new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
-                                       "-f", f"body={c.get('body', '')}"]))
-            for path in (f"issues/{n}/sub_issues", f"issues/{n}/dependencies/blocked_by"):
-                self.run(["api", "-X", "POST", f"repos/{self.repo}/{path}", "-F", f"sub_issue_id={new['id']}"
-                          if path.endswith("sub_issues") else f"issue_id={new['id']}"])
+            if new is None:
+                new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
+                                           "-f", f"body={c.get('body', '')}"]))
+            if c["title"] not in subs:
+                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
+            if new["id"] not in blockers:
+                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={new['id']}"])
             wrote = True
         return wrote
