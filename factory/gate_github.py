@@ -92,7 +92,7 @@ class GitHubGateTracker:
         return min((r["submitted_at"] for r in at_head.values() if r["submitted_at"]), default=None) \
             or self._api(f"commits/{head}")["commit"]["committer"]["date"]
 
-    def _round(self, reviews, required, head, requested, ci, author=None):
+    def _round(self, reviews, required, head, requested, ci):
         """(complete, verdict, ignored) of the round at `head`: marked agent reviews of every required focus at
         head, no requested reviewer left (GitHub drops a person on review and adds them back on a re-request), CI
         concluded. A person (with write access) or trusted bot blocks with a latest CHANGES_REQUESTED on head or
@@ -104,14 +104,6 @@ class GitHubGateTracker:
         complete = all(x in at_head for x in required) and not requested and ci in ("green", "red")
         if not complete:
             return False, None, ignored
-        # GitHub drops a person from requested_reviewers on any review, a COMMENTED one included: a person
-        # (not the PR author) whose latest review since the round started is only a comment is still pending.
-        last = {r["author"]: r for r in reviews if not r["agent"] and not r["bot"] and r["author"] != author}
-        mute = [r for r in last.values() if r["state"] == "COMMENTED"]
-        if mute:
-            start = self._start(head, at_head)
-            if any((r["submitted_at"] or "") >= start and self._can_write(r["author"]) for r in mute):
-                return False, None, ignored
         late = [r for r in others.values() if r["verdict"] == "changes"]
         if any(r["commit_id"] != head for r in late):  # a change request of an earlier round does not block this one
             start = self._start(head, at_head)
@@ -137,7 +129,7 @@ class GitHubGateTracker:
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
             ci = self._ci(head)
-            complete, verdict, ignored = self._round(reviews, required, head, requested, ci, (pr.get("user") or {}).get("login"))
+            complete, verdict, ignored = self._round(reviews, required, head, requested, ci)
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), ci=ci, reviews=reviews,
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
