@@ -214,6 +214,8 @@ class GitHubGateTracker:
             return True
         if kind == "review":
             return self._review(n, e)
+        if kind == "request-reviewers":
+            return self._rerequest(n)
         if kind == "create-issues":
             return self._create(n, value)
         if kind == "merge":
@@ -238,6 +240,24 @@ class GitHubGateTracker:
             return self.apply({"ticket": n, "kind": "stage", "value": "approved"})
         wrote = self.apply({"ticket": n, "kind": "label", "value": f"factory:fix-{tier}", "on": "pr"})
         return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote
+
+    def _rerequest(self, n):
+        """Ask again every person whose latest non-COMMENTED review requests changes, so the next round waits
+        for them (the `fix` node's `done`, after the push: a request at join time would hold the fix itself)."""
+        pr = self._pr(n)
+        if pr is None:
+            return False
+        latest = {}
+        for r in self._reviews(pr):
+            if not r["agent"] and not r["bot"] and r["verdict"]:
+                latest[r["author"]] = r["verdict"]
+        requested = {u["login"] for u in pr.get("requested_reviewers") or []}
+        who = [a for a, v in latest.items() if v == "changes" and a not in requested and self._can_write(a)]
+        if not who:
+            return False
+        self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/requested_reviewers",
+                  *[x for a in who for x in ("-f", f"reviewers[]={a}")]])
+        return True
 
     def _review(self, n, e):
         pr, focus = self._pr(n), e.get("focus")

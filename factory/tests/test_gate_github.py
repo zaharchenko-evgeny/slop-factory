@@ -332,6 +332,20 @@ class JoinTest(unittest.TestCase):
         self.assertIn("--remove-label", gh.writes[0])
         self.assertIn("factory:fix-mid", gh.writes[0])
 
+    def test_fix_done_asks_again_who_requested_changes(self):
+        # review 3 of #183: without this, a request counted by round 1 is dropped and nobody asks alice again
+        gh = FakeGh(reviews=[review(BOT, M), review("alice", "", commit="h0", state="CHANGES_REQUESTED"),
+                             review("bob", "", state="APPROVED")])
+        gh.requested = []
+        self.assertTrue(tr(gh).apply({"ticket": 7, "kind": "request-reviewers", "value": "changes"}))
+        post = [w for w in gh.writes if "requested_reviewers" in " ".join(w)]
+        self.assertEqual(len(post), 1)
+        self.assertIn("reviewers[]=alice", post[0])
+        self.assertNotIn("reviewers[]=bob", post[0])
+        gh.requested = ["alice"]
+        self.assertFalse(tr(gh).apply({"ticket": 7, "kind": "request-reviewers", "value": "changes"}))  # already asked
+        self.assertFalse(tr(gh).facts(7)["round_complete"])  # round 2 waits for her
+
     def test_change_request_counted_by_round_1_does_not_block_round_2(self):
         # B2 of #183: the bot reviews first, the human second; round 1 counts her request, round 2 must not loop on it
         gh = FakeGh(reviews=[review(BOT, M, commit="h0", at="2026-01-02T01:00:00Z"),

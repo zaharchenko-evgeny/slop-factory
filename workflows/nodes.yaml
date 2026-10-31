@@ -130,7 +130,8 @@ nodes:
     output: push-to-source
     outcomes:
       # The command label goes: the next round's join adds it again, and only an added label starts the node.
-      done: { effects: [{ unlabel: "factory:fix-*", "on": pr }, { stage: in-review }] }
+      # People who requested changes are asked again, after the push, so round 2 waits for them.
+      done: { effects: [{ unlabel: "factory:fix-*", "on": pr }, { request-reviewers: changes }, { stage: in-review }] }
       blocked: { from: [changes-requested], effects: [{ comment: reason }, { stage: blocked }] }
   merge:
     enabled: false
