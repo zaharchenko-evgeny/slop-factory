@@ -162,6 +162,30 @@ class CliAndValidate(unittest.TestCase):
             got = json.loads(out.getvalue())
             self.assertEqual((got["tier"], got["focus"]), ("strong", "behaviour"))
 
+    def test_apply_puts_automation_focus_in_payload(self):
+        class Rec(MemoryTracker):
+            seen_effects = []
+
+            def apply(self, e):
+                self.seen_effects.append(e)
+                return True
+        tr = Rec({"7": {"stage": "in-review", "head": "abc", "focus_missing": ["full"]}})
+        code, _ = gate.apply("review", "approve", {"ticket": "7", "event": "e", "round": 1}, tr, NODES, focus="behaviour")
+        self.assertEqual(code, 10)  # focus behaviour is not missing: not applied
+        tr.tickets["7"]["focus_missing"] = ["behaviour"]
+        self.assertEqual(gate.apply("review", "approve", {"ticket": "7", "event": "e", "round": 1}, tr, NODES, focus="behaviour")[0], 0)
+        self.assertEqual([e["focus"] for e in Rec.seen_effects if e["kind"] == "review"], ["behaviour"])
+
+    def test_join_approved_with_red_ci_is_changes(self):
+        for node in ("join", "recheck"):
+            for ci, want in (("red", "changes-requested"), ("green", "approved"), ("pending", "approved")):
+                if node == "recheck" and ci == "pending":
+                    continue  # recheck waits for CI to conclude
+                tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "round_complete": True,
+                                          "round_head": "abc", "ci": ci}})
+                code, _ = gate.apply(node, "approved", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+                self.assertEqual((node, ci, code, tr.tickets["7"]["stage"]), (node, ci, 0, want))
+
     def test_ci_concluded(self):
         facts = {"ci": "red"}
         self.assertTrue(gate.holds({"ci": "concluded"}, facts, {}))

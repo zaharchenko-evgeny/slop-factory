@@ -95,6 +95,8 @@ def validate(nodes, config):
                     errs.append(f"unknown-effect: {name}.{oname}: {e}")
                 elif "on" in e and (e["on"] not in ("issue", "pr") or keys[0] not in ("label", "unlabel")):
                     errs.append(f"unknown-effect: {name}.{oname}: bad `on` in {e}")
+            if (o or {}).get("else") and o["else"] not in n["outcomes"]:
+                errs.append(f"unknown-outcome: {name}.{oname}: else {o['else']}")
             for s in (o or {}).get("from") or []:
                 stage(f"{name}.{oname}.from", s)
             if effect_stage(o or {}):

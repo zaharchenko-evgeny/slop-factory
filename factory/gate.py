@@ -133,12 +133,15 @@ def resolve(effect, payload, ticket):
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
-def apply(name, outcome, payload, tracker, nodes):
+def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
         raise Bad(f"unknown outcome: {outcome}")
-    out = node["outcomes"][outcome]
     ticket = payload["ticket"]
+    payload = {**{k: v for k, v in (("focus", focus), ("tier", tier)) if v}, **payload}  # the automation's own
+    out = node["outcomes"][outcome]
+    if out.get("ci") and tracker.facts(ticket)["ci"] not in out["ci"] and out.get("else") in node["outcomes"]:
+        out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
@@ -190,7 +193,7 @@ def main(argv):
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
             code, out = check(a.node, event, tracker, nodes, config)
         else:
-            code, out = apply(a.node, a.outcome or "", read(a.payload or "", "payload"), tracker, nodes)
+            code, out = apply(a.node, a.outcome or "", read(a.payload or "", "payload"), tracker, nodes, a.focus, a.tier)
             path and Path(path).write_text(json.dumps(tracker.tickets))
     except Bad as e:
         print(json.dumps({"error": str(e)}))

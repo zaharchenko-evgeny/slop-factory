@@ -52,6 +52,8 @@ class PlanTest(unittest.TestCase):
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), config)["automations"]}
         self.assertIn("check --node review --event <file> --focus behaviour`", a["[factory:review-behaviour]"])
         self.assertIn("check --node fix --event <file> --tier mid`", a["[factory:fix-mid]"])
+        self.assertIn("apply --node review --focus behaviour --event", a["[factory:review-behaviour]"])
+        self.assertIn("apply --node fix --tier mid --event", a["[factory:fix-mid]"])
         self.assertIn("check --node intake --event <file>`", a["[factory:intake]"])
 
     def test_real_plan_is_prefixed_and_covers_pilot(self):
