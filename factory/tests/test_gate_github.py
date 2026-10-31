@@ -318,6 +318,14 @@ class JoinTest(unittest.TestCase):
         gh.reviews.append(review("alice", "", state="APPROVED"))
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
 
+    def test_comment_completes_the_human_part_and_does_not_approve(self):
+        # GitHub drops the person from requested_reviewers on any review: a comment ends their part, as no approval
+        gh = FakeGh(reviews=[review(BOT, M), review("alice", "thanks", state="COMMENTED")], requested=[])
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_complete"], f["round_verdict"]), (True, "approve"))  # the agent approval decides
+        gh.reviews[0] = review(BOT, C)
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # the comment never approves
+
     def test_earlier_round_changes_do_not_block_this_round(self):
         old = "2026-01-01T00:00:00Z"  # before the head's push (2026-01-02)
         gh = FakeGh(reviews=[review("alice", "", commit="h0", state="CHANGES_REQUESTED", at=old), review(BOT, M)])
