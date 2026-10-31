@@ -670,6 +670,25 @@ class DriveRun(unittest.TestCase):
         self.assertIn("- blocking findings: 3 (", numbers)
         self.assertIn("- reviewer agreement: 1/1 rounds", numbers)
 
+    def test_old_format_handoff_reads_next_to_a_new_one(self):
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.run_dir.mkdir(parents=True)
+        old = {"verdict": "changes-requested", "blocking": ["bad"], "nits": ["meh"]}
+        (d.run_dir / "review_behaviour.handoff.json").write_text(json.dumps(old))
+        (d.run_dir / "review_structure_security.handoff.json").write_text(json.dumps(
+            {"findings": [{"id": "B1", "file": "x", "finding": "f", "case": "c", "severity": "blocking"}]}))
+        self.assertIn("- blocking findings: 2 (", d.run_numbers(sm.new_ticket(d.m)))
+        self.assertEqual([(x["severity"], x["id"]) for x in drive.findings(old)], [("blocking", ""), ("minor", "")])
+        self.assertEqual(drive.blocking_ids(old), [" "])
+
+    def test_raising_agent_step_is_an_error_outcome(self):
+        d = drive.Delivery(self.root, "01", self.tr, "r1")
+        d.role_input = lambda *a: 1 / 0
+        d.run_dir.mkdir(parents=True)
+        res, out = d.run(sm.new_ticket(d.m), "implement")
+        self.assertEqual(res, "error")
+        self.assertIn("ZeroDivisionError", out["error"])
+
     def inbox(self):
         """Push the fixture retro entries to the knowledge branch, as the retro does."""
         k = yaml.safe_load((self.root / "factory.yaml").read_text())["knowledge"]
