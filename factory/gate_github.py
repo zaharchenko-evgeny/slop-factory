@@ -74,7 +74,7 @@ class GitHubGateTracker:
             verdict = (m[3] if agent else {"APPROVED": "approve", "CHANGES_REQUESTED": "changes"}.get(r["state"]))
             out.append({"author": r["user"]["login"], "state": r["state"], "commit_id": r["commit_id"],
                         "focus": m[1] if m else None, "round": int(m[2]) if m else None,
-                        "verdict": verdict, "agent": agent, "assoc": r.get("author_association"),
+                        "verdict": verdict, "agent": agent, "assoc": r.get("author_association"), "submitted_at": r.get("submitted_at"),
                         "bot": r["user"].get("type") == "Bot" or r["user"]["login"].endswith("[bot]")})
         return out
 
@@ -92,6 +92,16 @@ class GitHubGateTracker:
         return {e["requested_reviewer"]["login"] for e in self._list(f"issues/{pr['number']}/timeline")
                 if e.get("event") == "review_requested" and e.get("requested_reviewer")}
 
+    def _asked_reviewed(self, reviews, head, asked, at_head):
+        """Each person asked has a review of this round: on the head, or submitted since the round started (the first
+        agent review at head, else the head commit's date). A review of an earlier round never counts."""
+        if not asked:
+            return True
+        start = min((r["submitted_at"] for r in at_head.values() if r["submitted_at"]), default=None) \
+            or self._api(f"commits/{head}")["commit"]["committer"]["date"]
+        return all(any(r["author"] == u and r["state"] != "PENDING" and (
+            r["commit_id"] == head or (r["submitted_at"] or "") >= start) for r in reviews) for u in asked)
+
     def _round(self, reviews, required, head, requested, ci, asked=()):
         """(complete, verdict, ignored) of the round at `head`: marked agent reviews of every required focus at
         head, no requested reviewer left, CI concluded. Humans (with write access) and trusted bots count by
@@ -101,7 +111,7 @@ class GitHubGateTracker:
                   and (r["author"] in self.trusted if r["bot"] else self._can_write(r["author"]))}
         ignored = [r["author"] for r in reviews if r["bot"] and not r["agent"] and r["author"] not in self.trusted]
         complete = (all(x in at_head for x in required) and not requested and ci in ("green", "red")
-                    and all(any(r["author"] == u and r["state"] != "PENDING" for r in reviews) for u in asked))
+                    and self._asked_reviewed(reviews, head, asked, at_head))
         if not complete:
             return False, None, ignored
         changes = ci == "red" or any(at_head[x]["verdict"] != "approve" for x in required) \

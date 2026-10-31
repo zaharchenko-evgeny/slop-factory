@@ -53,6 +53,8 @@ class FakeGh:
         if a.endswith("/pulls/5"):
             return json.dumps({"number": 5, "merged": self.merged, "mergeable": True, "head": {"sha": "h1", "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": u} for u in self.requested]})
+        if a.endswith("/commits/h1"):
+            return json.dumps({"commit": {"committer": {"date": "2026-01-02T00:00:00Z"}}})
         if a.endswith("/timeline"):
             return "\n".join(json.dumps({"event": "review_requested", "requested_reviewer": {"login": u}}) for u in self.asked)
         if "/collaborators/" in a:
@@ -83,9 +85,9 @@ class FakeGh:
         return json.dumps({"id": 999}) if a.endswith("/issues POST") else ""
 
 
-def review(author, body, commit="h1", state="COMMENTED", assoc="OWNER"):
+def review(author, body, commit="h1", state="COMMENTED", assoc="OWNER", at="2026-01-02T01:00:00Z"):
     return {"user": {"login": author, "type": "Bot" if author.endswith("[bot]") else "User"}, "body": body,
-            "commit_id": commit, "state": state, "author_association": assoc}
+            "commit_id": commit, "state": state, "author_association": assoc, "submitted_at": at}
 
 
 def tr(gh):
@@ -316,6 +318,19 @@ class JoinTest(unittest.TestCase):
         gh.asked = ["alice"]  # asked once, request removed, never reviewed
         self.assertEqual(tr(gh).facts(7)["round_complete"], False)
         gh.reviews.append(review("alice", "", state="APPROVED"))
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
+
+    def test_earlier_round_review_does_not_complete_this_one(self):
+        old = "2026-01-01T00:00:00Z"  # before the head's push (2026-01-02)
+        gh = FakeGh(reviews=[review("alice", "", commit="h0", state="APPROVED", at=old)])
+        gh.asked = ["alice"]  # round 1 approved by alice; the fix pushed h1; her request was removed
+        self.assertEqual(tr(gh).facts(7)["round_complete"], False)  # no agent review yet: start = push of h1
+        gh.reviews.append(review(BOT, M, at="2026-01-02T02:00:00Z"))
+        self.assertEqual(tr(gh).facts(7)["round_complete"], False)  # start = the agent review; alice's is older
+        gh.reviews.append(review("alice", "", commit="h0", state="APPROVED", at="2026-01-02T03:00:00Z"))
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")  # she reviewed again since the start
+        gh.reviews[0:3] = [review("alice", "", commit="h0", state="APPROVED", at=old), review(BOT, M)]
+        gh.asked = []  # no longer asked at all
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
 
     def test_permission_lookup_failure_is_not_no_access(self):
