@@ -43,6 +43,10 @@ tracker:
   bot_logins: []   # comment authors that never resume a waiting ticket
   hold_label: factory:hold   # a ticket with this label never auto-merges
 
+# Bots other than targets.air.bot_login whose APPROVED / CHANGES_REQUESTED reviews count in a round.
+reviews:
+  trusted_bots: []
+
 channels: [local]
 
 # Event detectors (drive.py loop): external event of the machine → detector, a

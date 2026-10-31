@@ -1,7 +1,7 @@
 """The tracker port of the gate (factory/gate.py) and two in-memory fakes.
 
 `Tracker.facts(ticket)` returns a dict with: stage ("none" when unset), head, blockers_open (int),
-focus_missing (list), round_complete (bool), round_head, fix_rounds, fix_cap, ci, due, seen (event ids).
+focus_missing (list), round_complete (bool), round_verdict (changes|approve|None), round_head, fix_rounds, fix_cap, ci, due, seen (event ids).
 `Tracker.apply(effect)` takes {ticket, kind, value, event?}, reads first and writes only when the target
 state differs; it returns True when it wrote. The stage effect also records `event` in `seen`; so does the `seen` effect, which apply appends to an
 outcome without a stage effect.
@@ -33,7 +33,7 @@ class MemoryTracker:
     def facts(self, ticket):
         t = self._t(ticket)
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
-                "round_head": None, "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False}
+                "round_verdict": None, "round_head": None, "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False}
         return {**base, **{k: v for k, v in t.items() if k in base}, "stage": self.get_stage(t),
                 "seen": list(t.get("seen", []))}
 
