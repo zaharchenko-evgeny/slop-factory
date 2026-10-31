@@ -8,4 +8,4 @@ nodes:
   implement: { tiers: [cheap, mid], triggers: ["issues.labeled factory:implement-<tier>"], role: developer, output: create-pr, outcomes: {} }
   review: { focuses: [full, behaviour], triggers: ["pull_request.opened", "pull_request.synchronize"], role: reviewer, outcomes: {} }
   off: { enabled: false, triggers: ["issues.labeled factory:x"], role: router, outcomes: {} }
-  sweep: { triggers: ["schedule sweep"], role: router, output: as-instructed, outcomes: {} }
+  sweep: { triggers: ["schedule sweep"], role: script, output: read-only, outcomes: {} }
