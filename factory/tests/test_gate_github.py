@@ -31,6 +31,7 @@ class FakeGh:
 
     def __init__(self, labels=("factory:in-review", "risk:low"), reviews=(), comments=(), checks=("success",), sub=(), requested=()):
         self.requested = list(requested)
+        self.roles = {"alice": "write", "bob": "admin", "eve": "read"}
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
         self.blocked = [{"state": "open", "id": 1}, {"state": "closed", "id": 2}]
@@ -52,6 +53,11 @@ class FakeGh:
         if a.endswith("/pulls/5"):
             return json.dumps({"number": 5, "merged": self.merged, "mergeable": True, "head": {"sha": "h1", "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": u} for u in self.requested]})
+        if "/collaborators/" in a:
+            who = a.split("/collaborators/")[1].split("/")[0]
+            if who not in self.roles:
+                raise RuntimeError("404")
+            return json.dumps({"role_name": self.roles[who]})
         if a.endswith("/pulls/5/reviews"):
             return "\n".join(json.dumps(r) for r in self.reviews)
         if a.endswith(("issues/7", "issues/5")):
@@ -206,6 +212,7 @@ class EffectsTest(unittest.TestCase):
 
     def test_fix_rounds_grow_per_reviewed_head(self):
         C = M.replace("approve", "changes")
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, C), review(BOT, C)])).facts(7)["fix_rounds"], 2)
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)["fix_rounds"], 0)
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, C, commit="old")])).facts(7)["fix_rounds"], 1)
         gh = FakeGh(reviews=[review(BOT, C, commit="old")])
@@ -285,7 +292,7 @@ class JoinTest(unittest.TestCase):
     def test_unmarked_reviews(self):
         gh = FakeGh(reviews=[review(BOT, M), review("bob", "", state="CHANGES_REQUESTED")])
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # a person blocks, even unrequested
-        gh = FakeGh(reviews=[review(BOT, M), review("bob", "", state="CHANGES_REQUESTED", assoc="NONE")])
+        gh = FakeGh(reviews=[review(BOT, M), review("eve", "", state="CHANGES_REQUESTED")])
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")  # no write access
         bot = review("other[bot]", "", state="CHANGES_REQUESTED", assoc="NONE")
         gh = FakeGh(reviews=[review(BOT, M), bot, review(BOT, "no marker", state="CHANGES_REQUESTED")])

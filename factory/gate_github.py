@@ -19,7 +19,7 @@ MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(ap
 FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
 GOOD_CI = {"success", "neutral", "skipped"}
-WRITE = {"OWNER", "MEMBER", "COLLABORATOR"}  # author_association of a person with write access
+WRITE = {"admin", "maintain", "write"}  # repository roles with write access
 
 
 class GitHubGateTracker:
@@ -78,13 +78,20 @@ class GitHubGateTracker:
                         "bot": r["user"].get("type") == "Bot" or r["user"]["login"].endswith("[bot]")})
         return out
 
+    def _can_write(self, login):
+        """Write access from the collaborator permission API (author_association says nothing about the role)."""
+        try:
+            return self._api(f"collaborators/{login}/permission").get("role_name") in WRITE
+        except Exception:  # 404 for a stranger, 403 without rights: no access
+            return False
+
     def _round(self, reviews, required, head, requested, ci):
         """(complete, verdict, ignored) of the round at `head`: marked agent reviews of every required focus at
         head, no requested reviewer left, CI concluded. Humans (with write access) and trusted bots count by
         their latest APPROVED/CHANGES_REQUESTED, whatever commit it names (a late review lands in the next round)."""
         at_head = {r["focus"]: r for r in reviews if r["agent"] and r["commit_id"] == head}
         others = {r["author"]: r for r in reviews if not r["agent"] and r["verdict"]
-                  and (r["author"] in self.trusted if r["bot"] else r["assoc"] in WRITE)}
+                  and (r["author"] in self.trusted if r["bot"] else self._can_write(r["author"]))}
         ignored = [r["author"] for r in reviews if r["bot"] and not r["agent"] and r["author"] not in self.trusted]
         complete = (all(x in at_head for x in required) and not requested and ci in ("green", "red"))
         if not complete:
@@ -116,7 +123,7 @@ class GitHubGateTracker:
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                     fix_rounds=len({r["commit_id"] for r in reviews if r["agent"] and r["verdict"] == "changes"}))  # bot change requests, one per head
+                     fix_rounds=sum(1 for r in reviews if r["agent"] and r["verdict"] == "changes"))  # bot change requests
         return f
 
     # --- effects: read the target first, write only when it differs
