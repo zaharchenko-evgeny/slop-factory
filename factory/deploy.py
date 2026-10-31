@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "[factory:"
 PROMPT = (
     "Save the trigger payload (the <trigger_event> JSON) to a file. "
-    "Run `uv run factory/gate.py check --node {node} --event <file>`; on exit 10 stop and report why. "
+    "Run `uv run factory/gate.py check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
     "Otherwise read `role_file` and every skill it lists, and do the role's work. "
     "Then run `uv run factory/gate.py apply --node {node} --event <file> --outcome <outcome> --payload <file>` "
     "with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) "
@@ -49,14 +49,14 @@ def repository(r: dict) -> dict:
             "provider": "github" if "github.com" in url else "other"}
 
 
-def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str]]:
-    """(automation suffix, tier name for triggers, model tier) per tier or focus of the node."""
+def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str, str | None]]:
+    """(automation suffix, tier of the node, model tier, focus) per tier or focus of the node."""
     role = roles.get(n["role"], {})
     if n.get("tiers"):
-        return [(f"{name}-{t}", t, t) for t in n["tiers"]]
+        return [(f"{name}-{t}", t, t, None) for t in n["tiers"]]
     if n.get("focuses"):
-        return [(f"{name}-{f}", None, role["modes"][f]["tier"]) for f in n["focuses"]]
-    return [(name, None, n.get("tier") or role.get("tier") or "cheap")]
+        return [(f"{name}-{f}", None, role["modes"][f]["tier"], f) for f in n["focuses"]]
+    return [(name, None, n.get("tier") or role.get("tier") or "cheap", None)]
 
 
 def plan_air(nodes: dict, config: dict) -> dict:
@@ -72,7 +72,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
         env = n.get("environment", "default")
         if env not in used:
             used.append(env)
-        for aname, tier_arg, tier in variants(name, n, roles):
+        for aname, tier_arg, tier, focus in variants(name, n, roles):
             agent, _, model = air[tier].partition("/")
             trig = []
             for t in n["triggers"]:
@@ -88,7 +88,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{PREFIX}{env}] env",
-                "prompt": PROMPT.format(node=name),
+                "prompt": PROMPT.format(node=name, sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg}" if tier_arg else "")),
             })
     envs = []
     for env in used:

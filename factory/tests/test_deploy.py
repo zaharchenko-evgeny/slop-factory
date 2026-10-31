@@ -47,6 +47,13 @@ class PlanTest(unittest.TestCase):
                     ["automations"] if x["name"] == "[factory:join]")
         self.assertEqual([x["eventType"] for x in join["triggers"]], ["pull_request_review.submitted"])
 
+    def test_prompt_carries_focus_and_tier(self):
+        config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+        a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), config)["automations"]}
+        self.assertIn("check --node review --event <file> --focus behaviour`", a["[factory:review-behaviour]"])
+        self.assertIn("check --node fix --event <file> --tier mid`", a["[factory:fix-mid]"])
+        self.assertIn("check --node intake --event <file>`", a["[factory:intake]"])
+
     def test_real_plan_is_prefixed_and_covers_pilot(self):
         config = yaml.safe_load((ROOT / "factory.yaml").read_text())
         n = nodes.load()

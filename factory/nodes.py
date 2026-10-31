@@ -70,6 +70,9 @@ def validate(nodes, config):
                     errs.append(f"bad-condition: {name}: unknown `when` key {k}")
             if "stage" in n["when"]:
                 stage(f"{name}.when", n["when"]["stage"])
+        if any(str(t).startswith(("pull_request", "workflow_run")) for t in n.get("triggers") or []) \
+                and "ci" not in (n.get("when") or {}) and not n.get("ci-independent"):
+            errs.append(f"ci-gate: {name}: acts on a PR head, so `when` needs `ci` or the node needs `ci-independent: true`")
         role = n.get("role")
         if role not in NO_ROLE and role not in roles:
             errs.append(f"unknown-role: {name}: {role}")

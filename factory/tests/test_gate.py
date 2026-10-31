@@ -148,6 +148,26 @@ class CliAndValidate(unittest.TestCase):
             self.assertEqual(gate.main(["check", "--node", "nope", "--event", str(d / "ev.json"), "--tracker", tr]), 2)
             self.assertEqual(gate.main(["apply", "--node", "intake", "--outcome", "proceed", "--payload", str(d / "p.json"), "--tracker", tr]), 2)
 
+    def test_cli_focus_and_tier_reach_check(self):
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "t.json").write_text(json.dumps({"7": {"stage": "ready", "head": "abc", "focus_missing": ["full", "behaviour"]}}))
+            (d / "ev.json").write_text(json.dumps({"id": "e", "ticket": "7"}))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                gate.main(["check", "--node", "implement", "--event", str(d / "ev.json"), "--tier", "strong",
+                           "--focus", "behaviour", "--tracker", f"memory:{d / 't.json'}"])
+            got = json.loads(out.getvalue())
+            self.assertEqual((got["tier"], got["focus"]), ("strong", "behaviour"))
+
+    def test_ci_concluded(self):
+        facts = {"ci": "red"}
+        self.assertTrue(gate.holds({"ci": "concluded"}, facts, {}))
+        self.assertTrue(gate.holds({"ci": "concluded"}, {"ci": "green"}, {}))
+        self.assertFalse(gate.holds({"ci": "concluded"}, {"ci": "pending"}, {}))
+
     def test_validate_rejects_unknown_when_key(self):
         n = copy.deepcopy(NODES)
         n["nodes"]["intake"]["when"]["bogus"] = True

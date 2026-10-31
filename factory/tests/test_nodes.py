@@ -33,6 +33,7 @@ class NodesTest(unittest.TestCase):
         cases = {
             "no-trigger": lambda n: n["intake"].update(triggers=[]),
             "unknown-effect": lambda n: n["join"]["outcomes"]["approved"]["effects"].append({"explode": 1}),
+            "ci-gate": lambda n: n["join"].pop("ci-independent"),
             "unknown-role": lambda n: n["intake"].update(role="ghost"),
             "unknown-environment": lambda n: n["intake"].update(environment="moon"),
             "unreachable-stage": lambda n: n["implement"]["outcomes"].pop("failed"),

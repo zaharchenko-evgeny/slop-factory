@@ -1,6 +1,7 @@
 # The factory as nodes (ADR-0014). One node = triggers + one condition (`when`) + role, tier,
 # environment + outcomes. `uv run factory/nodes.py validate` checks it; `chart` derives the stage chart.
 # Stage names are keys of `tracker.stages` in factory.yaml. `from: [none]` = a PR with no stage label.
+# `ci-independent: true` = the node acts on a PR head without CI; validate requires `ci` in `when` or this flag.
 # Nodes marked `enabled: false` need a later slice. `pilot: true` = delivered by the pilot.
 environments:
   # `secrets` are names only; `domains` the network allow-list; `vm` the machine size (deploy.py plan).
@@ -79,6 +80,7 @@ nodes:
       failed: { effects: [{ comment: reason }, { stage: failed }] }
   adopt:
     enabled: false
+    ci-independent: true
     triggers: ["pull_request.labeled factory:adopt"]
     when: { stage: none }
     role: router
@@ -89,6 +91,7 @@ nodes:
   review:
     pilot: true
     focuses: [full, behaviour, structure-security]
+    ci-independent: true
     triggers: ["pull_request.opened", "pull_request.synchronize"]
     when: { stage: in-review, focus: required-by-risk }
     role: reviewer
@@ -98,6 +101,7 @@ nodes:
       changes: { effects: [{ review: request-changes-at-head }, { join: all-approve }] }
   join:
     pilot: true
+    ci-independent: true
     triggers: ["pull_request_review.submitted"]   # CI completion is picked up by the sweep
     when: { stage: in-review, round: complete-at-head }
     role: script
@@ -109,7 +113,7 @@ nodes:
     # CI completion has no trigger of its own: the sweep schedule re-runs the join decision, gated like join.
     pilot: true
     triggers: ["schedule sweep"]
-    when: { stage: in-review, round: complete-at-head }
+    when: { stage: in-review, round: complete-at-head, ci: concluded }
     role: script
     output: read-only
     outcomes:
@@ -118,6 +122,7 @@ nodes:
   fix:
     pilot: true
     tiers: [cheap, mid, strong]
+    ci-independent: true
     triggers: ["pull_request.labeled factory:fix-<tier>"]
     when: { stage: changes-requested, round: complete, fix-rounds: below-cap }
     role: developer
@@ -137,6 +142,7 @@ nodes:
       fix: { from: [approved], effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
   merging:
     enabled: false
+    ci-independent: true
     triggers: ["workflow_run.completed"]
     when: { stage: merging }
     role: script

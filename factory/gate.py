@@ -57,8 +57,8 @@ def holds(when, facts, event):
             value(want, ("below-cap", "at-cap"))
             return (facts["fix_rounds"] < facts["fix_cap"]) == (want == "below-cap")
         if key == "ci":
-            value(want, ("green", "red", "pending", "none"))
-            return facts["ci"] == want
+            value(want, ("green", "red", "pending", "none", "concluded"))
+            return facts["ci"] in ("green", "red") if want == "concluded" else facts["ci"] == want
         if key == "actor":
             return event.get("actor") == want
         if key == "always":
@@ -107,6 +107,7 @@ def check(name, event, tracker, nodes, config):
     return (NO_GO if why else GO), {
         "go": why is None, "reason": why, "ticket": event["ticket"], "node": name, "role": role,
         "tier": event.get("tier") if event.get("tier") in tiers else tiers[0],
+        "focus": event.get("focus"),
         "role_file": f"roles/{role}/role.md" if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
@@ -164,6 +165,8 @@ def main(argv):
     p.add_argument("--payload")
     p.add_argument("--tracker", default="")
     p.add_argument("--nodes")
+    p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
+    p.add_argument("--tier")
     try:
         a = p.parse_args(argv)
     except SystemExit:
@@ -183,7 +186,9 @@ def main(argv):
         nodes = nodes_mod.load(a.nodes)
         config = yaml.safe_load((ROOT / "factory.yaml").read_text())
         if a.cmd == "check":
-            code, out = check(a.node, read(a.event or "", "event"), tracker, nodes, config)
+            event = read(a.event or "", "event")
+            event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
+            code, out = check(a.node, event, tracker, nodes, config)
         else:
             code, out = apply(a.node, a.outcome or "", read(a.payload or "", "payload"), tracker, nodes)
             path and Path(path).write_text(json.dumps(tracker.tickets))

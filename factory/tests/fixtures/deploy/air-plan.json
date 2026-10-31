@@ -41,7 +41,7 @@
       },
       "environmentConfigId": "[factory:default] env",
       "name": "[factory:implement-cheap]",
-      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node implement --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file> --tier cheap`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node implement --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -73,7 +73,7 @@
       },
       "environmentConfigId": "[factory:default] env",
       "name": "[factory:implement-mid]",
-      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node implement --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file> --tier mid`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node implement --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -105,7 +105,7 @@
       },
       "environmentConfigId": "[factory:default] env",
       "name": "[factory:review-full]",
-      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node review --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node review --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node review --event <file> --focus full`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node review --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -141,7 +141,7 @@
       },
       "environmentConfigId": "[factory:default] env",
       "name": "[factory:review-behaviour]",
-      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node review --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node review --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node review --event <file> --focus behaviour`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node review --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
