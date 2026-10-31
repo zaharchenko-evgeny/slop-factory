@@ -94,7 +94,8 @@ class GitHubGateTracker:
              "head": None, "pr": None, "mergeable": None, "ci": "none", "reviews": [], "requested_reviewers": [],
              "focus_missing": [], "round_complete": False, "round_head": None, "fix_rounds": 0,
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
-             "issue_state": issue.get("state", "open")}
+             "issue_state": issue.get("state", "open"),
+             "title": issue.get("title", ""), "body": issue.get("body") or "", "branch": None}
         if stage == "split":
             kids = self._list(f"issues/{n}/sub_issues")
             f.update(children_total=len(kids), children_open=sum(k.get("state") == "open" for k in kids))
@@ -103,6 +104,7 @@ class GitHubGateTracker:
             latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             complete = all(x in latest for x in required)
+            f.update(branch=pr["head"]["ref"])
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), ci=self._ci(head), reviews=reviews,
                      requested_reviewers=[u["login"] for u in pr.get("requested_reviewers") or []],

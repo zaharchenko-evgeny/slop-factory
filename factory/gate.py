@@ -7,11 +7,14 @@
 
 Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py apply --node N --outcome O --payload FILE [--tracker github|memory:FILE]
+       gate.py apply --node N --handoff FILE [--event FILE]   (outcome and payload derived from the role's handoff)
        gate.py sweep [--tracker github] [--dry-run]   (no agent: lists the tickets itself, one stage per ticket)
 Exit 0 go / done, 10 no go (stale, duplicate or the node no longer matches), 2 bad event, payload, node
 or outcome, 1 a failing effect (the stage is untouched: it is the last effect).
 An event is JSON {id, ticket, head?, actor?}. A payload is JSON {ticket, event?, head?, actor?, ...}
 plus one field per outcome effect that needs data (the error names the field).
+`check --event` also takes the raw trigger payload (an `issues`, `pull_request` or `pull_request_review`
+event): the ticket is the issue number or the `<n>` of the PR branch `ez/<n>-*` (none: exit 10).
 `--tracker memory:FILE` runs on a JSON file {ticket: record} with the in-memory fake; `--tracker github`
 uses factory/gate_github.py (bot login from `targets.air.bot_login`).
 """
@@ -80,14 +83,87 @@ def load_node(name, nodes):
     return node
 
 
-def read(path, what):
+class NoTicket(Exception):
+    pass
+
+
+def from_trigger(d):
+    """{id, ticket, head, actor} of a raw webhook payload (issues, pull_request, pull_request_review)."""
+    pr, issue, review = d.get("pull_request"), d.get("issue"), d.get("review")
+    if not isinstance(pr, dict) and not isinstance(issue, dict):
+        raise Bad("malformed event: needs `ticket` or a trigger payload")
+    name = "pull_request_review" if review and pr else "pull_request" if pr else "issues"
+    src = pr or issue
+    if pr:
+        m = re.match(r"ez/(\d+)-", (pr.get("head") or {}).get("ref") or "")
+        if not m:
+            raise NoTicket(f"PR #{pr.get('number')} is not on an ez/<n>- branch")
+        ticket = int(m[1])
+    else:
+        ticket = issue.get("number")
+    when = d.get("delivery") or d.get("delivery_id") or (review or {}).get("submitted_at") or src.get("updated_at")
+    return {"id": f"{name}:{when}", "ticket": ticket, "head": ((pr or {}).get("head") or {}).get("sha"),
+            "actor": (d.get("sender") or {}).get("login")}
+
+
+def read(path, what, raw=False):
     try:
         data = json.loads(Path(path).read_text())
     except (OSError, ValueError) as e:
         raise Bad(f"malformed {what}: {e}")
+    if isinstance(data, dict) and raw and "ticket" not in data:
+        return from_trigger(data)
     if not isinstance(data, dict) or "ticket" not in data:
         raise Bad(f"malformed {what}: needs an object with `ticket`")
     return data
+
+
+COMPLEXITY_TIER = {"small": "cheap", "medium": "mid", "large": "strong"}
+FIX_TIERS = ("cheap", "mid", "strong")
+
+
+def intake_fields(h):
+    """The fields `intake`'s proceed outcome needs and the router handoff lacks: complexity and tier from the size."""
+    if h.get("handoff") != "ROUTER-INTAKE":
+        return {}
+    n = int("".join(c for c in str(h.get("size_estimate", "")) if c.isdigit()) or 0)
+    return {"complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
+            "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong"}
+
+
+def outcome_of(h):
+    """The node outcome a handoff names: `outcome`, a reviewer `verdict`, a router intake, else `status`."""
+    if h.get("outcome"):
+        return h["outcome"]
+    if h.get("verdict"):
+        return "approve" if h["verdict"] == "approved" else "changes"
+    if h.get("handoff") == "ROUTER-INTAKE":
+        # shortcut: a ready bug proceeds until the bug path (#161) is enabled: `reproduce` is disabled
+        return "proceed" if h.get("ready") == "yes" and h.get("split") in (None, "none") else (
+            "split" if h.get("split") not in (None, "none") else "grill")
+    return h.get("status")
+
+
+def fix_tier(facts):
+    """The fix tier of the ticket's `complexity:*` label (mid without one)."""
+    for label in facts.get("attrs", []):
+        if label.startswith("complexity:"):
+            return COMPLEXITY_TIER.get(label[11:], "mid")
+    return "mid"
+
+
+def join_plan(facts):
+    """The join rule: (outcome, payload) when every agent review at the head approves, else changes."""
+    head = [r for r in facts["reviews"] if r["agent"] and r["commit_id"] == facts["head"]]
+    return ("approved" if head and all(r["verdict"] == "approve" for r in head) else "changes"), {"tier": fix_tier(facts)}
+
+
+def branch_of(facts, config):
+    """The ticket's branch: the PR's head, else `branch_pattern` from the issue title (drive.py's slug rule)."""
+    if facts.get("branch"):
+        return facts["branch"]
+    from drive import branch_name
+    return branch_name(config["branch_pattern"], facts["ticket"], facts.get("title") or "", facts.get("body") or "")
 
 
 def matches(node, facts, event, outcome=None):
@@ -107,6 +183,8 @@ def check(name, event, tracker, nodes, config):
         raise Bad("malformed event: needs `id`")
     facts = tracker.facts(event["ticket"])
     why = matches(node, facts, event)
+    branch = branch_of({**facts, "ticket": event["ticket"]}, config)
+    facts = {k: v for k, v in facts.items() if k != "body"}
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
     if node.get("focuses"):  # one review tier per focus (roles.<role>.modes.<focus>.tier)
@@ -119,6 +197,7 @@ def check(name, event, tracker, nodes, config):
         "role_file": f"roles/{role}/role.md" if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
+        "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
     }
 
 
@@ -190,8 +269,8 @@ def sweep_plan(facts):
     if stage == "split" and facts.get("children_total") and facts["children_open"] == 0:
         return "sweep", "children-done", {}
     if stage == "in-review" and facts["round_complete"] and facts["round_head"] == facts["head"]:
-        changes = any(r["agent"] and r["commit_id"] == facts["head"] and r["verdict"] == "changes" for r in facts["reviews"])
-        return "join", "changes" if changes else "approved", {"tier": "mid"}
+        outcome, payload = join_plan(facts)
+        return "join", outcome, payload
     return None
 
 
@@ -224,6 +303,7 @@ def main(argv):
     p.add_argument("--event")
     p.add_argument("--outcome")
     p.add_argument("--payload")
+    p.add_argument("--handoff")
     p.add_argument("--tracker", default="")
     p.add_argument("--nodes")
     p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
@@ -234,7 +314,7 @@ def main(argv):
         return BAD
     path = ""
     try:
-        kind, _, path = (a.tracker or ("github" if a.cmd == "sweep" else "")).partition(":")
+        kind, _, path = (a.tracker or "github").partition(":")
         if kind == "github" and not path:
             tracker = GitHubGateTracker.from_config()
         elif kind == "memory" and path:
@@ -255,12 +335,30 @@ def main(argv):
         if not a.node:
             raise Bad("--node is required")
         if a.cmd == "check":
-            event = read(a.event or "", "event")
+            event = read(a.event or "", "event", raw=True)
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
             code, out = check(a.node, event, tracker, nodes, config)
         else:
-            code, out = apply(a.node, a.outcome or "", read(a.payload or "", "payload"), tracker, nodes, a.focus, a.tier)
+            if a.handoff:
+                try:
+                    h = json.loads(Path(a.handoff).read_text())
+                except (OSError, ValueError) as e:
+                    raise Bad(f"malformed handoff: {e}")
+                if not isinstance(h, dict):
+                    raise Bad("malformed handoff: needs an object")
+                ev = read(a.event, "event", raw=True) if a.event else {}
+                if "ticket" not in {**h, **ev}:
+                    raise Bad("apply --handoff needs `ticket` in the handoff or --event")
+                payload = {**intake_fields(h), **h, **{k: v for k, v in ev.items() if v is not None and k != "id"},
+                           **({"event": ev["id"]} if "id" in ev else {})}
+                out_name = a.outcome or outcome_of(h)
+            else:
+                payload, out_name = read(a.payload or "", "payload"), a.outcome or ""
+            code, out = apply(a.node, out_name, payload, tracker, nodes, a.focus, a.tier)
             path and Path(path).write_text(json.dumps(tracker.tickets))
+    except NoTicket as e:
+        print(json.dumps({"go": False, "reason": str(e)}))
+        return NO_GO
     except Bad as e:
         print(json.dumps({"error": str(e)}))
         return BAD

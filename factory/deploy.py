@@ -26,20 +26,23 @@ PREFIX = "[factory:"
 PROMPT = (
     "Save the trigger payload (the <trigger_event> JSON) to a file. "
     "Run `uv run factory/gate.py check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
-    "Otherwise read `role_file` and every skill it lists, and do the role's work. "
-    "Then run `uv run factory/gate.py apply --node {node}{sel} --event <file> --outcome <outcome> --payload <file>` "
-    "with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) "
-    "plus every field the outcome's effects name (for example `tier`, `reason`)."
+    "Otherwise read `role_file` and every skill it lists, and do the role's work on the `branch` of the output "
+    "(create it from the default branch when it does not exist; the platform pushes). "
+    "Write the role's handoff to `handoff_path`, then run "
+    "`uv run factory/gate.py apply --node {node}{sel} --event <file> --handoff <handoff_path>`."
 )
+BOT_FILTERED = ("review-", "join")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
 
-def trigger(text: str, tier: str | None) -> dict:
+def trigger(text: str, tier: str | None, pr_author: str | None = None) -> dict:
     """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations)."""
     event, _, arg = str(text).partition(" ")
     arg = arg.replace("<tier>", tier or "")
     labeled = event.startswith("issues.") or event.startswith("pull_request.labeled")
-    return {"triggerType": "EVENT", "source": "github", "eventType": event,
-            "filters": {"label": arg} if labeled and arg else {}}
+    filters = {"label": arg} if labeled and arg else {}
+    if pr_author and event.startswith("pull_request"):
+        filters["pr_author"] = pr_author
+    return {"triggerType": "EVENT", "source": "github", "eventType": event, "filters": filters}
 
 
 def repository(r: dict) -> dict:
@@ -65,6 +68,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     envs_def = nodes.get("environments") or {}
     scheds = nodes.get("schedules") or {}
+    bot = config["targets"]["air"]["bot_login"]
     automations, used = [], []
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human":
@@ -80,7 +84,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     trig.append({"triggerType": "SCHEDULED", "cronExpression": scheds[str(t)[9:]]["cron"],
                                  "timezone": "UTC"})
                 elif str(t) != "manual":
-                    trig.append(trigger(t, tier_arg))
+                    trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None))
             automations.append({
                 "name": f"{PREFIX}{aname}]",
                 "triggers": trig,

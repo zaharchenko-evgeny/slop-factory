@@ -10,7 +10,7 @@ environments:
     repository: primary
     startup: .air/cloud/startup.sh
     secrets: []   # gh is jetbrains-air[bot] through the platform's GH_TOKEN
-    domains: [github.com, api.github.com, objects.githubusercontent.com, pypi.org, files.pythonhosted.org]
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org]
     vm: default
 adapters:
   ticket: github-issues   # stage, fields, labels, blockers

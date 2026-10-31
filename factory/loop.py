@@ -23,6 +23,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gate  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
+from gate import intake_fields, outcome_of  # noqa: E402,F401
 
 ROOT = nodes_mod.ROOT
 
@@ -52,9 +53,8 @@ def cron_due(expr, last, now):
 
 
 def script_join(ctx):
-    """The `join` node: approved when every review at the head approves, else changes."""
-    head = [r for r in ctx["reviews"] if r["agent"] and r["commit_id"] == ctx["head"]]
-    return ("approved" if head and all(r["verdict"] == "approve" for r in head) else "changes"), {"tier": "mid"}
+    """The `join` node: the gate's join rule."""
+    return gate.join_plan(ctx)
 
 
 def script_sweep(facts):
@@ -92,29 +92,6 @@ def default_run_role(node, check, root=ROOT):
     return outcome_of(h), {**intake_fields(h), **h}
 
 
-def intake_fields(h):
-    """The fields `intake`'s proceed outcome needs and the router handoff lacks: complexity and tier from the size."""
-    if h.get("handoff") != "ROUTER-INTAKE":
-        return {}
-    n = int("".join(c for c in str(h.get("size_estimate", "")) if c.isdigit()) or 0)
-    return {"complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
-            "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong"}
-
-
-def outcome_of(h):
-    """The node outcome a handoff names: `outcome`, a reviewer `verdict`, a router intake, else `status`."""
-    if h.get("outcome"):
-        return h["outcome"]
-    if h.get("verdict"):
-        return "approve" if h["verdict"] == "approved" else "changes"
-    if h.get("handoff") == "ROUTER-INTAKE":
-        if h.get("kind") == "bug" and h.get("ready") == "yes":
-            return "bug"
-        return "proceed" if h.get("ready") == "yes" and h.get("split") in (None, "none") else (
-            "split" if h.get("split") not in (None, "none") else "grill")
-    return h.get("status")
-
-
 STALE = ("factory:implement-", "factory:fix-")
 
 
@@ -126,12 +103,15 @@ def drop_stale_commands(tracker, n, errors):
             for label in f.get("attrs", []):
                 if label.startswith(STALE):
                     tracker.apply({"kind": "unlabel", "ticket": n, "value": label})
+            if f.get("pr"):  # the PR's fix command too (the label of a fix round that never ran)
+                for tier in gate.FIX_TIERS:
+                    tracker.apply({"kind": "unlabel", "ticket": n, "value": f"factory:fix-{tier}", "on": "pr"})
     except (Exception, SystemExit) as e:
         errors.append(("stale-labels", n, f"{type(e).__name__}: {e}"))
 
 
 def tick(tracker, tickets, nodes, config, run_role=default_run_role, scripts=None, now=None, last=None,
-         only_node=None):
+         only_node=None, closed=()):
     """One pass. Returns ran [(node, ticket, outcome)], due (schedule nodes that ran), errors."""
     scripts, now = SCRIPTS if scripts is None else scripts, now or datetime.now()
     cap, ran = config["limits"]["concurrent_deliveries"], []
@@ -150,7 +130,7 @@ def tick(tracker, tickets, nodes, config, run_role=default_run_role, scripts=Non
                 continue
         view = Due(tracker, is_due)
         for n in tickets:
-            if n in moved:
+            if n in moved or (n in closed and name != "sweep"):  # no node acts on a ticket a human closed
                 continue
             try:
                 head = view.facts(n)["head"]
@@ -204,6 +184,7 @@ def main(argv):
     tracker = GitHubGateTracker.from_config()
     stamp = ROOT / config["targets"]["local"]["run_dir"] / "loop" / "last-tick"
     last = datetime.fromtimestamp(float(stamp.read_text())) if stamp.exists() else None
+    closed = []
     if a.issue:
         tickets = [a.issue]
     else:
@@ -211,8 +192,9 @@ def main(argv):
                              "--limit", "200", "--json", "number,labels"]))
         stages = set(config["tracker"]["stages"].values())
         tickets = [i["number"] for i in out if stages & {x["name"] for x in i["labels"]}]
-        tickets += [n for n in tracker.sweep_tickets(gate.SWEEP_STAGES) if n not in tickets]  # closed approved/merged/split too
-    res = tick(tracker, tickets, nodes_mod.load(), config, last=last, only_node=a.node)
+        closed = [n for n in tracker.sweep_tickets(gate.SWEEP_STAGES) if n not in tickets]  # closed approved/merged/split too
+        tickets += closed
+    res = tick(tracker, tickets, nodes_mod.load(), config, last=last, only_node=a.node, closed=closed)
     for r in res["ran"]:
         print(*r)
     for r in res["errors"]:

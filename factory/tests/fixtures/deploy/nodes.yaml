@@ -1,5 +1,5 @@
 environments:
-  default: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com], vm: default }
+  default: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com], vm: default }
 schedules:
   sweep: { cron: "*/10 * * * *" }
 nodes:
