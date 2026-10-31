@@ -332,3 +332,48 @@ stateDiagram-v2
     done --> [*]
 ```
 <!-- /nodes-chart -->
+
+## Status of problems 1-30 in the gate
+
+`factory/gate.py` (ADR-0014 nodes) replaces `begin`/`end`. *check* = `gate.py check`, *apply* = `gate.py apply`,
+*node* = a node in `workflows/nodes.yaml`, *sweep* = the `sweep` node, *adapter* = the tracker adapter (#172),
+*join* = the join slice (#173), *rounds* = bounded rounds (#155).
+
+| # | Status | Where |
+|---|---|---|
+| 1 | moved to a node | `implement` pushes, `review` is triggered by `synchronize`; `check` refuses a stale head |
+| 2 | moved to a node | `implement` outcome `done` sets the stage directly, no label race |
+| 3 | dropped | no command label is consumed; the node condition is the gate |
+| 4 | moved to a node | `review` posts a marker review (adapter, join) |
+| 5 | moved to a node | `join` is idempotent; the sweep repeats it (join) |
+| 6 | dropped | no vars comment; facts are read from the tracker each time |
+| 7 | solved by check | duplicate event id exits 10 (`seen`, written with the stage change) |
+| 8 | solved by check | `blockers: closed` in `intake.when`; the sweep re-offers |
+| 9 | solved by apply | the stage effect replaces the stage (a tag swap on the tag tracker) |
+| 10 | moved to the adapter | the adapter reports the actor; `when: {actor}` |
+| 11 | solved by apply | the script is the only writer; roles are read-only |
+| 12 | moved to the sweep | the sweep re-checks CI for waiting tickets |
+| 13 | moved to the sweep | closed unmerged PR handled by the `merging` node / sweep |
+| 14 | moved to the sweep | retro runs from the sweep for `merged` |
+| 15 | moved to a node | `join` (join) |
+| 16 | moved to the sweep | stale work found by the sweep; no lease in this design |
+| 17 | dropped | trust follows the facts, not the login |
+| 18 | moved to a node | `tiers` of `implement` and `fix` |
+| 19 | solved by check | `round: complete-at-head` and `ci: green` in `when` |
+| 20 | dropped | no trigger is consumed |
+| 21 | solved by check | `check` refuses a head that is not the event's head |
+| 22 | moved to a node | `review.focus: required-by-risk` (join) |
+| 23 | moved to a node | `join` (join) |
+| 24 | moved to a node | `doc-writer` node, later slice |
+| 25 | moved to the sweep | sweep |
+| 26 | dropped | no lease |
+| 27 | moved to a node | risk is a `set-field` effect; sticky rules in join / rounds |
+| 28 | dropped | see 17 |
+| 29 | moved to a node | cap check in `intake` (adapter) |
+| 30 | moved to the sweep | out-of-scope list above, plus the sweep |
+
+Also solved by apply: a repeated apply writes nothing (each effect reads first), a failing effect leaves the
+stage unchanged (the stage is the last effect), and a payload missing a field exits 2 naming it.
+The `when` vocabulary is `stage`, `blockers`, `focus`, `round`, `fix-rounds`, `ci`, `actor`, `always`, `due`;
+`same-repo` and `draft` (node `adopt`) are filters of the adapter's trigger, and `marked-review-at-head` and
+`open-fix` are part of `focus: required-by-risk`.

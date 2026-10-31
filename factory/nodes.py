@@ -17,6 +17,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "set-field", "join"}
 OUTPUTS = {"read-only", "create-pr", "push-to-source", "push-to-new-branch", "as-instructed"}
+WHEN_KEYS = {"stage", "blockers", "focus", "round", "fix-rounds", "ci", "actor", "always", "due"}
 NO_ROLE = {"script", "human"}
 
 
@@ -63,8 +64,12 @@ def validate(nodes, config):
                 errs.append(f"unknown-schedule: {name}: {t}")
         if not isinstance(n.get("when"), dict) or not n["when"]:
             errs.append(f"bad-condition: {name}: `when` must be one non-empty mapping")
-        elif "stage" in n["when"]:
-            stage(f"{name}.when", n["when"]["stage"])
+        else:
+            for k in n["when"]:
+                if k not in WHEN_KEYS:
+                    errs.append(f"bad-condition: {name}: unknown `when` key {k}")
+            if "stage" in n["when"]:
+                stage(f"{name}.when", n["when"]["stage"])
         role = n.get("role")
         if role not in NO_ROLE and role not in roles:
             errs.append(f"unknown-role: {name}: {role}")

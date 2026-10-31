@@ -1,0 +1,82 @@
+"""The tracker port of the gate (factory/gate.py) and two in-memory fakes.
+
+`Tracker.facts(ticket)` returns a dict with: stage ("none" when unset), head, blockers_open (int),
+focus_missing (list), round_complete (bool), round_head, fix_rounds, fix_cap, ci, due, seen (event ids).
+`Tracker.apply(effect)` takes {ticket, kind, value, event?}, reads first and writes only when the target
+state differs; it returns True when it wrote. The stage effect also records `event` in `seen`.
+"""
+import json
+from typing import Protocol
+
+
+class Tracker(Protocol):
+    def facts(self, ticket) -> dict: ...
+    def apply(self, effect: dict) -> bool: ...
+
+
+class MemoryTracker:
+    """Integer ids, stage in its own field. `fail_on` makes the effect kind raise."""
+
+    def __init__(self, tickets=None, fail_on=None):
+        self.tickets, self.fail_on = tickets or {}, fail_on
+
+    def _t(self, ticket):
+        return self.tickets[ticket]
+
+    def get_stage(self, t):
+        return t.get("stage", "none")
+
+    def set_stage(self, t, stage):
+        t["stage"] = stage
+
+    def facts(self, ticket):
+        t = self._t(ticket)
+        base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
+                "round_head": None, "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False}
+        return {**base, **{k: v for k, v in t.items() if k in base}, "stage": self.get_stage(t),
+                "seen": list(t.get("seen", []))}
+
+    def apply(self, effect):
+        if effect["kind"] == self.fail_on:
+            raise RuntimeError(f"effect failed: {effect['kind']}")
+        t, kind, value = self._t(effect["ticket"]), effect["kind"], effect["value"]
+        if kind == "stage":
+            if self.get_stage(t) == value:
+                return False
+            self.set_stage(t, value)
+            if effect.get("event") is not None:
+                t.setdefault("seen", []).append(effect["event"])
+            return True
+        if kind == "set-field":
+            fields = t.setdefault("fields", {})
+            if all(fields.get(k) == v for k, v in value.items()):
+                return False
+            fields.update(value)
+            return True
+        # label, unlabel, comment, review, create-issues, merge, join: a set of applied values
+        log = t.setdefault("log", [])
+        entry = [kind, json.dumps(value, sort_keys=True)]
+        if kind == "unlabel":
+            return self._drop(t, value)
+        if entry in log:
+            return False
+        log.append(entry)
+        return True
+
+    def _drop(self, t, value):
+        entry = ["label", json.dumps(value, sort_keys=True)]
+        log = t.setdefault("log", [])
+        if entry not in log:
+            return False
+        log.remove(entry)
+        return True
+
+
+class TagTracker(MemoryTracker):
+    """String ids (PROJ-1), stage held as a `stage:<name>` tag among the other tags, as in YouTrack."""
+
+    def get_stage(self, t):
+        return next((x[6:] for x in t.get("tags", []) if x.startswith("stage:")), "none")
+
+    def set_stage(self, t, stage):
+        t["tags"] = [x for x in t.get("tags", []) if not x.startswith("stage:")] + [f"stage:{stage}"]

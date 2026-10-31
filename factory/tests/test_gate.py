@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pyyaml>=6"]
+# ///
+"""Tests for factory/gate.py on both fakes. Run: uv run factory/tests/test_gate.py"""
+import copy
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "factory"))
+import gate  # noqa: E402
+import nodes  # noqa: E402
+from gate_port import MemoryTracker, TagTracker  # noqa: E402
+
+CONFIG = yaml.safe_load((ROOT / "factory.yaml").read_text())
+NODES = nodes.load()
+PAYLOAD = {"risk": "low", "complexity": "small", "tier": "mid"}
+
+
+def make(cls, tid, **kw):
+    t = {"head": "abc", "blockers_open": 0}
+    if cls is TagTracker:
+        t["tags"] = ["stage:ready", "risk:low"]
+    else:
+        t["stage"] = "ready"
+    return cls({tid: {**t, **kw}})
+
+
+class GateTest(unittest.TestCase):
+    pass
+
+
+def tests_for(cls, tid):
+    class T(GateTest):
+        def tr(self, **kw):
+            return make(cls, tid, **kw)
+
+        def ev(self, **kw):
+            return {"id": "e1", "ticket": tid, **kw}
+
+        def check(self, tr, event):
+            return gate.check("intake", event, tr, NODES, CONFIG)
+
+        def apply(self, tr, payload=None, outcome="proceed"):
+            return gate.apply("intake", outcome, {"ticket": tid, "event": "e1", **(payload or PAYLOAD)}, tr, NODES)
+
+        def test_go(self):
+            code, out = self.check(self.tr(), self.ev(head="abc"))
+            self.assertEqual((code, out["go"], out["role"], out["tier"]), (0, True, "router", "cheap"))
+            self.assertEqual(out["role_file"], "roles/router/role.md")
+            self.assertIn("grill", out["outcomes"])
+
+        def test_condition_fails(self):
+            self.assertEqual(self.check(self.tr(blockers_open=1), self.ev())[0], 10)
+
+        def test_stale_head(self):
+            code, out = self.check(self.tr(), self.ev(head="old"))
+            self.assertEqual((code, out["reason"]), (10, "stale head"))
+
+        def test_duplicate_event(self):
+            tr = self.tr()
+            self.assertEqual(self.apply(tr)[0], 0)
+            tr.set_stage(tr.tickets[tid], "ready")  # a person re-readies the ticket; same event id
+            self.assertEqual(self.check(tr, self.ev())[1]["reason"], "duplicate event")
+            self.assertEqual(self.check(tr, self.ev())[0], 10)
+
+        def test_apply_twice_is_noop(self):
+            tr = self.tr()
+            self.assertEqual(self.apply(tr)[0], 0)
+            after = copy.deepcopy(tr.tickets)
+            self.assertEqual(self.apply(tr)[0], 10)
+            self.assertEqual(tr.tickets, after)
+            self.assertEqual(tr.facts(tid)["stage"], "in-dev")
+
+        def test_effects_skip_when_state_holds(self):
+            tr = self.tr()
+            effects = [{"kind": "label", "ticket": tid, "value": "x"}, {"kind": "set-field", "ticket": tid, "value": {"a": 1}}]
+            self.assertEqual([tr.apply(e) for e in effects + effects], [True, True, False, False])
+
+        def test_failing_effect_leaves_stage(self):
+            tr = self.tr()
+            tr.fail_on = "label"
+            with self.assertRaises(RuntimeError):
+                self.apply(tr)
+            self.assertEqual(tr.facts(tid)["stage"], "ready")
+            tr.fail_on = None
+            self.assertEqual(self.apply(tr)[0], 0)  # a retry completes
+            self.assertEqual(tr.facts(tid)["stage"], "in-dev")
+
+        def test_bad_payload_names_field(self):
+            tr = self.tr()
+            with self.assertRaisesRegex(gate.Bad, "`complexity`"):
+                self.apply(tr, {"risk": "low", "tier": "mid"})
+            self.assertEqual(tr.facts(tid)["stage"], "ready")
+
+        def test_outcome_from(self):
+            tr = self.tr()
+            code, _ = gate.apply("human", "ready", {"ticket": tid, "actor": "human"}, tr, NODES)
+            self.assertEqual(code, 10)  # stage ready is not in the outcome's from
+
+        def test_unknown_node(self):
+            with self.assertRaises(gate.Bad):
+                gate.check("nope", self.ev(), self.tr(), NODES, CONFIG)
+
+    T.__name__ = f"Gate{cls.__name__}"
+    return T
+
+
+GateMemory = tests_for(MemoryTracker, 7)
+GateTag = tests_for(TagTracker, "PROJ-7")
+
+
+class CliAndValidate(unittest.TestCase):
+    def test_cli_exit_codes(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "t.json").write_text(json.dumps({"7": {"stage": "ready", "head": "abc"}}))
+            (d / "bad.json").write_text("{")
+            (d / "ev.json").write_text(json.dumps({"id": "e", "ticket": "7"}))
+            (d / "p.json").write_text(json.dumps({"ticket": "7", "risk": "low"}))
+            tr = f"memory:{d / 't.json'}"
+            self.assertEqual(gate.main(["check", "--node", "intake", "--event", str(d / "ev.json"), "--tracker", tr]), 0)
+            self.assertEqual(gate.main(["check", "--node", "intake", "--event", str(d / "bad.json"), "--tracker", tr]), 2)
+            self.assertEqual(gate.main(["check", "--node", "nope", "--event", str(d / "ev.json"), "--tracker", tr]), 2)
+            self.assertEqual(gate.main(["apply", "--node", "intake", "--outcome", "proceed", "--payload", str(d / "p.json"), "--tracker", tr]), 2)
+
+    def test_validate_rejects_unknown_when_key(self):
+        n = copy.deepcopy(NODES)
+        n["nodes"]["intake"]["when"]["bogus"] = True
+        self.assertTrue(any("unknown `when` key bogus" in e for e in nodes.validate(n, CONFIG)))
+
+
+if __name__ == "__main__":
+    unittest.main()
