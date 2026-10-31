@@ -88,7 +88,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{PREFIX}{env}] env",
-                "prompt": PROMPT.format(node=name, sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg}" if tier_arg else "")),
+                "prompt": PROMPT.format(node=name, sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else "")),
             })
     envs = []
     for env in used:

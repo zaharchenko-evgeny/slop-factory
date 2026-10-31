@@ -50,9 +50,11 @@ class PlanTest(unittest.TestCase):
     def test_prompt_carries_focus_and_tier(self):
         config = yaml.safe_load((ROOT / "factory.yaml").read_text())
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), config)["automations"]}
-        self.assertIn("check --node review --event <file> --focus behaviour`", a["[factory:review-behaviour]"])
+        self.assertIn("check --node review --event <file> --focus behaviour --tier review`", a["[factory:review-behaviour]"])
         self.assertIn("check --node fix --event <file> --tier mid`", a["[factory:fix-mid]"])
-        self.assertIn("apply --node review --focus behaviour --event", a["[factory:review-behaviour]"])
+        for f, tier in (("full", "review_strong"), ("behaviour", "review"), ("structure-security", "review_strong")):
+            self.assertIn(f"check --node review --event <file> --focus {f} --tier {tier}`", a[f"[factory:review-{f}]"])
+        self.assertIn("apply --node review --focus behaviour --tier review --event", a["[factory:review-behaviour]"])
         self.assertIn("apply --node fix --tier mid --event", a["[factory:fix-mid]"])
         self.assertIn("check --node intake --event <file>`", a["[factory:intake]"])
 

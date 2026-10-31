@@ -161,6 +161,11 @@ class CliAndValidate(unittest.TestCase):
                            "--focus", "behaviour", "--tracker", f"memory:{d / 't.json'}"])
             got = json.loads(out.getvalue())
             self.assertEqual((got["tier"], got["focus"]), ("strong", "behaviour"))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                gate.main(["check", "--node", "review", "--event", str(d / "ev.json"), "--tier", "review",
+                           "--focus", "behaviour", "--tracker", f"memory:{d / 't.json'}"])
+            self.assertEqual(json.loads(out.getvalue())["tier"], "review")
 
     def test_apply_puts_automation_focus_in_payload(self):
         class Rec(MemoryTracker):
@@ -186,6 +191,11 @@ class CliAndValidate(unittest.TestCase):
             self.assertEqual(run(node, "pending"), (0, "approved"), node)
             self.assertEqual(run(node, "green"), (0, "approved"), node)
             self.assertEqual(run(node, "red"), (0, "changes-requested"), node)
+        tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "round_complete": True, "round_head": "abc", "ci": "red"}})
+        tr.apply = lambda e, f=tr.apply: labels.append(e["value"]) or f(e)
+        labels = []
+        gate.apply("join", "approved", {"ticket": "7", "event": "e"}, tr, NODES)  # no tier from the agent
+        self.assertIn("factory:fix-cheap", labels)
         self.assertEqual(run("recheck", "red", "approved"), (0, "changes-requested"))  # a later red result
 
     def test_ci_list(self):

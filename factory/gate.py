@@ -105,6 +105,8 @@ def check(name, event, tracker, nodes, config):
     why = matches(node, facts, event)
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
+    if node.get("focuses"):  # one review tier per focus (roles.<role>.modes.<focus>.tier)
+        tiers = [roles[role]["modes"][f]["tier"] for f in node["focuses"]]
     skills = ROOT / "roles" / role / "skills.txt"
     return (NO_GO if why else GO), {
         "go": why is None, "reason": why, "ticket": event["ticket"], "node": name, "role": role,
@@ -144,6 +146,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     out = node["outcomes"][outcome]
     if out.get("ci") and tracker.facts(ticket)["ci"] not in out["ci"] and out.get("else") in node["outcomes"]:
         out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
+        if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
+            payload = {**payload, "tier": nodes["nodes"]["fix"]["tiers"][0]}
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
