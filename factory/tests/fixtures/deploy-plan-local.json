@@ -1,0 +1,23 @@
+{
+  "target": "local",
+  "launchd": {
+    "Label": "test.loop",
+    "ProgramArguments": [
+      "/usr/bin/lockf",
+      "-t",
+      "0",
+      "/f/.factory/runs/loop/loop.lock",
+      "uv",
+      "run",
+      "factory/loop.py",
+      "--once"
+    ],
+    "WorkingDirectory": "/f",
+    "StartInterval": 600,
+    "EnvironmentVariables": {
+      "PATH": "/a:/b"
+    },
+    "StandardOutPath": "/f/.factory/runs/loop/loop.log",
+    "StandardErrorPath": "/f/.factory/runs/loop/loop.log"
+  }
+}

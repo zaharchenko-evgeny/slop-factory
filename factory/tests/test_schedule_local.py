@@ -5,6 +5,7 @@
 # ///
 """Tests for factory/schedule_local.py; launchd is never touched. Run: uv run factory/tests/test_schedule_local.py"""
 import copy
+import json
 import os
 import shutil
 import subprocess
@@ -16,6 +17,7 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import deploy  # noqa: E402
 import schedule_local  # noqa: E402
 
 FIXTURE = yaml.safe_load("""
@@ -34,8 +36,12 @@ class Schedule(unittest.TestCase):
         self.assertEqual(job["WorkingDirectory"], "/f")
         self.assertEqual(job["EnvironmentVariables"], {"PATH": "/a:/b"})
         self.assertEqual(job["ProgramArguments"][:4], ["/usr/bin/lockf", "-t", "0", "/f/.factory/runs/loop/loop.lock"])
-        self.assertEqual(job["ProgramArguments"][4:], ["uv", "run", "factory/drive.py", "loop", "--once"])
+        self.assertEqual(job["ProgramArguments"][4:], ["uv", "run", "factory/loop.py", "--once"])
         self.assertEqual(job["StandardOutPath"], "/f/.factory/runs/loop/loop.log")
+
+    def test_deploy_plan_local_matches_fixture(self):
+        want = json.loads((Path(__file__).parent / "fixtures/deploy-plan-local.json").read_text())
+        self.assertEqual(json.loads(json.dumps(deploy.plan(FIXTURE, "local", Path("/f")))), want)
 
     def test_path_expands_home(self):
         cfg = copy.deepcopy(FIXTURE)
@@ -53,7 +59,7 @@ class Schedule(unittest.TestCase):
         self.assertEqual(args[:2], ["/bin/sh", "-c"])
         self.assertIn("security find-generic-password -s test-anthropic", args[2])
         self.assertIn("export ANTHROPIC_API_KEY", args[2])
-        self.assertIn("exec /usr/bin/lockf -t 0 /f/.factory/runs/loop/loop.lock uv run factory/drive.py loop --once", args[2])
+        self.assertIn("exec /usr/bin/lockf -t 0 /f/.factory/runs/loop/loop.lock uv run factory/loop.py --once", args[2])
 
     def test_central_access_needs_no_keychain(self):
         cfg = copy.deepcopy(FIXTURE)

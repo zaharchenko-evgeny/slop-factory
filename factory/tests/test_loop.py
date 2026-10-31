@@ -146,5 +146,35 @@ class LoopTest(unittest.TestCase):
         self.assertFalse(loop.cron_due("0 7 * * *", last, now))
 
 
+class PushPerCommit(unittest.TestCase):
+    def test_developer_commit_is_on_the_remote_before_review(self):
+        import subprocess
+        import types
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            git = lambda cwd, *a: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout
+            git(d, "init", "-q", "--bare", "remote.git")
+            root = d / "root"
+            wt = root / ".factory/worktrees/7"
+            git(d, "clone", "-q", "remote.git", str(wt))
+            git(wt, "checkout", "-q", "-b", "ez/7-x")
+            (root / "factory.yaml").write_text(yaml.safe_dump({"targets": {"local": CONFIG["targets"]["local"]}}))
+
+            def fake_run(root_, ticket, node):  # the developer commits
+                (wt / "f").write_text("x")
+                git(wt, "add", "f")
+                git(wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "#7 x")
+                (root / ".factory/runs/7/implement.handoff.json").write_text('{"status": "done"}')
+                return 0
+
+            sys.modules["run_role"] = types.SimpleNamespace(run=fake_run)
+            try:
+                outcome, _ = loop.default_run_role("implement", {"ticket": 7}, root)
+            finally:
+                del sys.modules["run_role"]
+            self.assertEqual(outcome, "done")
+            self.assertEqual(git(d / "remote.git", "rev-parse", "ez/7-x"), git(wt, "rev-parse", "HEAD"))
+
+
 if __name__ == "__main__":
     unittest.main()

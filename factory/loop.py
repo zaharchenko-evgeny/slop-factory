@@ -13,6 +13,7 @@ role runs per tick. A tick with nothing to do writes nothing.
 """
 import argparse
 import json
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta
@@ -80,10 +81,18 @@ def default_run_role(node, check, root=ROOT):
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{node}.in.md").write_text(json.dumps(check, indent=2))
     (d / f"{node}.handoff.json").unlink(missing_ok=True)
-    if run_role.run(root, check["ticket"], node):
+    code = run_role.run(root, check["ticket"], node)
+    if nodes_mod.load()["nodes"][node]["role"] == "developer":
+        push_branch(root / local["worktree_dir"] / str(check["ticket"]))  # the work never lives only in the worktree
+    if code:
         return None, {}
     h = json.loads((d / f"{node}.handoff.json").read_text())
     return outcome_of(h), {**intake_fields(h), **h}
+
+
+def push_branch(worktree):
+    """Push the worktree's branch to origin; a failed push stops the node (raises)."""
+    subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=worktree, check=True, capture_output=True, text=True)
 
 
 def intake_fields(h):
