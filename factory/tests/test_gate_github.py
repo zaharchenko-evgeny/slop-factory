@@ -169,6 +169,10 @@ class EffectsTest(unittest.TestCase):
         tr(gh).apply(eff("label", "factory:fix-mid"))
         self.assertEqual(gh.writes[0][:3], ["issue", "edit", "7"])
 
+    def test_nodes_yaml_on_pr_reaches_the_effect(self):
+        n = nodes.load()["nodes"]["join"]["outcomes"]["changes"]["effects"][0]
+        self.assertEqual(gate.resolve(n, {"tier": "mid"}, 7)["on"], "pr")
+
     def test_comment_trailer(self):
         gh = FakeGh()
         tr(gh).apply(eff("comment", "hi", run_id="r1"))
