@@ -176,21 +176,21 @@ class CliAndValidate(unittest.TestCase):
         self.assertEqual(gate.apply("review", "approve", {"ticket": "7", "event": "e", "round": 1}, tr, NODES, focus="behaviour")[0], 0)
         self.assertEqual([e["focus"] for e in Rec.seen_effects if e["kind"] == "review"], ["behaviour"])
 
-    def test_join_approved_with_red_ci_is_changes(self):
+    def test_join_and_recheck_ci_rule(self):
+        def run(node, ci, stage="in-review"):
+            tr = MemoryTracker({"7": {"stage": stage, "head": "abc", "round_complete": True, "round_head": "abc", "ci": ci}})
+            code, _ = gate.apply(node, "approved", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+            return code, tr.tickets["7"]["stage"]
         for node in ("join", "recheck"):
-            for ci, want in (("red", "changes-requested"), ("green", "approved"), ("pending", "approved")):
-                if node == "recheck" and ci == "pending":
-                    continue  # recheck waits for CI to conclude
-                tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "round_complete": True,
-                                          "round_head": "abc", "ci": ci}})
-                code, _ = gate.apply(node, "approved", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
-                self.assertEqual((node, ci, code, tr.tickets["7"]["stage"]), (node, ci, 0, want))
+            self.assertEqual(run(node, "none"), (10, "in-review"), node)  # no check run yet: no transition
+            self.assertEqual(run(node, "pending"), (0, "approved"), node)
+            self.assertEqual(run(node, "green"), (0, "approved"), node)
+            self.assertEqual(run(node, "red"), (0, "changes-requested"), node)
+        self.assertEqual(run("recheck", "red", "approved"), (0, "changes-requested"))  # a later red result
 
-    def test_ci_concluded(self):
-        facts = {"ci": "red"}
-        self.assertTrue(gate.holds({"ci": "concluded"}, facts, {}))
-        self.assertTrue(gate.holds({"ci": "concluded"}, {"ci": "green"}, {}))
-        self.assertFalse(gate.holds({"ci": "concluded"}, {"ci": "pending"}, {}))
+    def test_ci_list(self):
+        self.assertTrue(gate.holds({"ci": ["green", "red"]}, {"ci": "red"}, {}))
+        self.assertFalse(gate.holds({"ci": ["green", "red"]}, {"ci": "none"}, {}))
 
     def test_validate_rejects_unknown_when_key(self):
         n = copy.deepcopy(NODES)

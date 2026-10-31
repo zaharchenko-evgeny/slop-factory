@@ -44,7 +44,7 @@ def holds(when, facts, event):
     """Every key of `when` must hold (the vocabulary is nodes.WHEN_KEYS)."""
     def one(key, want):
         if key == "stage":
-            return facts["stage"] == want
+            return facts["stage"] in (want if isinstance(want, list) else [want])
         if key == "blockers":
             return (facts["blockers_open"] == 0) == (want == "closed")
         if key == "focus":
@@ -57,8 +57,10 @@ def holds(when, facts, event):
             value(want, ("below-cap", "at-cap"))
             return (facts["fix_rounds"] < facts["fix_cap"]) == (want == "below-cap")
         if key == "ci":
-            value(want, ("green", "red", "pending", "none", "concluded"))
-            return facts["ci"] in ("green", "red") if want == "concluded" else facts["ci"] == want
+            if isinstance(want, list):  # any of these
+                return facts["ci"] in want
+            value(want, ("green", "red", "pending", "none"))
+            return facts["ci"] == want
         if key == "actor":
             return event.get("actor") == want
         if key == "always":
