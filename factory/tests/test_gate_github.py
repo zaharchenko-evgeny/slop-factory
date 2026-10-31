@@ -318,6 +318,12 @@ class JoinTest(unittest.TestCase):
         gh.reviews.append(review("alice", "", state="APPROVED"))
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
 
+    def test_comment_alone_drops_the_request_but_leaves_the_human_pending(self):
+        gh = FakeGh(reviews=[review(BOT, M), review("alice", "thanks", state="COMMENTED")], requested=[])
+        self.assertEqual(tr(gh).facts(7)["round_complete"], False)
+        gh.reviews.append(review("alice", "", state="APPROVED"))
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
+
     def test_earlier_round_changes_do_not_block_this_round(self):
         old = "2026-01-01T00:00:00Z"  # before the head's push (2026-01-02)
         gh = FakeGh(reviews=[review("alice", "", commit="h0", state="CHANGES_REQUESTED", at=old), review(BOT, M)])
