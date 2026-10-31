@@ -326,6 +326,13 @@ class JoinTest(unittest.TestCase):
         gh.reviews[0] = review(BOT, C)
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # the comment never approves
 
+    def test_comment_after_changes_requested_still_blocks_until_approval(self):
+        gh = FakeGh(reviews=[review(BOT, M), review("alice", "", state="CHANGES_REQUESTED", at="2026-01-02T02:00:00Z"),
+                             review("alice", "ok?", state="COMMENTED", at="2026-01-02T03:00:00Z")])
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # a comment does not dismiss the request
+        gh.reviews.append(review("alice", "", state="APPROVED", at="2026-01-02T04:00:00Z"))
+        self.assertEqual(tr(gh).facts(7)["round_verdict"], "approve")
+
     def test_earlier_round_changes_do_not_block_this_round(self):
         old = "2026-01-01T00:00:00Z"  # before the head's push (2026-01-02)
         gh = FakeGh(reviews=[review("alice", "", commit="h0", state="CHANGES_REQUESTED", at=old), review(BOT, M)])
