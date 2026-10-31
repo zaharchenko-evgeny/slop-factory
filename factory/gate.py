@@ -5,14 +5,14 @@
 # ///
 """The gate: decide whether a node runs (check) and apply an outcome's effects (apply).
 
-Usage: gate.py check --node N --event FILE [--tracker memory:FILE]
-       gate.py apply --node N --outcome O --payload FILE [--tracker memory:FILE]
+Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
+       gate.py apply --node N --outcome O --payload FILE [--tracker github|memory:FILE]
 Exit 0 go / done, 10 no go (stale, duplicate or the node no longer matches), 2 bad event, payload, node
 or outcome, 1 a failing effect (the stage is untouched: it is the last effect).
 An event is JSON {id, ticket, head?, actor?}. A payload is JSON {ticket, event?, head?, actor?, ...}
 plus one field per outcome effect that needs data (the error names the field).
-`--tracker memory:FILE` runs on a JSON file {ticket: record} with the in-memory fake; the GitHub
-adapter is a later slice (docs/statechart.md).
+`--tracker memory:FILE` runs on a JSON file {ticket: record} with the in-memory fake; `--tracker github`
+uses factory/gate_github.py (bot login from `targets.air.bot_login`).
 """
 import argparse
 import json
@@ -24,6 +24,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nodes as nodes_mod  # noqa: E402
+from gate_github import GitHubGateTracker  # noqa: E402
 from gate_port import MemoryTracker  # noqa: E402
 
 ROOT = nodes_mod.ROOT
@@ -32,6 +33,11 @@ GO, NO_GO, BAD, FAILED = 0, 10, 2, 1
 
 class Bad(Exception):
     pass
+
+
+def value(want, allowed):
+    if want not in allowed:
+        raise Bad(f"bad condition value {want!r}: allowed {', '.join(allowed)}")
 
 
 def holds(when, facts, event):
@@ -45,10 +51,13 @@ def holds(when, facts, event):
             miss = facts["focus_missing"]
             return bool(miss) and event.get("focus", miss[0]) in miss
         if key == "round":
+            value(want, ("complete", "complete-at-head"))
             return facts["round_complete"] and (want != "complete-at-head" or facts["round_head"] == facts["head"])
         if key == "fix-rounds":
-            return facts["fix_rounds"] < facts["fix_cap"]
+            value(want, ("below-cap", "at-cap"))
+            return (facts["fix_rounds"] < facts["fix_cap"]) == (want == "below-cap")
         if key == "ci":
+            value(want, ("green", "red", "pending", "none"))
             return facts["ci"] == want
         if key == "actor":
             return event.get("actor") == want
@@ -132,6 +141,8 @@ def apply(name, outcome, payload, tracker, nodes):
     for e in effects:
         if e["kind"] == "stage":
             e["event"] = payload.get("event")
+        if e["kind"] == "review":
+            e["focus"], e["round"] = payload.get("focus"), payload.get("round")
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
     why = matches(node, tracker.facts(ticket), {**payload, "id": payload.get("event")}, out)
@@ -153,24 +164,32 @@ def main(argv):
         a = p.parse_args(argv)
     except SystemExit:
         return BAD
+    path = ""
     try:
         kind, _, path = a.tracker.partition(":")
-        if kind != "memory" or not path:
-            raise Bad("--tracker memory:FILE is the only tracker in this slice")
-        tracker = MemoryTracker({k: v for k, v in json.loads(Path(path).read_text()).items()})
+        if kind == "github" and not path:
+            tracker = GitHubGateTracker.from_config()
+        elif kind == "memory" and path:
+            try:
+                tracker = MemoryTracker(dict(json.loads(Path(path).read_text())))
+            except (OSError, ValueError, TypeError) as e:
+                raise Bad(f"malformed --tracker file: {e}")
+        else:
+            raise Bad("--tracker is github or memory:FILE")
         nodes = nodes_mod.load(a.nodes)
         config = yaml.safe_load((ROOT / "factory.yaml").read_text())
         if a.cmd == "check":
             code, out = check(a.node, read(a.event or "", "event"), tracker, nodes, config)
         else:
             code, out = apply(a.node, a.outcome or "", read(a.payload or "", "payload"), tracker, nodes)
-            Path(path).write_text(json.dumps(tracker.tickets))
+            path and Path(path).write_text(json.dumps(tracker.tickets))
     except Bad as e:
         print(json.dumps({"error": str(e)}))
         return BAD
     except Exception as e:  # a failing effect: later effects and the stage did not run
         print(json.dumps({"error": f"{type(e).__name__}: {e}"}))
-        Path(path).write_text(json.dumps(tracker.tickets))
+        if path:
+            Path(path).write_text(json.dumps(tracker.tickets))
         return FAILED
     print(json.dumps(out))
     return code
