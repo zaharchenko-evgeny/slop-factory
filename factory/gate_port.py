@@ -3,7 +3,8 @@
 `Tracker.facts(ticket)` returns a dict with: stage ("none" when unset), head, blockers_open (int),
 focus_missing (list), round_complete (bool), round_head, fix_rounds, fix_cap, ci, due, seen (event ids).
 `Tracker.apply(effect)` takes {ticket, kind, value, event?}, reads first and writes only when the target
-state differs; it returns True when it wrote. The stage effect also records `event` in `seen`.
+state differs; it returns True when it wrote. The stage effect also records `event` in `seen`; so does the `seen` effect, which apply appends to an
+outcome without a stage effect.
 """
 import json
 from typing import Protocol
@@ -40,13 +41,16 @@ class MemoryTracker:
         if effect["kind"] == self.fail_on:
             raise RuntimeError(f"effect failed: {effect['kind']}")
         t, kind, value = self._t(effect["ticket"]), effect["kind"], effect["value"]
-        if kind == "stage":
-            if self.get_stage(t) == value:
-                return False
-            self.set_stage(t, value)
-            if effect.get("event") is not None:
-                t.setdefault("seen", []).append(effect["event"])
-            return True
+        if kind in ("stage", "seen"):
+            seen, wrote = t.setdefault("seen", []), False
+            if kind == "stage" and self.get_stage(t) != value:
+                self.set_stage(t, value)
+                wrote = True
+            ev = effect.get("event") if kind == "stage" else value
+            if ev is not None and ev not in seen:
+                seen.append(ev)
+                wrote = True
+            return wrote
         if kind == "set-field":
             fields = t.setdefault("fields", {})
             if all(fields.get(k) == v for k, v in value.items()):

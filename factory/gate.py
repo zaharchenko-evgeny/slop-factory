@@ -132,6 +132,8 @@ def apply(name, outcome, payload, tracker, nodes):
     for e in effects:
         if e["kind"] == "stage":
             e["event"] = payload.get("event")
+    if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
+        effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
     why = matches(node, tracker.facts(ticket), {**payload, "id": payload.get("event")}, out)
     if why:
         return NO_GO, {"applied": False, "reason": why}

@@ -79,6 +79,15 @@ def tests_for(cls, tid):
             self.assertEqual((code, out["reason"]), (10, "duplicate event"))
             self.assertEqual(tr.facts(tid)["stage"], "ready")
 
+        def test_duplicate_event_without_stage_effect(self):
+            tr = self.tr(focus_missing=["full"])
+            tr.set_stage(tr.tickets[tid], "in-review")
+            pl = {"ticket": tid, "event": "r1", "head": "abc"}
+            self.assertEqual(gate.apply("review", "approve", pl, tr, NODES)[0], 0)
+            code, out = gate.apply("review", "approve", pl, tr, NODES)
+            self.assertEqual((code, out["reason"]), (10, "duplicate event"))
+            self.assertEqual(gate.check("review", {"id": "r1", "ticket": tid}, tr, NODES, CONFIG)[0], 10)
+
         def test_apply_twice_is_noop(self):
             tr = self.tr()
             self.assertEqual(self.apply(tr)[0], 0)
