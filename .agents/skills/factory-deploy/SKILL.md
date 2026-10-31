@@ -16,6 +16,8 @@ Run from the factory root. Whoever runs this applies the plan and changes no cod
 
 ## Steps
 
+0. Precondition: `factory/gate.py` must exist on the default branch (the thin prompt runs it). If not, stop and report; do not apply.
+
 1. Plan: `uv run --quiet factory/deploy.py plan --target air > /tmp/factory-plan.json`
    (`automations[]`, `environments[]`). Check nodes first with `uv run --quiet factory/nodes.py validate`.
 2. List what exists: air-automations `list_automations` and air-cloud environment configs; keep only names starting with `[factory:`.
