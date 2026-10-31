@@ -49,6 +49,15 @@ class GitHubGateTracker:
     def _labels(self, n):
         return [x["name"] for x in self._api(f"issues/{n}")["labels"]]
 
+    def sweep_tickets(self, stages):
+        """Issue numbers (open or closed) whose stage label is one of `stages`; in-review and changes-requested only when open."""
+        found = set()
+        for st in stages:
+            state = "open" if st in ("in-review", "changes-requested") else "all"
+            found |= {i["number"] for i in self._list(f"issues?state={state}&labels={self.stages[st]}&per_page=100")
+                      if "pull_request" not in i}
+        return sorted(found)
+
     def _pr(self, n):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""
         prs = [p for p in self._list("pulls?state=all&per_page=100") if p["head"]["ref"].startswith(f"ez/{n}-")
@@ -112,7 +121,8 @@ class GitHubGateTracker:
         return True, "changes" if changes else "approve", ignored
 
     def facts(self, n):
-        labels = self._labels(n)
+        issue = self._api(f"issues/{n}")
+        labels = [x["name"] for x in issue["labels"]]
         by_label = {v: k for k, v in self.stages.items()}
         stage = next((by_label[x] for x in labels if x in by_label), "none")
         blockers = [b for b in self._list(f"issues/{n}/dependencies/blocked_by") if b["state"] == "open"]
@@ -122,7 +132,11 @@ class GitHubGateTracker:
              "head": None, "pr": None, "mergeable": None, "ci": "none", "reviews": [], "requested_reviewers": [],
              "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
              "ignored_reviews": [], "fix_rounds": 0,
-             "fix_cap": self.fix_cap, "due": False, "seen": []}
+             "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
+             "issue_state": issue.get("state", "open")}
+        if stage == "split":
+            kids = self._list(f"issues/{n}/sub_issues")
+            f.update(children_total=len(kids), children_open=sum(k.get("state") == "open" for k in kids))
         if pr:
             head, reviews = pr["head"]["sha"], self._reviews(pr)
             latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
@@ -130,6 +144,7 @@ class GitHubGateTracker:
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
             ci = self._ci(head)
             complete, verdict, ignored = self._round(reviews, required, head, requested, ci)
+            f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), ci=ci, reviews=reviews,
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
@@ -151,7 +166,11 @@ class GitHubGateTracker:
             return self._join(n, e.get("tier") or "mid")
         if kind == "stage":
             want, have = self.stages[value], [x for x in self._labels(n) if x in self.stages.values()]
-            return have != [want] and self._edit(n, [want] if want not in have else [], [x for x in have if x != want])
+            closed = False
+            if value == "done" and self._api(f"issues/{n}").get("state", "open") == "open":
+                self.run(["issue", "close", str(n), "-R", self.repo])  # before the label: a retry still finds the ticket
+                closed = True
+            return (have != [want] and self._edit(n, [want] if want not in have else [], [x for x in have if x != want])) or closed
         if kind in ("label", "unlabel"):
             on, target = e.get("on") or "issue", n
             if on == "pr":

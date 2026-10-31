@@ -82,7 +82,7 @@ Probed on 31 October with personal probe automations on `ez/152-probes` (model c
 | --- | --- | --- | --- |
 | 1 | A label added by `jetbrains-air[bot]` fires `issues.labeled` and `pull_request.labeled` | Yes, both, within 2 s (labels on #164, #165, #167) | [12a95b1b](https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/4fd6cfca-9ffd-4569-89b1-04f593cbc223?run=12a95b1b-5aec-4ffe-a26b-0ee487f0aa89), [bb1ac000](https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/4fd6cfca-9ffd-4569-89b1-04f593cbc223?run=bb1ac000-a636-44b5-9b33-11ab1af51611), [aee758ee](https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/766d62c3-0f85-4dc4-b464-79e44bb664e6?run=aee758ee-ecdc-45d1-85ee-d29d64e1f9cd) |
 | 2 | A YouTrack tag added by a run fires `tagAdded` | Not probed: no YouTrack project for this repository; moved to #163 | none |
-| 3 | `push-to-source` accepts a merge commit from `main` | Pending: needs `main` past the base of PR #167; probe after #166 merges | none yet |
+| 3 | `push-to-source` accepts a merge commit from `main` | Yes: merge commit pushed by push-to-source, run 23839ea7 (#152) | run 23839ea7 |
 | 4 | `.air/cloud/startup.sh` runs and `FACTORY_ENV` reaches it | Yes: `startup ran 2026-10-31T09:44:22Z FACTORY_ENV=probe`; the script is read from the automation's branch | [12a95b1b](https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/4fd6cfca-9ffd-4569-89b1-04f593cbc223?run=12a95b1b-5aec-4ffe-a26b-0ee487f0aa89) |
 | 5 | `pull_request.opened` fires for a PR the platform opens after `create-pr` | Yes: PR #167 opened by `app/jetbrains-air`; filter `pr_author: jetbrains-air[bot]` works | [69343c6a](https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/9a76d1d9-e6d2-4d1b-a856-bc9242caeaf9?run=69343c6a-cf87-441a-9b8a-27474dbd1a25) |
 | 6 | Two runs of one automation run at the same time | Yes: 09:44:05–09:44:50 and 09:44:06–09:44:55 overlap | runs 12a95b1b and bb1ac000 (links above) |
@@ -90,8 +90,8 @@ Probed on 31 October with personal probe automations on `ez/152-probes` (model c
 
 Other findings and their consequences for the design (#150, #159):
 
-- Concurrent runs of one automation are real: the join and the merge train must be idempotent and keyed by head SHA. The pilot sweep merges nothing (dry-run).
+- Concurrent runs of one automation are real: the join and the merge train must be idempotent and keyed by head SHA. The pilot sweep merges nothing (dry-run). The `sweep` node is a script, not an agent: the Air automation runs `uv run factory/gate.py sweep` (model `cheap`, does no work). The script lists the issues itself, open or closed, in `approved`, `merged` or `split`, plus `in-review` for the join backstop, and moves each ticket at most one stage per run (`approved` with a merged PR → `merged`; `merged` → one retro comment, `done`, issue closed; `split` with all children closed → `done`). A run with no new facts writes nothing; `--dry-run` prints the plan. The `conflict` and `answered` outcomes are disabled for the pilot.
 - In a run `gh` acts as `jetbrains-air[bot]` through `GH_TOKEN`; `gh api user` answers 403, so a role must not call it.
 - The `create-pr` agent named its branch `ez/152-probe-p5` from AGENTS.md, so the gate must check branch naming, not assume it.
 - `result.summary` was null for 2 of 5 finished runs: the node's handoff goes through `gate apply`, not the run summary.
-- No answer is "no", so no workaround is needed. Probe 2 is tracked in #163; probe 3 stays open until it runs.
+- No answer is "no", so no workaround is needed. Probe 2 is tracked in #163.

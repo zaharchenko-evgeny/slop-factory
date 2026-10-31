@@ -1,0 +1,11 @@
+environments:
+  default: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com], vm: default }
+schedules:
+  sweep: { cron: "*/10 * * * *" }
+nodes:
+  human: { triggers: [manual], when: { actor: human }, role: human, outcomes: {} }
+  intake: { triggers: ["issues.labeled factory:ready"], role: router, tier: cheap, output: read-only, outcomes: {} }
+  implement: { tiers: [cheap, mid], triggers: ["issues.labeled factory:implement-<tier>"], role: developer, output: create-pr, outcomes: {} }
+  review: { focuses: [full, behaviour], triggers: ["pull_request.opened", "pull_request.synchronize"], role: reviewer, outcomes: {} }
+  off: { enabled: false, triggers: ["issues.labeled factory:x"], role: router, outcomes: {} }
+  sweep: { triggers: ["schedule sweep"], role: router, output: as-instructed, outcomes: {} }

@@ -48,17 +48,60 @@ class LoopTest(unittest.TestCase):
         self.assertEqual(self.t.tickets[1]["stage"], "in-dev")
         self.tick()
         self.assertEqual(self.t.tickets[1]["stage"], "in-review")
-        self.t.tickets[1].update(round_complete=True, round_head="abc")
+        self.t.tickets[1].update(round_complete=True, round_head="abc", ci="green", round_verdict="approve")
         self.tick()
         self.assertEqual(self.t.tickets[1]["stage"], "approved")
         self.assertEqual(self.calls, ["intake", "implement"])
 
+    def test_join_follows_round_verdict_not_agent_reviews_only(self):
+        # B1 of #183: a human change request or red CI makes changes, even when every agent review approves
+        self.t.tickets[1].update(stage="in-review", round_complete=True, round_head="abc", ci="red", round_verdict="changes")
+        self.assertEqual(self.tick()["ran"], [("join", 1, "changes")])
+        self.assertEqual(self.t.tickets[1]["stage"], "changes-requested")
+
+    def test_join_waits_while_round_open(self):
+        self.t.tickets[1].update(stage="in-review", round_complete=False, round_verdict=None)
+        self.assertEqual(self.tick()["ran"], [])
+
     def test_join_script_approves_without_run_role(self):
-        self.t.tickets[1].update(stage="in-review", round_complete=True, round_head="abc")
+        self.t.tickets[1].update(stage="in-review", round_complete=True, round_head="abc", ci="green", round_verdict="approve")
         res = self.tick()
         self.assertEqual(res["ran"], [("join", 1, "approved")])
         self.assertEqual(self.t.tickets[1]["stage"], "approved")
         self.assertEqual(self.calls, [])
+
+    def test_blocked_stays_blocked_on_comment_and_resumes_on_ready(self):
+        self.t.tickets[1].update(stage="blocked", log=[["comment", '"why"']])
+        self.t.tickets[1]["log"].append(["comment", '"a human answer"'])  # a comment never resumes
+        self.assertEqual(self.tick()["ran"], [])
+        self.assertEqual(self.t.tickets[1]["stage"], "blocked")
+        self.t.tickets[1]["stage"] = "ready"  # the human adds factory:ready
+        self.t.tickets[1]["branch"] = "ez/1-x"
+        self.assertEqual(self.tick()["ran"], [("intake", 1, "proceed")])
+        self.assertEqual(self.t.tickets[1]["branch"], "ez/1-x")
+        self.assertEqual(self.calls, ["intake"])
+
+    def test_stale_command_label_dropped_on_ready(self):
+        self.t.tickets[1]["log"] = [["label", '"factory:implement-cheap"']]
+        facts = self.t.facts
+        self.t.facts = lambda n: {**facts(n), "attrs": ["factory:implement-cheap" if
+                                                        ["label", '"factory:implement-cheap"'] in self.t.tickets[1]["log"]
+                                                        else "risk:low"]}
+        errors = []
+        loop.drop_stale_commands(self.t, 1, errors)
+        self.assertEqual((self.t.tickets[1]["log"], errors), ([], []))
+
+    def test_run_dir_does_not_change_next_node(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "runs" / "1"
+            run.mkdir(parents=True)
+            (run / "intake.handoff.json").write_text("{}")
+            before = loop.tick(self.t, [1], NODES, CONFIG, run_role=lambda *a: (None, {}))
+            import shutil
+            shutil.rmtree(run)
+            after = loop.tick(self.t, [1], NODES, CONFIG, run_role=lambda *a: (None, {}))
+            self.assertEqual(before, after)
+        self.assertEqual(self.tick()["ran"], [("intake", 1, "proceed")])
 
     def test_idempotent_and_quiet(self):
         self.t.tickets[1]["stage"] = "approved"
@@ -111,7 +154,7 @@ class LoopTest(unittest.TestCase):
             calls.append(node)
             return "answered", {}  # NO_GO: stage not in from
         kw = {"last": datetime(2026, 1, 1, 0, 0), "now": datetime(2026, 1, 1, 0, 10)}
-        res = loop.tick(self.t, [1], NODES, CONFIG, run_role=rr, **kw)
+        res = loop.tick(self.t, [1], NODES, CONFIG, run_role=rr, scripts={"sweep": lambda f: (calls.append("sweep"), ("answered", {}))[1]}, **kw)
         self.assertEqual((calls, res["due"]), (["sweep"], ["sweep"]))
         with tempfile.TemporaryDirectory() as d:
             stamp = Path(d) / "loop" / "last-tick"

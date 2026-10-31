@@ -7,6 +7,7 @@
 
 Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py apply --node N --outcome O --payload FILE [--tracker github|memory:FILE]
+       gate.py sweep [--tracker github] [--dry-run]   (no agent: lists the tickets itself, one stage per ticket)
 Exit 0 go / done, 10 no go (stale, duplicate or the node no longer matches), 2 bad event, payload, node
 or outcome, 1 a failing effect (the stage is untouched: it is the last effect).
 An event is JSON {id, ticket, head?, actor?}. A payload is JSON {ticket, event?, head?, actor?, ...}
@@ -44,7 +45,7 @@ def holds(when, facts, event):
     """Every key of `when` must hold (the vocabulary is nodes.WHEN_KEYS)."""
     def one(key, want):
         if key == "stage":
-            return facts["stage"] == want
+            return facts["stage"] in (want if isinstance(want, list) else [want])
         if key == "blockers":
             return (facts["blockers_open"] == 0) == (want == "closed")
         if key == "focus":
@@ -57,10 +58,15 @@ def holds(when, facts, event):
             value(want, ("below-cap", "at-cap"))
             return (facts["fix_rounds"] < facts["fix_cap"]) == (want == "below-cap")
         if key == "ci":
+            if isinstance(want, list):  # any of these
+                return facts["ci"] in want
             value(want, ("green", "red", "pending", "none"))
             return facts["ci"] == want
         if key == "actor":
             return event.get("actor") == want
+        if key == "pr-state":
+            value(want, ("open", "merged", "closed", "none"))
+            return facts.get("pr_state", "none") == want
         if key == "always":
             return bool(want)
         return bool(facts["due"]) == bool(want)  # due
@@ -103,10 +109,13 @@ def check(name, event, tracker, nodes, config):
     why = matches(node, facts, event)
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
+    if node.get("focuses"):  # one review tier per focus (roles.<role>.modes.<focus>.tier)
+        tiers = [roles[role]["modes"][f]["tier"] for f in node["focuses"]]
     skills = ROOT / "roles" / role / "skills.txt"
     return (NO_GO if why else GO), {
         "go": why is None, "reason": why, "ticket": event["ticket"], "node": name, "role": role,
         "tier": event.get("tier") if event.get("tier") in tiers else tiers[0],
+        "focus": event.get("focus"),
         "role_file": f"roles/{role}/role.md" if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
@@ -132,12 +141,20 @@ def resolve(effect, payload, ticket):
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
-def apply(name, outcome, payload, tracker, nodes):
+def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
         raise Bad(f"unknown outcome: {outcome}")
     out = node["outcomes"][outcome]
+    if out.get("enabled") is False:
+        raise Bad(f"disabled outcome: {outcome}")
     ticket = payload["ticket"]
+    payload = {**{k: v for k, v in (("focus", focus), ("tier", tier)) if v}, **payload}  # the automation's own
+    out = node["outcomes"][outcome]
+    if out.get("ci") and tracker.facts(ticket)["ci"] not in out["ci"] and out.get("else") in node["outcomes"]:
+        out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
+        if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
+            payload = {**payload, "tier": nodes["nodes"]["fix"]["tiers"][0]}
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
@@ -157,22 +174,81 @@ def apply(name, outcome, payload, tracker, nodes):
     return GO, {"applied": True, "written": [e["kind"] for e in effects if tracker.apply(e)]}
 
 
+SWEEP_STAGES = ("approved", "merged", "split", "in-review")
+
+
+FIX_TIER = {"complexity:small": "cheap", "complexity:medium": "mid", "complexity:large": "strong"}
+
+
+def join_decision(facts):
+    """The join's outcome and payload, or None while the round is open. Uses the adapter's `round_verdict`,
+    which counts every required agent focus, human change requests and CI. A fix label takes the ticket's
+    complexity tier (mid when unlabelled)."""
+    if not facts.get("round_complete") or facts.get("round_verdict") is None:
+        return None
+    tier = next((FIX_TIER[a] for a in facts.get("attrs", []) if a in FIX_TIER), "mid")
+    return ("changes" if facts["round_verdict"] == "changes" else "approved"), {"tier": tier}
+
+
+def sweep_plan(facts):
+    """(node, outcome, payload) of the first outcome whose facts hold, else None."""
+    stage = facts["stage"]
+    if stage == "approved" and facts.get("pr_state") == "merged":
+        return "sweep", "merged", {}
+    if stage == "merged":
+        agent = [r for r in facts["reviews"] if r["agent"]]
+        pr = f"PR #{facts['pr']} {facts['pr_state']}" if facts["pr"] else "no PR found"
+        text = (f"Retro: {pr}; fix rounds {facts['fix_rounds']}; "
+                f"reviews {len(agent)} ({sum(r['verdict'] == 'approve' for r in agent)} approve, "
+                f"{sum(r['verdict'] == 'changes' for r in agent)} changes)")
+        return "sweep", "retro", {"retro": text, "run_id": "sweep:retro"}
+    if stage == "split" and facts.get("children_total") and facts["children_open"] == 0:
+        return "sweep", "children-done", {}
+    if stage == "in-review" and (j := join_decision(facts)):
+        return "join", *j
+    return None
+
+
+def sweep(tracker, nodes, dry_run=False):
+    """One pass: each listed ticket moves at most one stage. Returns (results, failed)."""
+    results, failed = [], False
+    for n in tracker.sweep_tickets(SWEEP_STAGES):
+        try:
+            facts = tracker.facts(n)
+            plan = sweep_plan(facts)
+            if plan is None:
+                continue
+            node, outcome, payload = plan
+            r = {"ticket": n, "stage": facts["stage"], "node": node, "outcome": outcome}
+            if not dry_run:
+                code, out = apply(node, outcome, {"ticket": n, **payload}, tracker, nodes)
+                r.update(applied=out["applied"], written=out.get("written", []))
+            results.append(r)
+        except Exception as e:  # one ticket failing does not stop the others
+            failed = True
+            results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+    return results, failed
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply"])
-    p.add_argument("--node", required=True)
+    p.add_argument("cmd", choices=["check", "apply", "sweep"])
+    p.add_argument("--node", default="")
+    p.add_argument("--dry-run", action="store_true")
     p.add_argument("--event")
     p.add_argument("--outcome")
     p.add_argument("--payload")
     p.add_argument("--tracker", default="")
     p.add_argument("--nodes")
+    p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
+    p.add_argument("--tier")
     try:
         a = p.parse_args(argv)
     except SystemExit:
         return BAD
     path = ""
     try:
-        kind, _, path = a.tracker.partition(":")
+        kind, _, path = (a.tracker or ("github" if a.cmd == "sweep" else "")).partition(":")
         if kind == "github" and not path:
             tracker = GitHubGateTracker.from_config()
         elif kind == "memory" and path:
@@ -184,10 +260,20 @@ def main(argv):
             raise Bad("--tracker is github or memory:FILE")
         nodes = nodes_mod.load(a.nodes)
         config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+        if a.cmd == "sweep":
+            if not hasattr(tracker, "sweep_tickets"):
+                raise Bad("sweep needs --tracker github")
+            results, failed = sweep(tracker, nodes, a.dry_run)
+            print(json.dumps({"dry_run": a.dry_run, "sweep": results}))
+            return FAILED if failed else GO
+        if not a.node:
+            raise Bad("--node is required")
         if a.cmd == "check":
-            code, out = check(a.node, read(a.event or "", "event"), tracker, nodes, config)
+            event = read(a.event or "", "event")
+            event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
+            code, out = check(a.node, event, tracker, nodes, config)
         else:
-            code, out = apply(a.node, a.outcome or "", read(a.payload or "", "payload"), tracker, nodes)
+            code, out = apply(a.node, a.outcome or "", read(a.payload or "", "payload"), tracker, nodes, a.focus, a.tier)
             path and Path(path).write_text(json.dumps(tracker.tickets))
     except Bad as e:
         print(json.dumps({"error": str(e)}))

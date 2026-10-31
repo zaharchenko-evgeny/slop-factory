@@ -52,12 +52,17 @@ def cron_due(expr, last, now):
 
 
 def script_join(ctx):
-    """The `join` node: approved when every review at the head approves, else changes."""
-    head = [r for r in ctx["reviews"] if r["agent"] and r["commit_id"] == ctx["head"]]
-    return ("approved" if head and all(r["verdict"] == "approve" for r in head) else "changes"), {"tier": "mid"}
+    """The `join` node: the shared rule in gate.join_decision (agents, humans and CI)."""
+    return gate.join_decision(ctx) or (None, {})
 
 
-SCRIPTS = {"join": script_join}
+def script_sweep(facts):
+    """The sweep node's own outcomes (merged, retro, children-done); the join backstop stays with the join node."""
+    plan = gate.sweep_plan(facts)
+    return (plan[1], plan[2]) if plan and plan[0] == "sweep" else (None, {})
+
+
+SCRIPTS = {"join": script_join, "sweep": script_sweep}
 
 
 class Due:
@@ -109,6 +114,21 @@ def outcome_of(h):
     return h.get("status")
 
 
+STALE = ("factory:implement-", "factory:fix-")
+
+
+def drop_stale_commands(tracker, n, errors):
+    """A ticket back in `ready` (a human's `factory:ready`) loses its old command labels (`implement-*`, `fix-*`)."""
+    try:
+        f = tracker.facts(n)
+        if f["stage"] == "ready":
+            for label in f.get("attrs", []):
+                if label.startswith(STALE):
+                    tracker.apply({"kind": "unlabel", "ticket": n, "value": label})
+    except (Exception, SystemExit) as e:
+        errors.append(("stale-labels", n, f"{type(e).__name__}: {e}"))
+
+
 def tick(tracker, tickets, nodes, config, run_role=default_run_role, scripts=None, now=None, last=None,
          only_node=None):
     """One pass. Returns ran [(node, ticket, outcome)], due (schedule nodes that ran), errors."""
@@ -116,6 +136,8 @@ def tick(tracker, tickets, nodes, config, run_role=default_run_role, scripts=Non
     cap, ran = config["limits"]["concurrent_deliveries"], []
     schedules = nodes.get("schedules") or {}
     roles, moved, errors, due_ran = 0, set(), [], set()  # a ticket moves at most once per tick
+    for n in tickets:
+        drop_stale_commands(tracker, n, errors)
     for name, node in nodes["nodes"].items():
         if node.get("enabled") is False or node["role"] == "human" or only_node not in (None, name):
             continue
@@ -188,6 +210,7 @@ def main(argv):
                              "--limit", "200", "--json", "number,labels"]))
         stages = set(config["tracker"]["stages"].values())
         tickets = [i["number"] for i in out if stages & {x["name"] for x in i["labels"]}]
+        tickets += [n for n in tracker.sweep_tickets(gate.SWEEP_STAGES) if n not in tickets]  # closed approved/merged/split too
     res = tick(tracker, tickets, nodes_mod.load(), config, last=last, only_node=a.node)
     for r in res["ran"]:
         print(*r)
