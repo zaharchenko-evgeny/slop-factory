@@ -221,7 +221,7 @@ class Delivery:
         t0 = time.monotonic()
         try:
             return getattr(self, action)(t)
-        except (RuntimeError, OSError, ValueError) as e:
+        except Exception as e:  # noqa: BLE001 a bug in a step must not crash the driver
             # `ci` failed means a fix round, so its unexpected errors map to `error` (stage failed).
             return ("error" if action == "ci" else "failed"), {"error": str(e)}
         finally:
@@ -384,8 +384,7 @@ class Delivery:
         url = sh([gh(), "pr", "create", "--head", b, "--base", base, "--title", f"#{self.nn} {i['title']}",
                   "--body", self.pr_body(t, i, base)], self.wt).strip().splitlines()[-1]
         nits = [f"### {a}\n\n" + "\n".join(f"- {x['file']} — {x['finding']}" for x in minor)
-                for a in REVIEWERS if (minor := [x for x in (out.get(a) or {}).get("findings", [])
-                                                 if x["severity"] == "minor"])]
+                for a in REVIEWERS if (minor := [x for x in findings(out.get(a) or {}) if x["severity"] == "minor"])]
         if nits:
             body = "\n\n".join(["[factory] Review nits (advisory, not blocking)", *nits, self.trailer(t)])
             sh([gh(), "pr", "comment", url, "--body", body], self.wt)
@@ -521,7 +520,7 @@ class Delivery:
             h = json.loads(p.read_text())
             rounds.setdefault(int(n or 0), {})[action] = h.get("verdict")
             ids += [f"{action}-{n or 0}:{i}" for i in dict.fromkeys(
-                x["id"] for x in h.get("findings", []) if x["severity"] == "blocking")]  # per reviewer and round
+                x["id"] or "?" for x in findings(h) if x["severity"] == "blocking")]  # per reviewer and round
         shared = [set(v.values()) for v in rounds.values() if len(v) > 1]
         a = t["out"].get("approve") or {}
         return "\n".join([
@@ -675,7 +674,7 @@ class Delivery:
         if action == "fix" and (out.get("checks") or {}).get("result") == "failed":
             blocks["checks"] = Path(out["checks"]["report"]).read_text()
         elif action == "fix" and reviews:
-            blocks = reviews
+            blocks = {a: {**o, "findings": findings(o)} for a, o in reviews.items()}
         elif action == "fix" and (out.get("ci") or {}).get("result") == "failed":
             blocks["checks"] = Path(out["ci"]["report"]).read_text()  # CI or the merge with the base failed
         elif action == "diagnose":
@@ -707,21 +706,34 @@ class Delivery:
     def agent(self, t, action, spec):
         n = t["vars"]["fix_round"]
         step = f"{action}-{n}" if n else action
-        (self.run_dir / f"{step}.in.md").write_text(self.role_input(t, action, spec))
-        text = self.tracker.path(self.nn).read_text() if isinstance(self.tracker, LocalTracker) else None
-        if run_role.run(self.root, self.nn, action, step, ticket_text=text):
-            return "error", {}
-        h = json.loads((self.run_dir / f"{step}.handoff.json").read_text())
-        if spec["role"] == "reviewer":
-            h["blocking_ids"] = blocking_ids(h)
+        try:
+            (self.run_dir / f"{step}.in.md").write_text(self.role_input(t, action, spec))
+            text = self.tracker.path(self.nn).read_text() if isinstance(self.tracker, LocalTracker) else None
+            if run_role.run(self.root, self.nn, action, step, ticket_text=text):
+                return "error", {}
+            h = json.loads((self.run_dir / f"{step}.handoff.json").read_text())
+            if spec["role"] == "reviewer":
+                h["blocking_ids"] = blocking_ids(h)
+        except Exception as e:  # noqa: BLE001 a bug in a role step is that step's error, not a driver crash
+            return "error", {"error": f"{type(e).__name__}: {e}"}
         if spec["role"] not in ("developer", "doc-writer"):
             return "done", h
         return (h["status"] if h.get("status") in ("done", "blocked") else "error"), h
 
 
+def findings(handoff):
+    """The typed findings of a reviewer handoff. Handoffs from before the typed findings hold plain strings in
+    `blocking` (blocking, no id) and `nits` (minor); a string in `findings` counts as blocking."""
+    def typed(x, severity):
+        return x if isinstance(x, dict) else {"id": "", "file": "", "finding": str(x), "case": "", "severity": severity}
+    return [typed(x, "blocking") for x in handoff.get("findings") or []] \
+        + [typed(x, "blocking") for x in handoff.get("blocking") or []] \
+        + [typed(x, "minor") for x in handoff.get("nits") or []]
+
+
 def blocking_ids(handoff):
     """`<id> <file>` of each blocking finding: what the "same findings twice" guard compares."""
-    return [f"{x['id']} {x['file']}" for x in handoff.get("findings", []) if x["severity"] == "blocking"]
+    return [f"{x['id']} {x['file']}" for x in findings(handoff) if x["severity"] == "blocking"]
 
 
 def primary(config):
