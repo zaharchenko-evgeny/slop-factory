@@ -2,7 +2,8 @@
 
 Facts are read from GitHub on every call and nothing is stored (ADR-0014): no `seen` list, the stage
 label and the marked reviews at the head are the state. The PR is found from the branch `ez/<n>-*`.
-A marker `<!-- factory:review focus=<f> round=<n> -->` counts only on a review by `bot_login`
+A marker `<!-- factory:review focus=<f> round=<n> verdict=approve|changes -->` counts only on a review by `bot_login`
+(agent reviews are COMMENT reviews: the author cannot approve its own PR; the verdict is in the marker)
 (`targets.air.bot_login`; `gh api user` answers 403 inside an Air run, so it is never called).
 """
 import json
@@ -13,7 +14,7 @@ import yaml
 
 from github_tracker import ROOT, gh
 
-MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+) -->")
+MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))? -->")
 FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
 GOOD_CI = {"success", "neutral", "skipped"}
@@ -65,9 +66,11 @@ class GitHubGateTracker:
         out = []
         for r in self._list(f"pulls/{pr['number']}/reviews"):
             m = MARKER.search(r.get("body") or "")
+            agent = bool(m) and r["user"]["login"] == self.bot
+            verdict = (m[3] if agent else {"APPROVED": "approve", "CHANGES_REQUESTED": "changes"}.get(r["state"]))
             out.append({"author": r["user"]["login"], "state": r["state"], "commit_id": r["commit_id"],
                         "focus": m[1] if m else None, "round": int(m[2]) if m else None,
-                        "agent": bool(m) and r["user"]["login"] == self.bot})
+                        "verdict": verdict, "agent": agent})
         return out
 
     def facts(self, n):
@@ -94,9 +97,9 @@ class GitHubGateTracker:
         return f
 
     # --- effects: read the target first, write only when it differs
-    def _edit(self, n, add=(), remove=()):
+    def _edit(self, n, add=(), remove=(), on="issue"):
         flags = [x for a in add for x in ("--add-label", a)] + [x for r in remove for x in ("--remove-label", r)]
-        self.run(["issue", "edit", str(n), "-R", self.repo, *flags])
+        self.run([on, "edit", str(n), "-R", self.repo, *flags])
         return True
 
     def apply(self, e):
@@ -106,10 +109,19 @@ class GitHubGateTracker:
         if kind == "stage":
             want, have = self.stages[value], [x for x in self._labels(n) if x in self.stages.values()]
             return have != [want] and self._edit(n, [want] if want not in have else [], [x for x in have if x != want])
-        if kind == "label":
-            return value not in self._labels(n) and self._edit(n, [value])
-        if kind == "unlabel":
-            return value in self._labels(n) and self._edit(n, remove=[value])
+        if kind in ("label", "unlabel"):
+            on, target = e.get("on") or "issue", n
+            if on == "pr":
+                pr = self._pr(n)
+                if pr is None:
+                    raise RuntimeError(f"{kind}: no PR for ticket {n}")
+                target = pr["number"]
+            elif on != "issue":
+                raise ValueError(f"{kind}: bad target: {on}")
+            has = value in self._labels(target)
+            if kind == "label":
+                return not has and self._edit(target, [value], on=on)
+            return has and self._edit(target, remove=[value], on=on)
         if kind == "set-field":  # an attribute label `<field>:<value>`; one value per field
             (k, v), = value.items()
             have = [x for x in self._labels(n) if x.startswith(f"{k}:")]
@@ -117,6 +129,8 @@ class GitHubGateTracker:
                                                        [x for x in have if x != f"{k}:{v}"])
         if kind == "comment":
             body = value if value.startswith("[factory]") else f"[factory] {value}"
+            if e.get("run_id") and "Factory-Run:" not in body:
+                body += f"\n\nFactory-Run: {e['run_id']}"
             if any(c["body"] == body for c in self._list(f"issues/{n}/comments")):
                 return False
             self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
@@ -144,9 +158,10 @@ class GitHubGateTracker:
         if any(r["agent"] and r["focus"] == focus and r["commit_id"] == head for r in self._reviews(pr)):
             return False
         rnd = e.get("round") or self.facts(n)["fix_rounds"] + 1
-        event = "APPROVE" if e["value"].startswith("approve") else "REQUEST_CHANGES"
+        verdict = "approve" if e["value"].startswith("approve") else "changes"
         self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
-                  "-f", f"event={event}", "-f", f"body=[factory] <!-- factory:review focus={focus} round={rnd} -->"])
+                  "-f", "event=COMMENT",
+                  "-f", f"body=[factory] <!-- factory:review focus={focus} round={rnd} verdict={verdict} -->"])
         return True
 
     def _create(self, n, children):
@@ -164,7 +179,8 @@ class GitHubGateTracker:
                 continue
             if new is None:
                 new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
-                                           "-f", f"body={c.get('body', '')}\n\n{mark}"]))
+                                           "-f", f"body={c.get('body', '')}\n\n{mark}",
+                                           "-f", f"labels[]={self.stages['draft']}"]))
             if c["title"] not in subs:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
             if new["id"] not in blockers:

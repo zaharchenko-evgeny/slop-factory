@@ -87,8 +87,11 @@ def validate(nodes, config):
             errs.append(f"bad-output: {name}: {n.get('output')}")
         for oname, o in n["outcomes"].items():
             for e in (o or {}).get("effects") or []:
-                if not isinstance(e, dict) or len(e) != 1 or next(iter(e)) not in EFFECTS:
+                keys = [k for k in e if k != "on"] if isinstance(e, dict) else []
+                if len(keys) != 1 or keys[0] not in EFFECTS:
                     errs.append(f"unknown-effect: {name}.{oname}: {e}")
+                elif "on" in e and (e["on"] not in ("issue", "pr") or keys[0] not in ("label", "unlabel")):
+                    errs.append(f"unknown-effect: {name}.{oname}: bad `on` in {e}")
             for s in (o or {}).get("from") or []:
                 stage(f"{name}.{oname}.from", s)
             if effect_stage(o or {}):

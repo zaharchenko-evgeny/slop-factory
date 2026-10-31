@@ -97,7 +97,7 @@ nodes:
     role: script
     output: read-only
     outcomes:
-      changes: { effects: [{ label: "factory:fix-<tier>" }, { stage: changes-requested }] }
+      changes: { effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
       approved: { effects: [{ stage: approved }] }
   fix:
     pilot: true
@@ -118,7 +118,7 @@ nodes:
     outcomes:
       merged: { from: [approved], effects: [{ merge: match-head }, { stage: merging }] }
       update-or-hold: { from: [approved], effects: [{ comment: reason }, { stage: approved }] }
-      fix: { from: [approved], effects: [{ label: "factory:fix-<tier>" }, { stage: changes-requested }] }
+      fix: { from: [approved], effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
   merging:
     enabled: false
     triggers: ["workflow_run.completed"]
@@ -138,7 +138,7 @@ nodes:
       answered: { from: [needs-answers], effects: [{ stage: ready }] }
       children-done: { from: [split], effects: [{ stage: done }] }
       child-failed: { from: [split], effects: [{ stage: blocked }] }
-      conflict: { from: [approved], effects: [{ label: "factory:update-cheap" }, { stage: changes-requested }] }
+      conflict: { from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [approved], effects: [{ stage: merged }] }
       retro: { from: [merged], effects: [{ comment: retro }, { stage: done }] }
   routines:

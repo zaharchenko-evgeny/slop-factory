@@ -23,7 +23,7 @@ from gate_github import GitHubGateTracker  # noqa: E402
 
 CONFIG = yaml.safe_load((ROOT / "factory.yaml").read_text())
 STAGES, BOT, REPO = CONFIG["tracker"]["stages"], CONFIG["targets"]["air"]["bot_login"], "o/r"
-M = "<!-- factory:review focus=full round=1 -->"
+M = "<!-- factory:review focus=full round=1 verdict=approve -->"
 
 
 class FakeGh:
@@ -53,7 +53,7 @@ class FakeGh:
                                "requested_reviewers": [{"login": "alice"}]})
         if a.endswith("/pulls/5/reviews"):
             return "\n".join(json.dumps(r) for r in self.reviews)
-        if a.endswith("issues/7"):
+        if a.endswith(("issues/7", "issues/5")):
             return json.dumps({"labels": [{"name": x} for x in self.labels]})
         if a.endswith("issues/7/dependencies/blocked_by"):
             return "\n".join(json.dumps(b) for b in self.blocked)
@@ -64,7 +64,7 @@ class FakeGh:
         if a.endswith("issues/7/sub_issues"):
             return "\n".join(json.dumps({"title": t}) for t in self.sub)
         self.writes.append(args)
-        if args[:2] == ["issue", "edit"]:
+        if args[1] == "edit":
             it = iter(args[5:])
             for flag, v in zip(it, it):
                 if flag == "--add-label":
@@ -145,13 +145,38 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(tr(gh).apply(eff("review", "approve-at-head", focus="full", round=2)))
         w = gh.writes[0]
         self.assertIn("commit_id=h1", w)
-        self.assertIn("event=APPROVE", w)
-        self.assertIn("body=[factory] <!-- factory:review focus=full round=2 -->", w)
+        self.assertIn("event=COMMENT", w)
+        self.assertIn("body=[factory] <!-- factory:review focus=full round=2 verdict=approve -->", w)
         gh = FakeGh(reviews=[review(BOT, M)])  # already reviewed at head: skip
         self.assertFalse(tr(gh).apply(eff("review", "request-changes-at-head", focus="full")))
         gh = FakeGh(reviews=[review("mallory", M)])  # a human's marker does not skip it
         self.assertTrue(tr(gh).apply(eff("review", "request-changes-at-head", focus="full")))
-        self.assertIn("event=REQUEST_CHANGES", gh.writes[0])
+        self.assertIn("event=COMMENT", gh.writes[0])
+        self.assertIn("verdict=changes", gh.writes[0][-1])
+
+    def test_verdict_from_marker_or_state(self):
+        c = "<!-- factory:review focus=full round=1 verdict=changes -->"
+        rv = tr(FakeGh(reviews=[review(BOT, c), review("alice", "", state="CHANGES_REQUESTED"),
+                                review("bob", "", state="APPROVED"), review("eve", "")])).facts(7)["reviews"]
+        self.assertEqual([x["verdict"] for x in rv], ["changes", "changes", "approve", None])
+
+    def test_label_on_pr(self):
+        gh = FakeGh()
+        self.assertTrue(tr(gh).apply(eff("label", "factory:fix-mid", on="pr")))
+        self.assertEqual(gh.writes[0][:4], ["pr", "edit", "5", "-R"])
+        self.assertIn("--add-label", gh.writes[0])
+        gh = FakeGh()
+        tr(gh).apply(eff("label", "factory:fix-mid"))
+        self.assertEqual(gh.writes[0][:3], ["issue", "edit", "7"])
+
+    def test_nodes_yaml_on_pr_reaches_the_effect(self):
+        n = nodes.load()["nodes"]["join"]["outcomes"]["changes"]["effects"][0]
+        self.assertEqual(gate.resolve(n, {"tier": "mid"}, 7)["on"], "pr")
+
+    def test_comment_trailer(self):
+        gh = FakeGh()
+        tr(gh).apply(eff("comment", "hi", run_id="r1"))
+        self.assertTrue(gh.writes[0][-1].endswith("Factory-Run: r1"))
 
     def test_create_issues(self):
         gh = FakeGh(sub=["old"])
@@ -172,7 +197,8 @@ class EffectsTest(unittest.TestCase):
         gh.open_issues = [{"id": 555, "title": "A", "body": "<!-- factory:child of=10 -->"}, {"id": 556, "title": "A", "body": ""}]
         self.assertTrue(tr(gh).apply(eff("create-issues", ["A"])))
         self.assertIn("title=A", gh.writes[0])  # a new issue, carrying this ticket's marker
-        self.assertIn("factory:child of=7", gh.writes[0][-1])
+        self.assertIn("factory:child of=7", gh.writes[0][-3])
+        self.assertIn("labels[]=factory:draft", gh.writes[0])
 
     def test_fix_rounds_grow_per_reviewed_head(self):
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, M)])).facts(7)["fix_rounds"], 0)

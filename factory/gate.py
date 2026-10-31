@@ -115,7 +115,8 @@ def check(name, event, tracker, nodes, config):
 
 def resolve(effect, payload, ticket):
     """(kind, value) of one effect; a missing payload field raises Bad naming it."""
-    (kind, arg), = effect.items()
+    (kind, arg), = [(k, v) for k, v in effect.items() if k != "on"]
+    on = effect.get("on")
 
     def field(f):
         if f not in payload:
@@ -124,7 +125,8 @@ def resolve(effect, payload, ticket):
     if kind == "set-field":
         return {"kind": kind, "ticket": ticket, "value": {arg: field(arg)}}
     if kind in ("label", "unlabel"):
-        return {"kind": kind, "ticket": ticket, "value": re.sub(r"<([^>]+)>", lambda m: str(field(m[1])), arg)}
+        out = {"kind": kind, "ticket": ticket, "value": re.sub(r"<([^>]+)>", lambda m: str(field(m[1])), arg)}
+        return {**out, "on": on} if on else out
     if kind in ("comment", "create-issues"):
         return {"kind": kind, "ticket": ticket, "value": field(arg)}
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
@@ -143,6 +145,8 @@ def apply(name, outcome, payload, tracker, nodes):
             e["event"] = payload.get("event")
         if e["kind"] == "review":
             e["focus"], e["round"] = payload.get("focus"), payload.get("round")
+        if e["kind"] == "comment" and payload.get("run_id"):
+            e["run_id"] = payload["run_id"]
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
     why = matches(node, tracker.facts(ticket), {**payload, "id": payload.get("event")}, out)
