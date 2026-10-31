@@ -18,6 +18,7 @@ SCRIPT = ROOT / ".air/cloud/startup.sh"
 
 STUBS = {
     "curl": 'echo curl >> "$LOG"\ntmp=$(mktemp -d); printf "#!/bin/sh\\n" > "$tmp/conftest"; chmod +x "$tmp/conftest"; tar -cz -C "$tmp" conftest\n',
+    "gh": "",
     "git": 'echo git "$@" >> "$LOG"\n',
     "uv": 'echo uv "$@" >> "$LOG"\nprintf "#!/bin/sh\\n" > "$HOME/.local/bin/decide"; chmod +x "$HOME/.local/bin/decide"\n',
 }
@@ -58,6 +59,13 @@ class StartupTest(unittest.TestCase):
         r = self.run_script()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("uv", self.log.read_text())
+
+    def test_light_env_skips_approver_tools(self):
+        self.env["FACTORY_ENV"] = "light"
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("FACTORY_ENV=light", r.stdout)
+        self.assertNotIn("curl", self.log.read_text())
 
     def test_air_models_in_config(self):
         m = yaml.safe_load((ROOT / "factory.yaml").read_text())["targets"]["air"]["models"]

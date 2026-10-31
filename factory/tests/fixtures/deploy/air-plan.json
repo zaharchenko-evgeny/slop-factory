@@ -1,0 +1,132 @@
+{
+  "automations": [
+    {
+      "agent": "codex",
+      "environmentConfigId": "[factory:default] env",
+      "model": "small",
+      "name": "[factory:intake]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node intake --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
+      "triggerVcs": {
+        "outputBehaviour": "read-only"
+      },
+      "triggers": [
+        {
+          "event": "issues.labeled",
+          "filters": {
+            "label": "factory:ready"
+          }
+        }
+      ]
+    },
+    {
+      "agent": "codex",
+      "environmentConfigId": "[factory:default] env",
+      "model": "small",
+      "name": "[factory:implement-cheap]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
+      "triggerVcs": {
+        "outputBehaviour": "create-pr"
+      },
+      "triggers": [
+        {
+          "event": "issues.labeled",
+          "filters": {
+            "label": "factory:implement-cheap"
+          }
+        }
+      ]
+    },
+    {
+      "agent": "claude",
+      "environmentConfigId": "[factory:default] env",
+      "model": "mid[1m]",
+      "name": "[factory:implement-mid]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
+      "triggerVcs": {
+        "outputBehaviour": "create-pr"
+      },
+      "triggers": [
+        {
+          "event": "issues.labeled",
+          "filters": {
+            "label": "factory:implement-mid"
+          }
+        }
+      ]
+    },
+    {
+      "agent": "codex",
+      "environmentConfigId": "[factory:default] env",
+      "model": "rev2",
+      "name": "[factory:review-full]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node review --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
+      "triggerVcs": {
+        "outputBehaviour": "read-only"
+      },
+      "triggers": [
+        {
+          "event": "pull_request.opened",
+          "filters": {}
+        },
+        {
+          "event": "pull_request.synchronize",
+          "filters": {}
+        }
+      ]
+    },
+    {
+      "agent": "codex",
+      "environmentConfigId": "[factory:default] env",
+      "model": "rev",
+      "name": "[factory:review-behaviour]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node review --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
+      "triggerVcs": {
+        "outputBehaviour": "read-only"
+      },
+      "triggers": [
+        {
+          "event": "pull_request.opened",
+          "filters": {}
+        },
+        {
+          "event": "pull_request.synchronize",
+          "filters": {}
+        }
+      ]
+    },
+    {
+      "agent": "codex",
+      "environmentConfigId": "[factory:default] env",
+      "model": "small",
+      "name": "[factory:sweep]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node sweep --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply` with your outcome and payload.",
+      "triggerVcs": {
+        "outputBehaviour": "as-instructed"
+      },
+      "triggers": [
+        {
+          "cron": "*/10 * * * *",
+          "event": "schedule",
+          "filters": {}
+        }
+      ]
+    }
+  ],
+  "environments": [
+    {
+      "domains": [
+        "github.com"
+      ],
+      "name": "[factory:default] env",
+      "repository": "https://example.com/o/main",
+      "secrets": [
+        "GITHUB_TOKEN"
+      ],
+      "startup": ".air/cloud/startup.sh",
+      "variables": {
+        "FACTORY_ENV": "default"
+      },
+      "vm": "default"
+    }
+  ]
+}
