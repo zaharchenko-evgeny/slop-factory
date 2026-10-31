@@ -165,12 +165,6 @@ def fix_tier(facts):
     return "mid"
 
 
-def join_plan(facts):
-    """The join rule: (outcome, payload) when every agent review at the head approves, else changes."""
-    head = [r for r in facts["reviews"] if r["agent"] and r["commit_id"] == facts["head"]]
-    return ("approved" if head and all(r["verdict"] == "approve" for r in head) else "changes"), {"tier": fix_tier(facts)}
-
-
 def branch_of(facts, config):
     """The ticket's branch: the PR's head, else `branch_pattern` from the issue title (drive.py's slug rule)."""
     if facts.get("branch"):
@@ -254,6 +248,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             e["event"] = payload.get("event")
         if e["kind"] == "review":
             e["focus"], e["round"] = payload.get("focus"), payload.get("round")
+        if e["kind"] == "join":
+            e["tier"] = payload.get("tier")
         if e["kind"] == "comment" and payload.get("run_id"):
             e["run_id"] = payload["run_id"]
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
@@ -265,6 +261,15 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
 
 
 SWEEP_STAGES = ("approved", "merged", "split", "in-review")
+
+
+def join_decision(facts):
+    """The join's outcome and payload, or None while the round is open. Uses the adapter's `round_verdict`,
+    which counts every required agent focus, human change requests and CI. A fix label takes the ticket's
+    complexity tier (mid when unlabelled)."""
+    if not facts.get("round_complete") or facts.get("round_verdict") is None:
+        return None
+    return ("changes" if facts["round_verdict"] == "changes" else "approved"), {"tier": fix_tier(facts)}
 
 
 def sweep_plan(facts):
@@ -281,9 +286,10 @@ def sweep_plan(facts):
         return "sweep", "retro", {"retro": text, "run_id": "sweep:retro"}
     if stage == "split" and facts.get("children_total") and facts["children_open"] == 0:
         return "sweep", "children-done", {}
-    if stage == "in-review" and facts["round_complete"] and facts["round_head"] == facts["head"]:
-        outcome, payload = join_plan(facts)
-        return "join", outcome, payload
+    if stage == "in-review" and facts.get("waiting_reviewers"):
+        return "sweep", "waiting", {}  # ask them again; nothing moves until they decide
+    if stage == "in-review" and (j := join_decision(facts)):
+        return "join", *j
     return None
 
 

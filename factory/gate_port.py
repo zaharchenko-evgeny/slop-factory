@@ -1,7 +1,7 @@
 """The tracker port of the gate (factory/gate.py) and two in-memory fakes.
 
 `Tracker.facts(ticket)` returns a dict with: stage ("none" when unset), head, blockers_open (int),
-focus_missing (list), round_complete (bool), round_head, fix_rounds, fix_cap, ci, due, seen (event ids).
+focus_missing (list), round_complete (bool), round_verdict (changes|approve|None), round_head, fix_rounds, fix_cap, ci, due, seen (event ids).
 `Tracker.apply(effect)` takes {ticket, kind, value, event?}, reads first and writes only when the target
 state differs; it returns True when it wrote. The stage effect also records `event` in `seen`; so does the `seen` effect, which apply appends to an
 outcome without a stage effect.
@@ -33,8 +33,8 @@ class MemoryTracker:
     def facts(self, ticket):
         t = self._t(ticket)
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
-                "round_head": None, "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False}
-        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "attrs", "reviews", "pr")}, "stage": self.get_stage(t),
+                "round_verdict": None, "round_head": None, "attrs": [], "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False}
+        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr")}, "stage": self.get_stage(t),
                 "seen": list(t.get("seen", []))}
 
     def apply(self, effect):
@@ -68,8 +68,13 @@ class MemoryTracker:
         return True
 
     def _drop(self, t, value):
-        entry = ["label", json.dumps(value, sort_keys=True)]
         log = t.setdefault("log", [])
+        if value.endswith("*"):  # every label with the prefix
+            gone = [x for x in log if x[0] == "label" and json.loads(x[1]).startswith(value[:-1])]
+            for x in gone:
+                log.remove(x)
+            return bool(gone)
+        entry = ["label", json.dumps(value, sort_keys=True)]
         if entry not in log:
             return False
         log.remove(entry)

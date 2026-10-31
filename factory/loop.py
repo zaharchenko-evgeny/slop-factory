@@ -53,8 +53,8 @@ def cron_due(expr, last, now):
 
 
 def script_join(ctx):
-    """The `join` node: the gate's join rule."""
-    return gate.join_plan(ctx)
+    """The `join` node: the shared rule in gate.join_decision (agents, humans and CI)."""
+    return gate.join_decision(ctx) or (None, {})
 
 
 def script_sweep(facts):

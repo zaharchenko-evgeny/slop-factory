@@ -291,9 +291,10 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual(gate.outcome_of(h), "proceed")
 
     def test_join_tier_from_complexity_label(self):
-        facts = {"head": "a", "reviews": [{"agent": True, "commit_id": "a", "verdict": "approve"}], "attrs": ["complexity:large"]}
-        self.assertEqual(gate.join_plan(facts), ("approved", {"tier": "strong"}))
-        self.assertEqual(gate.join_plan({**facts, "attrs": []})[1], {"tier": "mid"})
+        facts = {"round_complete": True, "round_verdict": "changes", "attrs": ["complexity:large"]}
+        self.assertEqual(gate.join_decision(facts), ("changes", {"tier": "strong"}))
+        self.assertEqual(gate.join_decision({**facts, "attrs": []})[1], {"tier": "mid"})
+        self.assertIsNone(gate.join_decision({**facts, "round_complete": False}))
 
 
 if __name__ == "__main__":

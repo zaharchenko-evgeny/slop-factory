@@ -75,7 +75,7 @@ nodes:
     role: developer
     output: create-pr
     outcomes:
-      done: { effects: [{ stage: in-review }] }
+      done: { effects: [{ unlabel: "factory:implement-*" }, { stage: in-review }] }
       error: { effects: [{ label: "factory:implement-<next tier>" }, { stage: in-dev }] }
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
       failed: { effects: [{ comment: reason }, { stage: failed }] }
@@ -129,7 +129,9 @@ nodes:
     role: developer
     output: push-to-source
     outcomes:
-      done: { effects: [{ stage: in-review }] }
+      # The command label goes: the next round's join adds it again, and only an added label starts the node.
+      # People who requested changes are asked again, after the push, so round 2 waits for them.
+      done: { effects: [{ unlabel: "factory:fix-*", "on": pr }, { request-reviewers: changes }, { stage: in-review }] }
       blocked: { from: [changes-requested], effects: [{ comment: reason }, { stage: blocked }] }
   merge:
     enabled: false
@@ -166,6 +168,8 @@ nodes:
       conflict: { enabled: false, from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [approved], effects: [{ stage: merged }] }
       retro: { from: [merged], effects: [{ comment: retro }, { stage: done }] }
+      # A handled change request whose author has not decided again: ask them again, move nothing.
+      waiting: { from: [in-review], effects: [{ join: all-approve }] }
   routines:
     enabled: false
     triggers: ["schedule routines"]
