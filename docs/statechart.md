@@ -347,7 +347,7 @@ stateDiagram-v2
 | 4 | moved to a node | `review` posts a marker review (adapter, join) |
 | 5 | moved to a node | `join` is idempotent; the sweep repeats it (join) |
 | 6 | dropped | no vars comment; facts are read from the tracker each time |
-| 7 | solved by check | duplicate event id exits 10 (`seen`, written with the stage change) |
+| 7 | solved by check | duplicate event id exits 10 (`seen`, written with the stage change, or by a `seen` effect that apply appends when the outcome has no stage effect) |
 | 8 | solved by check | `blockers: closed` in `intake.when`; the sweep re-offers |
 | 9 | solved by apply | the stage effect replaces the stage (a tag swap on the tag tracker) |
 | 10 | moved to the adapter | the adapter reports the actor; `when: {actor}` |
