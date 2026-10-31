@@ -1,5 +1,7 @@
 # Proposed state chart for the whole factory
 
+> Superseded in mechanism by [ADR-0014](adr/0014-node-model.md) (nodes, facts and effects replace vars, leases and step.py). The states and outcomes stay.
+
 Status is a proposal in #111 (30 October 2026). It extends [the delivery state chart](statechart.md)
 and keeps its rules: the tracker label is the only state, one event starts one short step, and
 `factory/step.py` owns every state decision. Nothing here changes slices #106 to #109. Each new part
