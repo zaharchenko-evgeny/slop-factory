@@ -39,6 +39,7 @@ class LoopTest(unittest.TestCase):
         return HANDOFFS[node]
 
     def tick(self, **kw):
+        kw = {"last": datetime(2026, 1, 1, 0, 0), "now": datetime(2026, 1, 1, 0, 1), **kw}
         return loop.tick(self.t, [1], NODES, CONFIG, run_role=self.run_role, **kw)
 
     def test_ready_to_approved_over_ticks(self):
@@ -76,7 +77,33 @@ class LoopTest(unittest.TestCase):
         self.assertEqual(len(res["ran"]), 1)
         self.assertEqual(loop.tick(t, [2], NODES, CONFIG, run_role=self.run_role, only_node="implement")["ran"], [])
 
+    def test_error_and_stale_do_not_stop_the_tick(self):
+        t = MemoryTracker({3: {"stage": "ready", "head": "a"}, 5: {"stage": "ready", "head": "b"}})
+        def rr(node, check):
+            return ("proceed", {}) if check["ticket"] == 3 else HANDOFFS[node]  # 3: payload misses fields
+        res = loop.tick(t, [3, 5], NODES, CONFIG, run_role=rr)
+        self.assertEqual([e[1] for e in res["errors"]], [3])
+        self.assertEqual(res["ran"], [("intake", 5, "proceed")])
+        def stale(node, check):
+            t.tickets[5]["head"] = "new"  # the head moved while the role ran
+            return "done", {}
+        t.tickets[5]["stage"] = "in-dev"
+        self.assertEqual(loop.tick(t, [5], NODES, CONFIG, run_role=stale)["ran"], [])
+        self.assertEqual(t.tickets[5]["stage"], "in-dev")
+
+    def test_quiet_tick_reports_no_due_nodes(self):
+        res = loop.tick(MemoryTracker({}), [], NODES, CONFIG, run_role=self.run_role, last=None)
+        self.assertEqual((res["ran"], res["due"]), ([], []))
+
+    def test_outcome_of(self):
+        self.assertEqual(loop.outcome_of({"handoff": "REVIEWER", "verdict": "approved"}), "approve")
+        self.assertEqual(loop.outcome_of({"verdict": "changes-requested"}), "changes")
+        self.assertEqual(loop.outcome_of({"handoff": "ROUTER-INTAKE", "ready": "yes", "split": "none"}), "proceed")
+        self.assertEqual(loop.outcome_of({"status": "done"}), "done")
+
     def test_cron(self):
+        self.assertTrue(loop.cron_match("0 6 */2 * *", datetime(2026, 1, 1, 6, 0)))
+        self.assertFalse(loop.cron_match("0 6 */2 * *", datetime(2026, 1, 2, 6, 0)))
         last, now = datetime(2026, 1, 1, 5, 55), datetime(2026, 1, 1, 6, 1)
         self.assertTrue(loop.cron_due("0 6 * * *", last, now))
         self.assertTrue(loop.cron_due("*/10 * * * *", last, now))

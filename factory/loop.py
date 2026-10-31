@@ -30,14 +30,15 @@ ROOT = nodes_mod.ROOT
 def cron_match(expr, t):
     """True when the 5-field cron `expr` matches minute `t` (`*`, `*/n`, `a-b`, lists, numbers)."""
     vals = [t.minute, t.hour, t.day, t.month, (t.weekday() + 1) % 7]
-    def ok(field, v):
+    bounds = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)]
+    def ok(field, v, b):
         for part in field.split(","):
             rng, _, step = part.partition("/")
-            lo, hi = (0, 59) if rng == "*" else (int(rng.split("-")[0]), int(rng.split("-")[-1]))
+            lo, hi = b if rng == "*" else (int(rng.split("-")[0]), int(rng.split("-")[-1]))
             if lo <= v <= hi and (v - lo) % int(step or 1) == 0:
                 return True
         return False
-    return all(ok(f, v) for f, v in zip(expr.split(), vals))
+    return all(ok(f, v, b) for f, v, b in zip(expr.split(), vals, bounds))
 
 
 def cron_due(expr, last, now):
@@ -78,52 +79,76 @@ def default_run_role(node, check, root=ROOT):
     d = root / local["run_dir"] / str(check["ticket"])
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{node}.in.md").write_text(json.dumps(check, indent=2))
+    (d / f"{node}.handoff.json").unlink(missing_ok=True)
     if run_role.run(root, check["ticket"], node):
         return None, {}
     h = json.loads((d / f"{node}.handoff.json").read_text())
-    return h.get("outcome") or h.get("status"), h
+    return outcome_of(h), h
+
+
+def outcome_of(h):
+    """The node outcome a handoff names: `outcome`, a reviewer `verdict`, a router intake, else `status`."""
+    if h.get("outcome"):
+        return h["outcome"]
+    if h.get("verdict"):
+        return "approve" if h["verdict"] == "approved" else "changes"
+    if h.get("handoff") == "ROUTER-INTAKE":
+        return "proceed" if h.get("ready") == "yes" and h.get("split") in (None, "none") else (
+            "split" if h.get("split") not in (None, "none") else "grill")
+    return h.get("status")
 
 
 def tick(tracker, tickets, nodes, config, run_role=default_run_role, scripts=None, now=None, last=None,
          only_node=None):
-    """One pass. Returns {"ran": [(node, ticket, outcome)], "due": [schedule nodes that were due]}."""
+    """One pass. Returns ran [(node, ticket, outcome)], due (schedule nodes that ran), errors."""
     scripts, now = SCRIPTS if scripts is None else scripts, now or datetime.now()
-    cap, ran, due = config["limits"]["concurrent_deliveries"], [], []
+    cap, ran = config["limits"]["concurrent_deliveries"], []
     schedules = nodes.get("schedules") or {}
-    roles, moved = 0, set()  # a ticket moves at most once per tick
+    roles, moved, errors, due_ran = 0, set(), [], set()  # a ticket moves at most once per tick
     for name, node in nodes["nodes"].items():
         if node.get("enabled") is False or node["role"] == "human" or only_node not in (None, name):
             continue
         sched = next((t.split()[1] for t in node.get("triggers", []) if t.startswith("schedule ")), None)
         is_due = False
         if sched:
-            is_due = last is not None and cron_due(schedules[sched]["cron"], last, now)
+            is_due = last is None or cron_due(schedules[sched]["cron"], last, now)
             if not is_due:
                 continue
-            due.append(name)
         view = Due(tracker, is_due)
         for n in tickets:
             if n in moved:
                 continue
-            code, chk = gate.check(name, {"id": f"loop:{name}:{n}", "ticket": n}, view, nodes, config)
-            if code != gate.GO:
-                continue
-            is_script = node["role"] == "script"
-            if is_script and name not in scripts:
-                continue
-            if not is_script:
-                if roles >= cap:
+            try:
+                head = view.facts(n)["head"]
+                event = f"loop:{name}:{n}:{head}"
+                code, chk = gate.check(name, {"id": event, "ticket": n}, view, nodes, config)
+                if code != gate.GO:
                     continue
-                roles += 1
-            outcome, extra = scripts[name](chk["context"]) if is_script else run_role(name, chk)
-            if outcome is None:
+                is_script = node["role"] == "script"
+                if is_script and name not in scripts:
+                    continue
+                if not is_script:
+                    if roles >= cap:
+                        continue
+                    roles += 1
+                outcome, extra = scripts[name](chk["context"]) if is_script else run_role(name, chk)
+                if outcome is None:
+                    continue
+                payload = {**extra, "ticket": n, "event": event, "head": head}
+                missing = chk["context"]["focus_missing"]
+                if missing and "focus" not in payload:
+                    payload["focus"] = missing[0]
+                code, res = gate.apply(name, outcome, payload, view, nodes)
+            except Exception as e:  # one ticket's error never stops the others
+                errors.append((name, n, f"{type(e).__name__}: {e}"))
                 continue
-            payload = {**extra, "ticket": n, "event": f"loop:{name}:{n}:{chk['context']['head']}",
-                       "head": chk["context"]["head"]}
-            code, res = gate.apply(name, outcome, payload, view, nodes)
+            if code != gate.GO:
+                continue  # stale head or duplicate: nothing was applied
             ran.append((name, n, outcome))
             moved.add(n)
-    return {"ran": ran, "due": due}
+            if is_due:
+                due_ran.add(name)
+    return {"ran": ran, "due": sorted(due_ran), "errors": errors}
 
 
 def main(argv):
@@ -148,7 +173,9 @@ def main(argv):
     res = tick(tracker, tickets, nodes_mod.load(), config, last=last, only_node=a.node)
     for r in res["ran"]:
         print(*r)
-    if last is None or (res["due"] and not a.node and not a.issue):
+    for r in res["errors"]:
+        print("error", *r, file=sys.stderr)
+    if res["due"] and not a.node and not a.issue:
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.write_text(str(time.time()))
     return 0
