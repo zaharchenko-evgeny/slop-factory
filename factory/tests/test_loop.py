@@ -60,6 +60,39 @@ class LoopTest(unittest.TestCase):
         self.assertEqual(self.t.tickets[1]["stage"], "approved")
         self.assertEqual(self.calls, [])
 
+    def test_blocked_stays_blocked_on_comment_and_resumes_on_ready(self):
+        self.t.tickets[1].update(stage="blocked", log=[["comment", '"why"']])
+        self.t.tickets[1]["log"].append(["comment", '"a human answer"'])  # a comment never resumes
+        self.assertEqual(self.tick()["ran"], [])
+        self.assertEqual(self.t.tickets[1]["stage"], "blocked")
+        self.t.tickets[1]["stage"] = "ready"  # the human adds factory:ready
+        self.t.tickets[1]["branch"] = "ez/1-x"
+        self.assertEqual(self.tick()["ran"], [("intake", 1, "proceed")])
+        self.assertEqual(self.t.tickets[1]["branch"], "ez/1-x")
+        self.assertEqual(self.calls, ["intake"])
+
+    def test_stale_command_label_dropped_on_ready(self):
+        self.t.tickets[1]["log"] = [["label", '"factory:implement-cheap"']]
+        facts = self.t.facts
+        self.t.facts = lambda n: {**facts(n), "attrs": ["factory:implement-cheap" if
+                                                        ["label", '"factory:implement-cheap"'] in self.t.tickets[1]["log"]
+                                                        else "risk:low"]}
+        errors = []
+        loop.drop_stale_commands(self.t, 1, errors)
+        self.assertEqual((self.t.tickets[1]["log"], errors), ([], []))
+
+    def test_run_dir_does_not_change_next_node(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "runs" / "1"
+            run.mkdir(parents=True)
+            (run / "intake.handoff.json").write_text("{}")
+            before = loop.tick(self.t, [1], NODES, CONFIG, run_role=lambda *a: (None, {}))
+            import shutil
+            shutil.rmtree(run)
+            after = loop.tick(self.t, [1], NODES, CONFIG, run_role=lambda *a: (None, {}))
+            self.assertEqual(before, after)
+        self.assertEqual(self.tick()["ran"], [("intake", 1, "proceed")])
+
     def test_idempotent_and_quiet(self):
         self.t.tickets[1]["stage"] = "approved"
         before = copy.deepcopy(self.t.tickets)
