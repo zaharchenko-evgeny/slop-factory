@@ -264,6 +264,28 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual(t["fields"]["complexity"], "medium")
         self.assertIn(["label", '"factory:implement-mid"'], t["log"])
 
+    def test_check_on_recorded_payload_and_other_handoffs(self):
+        tr = MemoryTracker({7: {"stage": "ready", "head": "abc", "title": "t"}})
+        for payload in TRIGGERS.values():
+            ev = gate.read(self.file(payload), "event", raw=True)
+            code, out = gate.check("intake", {**ev, "head": None}, tr, NODES, CONFIG)
+            self.assertEqual((code, out["ticket"], out["branch"]), (0, 7, "ez/7-t"))
+        grill = {"handoff": "ROUTER-INTAKE", "kind": "feature", "ready": "no", "missing": "acceptance check 2",
+                 "risk": "low", "size_estimate": "~120", "split": "none", "next": "blocked"}
+        tr = self.file({"7": {"stage": "ready", "head": "abc"}})
+        ev = str(self.file(TRIGGERS["issues"]))
+        code, _ = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(grill)), "--event", ev, "--tracker", f"memory:{tr}"])
+        self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "needs-answers"))
+        split = {**grill, "ready": "yes", "missing": "none", "split": "\n  - First — scope (~100)\n  - Second — more (~90)"}
+        tr = self.file({"7": {"stage": "ready", "head": "abc"}})
+        code, _ = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(split)), "--event", ev, "--tracker", f"memory:{tr}"])
+        self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "split"))
+        self.assertEqual([c["title"] for c in gate.intake_fields(split)["children"]], ["First", "Second"])
+        tr = self.file({"7": {"stage": "in-dev", "head": "abc"}})
+        blocked = {"handoff": "DEVELOPER", "status": "blocked", "branch": "ez/7-x", "blocked_reason": "ambiguous acceptance"}
+        code, _ = self.run_main(["apply", "--node", "implement", "--handoff", str(self.file(blocked)), "--event", ev, "--tracker", f"memory:{tr}"])
+        self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "blocked"))
+
     def test_bug_intake_proceeds(self):
         h = {"handoff": "ROUTER-INTAKE", "kind": "bug", "ready": "yes", "split": "none"}
         self.assertEqual(gate.outcome_of(h), "proceed")

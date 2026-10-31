@@ -122,13 +122,26 @@ COMPLEXITY_TIER = {"small": "cheap", "medium": "mid", "large": "strong"}
 FIX_TIERS = ("cheap", "mid", "strong")
 
 
+def slices(split):
+    """The proposed slices of a router `split` (a string of lines or a list) as {title, body} children."""
+    lines = split.splitlines() if isinstance(split, str) else [str(x) for x in split or []]
+    out = [x.strip().lstrip("-").strip() for x in lines]
+    return [{"title": x.split(" — ")[0].strip(), "body": x} for x in out if x and x != "none"]
+
+
 def intake_fields(h):
-    """The fields `intake`'s proceed outcome needs and the router handoff lacks: complexity and tier from the size."""
+    """Payload fields the outcomes need and the handoff names otherwise.
+    ROUTER-INTAKE: complexity and tier from the size, `questions` from `missing`, `children` from `split`.
+    A blocked or failed handoff: `reason` from `blocked_reason`."""
+    out = {"reason": h["blocked_reason"]} if h.get("blocked_reason") not in (None, "", "none") else {}
     if h.get("handoff") != "ROUTER-INTAKE":
-        return {}
+        return out
     n = int("".join(c for c in str(h.get("size_estimate", "")) if c.isdigit()) or 0)
-    return {"complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
-            "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong"}
+    missing = ", ".join(h["missing"]) if isinstance(h.get("missing"), list) else str(h.get("missing", ""))
+    return {**out, "complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
+            "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong",
+            "questions": f"[factory] Needs answers before work starts: {missing}",
+            "children": slices(h.get("split")) if h.get("split") not in (None, "none") else []}
 
 
 def outcome_of(h):
