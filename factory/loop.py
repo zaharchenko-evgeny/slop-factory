@@ -211,6 +211,7 @@ def main(argv):
                              "--limit", "200", "--json", "number,labels"]))
         stages = set(config["tracker"]["stages"].values())
         tickets = [i["number"] for i in out if stages & {x["name"] for x in i["labels"]}]
+        tickets += [n for n in tracker.sweep_tickets(gate.SWEEP_STAGES) if n not in tickets]  # closed approved/merged/split too
     res = tick(tracker, tickets, nodes_mod.load(), config, last=last, only_node=a.node)
     for r in res["ran"]:
         print(*r)

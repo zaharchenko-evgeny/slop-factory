@@ -161,7 +161,7 @@ def apply(name, outcome, payload, tracker, nodes):
     return GO, {"applied": True, "written": [e["kind"] for e in effects if tracker.apply(e)]}
 
 
-SWEEP_STAGES = ("approved", "merged", "split", "in-review", "changes-requested")
+SWEEP_STAGES = ("approved", "merged", "split", "in-review")
 
 
 def sweep_plan(facts):
@@ -171,7 +171,8 @@ def sweep_plan(facts):
         return "sweep", "merged", {}
     if stage == "merged":
         agent = [r for r in facts["reviews"] if r["agent"]]
-        text = (f"Retro: PR #{facts['pr']} {facts.get('pr_state')}; fix rounds {facts['fix_rounds']}; "
+        pr = f"PR #{facts['pr']} {facts['pr_state']}" if facts["pr"] else "no PR found"
+        text = (f"Retro: {pr}; fix rounds {facts['fix_rounds']}; "
                 f"reviews {len(agent)} ({sum(r['verdict'] == 'approve' for r in agent)} approve, "
                 f"{sum(r['verdict'] == 'changes' for r in agent)} changes)")
         return "sweep", "retro", {"retro": text, "run_id": "sweep:retro"}
@@ -179,7 +180,7 @@ def sweep_plan(facts):
         return "sweep", "children-done", {}
     if stage == "in-review" and facts["round_complete"] and facts["round_head"] == facts["head"]:
         changes = any(r["agent"] and r["commit_id"] == facts["head"] and r["verdict"] == "changes" for r in facts["reviews"])
-        return "join", "changes" if changes else "approved", {"tier": "cheap"}
+        return "join", "changes" if changes else "approved", {"tier": "mid"}
     return None
 
 

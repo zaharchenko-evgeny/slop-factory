@@ -258,6 +258,15 @@ class SweepTest(unittest.TestCase):
         self.assertEqual(gh.state, "closed")
         self.assertIn(["issue", "close", "7", "-R", REPO], gh.writes)
 
+    def test_retro_without_pr(self):
+        gh = FakeGh(labels=["factory:merged"])
+        gh.__class__.__call__, orig = (lambda self, a: "" if any(x.endswith("state=all&per_page=100") for x in a) else orig(self, a)), gh.__class__.__call__
+        try:
+            self.run_sweep(gh)
+        finally:
+            gh.__class__.__call__ = orig
+        self.assertIn("Retro: no PR found;", [w for w in gh.writes if w[:2] == ["issue", "comment"]][0][-1])
+
     def test_dry_run_writes_nothing_and_open_pr_waits(self):
         gh = FakeGh(labels=["factory:approved"])
         self.assertEqual(self.run_sweep(gh)[0], [])  # PR still open
