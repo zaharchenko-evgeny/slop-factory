@@ -48,13 +48,13 @@ class LoopTest(unittest.TestCase):
         self.assertEqual(self.t.tickets[1]["stage"], "in-dev")
         self.tick()
         self.assertEqual(self.t.tickets[1]["stage"], "in-review")
-        self.t.tickets[1].update(round_complete=True, round_head="abc")
+        self.t.tickets[1].update(round_complete=True, round_head="abc", ci="green")
         self.tick()
         self.assertEqual(self.t.tickets[1]["stage"], "approved")
         self.assertEqual(self.calls, ["intake", "implement"])
 
     def test_join_script_approves_without_run_role(self):
-        self.t.tickets[1].update(stage="in-review", round_complete=True, round_head="abc")
+        self.t.tickets[1].update(stage="in-review", round_complete=True, round_head="abc", ci="green")
         res = self.tick()
         self.assertEqual(res["ran"], [("join", 1, "approved")])
         self.assertEqual(self.t.tickets[1]["stage"], "approved")

@@ -148,6 +148,60 @@ class CliAndValidate(unittest.TestCase):
             self.assertEqual(gate.main(["check", "--node", "nope", "--event", str(d / "ev.json"), "--tracker", tr]), 2)
             self.assertEqual(gate.main(["apply", "--node", "intake", "--outcome", "proceed", "--payload", str(d / "p.json"), "--tracker", tr]), 2)
 
+    def test_cli_focus_and_tier_reach_check(self):
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "t.json").write_text(json.dumps({"7": {"stage": "ready", "head": "abc", "focus_missing": ["full", "behaviour"]}}))
+            (d / "ev.json").write_text(json.dumps({"id": "e", "ticket": "7"}))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                gate.main(["check", "--node", "implement", "--event", str(d / "ev.json"), "--tier", "strong",
+                           "--focus", "behaviour", "--tracker", f"memory:{d / 't.json'}"])
+            got = json.loads(out.getvalue())
+            self.assertEqual((got["tier"], got["focus"]), ("strong", "behaviour"))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                gate.main(["check", "--node", "review", "--event", str(d / "ev.json"), "--tier", "review",
+                           "--focus", "behaviour", "--tracker", f"memory:{d / 't.json'}"])
+            self.assertEqual(json.loads(out.getvalue())["tier"], "review")
+
+    def test_apply_puts_automation_focus_in_payload(self):
+        class Rec(MemoryTracker):
+            seen_effects = []
+
+            def apply(self, e):
+                self.seen_effects.append(e)
+                return True
+        tr = Rec({"7": {"stage": "in-review", "head": "abc", "focus_missing": ["full"]}})
+        code, _ = gate.apply("review", "approve", {"ticket": "7", "event": "e", "round": 1}, tr, NODES, focus="behaviour")
+        self.assertEqual(code, 10)  # focus behaviour is not missing: not applied
+        tr.tickets["7"]["focus_missing"] = ["behaviour"]
+        self.assertEqual(gate.apply("review", "approve", {"ticket": "7", "event": "e", "round": 1}, tr, NODES, focus="behaviour")[0], 0)
+        self.assertEqual([e["focus"] for e in Rec.seen_effects if e["kind"] == "review"], ["behaviour"])
+
+    def test_join_and_recheck_ci_rule(self):
+        def run(node, ci, stage="in-review"):
+            tr = MemoryTracker({"7": {"stage": stage, "head": "abc", "round_complete": True, "round_head": "abc", "ci": ci}})
+            code, _ = gate.apply(node, "approved", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+            return code, tr.tickets["7"]["stage"]
+        for node in ("join", "recheck"):
+            self.assertEqual(run(node, "none"), (10, "in-review"), node)  # no check run yet: no transition
+            self.assertEqual(run(node, "pending"), (0, "approved"), node)
+            self.assertEqual(run(node, "green"), (0, "approved"), node)
+            self.assertEqual(run(node, "red"), (0, "changes-requested"), node)
+        tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "round_complete": True, "round_head": "abc", "ci": "red"}})
+        tr.apply = lambda e, f=tr.apply: labels.append(e["value"]) or f(e)
+        labels = []
+        gate.apply("join", "approved", {"ticket": "7", "event": "e"}, tr, NODES)  # no tier from the agent
+        self.assertIn("factory:fix-cheap", labels)
+        self.assertEqual(run("recheck", "red", "approved"), (0, "changes-requested"))  # a later red result
+
+    def test_ci_list(self):
+        self.assertTrue(gate.holds({"ci": ["green", "red"]}, {"ci": "red"}, {}))
+        self.assertFalse(gate.holds({"ci": ["green", "red"]}, {"ci": "none"}, {}))
+
     def test_validate_rejects_unknown_when_key(self):
         n = copy.deepcopy(NODES)
         n["nodes"]["intake"]["when"]["bogus"] = True

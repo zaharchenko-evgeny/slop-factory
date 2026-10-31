@@ -1,9 +1,17 @@
 # The factory as nodes (ADR-0014). One node = triggers + one condition (`when`) + role, tier,
 # environment + outcomes. `uv run factory/nodes.py validate` checks it; `chart` derives the stage chart.
 # Stage names are keys of `tracker.stages` in factory.yaml. `from: [none]` = a PR with no stage label.
+# An outcome with `ci: [..]` applies only when CI is one of them (`ci: none` makes no transition); otherwise `else` names the outcome applied.
+# `ci-independent: true` = the node acts on a PR head without CI; validate requires `ci` in `when` or this flag.
 # Nodes marked `enabled: false` need a later slice. `pilot: true` = delivered by the pilot.
 environments:
-  default: { repository: primary, startup: .air/cloud/startup.sh }
+  # `secrets` are names only; `domains` the network allow-list; `vm` the machine size (deploy.py plan).
+  default:
+    repository: primary
+    startup: .air/cloud/startup.sh
+    secrets: []   # gh is jetbrains-air[bot] through the platform's GH_TOKEN
+    domains: [github.com, api.github.com, objects.githubusercontent.com, pypi.org, files.pythonhosted.org]
+    vm: default
 adapters:
   ticket: github-issues   # stage, fields, labels, blockers
   pr: github              # state, head, CI, reviews by head SHA
@@ -73,6 +81,7 @@ nodes:
       failed: { effects: [{ comment: reason }, { stage: failed }] }
   adopt:
     enabled: false
+    ci-independent: true
     triggers: ["pull_request.labeled factory:adopt"]
     when: { stage: none }
     role: router
@@ -83,6 +92,7 @@ nodes:
   review:
     pilot: true
     focuses: [full, behaviour, structure-security]
+    ci-independent: true
     triggers: ["pull_request.opened", "pull_request.synchronize"]
     when: { stage: in-review, focus: required-by-risk }
     role: reviewer
@@ -92,16 +102,28 @@ nodes:
       changes: { effects: [{ review: request-changes-at-head }, { join: all-approve }] }
   join:
     pilot: true
-    triggers: ["pull_request_review.submitted", "workflow_run.completed"]
-    when: { stage: in-review, round: complete-at-head }
+    ci-independent: true
+    triggers: ["pull_request_review.submitted"]   # CI completion is picked up by the sweep
+    when: { stage: in-review, round: complete-at-head, ci: [green, pending, red] }
     role: script
     output: read-only
     outcomes:
       changes: { effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
-      approved: { effects: [{ stage: approved }] }
+      approved: { ci: [green, pending], else: changes, effects: [{ stage: approved }] }
+  recheck:
+    # CI completion has no trigger of its own: the sweep schedule re-runs the join decision, gated like join.
+    pilot: true
+    triggers: ["schedule sweep"]
+    when: { stage: [in-review, approved], round: complete-at-head, ci: [green, pending, red] }
+    role: script
+    output: read-only
+    outcomes:
+      changes: { from: [in-review, approved], effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
+      approved: { from: [in-review], ci: [green, pending], else: changes, effects: [{ stage: approved }] }
   fix:
     pilot: true
     tiers: [cheap, mid, strong]
+    ci-independent: true
     triggers: ["pull_request.labeled factory:fix-<tier>"]
     when: { stage: changes-requested, round: complete, fix-rounds: below-cap }
     role: developer
@@ -121,6 +143,7 @@ nodes:
       fix: { from: [approved], effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
   merging:
     enabled: false
+    ci-independent: true
     triggers: ["workflow_run.completed"]
     when: { stage: merging }
     role: script

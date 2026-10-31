@@ -1,0 +1,216 @@
+{
+  "automations": [
+    {
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "small",
+        "isDefault": false,
+        "name": "small"
+      },
+      "environmentConfigId": "[factory:default] env",
+      "name": "[factory:intake]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node intake --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node intake --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
+      },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        }
+      ],
+      "triggers": [
+        {
+          "eventType": "issues.labeled",
+          "filters": {
+            "label": "factory:ready"
+          },
+          "source": "github",
+          "triggerType": "EVENT"
+        }
+      ]
+    },
+    {
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "small",
+        "isDefault": false,
+        "name": "small"
+      },
+      "environmentConfigId": "[factory:default] env",
+      "name": "[factory:implement-cheap]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file> --tier cheap`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node implement --tier cheap --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
+      },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "create-pr"
+        }
+      ],
+      "triggers": [
+        {
+          "eventType": "issues.labeled",
+          "filters": {
+            "label": "factory:implement-cheap"
+          },
+          "source": "github",
+          "triggerType": "EVENT"
+        }
+      ]
+    },
+    {
+      "agentAndModel": {
+        "agentId": "claude",
+        "id": "mid[1m]",
+        "isDefault": false,
+        "name": "mid[1m]"
+      },
+      "environmentConfigId": "[factory:default] env",
+      "name": "[factory:implement-mid]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file> --tier mid`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node implement --tier mid --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
+      },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "create-pr"
+        }
+      ],
+      "triggers": [
+        {
+          "eventType": "issues.labeled",
+          "filters": {
+            "label": "factory:implement-mid"
+          },
+          "source": "github",
+          "triggerType": "EVENT"
+        }
+      ]
+    },
+    {
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "rev2",
+        "isDefault": false,
+        "name": "rev2"
+      },
+      "environmentConfigId": "[factory:default] env",
+      "name": "[factory:review-full]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node review --event <file> --focus full --tier review_strong`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node review --focus full --tier review_strong --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
+      },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        }
+      ],
+      "triggers": [
+        {
+          "eventType": "pull_request.opened",
+          "filters": {},
+          "source": "github",
+          "triggerType": "EVENT"
+        },
+        {
+          "eventType": "pull_request.synchronize",
+          "filters": {},
+          "source": "github",
+          "triggerType": "EVENT"
+        }
+      ]
+    },
+    {
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "rev",
+        "isDefault": false,
+        "name": "rev"
+      },
+      "environmentConfigId": "[factory:default] env",
+      "name": "[factory:review-behaviour]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node review --event <file> --focus behaviour --tier review`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node review --focus behaviour --tier review --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
+      },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        }
+      ],
+      "triggers": [
+        {
+          "eventType": "pull_request.opened",
+          "filters": {},
+          "source": "github",
+          "triggerType": "EVENT"
+        },
+        {
+          "eventType": "pull_request.synchronize",
+          "filters": {},
+          "source": "github",
+          "triggerType": "EVENT"
+        }
+      ]
+    },
+    {
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "small",
+        "isDefault": false,
+        "name": "small"
+      },
+      "environmentConfigId": "[factory:default] env",
+      "name": "[factory:sweep]",
+      "prompt": "Save the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node sweep --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work. Then run `uv run factory/gate.py apply --node sweep --event <file> --outcome <outcome> --payload <file>` with the outcome name of the node. The payload file is a JSON object with `ticket` (from the event) plus every field the outcome's effects name (for example `tier`, `reason`).",
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
+      },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "as-instructed"
+        }
+      ],
+      "triggers": [
+        {
+          "cronExpression": "*/10 * * * *",
+          "timezone": "UTC",
+          "triggerType": "SCHEDULED"
+        }
+      ]
+    }
+  ],
+  "environments": [
+    {
+      "domains": [
+        "github.com"
+      ],
+      "name": "[factory:default] env",
+      "repository": "https://example.com/o/main",
+      "secrets": [],
+      "startup": ".air/cloud/startup.sh",
+      "variables": {
+        "FACTORY_ENV": "default"
+      },
+      "vm": "default"
+    }
+  ]
+}

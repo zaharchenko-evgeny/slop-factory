@@ -38,6 +38,7 @@ def edges(nodes):
             if target is None:
                 continue
             src = o.get("from") or [(n["when"] or {}).get("stage", "none")]
+            src = src[0] if isinstance(src[0], list) else src
             label = f"{name}{' (P)' if n.get('pilot') else ''}: {oname}"
             out += [(s, target, label) for s in src]
     return out
@@ -69,7 +70,11 @@ def validate(nodes, config):
                 if k not in WHEN_KEYS:
                     errs.append(f"bad-condition: {name}: unknown `when` key {k}")
             if "stage" in n["when"]:
-                stage(f"{name}.when", n["when"]["stage"])
+                for st in n["when"]["stage"] if isinstance(n["when"]["stage"], list) else [n["when"]["stage"]]:
+                    stage(f"{name}.when", st)
+        if any(str(t).startswith(("pull_request", "workflow_run")) for t in n.get("triggers") or []) \
+                and "ci" not in (n.get("when") or {}) and not n.get("ci-independent"):
+            errs.append(f"ci-gate: {name}: acts on a PR head, so `when` needs `ci` or the node needs `ci-independent: true`")
         role = n.get("role")
         if role not in NO_ROLE and role not in roles:
             errs.append(f"unknown-role: {name}: {role}")
@@ -92,6 +97,8 @@ def validate(nodes, config):
                     errs.append(f"unknown-effect: {name}.{oname}: {e}")
                 elif "on" in e and (e["on"] not in ("issue", "pr") or keys[0] not in ("label", "unlabel")):
                     errs.append(f"unknown-effect: {name}.{oname}: bad `on` in {e}")
+            if (o or {}).get("else") and o["else"] not in n["outcomes"]:
+                errs.append(f"unknown-outcome: {name}.{oname}: else {o['else']}")
             for s in (o or {}).get("from") or []:
                 stage(f"{name}.{oname}.from", s)
             if effect_stage(o or {}):

@@ -316,6 +316,9 @@ stateDiagram-v2
     [*] --> in_review: adopt: adopted
     in_review --> changes_requested: join (P): changes
     in_review --> approved: join (P): approved
+    in_review --> changes_requested: recheck (P): changes
+    approved --> changes_requested: recheck (P): changes
+    in_review --> approved: recheck (P): approved
     changes_requested --> in_review: fix (P): done
     changes_requested --> blocked: fix (P): blocked
     approved --> merging: merge: merged

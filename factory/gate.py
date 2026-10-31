@@ -45,7 +45,7 @@ def holds(when, facts, event):
     """Every key of `when` must hold (the vocabulary is nodes.WHEN_KEYS)."""
     def one(key, want):
         if key == "stage":
-            return facts["stage"] == want
+            return facts["stage"] in (want if isinstance(want, list) else [want])
         if key == "blockers":
             return (facts["blockers_open"] == 0) == (want == "closed")
         if key == "focus":
@@ -58,6 +58,8 @@ def holds(when, facts, event):
             value(want, ("below-cap", "at-cap"))
             return (facts["fix_rounds"] < facts["fix_cap"]) == (want == "below-cap")
         if key == "ci":
+            if isinstance(want, list):  # any of these
+                return facts["ci"] in want
             value(want, ("green", "red", "pending", "none"))
             return facts["ci"] == want
         if key == "actor":
@@ -107,10 +109,13 @@ def check(name, event, tracker, nodes, config):
     why = matches(node, facts, event)
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
+    if node.get("focuses"):  # one review tier per focus (roles.<role>.modes.<focus>.tier)
+        tiers = [roles[role]["modes"][f]["tier"] for f in node["focuses"]]
     skills = ROOT / "roles" / role / "skills.txt"
     return (NO_GO if why else GO), {
         "go": why is None, "reason": why, "ticket": event["ticket"], "node": name, "role": role,
         "tier": event.get("tier") if event.get("tier") in tiers else tiers[0],
+        "focus": event.get("focus"),
         "role_file": f"roles/{role}/role.md" if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
@@ -136,7 +141,7 @@ def resolve(effect, payload, ticket):
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
-def apply(name, outcome, payload, tracker, nodes):
+def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
         raise Bad(f"unknown outcome: {outcome}")
@@ -144,6 +149,12 @@ def apply(name, outcome, payload, tracker, nodes):
     if out.get("enabled") is False:
         raise Bad(f"disabled outcome: {outcome}")
     ticket = payload["ticket"]
+    payload = {**{k: v for k, v in (("focus", focus), ("tier", tier)) if v}, **payload}  # the automation's own
+    out = node["outcomes"][outcome]
+    if out.get("ci") and tracker.facts(ticket)["ci"] not in out["ci"] and out.get("else") in node["outcomes"]:
+        out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
+        if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
+            payload = {**payload, "tier": nodes["nodes"]["fix"]["tiers"][0]}
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
@@ -215,6 +226,8 @@ def main(argv):
     p.add_argument("--payload")
     p.add_argument("--tracker", default="")
     p.add_argument("--nodes")
+    p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
+    p.add_argument("--tier")
     try:
         a = p.parse_args(argv)
     except SystemExit:
@@ -242,9 +255,11 @@ def main(argv):
         if not a.node:
             raise Bad("--node is required")
         if a.cmd == "check":
-            code, out = check(a.node, read(a.event or "", "event"), tracker, nodes, config)
+            event = read(a.event or "", "event")
+            event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
+            code, out = check(a.node, event, tracker, nodes, config)
         else:
-            code, out = apply(a.node, a.outcome or "", read(a.payload or "", "payload"), tracker, nodes)
+            code, out = apply(a.node, a.outcome or "", read(a.payload or "", "payload"), tracker, nodes, a.focus, a.tier)
             path and Path(path).write_text(json.dumps(tracker.tickets))
     except Bad as e:
         print(json.dumps({"error": str(e)}))
