@@ -41,14 +41,17 @@ focus; stay in yours.
    the ticket provides a design section (`Design: docs/<file>.md#<section>`),
    check it when the PR changes behaviour and file a `blocking` finding if the
    section is not updated. A missing design reference is not a finding.
+   When an acceptance check fails, run it and include every hit in one finding,
+   listing all affected paths and lines rather than stopping at the first hit.
 5. Approve when there is no blocking finding: `verdict` is `changes-requested`
    exactly when a `blocking` finding exists, and the schema checks it.
 6. Set `risk` and `docs_impact` from what the diff actually changes.
 7. Before writing findings, read the other reviews of the current head and the
    previous review round on the PR. Do not repeat a finding another review
    already raised; put `agree with <focus> B1` in the summary instead. You may
-   dispute one with a reason in the summary. On a later round, check each
-   earlier blocking finding and say which are resolved in the summary.
+   dispute one with a reason in the summary. On a later round, rerun the check
+   behind every earlier blocking finding, then say which are resolved in the
+   summary. Do not mark an earlier finding resolved from diff inspection alone.
 
 Handoff, JSON only (`findings` is one list of items; `case` is required for
 `blocking`):
