@@ -242,6 +242,18 @@ class TriggerTest(unittest.TestCase):
             ev = gate.read(self.file(payload), "event", raw=True)
             self.assertEqual((ev["ticket"], ev["head"], ev["id"]), (7, *want[name]), name)
 
+    def test_check_accepts_air_trigger_wrapper_with_same_facts_as_raw_event(self):
+        wrapper = json.loads((ROOT / "factory/tests/fixtures/air-issues-labeled.json").read_text())
+        raw = wrapper["data"]
+        tracker = self.file({"228": {"stage": "in-dev", "head": "abc", "title": wrapper["data"]["issue"]["title"]}})
+        args = ["check", "--node", "implement", "--tier", "cheap"]
+
+        wrapper_code, wrapper_facts = self.run_main([*args, "--event", str(self.file(wrapper)), "--tracker", f"memory:{tracker}"])
+        raw_code, raw_facts = self.run_main([*args, "--event", str(self.file(raw)), "--tracker", f"memory:{tracker}"])
+        self.assertEqual((wrapper_code, wrapper_facts), (raw_code, raw_facts))
+        self.assertTrue(wrapper_facts["go"])
+        self.assertEqual((wrapper_facts["ticket"], wrapper_facts["branch"]), (228, "ez/228-gate-check-accepts-air"))
+
     def file(self, obj):
         d = Path(tempfile.mkdtemp())
         (d / "f.json").write_text(json.dumps(obj))
