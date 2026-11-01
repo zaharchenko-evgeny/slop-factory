@@ -25,12 +25,19 @@ ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "[factory:"
 PROMPT = (
     "Save the trigger payload (the <trigger_event> JSON) to a file. "
-    "Run `uv run factory/gate.py check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
-    "Otherwise read `role_file` and every skill it lists, and do the role's work on the `branch` of the output "
+    "{gate_setup}"
+    "Run `uv run {gate_root}factory/gate.py check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
+    "Otherwise {role_read}, and do the role's work on the `branch` of the output "
     "(create it from the default branch when it does not exist; the platform pushes). "
     "Write the role's handoff to `handoff_path`, then run "
-    "`uv run factory/gate.py apply --node {node}{sel} --event <file> --handoff <handoff_path>`."
+    "`uv run {gate_root}factory/gate.py apply --node {node}{sel} --event <file> --handoff <handoff_path>`."
 )
+PR_GATE_SETUP = (
+    "For this pull-request-triggered node, first run `git fetch origin main` and "
+    "`git worktree add --detach <tmp>/factory-main origin/main`. Use that worktree for the gate, role file, "
+    "and listed skills; use this checkout only as the code under review or fix. "
+)
+PR_TRIGGERED_NODES = {"review", "join", "fix", "finish"}
 BOT_FILTERED = ("review-", "join")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
 
@@ -56,6 +63,10 @@ def repository(r: dict) -> dict:
 # merged to done) from facts, so the automation only runs it.
 SCRIPT_PROMPT = ("Run `uv run factory/gate.py sweep` once and report its JSON output. Do nothing else: "
                  "change no file, label, comment or review yourself.")
+PR_SCRIPT_PROMPT = (
+    f"{PR_GATE_SETUP}Run `uv run <tmp>/factory-main/factory/gate.py sweep` once and report its JSON output. "
+    "Do nothing else: change no file, label, comment or review yourself."
+)
 
 
 def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str, str | None]]:
@@ -98,8 +109,14 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{PREFIX}{env}] env",
-                "prompt": SCRIPT_PROMPT if n["role"] == "script" else PROMPT.format(
-                    node=name, sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else "")),
+                "prompt": (PR_SCRIPT_PROMPT if name in PR_TRIGGERED_NODES else SCRIPT_PROMPT)
+                if n["role"] == "script" else PROMPT.format(
+                    node=name,
+                    sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else ""),
+                    gate_root="<tmp>/factory-main/" if name in PR_TRIGGERED_NODES else "",
+                    gate_setup=PR_GATE_SETUP if name in PR_TRIGGERED_NODES else "",
+                    role_read="read `role_file` and every skill it lists from <tmp>/factory-main"
+                    if name in PR_TRIGGERED_NODES else "read `role_file` and every skill it lists"),
             })
     envs = []
     for env in used:

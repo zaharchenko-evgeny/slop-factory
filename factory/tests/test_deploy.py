@@ -72,6 +72,22 @@ class PlanTest(unittest.TestCase):
         self.assertIn("apply --node fix --tier mid --event", a["[factory:fix-mid]"])
         self.assertIn("check --node intake --event <file>`", a["[factory:intake]"])
 
+    def test_pull_request_nodes_run_gate_from_main(self):
+        config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+        a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), config)["automations"]}
+        for name in ("[factory:review-full]", "[factory:join]", "[factory:fix-cheap]", "[factory:finish]"):
+            with self.subTest(name=name):
+                prompt = a[name]
+                self.assertIn("git worktree add --detach <tmp>/factory-main origin/main", prompt)
+                if name in ("[factory:join]", "[factory:finish]"):
+                    self.assertIn("uv run <tmp>/factory-main/factory/gate.py sweep", prompt)
+                else:
+                    self.assertIn("uv run <tmp>/factory-main/factory/gate.py check", prompt)
+                    self.assertIn("role_file` and every skill it lists from <tmp>/factory-main", prompt)
+                    self.assertIn("uv run <tmp>/factory-main/factory/gate.py apply", prompt)
+        self.assertNotIn("git worktree add", a["[factory:implement-cheap]"])
+        self.assertNotIn("git worktree add", a["[factory:intake]"])
+
     def test_real_plan_is_prefixed_and_covers_pilot(self):
         config = yaml.safe_load((ROOT / "factory.yaml").read_text())
         n = nodes.load()
