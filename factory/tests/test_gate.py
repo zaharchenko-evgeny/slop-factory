@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parents[2])
+import deploy  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
 from gate_port import MemoryTracker, TagTracker  # noqa: E402
@@ -432,6 +433,62 @@ class StaleSweepTest(unittest.TestCase):
         tr.sweep_tickets = lambda stages: [1]
         self.assertEqual(len(gate.sweep_stale(tr, NODES, 2, self.NOW, dry_run=True)[0]), 1)
         self.assertNotIn("log", tr.tickets[1])
+
+
+class SpecTest(unittest.TestCase):
+    """`--spec`: check and apply need the automation's spec, never workflows/nodes.yaml."""
+
+    def run_gate(self, d, *args, stage="in-dev"):
+        import contextlib
+        import io
+        (d / "t.json").write_text(json.dumps({"7": {"stage": stage, "head": "abc", "ci": "none"}}))
+        (d / "ev.json").write_text(json.dumps({"id": "e", "ticket": "7"}))
+        out = io.StringIO()
+        real_load = nodes.load
+        nodes.load = lambda *a: self.fail("read the node graph")
+        try:
+            with contextlib.redirect_stdout(out):
+                code = gate.main([*args, "--tracker", f"memory:{d / 't.json'}", "--spec", str(d / "spec.json")])
+        finally:
+            nodes.load = real_load
+        return code, out.getvalue()
+
+    def spec(self, d):
+        spec = deploy.node_spec("implement", NODES["nodes"]["implement"], CONFIG, "mid", None, NODES)
+        (d / "spec.json").write_text(json.dumps(spec))
+
+    def test_check_and_apply_read_only_the_spec(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            self.spec(d)
+            code, out = self.run_gate(d, "check", "--node", "implement", "--event", str(d / "ev.json"), "--tier", "mid")
+            self.assertEqual((code, json.loads(out)["outcomes"]), (0, ["done", "error", "blocked", "failed"]))
+            (d / "p.json").write_text(json.dumps({"ticket": "7", "event": "e", "tier": "mid"}))
+            code, _ = self.run_gate(d, "apply", "--node", "implement", "--outcome", "done", "--payload", str(d / "p.json"))
+            self.assertEqual(code, 0)
+
+    def test_sweep_spec_carries_the_script_nodes_it_applies(self):
+        with tempfile.TemporaryDirectory() as d:
+            spec = deploy.node_spec("recover", NODES["nodes"]["recover"], CONFIG, "cheap", None, NODES)
+            (Path(d) / "s.json").write_text(json.dumps(spec))
+            got = gate.spec_nodes(Path(d) / "s.json")["nodes"]
+            self.assertLessEqual({"join", "finish", "recover"}, set(got))
+            self.assertEqual(got["join"]["else_tier"], "cheap")
+
+    def test_apply_rejects_an_outcome_outside_the_spec_and_a_wrong_stage(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            self.spec(d)
+            (d / "p.json").write_text(json.dumps({"ticket": "7", "event": "e"}))
+            code, out = self.run_gate(d, "apply", "--node", "implement", "--outcome", "approve", "--payload", str(d / "p.json"))
+            self.assertEqual((code, json.loads(out)["error"]), (2, "unknown outcome: approve"))
+            code, _ = self.run_gate(d, "check", "--node", "implement", "--event", str(d / "ev.json"), stage="ready")
+            self.assertEqual(code, 10)  # the spec's `when` still holds the stage
+            spec = json.loads((d / "spec.json").read_text())
+            spec["outcomes"]["done"]["from"] = ["approved"]
+            (d / "spec.json").write_text(json.dumps(spec))
+            code, out = self.run_gate(d, "apply", "--node", "implement", "--outcome", "done", "--payload", str(d / "p.json"))
+            self.assertEqual((code, json.loads(out)["reason"]), (10, "stage in-dev is not in the outcome's from"))
 
 
 if __name__ == "__main__":
