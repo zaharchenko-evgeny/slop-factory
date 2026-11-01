@@ -19,14 +19,22 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import config  # noqa: E402
-import deploy  # noqa: E402
-import gate  # noqa: E402
-import nodes  # noqa: E402
-
+HERE = Path(__file__).resolve().parent
+# Engine modules (config, deploy, gate, nodes) are imported by load_engine(), never at module level: a pull-request
+# node must import them from main's worktree, because importing runs module-level code with the node's credentials.
+config = deploy = gate = nodes = None
+# Mirrors deploy.PR_TRIGGERED_NODES (a test keeps them equal); it cannot be read from deploy before the engine is chosen.
+PR_NODES = {"review", "join", "fix", "finish"}
 
 STATE = Path(".factory/begin.json")
+
+
+def load_engine(factory_dir):
+    """Import the engine modules from `factory_dir` (the checkout's own, or main's worktree for a pull-request node)."""
+    global config, deploy, gate, nodes
+    sys.path.insert(0, str(factory_dir))
+    import config as config_, deploy as deploy_, gate as gate_, nodes as nodes_
+    config, deploy, gate, nodes = config_, deploy_, gate_, nodes_
 
 
 def from_main():
@@ -34,7 +42,6 @@ def from_main():
     root = tempfile.mkdtemp(prefix="factory-main-") + "/main"
     for cmd in (["fetch", "origin", "main"], ["worktree", "add", "--detach", root, "origin/main"]):
         subprocess.run(["git", *cmd], check=True, capture_output=True)
-    config.set_team(root)
     return root
 
 
@@ -53,13 +60,16 @@ def gate_args(state, *more):
     return [*sel, "--spec", state["spec"], *state["tracker"], *more]
 
 
-def begin(argv):
+def begin(argv, team=None):
     p = argparse.ArgumentParser(prog="factory begin")
     p.add_argument("automation")
     p.add_argument("payload", nargs="?")
     p.add_argument("--tracker")  # tests: a memory tracker
     a = p.parse_args(argv)
-    engine = from_main() if a.automation.split("-")[0] in deploy.PR_TRIGGERED_NODES else None
+    engine = from_main() if a.automation.split("-")[0] in PR_NODES else None
+    load_engine(Path(engine) / "factory" if engine else HERE)
+    if engine or team:
+        config.set_team(engine or team)
     try:
         compiled = deploy.compile_automation(a.automation, nodes.load(), config.load())
     except KeyError as e:
@@ -84,11 +94,12 @@ def begin(argv):
     return code
 
 
-def end(argv):
+def end(argv, team=None):
     if len(argv) != 1 or not STATE.exists():
         print(json.dumps({"error": "end needs <handoff_path> and a prior `factory begin`"}))
         return 2
     state = json.loads(STATE.read_text())
+    load_engine(Path(state["engine"]) / "factory" if state["engine"] else HERE)
     if argv[0] != state["handoff_path"]:
         print(json.dumps({"error": f"handoff path must be {state['handoff_path']}"}))
         return 2
@@ -105,15 +116,32 @@ def validate():
     return 1 if errs else 0
 
 
+def pop_team(argv):
+    """Strip `--team DIR` without the engine modules; returns (DIR or None, the remaining arguments)."""
+    argv = list(argv)
+    if "--team" not in argv:
+        return None, argv
+    i = argv.index("--team")
+    team = argv[i + 1] if i + 1 < len(argv) else None
+    del argv[i:i + 2]
+    return team, argv
+
+
 def main(argv=None):
-    argv = config.pop_team(sys.argv[1:] if argv is None else argv)
+    team, argv = pop_team(sys.argv[1:] if argv is None else argv)
     cmd, rest = (argv[0], argv[1:]) if argv else ("", [])
-    if cmd == "begin":
-        return begin(rest)
-    if cmd == "end":
-        return end(rest)
     if cmd == "sweep" and "--main" in rest:
-        return run_gate(from_main(), ["sweep", *[x for x in rest if x != "--main"]])
+        engine = from_main()
+        load_engine(Path(engine) / "factory")
+        config.set_team(engine)
+        return run_gate(engine, ["sweep", *[x for x in rest if x != "--main"]])
+    if cmd == "end":
+        return end(rest, team)
+    if cmd == "begin":
+        return begin(rest, team)
+    load_engine(HERE)
+    if team:
+        config.set_team(team)
     if cmd in ("check", "apply", "sweep"):
         return gate.main([cmd, *rest])
     if cmd == "deploy":

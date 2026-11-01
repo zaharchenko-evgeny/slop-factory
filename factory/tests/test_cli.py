@@ -8,6 +8,8 @@ import contextlib
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -19,6 +21,8 @@ sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(ROOT)
 import cli  # noqa: E402
+
+cli.load_engine(cli.HERE)
 
 PAYLOAD = {"action": "labeled", "issue": {"number": 7, "title": "Add x", "updated_at": "T1"}}
 
@@ -62,17 +66,56 @@ class BeginEndTest(unittest.TestCase):
 
     def test_pull_request_node_runs_main_gate_not_the_checkouts(self):
         main = Path("main")
-        (main / "factory").mkdir(parents=True)
+        shutil.copytree(ROOT, main, ignore=shutil.ignore_patterns(".git", ".factory", "tests"))
         (main / "factory/gate.py").write_text(
             'import json, sys\nprint(json.dumps({"gate": "main", "handoff_path": "h.json", "argv": sys.argv[1:]}))\n')
         Path("event.json").write_text("{}")
         pr_gate = mock.Mock(side_effect=AssertionError("the pull request's gate ran"))
-        with mock.patch.object(cli, "from_main", return_value=str(main.resolve())), mock.patch.object(cli.gate, "main", pr_gate):
+        with mock.patch.object(cli, "from_main", return_value=str(main.resolve())), \
+                mock.patch.object(cli, "load_engine"), mock.patch.object(cli.gate, "main", pr_gate):
             code, out = self.run_cli("begin", "fix-mid", "event.json")
             self.assertEqual((code, json.loads(out)["gate"]), (0, "main"), out)
             code, out = self.run_cli("end", "h.json")
             self.assertEqual((code, json.loads(out)["argv"][2]), (0, "apply"), out)
         pr_gate.assert_not_called()
+
+    def test_pr_nodes_match_deploy(self):
+        self.assertEqual(cli.PR_NODES, cli.deploy.PR_TRIGGERED_NODES)
+
+
+class ImportTimeBoundaryTest(unittest.TestCase):
+    def test_pull_request_module_with_import_side_effect_never_runs(self):
+        """A pull request that changes the engine cannot run code at import: begin imports main's modules."""
+        git = lambda cwd, *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True,
+                                             capture_output=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            origin, pr = tmp / "origin.git", tmp / "pr"
+            git(tmp, "init", "--bare", "-b", "main", str(origin))
+            files = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+            for rel in files:
+                if (ROOT / rel).is_file():
+                    (pr / rel).parent.mkdir(parents=True, exist_ok=True)
+                    (pr / rel).write_bytes((ROOT / rel).read_bytes())
+            # main's gate is a stub: begin only has to reach it
+            (pr / "factory/gate.py").write_text(
+                'import json\nif __name__ == "__main__":\n    print(json.dumps({"gate": "main", "handoff_path": "h.json"}))\n')
+            git(pr, "init", "-b", "main")
+            git(pr, "remote", "add", "origin", str(origin))
+            git(pr, "add", "-A")
+            git(pr, "commit", "-m", "main")
+            git(pr, "push", "origin", "main")
+            git(pr, "checkout", "-b", "pr")
+            marker = tmp / "pwned"
+            for mod in ("gate", "config", "deploy", "nodes"):
+                f = pr / "factory" / f"{mod}.py"
+                f.write_text(f'open({str(marker)!r}, "w").write("x")\n' + f.read_text())
+            Path(pr / "event.json").write_text("{}")
+            done = subprocess.run([sys.executable, str(pr / "factory/cli.py"), "begin", "fix-mid", "event.json"], cwd=pr,
+                                  capture_output=True, text=True)
+            self.assertFalse(marker.exists(), "the pull request's engine module ran at import")
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(json.loads(done.stdout)["gate"], "main")
 
 
 if __name__ == "__main__":
