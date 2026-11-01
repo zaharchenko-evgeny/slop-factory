@@ -60,7 +60,7 @@ class FakeGh:
             return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "head": {"sha": "h1", "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": u} for u in self.requested]})
         if a.endswith("/commits/h1"):
-            return json.dumps({"commit": {"committer": {"date": "2026-01-02T00:00:00Z"}}})
+            return json.dumps({"commit": {"committer": {"date": getattr(self, "head_date", "2026-01-02T00:00:00Z")}}})
         if "/collaborators/" in a:
             who = a.split("/collaborators/")[1].split("/")[0]
             if who not in self.roles:
@@ -341,6 +341,7 @@ class JoinTest(unittest.TestCase):
                       review(BOT, M, at="2026-01-02T03:00:00Z")]  # round 2: the agent approves h1
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # the late review counts in round 2
         gh.fix_events = ["2026-01-02T01:30:00Z"]  # round 1's join started the fix at 01:30; alice came at 02:00
+        gh.head_date = "2026-01-02T02:50:00Z"  # the fix pushed this head after its label
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # sent during the fix: counts in round 2
         gh.fix_events = ["2026-01-02T02:30:00Z"]  # the join ran after alice: the fix was given her request
         f = tr(gh).facts(7)
@@ -373,6 +374,7 @@ class JoinTest(unittest.TestCase):
                              review(BOT, M, at="2026-01-02T04:00:00Z"),
                              review("alice", "looking", state="COMMENTED", at="2026-01-02T05:00:00Z")])
         gh.fix_events, gh.requested = ["2026-01-02T02:05:00Z"], []
+        gh.head_date = "2026-01-02T02:50:00Z"  # the fix pushed this head after its label
         res, _ = gate.sweep(tr(gh), nodes.load())
         self.assertEqual([(r["node"], r["outcome"]) for r in res], [("join", "waiting")])
         self.assertTrue(any("reviewers[]=alice" in " ".join(w) for w in gh.writes))
@@ -383,6 +385,7 @@ class JoinTest(unittest.TestCase):
         bot = review("rev[bot]", "", commit="h0", state="CHANGES_REQUESTED", assoc="NONE", at="2026-01-02T02:00:00Z")
         gh = FakeGh(reviews=[bot, review(BOT, M, at="2026-01-02T04:00:00Z")])
         gh.fix_events = ["2026-01-02T02:05:00Z"]
+        gh.head_date = "2026-01-02T02:50:00Z"  # the fix pushed this head after its label
         t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, trusted_bots=["rev[bot]"])
         f = t.facts(7)
         self.assertEqual((f["round_complete"], f["waiting_reviewers"], f["round_verdict"]), (True, [], "approve"))
@@ -398,12 +401,29 @@ class JoinTest(unittest.TestCase):
         f = GitHubGateTracker(REPO, STAGES, BOT, run=G(), run_cap=8).facts(7)
         self.assertEqual(f["agent_runs"], 1)  # a person's ready starts a fresh budget
 
+    def test_join_at_the_run_cap_blocks_instead_of_starting_a_fix(self):
+        # review of PR #198, B1: the reviewer's own join adds the fix label, so the cap must hold there too
+        gh = FakeGh(reviews=[review(BOT, C)])
+        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, run_cap=0)
+        t.apply({"ticket": 7, "kind": "join", "value": "all-approve", "tier": "mid"})
+        self.assertIn("factory:blocked", gh.labels)
+        self.assertFalse(any("factory:fix-" in x for x in gh.labels))
+
+    def test_head_already_handed_to_a_fix_is_an_open_round(self):
+        # review of PR #198, B2: between the fix's apply and the platform's push the old head must not re-join
+        gh = FakeGh(reviews=[review(BOT, C)])  # head h1 is committed 2026-01-02T00:00:00Z in the stub
+        gh.fix_events = ["2026-01-02T05:00:00Z"]  # the fix for h1 started after h1's commit
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_complete"], f["round_verdict"]), (False, None))
+        self.assertEqual(join(gh), (False, 0))
+
     def test_change_request_counted_by_round_1_does_not_block_round_2(self):
         # B2 of #183: the bot reviews first, the human second; round 1 counts her request, round 2 must not loop on it
         gh = FakeGh(reviews=[review(BOT, M, commit="h0", at="2026-01-02T01:00:00Z"),
                              review("alice", "", commit="h0", state="CHANGES_REQUESTED", at="2026-01-02T02:00:00Z"),
                              review(BOT, M, at="2026-01-02T04:00:00Z")])
         gh.fix_events = ["2026-01-02T02:05:00Z"]  # round 1's join started the fix after her request
+        gh.head_date = "2026-01-02T02:50:00Z"  # the fix pushed this head after its label
         f = tr(gh).facts(7)
         self.assertEqual((f["round_complete"], f["waiting_reviewers"]), (False, ["alice"]))  # waits, no loop
         self.assertTrue(join(gh)[0])  # the join asks her again and moves nothing

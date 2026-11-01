@@ -72,6 +72,8 @@ class GitHubGateTracker:
                         "--jq", ".workflow_runs[]"])
         latest = {}
         for r in (json.loads(x) for x in out.splitlines() if x.strip()):
+            if r.get("event") == "workflow_run":  # ci-state.yml reports CI; it is not CI
+                continue
             key = (r.get("workflow_id"), r.get("event"))
             if key not in latest or (r.get("run_number"), r.get("run_attempt", 1)) > (
                     latest[key].get("run_number"), latest[key].get("run_attempt", 1)):
@@ -151,6 +153,9 @@ class GitHubGateTracker:
         others = {r["author"]: r for r in reviews if not r["agent"] and r["verdict"]
                   and (r["author"] in self.trusted if r["bot"] else self._can_write(r["author"]))}
         ignored = [r["author"] for r in reviews if r["bot"] and not r["agent"] and r["author"] not in self.trusted]
+        writes = self._fix_writes(pr) if pr is not None else []
+        if writes and max(writes) > self._api(f"commits/{head}")["commit"]["committer"]["date"]:
+            return False, None, ignored, []  # this head's round already went to a fix; wait for its push
         if ci == "red":  # a red head needs a fix whatever the reviews say; reviewers only start on green
             return True, "changes", ignored, []
         complete = all(x in at_head for x in required) and not requested and ci == "green"
@@ -278,6 +283,11 @@ class GitHubGateTracker:
             return False
         if f["round_verdict"] == "approve":
             return self.apply({"ticket": n, "kind": "stage", "value": "approved"})
+        if f["agent_runs"] >= f["run_cap"]:  # spend guard: no further developer run starts
+            self.apply({"ticket": n, "kind": "comment", "value": (
+                f"[factory] Stopped: {f['agent_runs']} developer runs since the last factory:ready reached "
+                f"limits.agent_runs_per_ticket. A person decides, then sets factory:ready.")})
+            return self.apply({"ticket": n, "kind": "stage", "value": "blocked"})
         wrote = self.apply({"ticket": n, "kind": "label", "value": f"factory:fix-{tier}", "on": "pr"})
         return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote
 

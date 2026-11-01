@@ -30,7 +30,7 @@ jobs:
           pr=$(gh pr list --head "$BRANCH" --state open --json number,headRefOid --jq ".[] | select(.headRefOid == \"$SHA\") | .number")
           if [ -z "$pr" ]; then echo "no open PR at $SHA (head moved or PR closed): nothing to label"; exit 0; fi
           case "$CONCLUSION" in
-            success) want=factory:ci-green ;;
+            success|neutral) want=factory:ci-green ;;
             cancelled|skipped) echo "conclusion $CONCLUSION: no result"; exit 0 ;;
             *) want=factory:ci-red ;;
           esac
