@@ -141,6 +141,43 @@ GateTag = tests_for(TagTracker, "PROJ-7")
 
 
 class CliAndValidate(unittest.TestCase):
+    def test_implement_done_blocks_branch_past_estimate_and_diff_limit(self):
+        tr = MemoryTracker({"7": {"stage": "in-dev", "body": "Size: about 250 lines with tests."}})
+        with patch.object(gate, "branch_size", return_value=(500, [("factory/gate.py", 300), ("factory/tests/test_gate.py", 200)])):
+            code, out = gate.apply("implement", "done", {"ticket": "7", "event": "e"}, tr, NODES)
+        self.assertEqual((code, tr.tickets["7"]["stage"]), (gate.GO, "blocked"))
+        comment = next(json.loads(v) for kind, v in tr.tickets["7"]["log"] if kind == "comment")
+        self.assertIn("500 lines", comment)
+        self.assertIn("250-line estimate", comment)
+        self.assertIn("factory/gate.py (300)", comment)
+
+    def test_small_estimate_does_not_block_below_diff_limit(self):
+        tr = MemoryTracker({"7": {"stage": "in-dev", "body": "size_estimate: ~50"}})
+        with patch.object(gate, "branch_size", return_value=(100, [("factory/gate.py", 100)])):
+            code, _ = gate.apply("implement", "done", {"ticket": "7", "event": "e"}, tr, NODES)
+        self.assertEqual((code, tr.tickets["7"]["stage"]), (gate.GO, "in-review"))
+
+    def test_fix_done_uses_current_size_line(self):
+        tr = MemoryTracker({"7": {"stage": "changes-requested", "round_complete": True,
+                                   "body": "Size: about 250 lines."}})
+        with patch.object(gate, "branch_size", return_value=(501, [("deleted.txt", 1)])):
+            gate.apply("fix", "done", {"ticket": "7", "event": "e"}, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "blocked")
+
+    def test_branch_size_uses_delivery_checkout_and_counts_modified_lines(self):
+        with tempfile.TemporaryDirectory() as engine, tempfile.TemporaryDirectory() as delivery:
+            (Path(delivery) / "retained.txt").write_text("still here\n")
+            result = type("Result", (), {
+                "returncode": 0,
+                "stdout": "5\t7\tretained.txt\n0\t9\tdeleted.txt\n4\t0\tskills/vendor/copy.txt\n",
+                "stderr": "",
+            })()
+            with patch.object(gate, "ROOT", Path(engine)), \
+                    patch.object(gate.subprocess, "run", return_value=result) as run:
+                self.assertEqual(gate.branch_size("origin/main", checkout=delivery),
+                                 (13, [("retained.txt", 12), ("deleted.txt", 1)]))
+            self.assertEqual(run.call_args.kwargs["cwd"], Path(delivery))
+
     def test_intake_size_uses_first_number(self):
         fields = gate.intake_fields({
             "handoff": "ROUTER-INTAKE",
