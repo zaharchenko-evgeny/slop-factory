@@ -17,6 +17,7 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import config as config_mod
 import nodes as nodes_mod
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,7 +60,7 @@ OUTCOME_WORDS = {
 
 def role_intro(role: str) -> str:
     """The role's opening section, which states its responsibility and limits."""
-    path = ROOT / "roles" / role / "role.md"
+    path = config_mod.resolve(f"roles/{role}/role.md")
     lines = path.read_text().splitlines()
     section = []
     for line in lines[1:]:
@@ -102,7 +103,7 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None) -> dict:
 
 
 def repository(r: dict) -> dict:
-    """The `repository` input of create_automation from a factory.yaml repository."""
+    """The `repository` input of create_automation from a factory.descriptor.yaml repository."""
     url = r["url"].rstrip("/")
     return {"fullName": "/".join(url.split("/")[-2:]), "cloneUrl": url + ".git", "browseUrl": url,
             "provider": "github" if "github.com" in url else "other"}
@@ -211,10 +212,11 @@ def labels(nodes: dict, config: dict) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
+    argv = config_mod.pop_team(argv)
     if len(argv) != 3 or argv[0] != "plan" or argv[1] != "--target" or argv[2] != "air":
         print(__doc__)
         return 2
-    config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+    config = config_mod.load()
     out = plan_air(nodes_mod.load(), config)
     print(json.dumps(out, indent=2, sort_keys=True))
     return 0

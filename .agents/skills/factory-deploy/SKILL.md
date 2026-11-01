@@ -5,7 +5,7 @@ description: "Deploy the factory nodes to Air Cloud: render the plan with deploy
 
 # Factory deploy (Air target)
 
-Read first: `factory.yaml` (`targets.air`), `workflows/nodes.yaml`, `docs/targets.md`.
+Read first: `factory.descriptor.yaml` (`targets.air`), `workflows/nodes.yaml`, `docs/targets.md`.
 Run from the factory root. Whoever runs this applies the plan and changes no code.
 
 ## Rules

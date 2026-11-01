@@ -29,6 +29,7 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 from gate_github import GitHubGateTracker  # noqa: E402
 from gate_port import MemoryTracker  # noqa: E402
@@ -209,12 +210,12 @@ def check(name, event, tracker, nodes, config):
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
     if node.get("focuses"):  # one review tier per focus (roles.<role>.modes.<focus>.tier)
         tiers = [roles[role]["modes"][f]["tier"] for f in node["focuses"]]
-    skills = ROOT / "roles" / role / "skills.txt"
+    skills = config_mod.resolve(f"roles/{role}/skills.txt")
     return (NO_GO if why else GO), {
         "go": why is None, "reason": why, "ticket": event["ticket"], "node": name, "role": role,
         "tier": event.get("tier") if event.get("tier") in tiers else tiers[0],
         "focus": event.get("focus"),
-        "role_file": f"roles/{role}/role.md" if role in roles else None,
+        "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
@@ -499,7 +500,7 @@ def main(argv):
     p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
     p.add_argument("--tier")
     try:
-        a = p.parse_args(argv)
+        a = p.parse_args(config_mod.pop_team(argv))
     except SystemExit:
         return BAD
     path = ""
@@ -515,7 +516,7 @@ def main(argv):
         else:
             raise Bad("--tracker is github or memory:FILE")
         nodes = nodes_mod.load(a.nodes)
-        config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+        config = config_mod.load()
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):
                 raise Bad("sweep needs --tracker github")

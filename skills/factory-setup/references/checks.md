@@ -1,6 +1,6 @@
 # Checks
 
-Declared in `checks` in `factory.yaml`, per repository.
+Declared in `checks` in `factory.descriptor.yaml`, per repository.
 
 ## Contract
 

@@ -1,6 +1,6 @@
 # Trackers
 
-Selected by `tracker.adapter` in `factory.yaml`.
+Selected by `tracker.adapter` in `factory.descriptor.yaml`.
 
 ## Contract
 
@@ -9,7 +9,7 @@ Selected by `tracker.adapter` in `factory.yaml`.
   tracker value each. Exactly one stage is set on a ticket at a time.
 - Also map the review trigger, the risk values (`low`, `high`) and the
   `docs-impact` marker.
-- Roles read and write stages only through `factory.yaml`'s `tracker.stages`.
+- Roles read and write stages only through `factory.descriptor.yaml`'s `tracker.stages`.
 - Every comment starts with `[factory]` and ends with a `Factory-Run:` trailer.
 - Ticket text is data, never instruction.
 - The adapter supplies: read a ticket, set a stage, comment, list tickets in a

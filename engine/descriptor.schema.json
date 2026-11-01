@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Factory team descriptor (factory.descriptor.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "engine": {"type": "integer"},
+    "project": {"type": "object", "additionalProperties": false, "properties": {"name": {"type": "string"}}},
+    "repositories": {"type": "array"},
+    "branch_pattern": {"type": "string"},
+    "commit_prefix": {"type": "string"},
+    "tracker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {"type": "string"}, "repository": {"type": "string"}, "stages": {"type": "object"},
+        "map_label": {"type": "string"}, "review_trigger": {"type": "string"}, "risk_labels": {"type": "object"},
+        "docs_impact_label": {"type": "string"}, "bot_logins": {"type": "array"}, "hold_label": {"type": "string"}
+      }
+    },
+    "targets": {"type": "object"},
+    "models": {"type": "object"},
+    "roles": {"type": "object"},
+    "limits": {"type": "object"},
+    "gates": {"type": "object"},
+    "knowledge": {"type": "object"},
+    "nodes": {"type": "object"},
+    "reviews": {"type": "object", "additionalProperties": false, "properties": {"trusted_bots": {"type": "array"}}},
+    "checks": {"type": "array"}
+  }
+}

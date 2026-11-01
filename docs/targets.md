@@ -16,7 +16,7 @@ by hand, see the `factory-delivery` skill.
 
 | Concern | Air |
 | --- | --- |
-| Harness | `claude-code` or `codex` with the models Air provides (`targets.air.models` in `factory.yaml`) |
+| Harness | `claude-code` or `codex` with the models Air provides (`targets.air.models` in `factory.descriptor.yaml`) |
 | Secrets | Project environment secrets, names only: `GITHUB_TOKEN`, decisions-kit auth |
 | Tools | Installed in the environment's setup script: `uv`, `gh`, `conftest`, `decide`; `.air/cloud/startup.sh` installs `conftest` and `decide` |
 | Overlap | Duplicate trigger firings are expected; the gate refuses a stale or duplicate event (exit 10) |

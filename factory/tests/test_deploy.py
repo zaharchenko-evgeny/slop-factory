@@ -16,6 +16,8 @@ import yaml
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "factory"))
+import config as cfg  # noqa: E402
+cfg.set_team(Path(__file__).resolve().parents[2])
 import deploy
 import nodes
 
@@ -35,7 +37,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(deploy.main(["plan", "--target", "local"]), 2)
 
     def test_plan_lists_every_label_the_gate_writes(self):
-        plan = deploy.plan_air(nodes.load(), yaml.safe_load((HERE.parent.parent / "factory.yaml").read_text()))
+        plan = deploy.plan_air(nodes.load(), cfg.load())
         for want in ("factory:ready", "factory:implement-cheap", "factory:fix-strong", "complexity:small", "risk:high"):
             self.assertIn(want, plan["labels"])
         self.assertFalse([x for x in plan["labels"] if "<" in x])
@@ -48,7 +50,7 @@ class PlanTest(unittest.TestCase):
 
     def test_recover_runs_the_stale_sweep_twice_a_day_on_the_cheap_tier(self):
         for plan in (json.loads((FIX / "air-plan.json").read_text()),
-                     deploy.plan_air(nodes.load(), yaml.safe_load((ROOT / "factory.yaml").read_text()))):
+                     deploy.plan_air(nodes.load(), cfg.load())):
             a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] recover")
             self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "0 6,18 * * *", "timezone": "UTC"}])
             self.assertEqual(a["prompt"], deploy.STALE_PROMPT)
@@ -65,16 +67,16 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(set(a["[Slop factory] intake"]["agentAndModel"]), {"id", "name", "isDefault", "agentId"})
         self.assertEqual(set(a["[Slop factory] intake"]["repository"]), {"fullName", "cloneUrl", "browseUrl", "provider"})
         self.assertEqual(a["[Slop factory] intake"]["triggerVcs"], [{"outputBehaviour": "read-only"}])
-        for e in deploy.plan_air(nodes.load(), yaml.safe_load((ROOT / "factory.yaml").read_text()))["environments"]:
+        for e in deploy.plan_air(nodes.load(), cfg.load())["environments"]:
             self.assertNotIn("GITHUB_TOKEN", e["secrets"])
-        join = next(x for x in deploy.plan_air(nodes.load(), yaml.safe_load((ROOT / "factory.yaml").read_text()))
+        join = next(x for x in deploy.plan_air(nodes.load(), cfg.load())
                     ["automations"] if x["name"] == "[Slop factory] join")
         self.assertEqual([(x["eventType"], x["filters"].get("label")) for x in join["triggers"]],
                          [("pull_request_review.submitted", None), ("pull_request.labeled", "factory:ci-red")])
-        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), yaml.safe_load((ROOT / "factory.yaml").read_text()))["automations"] if a["name"] != "[Slop factory] recover" for x in a["triggers"]), "no polling"  # recover is the one safety net
+        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] != "[Slop factory] recover" for x in a["triggers"]), "no polling"  # recover is the one safety net
 
     def test_prompt_carries_focus_and_tier(self):
-        config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+        config = cfg.load()
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), config)["automations"]}
         self.assertIn("check --node review --event <file> --focus behaviour --tier review`", a["[Slop factory] review-behaviour"])
         self.assertIn("check --node fix --event <file> --tier mid`", a["[Slop factory] fix-mid"])
@@ -85,7 +87,7 @@ class PlanTest(unittest.TestCase):
         self.assertIn("check --node intake --event <file>`", a["[Slop factory] intake"])
 
     def test_agent_prompts_open_with_role_and_flow(self):
-        config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+        config = cfg.load()
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), config)["automations"]}
         reviewer = a["[Slop factory] review-full"]
         self.assertTrue(reviewer.startswith("You are the reviewer of Slop factory.\n\n"))
@@ -96,7 +98,7 @@ class PlanTest(unittest.TestCase):
         self.assertIn("Your job in this flow:", intake)
 
     def test_pull_request_nodes_run_gate_from_main(self):
-        config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+        config = cfg.load()
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), config)["automations"]}
         for name in ("[Slop factory] review-full", "[Slop factory] join", "[Slop factory] fix-cheap", "[Slop factory] finish"):
             with self.subTest(name=name):
@@ -112,7 +114,7 @@ class PlanTest(unittest.TestCase):
         self.assertNotIn("git worktree add", a["[Slop factory] intake"])
 
     def test_real_plan_is_prefixed_and_covers_pilot(self):
-        config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+        config = cfg.load()
         n = nodes.load()
         plan = deploy.plan_air(n, config)
         names = {a["name"] for a in plan["automations"]}

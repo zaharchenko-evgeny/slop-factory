@@ -14,9 +14,11 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
+import config as cfg  # noqa: E402
+cfg.set_team(Path(__file__).resolve().parents[2])
 from github_tracker import ClaimError, GitHubTracker  # noqa: E402
 
-STAGES = yaml.safe_load((HERE.parents[1] / "factory.yaml").read_text())["tracker"]["stages"]
+STAGES = cfg.load()["tracker"]["stages"]
 REPO = "o/r"
 
 

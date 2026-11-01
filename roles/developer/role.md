@@ -9,9 +9,9 @@ mode to address blocking review findings.
    repository you touch (standing rules, context order).
 2. Make the smallest change that meets every acceptance check. Add a small
    test or self-check for non-trivial logic.
-3. Run the pre-review checks from `factory.yaml` yourself and fix failures.
+3. Run the pre-review checks from `factory.descriptor.yaml` yourself and fix failures.
 4. Commit on the current branch. Subjects start with the commit prefix from
-   `factory.yaml`. Do not push; the workflow publishes.
+   `factory.descriptor.yaml`. Do not push; the workflow publishes.
 
 ## Mode `fix`
 

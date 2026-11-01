@@ -1,6 +1,6 @@
-# {{PROJECT_NAME}} software factory. Roles and workflows read every
-# repository, tracker, model name from this file (design §2).
-version: 1
+# {{PROJECT_NAME}} team descriptor (ADR-0015). Roles and workflows read every
+# repository, tracker, model name from here; engine/defaults.yaml holds what teams share.
+engine: 1
 
 project: { name: "{{PROJECT_NAME}} factory" }
 
@@ -13,28 +13,6 @@ commit_prefix: "#{ticket} "
 tracker:
   adapter: github-issues
   repository: {{TRACKER_REPOSITORY}}
-  # Stage → label. Exactly one stage label is set on an issue at a time.
-  stages:
-    draft: factory:draft
-    ready: factory:ready
-    in-dev: factory:in-dev
-    in-review: factory:in-review
-    changes-requested: factory:changes-requested
-    approved: factory:approved
-    done: factory:done
-    blocked: factory:blocked
-    # Stages of the node chart (workflows/nodes.yaml); the pilot uses none of them.
-    needs-answers: factory:needs-answers
-    split: factory:split
-    not-actionable: factory:not-actionable
-    investigating: factory:investigating
-  # The map issue; its sub-issues give the frontier order.
-  map_label: factory:map
-  review_trigger: factory:review
-  risk_labels: { low: "risk:low", high: "risk:high" }
-  docs_impact_label: docs-impact
-  bot_logins: []   # comment authors that never resume a waiting ticket
-  hold_label: factory:hold   # a ticket with this label never auto-merges
 
 # Bots other than targets.air.bot_login whose APPROVED / CHANGES_REQUESTED reviews count in a round.
 reviews:

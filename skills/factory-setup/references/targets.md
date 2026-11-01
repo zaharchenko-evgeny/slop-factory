@@ -1,10 +1,10 @@
 # Targets
 
-Selected by `targets.<name>` in `factory.yaml`.
+Selected by `targets.<name>` in `factory.descriptor.yaml`.
 
 ## Contract
 
-- **Plan**: compare `factory.yaml` with what is deployed and list creates,
+- **Plan**: compare `factory.descriptor.yaml` with what is deployed and list creates,
   updates and prunes. Change nothing.
 - **Apply**: only after the user approves the plan. While
   `gates.confirm_external_writes` is `true`, show every external write first.
