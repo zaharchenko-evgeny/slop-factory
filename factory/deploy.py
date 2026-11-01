@@ -26,16 +26,18 @@ PROMPT = (
     "Your job in this flow: triggered by {triggers}; outcomes: {outcomes}.\n\n"
     "Save the trigger payload (the <trigger_event> JSON) to a file. "
     "{gate_setup}"
-    "Run `uv run {gate_root}factory/gate.py check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
+    "Run `uv run {gate_root}factory/gate.py{team} check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
     "Otherwise {role_read}, and do the role's work on the `branch` of the output "
     "(create it from the default branch when it does not exist; the platform pushes). "
     "Write the role's handoff to `handoff_path`, then run "
-    "`uv run {gate_root}factory/gate.py apply --node {node}{sel} --event <file> --handoff <handoff_path>`."
+    "`uv run {gate_root}factory/gate.py{team} apply --node {node}{sel} --event <file> --handoff <handoff_path>`."
 )
 PR_GATE_SETUP = (
     "For this pull-request-triggered node, first run `git fetch origin main` and "
     "`git worktree add --detach <tmp>/factory-main origin/main`. Use that worktree for the gate, role file, "
     "and listed skills; use this checkout only as the code under review or fix. "
+    "Always pass `--team <tmp>/factory-main` to the gate, so the descriptor, graph and role overrides come from "
+    "main, never from the pull request. "
 )
 PR_TRIGGERED_NODES = {"review", "join", "fix", "finish"}
 BOT_FILTERED = ("review-", "join")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
@@ -115,7 +117,7 @@ SCRIPT_PROMPT = ("Run `uv run factory/gate.py sweep` once and report its JSON ou
                  "change no file, label, comment or review yourself.")
 STALE_PROMPT = SCRIPT_PROMPT.replace("gate.py sweep`", "gate.py sweep --stale`")
 PR_SCRIPT_PROMPT = (
-    f"{PR_GATE_SETUP}Run `uv run <tmp>/factory-main/factory/gate.py sweep` once and report its JSON output. "
+    f"{PR_GATE_SETUP}Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep` once and report its JSON output. "
     "Do nothing else: change no file, label, comment or review yourself."
 )
 
@@ -172,6 +174,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     node=name,
                     sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else ""),
                     gate_root="<tmp>/factory-main/" if name in PR_TRIGGERED_NODES else "",
+                    team=" --team <tmp>/factory-main" if name in PR_TRIGGERED_NODES else "",
                     gate_setup=PR_GATE_SETUP if name in PR_TRIGGERED_NODES else "",
                     role_read="read `role_file` and every skill it lists from <tmp>/factory-main"
                     if name in PR_TRIGGERED_NODES else "read `role_file` and every skill it lists"),

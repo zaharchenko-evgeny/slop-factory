@@ -105,11 +105,11 @@ class PlanTest(unittest.TestCase):
                 prompt = a[name]
                 self.assertIn("git worktree add --detach <tmp>/factory-main origin/main", prompt)
                 if name in ("[Slop factory] join", "[Slop factory] finish"):
-                    self.assertIn("uv run <tmp>/factory-main/factory/gate.py sweep", prompt)
+                    self.assertIn("uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep", prompt)
                 else:
-                    self.assertIn("uv run <tmp>/factory-main/factory/gate.py check", prompt)
+                    self.assertIn("uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main check", prompt)
                     self.assertIn("role_file` and every skill it lists from <tmp>/factory-main", prompt)
-                    self.assertIn("uv run <tmp>/factory-main/factory/gate.py apply", prompt)
+                    self.assertIn("uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main apply", prompt)
         self.assertNotIn("git worktree add", a["[Slop factory] implement-cheap"])
         self.assertNotIn("git worktree add", a["[Slop factory] intake"])
 
