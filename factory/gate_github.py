@@ -375,7 +375,12 @@ class GitHubGateTracker:
         head = pr["head"]["sha"]
         if any(r["agent"] and r["focus"] == focus and r["commit_id"] == head for r in self._reviews(pr)):
             return False
-        rnd = e.get("round") or self.facts(n)["fix_rounds"] + 1
+        facts = self.facts(n)
+        earlier_change_heads = {r["commit_id"] for r in facts["reviews"]
+                                if r["agent"] and r["verdict"] == "changes"
+                                and r["commit_id"] != head
+                                and (r.get("submitted_at") or "") >= self._since}
+        rnd = e.get("round") or len(earlier_change_heads) + 1
         verdict = "approve" if e["value"].startswith("approve") else "changes"
         marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict} -->"
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first

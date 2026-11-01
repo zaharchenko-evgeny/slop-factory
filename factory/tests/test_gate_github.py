@@ -32,6 +32,7 @@ class FakeGh:
     """The gh calls of the adapter over one ticket (7) with a PR on ez/7-x; records writes."""
 
     def __init__(self, labels=("factory:in-review", "risk:low"), reviews=(), comments=(), checks=("success",), sub=(), requested=()):
+        self.head_sha = "h1"
         self.requested = list(requested)
         self.roles = {"alice": "write", "bob": "admin", "eve": "read"}
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
@@ -59,9 +60,9 @@ class FakeGh:
             on = want in self.labels and (self.state == "open" or "state=all" in a)
             return json.dumps({"number": 7}) if on else ""
         if a.endswith("/pulls/5"):
-            return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "head": {"sha": "h1", "ref": "ez/7-x"},
+            return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": u} for u in self.requested]})
-        if a.endswith("/commits/h1"):
+        if "/commits/" in a:
             return json.dumps({"commit": {"committer": {"date": getattr(self, "head_date", "2026-01-02T00:00:00Z")}}})
         if "/collaborators/" in a:
             who = a.split("/collaborators/")[1].split("/")[0]
@@ -325,6 +326,22 @@ class EffectsTest(unittest.TestCase):
         gh = FakeGh(reviews=[review(BOT, C, commit="old")])
         tr(gh).apply(eff("review", "approve-at-head", focus="full"))
         self.assertIn("round=2", gh.writes[0][-1])
+
+    def test_review_round_is_shared_by_reviews_of_one_head(self):
+        gh = FakeGh()
+        tracker = tr(gh)
+        tracker.apply(eff("review", "request-changes-at-head", focus="full"))
+        self.assertIn("round=1", gh.writes[-1][-1])
+        gh.reviews.append(review(BOT, M.replace("approve", "changes")))
+        tracker.apply(eff("review", "request-changes-at-head", focus="behaviour"))
+        self.assertIn("round=1", gh.writes[-1][-1])
+
+        gh.head_sha = "h2"
+        tracker.apply(eff("review", "request-changes-at-head", focus="full"))
+        self.assertIn("round=2", gh.writes[-1][-1])
+        gh.reviews.append(review(BOT, M.replace("approve", "changes"), commit="h2"))
+        tracker.apply(eff("review", "request-changes-at-head", focus="structure-security"))
+        self.assertIn("round=2", gh.writes[-1][-1])
 
     def test_fork_pr_is_ignored(self):
         self.assertEqual(tr(FakeGh()).facts(7)["pr"], 5)
