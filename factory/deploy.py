@@ -24,6 +24,8 @@ import schedule_local
 ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "[factory:"
 PROMPT = (
+    "You are the {role} of {project}.\n\n{role_intro}\n\n"
+    "Your job in this flow: triggered by {triggers}; outcomes: {outcomes}.\n\n"
     "Save the trigger payload (the <trigger_event> JSON) to a file. "
     "{gate_setup}"
     "Run `uv run {gate_root}factory/gate.py check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
@@ -39,6 +41,59 @@ PR_GATE_SETUP = (
 )
 PR_TRIGGERED_NODES = {"review", "join", "fix", "finish"}
 BOT_FILTERED = ("review-", "join")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
+
+
+OUTCOME_WORDS = {
+    "approve": "the change is ready",
+    "changes": "list blocking findings",
+    "proceed": "the ticket is ready for implementation",
+    "grill": "list the questions that block work",
+    "split": "propose independent ticket slices",
+    "done": "the work is complete",
+    "error": "the work needs the next tier",
+    "blocked": "explain what blocks the work",
+    "failed": "explain why the work failed",
+    "not-actionable": "explain why the request cannot be acted on",
+    "bug": "hand off the confirmed bug for implementation",
+    "waiting": "the review round is still waiting",
+    "approved": "all required reviewers approved",
+}
+
+
+def role_intro(role: str) -> str:
+    """The role's opening section, which states its responsibility and limits."""
+    path = ROOT / "roles" / role / "role.md"
+    lines = path.read_text().splitlines()
+    section = []
+    for line in lines[1:]:
+        if line.startswith("## "):
+            break
+        section.append(line)
+    return "\n".join(section).strip()
+
+
+def project_name(config: dict) -> str:
+    if config.get("project", {}).get("name"):
+        return config["project"]["name"]
+    first = (ROOT / "AGENTS.md").read_text().splitlines()[0]
+    return first.removeprefix("# ").strip()
+
+
+def flow_triggers(node: dict) -> str:
+    words = []
+    for trigger_text in node.get("triggers", []):
+        event, _, label = str(trigger_text).partition(" ")
+        event = (event.replace("issues.labeled", "ticket labeled")
+                 .replace("pull_request.labeled", "pull request labeled")
+                 .replace("pull_request_review.submitted", "pull request review submitted")
+                 .replace("pull_request", "pull request").replace("workflow_run", "workflow run"))
+        words.append(f"{event} {label}".strip())
+    return " or ".join(words) or "manual invocation"
+
+
+def flow_outcomes(node: dict) -> str:
+    return "; ".join(f"{name}: {OUTCOME_WORDS.get(name, name.replace('-', ' '))}"
+                      for name in node.get("outcomes", {}))
 
 
 def trigger(text: str, tier: str | None, pr_author: str | None = None) -> dict:
@@ -111,6 +166,11 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "environmentConfigId": f"{PREFIX}{env}] env",
                 "prompt": (PR_SCRIPT_PROMPT if name in PR_TRIGGERED_NODES else SCRIPT_PROMPT)
                 if n["role"] == "script" else PROMPT.format(
+                    role=n["role"],
+                    project=project_name(config),
+                    role_intro=role_intro(n["role"]),
+                    triggers=flow_triggers(n),
+                    outcomes=flow_outcomes(n),
                     node=name,
                     sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else ""),
                     gate_root="<tmp>/factory-main/" if name in PR_TRIGGERED_NODES else "",

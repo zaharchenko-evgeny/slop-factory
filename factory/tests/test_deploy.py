@@ -72,6 +72,17 @@ class PlanTest(unittest.TestCase):
         self.assertIn("apply --node fix --tier mid --event", a["[factory:fix-mid]"])
         self.assertIn("check --node intake --event <file>`", a["[factory:intake]"])
 
+    def test_agent_prompts_open_with_role_and_flow(self):
+        config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+        a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), config)["automations"]}
+        reviewer = a["[factory:review-full]"]
+        self.assertTrue(reviewer.startswith("You are the reviewer of Slop factory: project rules.\n\n"))
+        self.assertLess(reviewer.index("You review one branch independently"), reviewer.index("Save the trigger payload"))
+        self.assertIn("outcomes: approve: the change is ready; changes: list blocking findings", reviewer)
+        intake = a["[factory:intake]"]
+        self.assertTrue(intake.startswith("You are the router of Slop factory: project rules.\n\n"))
+        self.assertIn("Your job in this flow:", intake)
+
     def test_pull_request_nodes_run_gate_from_main(self):
         config = yaml.safe_load((ROOT / "factory.yaml").read_text())
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), config)["automations"]}
