@@ -117,7 +117,8 @@ SCRIPT_PROMPT = ("Run `uv run factory/gate.py sweep` once and report its JSON ou
                  "change no file, label, comment or review yourself.")
 STALE_PROMPT = SCRIPT_PROMPT.replace("gate.py sweep`", "gate.py sweep --stale`")
 PR_SCRIPT_PROMPT = (
-    f"{PR_GATE_SETUP}Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep` once and report its JSON output. "
+    f"{PR_GATE_SETUP}Run `mkdir -p .factory` and save the trigger payload (the <trigger_event> JSON) to `.factory/event.json`. "
+    "Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep --event .factory/event.json` once and report its JSON output. "
     "Do nothing else: change no file, label, comment or review yourself."
 )
 

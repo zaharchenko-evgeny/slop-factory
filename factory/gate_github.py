@@ -139,6 +139,10 @@ class GitHubGateTracker:
                 return None
             raise
 
+    def blocking(self, n):
+        """Issues whose native dependency list names `n` as a blocker."""
+        return self._list(f"issues/{n}/dependencies/blocking")
+
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
         the label when it finishes, so every round adds it again)."""

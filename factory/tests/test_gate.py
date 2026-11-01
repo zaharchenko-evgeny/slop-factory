@@ -434,5 +434,47 @@ class StaleSweepTest(unittest.TestCase):
         self.assertNotIn("log", tr.tickets[1])
 
 
+class UnblockedSweepTest(unittest.TestCase):
+    def sweep(self, tickets, closed=10):
+        tr = MemoryTracker(tickets)
+        tr.sweep_tickets = lambda stages: []
+        return tr, gate.sweep(tr, NODES, closed_ticket=closed)
+
+    def test_closing_last_blocker_refires_ready_and_does_not_use_recover(self):
+        tr, (results, failed) = self.sweep({
+            10: {"blocking": [11]},
+            11: {"stage": "ready", "blockers_open": 0},
+        })
+        self.assertFalse(failed)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(11, "unblocked")])
+        self.assertEqual(tr.tickets[11]["log"], [
+            ["label", '"factory:ready"'],
+            ["comment", '"[factory] unblocked by #10"'],
+        ])
+        self.assertNotIn("recover", json.dumps(tr.tickets[11]["log"]))
+        tr.tickets[11]["stage"] = "in-dev"  # intake accepted the re-fire
+        tr.tickets[11]["log"].clear()
+        self.assertEqual(gate.sweep(tr, NODES, closed_ticket=10), ([], False))
+        self.assertEqual(tr.tickets[11]["log"], [])
+
+    def test_ready_dependent_with_another_open_blocker_is_untouched(self):
+        tr, (results, failed) = self.sweep({
+            10: {"blocking": [11]},
+            11: {"stage": "ready", "blockers_open": 1},
+        })
+        self.assertFalse(failed)
+        self.assertEqual(results, [])
+        self.assertNotIn("log", tr.tickets[11])
+
+    def test_dependent_outside_ready_is_untouched(self):
+        tr, (results, failed) = self.sweep({
+            10: {"blocking": [11]},
+            11: {"stage": "in-dev", "blockers_open": 0},
+        })
+        self.assertFalse(failed)
+        self.assertEqual(results, [])
+        self.assertNotIn("log", tr.tickets[11])
+
+
 if __name__ == "__main__":
     unittest.main()
