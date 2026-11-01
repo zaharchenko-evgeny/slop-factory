@@ -30,6 +30,9 @@ class MemoryTracker:
     def set_stage(self, t, stage):
         t["stage"] = stage
 
+    def blocking(self, ticket):
+        return self._t(ticket).get("blocking", [])
+
     def facts(self, ticket):
         t = self._t(ticket)
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,

@@ -85,6 +85,8 @@ class FakeGh:
             return "\n".join(json.dumps(r) for r in self.reviews)
         if a.endswith(("issues/7", "issues/5")):
             return json.dumps({"labels": [{"name": x} for x in self.labels], "state": self.state})
+        if a.endswith("issues/7/dependencies/blocking"):
+            return "\n".join(json.dumps(i) for i in getattr(self, "blocking_issues", []))
         if a.endswith("issues/7/dependencies/blocked_by"):
             return "\n".join(json.dumps(b) for b in self.blocked)
         if a.endswith("issues/7/comments"):
@@ -678,6 +680,11 @@ class SweepTest(unittest.TestCase):
         gh.sub_state, gh.sub_reason = ["closed", "closed"], ["completed", "completed"]
         self.assertEqual([r["outcome"] for r in self.run_sweep(gh)[0]], ["children-done"])
         self.assertEqual(gh.labels, ["factory:done"])
+
+    def test_blocking_lists_native_dependents(self):
+        gh = FakeGh()
+        gh.blocking_issues = [{"number": 12, "state": "open"}]
+        self.assertEqual(tr(gh).blocking(7), gh.blocking_issues)
 
     def test_in_review_complete_round_runs_join_and_disabled_outcomes_refuse(self):
         gh = FakeGh(reviews=[review(BOT, M)])

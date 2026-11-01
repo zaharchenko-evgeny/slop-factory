@@ -375,7 +375,7 @@ def sweep_plan(facts):
     return None
 
 
-def sweep(tracker, nodes, dry_run=False):
+def sweep(tracker, nodes, dry_run=False, closed_ticket=None):
     """Move every listed ticket through each step its facts allow (a merged PR goes approved to done in one
     step). A ticket that reaches done or blocked also lets its split parent finish. Returns (results, failed)."""
     results, failed = [], False
@@ -404,6 +404,24 @@ def sweep(tracker, nodes, dry_run=False):
                 failed = True
                 results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
                 break
+    if closed_ticket is not None and hasattr(tracker, "blocking"):
+        for dependent in tracker.blocking(closed_ticket):
+            n = dependent["number"] if isinstance(dependent, dict) else dependent
+            try:
+                facts = tracker.facts(n)
+                if facts["stage"] != "ready" or facts["blockers_open"]:
+                    continue
+                results.append({"ticket": n, "stage": "ready", "node": "intake", "outcome": "unblocked"})
+                if dry_run:
+                    continue
+                for effect in ({"kind": "unlabel", "ticket": n, "value": "factory:ready"},
+                               {"kind": "label", "ticket": n, "value": "factory:ready"},
+                               {"kind": "comment", "ticket": n, "value": f"[factory] unblocked by #{closed_ticket}",
+                                "run_id": "finish:unblocked"}):
+                    tracker.apply(effect)
+            except Exception as e:
+                failed = True
+                results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
     return results, failed
 
 
@@ -520,7 +538,13 @@ def main(argv):
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):
                 raise Bad("sweep needs --tracker github")
-            results, failed = sweep(tracker, nodes, a.dry_run)
+            closed_ticket = None
+            if a.event:
+                raw = json.loads(Path(a.event).read_text())
+                raw = raw.get("data", raw)
+                if raw.get("action") == "closed" and isinstance(raw.get("issue"), dict):
+                    closed_ticket = raw["issue"].get("number")
+            results, failed = sweep(tracker, nodes, a.dry_run, closed_ticket)
             out = {"dry_run": a.dry_run, "sweep": results}
             if a.stale:
                 out["stale"], stale_failed = sweep_stale(tracker, nodes, config["limits"].get("stale_hours", 2),
