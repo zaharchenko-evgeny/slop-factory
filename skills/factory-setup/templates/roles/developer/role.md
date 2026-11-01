@@ -80,7 +80,7 @@ blocked_reason: none
 
 The driver validates the handoff as JSON against `roles/developer/handoff.schema.json`; the field names are the keys of the Handoff block above, lists are arrays. An invalid one is rerun once with the error in the prompt. Write it as JSON with your write tool to the file named by `$FACTORY_HANDOFF` (the prompt also gives the path), as the last thing you do; text around the object is ignored. The fenced text format above stays accepted for one release.
 
-```json
+```
 {
   "handoff": "DEVELOPER",
   "status": "done",

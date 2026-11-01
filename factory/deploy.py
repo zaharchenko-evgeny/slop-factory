@@ -21,25 +21,6 @@ import config as config_mod
 import nodes as nodes_mod
 
 ROOT = Path(__file__).resolve().parents[1]
-PROMPT = (
-    "You are the {role} of {project}.\n\n{role_intro}\n\n"
-    "Your job in this flow: triggered by {triggers}; outcomes: {outcomes}.\n\n"
-    "{spec_block}"
-    "Save the trigger payload (the <trigger_event> JSON) to a file. "
-    "{gate_setup}"
-    "Run `uv run {gate_root}factory/gate.py{team} check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
-    "Otherwise {role_read}, and do the role's work on the `branch` of the output "
-    "(create it from the default branch when it does not exist; the platform pushes). "
-    "Write the role's handoff to `handoff_path`, then run "
-    "`uv run {gate_root}factory/gate.py{team} apply --node {node}{sel} --event <file> --handoff <handoff_path>`."
-)
-PR_GATE_SETUP = (
-    "For this pull-request-triggered node, first run `git fetch origin main` and "
-    "`git worktree add --detach <tmp>/factory-main origin/main`. Use that worktree for the gate, role file, "
-    "and listed skills; use this checkout only as the code under review or fix. "
-    "Always pass `--team <tmp>/factory-main` to the gate, so the descriptor, graph and role overrides come from "
-    "main, never from the pull request. "
-)
 PR_TRIGGERED_NODES = {"review", "join", "fix", "finish"}
 BOT_FILTERED = ("review-", "join")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
@@ -61,10 +42,6 @@ OUTCOME_WORDS = {
 }
 
 
-SPEC_SAVE = ("Save this node spec (the JSON block) to a file next to the trigger payload and pass it as `--spec <spec file>`; "
-             "the gate then reads no node graph.\n\n")
-
-
 def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | None, nodes: dict, top: bool = True) -> dict:
     """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
     spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
@@ -75,25 +52,6 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
         spec["runs"] = {k: node_spec(k, v, config, None, None, nodes, False) for k, v in nodes["nodes"].items()
                         if v["role"] == "script" and k != name and v.get("enabled") is not False}
     return spec
-
-
-def spec_block(spec: dict, node: dict) -> str:
-    lines = "\n".join(f"- `{o}`: {OUTCOME_WORDS.get(o, o.replace('-', ' '))}"
-                      + (f" (from stage {', '.join(v['from'])})" if (v or {}).get("from") else "")
-                      for o, v in node["outcomes"].items())
-    return f"{SPEC_SAVE}```json\n{json.dumps(spec, sort_keys=True)}\n```\n\nOutcomes:\n{lines}\n\n"
-
-
-def role_intro(role: str) -> str:
-    """The role's opening section, which states its responsibility and limits."""
-    path = config_mod.resolve(f"roles/{role}/role.md")
-    lines = path.read_text().splitlines()
-    section = []
-    for line in lines[1:]:
-        if line.startswith("## "):
-            break
-        section.append(line)
-    return "\n".join(section).strip()
 
 
 def project_name(config: dict) -> str:
@@ -110,11 +68,6 @@ def flow_triggers(node: dict) -> str:
                  .replace("pull_request", "pull request").replace("workflow_run", "workflow run"))
         words.append(f"{event} {label}".strip())
     return " or ".join(words) or "manual invocation"
-
-
-def flow_outcomes(node: dict) -> str:
-    return "; ".join(f"{name}: {OUTCOME_WORDS.get(name, name.replace('-', ' '))}"
-                      for name in node.get("outcomes", {}))
 
 
 def trigger(text: str, tier: str | None, pr_author: str | None = None) -> dict:
@@ -135,26 +88,47 @@ def repository(r: dict) -> dict:
             "provider": "github" if "github.com" in url else "other"}
 
 
-# A script node runs no agent work: the gate's sweep decides every scripted step (join, waiting reviewers,
-# merged to done) from facts, so the automation only runs it.
-SCRIPT_PROMPT = ("Run `uv run factory/gate.py sweep --spec <spec file>` once and report its JSON output. Do nothing else: "
-                 "change no file, label, comment or review yourself.")
-STALE_PROMPT = SCRIPT_PROMPT.replace("sweep --spec", "sweep --stale --spec")
-JOIN_SCRIPT_PROMPT = (
-    f"{PR_GATE_SETUP}Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep --spec <spec file>` once "
-    "and report its JSON output. Do nothing else: change no file, label, comment or review yourself."
-)
-FINISH_SCRIPT_PROMPT = (
-    f"{PR_GATE_SETUP}Read the issue number from the trigger payload. "
-    "Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep --issue <issue number> --spec <spec file>` once and report its JSON output. "
-    "Do nothing else: change no file, label, comment or review yourself."
-)
+# A script node runs one command and judges nothing: the gate's sweep decides every scripted step (join, waiting
+# reviewers, merged to done) from facts. `--main` runs it from main's graph (a PR-triggered node never trusts the PR).
+SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no file, label, comment or review "
+                 "itself. Run `factory sweep{args}` once and report its JSON output.")
+SCRIPT_ARGS = {"join": " --main", "finish": " --main --issue <issue number from the trigger payload>",
+               "recover": " --stale"}
 
 
-def script_prompt(name: str, n: dict, spec: dict) -> str:
-    return spec_block(spec, n) + (FINISH_SCRIPT_PROMPT if name == "finish" else
-                                  JOIN_SCRIPT_PROMPT if name == "join" else
-                                  STALE_PROMPT if "--stale" in n.get("run", "") else SCRIPT_PROMPT)
+def script_prompt(name: str) -> str:
+    return SCRIPT_PROMPT.format(args=SCRIPT_ARGS.get(name, ""))
+
+
+def skill_lines(role: str) -> str:
+    """One line per skill of the role: its name, its front-matter description and its file."""
+    skills = config_mod.resolve(f"roles/{role}/skills.txt")
+    lines = []
+    for skill in skills.read_text().split() if skills.exists() else []:
+        path = next(ROOT.glob(f"skills/**/{skill}/SKILL.md"))
+        text = path.read_text()
+        meta = yaml.safe_load(text.split("---")[1]) if text.startswith("---") else {}
+        desc = " ".join(str(meta.get("description", "")).split())
+        lines.append(f"- {skill}: {desc} (file: `{path.relative_to(ROOT)}`)")  # the path until skills install (#213)
+    return "\n".join(lines)
+
+
+def this_step(node: dict, focus: str | None) -> str:
+    outcomes = "\n".join(f"- `{o}`: {OUTCOME_WORDS.get(o, o.replace('-', ' '))}"
+                         for o, v in node["outcomes"].items() if (v or {}).get("enabled") is not False)
+    return f"Woken by: {flow_triggers(node)}.\n\nOutcomes:\n{outcomes}"
+
+
+def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None) -> str:
+    role = n["role"]
+    who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
+    text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
+    return (f"{who}\n\n{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n## This step\n\n{this_step(n, focus)}\n\n"
+            "## How you start and finish\n\n"
+            f"1. Run `factory begin {aname}` with the trigger payload (the <trigger_event> JSON) on stdin, as a heredoc. "
+            "It prints the ticket, the facts, the branch or PR head and the handoff path. "
+            "If it exits 10 the node must not act: report the reason and stop.\n"
+            "2. Do the role's work, write the handoff to the handoff path, then run `factory end <handoff_path>`.")
 
 
 def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str, str | None]]:
@@ -165,6 +139,19 @@ def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str
     if n.get("focuses"):
         return [(f"{name}-{f}", None, role["modes"][f]["tier"], f) for f in n["focuses"]]
     return [(name, None, n.get("tier") or role.get("tier") or "cheap", None)]
+
+
+def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
+    """The node, gate options and spec of one automation (`review-behaviour`, `fix-mid`) from the node graph."""
+    roles = config["roles"]
+    for name, n in nodes["nodes"].items():
+        if n.get("enabled") is False or n["role"] in ("human", "script"):
+            continue
+        for aname, tier_arg, tier, focus in variants(name, n, roles):
+            if aname == automation:
+                return {"node": name, "focus": focus, "tier": tier_arg or (tier if focus else None),
+                        "spec": node_spec(name, n, config, tier_arg or tier, focus, nodes)}
+    raise KeyError(f"unknown automation: {automation}")
 
 
 def plan_air(nodes: dict, config: dict) -> dict:
@@ -200,20 +187,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{prefix}{env}",
-                "prompt": script_prompt(name, n, spec) if n["role"] == "script" else PROMPT.format(
-                    spec_block=spec_block(spec, n),
-                    role=n["role"],
-                    project=project_name(config),
-                    role_intro=role_intro(n["role"]),
-                    triggers=flow_triggers(n),
-                    outcomes=flow_outcomes(n),
-                    node=name,
-                    sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else "") + " --spec <spec file>",
-                    gate_root="<tmp>/factory-main/" if name in PR_TRIGGERED_NODES else "",
-                    team=" --team <tmp>/factory-main" if name in PR_TRIGGERED_NODES else "",
-                    gate_setup=PR_GATE_SETUP if name in PR_TRIGGERED_NODES else "",
-                    role_read="read `role_file` and every skill it lists from <tmp>/factory-main"
-                    if name in PR_TRIGGERED_NODES else "read `role_file` and every skill it lists"),
+                "prompt": script_prompt(name) if n["role"] == "script" else agent_prompt(name, n, config, aname, focus),
             })
     envs = []
     for env in used:
