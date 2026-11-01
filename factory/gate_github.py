@@ -117,12 +117,13 @@ class GitHubGateTracker:
                 return False
             raise  # any other failure must not drop a blocking review: the join fails and is retried
 
-    def _agent_runs(self, n, pr):
+    def _agent_runs(self, n, pr, issue_events=None):
         """Developer runs started for ticket `n` since a person last set `factory:ready`: each `labeled` event
         of a command label (`factory:implement-*`, `fix-*`, `update-*`) on the issue or its PR after it. A
         person's `ready` starts a fresh budget. Reviews follow pushes, so this bounds them too."""
         cmds = ("factory:implement-", "factory:fix-", "factory:update-")
-        events = {t: self._list(f"issues/{t}/events") for t in [n] + ([pr] if pr else [])}
+        events = {t: issue_events if t == n and issue_events is not None else self._list(f"issues/{t}/events")
+                  for t in [n] + ([pr] if pr else [])}
         name = lambda e: (e.get("label") or {}).get("name", "") if e.get("event") == "labeled" else ""
         since = self._since = max((e.get("created_at") or "" for e in events[n] if name(e) == self.stages.get("ready")),
                                   default="")
@@ -186,7 +187,15 @@ class GitHubGateTracker:
         issue = self._api(f"issues/{n}")
         labels = [x["name"] for x in issue["labels"]]
         by_label = {v: k for k, v in self.stages.items()}
-        stage = next((by_label[x] for x in labels if x in by_label), "none")
+        events = self._list(f"issues/{n}/events")
+        # The stage is the stage label added last (a person's factory:ready on a running ticket wins over the
+        # label it replaces); `apply` of the stage effect removes the others.
+        added = {}
+        for e in events:
+            if e.get("event") == "labeled":
+                added[e["label"]["name"]] = max(e.get("created_at") or "", added.get(e["label"]["name"], ""))
+        stage = max((x for x in labels if x in by_label), key=lambda x: added.get(x, ""), default=None)
+        stage = by_label.get(stage, "none")
         blockers = [b for b in self._list(f"issues/{n}/dependencies/blocked_by") if b["state"] == "open"]
         risk = "low" if self.risk_labels["low"] in labels else "high"
         required, pr = FOCUSES[risk], self._pr(n)
@@ -195,13 +204,15 @@ class GitHubGateTracker:
              "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
              "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
-             "agent_runs": self._agent_runs(n, pr["number"] if pr else None), "run_cap": self.run_cap,
+             "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
              "handed_to_fix": False,
              "issue_state": issue.get("state", "open"),
              "title": issue.get("title", ""), "body": issue.get("body") or "", "branch": None}
         if stage == "split":
             kids = self._list(f"issues/{n}/sub_issues")
-            f.update(children_total=len(kids), children_open=sum(k.get("state") == "open" for k in kids))
+            f.update(children=[{"number": k.get("number"), "state": k.get("state"), "not_planned": k.get("state") == "closed" and k.get("state_reason") == "not_planned",
+                                "blocked": k.get("state") != "closed" and self.stages["blocked"] in [x["name"] for x in k.get("labels") or []]}
+                               for k in kids])
         if pr:
             head, reviews = pr["head"]["sha"], self._reviews(pr)
             latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins

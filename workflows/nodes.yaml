@@ -24,7 +24,8 @@ nodes:
     when: { actor: human }
     role: human
     outcomes:
-      ready: { from: [draft, needs-answers, not-actionable, blocked, failed], effects: [{ stage: ready }] }
+      # A person resumes a ticket from every stage but done; the gate reads the stage as the latest stage label added.
+      ready: { from: [draft, in-dev, in-review, changes-requested, approved, blocked, needs-answers, split, not-actionable, investigating], effects: [{ stage: ready }] }
   intake:
     pilot: true
     triggers: ["issues.labeled factory:ready"]
@@ -37,39 +38,19 @@ nodes:
       grill: { effects: [{ comment: questions }, { stage: needs-answers }] }
       split: { effects: [{ create-issues: children }, { stage: split }] }
       not-actionable: { effects: [{ comment: reason }, { stage: not-actionable }] }
-      bug: { enabled: false, ticket: 161, effects: [{ stage: reproduce }] }   # reproduce is not built yet
-  reproduce:
+      bug: { enabled: false, ticket: 161, effects: [{ stage: investigating }] }   # investigate is not built yet
+  investigate:
     enabled: false
     ticket: 161
-    triggers: ["issues.labeled factory:reproduce"]
-    when: { stage: reproduce }
+    triggers: ["issues.labeled factory:investigating"]
+    when: { stage: investigating }
     role: developer
     tier: mid
     output: read-only
     outcomes:
-      reproduced: { effects: [{ stage: diagnose }] }
-      not-reproduced: { effects: [{ comment: questions }, { stage: needs-answers }] }
-  diagnose:
-    enabled: false
-    ticket: 161
-    triggers: ["issues.labeled factory:diagnose"]
-    when: { stage: diagnose }
-    role: developer
-    tier: mid
-    output: read-only
-    outcomes:
-      diagnosed: { effects: [{ comment: diagnosis }, { stage: verify }] }
-  verify:
-    enabled: false
-    ticket: 161
-    triggers: ["issues.labeled factory:verify"]
-    when: { stage: verify }
-    role: router
-    tier: cheap
-    output: read-only
-    outcomes:
-      bug: { effects: [{ stage: in-dev }] }
+      bug: { effects: [{ comment: diagnosis }, { stage: in-dev }] }
       intended: { effects: [{ comment: reason }, { stage: not-actionable }] }
+      cannot-reproduce: { effects: [{ comment: questions }, { stage: needs-answers }] }
   implement:
     pilot: true
     tiers: [cheap, mid, strong]
@@ -81,7 +62,7 @@ nodes:
       done: { effects: [{ unlabel: "factory:implement-*" }, { stage: in-review }] }
       error: { effects: [{ unlabel: "factory:implement-*" }, { label: "factory:implement-<next tier>" }, { stage: in-dev }] }
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
-      failed: { effects: [{ comment: reason }, { stage: failed }] }
+      failed: { effects: [{ comment: reason }, { stage: blocked }] }   # one stop stage: the reason is the comment
   adopt:
     enabled: false
     ticket: 160
@@ -162,24 +143,14 @@ nodes:
     role: script
     output: read-only
     outcomes:
-      merged: { from: [approved], effects: [{ merge: match-head }, { stage: merging }] }
+      merged: { from: [approved], effects: [{ merge: match-head }] }
       update-or-hold: { from: [approved], effects: [{ comment: reason }, { stage: approved }] }
       fix: { from: [approved], effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
-  merging:
-    enabled: false
-    ticket: 159
-    ci-independent: true
-    triggers: ["workflow_run.completed"]
-    when: { stage: merging }
-    role: script
-    output: read-only
-    outcomes:
-      merged: { effects: [{ stage: merged }] }
-      moved: { effects: [{ stage: approved }] }
   finish:
     pilot: true
     ci-independent: true   # runs after the merge
-    triggers: ["pull_request.merged"]
+    # A closed or blocked child lets the sweep check its split parent.
+    triggers: ["pull_request.merged", "issues.closed", "issues.labeled factory:blocked"]
     when: { always: true }   # the script picks each ticket's outcome from its facts (pr-state, children)
     role: script
     tier: cheap   # Air automation model; it does no work: the automation runs `uv run factory/gate.py sweep`
@@ -188,10 +159,9 @@ nodes:
     outcomes:
       answered: { enabled: false, ticket: 157, from: [needs-answers], effects: [{ stage: ready }] }
       children-done: { from: [split], effects: [{ stage: done }] }
-      child-failed: { from: [split], effects: [{ stage: blocked }] }
+      child-blocked: { from: [split], effects: [{ comment: reason }, { stage: blocked }] }
       conflict: { enabled: false, ticket: 158, from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
-      merged: { from: [approved], effects: [{ stage: merged }] }
-      retro: { from: [merged], effects: [{ comment: retro }, { stage: done }] }
+      merged: { from: [approved], effects: [{ comment: retro }, { stage: done }] }
   recover:
     pilot: true
     # Safety net for an Air run that died silently: re-fires the label that woke it (limits.stale_hours).

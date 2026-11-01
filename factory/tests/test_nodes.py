@@ -43,12 +43,17 @@ class NodesTest(unittest.TestCase):
             "ci-gate": lambda n: n["finish"].pop("ci-independent"),
             "unknown-role": lambda n: n["intake"].update(role="ghost"),
             "unknown-environment": lambda n: n["intake"].update(environment="moon"),
-            "unreachable-stage": lambda n: n["implement"]["outcomes"].pop("failed"),
+            "unreachable-stage": lambda n: n["join"]["outcomes"].pop("approved"),
         }
         for name, mutate in cases.items():
             with self.subTest(name):
                 errs = broken(mutate)
                 self.assertTrue(any(e.startswith(name) for e in errs), errs)
+
+    def test_unused_stage_fails_validation(self):
+        config = copy.deepcopy(CONFIG)
+        config["tracker"]["stages"]["orphan"] = "factory:orphan"
+        self.assertIn("unused-stage: orphan", nodes.validate(nodes.load(), config))
 
     def test_chart_is_current(self):
         want = nodes.block(nodes.load())

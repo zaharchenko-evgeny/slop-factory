@@ -71,8 +71,10 @@ class FakeGh:
                 raise RuntimeError("HTTP 404: Not Found")
             return json.dumps({"number": self.parent_of})
         if a.endswith("issues/7/events"):
-            return "\n".join(json.dumps({"event": "labeled", "label": {"name": "factory:implement-cheap"}})
-                             for _ in range(getattr(self, "impl_runs", 0)))
+            return "\n".join([json.dumps({"event": "labeled", "label": {"name": n}, "created_at": t})
+                              for n, t in getattr(self, "label_events", [])] +
+                             [json.dumps({"event": "labeled", "label": {"name": "factory:implement-cheap"}})
+                              for _ in range(getattr(self, "impl_runs", 0))])
         if a.endswith("issues/5/events"):
             return "\n".join(json.dumps({"event": "labeled", "label": {"name": "factory:fix-mid"}, "created_at": t})
                              for t in getattr(self, "fix_events", []))
@@ -87,7 +89,10 @@ class FakeGh:
         if a.endswith("issues?state=open&per_page=100"):
             return "\n".join(json.dumps(i) for i in self.open_issues)
         if a.endswith("issues/7/sub_issues"):
-            return "\n".join(json.dumps({"title": t, "state": st}) for t, st in zip(self.sub, self.sub_state))
+            reasons, labels = getattr(self, "sub_reason", ["completed"] * 9), getattr(self, "sub_labels", [[]] * 9)
+            return "\n".join(json.dumps({"number": i + 1, "title": t, "state": st, "state_reason": r if st == "closed" else None,
+                                         "labels": [{"name": x} for x in ls]})
+                             for i, (t, st, r, ls) in enumerate(zip(self.sub, self.sub_state, reasons, labels)))
         self.writes.append(args)
         if args[1] == "close":
             self.state = "closed"
@@ -600,7 +605,7 @@ class SweepTest(unittest.TestCase):
         gh = FakeGh(labels=["factory:approved", "risk:low"], reviews=[review(BOT, M)])
         gh.merged, gh.state = True, "closed"  # a closed issue in approved is still found
         res, failed = self.run_sweep(gh)
-        self.assertEqual(([(r["ticket"], r["outcome"]) for r in res], failed), ([(7, "merged"), (7, "retro")], False))
+        self.assertEqual(([(r["ticket"], r["outcome"]) for r in res], failed), ([(7, "merged")], False))
         self.assertEqual(sorted(gh.labels), ["factory:done", "risk:low"])
         comments = [w for w in gh.writes if w[:2] == ["issue", "comment"]]
         self.assertEqual(len(comments), 1)
@@ -611,20 +616,11 @@ class SweepTest(unittest.TestCase):
         self.assertEqual(len(gh.writes), n)
 
     def test_done_closes_an_open_issue(self):
-        gh = FakeGh(labels=["factory:merged", "risk:low"])
+        gh = FakeGh(labels=["factory:approved", "risk:low"])
         gh.merged = True
         self.run_sweep(gh)
         self.assertEqual(gh.state, "closed")
         self.assertIn(["issue", "close", "7", "-R", REPO], gh.writes)
-
-    def test_retro_without_pr(self):
-        gh = FakeGh(labels=["factory:merged"])
-        gh.__class__.__call__, orig = (lambda self, a: "" if any(x.endswith("state=all&per_page=100") for x in a) else orig(self, a)), gh.__class__.__call__
-        try:
-            self.run_sweep(gh)
-        finally:
-            gh.__class__.__call__ = orig
-        self.assertIn("Retro: no PR found;", [w for w in gh.writes if w[:2] == ["issue", "comment"]][0][-1])
 
     def test_dry_run_writes_nothing_and_open_pr_waits(self):
         gh = FakeGh(labels=["factory:approved"])
@@ -642,6 +638,28 @@ class SweepTest(unittest.TestCase):
         self.assertEqual([r["outcome"] for r in self.run_sweep(gh)[0]], ["children-done"])
         self.assertEqual(sorted(gh.labels), ["factory:done"])
 
+    def test_child_closed_as_not_planned_blocks_the_parent(self):
+        gh = FakeGh(labels=["factory:split"], sub=["a", "b"])
+        gh.sub_state, gh.sub_reason = ["closed", "closed"], ["completed", "not_planned"]
+        res, _ = self.run_sweep(gh)
+        self.assertEqual([r["outcome"] for r in res], ["child-blocked"])
+        self.assertEqual(gh.labels, ["factory:blocked"])
+        self.assertIn("#2 (closed as not planned)", [w for w in gh.writes if w[:2] == ["issue", "comment"]][0][-1])
+
+    def test_blocked_child_blocks_the_parent(self):
+        gh = FakeGh(labels=["factory:split"], sub=["a", "b"])
+        gh.sub_labels = [[], ["factory:blocked"]]
+        res, _ = self.run_sweep(gh)
+        self.assertEqual([r["outcome"] for r in res], ["child-blocked"])
+        self.assertEqual(gh.labels, ["factory:blocked"])
+        self.assertIn("#2 (blocked)", [w for w in gh.writes if w[:2] == ["issue", "comment"]][0][-1])
+
+    def test_children_closed_as_completed_finish_the_parent(self):
+        gh = FakeGh(labels=["factory:split"], sub=["a", "b"])
+        gh.sub_state, gh.sub_reason = ["closed", "closed"], ["completed", "completed"]
+        self.assertEqual([r["outcome"] for r in self.run_sweep(gh)[0]], ["children-done"])
+        self.assertEqual(gh.labels, ["factory:done"])
+
     def test_in_review_complete_round_runs_join_and_disabled_outcomes_refuse(self):
         gh = FakeGh(reviews=[review(BOT, M)])
         res, _ = self.run_sweep(gh)
@@ -654,6 +672,28 @@ class SweepTest(unittest.TestCase):
         self.assertTrue(gate.holds({"pr-state": "merged"}, {"pr_state": "merged"}, {}))
         with self.assertRaises(gate.Bad):
             gate.holds({"pr-state": "x"}, {"pr_state": "merged"}, {})
+
+
+class ResumeTest(unittest.TestCase):
+    def test_stage_is_the_latest_stage_label_added(self):
+        gh = FakeGh(labels=["factory:in-review", "factory:ready", "risk:low"])
+        gh.label_events = [("factory:in-review", "2026-01-01T00:00:00Z"), ("factory:ready", "2026-01-02T00:00:00Z")]
+        self.assertEqual(tr(gh).facts(7)["stage"], "ready")
+        gh.label_events.reverse()
+        gh.label_events = [("factory:ready", "2026-01-01T00:00:00Z"), ("factory:in-review", "2026-01-02T00:00:00Z")]
+        self.assertEqual(tr(gh).facts(7)["stage"], "in-review")
+
+    def test_ready_added_in_review_resumes_through_intake_and_leaves_one_stage_label(self):
+        gh = FakeGh(labels=["factory:in-review", "factory:ready", "risk:low"])
+        gh.blocked = []
+        gh.label_events = [("factory:in-review", "2026-01-01T00:00:00Z"), ("factory:ready", "2026-01-02T00:00:00Z")]
+        t, n = tr(gh), nodes.load()
+        code, out = gate.check("intake", {"id": "e1", "ticket": 7}, t, n, CONFIG)
+        self.assertEqual(code, 0, out)
+        code, out = gate.apply("intake", "proceed", {"ticket": 7, "complexity": "small", "tier": "cheap", "risk": "low"}, t, n)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(x for x in gh.labels if x in STAGES.values()), ["factory:in-dev"])
+        self.assertIn("factory:implement-cheap", gh.labels)
 
 
 class GateTest(unittest.TestCase):

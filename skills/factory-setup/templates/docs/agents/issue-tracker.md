@@ -66,7 +66,7 @@ Rules:
 
 - Claim before the first other write; release when the ticket reaches a
   `human` or `external` state, or when reading the ticket after the claim fails.
-- `approved` → `merged` → `done` is the `finish` node's (`gate.py sweep` on the
+- `approved` → `done` is the `finish` node's (`gate.py sweep` on the
   merge event). The GitHub adapter closes the issue when `set_state` moves it
   to `done` (a no-op if already closed), so tickets blocked by it reach the
   frontier. Nobody sets `done` by hand.

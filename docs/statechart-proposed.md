@@ -20,9 +20,7 @@ flowchart LR
     classDef ext fill:#efe,stroke:#393
     N_human["<b>human</b><br/>on: a person<br/>human"]:::node
     N_intake["<b>intake</b><br/>on: issue +factory:ready<br/>router · cheap"]:::node
-    N_reproduce["<b>reproduce</b> (#161)<br/>on: issue +factory:reproduce<br/>developer · mid"]:::planned
-    N_diagnose["<b>diagnose</b> (#161)<br/>on: issue +factory:diagnose<br/>developer · mid"]:::planned
-    N_verify["<b>verify</b> (#161)<br/>on: issue +factory:verify<br/>router · cheap"]:::planned
+    N_investigate["<b>investigate</b> (#161)<br/>on: issue +factory:investigating<br/>developer · mid"]:::planned
     N_implement["<b>implement</b><br/>on: issue +factory:implement-{cheap|mid|strong}<br/>developer · cheap|mid|strong"]:::node
     N_adopt["<b>adopt</b> (#160)<br/>on: PR +factory:adopt<br/>router · cheap"]:::planned
     N_review["<b>review</b><br/>on: PR +factory:ci-green<br/>reviewer · review tiers"]:::node
@@ -31,34 +29,33 @@ flowchart LR
     N_update["<b>update</b> (#158)<br/>on: PR +factory:update-{cheap|mid|strong}<br/>developer · cheap|mid|strong"]:::planned
     N_reopen["<b>reopen</b> (#196)<br/>on: PR push<br/>script"]:::planned
     N_merge["<b>merge</b> (#159)<br/>on: PR +factory:merge<br/>script"]:::planned
-    N_merging["<b>merging</b> (#159)<br/>on: workflow_run.completed<br/>script"]:::planned
-    N_finish["<b>finish</b><br/>on: PR merged<br/>script"]:::node
+    N_finish["<b>finish</b><br/>on: PR merged<br/>on: issue closed<br/>on: issue +factory:blocked<br/>script"]:::node
     N_recover["<b>recover</b><br/>on: cron 0 6,18 * * *<br/>script"]:::node
     N_routines["<b>routines</b> (#162)<br/>on: cron 0 6 * * *<br/>distill · review tiers"]:::planned
     CI["<b>CI</b> quality-gates + ci-state.yml<br/>on: PR push<br/>writes +factory:ci-green or +factory:ci-red"]:::ext
     S_approved(["approved"]):::stage
     S_blocked(["blocked"]):::stage
     S_changes_requested(["changes-requested"]):::stage
-    S_diagnose(["diagnose"]):::stage
     S_done(["done"]):::stage
     S_draft(["draft"]):::stage
-    S_failed(["failed"]):::stage
     S_in_dev(["in-dev"]):::stage
     S_in_review(["in-review"]):::stage
-    S_merged(["merged"]):::stage
-    S_merging(["merging"]):::stage
+    S_investigating(["investigating"]):::stage
     S_needs_answers(["needs-answers"]):::stage
     S_not_actionable(["not-actionable"]):::stage
     S_ready(["ready"]):::stage
-    S_reproduce(["reproduce"]):::stage
     S_split(["split"]):::stage
-    S_verify(["verify"]):::stage
     S_none(["PR with no stage"]):::stage
     S_draft --> N_human
-    S_needs_answers --> N_human
-    S_not_actionable --> N_human
+    S_in_dev --> N_human
+    S_in_review --> N_human
+    S_changes_requested --> N_human
+    S_approved --> N_human
     S_blocked --> N_human
-    S_failed --> N_human
+    S_needs_answers --> N_human
+    S_split --> N_human
+    S_not_actionable --> N_human
+    S_investigating --> N_human
     N_human -- "ready" --> S_ready
     S_ready --> N_intake
     N_intake -- "proceed +factory:implement-{tier}" --> S_in_dev
@@ -66,20 +63,16 @@ flowchart LR
     N_intake -- "split" --> S_split
     N_intake -- "not-actionable" --> S_not_actionable
     S_ready -.-> N_intake
-    N_intake -. "bug (#161)" -.-> S_reproduce
-    S_reproduce -.-> N_reproduce
-    N_reproduce -. "reproduced" -.-> S_diagnose
-    N_reproduce -. "not-reproduced" -.-> S_needs_answers
-    S_diagnose -.-> N_diagnose
-    N_diagnose -. "diagnosed" -.-> S_verify
-    S_verify -.-> N_verify
-    N_verify -. "bug" -.-> S_in_dev
-    N_verify -. "intended" -.-> S_not_actionable
+    N_intake -. "bug (#161)" -.-> S_investigating
+    S_investigating -.-> N_investigate
+    N_investigate -. "bug" -.-> S_in_dev
+    N_investigate -. "intended" -.-> S_not_actionable
+    N_investigate -. "cannot-reproduce" -.-> S_needs_answers
     S_in_dev --> N_implement
     N_implement -- "done" --> S_in_review
     N_implement -- "error +factory:implement-{next}" --> S_in_dev
     N_implement -- "blocked" --> S_blocked
-    N_implement -- "failed" --> S_failed
+    N_implement -- "failed" --> S_blocked
     S_none -.-> N_adopt
     N_adopt -. "adopted" -.-> S_in_review
     S_in_review --> N_review
@@ -96,23 +89,17 @@ flowchart LR
     S_approved -.-> N_reopen
     N_reopen -. "reopened" -.-> S_in_review
     S_approved -.-> N_merge
-    N_merge -. "merged" -.-> S_merging
     N_merge -. "update-or-hold" -.-> S_approved
     N_merge -. "fix +factory:fix-{tier}" -.-> S_changes_requested
-    S_merging -.-> N_merging
-    N_merging -. "merged" -.-> S_merged
-    N_merging -. "moved" -.-> S_approved
     S_needs_answers -.-> N_finish
     N_finish -. "answered (#157)" -.-> S_ready
     S_split --> N_finish
     N_finish -- "children-done" --> S_done
-    N_finish -- "child-failed" --> S_blocked
+    N_finish -- "child-blocked" --> S_blocked
     S_approved -.-> N_finish
     N_finish -. "conflict +factory:update-cheap (#158)" -.-> S_changes_requested
     S_approved --> N_finish
-    N_finish -- "merged" --> S_merged
-    S_merged --> N_finish
-    N_finish -- "retro" --> S_done
+    N_finish -- "merged" --> S_done
     N_recover -- "blocked" --> S_blocked
     S_in_review -- "push" --> CI
     CI -- "+factory:ci-green" --> N_review
@@ -130,20 +117,17 @@ flowchart LR
 | Node | Starts on | Writes (labels it adds, stage it sets) | Role · tier | Status |
 |---|---|---|---|---|
 | `human` | `a person` | ready: → ready | human | built |
-| `intake` | `issue +factory:ready` | proceed: +factory:implement-{tier} → in-dev<br>grill: → needs-answers<br>split: → split<br>not-actionable: → not-actionable<br>bug: → reproduce (planned #161) | router · cheap | built |
-| `reproduce` | `issue +factory:reproduce` | reproduced: → diagnose<br>not-reproduced: → needs-answers | developer · mid | planned #161 |
-| `diagnose` | `issue +factory:diagnose` | diagnosed: → verify | developer · mid | planned #161 |
-| `verify` | `issue +factory:verify` | bug: → in-dev<br>intended: → not-actionable | router · cheap | planned #161 |
-| `implement` | `issue +factory:implement-{cheap|mid|strong}` | done: → in-review<br>error: +factory:implement-{next} → in-dev<br>blocked: → blocked<br>failed: → failed | developer · cheap/mid/strong | built |
+| `intake` | `issue +factory:ready` | proceed: +factory:implement-{tier} → in-dev<br>grill: → needs-answers<br>split: → split<br>not-actionable: → not-actionable<br>bug: → investigating (planned #161) | router · cheap | built |
+| `investigate` | `issue +factory:investigating` | bug: → in-dev<br>intended: → not-actionable<br>cannot-reproduce: → needs-answers | developer · mid | planned #161 |
+| `implement` | `issue +factory:implement-{cheap|mid|strong}` | done: → in-review<br>error: +factory:implement-{next} → in-dev<br>blocked: → blocked<br>failed: → blocked | developer · cheap/mid/strong | built |
 | `adopt` | `PR +factory:adopt` | adopted: → in-review | router · cheap | planned #160 |
 | `review` | `PR +factory:ci-green` | approve: —<br>changes: — | reviewer · per focus | built |
 | `join` | `PR review submitted`<br>`PR +factory:ci-red` | changes: +factory:fix-{tier} → changes-requested<br>approved: → approved<br>waiting: join | script | built |
 | `fix` | `PR +factory:fix-{cheap|mid|strong}` | done: → in-review<br>blocked: → blocked | developer · cheap/mid/strong | built |
 | `update` | `PR +factory:update-{cheap|mid|strong}` | resolved: → in-review<br>escalate: +factory:update-{next} → changes-requested<br>unresolvable: → blocked | developer · cheap/mid/strong | planned #158 |
 | `reopen` | `PR push` | reopened: → in-review | script | planned #196 |
-| `merge` | `PR +factory:merge` | merged: → merging<br>update-or-hold: → approved<br>fix: +factory:fix-{tier} → changes-requested | script | planned #159 |
-| `merging` | `workflow_run.completed` | merged: → merged<br>moved: → approved | script | planned #159 |
-| `finish` | `PR merged` | answered: → ready (planned #157)<br>children-done: → done<br>child-failed: → blocked<br>conflict: +factory:update-cheap → changes-requested (planned #158)<br>merged: → merged<br>retro: → done | script | built |
+| `merge` | `PR +factory:merge` | merged: —<br>update-or-hold: → approved<br>fix: +factory:fix-{tier} → changes-requested | script | planned #159 |
+| `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked` | answered: → ready (planned #157)<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested (planned #158)<br>merged: → done | script | built |
 | `recover` | `cron 0 6,18 * * *` | blocked: → blocked | script | built |
 | `routines` | `cron 0 6 * * *` | proposed: — | distill · per focus | planned #162 |
 <!-- /nodes-chart -->
