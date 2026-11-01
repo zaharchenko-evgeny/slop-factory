@@ -29,6 +29,13 @@ class NodesTest(unittest.TestCase):
     def test_file_is_valid(self):
         self.assertEqual(nodes.validate(nodes.load(), CONFIG), [])
 
+    def test_project_name_is_required(self):
+        for project in ({}, {"name": "  "}):
+            config = copy.deepcopy(CONFIG)
+            config["project"] = project
+            with self.subTest(project=project):
+                self.assertTrue(any(e.startswith("project-name:") for e in nodes.validate(nodes.load(), config)))
+
     def test_broken_fixtures(self):
         cases = {
             "no-trigger": lambda n: n["intake"].update(triggers=[]),

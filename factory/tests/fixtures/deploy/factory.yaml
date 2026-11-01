@@ -1,3 +1,4 @@
+project: { name: "Slop factory" }
 repositories:
   - { name: main, url: https://example.com/o/main, role: primary }
 targets:
