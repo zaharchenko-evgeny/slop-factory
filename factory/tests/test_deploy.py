@@ -104,7 +104,9 @@ class PlanTest(unittest.TestCase):
             with self.subTest(name=name):
                 prompt = a[name]
                 if name == "[Slop factory] join":
-                    self.assertEqual(prompt, deploy.SCRIPT_PROMPT)
+                    self.assertEqual(prompt, deploy.JOIN_SCRIPT_PROMPT)
+                    self.assertIn("git worktree add --detach <tmp>/factory-main origin/main", prompt)
+                    self.assertIn("uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep", prompt)
                     self.assertNotIn("event.json", prompt)
                     self.assertNotIn("--issue", prompt)
                 elif name == "[Slop factory] finish":
