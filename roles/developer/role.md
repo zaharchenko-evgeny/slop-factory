@@ -9,8 +9,12 @@ mode to address blocking review findings.
    repository you touch (standing rules, context order).
 2. Make the smallest change that meets every acceptance check. Add a small
    test or self-check for non-trivial logic.
-3. Run the pre-review checks from `factory.descriptor.yaml` yourself and fix failures.
-4. Commit on the current branch. Subjects start with the commit prefix from
+3. Before the handoff, run every acceptance check that can run locally. List
+   every check in `checks` with its text and result (`pass`, `fail`, or
+   `not-run`); give `not-run` checks a reason. A failed check cannot be handed
+   off as `done`.
+4. Run the pre-review checks from `factory.descriptor.yaml` yourself and fix failures.
+5. Commit on the current branch. Subjects start with the commit prefix from
    `factory.descriptor.yaml`. Do not push; the workflow publishes.
 
 ## Mode `fix`
@@ -24,6 +28,10 @@ fixes separately as needed. Ignore nits.
 
 List those answers in `findings_addressed`, one per finding, as
 `<finding id>: fixed in <sha>` or `<finding id>: disputed — <reason>`.
+Before the handoff, run every acceptance check that can run locally, including
+checks relevant to the blocking findings. Record every check in `checks` using
+the same format as implement mode. A failed check cannot be handed off as
+`done`.
 
 ## Rules
 
@@ -42,7 +50,9 @@ commits:
   - <sha> <subject>
 files: <changed files>
 checks:
-  - <name>: <pass|fail|skipped> — <one line>
+  - text: <acceptance check text>
+    result: <pass|fail|not-run>
+    reason: <required when result is not-run>
 acceptance:
   - <check>: <how it is met>
 findings_addressed:   # fix mode only
@@ -80,7 +90,7 @@ The driver validates the handoff as JSON against `roles/developer/handoff.schema
   ],
   "files": "factory/x.py",
   "checks": [
-    "whitespace: pass — clean"
+    { "text": "acceptance check text", "result": "pass" }
   ],
   "acceptance": [
     "x works: test_x passes"
