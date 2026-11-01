@@ -238,6 +238,24 @@ def check(name, event, tracker, nodes, config):
     }
 
 
+def check_state_path(ticket):
+    return Path(".factory") / "check" / f"{ticket}.json"
+
+
+def save_check_state(ticket, head):
+    path = check_state_path(ticket)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"ticket": ticket, "head": head}))
+
+
+def checked_head(ticket):
+    try:
+        state = json.loads(check_state_path(ticket).read_text())
+        return state.get("head") if state.get("ticket") == ticket else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def resolve(effect, payload, ticket):
     """(kind, value) of one effect; a missing payload field raises Bad naming it."""
     (kind, arg), = [(k, v) for k, v in effect.items() if k != "on"]
@@ -257,7 +275,7 @@ def resolve(effect, payload, ticket):
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
-def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
+def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None):
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
         raise Bad(f"unknown outcome: {outcome}")
@@ -282,7 +300,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
     after = []  # effects that must follow the stage change
     if name == "implement" and outcome == "done" and facts.get("pr") and facts.get("ci") in ("green", "red") \
-            and local_head() == facts.get("head"):
+            and checked_pr_head is not None and facts.get("head") == checked_pr_head:
         # A resumed ticket implemented on its open PR with no new commit: no push, so no CI label would come.
         # Re-fire it, and run the join once the stage is in-review: reviews already at this head decide.
         effects = refire_ci(ticket, facts["ci"]) + effects
@@ -584,6 +602,8 @@ def main(argv):
             event = read(a.event or "", "event", raw=True)
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
             code, out = check(a.node, event, tracker, nodes, config)
+            if a.node == "implement" and code == GO:
+                save_check_state(event["ticket"], out["context"].get("head"))
         else:
             if a.handoff:
                 try:
@@ -600,7 +620,8 @@ def main(argv):
                 out_name = a.outcome or outcome_of(h)
             else:
                 payload, out_name = read(a.payload or "", "payload"), a.outcome or ""
-            code, out = apply(a.node, out_name, payload, tracker, nodes, a.focus, a.tier)
+            code, out = apply(a.node, out_name, payload, tracker, nodes, a.focus, a.tier,
+                              checked_head(payload["ticket"]) if a.node == "implement" else None)
             path and Path(path).write_text(json.dumps(tracker.tickets))
     except NoTicket as e:
         print(json.dumps({"go": False, "reason": str(e)}))

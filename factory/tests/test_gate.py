@@ -181,6 +181,28 @@ class CliAndValidate(unittest.TestCase):
                            "--focus", "behaviour", "--tracker", f"memory:{d / 't.json'}"])
             self.assertEqual(json.loads(out.getvalue())["tier"], "review")
 
+    def test_implement_check_persists_the_pr_head_for_apply(self):
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as d:
+            old = Path.cwd()
+            try:
+                os.chdir(d)
+                tracker = Path(d) / "t.json"
+                tracker.write_text(json.dumps({"7": {"stage": "in-dev", "head": "pr-head", "pr": 9, "ci": "green"}}))
+                event = Path(d) / "ev.json"
+                event.write_text(json.dumps({"id": "e", "ticket": "7"}))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    code = gate.main(["check", "--node", "implement", "--event", str(event),
+                                      "--tracker", f"memory:{tracker}"])
+                out = json.loads(output.getvalue())
+                self.assertEqual(code, gate.GO)
+                self.assertEqual(out["context"]["head"], "pr-head")
+                self.assertEqual(gate.checked_head("7"), "pr-head")
+            finally:
+                os.chdir(old)
+
     def test_apply_puts_automation_focus_in_payload(self):
         class Rec(MemoryTracker):
             seen_effects = []
@@ -403,6 +425,18 @@ class TriggerTest(unittest.TestCase):
         eff = [list(e)[0] for e in NODES["nodes"]["implement"]["outcomes"]["error"]["effects"]]
         self.assertEqual(eff[:2], ["unlabel", "label"])
 
+    def test_implement_after_push_does_not_refire_ci(self):
+        seen = []
+        class T(MemoryTracker):
+            def apply(self, e):
+                seen.append((e["kind"], e["value"], e.get("on")))
+                return super().apply(e)
+        tr = T({"7": {"stage": "in-dev", "head": "pushed", "ci": "green", "pr": 5}})
+        gate.apply("implement", "done", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES,
+                   checked_pr_head="before-push")
+        self.assertNotIn(("label", "factory:ci-green", "pr"), seen)
+        self.assertEqual(tr.tickets["7"]["stage"], "in-review")
+
     def test_resumed_implement_with_no_commit_refires_the_ci_label(self):
         seen = []
         class T(MemoryTracker):
@@ -410,12 +444,8 @@ class TriggerTest(unittest.TestCase):
                 seen.append((e["kind"], e["value"], e.get("on")))
                 return super().apply(e)
         tr = T({"7": {"stage": "in-dev", "head": "abc", "ci": "green", "pr": 5}})
-        orig = gate.local_head
-        try:
-            gate.local_head = lambda: "abc"
-            gate.apply("implement", "done", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
-        finally:
-            gate.local_head = orig
+        gate.apply("implement", "done", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES,
+                   checked_pr_head="abc")
         self.assertIn(("label", "factory:ci-green", "pr"), seen)
         self.assertEqual(tr.tickets["7"]["stage"], "in-review")
         self.assertEqual(seen[-1][0], "join")  # after the stage change: reviews already at this head decide

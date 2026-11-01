@@ -29,6 +29,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       BRANCH: ${{ github.event.workflow_run.head_branch }}
       SHA: ${{ github.event.workflow_run.head_sha }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
       CONCLUSION: ${{ github.event.workflow_run.conclusion }}
     steps:
       - name: Label the PR with the CI result of its current head
@@ -40,7 +41,24 @@ jobs:
             cancelled|skipped) echo "conclusion $CONCLUSION: no result"; exit 0 ;;
             *) want=factory:ci-red ;;
           esac
-          # Remove first: re-adding a label the PR already has fires no event, and every head needs one.
-          gh pr edit "$pr" --remove-label factory:ci-green --remove-label factory:ci-red >/dev/null 2>&1 || true
+          labels=$(gh pr view "$pr" --json labels --jq '[.labels[].name] | join(",")')
+          has_want=false
+          has_other=false
+          case ",$labels," in *",$want,"*) has_want=true ;; esac
+          other=factory:ci-green
+          [ "$want" = factory:ci-green ] && other=factory:ci-red
+          case ",$labels," in *",$other,"*) has_other=true ;; esac
+          previous_sha=$(gh run list --workflow quality-gates.yml --branch "$BRANCH" --limit 100 \
+            --json databaseId,headSha,status \
+            --jq "[.[] | select(.databaseId != $RUN_ID and .status == \"completed\")][0].headSha // \"\"")
+          if [ "$has_want" = true ] && [ "$previous_sha" = "$SHA" ]; then
+            if [ "$has_other" = true ]; then gh pr edit "$pr" --remove-label "$other" >/dev/null; fi
+            echo "PR #$pr at $SHA already has $want: nothing to change"
+            exit 0
+          fi
+          # Re-adding the same label fires no event; clear a stale result before recording this head.
+          if [ "$has_other" = true ] || [ "$has_want" = true ]; then
+            gh pr edit "$pr" --remove-label "$other" --remove-label "$want" >/dev/null 2>&1 || true
+          fi
           gh pr edit "$pr" --add-label "$want"
           echo "PR #$pr at $SHA: $want"
