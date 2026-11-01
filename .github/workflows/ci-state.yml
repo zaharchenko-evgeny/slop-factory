@@ -24,23 +24,19 @@ jobs:
     permissions:
       pull-requests: write
       issues: write
+      contents: read
+      statuses: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       BRANCH: ${{ github.event.workflow_run.head_branch }}
       SHA: ${{ github.event.workflow_run.head_sha }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
       CONCLUSION: ${{ github.event.workflow_run.conclusion }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
       - name: Label the PR with the CI result of its current head
-        run: |
-          pr=$(gh pr list --head "$BRANCH" --state open --json number,headRefOid --jq ".[] | select(.headRefOid == \"$SHA\") | .number")
-          if [ -z "$pr" ]; then echo "no open PR at $SHA (head moved or PR closed): nothing to label"; exit 0; fi
-          case "$CONCLUSION" in
-            success|neutral) want=factory:ci-green ;;
-            cancelled|skipped) echo "conclusion $CONCLUSION: no result"; exit 0 ;;
-            *) want=factory:ci-red ;;
-          esac
-          # Remove first: re-adding a label the PR already has fires no event, and every head needs one.
-          gh pr edit "$pr" --remove-label factory:ci-green --remove-label factory:ci-red >/dev/null 2>&1 || true
-          gh pr edit "$pr" --add-label "$want"
-          echo "PR #$pr at $SHA: $want"
+        run: scripts/ci-state-label.sh
