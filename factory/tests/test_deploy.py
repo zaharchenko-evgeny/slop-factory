@@ -103,10 +103,16 @@ class PlanTest(unittest.TestCase):
         for name in ("[Slop factory] review-full", "[Slop factory] join", "[Slop factory] fix-cheap", "[Slop factory] finish"):
             with self.subTest(name=name):
                 prompt = a[name]
-                self.assertIn("git worktree add --detach <tmp>/factory-main origin/main", prompt)
-                if name in ("[Slop factory] join", "[Slop factory] finish"):
-                    self.assertIn("uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep", prompt)
+                if name == "[Slop factory] join":
+                    self.assertEqual(prompt, deploy.SCRIPT_PROMPT)
+                    self.assertNotIn("event.json", prompt)
+                    self.assertNotIn("--issue", prompt)
+                elif name == "[Slop factory] finish":
+                    self.assertIn("git worktree add --detach <tmp>/factory-main origin/main", prompt)
+                    self.assertIn("sweep --issue <issue number>", prompt)
+                    self.assertNotIn("event.json", prompt)
                 else:
+                    self.assertIn("git worktree add --detach <tmp>/factory-main origin/main", prompt)
                     self.assertIn("uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main check", prompt)
                     self.assertIn("role_file` and every skill it lists from <tmp>/factory-main", prompt)
                     self.assertIn("uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main apply", prompt)

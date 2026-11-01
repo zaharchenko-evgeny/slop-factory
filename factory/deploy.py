@@ -116,9 +116,9 @@ def repository(r: dict) -> dict:
 SCRIPT_PROMPT = ("Run `uv run factory/gate.py sweep` once and report its JSON output. Do nothing else: "
                  "change no file, label, comment or review yourself.")
 STALE_PROMPT = SCRIPT_PROMPT.replace("gate.py sweep`", "gate.py sweep --stale`")
-PR_SCRIPT_PROMPT = (
-    f"{PR_GATE_SETUP}Run `mkdir -p .factory` and save the trigger payload (the <trigger_event> JSON) to `.factory/event.json`. "
-    "Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep --event .factory/event.json` once and report its JSON output. "
+FINISH_SCRIPT_PROMPT = (
+    f"{PR_GATE_SETUP}Read the issue number from the trigger payload. "
+    "Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep --issue <issue number>` once and report its JSON output. "
     "Do nothing else: change no file, label, comment or review yourself."
 )
 
@@ -164,7 +164,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{prefix}{env}",
-                "prompt": (PR_SCRIPT_PROMPT if name in PR_TRIGGERED_NODES else
+                "prompt": (FINISH_SCRIPT_PROMPT if name == "finish" else
                            STALE_PROMPT if "--stale" in n.get("run", "") else SCRIPT_PROMPT)
                 if n["role"] == "script" else PROMPT.format(
                     role=n["role"],
