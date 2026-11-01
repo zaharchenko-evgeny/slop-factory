@@ -35,7 +35,24 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
         run: git -c user.name=ci -c user.email=ci@example.invalid merge --no-edit origin/main
       - id: checks
-        run: uv run --quiet factory/run_checks.py --mode blocking --strict 2>&1 | tee checks.log; exit "${PIPESTATUS[0]}"
+        run: |
+          set -o pipefail
+          uv run --quiet --with pyyaml python - <<'PY' 2>&1 | tee checks.log
+          import os, shutil, subprocess, sys, yaml
+          config = yaml.safe_load(open("factory.yaml"))
+          base = os.environ.get("FACTORY_BASE") or config["repositories"][0].get("default_branch", "main")
+          for check in config.get("checks", []):
+              if check.get("stage", "pre-review") != "pre-review" or check.get("mode") != "blocking":
+                  continue
+              if check.get("requires") and not shutil.which(check["requires"]):
+                  print(f"{check['name']}: skipped")
+                  sys.exit(1)
+              result = subprocess.run(["bash", "-c", check["run"]], env={**os.environ, "FACTORY_BASE": base}, text=True, capture_output=True)
+              print(f"{check['name']}: {'pass' if result.returncode == 0 else 'fail'}")
+              if result.returncode:
+                  print(result.stdout + result.stderr, file=sys.stderr)
+                  sys.exit(1)
+          PY
       # No branch protection (private repository): a red main is owned by one ticket.
       - name: Open or reuse the Main is red ticket
         if: failure() && github.event_name == 'push'

@@ -173,11 +173,15 @@ def fix_tier(facts):
 
 
 def branch_of(facts, config):
-    """The ticket's branch: the PR's head, else `branch_pattern` from the issue title (drive.py's slug rule)."""
+    """The ticket's branch: the PR's head, else `branch_pattern` from the issue title."""
     if facts.get("branch"):
         return facts["branch"]
-    from drive import branch_name
-    return branch_name(config["branch_pattern"], facts["ticket"], facts.get("title") or "", facts.get("body") or "")
+    body = facts.get("body") or ""
+    explicit = re.search(r"^slug:[ \t]*([a-z0-9][a-z0-9-]*)[ \t]*$", body, re.M)
+    title = facts.get("title") or ""
+    words = [word for word in re.findall(r"[a-z0-9]+", title.lower()) if word not in {"a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "with", "from", "by"}]
+    slug = explicit.group(1) if explicit else "-".join(words[:4]) or "ticket"
+    return config["branch_pattern"].format(ticket=facts["ticket"], slug=slug)
 
 
 def matches(node, facts, event, outcome=None):

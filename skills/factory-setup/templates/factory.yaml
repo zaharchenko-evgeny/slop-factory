@@ -46,7 +46,7 @@ reviews:
 
 channels: [local]
 
-# Event detectors (drive.py loop): external event of the machine → detector, a
+# Event detectors: external event → detector, a
 # built-in name or `{ run: <bash> }` (exit 0 fires it, stdout an optional JSON
 # payload, $FACTORY_TICKET the ticket). An event with no detector is never fired.
 events:
@@ -61,9 +61,9 @@ targets:
     run_dir: .factory/runs      # handoffs per ticket, git-ignored
     worktree_dir: .factory/worktrees
     # Claude access of role calls: `env` (the caller's ANTHROPIC_API_KEY) or `central` (the JetBrains
-    # Central proxy via `jbcentral`, no key; factory/model_access.py). The Air target does not use this.
+    # Central proxy via `jbcentral`, no key. The Air target does not use this.
     model_access: {{MODEL_ACCESS}}
-    # launchd job for `drive.py loop --once` (factory/schedule_local.py); `path` is the PATH the jobs need.
+    # launchd job for the local scheduler; `path` is the PATH the jobs need.
     schedule:
       label: {{SCHEDULE_LABEL}}
       interval: 10m
@@ -89,7 +89,7 @@ roles:
   router: { harness: pi, tier: cheap }
   # `fallback` reruns the developer once, in its resumed session, after a malformed handoff.
   developer: { harness: pi, tier: mid, tier_high_risk: strong, fallback: mid }
-  # One entry per reviewer focus (an action mode in workflows/delivery.sm.yaml).
+  # One entry per reviewer focus (an action mode in the node workflow).
   # `fallback` reruns the same focus once when the reviewer's output has no valid handoff.
   reviewer:
     harness: pi
@@ -98,11 +98,11 @@ roles:
       full: { tier: review_strong, fallback: cheap }             # risk low: one reviewer, covers every focus
       behaviour: { tier: review, fallback: cheap }               # risk high
       structure-security: { tier: review_strong, fallback: cheap }  # risk high
-  # Runs when a reviewer reports docs_impact, before the approver (workflows/delivery.sm.yaml `document`).
+  # Runs when a reviewer reports docs_impact, before the approver.
   doc-writer: { harness: pi, tier: mid }
-  # Records the run on the knowledge branch after the merge (workflows/delivery.sm.yaml `retro`).
+  # Records the run on the knowledge branch after the merge.
   retro: { harness: pi, tier: cheap }
-  # Weekly, outside any ticket: merges the knowledge inbox into `knowledge/` as one PR (`drive.py distill`).
+  # Weekly, outside any ticket: merges the knowledge inbox into `knowledge/` as one PR.
   distill: { harness: pi, tier: mid }
   # Auto-approval (design §8): `tier` is the soft judgment's model, run by decisions-kit
   # `decide` with `engine`. Dry-run records the verdict only; a human still merges.
@@ -112,7 +112,7 @@ roles:
     { harness: pi, tier: cheap, engine: {{DECISIONS_ENGINE}}, dry_run: true, auto_merge: { enabled: false, max_risk: low, require: judgment } }
 
 # Retro entries (design §11, ADR-0007): pushed to `branch` under `<dir>/<repo>/`,
-# never to a default branch. The distill (`drive.py distill`, run by `drive.py loop` every
+# never to a default branch. The distill runs every
 # `distill_every_days`) opens one PR from `<distill_branch>-<date>` to the default branch with the
 # entries merged into `<dir>/` and listed in `<dir>/distilled.txt`.
 knowledge: { branch: knowledge-inbox, dir: knowledge, distill_branch: knowledge-distill, distill_every_days: 7 }

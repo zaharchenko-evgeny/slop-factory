@@ -4,4 +4,4 @@ run: r2
 
 ## Lessons
 
-- navigation: point AGENTS.md to factory/drive.py — the developer searched for the driver
+- navigation: update AGENTS.md navigation — the developer searched for the local runner
