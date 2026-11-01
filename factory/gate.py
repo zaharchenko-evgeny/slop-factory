@@ -392,11 +392,12 @@ def size_estimate(body):
     return int(m[1]) if m else None
 
 
-def branch_size(base):
-    """Changed lines against the default branch, with whole-file deletions counted once."""
+def branch_size(base, checkout=None):
+    """Changed lines in the delivery checkout against the default branch, with whole-file deletions counted once."""
+    checkout = Path(checkout or Path.cwd())
     result = subprocess.run(
         ["git", "diff", "--no-renames", "--numstat", f"{base}...HEAD", "--", ".", ":(exclude)skills/vendor/**"],
-        cwd=ROOT, capture_output=True, text=True,
+        cwd=checkout, capture_output=True, text=True,
     )
     if result.returncode:
         raise Bad(f"could not measure branch diff against {base}: {result.stderr.strip()}")
@@ -408,7 +409,7 @@ def branch_size(base):
         if added == deleted == "-":  # binary files have no line count
             continue
         added, deleted = int(added), int(deleted)
-        count = 1 if added == 0 and deleted and not (ROOT / path).exists() else max(added, deleted)
+        count = 1 if added == 0 and deleted and not (checkout / path).exists() else added + deleted
         if count:
             files.append((path, count))
     files.sort(key=lambda item: (-item[1], item[0]))

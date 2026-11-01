@@ -164,13 +164,19 @@ class CliAndValidate(unittest.TestCase):
             gate.apply("fix", "done", {"ticket": "7", "event": "e"}, tr, NODES)
         self.assertEqual(tr.tickets["7"]["stage"], "blocked")
 
-    def test_branch_size_counts_deleted_file_once_and_skips_vendor(self):
-        with tempfile.TemporaryDirectory() as d, patch.object(gate, "ROOT", Path(d)), \
-                patch.object(gate.subprocess, "run", return_value=type("Result", (), {
-                    "returncode": 0, "stdout": "0\t9\tdeleted.txt\n4\t0\tskills/vendor/copy.txt\n",
-                    "stderr": "",
-                })()):
-            self.assertEqual(gate.branch_size("origin/main"), (1, [("deleted.txt", 1)]))
+    def test_branch_size_uses_delivery_checkout_and_counts_modified_lines(self):
+        with tempfile.TemporaryDirectory() as engine, tempfile.TemporaryDirectory() as delivery:
+            (Path(delivery) / "retained.txt").write_text("still here\n")
+            result = type("Result", (), {
+                "returncode": 0,
+                "stdout": "5\t7\tretained.txt\n0\t9\tdeleted.txt\n4\t0\tskills/vendor/copy.txt\n",
+                "stderr": "",
+            })()
+            with patch.object(gate, "ROOT", Path(engine)), \
+                    patch.object(gate.subprocess, "run", return_value=result) as run:
+                self.assertEqual(gate.branch_size("origin/main", checkout=delivery),
+                                 (13, [("retained.txt", 12), ("deleted.txt", 1)]))
+            self.assertEqual(run.call_args.kwargs["cwd"], Path(delivery))
 
     def test_intake_size_uses_first_number(self):
         fields = gate.intake_fields({

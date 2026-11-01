@@ -22,6 +22,10 @@ mode to address blocking review findings.
 
 ## Mode `fix`
 
+Track added and modified lines against the ticket's current size estimate. If
+work is heading past 1.5× the estimate, stop and hand off `blocked` with a
+concrete proposed split instead of finishing an oversized branch.
+
 Input: the previous handoff and the reviewer's findings. Read every
 change-request review of the current round on the PR (`gh api
 repos/<repo>/pulls/<n>/reviews`; each body holds the summary and one `**B1**
