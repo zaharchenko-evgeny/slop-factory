@@ -1,4 +1,4 @@
-# Offline Evaluation factory
+# Slop factory
 
 A software factory that delivers GitHub Issues as reviewed pull requests, plus
 the skill that generates it.

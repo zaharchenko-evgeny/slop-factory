@@ -1,5 +1,5 @@
 {
-  "PROJECT_NAME": "Offline Evaluation",
+  "PROJECT_NAME": "Slop",
   "REPOSITORIES": [
     "  - name: offline-eval-factory",
     "    url: https://github.com/zaharchenko-evgeny/offline-eval-factory",
