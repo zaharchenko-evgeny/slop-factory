@@ -250,6 +250,10 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
                        "[factory] Stopped: the fix round ended without a commit, so nothing starts the next "
                        "review. A person decides, then sets factory:ready.")},
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
+    if name == "implement" and outcome == "done" and facts.get("pr") and facts.get("ci") in ("green", "red") \
+            and local_head() == facts.get("head"):
+        # A resumed ticket implemented on its open PR with no new commit: no push, so no CI label would come.
+        effects = refire_ci(ticket, facts["ci"]) + effects
     starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(COMMANDS)]
     stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith("factory:fix-") for e in starts))
     if stop:
@@ -257,6 +261,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         # that refused later would stop it with no comment and no event to wake it.
         effects = [{"kind": "comment", "ticket": ticket, "value": stop},
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
+    if any(e["kind"] == "stage" and e["value"] in ("blocked", "failed") for e in effects):
+        effects = clear_commands(ticket) + effects
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
         if e["kind"] == "stage":
@@ -277,6 +283,21 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
 
 SWEEP_STAGES = ("approved", "merged", "split", "in-review")
 COMMANDS = ("factory:implement-", "factory:fix-", "factory:update-")
+
+
+def clear_commands(ticket):
+    """Effects that remove every command label. A stopped ticket keeps none, so the first command after a
+    person's factory:ready is a new label and fires its node (re-adding a present label fires nothing)."""
+    return [{"kind": "unlabel", "ticket": ticket, "value": "factory:implement-*"},
+            {"kind": "unlabel", "ticket": ticket, "value": "factory:fix-*", "on": "pr"},
+            {"kind": "unlabel", "ticket": ticket, "value": "factory:update-*", "on": "pr"}]
+
+
+def refire_ci(ticket, ci):
+    """Effects that write the PR's CI label again (remove, then add), so its node starts for an unchanged head."""
+    return [{"kind": "unlabel", "ticket": ticket, "value": "factory:ci-green", "on": "pr"},
+            {"kind": "unlabel", "ticket": ticket, "value": "factory:ci-red", "on": "pr"},
+            {"kind": "label", "ticket": ticket, "value": f"factory:ci-{ci}", "on": "pr"}]
 
 
 def stop_reason(facts, fix=False):

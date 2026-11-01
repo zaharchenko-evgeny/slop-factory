@@ -75,7 +75,7 @@ nodes:
     output: create-pr
     outcomes:
       done: { effects: [{ unlabel: "factory:implement-*" }, { stage: in-review }] }
-      error: { effects: [{ label: "factory:implement-<next tier>" }, { stage: in-dev }] }
+      error: { effects: [{ unlabel: "factory:implement-*" }, { label: "factory:implement-<next tier>" }, { stage: in-dev }] }
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
       failed: { effects: [{ comment: reason }, { stage: failed }] }
   adopt:

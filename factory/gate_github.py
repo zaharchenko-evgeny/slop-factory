@@ -16,6 +16,11 @@ import yaml
 from github_tracker import ROOT, gh
 
 
+def gate_clear(n):
+    from gate import clear_commands
+    return clear_commands(n)
+
+
 def gate_stop(f):
     """The reason a new fix round must not start, else None (the gate's own rule, shared with gate.apply)."""
     from gate import stop_reason
@@ -238,6 +243,8 @@ class GitHubGateTracker:
             if on == "pr":
                 pr = self._pr(n)
                 if pr is None:
+                    if kind == "unlabel":
+                        return False  # nothing to remove from a PR that does not exist
                     raise RuntimeError(f"{kind}: no PR for ticket {n}")
                 target = pr["number"]
             elif on != "issue":
@@ -294,6 +301,8 @@ class GitHubGateTracker:
         stop = gate_stop(f)
         if stop:  # no further developer run starts: a person decides
             self.apply({"ticket": n, "kind": "comment", "value": stop})
+            for e in gate_clear(n):
+                self.apply(e)
             return self.apply({"ticket": n, "kind": "stage", "value": "blocked"})
         wrote = self.apply({"ticket": n, "kind": "label", "value": f"factory:fix-{tier}", "on": "pr"})
         return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote

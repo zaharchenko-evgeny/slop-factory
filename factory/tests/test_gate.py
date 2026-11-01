@@ -299,6 +299,39 @@ class TriggerTest(unittest.TestCase):
         gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
         self.assertEqual(tr.tickets["7"]["stage"], "blocked")
 
+    def test_a_stop_clears_every_command_label(self):
+        # review of PR #198: a label left on the ticket makes the command after factory:ready a no-op
+        seen = []
+        class T(MemoryTracker):
+            def apply(self, e):
+                seen.append((e["kind"], e["value"], e.get("on")))
+                return super().apply(e)
+        tr = T({"7": {"stage": "in-review", "head": "abc", "ci": "red", "fix_rounds": 3, "fix_cap": 3}})
+        gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        self.assertIn(("unlabel", "factory:fix-*", "pr"), seen)
+        self.assertIn(("unlabel", "factory:implement-*", None), seen)
+        self.assertEqual(seen[-1], ("stage", "blocked", None))
+
+    def test_implement_error_swaps_the_tier_label(self):
+        eff = [list(e)[0] for e in NODES["nodes"]["implement"]["outcomes"]["error"]["effects"]]
+        self.assertEqual(eff[:2], ["unlabel", "label"])
+
+    def test_resumed_implement_with_no_commit_refires_the_ci_label(self):
+        seen = []
+        class T(MemoryTracker):
+            def apply(self, e):
+                seen.append((e["kind"], e["value"], e.get("on")))
+                return super().apply(e)
+        tr = T({"7": {"stage": "in-dev", "head": "abc", "ci": "green", "pr": 5}})
+        orig = gate.local_head
+        try:
+            gate.local_head = lambda: "abc"
+            gate.apply("implement", "done", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        finally:
+            gate.local_head = orig
+        self.assertIn(("label", "factory:ci-green", "pr"), seen)
+        self.assertEqual(tr.tickets["7"]["stage"], "in-review")
+
     def test_bug_intake_proceeds(self):
         h = {"handoff": "ROUTER-INTAKE", "kind": "bug", "ready": "yes", "split": "none"}
         self.assertEqual(gate.outcome_of(h), "proceed")
