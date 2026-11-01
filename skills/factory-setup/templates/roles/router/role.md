@@ -39,10 +39,17 @@ ready: <yes|no>
 missing: <comma-separated list, or none>
 risk: <low|high>
 size_estimate: <changed lines, tests and fixtures included, e.g. ~150>
-split: <none, or one line per proposed slice below>
-  - <slice title> — <scope> (~<lines>)
+split: <none, or the proposed slices (see "Slices")>
 next: <delivery|designer|investigator|reviewer|blocked>
 ```
+
+### Slices
+
+In the JSON handoff `split` is an array of `{"title", "body"}` objects, in delivery order. The workflow creates each
+as a sub-issue with that body, the parent's `risk:` label, and a blocked-by link on the slice before it. The body
+is a whole ticket (it must pass intake by itself): its part of the scope, acceptance checks, affected repositories
+and `Size: about N lines with tests`. A bare line `<title> — <scope> (~<lines>)` stays accepted but gives a
+one-line ticket that fails intake.
 
 Example, the last block of your reply, fenced as here, nothing after it:
 

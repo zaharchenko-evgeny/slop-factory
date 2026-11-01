@@ -15,7 +15,9 @@ mode to address blocking review findings.
 
 ## Mode `fix`
 
-Input: the previous handoff and the reviewer's blocking findings. Address each
+Input: the previous handoff and the reviewer's blocking findings. Read them from the body of the latest
+change-request review on the PR (`gh api repos/<repo>/pulls/<n>/reviews`; the body holds the summary and one
+`**B1** path:line — text` line per finding, blocking first). Address each
 blocking finding with a new commit, or explain why it is wrong. Ignore nits.
 
 ## Rules
