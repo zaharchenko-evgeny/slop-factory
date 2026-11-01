@@ -94,7 +94,7 @@ echo '[{"questions": [{"id": "risk-low", "resolution": "decided", "answer": "yes
 def review(risk, docs="no", findings=()):
     """A reviewer's JSON handoff reply."""
     v = "changes-requested" if any(f["severity"] == "blocking" for f in findings) else "approved"
-    return json.dumps({"handoff": "REVIEWER", "verdict": v, "reviewed_sha": "x", "risk": risk, "docs_impact": docs,
+    return json.dumps({"handoff": "REVIEWER", "verdict": v, "summary": "s", "reviewed_sha": "x", "risk": risk, "docs_impact": docs,
                        "findings": list(findings)}) + "\n"
 
 
