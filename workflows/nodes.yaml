@@ -17,6 +17,7 @@ adapters:
   pr: github              # state, head, CI, reviews by head SHA
 schedules:
   routines: { cron: "0 6 * * *" }
+  recover: { cron: "0 6,18 * * *" }
 nodes:
   human:
     triggers: ["manual"]
@@ -191,6 +192,18 @@ nodes:
       conflict: { enabled: false, ticket: 158, from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [approved], effects: [{ stage: merged }] }
       retro: { from: [merged], effects: [{ comment: retro }, { stage: done }] }
+  recover:
+    pilot: true
+    # Safety net for an Air run that died silently: re-fires the label that woke it (limits.stale_hours).
+    triggers: ["schedule recover"]
+    when: { always: true }
+    role: script
+    tier: cheap
+    run: uv run factory/gate.py sweep --stale
+    output: read-only
+    outcomes:
+      # The sweep writes these itself: one re-fire per ticket and stage, then blocked.
+      blocked: { effects: [{ comment: reason }, { stage: blocked }] }
   routines:
     enabled: false
     ticket: 162

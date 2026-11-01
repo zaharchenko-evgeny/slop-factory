@@ -61,10 +61,10 @@ class GitHubGateTracker:
         return [x["name"] for x in self._api(f"issues/{n}")["labels"]]
 
     def sweep_tickets(self, stages):
-        """Issue numbers (open or closed) whose stage label is one of `stages`; in-review, changes-requested and in-dev only when open."""
+        """Issue numbers (open or closed) whose stage label is one of `stages`; ready, in-review, changes-requested and in-dev only when open."""
         found = set()
         for st in stages:
-            state = "open" if st in ("in-review", "changes-requested", "in-dev") else "all"
+            state = "open" if st in ("ready", "in-review", "changes-requested", "in-dev") else "all"
             found |= {i["number"] for i in self._list(f"issues?state={state}&labels={self.stages[st]}&per_page=100")
                       if "pull_request" not in i}
         return sorted(found)
@@ -221,6 +221,27 @@ class GitHubGateTracker:
                      fix_rounds=len({r["commit_id"] for r in reviews if r["agent"] and r["verdict"] == "changes"
                                      and (r.get("submitted_at") or "") >= since}))  # rounds since ready: heads with an agent change request
         return f
+
+    def stale_facts(self, n):
+        """facts plus what the stale sweep needs: `since` (last label or commit event, ISO), the command label
+        (`factory:implement-*` on the issue, `factory:fix-*` on the PR) and when it was added, the head commit
+        date, the PR's CI label, and the `[factory] recover:` comments written since the stage began."""
+        f, labeled = self.facts(n), {}
+        pr = f["pr"]
+        for t in [n] + ([pr] if pr else []):
+            for e in self._list(f"issues/{t}/events"):
+                if e.get("event") == "labeled":
+                    labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
+        pr_labels = self._labels(pr) if pr else []
+        have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
+        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-"))), None)
+        commit_at = self._api(f"commits/{f['head']}")["commit"]["committer"]["date"] if f["head"] else None
+        stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
+        comments = [c["body"] for c in self._list(f"issues/{n}/comments") if c["body"].startswith("[factory] recover:")
+                    and c["created_at"] >= stage_at]
+        return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1],
+                "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
+                "ci_label": next((x[11:] for x in pr_labels if x in ("factory:ci-green", "factory:ci-red")), None)}
 
     # --- effects: read the target first, write only when it differs
     def _edit(self, n, add=(), remove=(), on="issue"):

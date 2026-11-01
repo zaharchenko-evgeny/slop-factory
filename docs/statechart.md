@@ -311,6 +311,7 @@ flowchart LR
     N_merge["<b>merge</b> (#159)<br/>on: PR +factory:merge<br/>script"]:::planned
     N_merging["<b>merging</b> (#159)<br/>on: workflow_run.completed<br/>script"]:::planned
     N_finish["<b>finish</b><br/>on: PR merged<br/>script"]:::node
+    N_recover["<b>recover</b><br/>on: cron 0 6,18 * * *<br/>script"]:::node
     N_routines["<b>routines</b> (#162)<br/>on: cron 0 6 * * *<br/>distill · review tiers"]:::planned
     CI["<b>CI</b> quality-gates + ci-state.yml<br/>on: PR push<br/>writes +factory:ci-green or +factory:ci-red"]:::ext
     S_approved(["approved"]):::stage
@@ -390,6 +391,7 @@ flowchart LR
     N_finish -- "merged" --> S_merged
     S_merged --> N_finish
     N_finish -- "retro" --> S_done
+    N_recover -- "blocked" --> S_blocked
     S_in_review -- "push" --> CI
     CI -- "+factory:ci-green" --> N_review
     CI -- "+factory:ci-red" --> N_join
@@ -420,6 +422,7 @@ flowchart LR
 | `merge` | `PR +factory:merge` | merged: → merging<br>update-or-hold: → approved<br>fix: +factory:fix-{tier} → changes-requested | script | planned #159 |
 | `merging` | `workflow_run.completed` | merged: → merged<br>moved: → approved | script | planned #159 |
 | `finish` | `PR merged` | answered: → ready (planned #157)<br>children-done: → done<br>child-failed: → blocked<br>conflict: +factory:update-cheap → changes-requested (planned #158)<br>merged: → merged<br>retro: → done | script | built |
+| `recover` | `cron 0 6,18 * * *` | blocked: → blocked | script | built |
 | `routines` | `cron 0 6 * * *` | proposed: — | distill · per focus | planned #162 |
 <!-- /nodes-chart -->
 

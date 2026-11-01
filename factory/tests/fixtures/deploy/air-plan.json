@@ -204,6 +204,35 @@
           "triggerType": "SCHEDULED"
         }
       ]
+    },
+    {
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "small",
+        "isDefault": false,
+        "name": "small"
+      },
+      "environmentConfigId": "[factory:default] env",
+      "name": "[factory:recover]",
+      "prompt": "Run `uv run factory/gate.py sweep --stale` once and report its JSON output. Do nothing else: change no file, label, comment or review yourself.",
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
+      },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        }
+      ],
+      "triggers": [
+        {
+          "cronExpression": "0 6,18 * * *",
+          "timezone": "UTC",
+          "triggerType": "SCHEDULED"
+        }
+      ]
     }
   ],
   "environments": [

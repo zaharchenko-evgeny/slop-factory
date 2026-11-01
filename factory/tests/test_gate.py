@@ -5,6 +5,7 @@
 # ///
 """Tests for factory/gate.py on both fakes. Run: uv run factory/tests/test_gate.py"""
 import copy
+from datetime import datetime, timezone
 import json
 import sys
 import tempfile
@@ -366,6 +367,61 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual(gate.join_decision(facts), ("changes", {"tier": "strong"}))
         self.assertEqual(gate.join_decision({**facts, "attrs": []})[1], {"tier": "mid"})
         self.assertIsNone(gate.join_decision({**facts, "round_complete": False}))
+
+
+class StaleSweepTest(unittest.TestCase):
+    NOW = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+    OLD, FRESH = "2026-11-01T08:00:00Z", "2026-11-01T11:30:00Z"
+
+    def sweep(self, tickets):
+        class Tr(MemoryTracker):
+            def sweep_tickets(self, stages):
+                return [n for n, t in self.tickets.items() if self.get_stage(t) in stages]
+        tr = Tr(tickets)
+        return tr, gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
+
+    def test_stale_ready_is_refired_once_then_blocked(self):
+        tr, res = self.sweep({1: {"stage": "ready", "since": self.OLD}})
+        self.assertEqual([(r["recover"], r["applied"]) for r in res], [("refire", True)])
+        self.assertEqual(tr.tickets[1]["stage"], "ready")
+        self.assertIn(["label", '"factory:ready"'], tr.tickets[1]["log"])
+        self.assertIn("[factory] recover: stage=ready", tr.tickets[1]["log"][-1][1])
+        res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
+        self.assertEqual([r["recover"] for r in res], ["blocked"])
+        self.assertEqual(tr.tickets[1]["stage"], "blocked")
+        self.assertIn("did not respond twice", json.dumps(tr.tickets[1]["log"]))
+
+    def test_fresh_ticket_is_not_touched(self):
+        tr, res = self.sweep({1: {"stage": "ready", "since": self.FRESH}, 2: {"stage": "ready", "since": self.OLD,
+                                                                              "blockers_open": 1}})
+        self.assertEqual(res, [])
+        self.assertNotIn("log", tr.tickets[1])
+        self.assertNotIn("log", tr.tickets[2])  # waiting on a blocker, not on a lost run
+
+    def test_in_review_with_ci_green_and_no_review_refires_ci_green(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": "green", "reviews": []}})
+        self.assertEqual([(r["recover"], r["stage"]) for r in res], [("refire", "in-review")])
+        self.assertIn(["label", '"factory:ci-green"'], tr.tickets[3]["log"])
+
+    def test_in_review_without_ci_label_only_comments(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": None}})
+        self.assertEqual([r["recover"] for r in res], ["comment"])
+        self.assertFalse([e for e in tr.tickets[3]["log"] if e[0] == "label"])
+
+    def test_in_dev_command_without_pr_and_fix_without_commit(self):
+        tr, res = self.sweep({4: {"stage": "in-dev", "since": self.OLD, "command": "factory:implement-mid"},
+                              5: {"stage": "changes-requested", "since": self.OLD, "pr": 7, "command": "factory:fix-mid",
+                                  "command_at": "2026-11-01T07:00:00Z", "commit_at": "2026-11-01T06:00:00Z"},
+                              6: {"stage": "changes-requested", "since": self.OLD, "pr": 8, "command": "factory:fix-mid",
+                                  "command_at": "2026-11-01T07:00:00Z", "commit_at": "2026-11-01T07:30:00Z"}})
+        self.assertEqual(sorted(r["ticket"] for r in res), [4, 5])
+        self.assertIn(["label", '"factory:implement-mid"'], tr.tickets[4]["log"])
+
+    def test_dry_run_writes_nothing(self):
+        tr = MemoryTracker({1: {"stage": "ready", "since": self.OLD}})
+        tr.sweep_tickets = lambda stages: [1]
+        self.assertEqual(len(gate.sweep_stale(tr, NODES, 2, self.NOW, dry_run=True)[0]), 1)
+        self.assertNotIn("log", tr.tickets[1])
 
 
 if __name__ == "__main__":

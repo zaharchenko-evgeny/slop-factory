@@ -131,6 +131,7 @@ limits:
   fix_rounds: 3
   # Air spend guard (gate.check refuses, the sweep blocks): implement, fix and update runs per ticket.
   agent_runs_per_ticket: 8
+  stale_hours: 2   # recover node: hours in an active stage before a missing waking event counts as a lost run
   resume_cap: 3   # comment resumes of a waiting ticket before it stays for a person
   runs_per_day: 20
   environment_repair_attempts: 2

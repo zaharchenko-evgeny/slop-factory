@@ -43,6 +43,15 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(a["[factory:sweep]"]["prompt"], deploy.SCRIPT_PROMPT)
         self.assertIn("gate.py check --node intake", a["[factory:intake]"]["prompt"])
 
+    def test_recover_runs_the_stale_sweep_twice_a_day_on_the_cheap_tier(self):
+        for plan in (json.loads((FIX / "air-plan.json").read_text()),
+                     deploy.plan_air(nodes.load(), yaml.safe_load((ROOT / "factory.yaml").read_text()))):
+            a = next(x for x in plan["automations"] if x["name"] == "[factory:recover]")
+            self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "0 6,18 * * *", "timezone": "UTC"}])
+            self.assertEqual(a["prompt"], deploy.STALE_PROMPT)
+            intake = next(x for x in plan["automations"] if x["name"] == "[factory:intake]")  # router: cheap
+            self.assertEqual(a["agentAndModel"], intake["agentAndModel"])
+
     def test_air_shape_and_no_github_token(self):
         plan = json.loads((FIX / "air-plan.json").read_text())
         a = {x["name"]: x for x in plan["automations"]}
@@ -59,7 +68,7 @@ class PlanTest(unittest.TestCase):
                     ["automations"] if x["name"] == "[factory:join]")
         self.assertEqual([(x["eventType"], x["filters"].get("label")) for x in join["triggers"]],
                          [("pull_request_review.submitted", None), ("pull_request.labeled", "factory:ci-red")])
-        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), yaml.safe_load((ROOT / "factory.yaml").read_text()))["automations"] for x in a["triggers"]), "no polling"
+        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), yaml.safe_load((ROOT / "factory.yaml").read_text()))["automations"] if a["name"] != "[factory:recover]" for x in a["triggers"]), "no polling"  # recover is the one safety net
 
     def test_prompt_carries_focus_and_tier(self):
         config = yaml.safe_load((ROOT / "factory.yaml").read_text())
@@ -106,12 +115,12 @@ class PlanTest(unittest.TestCase):
         names = {a["name"] for a in plan["automations"]}
         self.assertTrue(all(x.startswith("[factory:") for x in names))
         pilot = {f"[factory:{x}]" for x in (
-            "intake", "join", "finish",
+            "intake", "join", "finish", "recover",
             *(f"{b}-{t}" for b in ("implement", "fix") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security")))}
         self.assertEqual(names, pilot)
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
-                         {"intake", "implement", "review", "join", "fix", "finish"})
+                         {"intake", "implement", "review", "join", "fix", "finish", "recover"})
         self.assertEqual(deploy.plan_air(n, config), plan)
 
     def test_local_is_launchd_job(self):
