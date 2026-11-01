@@ -377,9 +377,13 @@ class GitHubGateTracker:
                     self.run(["api", "-X", "PATCH", path, "-f", f"body={want}"])
                     wrote = True
                 have = {x["name"] for x in new.get("labels") or []}
-                if [r for r in risk if r not in have]:
+                stale = [x for x in have if x.startswith("risk:") and x not in risk] if risk else []
+                for x in stale:  # an opposing risk label would pick the wrong review path
+                    self.run(["api", "-X", "DELETE", f"{path}/labels/{x}"])
+                missing = [r for r in risk if r not in have]
+                if missing:
                     self.run(["api", "-X", "POST", f"{path}/labels", *[x for r in risk for x in ("-f", f"labels[]={r}")]])
-                    wrote = True
+                wrote = wrote or bool(stale or missing)
                 chained = bool(prev) and prev in {b["id"] for b in self._list(f"issues/{new['number']}/dependencies/blocked_by")}
             if prev and not chained:
                 wrote = True

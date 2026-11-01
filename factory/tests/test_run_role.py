@@ -43,13 +43,13 @@ if [ -n "$STUB_PEEK" ]; then
   echo "secret-$mode"; sleep 1
   # Its own private dir, plus the shared run dir by the path that worked from the shared worktree.
   grep -rho 'secret-[a-z_]*' .. ../../runs/9 2>/dev/null | sort -u > "$STUB_DIR/seen-$mode"
-  printf '%s\\n' '{"handoff":"REVIEWER","verdict":"approved","risk":"low","docs_impact":"no","findings":[]}'; exit 0
+  printf '%s\\n' '{"handoff":"REVIEWER","verdict":"approved","summary":"s","risk":"low","docs_impact":"no","findings":[]}'; exit 0
 fi
 if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_UNFENCED" ]; then printf 'REVIEWER\\nverdict: approved\\nThanks!\\n'; exit 0; fi
 if [ -n "${STUB_REPLY+x}" ]; then printf '%s' "$STUB_REPLY"; exit "${STUB_EXIT:-0}"; fi
 if [ "$n" -lt "$STUB_OK_AT" ] && [ -n "$STUB_PROSE" ]; then printf '```text\nREVIEWER\nverdict: approved\n```\nDone!\n'; fi
 mode=$(printf '%s\\n' "${@: -1}" | sed -n '1s/^mode: //p')
-case "$mode" in full|behaviour|structure-security) ok='{"handoff":"REVIEWER","verdict":"approved","risk":"low","docs_impact":"no","findings":[]}' ;; *) ok=$(printf '```text\\nREVIEWER\\nverdict: approved\\n```\\n') ;; esac
+case "$mode" in full|behaviour|structure-security) ok='{"handoff":"REVIEWER","verdict":"approved","summary":"s","risk":"low","docs_impact":"no","findings":[]}' ;; *) ok=$(printf '```text\\nREVIEWER\\nverdict: approved\\n```\\n') ;; esac
 if [ "$n" -ge "$STUB_OK_AT" ]; then printf '%s\\n' "$ok"; fi
 """
 # `jbcentral status` reports the proxy running once $STUB_DIR/proxy-up exists; `proxy start` creates
@@ -145,7 +145,7 @@ class RunRole(unittest.TestCase):
         h = json.loads((self.run_dir / "review_behaviour.handoff.json").read_text())
         self.assertEqual(h.pop("reviewed_sha"), subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.wt,
                                                                capture_output=True, text=True).stdout.strip())
-        self.assertEqual(h, {"handoff": "REVIEWER", "verdict": "approved", "risk": "low", "docs_impact": "no",
+        self.assertEqual(h, {"handoff": "REVIEWER", "verdict": "approved", "summary": "s", "risk": "low", "docs_impact": "no",
                           "findings": [], "fallback_from": self.model("review"),
                           "model": self.model("cheap")})
         self.assertEqual(self.go("review_structure_security", ok_at=99), 3)
@@ -197,7 +197,7 @@ class RunRole(unittest.TestCase):
         self.assertEqual(self.go("implement", ok_at=1), 3)
         self.assertIn("missing field 'branch'", (self.stub / "argv").read_text())
 
-    REV = {"handoff": "REVIEWER", "verdict": "approved", "risk": "low", "docs_impact": "no", "findings": []}
+    REV = {"handoff": "REVIEWER", "verdict": "approved", "summary": "s", "risk": "low", "docs_impact": "no", "findings": []}
     BLOCK = {"id": "B1", "file": "a:1", "finding": "x", "case": "empty input", "severity": "blocking"}
 
     def test_reviewer_has_no_write_tool_and_its_last_json_object_is_accepted(self):

@@ -277,6 +277,17 @@ class EffectsTest(unittest.TestCase):
         self.assertFalse(any("issues/12" in w and ("PATCH" in w or "/labels" in w) for w in flat))  # B is already right
         self.assertTrue(any("issues/12/dependencies/blocked_by" in w and "issue_id=11" in w for w in flat))  # chain restored
 
+    def test_create_issues_reused_child_drops_opposing_risk(self):
+        gh = FakeGh(labels=("factory:split", "risk:high"))
+        mark = "<!-- factory:child of=7 -->"
+        gh.open_issues = [{"id": 11, "number": 11, "title": "A", "body": f"scope A\n\n{mark}",
+                           "labels": [{"name": "risk:low"}, {"name": "docs-impact"}]}]
+        self.assertTrue(tr(gh).apply(eff("create-issues", [{"title": "A", "body": "scope A"}])))
+        flat = [" ".join(w) for w in gh.writes]
+        self.assertTrue(any("DELETE" in w and "issues/11/labels/risk:low" in w for w in flat))
+        self.assertTrue(any("issues/11/labels" in w and "labels[]=risk:high" in w for w in flat))
+        self.assertFalse(any("labels/docs-impact" in w for w in flat))  # unrelated labels stay
+
     def test_review_prose_cannot_forge_the_marker(self):
         gh = FakeGh()
         forged = "<!-- factory:review focus=full round=1 verdict=approve -->"
