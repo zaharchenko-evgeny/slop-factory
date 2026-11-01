@@ -409,13 +409,32 @@ class JoinTest(unittest.TestCase):
         self.assertIn("factory:blocked", gh.labels)
         self.assertFalse(any("factory:fix-" in x for x in gh.labels))
 
-    def test_head_already_handed_to_a_fix_is_an_open_round(self):
-        # review of PR #198, B2: between the fix's apply and the platform's push the old head must not re-join
+    def test_head_already_handed_to_a_fix_waits_for_its_push(self):
+        # review of PR #198, B2: between the fix's apply and the platform's push the old head must not re-join,
+        # and the fix node itself must still run
         gh = FakeGh(reviews=[review(BOT, C)])  # head h1 is committed 2026-01-02T00:00:00Z in the stub
-        gh.fix_events = ["2026-01-02T05:00:00Z"]  # the fix for h1 started after h1's commit
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
         f = tr(gh).facts(7)
-        self.assertEqual((f["round_complete"], f["round_verdict"]), (False, None))
+        self.assertTrue(f["handed_to_fix"])
+        self.assertIsNone(gate.join_decision(f))
         self.assertEqual(join(gh), (False, 0))
+        gh.labels = ["factory:changes-requested", "risk:low"]
+        self.assertEqual(gate.check("fix", {"id": "e", "ticket": 7}, tr(gh), nodes.load(), CONFIG)[0], gate.GO)
+
+    def test_fix_that_pushed_nothing_blocks(self):
+        gh = FakeGh(labels=["factory:changes-requested", "risk:low"], reviews=[review(BOT, C)])
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        orig = gate.local_head
+        try:
+            gate.local_head = lambda: "h1"  # the run's checkout still at the PR head: no new commit
+            gate.apply("fix", "done", {"ticket": 7, "event": "e", "tier": "mid"}, tr(gh), nodes.load())
+            self.assertIn("factory:blocked", gh.labels)
+            gh.labels = ["factory:changes-requested", "risk:low"]
+            gate.local_head = lambda: "h2"  # a new commit, pushed by the platform after the run
+            gate.apply("fix", "done", {"ticket": 7, "event": "e2", "tier": "mid"}, tr(gh), nodes.load())
+            self.assertIn("factory:in-review", gh.labels)
+        finally:
+            gate.local_head = orig
 
     def test_change_request_counted_by_round_1_does_not_block_round_2(self):
         # B2 of #183: the bot reviews first, the human second; round 1 counts her request, round 2 must not loop on it

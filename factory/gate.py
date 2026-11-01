@@ -243,6 +243,13 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             payload = {**payload, "tier": nodes["nodes"]["fix"]["tiers"][0]}
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     facts = tracker.facts(ticket)
+    if name == "fix" and outcome == "done" and facts.get("handed_to_fix") and local_head() == facts.get("head"):
+        # The platform pushes after the run; an unchanged HEAD means the fix made no commit, and no event
+        # would ever start the next round. A person decides.
+        effects = [{"kind": "comment", "ticket": ticket, "value": (
+                       "[factory] Stopped: the fix round ended without a commit, so nothing starts the next "
+                       "review. A person decides, then sets factory:ready.")},
+                   {"kind": "stage", "ticket": ticket, "value": "blocked"}]
     if any(e["kind"] == "label" and str(e["value"]).startswith(COMMANDS) for e in effects) \
             and facts.get("agent_runs", 0) >= facts.get("run_cap", 8):
         # Spend guard: the transition that would start another developer run blocks the ticket instead.
@@ -272,12 +279,19 @@ SWEEP_STAGES = ("approved", "merged", "split", "in-review")
 COMMANDS = ("factory:implement-", "factory:fix-", "factory:update-")
 
 
+def local_head():
+    """The checkout's HEAD, else None (no git checkout)."""
+    import subprocess
+    r = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
 def join_decision(facts):
     """The join's outcome and payload, or None while the round is open. Uses the adapter's `round_verdict`,
     which counts every required agent focus, human change requests and CI. A fix label takes the ticket's
     complexity tier (mid when unlabelled)."""
-    if not facts.get("round_complete") or facts.get("round_verdict") is None:
-        return None
+    if facts.get("handed_to_fix") or not facts.get("round_complete") or facts.get("round_verdict") is None:
+        return None  # an open round, or a head whose round already went to a fix (its push comes next)
     return ("changes" if facts["round_verdict"] == "changes" else "approved"), {"tier": fix_tier(facts)}
 
 
@@ -295,7 +309,7 @@ def sweep_plan(facts):
         return "finish", "retro", {"retro": text, "run_id": "finish:retro"}
     if stage == "split" and facts.get("children_total") and facts["children_open"] == 0:
         return "finish", "children-done", {}
-    if stage == "in-review" and facts.get("waiting_reviewers"):
+    if stage == "in-review" and facts.get("waiting_reviewers") and not facts.get("handed_to_fix"):
         return "join", "waiting", {}  # ask them again; nothing moves until they decide
     if stage == "in-review" and (j := join_decision(facts)):
         return "join", *j

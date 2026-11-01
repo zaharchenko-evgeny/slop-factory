@@ -153,9 +153,6 @@ class GitHubGateTracker:
         others = {r["author"]: r for r in reviews if not r["agent"] and r["verdict"]
                   and (r["author"] in self.trusted if r["bot"] else self._can_write(r["author"]))}
         ignored = [r["author"] for r in reviews if r["bot"] and not r["agent"] and r["author"] not in self.trusted]
-        writes = self._fix_writes(pr) if pr is not None else []
-        if writes and max(writes) > self._api(f"commits/{head}")["commit"]["committer"]["date"]:
-            return False, None, ignored, []  # this head's round already went to a fix; wait for its push
         if ci == "red":  # a red head needs a fix whatever the reviews say; reviewers only start on green
             return True, "changes", ignored, []
         complete = all(x in at_head for x in required) and not requested and ci == "green"
@@ -187,6 +184,7 @@ class GitHubGateTracker:
              "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
              "agent_runs": self._agent_runs(n, pr["number"] if pr else None), "run_cap": self.run_cap,
+             "handed_to_fix": False,
              "issue_state": issue.get("state", "open"),
              "title": issue.get("title", ""), "body": issue.get("body") or "", "branch": None}
         if stage == "split":
@@ -198,6 +196,8 @@ class GitHubGateTracker:
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
             ci = self._ci(head)
+            writes = self._fix_writes(pr["number"])
+            f["handed_to_fix"] = bool(writes) and max(writes) > self._api(f"commits/{head}")["commit"]["committer"]["date"]
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
@@ -277,6 +277,8 @@ class GitHubGateTracker:
         f = self.facts(n)
         for who in f["ignored_reviews"]:
             print(f"join: ignored unmarked bot review by {who}", file=sys.stderr)
+        if f["handed_to_fix"]:
+            return False  # this head already went to a fix; its push starts the next round
         if f["stage"] == "in-review" and f["waiting_reviewers"]:
             return self._rerequest(n, f["waiting_reviewers"])  # nothing moves until they decide again
         if not f["round_complete"] or f["stage"] != "in-review":
