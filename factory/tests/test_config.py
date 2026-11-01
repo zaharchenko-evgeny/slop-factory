@@ -47,6 +47,14 @@ class TeamRootTest(unittest.TestCase):
             self.assertEqual(Path(out["role_file"]), root / "roles/reviewer/role.md")
             self.assertEqual(config.resolve("roles/router/role.md"), ROOT / "roles/router/role.md")
 
+    def test_installed_tool_finds_engine_assets_under_its_prefix(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "share/factory-engine").mkdir(parents=True)
+            with mock.patch.object(config, "_HERE", Path(tmp) / "site"), mock.patch.object(config.sys, "prefix", tmp), \
+                    mock.patch.dict(config.os.environ, {"FACTORY_ENGINE": ""}):
+                self.assertEqual(config._find_engine(), Path(tmp) / "share/factory-engine")
+
     def test_missing_key_comes_from_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = {k: v for k, v in DESCRIPTOR.items() if k != "branch_pattern"}

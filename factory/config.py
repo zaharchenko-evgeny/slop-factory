@@ -6,13 +6,24 @@ repository both are this repository.
 """
 import json
 import os
+import sys
 from pathlib import Path
 
 import yaml
 
 DESCRIPTOR = "factory.descriptor.yaml"
 _HERE = Path(__file__).resolve().parents[1]
-ENGINE_ROOT = Path(os.environ.get("FACTORY_ENGINE") or _HERE)
+
+
+def _find_engine():
+    """FACTORY_ENGINE, else this checkout, else the assets an installed tool ships under its prefix."""
+    if os.environ.get("FACTORY_ENGINE"):
+        return Path(os.environ["FACTORY_ENGINE"])
+    installed = Path(sys.prefix) / "share/factory-engine"
+    return _HERE if (_HERE / "workflows/nodes.yaml").exists() or not installed.exists() else installed
+
+
+ENGINE_ROOT = _find_engine()
 _team = None
 
 
@@ -26,8 +37,7 @@ def team_root():
 
 
 def engine_root():
-    """ENGINE_ROOT, or the team root when the engine files are not installed beside the code."""
-    return ENGINE_ROOT if (ENGINE_ROOT / "workflows/nodes.yaml").exists() else team_root()
+    return ENGINE_ROOT
 
 
 def resolve(rel):
