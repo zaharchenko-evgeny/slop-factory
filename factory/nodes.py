@@ -7,7 +7,7 @@
 
 Usage: nodes.py validate [nodes.yaml] | nodes.py chart [nodes.yaml]
 Each error line starts with a name: no-trigger, bad-condition, unknown-effect, unknown-role,
-unknown-tier, unknown-environment, unknown-stage, unknown-schedule, bad-output, unreachable-stage.
+unknown-tier, unknown-environment, unknown-stage, unknown-schedule, bad-output, unreachable-stage, unused-stage.
 """
 import sys
 from pathlib import Path
@@ -116,6 +116,11 @@ def validate(nodes, config):
                 todo.append(t)
     used = {s for s, t, _ in edges(nodes)} | {t for s, t, _ in edges(nodes)}
     errs += [f"unreachable-stage: {s}" for s in sorted(used - reach - {"none"})]
+    read = {st for n in (nodes.get("nodes") or {}).values() if isinstance(n.get("when"), dict)
+            for st in (n["when"].get("stage") if isinstance(n["when"].get("stage"), list) else [n["when"].get("stage")])}
+    read |= {s for n in (nodes.get("nodes") or {}).values() for o in (n.get("outcomes") or {}).values()
+             for s in (o or {}).get("from") or []}
+    errs += [f"unused-stage: {s}" for s in sorted(set(stages) - used - read)]
     return errs
 
 
@@ -128,7 +133,7 @@ def trigger_text(t, n, schedules):
     tiers = "|".join(n.get("tiers") or ["tier"])
     t = t.replace("<tier>", "{" + tiers + "}")
     event, _, label = t.partition(" ")
-    names = {"issues.labeled": "issue +", "pull_request.labeled": "PR +", "pull_request.merged": "PR merged",
+    names = {"issues.labeled": "issue +", "pull_request.labeled": "PR +", "pull_request.merged": "PR merged", "issues.closed": "issue closed",
              "pull_request.synchronize": "PR push", "pull_request.opened": "PR opened",
              "pull_request_review.submitted": "PR review submitted", "manual": "a person"}
     if event == "schedule":

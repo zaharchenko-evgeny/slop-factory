@@ -24,19 +24,13 @@ tracker:
     in-review: factory:in-review
     changes-requested: factory:changes-requested
     approved: factory:approved
-    merged: factory:merged
     done: factory:done
     blocked: factory:blocked
-    waiting-main: factory:waiting-main
-    failed: factory:failed
     # Stages of the node chart (workflows/nodes.yaml); the pilot uses none of them.
     needs-answers: factory:needs-answers
     split: factory:split
     not-actionable: factory:not-actionable
-    reproduce: factory:reproduce
-    diagnose: factory:diagnose
-    verify: factory:verify
-    merging: factory:merging
+    investigating: factory:investigating
   # The map issue; its sub-issues give the frontier order.
   map_label: factory:map
   review_trigger: factory:review

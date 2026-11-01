@@ -277,7 +277,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         # that refused later would stop it with no comment and no event to wake it.
         effects = [{"kind": "comment", "ticket": ticket, "value": stop},
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
-    if any(e["kind"] == "stage" and e["value"] in ("blocked", "failed") for e in effects):
+    if any(e["kind"] == "stage" and e["value"] == "blocked" for e in effects):
         effects = clear_commands(ticket) + effects
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
@@ -298,7 +298,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     return GO, {"applied": True, "written": [e["kind"] for e in effects + after if tracker.apply(e)]}
 
 
-SWEEP_STAGES = ("approved", "merged", "split", "in-review")
+SWEEP_STAGES = ("approved", "split", "in-review")
 COMMANDS = ("factory:implement-", "factory:fix-", "factory:update-")
 
 
@@ -345,20 +345,28 @@ def join_decision(facts):
     return ("changes" if facts["round_verdict"] == "changes" else "approved"), {"tier": fix_tier(facts)}
 
 
+def retro_payload(facts):
+    """The `finish` retro comment of a merged ticket, from its facts."""
+    agent = [r for r in facts["reviews"] if r["agent"]]
+    pr = f"PR #{facts['pr']} {facts['pr_state']}" if facts["pr"] else "no PR found"
+    text = (f"Retro: {pr}; fix rounds {facts['fix_rounds']}; "
+            f"reviews {len(agent)} ({sum(r['verdict'] == 'approve' for r in agent)} approve, "
+            f"{sum(r['verdict'] == 'changes' for r in agent)} changes)")
+    return {"retro": text, "run_id": "finish:retro"}
+
+
 def sweep_plan(facts):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
     if stage == "approved" and facts.get("pr_state") == "merged":
-        return "finish", "merged", {}
-    if stage == "merged":
-        agent = [r for r in facts["reviews"] if r["agent"]]
-        pr = f"PR #{facts['pr']} {facts['pr_state']}" if facts["pr"] else "no PR found"
-        text = (f"Retro: {pr}; fix rounds {facts['fix_rounds']}; "
-                f"reviews {len(agent)} ({sum(r['verdict'] == 'approve' for r in agent)} approve, "
-                f"{sum(r['verdict'] == 'changes' for r in agent)} changes)")
-        return "finish", "retro", {"retro": text, "run_id": "finish:retro"}
-    if stage == "split" and facts.get("children_total") and facts["children_open"] == 0:
-        return "finish", "children-done", {}
+        return "finish", "merged", retro_payload(facts)
+    if stage == "split" and (kids := facts.get("children")):
+        if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
+            what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)
+            return "finish", "child-blocked", {"reason": f"[factory] Blocked: child tickets need a person: {what}. "
+                                                         "Fix them, then set factory:ready on this ticket."}
+        if all(c["state"] == "closed" for c in kids):
+            return "finish", "children-done", {}
     if stage == "in-review" and facts.get("waiting_reviewers") and not facts.get("handed_to_fix"):
         return "join", "waiting", {}  # ask them again; nothing moves until they decide
     if stage == "in-review" and (j := join_decision(facts)):
@@ -367,13 +375,13 @@ def sweep_plan(facts):
 
 
 def sweep(tracker, nodes, dry_run=False):
-    """Move every listed ticket through each step its facts allow (a merged PR goes approved, merged, done in
-    one pass). A ticket that reaches done also lets its split parent finish. Returns (results, failed)."""
+    """Move every listed ticket through each step its facts allow (a merged PR goes approved to done in one
+    step). A ticket that reaches done or blocked also lets its split parent finish. Returns (results, failed)."""
     results, failed = [], False
     queue, seen = list(tracker.sweep_tickets(SWEEP_STAGES)), set()
     while queue:
         n = queue.pop(0)
-        for _ in range(4):  # a ticket's longest walk is approved, merged, done
+        for _ in range(4):  # a ticket's longest walk: in-review, approved, done
             try:
                 facts = tracker.facts(n)
                 plan = sweep_plan(facts)
@@ -389,7 +397,7 @@ def sweep(tracker, nodes, dry_run=False):
                 r.update(applied=out["applied"], written=out.get("written", []))
                 if not out["applied"]:
                     break
-                if outcome == "retro" and hasattr(tracker, "parent") and (p := tracker.parent(n)):
+                if outcome in ("merged", "children-done") and hasattr(tracker, "parent") and (p := tracker.parent(n)):
                     queue.append(p)
             except Exception as e:  # one ticket failing does not stop the others
                 failed = True
@@ -452,7 +460,7 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False):
                 continue
             run = "recover:stale"
             if kind == "finish":
-                _, out = apply("finish", "merged", {"ticket": n}, tracker, nodes)
+                _, out = apply("finish", "merged", {"ticket": n, **retro_payload(facts)}, tracker, nodes)
                 r["applied"] = out["applied"]
             elif kind == "comment":
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
