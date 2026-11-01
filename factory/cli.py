@@ -39,6 +39,9 @@ def load_engine(factory_dir):
 
 def from_main():
     """Use main's descriptor, graph and role overrides, never the pull request's (until #213 pins an engine)."""
+    shared = Path.home() / "factory-main"
+    if shared.is_dir():
+        return str(shared)
     root = tempfile.mkdtemp(prefix="factory-main-") + "/main"
     for cmd in (["fetch", "origin", "main"], ["worktree", "add", "--detach", root, "origin/main"]):
         subprocess.run(["git", *cmd], check=True, capture_output=True)
@@ -64,9 +67,10 @@ def begin(argv, team=None):
     p = argparse.ArgumentParser(prog="factory begin")
     p.add_argument("automation")
     p.add_argument("payload", nargs="?")
+    p.add_argument("--main", action="store_true")
     p.add_argument("--tracker")  # tests: a memory tracker
     a = p.parse_args(argv)
-    engine = from_main() if a.automation.split("-")[0] in PR_NODES else None
+    engine = from_main() if a.main or a.automation.split("-")[0] in PR_NODES else None
     load_engine(Path(engine) / "factory" if engine else HERE)
     if engine or team:
         config.set_team(engine or team)
