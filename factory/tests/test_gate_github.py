@@ -712,6 +712,10 @@ class StaleFactsTest(unittest.TestCase):
         self.assertEqual(len(f["recover_comments"]), 1)
         self.assertEqual(gate.recovered(f, "in-review"), 1)
 
+    def test_ci_label_of_an_earlier_head_is_ignored(self):
+        t = tr(FakeGh(labels=("factory:in-review", "factory:ci-green", "risk:low")))
+        t._ci = lambda sha: "none"  # the new head has no CI result yet, the label is left from the old head
+        self.assertIsNone(t.stale_facts(7)["ci_label"])
 
 if __name__ == "__main__":
     unittest.main()

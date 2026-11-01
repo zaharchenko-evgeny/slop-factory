@@ -403,8 +403,8 @@ RECOVER = "[factory] recover:"
 
 
 def recovered(facts, stage):
-    """Re-fires already recorded for `stage` (the counter is the `[factory] recover: stage=<stage> ...` comment)."""
-    return sum(f"stage={stage} " in c for c in facts.get("recover_comments", []))
+    """Re-fires already recorded for `stage` (the counter is the `[factory] recover: stage=<stage> re-fired ...` comment; comment-only notes do not count)."""
+    return sum(f"stage={stage} re-fired" in c for c in facts.get("recover_comments", []))
 
 
 def stale_plan(facts, now, hours):

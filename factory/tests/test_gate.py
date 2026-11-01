@@ -408,6 +408,14 @@ class StaleSweepTest(unittest.TestCase):
         self.assertEqual([r["recover"] for r in res], ["comment"])
         self.assertFalse([e for e in tr.tickets[3]["log"] if e[0] == "label"])
 
+    def test_comment_only_note_does_not_use_the_retry(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": None}})
+        self.assertEqual([r["recover"] for r in res], ["comment"])
+        tr.tickets[3].update(ci_label="green", reviews=[])  # CI finished, the reviewer run then died
+        res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
+        self.assertEqual([r["recover"] for r in res], ["refire"])
+        self.assertEqual(gate.sweep_stale(tr, NODES, 2, self.NOW)[0][0]["recover"], "blocked")
+
     def test_in_dev_command_without_pr_and_fix_without_commit(self):
         tr, res = self.sweep({4: {"stage": "in-dev", "since": self.OLD, "command": "factory:implement-mid"},
                               5: {"stage": "changes-requested", "since": self.OLD, "pr": 7, "command": "factory:fix-mid",
