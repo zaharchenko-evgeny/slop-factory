@@ -300,7 +300,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
     after = []  # effects that must follow the stage change
     if name == "implement" and outcome == "done" and facts.get("pr") and facts.get("ci") in ("green", "red") \
-            and checked_pr_head is not None and facts.get("head") == checked_pr_head:
+            and checked_pr_head is not None and facts.get("head") == checked_pr_head and local_head() == facts.get("head"):
         # A resumed ticket implemented on its open PR with no new commit: no push, so no CI label would come.
         # Re-fire it, and run the join once the stage is in-review: reviews already at this head decide.
         effects = refire_ci(ticket, facts["ci"]) + effects

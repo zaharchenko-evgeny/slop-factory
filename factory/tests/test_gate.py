@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import yaml
@@ -444,12 +445,25 @@ class TriggerTest(unittest.TestCase):
                 seen.append((e["kind"], e["value"], e.get("on")))
                 return super().apply(e)
         tr = T({"7": {"stage": "in-dev", "head": "abc", "ci": "green", "pr": 5}})
-        gate.apply("implement", "done", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES,
-                   checked_pr_head="abc")
+        with patch.object(gate, "local_head", return_value="abc"):
+            gate.apply("implement", "done", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES,
+                       checked_pr_head="abc")
         self.assertIn(("label", "factory:ci-green", "pr"), seen)
         self.assertEqual(tr.tickets["7"]["stage"], "in-review")
         self.assertEqual(seen[-1][0], "join")  # after the stage change: reviews already at this head decide
         self.assertEqual(seen[-2], ("stage", "in-review", None))
+
+    def test_resumed_implement_with_unpublished_commit_does_not_refire_old_ci(self):
+        seen = []
+        class T(MemoryTracker):
+            def apply(self, e):
+                seen.append((e["kind"], e["value"], e.get("on")))
+                return super().apply(e)
+        tr = T({"7": {"stage": "in-dev", "head": "abc", "ci": "green", "pr": 5}})
+        with patch.object(gate, "local_head", return_value="new-local-commit"):
+            gate.apply("implement", "done", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES,
+                       checked_pr_head="abc")
+        self.assertNotIn(("label", "factory:ci-green", "pr"), seen)
 
     def test_bug_intake_proceeds(self):
         h = {"handoff": "ROUTER-INTAKE", "kind": "bug", "ready": "yes", "split": "none"}
