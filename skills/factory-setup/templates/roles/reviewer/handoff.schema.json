@@ -21,6 +21,9 @@
      "changes-requested"
     ]
    },
+   "summary": {
+    "type": "string"
+   },
    "reviewed_sha": {
     "type": "string"
    },
