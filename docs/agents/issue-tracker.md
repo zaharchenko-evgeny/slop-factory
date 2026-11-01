@@ -9,6 +9,11 @@ This file follows the per-tracker templates of the mattpocock
 
 ## Conventions
 
+- **Estimate ticket size** as the lines a reviewer must read: added lines plus
+  modified lines, counting tests and fixtures. A whole file deleted counts as
+  one line because it is checked by listing it; lines removed from a file that
+  remains count as modified. A ticket may report both changed lines and
+  deletion volume; use changed lines for the size estimate.
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
 - **Read an issue**: `gh issue view <number> --json number,title,body,labels,comments`.
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments` with `--label` and `--state` filters.

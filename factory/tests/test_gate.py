@@ -135,6 +135,15 @@ GateTag = tests_for(TagTracker, "PROJ-7")
 
 
 class CliAndValidate(unittest.TestCase):
+    def test_intake_size_uses_first_number(self):
+        fields = gate.intake_fields({
+            "handoff": "ROUTER-INTAKE",
+            "size_estimate": "about 40 lines changed; deletions about 2,200 lines",
+            "missing": "none",
+            "split": "none",
+        })
+        self.assertEqual((fields["complexity"], fields["tier"]), ("small", "cheap"))
+
     def test_cli_exit_codes(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)

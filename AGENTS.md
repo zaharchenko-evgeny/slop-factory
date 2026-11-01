@@ -21,8 +21,13 @@ change, whether you are a person, a pi session or a factory role.
    `changes-requested` for a fix round and `blocked` or `failed` when a run
    stops. The next ticket to work on comes from the frontier: open, `ready`,
    every blocker closed, unclaimed (no assignee), in map order.
-3. **Split large tickets.** Above about 400 lines, or 3 repositories, split the
-   ticket into linked sub-issues before starting. Deliver the first slice.
+3. **Split large tickets.** Estimate size as lines a reviewer must read: added
+   lines plus modified lines, counting tests and fixtures. A whole file deleted
+   counts as one line because it is checked by listing it; lines removed from a
+   file that remains count as modified. A ticket may report both changed lines
+   and deletion volume; use changed lines for the size estimate. Above about
+   400 lines, or 3 repositories, split the ticket into linked sub-issues before
+   starting. Deliver the first slice.
 4. **Deliver through the factory.** The factory is the node list in
    [workflows/nodes.yaml](workflows/nodes.yaml) ([ADR-0014](docs/adr/0014-node-model.md)),
    deployed as `[factory:<node>]` Air automations by the `factory-deploy` skill.

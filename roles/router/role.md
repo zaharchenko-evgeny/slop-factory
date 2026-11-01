@@ -18,9 +18,15 @@ Input: a request (free text or a tracker issue).
    recommend stage `blocked` with the question to ask the human.
 3. Choose the risk path: `low` when the issue carries the low-risk label from
    `factory.yaml`, otherwise `high`.
-4. Estimate the size of the change in changed lines, counting tests and
-   fixtures, not only production code. Above about 400 lines, propose slices
-   in `split:`, each one a ticket that delivers on its own.
+4. Estimate the size as the lines a reviewer must read: added lines plus
+   modified lines, counting tests and fixtures, not only production code. A
+   whole file deleted counts as one line because it is checked by listing it;
+   lines removed from a file that remains count as modified. Keep
+   `size_estimate` to the changed-line count only, for example `~40`; mention
+   deletion volume in the ticket body's prose when useful. Above about 400
+   lines, propose slices in `split:`, each
+   one a ticket that delivers on its own. For example, deleting 12 files
+   (2,000 lines) and editing 40 lines is about 52 lines, so do not split.
 5. End your reply with the handoff as the last fenced block and nothing after
    it; trailing text makes the step fail and rerun.
 
