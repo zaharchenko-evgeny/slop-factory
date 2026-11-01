@@ -1,5 +1,25 @@
 # Implementation plan
 
+## Current: the engine package (ADR-0015)
+
+The build order of [ADR-0015](adr/0015-engine-package-and-descriptor.md). Each ticket's body is its spec. Blockers are GitHub issue dependencies.
+
+| Step | Ticket | Delivers | Blocked by |
+| --- | --- | --- | --- |
+| 1 | #179 | Delete the retired engine: transition table, local driver, local loop | — |
+| 2 | #203 | Fewer stages; resume from any active stage; a split parent never stalls | #179 |
+| 3a | #211 | Engine and team roots, `factory.descriptor.yaml`, overrides by path, the `factory` command | #179 |
+| 3b | #212 | One compiled node spec per automation; runs never read the graph | #211 |
+| 4 | #213 | `startup.sh` installs the whole factory; `read`, `write`, `ops` environments | #211, #212 |
+| 5a | #214 | The engine repository `factory`, with history, v0.1.0 | #203, #212, #213 |
+| 5b | #215 | This repository becomes the team repo and redeploys | #214 |
+| 6 | #162 | Knowledge routines: nightly retro, weekly distill, knowledge reviewer | #215 |
+| 7 | #216 | The first eval project repository | #215 |
+
+Follow-ups, not ticketed yet: several repositories per ticket as a draft set, the YouTrack adapter, Air Mate as the ticket front door (#11), and a local event loop.
+
+## History: the first plan
+
 Follows `docs/design.md` §15. Each step is one GitHub issue in this repository.
 Roles are enabled in phases; each phase runs for about a week before the next.
 The Air path follows the state chart in [statechart.md](statechart.md) and
