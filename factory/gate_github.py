@@ -15,6 +15,12 @@ import yaml
 
 from github_tracker import ROOT, gh
 
+
+def gate_stop(f):
+    """The reason a new fix round must not start, else None (the gate's own rule, shared with gate.apply)."""
+    from gate import stop_reason
+    return stop_reason(f, fix=True)
+
 MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))? -->")
 FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
@@ -205,7 +211,7 @@ class GitHubGateTracker:
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                     fix_rounds=sum(1 for r in reviews if r["agent"] and r["verdict"] == "changes"))  # bot change requests
+                     fix_rounds=len({r["commit_id"] for r in reviews if r["agent"] and r["verdict"] == "changes"}))  # rounds: heads with an agent change request
         return f
 
     # --- effects: read the target first, write only when it differs
@@ -285,10 +291,9 @@ class GitHubGateTracker:
             return False
         if f["round_verdict"] == "approve":
             return self.apply({"ticket": n, "kind": "stage", "value": "approved"})
-        if f["agent_runs"] >= f["run_cap"]:  # spend guard: no further developer run starts
-            self.apply({"ticket": n, "kind": "comment", "value": (
-                f"[factory] Stopped: {f['agent_runs']} developer runs since the last factory:ready reached "
-                f"limits.agent_runs_per_ticket. A person decides, then sets factory:ready.")})
+        stop = gate_stop(f)
+        if stop:  # no further developer run starts: a person decides
+            self.apply({"ticket": n, "kind": "comment", "value": stop})
             return self.apply({"ticket": n, "kind": "stage", "value": "blocked"})
         wrote = self.apply({"ticket": n, "kind": "label", "value": f"factory:fix-{tier}", "on": "pr"})
         return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote

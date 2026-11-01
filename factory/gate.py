@@ -250,12 +250,12 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
                        "[factory] Stopped: the fix round ended without a commit, so nothing starts the next "
                        "review. A person decides, then sets factory:ready.")},
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
-    if any(e["kind"] == "label" and str(e["value"]).startswith(COMMANDS) for e in effects) \
-            and facts.get("agent_runs", 0) >= facts.get("run_cap", 8):
-        # Spend guard: the transition that would start another developer run blocks the ticket instead.
-        effects = [{"kind": "comment", "ticket": ticket, "value": (
-                       f"[factory] Stopped: {facts['agent_runs']} developer runs since the last factory:ready "
-                       f"reached limits.agent_runs_per_ticket. A person decides, then sets factory:ready.")},
+    starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(COMMANDS)]
+    stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith("factory:fix-") for e in starts))
+    if stop:
+        # The transition that would start a developer run it may not start blocks the ticket instead; a check
+        # that refused later would stop it with no comment and no event to wake it.
+        effects = [{"kind": "comment", "ticket": ticket, "value": stop},
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
@@ -277,6 +277,18 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
 
 SWEEP_STAGES = ("approved", "merged", "split", "in-review")
 COMMANDS = ("factory:implement-", "factory:fix-", "factory:update-")
+
+
+def stop_reason(facts, fix=False):
+    """Why no further developer run may start for this ticket, else None: the spend guard, and for a fix
+    round the fix-round cap (`limits.fix_rounds`)."""
+    if facts.get("agent_runs", 0) >= facts.get("run_cap", 8):
+        return (f"[factory] Stopped: {facts['agent_runs']} developer runs since the last factory:ready reached "
+                f"limits.agent_runs_per_ticket. A person decides, then sets factory:ready.")
+    if fix and facts.get("fix_rounds", 0) >= facts.get("fix_cap", 3):
+        return (f"[factory] Stopped: {facts['fix_rounds']} fix rounds reached limits.fix_rounds and the review "
+                f"still requests changes. A person decides, then sets factory:ready.")
+    return None
 
 
 def local_head():

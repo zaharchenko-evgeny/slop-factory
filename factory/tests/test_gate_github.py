@@ -242,7 +242,8 @@ class EffectsTest(unittest.TestCase):
 
     def test_fix_rounds_grow_per_reviewed_head(self):
         C = M.replace("approve", "changes")
-        self.assertEqual(tr(FakeGh(reviews=[review(BOT, C), review(BOT, C)])).facts(7)["fix_rounds"], 2)
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, C), review(BOT, C)])).facts(7)["fix_rounds"], 1)  # one head
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, C, commit="h0"), review(BOT, C)])).facts(7)["fix_rounds"], 2)
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)["fix_rounds"], 0)
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, C, commit="old")])).facts(7)["fix_rounds"], 1)
         gh = FakeGh(reviews=[review(BOT, C, commit="old")])
@@ -435,6 +436,10 @@ class JoinTest(unittest.TestCase):
             self.assertIn("factory:in-review", gh.labels)
         finally:
             gate.local_head = orig
+
+    def test_fix_rounds_count_heads_not_reviewers(self):
+        two = [review(BOT, C.replace("focus=full", "focus=behaviour")), review(BOT, C.replace("focus=full", "focus=structure-security"))]
+        self.assertEqual(tr(FakeGh(reviews=two)).facts(7)["fix_rounds"], 1)  # two reviewers, one round
 
     def test_change_request_counted_by_round_1_does_not_block_round_2(self):
         # B2 of #183: the bot reviews first, the human second; round 1 counts her request, round 2 must not loop on it

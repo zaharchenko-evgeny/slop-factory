@@ -294,6 +294,11 @@ class TriggerTest(unittest.TestCase):
         gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
         self.assertEqual(tr.tickets["7"]["stage"], "changes-requested")
 
+    def test_fix_round_cap_blocks_the_join_instead_of_a_silent_refusal(self):
+        tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "ci": "red", "fix_rounds": 3, "fix_cap": 3}})
+        gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "blocked")
+
     def test_bug_intake_proceeds(self):
         h = {"handoff": "ROUTER-INTAKE", "kind": "bug", "ready": "yes", "split": "none"}
         self.assertEqual(gate.outcome_of(h), "proceed")
