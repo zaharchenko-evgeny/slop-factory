@@ -8,7 +8,7 @@ The [proposed whole-factory chart](statechart-proposed.md) extends this one with
 
 ## What changes
 
-Today one `drive.py run` walks a ticket from `ready` to `approved`. It keeps fork, join and loop state in
+In the earlier design, one run of the local driver walked a ticket from `ready` to `approved`. It kept fork, join and loop state in
 `.factory/runs/`. In the new design the tracker label is the only state. Each GitHub event starts one
 short step, and one step runs one role. A step ends by setting the label or PR label that starts the
 next step, or by recording an intent that the next push applies.
@@ -18,7 +18,7 @@ next step, or by recording an intent that the next push applies.
 - The loop is the `in-review` and `changes-requested` cycle, bounded by `fix_round`.
 
 The same transition table drives both targets. On Air, GitHub events start automations. Locally,
-`drive.py loop` polls the same events and calls the same step code.
+the retired local driver polled the same events and called the same step code.
 
 ## The chart
 
@@ -279,7 +279,7 @@ Each slice is a factory ticket under #100 and ends in a state that can be checke
    command labels, without `parallel` and `loop`. `sm.py validate` and `sm.py simulate` cover the table.
 2. `factory/step.py`: `begin` and `end` with the GitHub adapter. The tests stub `gh` and cover each
    of the 30 numbered problems above.
-3. The local target runs on `step.py`: `drive.py loop` turns polled events into the same calls. The fork
+3. The local target runs on `step.py`: the local driver (since retired) turned polled events into the same calls. The fork
    and loop engine code is deleted in the same change.
 4. The Air target (#7): render the automations in the table from `delivery.sm.yaml` and `factory.yaml`.
 5. The sweep on both targets.
