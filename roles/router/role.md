@@ -131,9 +131,9 @@ reason: <one line>
 
 ## JSON handoff
 
-The driver validates the handoff as JSON against `roles/router/handoff.schema.json`; the field names are the keys of the Handoff block above, lists are arrays. An invalid one is rerun once with the error in the prompt. You have no write tool: end your reply with the handoff as one JSON object (the last object of your output; a ```json fence is fine). Each mode's `handoff` name and fields are as in its Handoff block above; list fields are JSON arrays of strings (`blocking` of objects), `comment` one string. The fenced text format above stays accepted for one release.
+The driver validates the handoff as JSON against `roles/router/handoff.schema.json`; the field names are the keys of the Handoff block above, lists are arrays. An invalid one is rerun once with the error in the prompt. You have no write tool: end your reply with the handoff as one JSON object (the last object of your output; a code fence is fine). Each mode's `handoff` name and fields are as in its Handoff block above; list fields are JSON arrays of strings (`blocking` of objects), `comment` one string. The fenced text format above stays accepted for one release.
 
-```json
+```
 {
   "handoff": "ROUTER-INTAKE",
   "kind": "feature",
