@@ -136,7 +136,8 @@ def intake_fields(h):
     out = {"reason": h["blocked_reason"]} if h.get("blocked_reason") not in (None, "", "none") else {}
     if h.get("handoff") != "ROUTER-INTAKE":
         return out
-    n = int("".join(c for c in str(h.get("size_estimate", "")) if c.isdigit()) or 0)
+    size = re.search(r"\d+", str(h.get("size_estimate", "")))
+    n = int(size[0]) if size else 0
     missing = ", ".join(h["missing"]) if isinstance(h.get("missing"), list) else str(h.get("missing", ""))
     return {**out, "complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
             "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong",

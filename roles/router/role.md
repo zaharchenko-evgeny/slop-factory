@@ -21,10 +21,10 @@ Input: a request (free text or a tracker issue).
 4. Estimate the size as the lines a reviewer must read: added lines plus
    modified lines, counting tests and fixtures, not only production code. A
    whole file deleted counts as one line because it is checked by listing it;
-   lines removed from a file that remains count as modified. The size estimate
-   may report both changed lines and deletion volume, for example `about 40
-   lines changed; deletions about 2,200 lines`; use the first number to decide
-   whether to split. Above about 400 lines, propose slices in `split:`, each
+   lines removed from a file that remains count as modified. Keep
+   `size_estimate` to the changed-line count only, for example `~40`; mention
+   deletion volume in the ticket body's prose when useful. Above about 400
+   lines, propose slices in `split:`, each
    one a ticket that delivers on its own. For example, deleting 12 files
    (2,000 lines) and editing 40 lines is about 52 lines, so do not split.
 5. End your reply with the handoff as the last fenced block and nothing after
