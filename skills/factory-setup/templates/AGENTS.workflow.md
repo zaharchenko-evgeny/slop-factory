@@ -44,8 +44,12 @@ change, whether you are a person, a pi session or a factory role.
    GitHub cannot require status checks here (private repository, no Pro),
    so merge only a PR whose `factory-checks` ran after the latest push to
    `main`.
-6. **Record process gaps.** When a run needs a manual step or hits a factory
-   defect, add one comment to the ticket that will fix it (or open a new
-   ticket). Do not fix the factory inside an unrelated ticket.
+6. **Write notes where the role was triggered.** A role woken by a pull request
+   writes every note to that PR, as a PR comment starting with `[factory]` and
+   ending with a `Factory-Run:` trailer. This includes process gaps and
+   blocked-gate reports. A role woken by a ticket writes notes to that ticket.
+   Stage changes and the retro stay on the ticket and are written by the gate.
+   Identify the ticket that will fix a process gap (or open a new ticket); do
+   not fix the factory inside an unrelated ticket.
 
 {{MODEL_POLICY}}

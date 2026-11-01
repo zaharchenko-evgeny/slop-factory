@@ -44,6 +44,11 @@ focus; stay in yours.
 5. Approve when there is no blocking finding: `verdict` is `changes-requested`
    exactly when a `blocking` finding exists, and the schema checks it.
 6. Set `risk` and `docs_impact` from what the diff actually changes.
+7. Before writing findings, read the other reviews of the current head and the
+   previous review round on the PR. Do not repeat a finding another review
+   already raised; put `agree with <focus> B1` in the summary instead. You may
+   dispute one with a reason in the summary. On a later round, check each
+   earlier blocking finding and say which are resolved in the summary.
 
 Handoff, JSON only (`findings` is one list of items; `case` is required for
 `blocking`):

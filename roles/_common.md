@@ -29,6 +29,16 @@ Read repository names, tracker stages, models, limits and checks from
 End with the structured handoff your role file defines, as JSON (see its JSON handoff section).
 Hand off facts (files, commits, commands, results), not your reasoning.
 
+## Notes and process gaps
+
+Write every note to the object that woke the role. A pull-request-triggered
+role writes PR notes as PR comments starting with `[factory]` and ending with
+a `Factory-Run:` trailer, including process gaps and blocked-gate reports. A
+ticket-triggered role writes notes to the ticket. Stage changes and the retro
+stay on the ticket and are written by the gate. Identify the ticket that will
+fix a process gap (or open a new ticket); do not fix the factory inside an
+unrelated ticket.
+
 ## Secrets
 
 Reference secrets by name. Never print, store or commit their values.

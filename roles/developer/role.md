@@ -15,10 +15,15 @@ mode to address blocking review findings.
 
 ## Mode `fix`
 
-Input: the previous handoff and the reviewer's blocking findings. Read them from the body of the latest
-change-request review on the PR (`gh api repos/<repo>/pulls/<n>/reviews`; the body holds the summary and one
-`**B1** path:line — text` line per finding, blocking first). Address each
-blocking finding with a new commit, or explain why it is wrong. Ignore nits.
+Input: the previous handoff and the reviewer's findings. Read every
+change-request review of the current round on the PR (`gh api
+repos/<repo>/pulls/<n>/reviews`; each body holds the summary and one `**B1**
+path:line — text` line per finding, blocking first). Address each finding in
+your handoff as fixed (include the commit) or disputed (give a reason). Commit
+fixes separately as needed. Ignore nits.
+
+List those answers in `findings_addressed`, one per finding, as
+`<finding id>: fixed in <sha>` or `<finding id>: disputed — <reason>`.
 
 ## Rules
 
