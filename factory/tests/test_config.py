@@ -58,7 +58,11 @@ class TeamRootTest(unittest.TestCase):
             self.assertEqual((c["tracker"]["hold_label"], c["tracker"]["repository"]), ("mine", "o/r"))
 
     def test_unknown_descriptor_key_fails_validate(self):
-        for bad in ({"colour": 1}, {"tracker": {**DESCRIPTOR["tracker"], "colour": 1}}):
+        nested = ({"limits": {"colour": 1}}, {"gates": {"colour": 1}}, {"knowledge": {"colour": 1}},
+                  {"targets": {"air": {"colour": 1}}}, {"roles": {"developer": {"colour": 1}}},
+                  {"roles": {"reviewer": {"modes": {"full": {"colour": 1}}}}},
+                  {"repositories": [{"name": "x", "colour": 1}]}, {"checks": [{"name": "x", "colour": 1}]})
+        for bad in ({"colour": 1}, {"tracker": {**DESCRIPTOR["tracker"], "colour": 1}}, *nested):
             with tempfile.TemporaryDirectory() as tmp:
                 config.set_team(team(tmp, {**DESCRIPTOR, **bad}))
                 out = io.StringIO()

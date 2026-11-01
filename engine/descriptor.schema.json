@@ -4,28 +4,258 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "engine": {"type": "integer"},
-    "project": {"type": "object", "additionalProperties": false, "properties": {"name": {"type": "string"}}},
-    "repositories": {"type": "array"},
-    "branch_pattern": {"type": "string"},
-    "commit_prefix": {"type": "string"},
+    "engine": {
+      "type": "integer"
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "repositories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "default_branch": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "branch_pattern": {
+      "type": "string"
+    },
+    "commit_prefix": {
+      "type": "string"
+    },
     "tracker": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "adapter": {"type": "string"}, "repository": {"type": "string"}, "stages": {"type": "object"},
-        "map_label": {"type": "string"}, "review_trigger": {"type": "string"}, "risk_labels": {"type": "object"},
-        "docs_impact_label": {"type": "string"}, "bot_logins": {"type": "array"}, "hold_label": {"type": "string"}
+        "adapter": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "stages": {
+          "type": "object"
+        },
+        "map_label": {
+          "type": "string"
+        },
+        "review_trigger": {
+          "type": "string"
+        },
+        "risk_labels": {
+          "type": "object"
+        },
+        "docs_impact_label": {
+          "type": "string"
+        },
+        "bot_logins": {
+          "type": "array"
+        },
+        "hold_label": {
+          "type": "string"
+        }
       }
     },
-    "targets": {"type": "object"},
-    "models": {"type": "object"},
-    "roles": {"type": "object"},
-    "limits": {"type": "object"},
-    "gates": {"type": "object"},
-    "knowledge": {"type": "object"},
-    "nodes": {"type": "object"},
-    "reviews": {"type": "object", "additionalProperties": false, "properties": {"trusted_bots": {"type": "array"}}},
-    "checks": {"type": "array"}
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "air": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bot_login": {
+              "type": "string"
+            },
+            "models": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tier": {
+            "type": "string"
+          },
+          "tier_high_risk": {
+            "type": "string"
+          },
+          "fallback": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "auto_merge": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "max_risk": {
+                "type": "string"
+              },
+              "require": {}
+            }
+          },
+          "modes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "tier": {
+                  "type": "string"
+                },
+                "fallback": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "concurrent_deliveries": {
+          "type": "integer"
+        },
+        "fix_rounds": {
+          "type": "integer"
+        },
+        "agent_runs_per_ticket": {
+          "type": "integer"
+        },
+        "stale_hours": {
+          "type": "integer"
+        },
+        "resume_cap": {
+          "type": "integer"
+        },
+        "runs_per_day": {
+          "type": "integer"
+        },
+        "environment_repair_attempts": {
+          "type": "integer"
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ticket_approval": {
+          "type": "string"
+        },
+        "pr_approval": {
+          "type": "string"
+        },
+        "confirm_external_writes": {
+          "type": "boolean"
+        },
+        "confirm_external_writes_scope": {
+          "type": "array"
+        }
+      }
+    },
+    "knowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "dir": {
+          "type": "string"
+        },
+        "distill_branch": {
+          "type": "string"
+        },
+        "distill_every_days": {
+          "type": "integer"
+        }
+      }
+    },
+    "nodes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    },
+    "reviews": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trusted_bots": {
+          "type": "array"
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "requires": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          }
+        }
+      }
+    }
   }
 }

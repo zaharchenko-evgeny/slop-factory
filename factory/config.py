@@ -78,12 +78,19 @@ def _check(schema, value, where, errs):
     if t in kinds and (not isinstance(value, kinds[t]) or (t != "boolean" and isinstance(value, bool))):
         errs.append(f"{where}: must be {t}")
         return
-    if isinstance(value, dict) and "properties" in schema:
+    if isinstance(value, dict) and ("properties" in schema or "additionalProperties" in schema):
         for k, v in value.items():
-            if k in schema["properties"]:
+            if k in schema.get("properties", {}):
                 _check(schema["properties"][k], v, f"{where}.{k}", errs)
-            elif schema.get("additionalProperties") is False:
-                errs.append(f"unknown-key: {where}.{k}")
+            else:
+                extra = schema.get("additionalProperties")
+                if extra is False:
+                    errs.append(f"unknown-key: {where}.{k}")
+                elif isinstance(extra, dict):
+                    _check(extra, v, f"{where}.{k}", errs)
+    if isinstance(value, list) and "items" in schema:
+        for i, v in enumerate(value):
+            _check(schema["items"], v, f"{where}[{i}]", errs)
 
 
 def validate():
