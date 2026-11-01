@@ -4,6 +4,7 @@
   "required": [
    "handoff",
    "verdict",
+   "summary",
    "risk",
    "docs_impact",
    "findings"
