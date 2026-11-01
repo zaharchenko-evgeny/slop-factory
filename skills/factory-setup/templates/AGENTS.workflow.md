@@ -17,28 +17,28 @@ change, whether you are a person, a pi session or a factory role.
    every blocker closed, unclaimed (no assignee), in map order.
 3. **Split large tickets.** Above about 400 lines, or 3 repositories, split the
    ticket into linked sub-issues before starting. Deliver the first slice.
-4. **Deliver through the factory.** A ticket in `ready` runs through
-   [workflows/delivery.v1.sm.yaml](workflows/delivery.v1.sm.yaml), driven by
-   `factory/sm_v1.py` and the `factory-delivery` skill: router intake →
-   developer in `.factory/worktrees/<issue>` → pre-review checks from
-   [factory.yaml](factory.yaml) → reviewers chosen by risk (one for
-   `risk:low`, behaviour plus structure-security for `risk:high`, each in its
-   own directory) → fix rounds → doc-writer when a reviewer reports docs impact →
-   approver (dry-run) → PR → router summary on the
-   ticket. Each role runs as its own `pi -p` process with the model from
-   `factory.yaml`. Whoever orchestrates runs scripts, git and `gh`, and never
-   writes or reviews the code.
-5. **Merge gate.** A human merges the PR after CI passes and the reviewers
-   approve; `uv run factory/drive.py loop --once` then moves every
-   ticket whose PRs are all merged through `merged` to `factory:done`. A PR that passed alone
-   can still break the base together with another one: the factory re-runs
-   the blocking checks on the branch merged with the current base before
-   `approved`, and a failure (or failed CI) is a fix round. Merge PRs one at a
-   time, and update a branch that is behind the base first. GitHub cannot
-   require status checks here (private repository, no Pro), so a human merges
-   only a PR whose `factory-checks` ran after the latest push to `main`; a push
-   to `main` re-runs it on every open factory PR, and a red `main` opens the
-   `Main is red: <check>` ticket.
+4. **Deliver through the factory.** The factory is the node list in
+   [workflows/nodes.yaml](workflows/nodes.yaml) ([ADR-0014](docs/adr/0014-node-model.md)),
+   deployed as `[factory:<node>]` Air automations by the `factory-deploy` skill.
+   Each automation's agent runs `uv run factory/gate.py check`, does its
+   role's work, writes the handoff to the `handoff_path` that `check`
+   printed, and runs `gate.py apply`. The gate alone changes labels, posts
+   reviews and comments, and moves the stage. An agent never edits labels,
+   never approves, and never merges. On Air the platform pushes the branch
+   (`create-pr` for implement, `push-to-source` for fix); work on the
+   `branch` that `check` prints. Every automation starts on a label or a PR
+   event, never on a schedule: CI labels the PR `factory:ci-green` or
+   `factory:ci-red` when it finishes (`.github/workflows/ci-state.yml`).
+   Scripted steps (join, finish) run only `gate.py sweep`. Agent reviews are `COMMENT` reviews pinned to the head,
+   with the verdict in a `<!-- factory:review ... -->` marker.
+5. **Merge gate.** A human merges a PR after CI is green at its exact head
+   and the join set `factory:approved`: update a branch that is behind
+   `main` first, then merge with `--match-head-commit`, one PR at a time.
+   The `finish` node, on the merge event, then moves the ticket to
+   `merged` and `done`, and closes it.
+   GitHub cannot require status checks here (private repository, no Pro),
+   so merge only a PR whose `factory-checks` ran after the latest push to
+   `main`.
 6. **Record process gaps.** When a run needs a manual step or hits a factory
    defect, add one comment to the ticket that will fix it (or open a new
    ticket). Do not fix the factory inside an unrelated ticket.

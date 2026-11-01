@@ -25,7 +25,7 @@ PAYLOAD = {"risk": "low", "complexity": "small", "tier": "mid"}
 
 
 def make(cls, tid, **kw):
-    t = {"head": "abc", "blockers_open": 0}
+    t = {"head": "abc", "blockers_open": 0, "ci": "green"}  # reviewers start on green CI
     if cls is TagTracker:
         t["tags"] = ["stage:ready", "risk:low"]
     else:
@@ -174,7 +174,7 @@ class CliAndValidate(unittest.TestCase):
             def apply(self, e):
                 self.seen_effects.append(e)
                 return True
-        tr = Rec({"7": {"stage": "in-review", "head": "abc", "focus_missing": ["full"]}})
+        tr = Rec({"7": {"stage": "in-review", "head": "abc", "ci": "green", "focus_missing": ["full"]}})
         code, _ = gate.apply("review", "approve", {"ticket": "7", "event": "e", "round": 1}, tr, NODES, focus="behaviour")
         self.assertEqual(code, 10)  # focus behaviour is not missing: not applied
         tr.tickets["7"]["focus_missing"] = ["behaviour"]
@@ -187,8 +187,8 @@ class CliAndValidate(unittest.TestCase):
             code, _ = gate.apply(node, "approved", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
             return code, tr.tickets["7"]["stage"]
         for node in ("join",):
-            self.assertEqual(run(node, "none"), (10, "in-review"), node)  # no check run yet: no transition
-            self.assertEqual(run(node, "pending"), (0, "approved"), node)
+            self.assertEqual(run(node, "none"), (10, "in-review"), node)  # no CI result yet: no transition
+            self.assertEqual(run(node, "pending"), (10, "in-review"), node)  # a new push waits for its CI label
             self.assertEqual(run(node, "green"), (0, "approved"), node)
             self.assertEqual(run(node, "red"), (0, "changes-requested"), node)
         tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "round_complete": True, "round_head": "abc", "ci": "red"}})
@@ -284,6 +284,55 @@ class TriggerTest(unittest.TestCase):
         blocked = {"handoff": "DEVELOPER", "status": "blocked", "branch": "ez/7-x", "blocked_reason": "ambiguous acceptance"}
         code, _ = self.run_main(["apply", "--node", "implement", "--handoff", str(self.file(blocked)), "--event", ev, "--tracker", f"memory:{tr}"])
         self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "blocked"))
+
+    def test_run_cap_blocks_the_transition_that_would_start_a_run(self):
+        tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "ci": "red", "agent_runs": 8, "run_cap": 8}})
+        code, out = gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        self.assertEqual((code, tr.tickets["7"]["stage"]), (0, "blocked"))
+        self.assertNotIn(["label", '"factory:fix-mid"'], tr.tickets["7"].get("log", []))  # no fix run starts
+        tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "ci": "red", "agent_runs": 7, "run_cap": 8}})
+        gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "changes-requested")
+
+    def test_fix_round_cap_blocks_the_join_instead_of_a_silent_refusal(self):
+        tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "ci": "red", "fix_rounds": 3, "fix_cap": 3}})
+        gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "blocked")
+
+    def test_a_stop_clears_every_command_label(self):
+        # review of PR #198: a label left on the ticket makes the command after factory:ready a no-op
+        seen = []
+        class T(MemoryTracker):
+            def apply(self, e):
+                seen.append((e["kind"], e["value"], e.get("on")))
+                return super().apply(e)
+        tr = T({"7": {"stage": "in-review", "head": "abc", "ci": "red", "fix_rounds": 3, "fix_cap": 3}})
+        gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        self.assertIn(("unlabel", "factory:fix-*", "pr"), seen)
+        self.assertIn(("unlabel", "factory:implement-*", None), seen)
+        self.assertEqual(seen[-1], ("stage", "blocked", None))
+
+    def test_implement_error_swaps_the_tier_label(self):
+        eff = [list(e)[0] for e in NODES["nodes"]["implement"]["outcomes"]["error"]["effects"]]
+        self.assertEqual(eff[:2], ["unlabel", "label"])
+
+    def test_resumed_implement_with_no_commit_refires_the_ci_label(self):
+        seen = []
+        class T(MemoryTracker):
+            def apply(self, e):
+                seen.append((e["kind"], e["value"], e.get("on")))
+                return super().apply(e)
+        tr = T({"7": {"stage": "in-dev", "head": "abc", "ci": "green", "pr": 5}})
+        orig = gate.local_head
+        try:
+            gate.local_head = lambda: "abc"
+            gate.apply("implement", "done", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        finally:
+            gate.local_head = orig
+        self.assertIn(("label", "factory:ci-green", "pr"), seen)
+        self.assertEqual(tr.tickets["7"]["stage"], "in-review")
+        self.assertEqual(seen[-1][0], "join")  # after the stage change: reviews already at this head decide
+        self.assertEqual(seen[-2], ("stage", "in-review", None))
 
     def test_bug_intake_proceeds(self):
         h = {"handoff": "ROUTER-INTAKE", "kind": "bug", "ready": "yes", "split": "none"}

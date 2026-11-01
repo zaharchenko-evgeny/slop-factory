@@ -153,9 +153,12 @@ class LoopTest(unittest.TestCase):
         def rr(node, check):
             calls.append(node)
             return "answered", {}  # NO_GO: stage not in from
-        kw = {"last": datetime(2026, 1, 1, 0, 0), "now": datetime(2026, 1, 1, 0, 10)}
-        res = loop.tick(self.t, [1], NODES, CONFIG, run_role=rr, scripts={"sweep": lambda f: (calls.append("sweep"), ("answered", {}))[1]}, **kw)
-        self.assertEqual((calls, res["due"]), (["sweep"], ["sweep"]))
+        kw = {"last": datetime(2026, 1, 1, 0, 0), "now": datetime(2026, 1, 1, 0, 30)}
+        sched = copy.deepcopy(NODES)  # the factory has no scheduled node now; routines (#162) will
+        sched["schedules"]["tick"] = {"cron": "*/30 * * * *"}
+        sched["nodes"]["tick"] = {**sched["nodes"]["finish"], "triggers": ["schedule tick"]}
+        res = loop.tick(self.t, [1], sched, CONFIG, run_role=rr, scripts={"tick": lambda f: (calls.append("tick"), ("answered", {}))[1]}, **kw)
+        self.assertEqual((calls, res["due"]), (["tick"], ["tick"]))
         with tempfile.TemporaryDirectory() as d:
             stamp = Path(d) / "loop" / "last-tick"
             loop.update_stamp(stamp, res, True)

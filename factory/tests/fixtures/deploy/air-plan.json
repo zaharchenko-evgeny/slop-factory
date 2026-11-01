@@ -221,5 +221,16 @@
       },
       "vm": "default"
     }
+  ],
+  "labels": [
+    "complexity:large",
+    "complexity:medium",
+    "complexity:small",
+    "factory:implement-cheap",
+    "factory:implement-mid",
+    "factory:ready",
+    "factory:x",
+    "risk:high",
+    "risk:low"
   ]
 }

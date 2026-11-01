@@ -15,6 +15,17 @@ import yaml
 
 from github_tracker import ROOT, gh
 
+
+def gate_clear(n):
+    from gate import clear_commands
+    return clear_commands(n)
+
+
+def gate_stop(f):
+    """The reason a new fix round must not start, else None (the gate's own rule, shared with gate.apply)."""
+    from gate import stop_reason
+    return stop_reason(f, fix=True)
+
 MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))? -->")
 FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
@@ -23,8 +34,8 @@ WRITE = {"admin", "maintain", "write"}  # repository roles with write access
 
 
 class GitHubGateTracker:
-    def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=()):
-        self.trusted = set(trusted_bots)
+    def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8):
+        self.trusted, self.run_cap = set(trusted_bots), run_cap
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, run
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
@@ -36,7 +47,7 @@ class GitHubGateTracker:
             raise ValueError("factory.yaml: targets.air.bot_login is not set")
         t = c["tracker"]
         return cls(t["repository"], t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run,
-                   (c.get("reviews") or {}).get("trusted_bots") or [])
+                   (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8))
 
     # --- reads
     def _api(self, path, *flags):
@@ -50,10 +61,10 @@ class GitHubGateTracker:
         return [x["name"] for x in self._api(f"issues/{n}")["labels"]]
 
     def sweep_tickets(self, stages):
-        """Issue numbers (open or closed) whose stage label is one of `stages`; in-review and changes-requested only when open."""
+        """Issue numbers (open or closed) whose stage label is one of `stages`; in-review, changes-requested and in-dev only when open."""
         found = set()
         for st in stages:
-            state = "open" if st in ("in-review", "changes-requested") else "all"
+            state = "open" if st in ("in-review", "changes-requested", "in-dev") else "all"
             found |= {i["number"] for i in self._list(f"issues?state={state}&labels={self.stages[st]}&per_page=100")
                       if "pull_request" not in i}
         return sorted(found)
@@ -72,6 +83,8 @@ class GitHubGateTracker:
                         "--jq", ".workflow_runs[]"])
         latest = {}
         for r in (json.loads(x) for x in out.splitlines() if x.strip()):
+            if r.get("event") == "workflow_run":  # ci-state.yml reports CI; it is not CI
+                continue
             key = (r.get("workflow_id"), r.get("event"))
             if key not in latest or (r.get("run_number"), r.get("run_attempt", 1)) > (
                     latest[key].get("run_number"), latest[key].get("run_attempt", 1)):
@@ -104,6 +117,26 @@ class GitHubGateTracker:
                 return False
             raise  # any other failure must not drop a blocking review: the join fails and is retried
 
+    def _agent_runs(self, n, pr):
+        """Developer runs started for ticket `n` since a person last set `factory:ready`: each `labeled` event
+        of a command label (`factory:implement-*`, `fix-*`, `update-*`) on the issue or its PR after it. A
+        person's `ready` starts a fresh budget. Reviews follow pushes, so this bounds them too."""
+        cmds = ("factory:implement-", "factory:fix-", "factory:update-")
+        events = {t: self._list(f"issues/{t}/events") for t in [n] + ([pr] if pr else [])}
+        name = lambda e: (e.get("label") or {}).get("name", "") if e.get("event") == "labeled" else ""
+        since = self._since = max((e.get("created_at") or "" for e in events[n] if name(e) == self.stages.get("ready")),
+                                  default="")
+        return sum(1 for es in events.values() for e in es if name(e).startswith(cmds) and (e.get("created_at") or "") >= since)
+
+    def parent(self, n):
+        """The parent issue number of sub-issue `n`, else None."""
+        try:
+            return self._api(f"issues/{n}/parent").get("number")
+        except Exception as e:
+            if "404" in str(e):
+                return None
+            raise
+
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
         the label when it finishes, so every round adds it again)."""
@@ -132,7 +165,9 @@ class GitHubGateTracker:
         others = {r["author"]: r for r in reviews if not r["agent"] and r["verdict"]
                   and (r["author"] in self.trusted if r["bot"] else self._can_write(r["author"]))}
         ignored = [r["author"] for r in reviews if r["bot"] and not r["agent"] and r["author"] not in self.trusted]
-        complete = all(x in at_head for x in required) and not requested and ci in ("green", "red")
+        if ci == "red":  # a red head needs a fix whatever the reviews say; reviewers only start on green
+            return True, "changes", ignored, []
+        complete = all(x in at_head for x in required) and not requested and ci == "green"
         if not complete:
             return False, None, ignored, []
         late = [r for r in others.values() if r["verdict"] == "changes"]
@@ -160,6 +195,8 @@ class GitHubGateTracker:
              "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
              "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
+             "agent_runs": self._agent_runs(n, pr["number"] if pr else None), "run_cap": self.run_cap,
+             "handed_to_fix": False,
              "issue_state": issue.get("state", "open"),
              "title": issue.get("title", ""), "body": issue.get("body") or "", "branch": None}
         if stage == "split":
@@ -171,6 +208,9 @@ class GitHubGateTracker:
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
             ci = self._ci(head)
+            since = getattr(self, "_since", "")  # a person's factory:ready starts a fresh round count
+            writes = [t for t in self._fix_writes(pr["number"]) if t >= since]
+            f["handed_to_fix"] = bool(writes) and max(writes) > self._api(f"commits/{head}")["commit"]["committer"]["date"]
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
@@ -178,7 +218,8 @@ class GitHubGateTracker:
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                     fix_rounds=sum(1 for r in reviews if r["agent"] and r["verdict"] == "changes"))  # bot change requests
+                     fix_rounds=len({r["commit_id"] for r in reviews if r["agent"] and r["verdict"] == "changes"
+                                     and (r.get("submitted_at") or "") >= since}))  # rounds since ready: heads with an agent change request
         return f
 
     # --- effects: read the target first, write only when it differs
@@ -205,6 +246,8 @@ class GitHubGateTracker:
             if on == "pr":
                 pr = self._pr(n)
                 if pr is None:
+                    if kind == "unlabel":
+                        return False  # nothing to remove from a PR that does not exist
                     raise RuntimeError(f"{kind}: no PR for ticket {n}")
                 target = pr["number"]
             elif on != "issue":
@@ -250,12 +293,20 @@ class GitHubGateTracker:
         f = self.facts(n)
         for who in f["ignored_reviews"]:
             print(f"join: ignored unmarked bot review by {who}", file=sys.stderr)
+        if f["handed_to_fix"]:
+            return False  # this head already went to a fix; its push starts the next round
         if f["stage"] == "in-review" and f["waiting_reviewers"]:
             return self._rerequest(n, f["waiting_reviewers"])  # nothing moves until they decide again
         if not f["round_complete"] or f["stage"] != "in-review":
             return False
         if f["round_verdict"] == "approve":
             return self.apply({"ticket": n, "kind": "stage", "value": "approved"})
+        stop = gate_stop(f)
+        if stop:  # no further developer run starts: a person decides
+            self.apply({"ticket": n, "kind": "comment", "value": stop})
+            for e in gate_clear(n):
+                self.apply(e)
+            return self.apply({"ticket": n, "kind": "stage", "value": "blocked"})
         wrote = self.apply({"ticket": n, "kind": "label", "value": f"factory:fix-{tier}", "on": "pr"})
         return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote
 

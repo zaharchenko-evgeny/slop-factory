@@ -31,6 +31,12 @@ class PlanTest(unittest.TestCase):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
 
+    def test_plan_lists_every_label_the_gate_writes(self):
+        plan = deploy.plan_air(nodes.load(), yaml.safe_load((HERE.parent.parent / "factory.yaml").read_text()))
+        for want in ("factory:ready", "factory:implement-cheap", "factory:fix-strong", "complexity:small", "risk:high"):
+            self.assertIn(want, plan["labels"])
+        self.assertFalse([x for x in plan["labels"] if "<" in x])
+
     def test_script_nodes_only_run_the_sweep(self):
         plan = json.loads((FIX / "air-plan.json").read_text())
         a = {x["name"]: x for x in plan["automations"]}
@@ -51,7 +57,9 @@ class PlanTest(unittest.TestCase):
             self.assertNotIn("GITHUB_TOKEN", e["secrets"])
         join = next(x for x in deploy.plan_air(nodes.load(), yaml.safe_load((ROOT / "factory.yaml").read_text()))
                     ["automations"] if x["name"] == "[factory:join]")
-        self.assertEqual([x["eventType"] for x in join["triggers"]], ["pull_request_review.submitted"])
+        self.assertEqual([(x["eventType"], x["filters"].get("label")) for x in join["triggers"]],
+                         [("pull_request_review.submitted", None), ("pull_request.labeled", "factory:ci-red")])
+        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), yaml.safe_load((ROOT / "factory.yaml").read_text()))["automations"] for x in a["triggers"]), "no polling"
 
     def test_prompt_carries_focus_and_tier(self):
         config = yaml.safe_load((ROOT / "factory.yaml").read_text())
@@ -71,12 +79,12 @@ class PlanTest(unittest.TestCase):
         names = {a["name"] for a in plan["automations"]}
         self.assertTrue(all(x.startswith("[factory:") for x in names))
         pilot = {f"[factory:{x}]" for x in (
-            "intake", "join", "sweep",
+            "intake", "join", "finish",
             *(f"{b}-{t}" for b in ("implement", "fix") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security")))}
         self.assertEqual(names, pilot)
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
-                         {"intake", "implement", "review", "join", "fix", "sweep"})
+                         {"intake", "implement", "review", "join", "fix", "finish"})
         self.assertEqual(deploy.plan_air(n, config), plan)
 
     def test_local_is_launchd_job(self):

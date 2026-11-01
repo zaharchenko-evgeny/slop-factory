@@ -242,6 +242,30 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
             payload = {**payload, "tier": nodes["nodes"]["fix"]["tiers"][0]}
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
+    facts = tracker.facts(ticket)
+    if name == "fix" and outcome == "done" and facts.get("handed_to_fix") and local_head() == facts.get("head"):
+        # The platform pushes after the run; an unchanged HEAD means the fix made no commit, and no event
+        # would ever start the next round. A person decides.
+        effects = [{"kind": "comment", "ticket": ticket, "value": (
+                       "[factory] Stopped: the fix round ended without a commit, so nothing starts the next "
+                       "review. A person decides, then sets factory:ready.")},
+                   {"kind": "stage", "ticket": ticket, "value": "blocked"}]
+    after = []  # effects that must follow the stage change
+    if name == "implement" and outcome == "done" and facts.get("pr") and facts.get("ci") in ("green", "red") \
+            and local_head() == facts.get("head"):
+        # A resumed ticket implemented on its open PR with no new commit: no push, so no CI label would come.
+        # Re-fire it, and run the join once the stage is in-review: reviews already at this head decide.
+        effects = refire_ci(ticket, facts["ci"]) + effects
+        after = [{"kind": "join", "ticket": ticket, "value": "all-approve", "tier": fix_tier(facts)}]
+    starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(COMMANDS)]
+    stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith("factory:fix-") for e in starts))
+    if stop:
+        # The transition that would start a developer run it may not start blocks the ticket instead; a check
+        # that refused later would stop it with no comment and no event to wake it.
+        effects = [{"kind": "comment", "ticket": ticket, "value": stop},
+                   {"kind": "stage", "ticket": ticket, "value": "blocked"}]
+    if any(e["kind"] == "stage" and e["value"] in ("blocked", "failed") for e in effects):
+        effects = clear_commands(ticket) + effects
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
         if e["kind"] == "stage":
@@ -254,21 +278,56 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             e["run_id"] = payload["run_id"]
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
-    why = matches(node, tracker.facts(ticket), {**payload, "id": payload.get("event")}, out)
+    why = matches(node, facts, {**payload, "id": payload.get("event")}, out)
     if why:
         return NO_GO, {"applied": False, "reason": why}
-    return GO, {"applied": True, "written": [e["kind"] for e in effects if tracker.apply(e)]}
+    return GO, {"applied": True, "written": [e["kind"] for e in effects + after if tracker.apply(e)]}
 
 
 SWEEP_STAGES = ("approved", "merged", "split", "in-review")
+COMMANDS = ("factory:implement-", "factory:fix-", "factory:update-")
+
+
+def clear_commands(ticket):
+    """Effects that remove every command label. A stopped ticket keeps none, so the first command after a
+    person's factory:ready is a new label and fires its node (re-adding a present label fires nothing)."""
+    return [{"kind": "unlabel", "ticket": ticket, "value": "factory:implement-*"},
+            {"kind": "unlabel", "ticket": ticket, "value": "factory:fix-*", "on": "pr"},
+            {"kind": "unlabel", "ticket": ticket, "value": "factory:update-*", "on": "pr"}]
+
+
+def refire_ci(ticket, ci):
+    """Effects that write the PR's CI label again (remove, then add), so its node starts for an unchanged head."""
+    return [{"kind": "unlabel", "ticket": ticket, "value": "factory:ci-green", "on": "pr"},
+            {"kind": "unlabel", "ticket": ticket, "value": "factory:ci-red", "on": "pr"},
+            {"kind": "label", "ticket": ticket, "value": f"factory:ci-{ci}", "on": "pr"}]
+
+
+def stop_reason(facts, fix=False):
+    """Why no further developer run may start for this ticket, else None: the spend guard, and for a fix
+    round the fix-round cap (`limits.fix_rounds`)."""
+    if facts.get("agent_runs", 0) >= facts.get("run_cap", 8):
+        return (f"[factory] Stopped: {facts['agent_runs']} developer runs since the last factory:ready reached "
+                f"limits.agent_runs_per_ticket. A person decides, then sets factory:ready.")
+    if fix and facts.get("fix_rounds", 0) >= facts.get("fix_cap", 3):
+        return (f"[factory] Stopped: {facts['fix_rounds']} fix rounds reached limits.fix_rounds and the review "
+                f"still requests changes. A person decides, then sets factory:ready.")
+    return None
+
+
+def local_head():
+    """The checkout's HEAD, else None (no git checkout)."""
+    import subprocess
+    r = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
 
 
 def join_decision(facts):
     """The join's outcome and payload, or None while the round is open. Uses the adapter's `round_verdict`,
     which counts every required agent focus, human change requests and CI. A fix label takes the ticket's
     complexity tier (mid when unlabelled)."""
-    if not facts.get("round_complete") or facts.get("round_verdict") is None:
-        return None
+    if facts.get("handed_to_fix") or not facts.get("round_complete") or facts.get("round_verdict") is None:
+        return None  # an open round, or a head whose round already went to a fix (its push comes next)
     return ("changes" if facts["round_verdict"] == "changes" else "approved"), {"tier": fix_tier(facts)}
 
 
@@ -276,41 +335,52 @@ def sweep_plan(facts):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
     if stage == "approved" and facts.get("pr_state") == "merged":
-        return "sweep", "merged", {}
+        return "finish", "merged", {}
     if stage == "merged":
         agent = [r for r in facts["reviews"] if r["agent"]]
         pr = f"PR #{facts['pr']} {facts['pr_state']}" if facts["pr"] else "no PR found"
         text = (f"Retro: {pr}; fix rounds {facts['fix_rounds']}; "
                 f"reviews {len(agent)} ({sum(r['verdict'] == 'approve' for r in agent)} approve, "
                 f"{sum(r['verdict'] == 'changes' for r in agent)} changes)")
-        return "sweep", "retro", {"retro": text, "run_id": "sweep:retro"}
+        return "finish", "retro", {"retro": text, "run_id": "finish:retro"}
     if stage == "split" and facts.get("children_total") and facts["children_open"] == 0:
-        return "sweep", "children-done", {}
-    if stage == "in-review" and facts.get("waiting_reviewers"):
-        return "sweep", "waiting", {}  # ask them again; nothing moves until they decide
+        return "finish", "children-done", {}
+    if stage == "in-review" and facts.get("waiting_reviewers") and not facts.get("handed_to_fix"):
+        return "join", "waiting", {}  # ask them again; nothing moves until they decide
     if stage == "in-review" and (j := join_decision(facts)):
         return "join", *j
     return None
 
 
 def sweep(tracker, nodes, dry_run=False):
-    """One pass: each listed ticket moves at most one stage. Returns (results, failed)."""
+    """Move every listed ticket through each step its facts allow (a merged PR goes approved, merged, done in
+    one pass). A ticket that reaches done also lets its split parent finish. Returns (results, failed)."""
     results, failed = [], False
-    for n in tracker.sweep_tickets(SWEEP_STAGES):
-        try:
-            facts = tracker.facts(n)
-            plan = sweep_plan(facts)
-            if plan is None:
-                continue
-            node, outcome, payload = plan
-            r = {"ticket": n, "stage": facts["stage"], "node": node, "outcome": outcome}
-            if not dry_run:
+    queue, seen = list(tracker.sweep_tickets(SWEEP_STAGES)), set()
+    while queue:
+        n = queue.pop(0)
+        for _ in range(4):  # a ticket's longest walk is approved, merged, done
+            try:
+                facts = tracker.facts(n)
+                plan = sweep_plan(facts)
+                if plan is None or (n, facts["stage"]) in seen:
+                    break
+                seen.add((n, facts["stage"]))
+                node, outcome, payload = plan
+                r = {"ticket": n, "stage": facts["stage"], "node": node, "outcome": outcome}
+                results.append(r)
+                if dry_run:
+                    break
                 code, out = apply(node, outcome, {"ticket": n, **payload}, tracker, nodes)
                 r.update(applied=out["applied"], written=out.get("written", []))
-            results.append(r)
-        except Exception as e:  # one ticket failing does not stop the others
-            failed = True
-            results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+                if not out["applied"]:
+                    break
+                if outcome == "retro" and hasattr(tracker, "parent") and (p := tracker.parent(n)):
+                    queue.append(p)
+            except Exception as e:  # one ticket failing does not stop the others
+                failed = True
+                results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+                break
     return results, failed
 
 

@@ -60,12 +60,19 @@ class FakeGh:
             return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "head": {"sha": "h1", "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": u} for u in self.requested]})
         if a.endswith("/commits/h1"):
-            return json.dumps({"commit": {"committer": {"date": "2026-01-02T00:00:00Z"}}})
+            return json.dumps({"commit": {"committer": {"date": getattr(self, "head_date", "2026-01-02T00:00:00Z")}}})
         if "/collaborators/" in a:
             who = a.split("/collaborators/")[1].split("/")[0]
             if who not in self.roles:
                 raise RuntimeError("404")
             return json.dumps({"role_name": self.roles[who]})
+        if a.endswith("/parent"):
+            if getattr(self, "parent_of", None) is None:
+                raise RuntimeError("HTTP 404: Not Found")
+            return json.dumps({"number": self.parent_of})
+        if a.endswith("issues/7/events"):
+            return "\n".join(json.dumps({"event": "labeled", "label": {"name": "factory:implement-cheap"}})
+                             for _ in range(getattr(self, "impl_runs", 0)))
         if a.endswith("issues/5/events"):
             return "\n".join(json.dumps({"event": "labeled", "label": {"name": "factory:fix-mid"}, "created_at": t})
                              for t in getattr(self, "fix_events", []))
@@ -235,7 +242,8 @@ class EffectsTest(unittest.TestCase):
 
     def test_fix_rounds_grow_per_reviewed_head(self):
         C = M.replace("approve", "changes")
-        self.assertEqual(tr(FakeGh(reviews=[review(BOT, C), review(BOT, C)])).facts(7)["fix_rounds"], 2)
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, C), review(BOT, C)])).facts(7)["fix_rounds"], 1)  # one head
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, C, commit="h0"), review(BOT, C)])).facts(7)["fix_rounds"], 2)
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)["fix_rounds"], 0)
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, C, commit="old")])).facts(7)["fix_rounds"], 1)
         gh = FakeGh(reviews=[review(BOT, C, commit="old")])
@@ -334,6 +342,7 @@ class JoinTest(unittest.TestCase):
                       review(BOT, M, at="2026-01-02T03:00:00Z")]  # round 2: the agent approves h1
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # the late review counts in round 2
         gh.fix_events = ["2026-01-02T01:30:00Z"]  # round 1's join started the fix at 01:30; alice came at 02:00
+        gh.head_date = "2026-01-02T02:50:00Z"  # the fix pushed this head after its label
         self.assertEqual(tr(gh).facts(7)["round_verdict"], "changes")  # sent during the fix: counts in round 2
         gh.fix_events = ["2026-01-02T02:30:00Z"]  # the join ran after alice: the fix was given her request
         f = tr(gh).facts(7)
@@ -366,8 +375,9 @@ class JoinTest(unittest.TestCase):
                              review(BOT, M, at="2026-01-02T04:00:00Z"),
                              review("alice", "looking", state="COMMENTED", at="2026-01-02T05:00:00Z")])
         gh.fix_events, gh.requested = ["2026-01-02T02:05:00Z"], []
+        gh.head_date = "2026-01-02T02:50:00Z"  # the fix pushed this head after its label
         res, _ = gate.sweep(tr(gh), nodes.load())
-        self.assertEqual([(r["node"], r["outcome"]) for r in res], [("sweep", "waiting")])
+        self.assertEqual([(r["node"], r["outcome"]) for r in res], [("join", "waiting")])
         self.assertTrue(any("reviewers[]=alice" in " ".join(w) for w in gh.writes))
         self.assertIn("factory:in-review", gh.labels)  # nothing moved
 
@@ -376,9 +386,72 @@ class JoinTest(unittest.TestCase):
         bot = review("rev[bot]", "", commit="h0", state="CHANGES_REQUESTED", assoc="NONE", at="2026-01-02T02:00:00Z")
         gh = FakeGh(reviews=[bot, review(BOT, M, at="2026-01-02T04:00:00Z")])
         gh.fix_events = ["2026-01-02T02:05:00Z"]
+        gh.head_date = "2026-01-02T02:50:00Z"  # the fix pushed this head after its label
         t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, trusted_bots=["rev[bot]"])
         f = t.facts(7)
         self.assertEqual((f["round_complete"], f["waiting_reviewers"], f["round_verdict"]), (True, [], "approve"))
+
+    def test_agent_runs_count_since_the_last_ready(self):
+        class G(FakeGh):
+            def __call__(self, args):
+                if any(x.endswith("issues/7/events") for x in args):
+                    ev = lambda name, t: json.dumps({"event": "labeled", "label": {"name": name}, "created_at": t})
+                    return "\n".join([ev("factory:implement-cheap", "2026-01-01T00:00:00Z")] * 8
+                                      + [ev("factory:ready", "2026-01-02T00:00:00Z"), ev("factory:implement-mid", "2026-01-02T01:00:00Z")])
+                return FakeGh.__call__(self, args)
+        f = GitHubGateTracker(REPO, STAGES, BOT, run=G(), run_cap=8).facts(7)
+        self.assertEqual(f["agent_runs"], 1)  # a person's ready starts a fresh budget
+
+    def test_join_at_the_run_cap_blocks_instead_of_starting_a_fix(self):
+        # review of PR #198, B1: the reviewer's own join adds the fix label, so the cap must hold there too
+        gh = FakeGh(reviews=[review(BOT, C)])
+        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, run_cap=0)
+        t.apply({"ticket": 7, "kind": "join", "value": "all-approve", "tier": "mid"})
+        self.assertIn("factory:blocked", gh.labels)
+        self.assertFalse(any("factory:fix-" in x for x in gh.labels))
+
+    def test_head_already_handed_to_a_fix_waits_for_its_push(self):
+        # review of PR #198, B2: between the fix's apply and the platform's push the old head must not re-join,
+        # and the fix node itself must still run
+        gh = FakeGh(reviews=[review(BOT, C)])  # head h1 is committed 2026-01-02T00:00:00Z in the stub
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        f = tr(gh).facts(7)
+        self.assertTrue(f["handed_to_fix"])
+        self.assertIsNone(gate.join_decision(f))
+        self.assertEqual(join(gh), (False, 0))
+        gh.labels = ["factory:changes-requested", "risk:low"]
+        self.assertEqual(gate.check("fix", {"id": "e", "ticket": 7}, tr(gh), nodes.load(), CONFIG)[0], gate.GO)
+
+    def test_fix_that_pushed_nothing_blocks(self):
+        gh = FakeGh(labels=["factory:changes-requested", "risk:low"], reviews=[review(BOT, C)])
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        orig = gate.local_head
+        try:
+            gate.local_head = lambda: "h1"  # the run's checkout still at the PR head: no new commit
+            gate.apply("fix", "done", {"ticket": 7, "event": "e", "tier": "mid"}, tr(gh), nodes.load())
+            self.assertIn("factory:blocked", gh.labels)
+            gh.labels = ["factory:changes-requested", "risk:low"]
+            gate.local_head = lambda: "h2"  # a new commit, pushed by the platform after the run
+            gate.apply("fix", "done", {"ticket": 7, "event": "e2", "tier": "mid"}, tr(gh), nodes.load())
+            self.assertIn("factory:in-review", gh.labels)
+        finally:
+            gate.local_head = orig
+
+    def test_fix_rounds_count_heads_not_reviewers(self):
+        two = [review(BOT, C.replace("focus=full", "focus=behaviour")), review(BOT, C.replace("focus=full", "focus=structure-security"))]
+        self.assertEqual(tr(FakeGh(reviews=two)).facts(7)["fix_rounds"], 1)  # two reviewers, one round
+
+    def test_ready_resets_fix_rounds_and_the_fix_handoff(self):
+        class G(FakeGh):
+            def __call__(self, args):
+                if any(x.endswith("issues/7/events") for x in args):
+                    return json.dumps({"event": "labeled", "label": {"name": "factory:ready"}, "created_at": "2026-01-03T00:00:00Z"})
+                return FakeGh.__call__(self, args)
+        gh = G(reviews=[review(BOT, C, at="2026-01-02T01:00:00Z")])  # change request before the resume
+        gh.fix_events = ["2026-01-02T05:00:00Z"]  # its fix round, before the resume
+        f = tr(gh).facts(7)
+        self.assertEqual((f["fix_rounds"], f["handed_to_fix"]), (0, False))  # a fresh start after factory:ready
+        self.assertEqual((f["round_complete"], f["round_verdict"]), (True, "changes"))  # the join decides again
 
     def test_change_request_counted_by_round_1_does_not_block_round_2(self):
         # B2 of #183: the bot reviews first, the human second; round 1 counts her request, round 2 must not loop on it
@@ -386,6 +459,7 @@ class JoinTest(unittest.TestCase):
                              review("alice", "", commit="h0", state="CHANGES_REQUESTED", at="2026-01-02T02:00:00Z"),
                              review(BOT, M, at="2026-01-02T04:00:00Z")])
         gh.fix_events = ["2026-01-02T02:05:00Z"]  # round 1's join started the fix after her request
+        gh.head_date = "2026-01-02T02:50:00Z"  # the fix pushed this head after its label
         f = tr(gh).facts(7)
         self.assertEqual((f["round_complete"], f["waiting_reviewers"]), (False, ["alice"]))  # waits, no loop
         self.assertTrue(join(gh)[0])  # the join asks her again and moves nothing
@@ -455,19 +529,16 @@ class SweepTest(unittest.TestCase):
     def run_sweep(self, gh, dry=False):
         return gate.sweep(tr(gh), nodes.load(), dry)
 
-    def test_merged_pr_walks_approved_to_done_one_stage_per_sweep(self):
+    def test_merged_pr_walks_approved_to_done_in_one_run(self):
         gh = FakeGh(labels=["factory:approved", "risk:low"], reviews=[review(BOT, M)])
         gh.merged, gh.state = True, "closed"  # a closed issue in approved is still found
         res, failed = self.run_sweep(gh)
-        self.assertEqual([(r["ticket"], r["outcome"]) for r in res], [(7, "merged")])
-        self.assertEqual(sorted(gh.labels), ["factory:merged", "risk:low"])
-        res, _ = self.run_sweep(gh)
-        self.assertEqual([r["outcome"] for r in res], ["retro"])
+        self.assertEqual(([(r["ticket"], r["outcome"]) for r in res], failed), ([(7, "merged"), (7, "retro")], False))
         self.assertEqual(sorted(gh.labels), ["factory:done", "risk:low"])
         comments = [w for w in gh.writes if w[:2] == ["issue", "comment"]]
         self.assertEqual(len(comments), 1)
         self.assertIn("Retro: PR #5 merged; fix rounds 0; reviews 1 (1 approve, 0 changes)", comments[0][-1])
-        self.assertTrue(comments[0][-1].endswith("Factory-Run: sweep:retro"))
+        self.assertTrue(comments[0][-1].endswith("Factory-Run: finish:retro"))
         n = len(gh.writes)
         self.assertEqual(self.run_sweep(gh), ([], False))  # no new facts: nothing written
         self.assertEqual(len(gh.writes), n)

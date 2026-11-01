@@ -60,10 +60,10 @@ def script_join(ctx):
 def script_sweep(facts):
     """The sweep node's own outcomes (merged, retro, children-done); the join backstop stays with the join node."""
     plan = gate.sweep_plan(facts)
-    return (plan[1], plan[2]) if plan and plan[0] == "sweep" else (None, {})
+    return (plan[1], plan[2]) if plan and plan[0] == "finish" else (None, {})
 
 
-SCRIPTS = {"join": script_join, "sweep": script_sweep}
+SCRIPTS = {"join": script_join, "finish": script_sweep}
 
 
 class Due:
@@ -130,7 +130,7 @@ def tick(tracker, tickets, nodes, config, run_role=default_run_role, scripts=Non
                 continue
         view = Due(tracker, is_due)
         for n in tickets:
-            if n in moved or (n in closed and name != "sweep"):  # no node acts on a ticket a human closed
+            if n in moved or (n in closed and name != "finish"):  # no node acts on a ticket a human closed
                 continue
             try:
                 head = view.facts(n)["head"]
