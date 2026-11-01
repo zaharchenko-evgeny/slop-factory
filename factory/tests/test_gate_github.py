@@ -683,6 +683,14 @@ class ResumeTest(unittest.TestCase):
         gh.label_events = [("factory:ready", "2026-01-01T00:00:00Z"), ("factory:in-review", "2026-01-02T00:00:00Z")]
         self.assertEqual(tr(gh).facts(7)["stage"], "in-review")
 
+    def test_tied_label_timestamps_follow_event_order(self):
+        tie = "2026-01-01T00:00:00Z"
+        gh = FakeGh(labels=["factory:in-review", "factory:ready", "risk:low"])
+        gh.label_events = [("factory:in-review", tie), ("factory:ready", tie)]
+        self.assertEqual(tr(gh).facts(7)["stage"], "ready")
+        gh.label_events = [("factory:ready", tie), ("factory:in-review", tie)]
+        self.assertEqual(tr(gh).facts(7)["stage"], "in-review")
+
     def test_ready_added_in_review_resumes_through_intake_and_leaves_one_stage_label(self):
         gh = FakeGh(labels=["factory:in-review", "factory:ready", "risk:low"])
         gh.blocked = []

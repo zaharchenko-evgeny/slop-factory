@@ -190,11 +190,12 @@ class GitHubGateTracker:
         events = self._list(f"issues/{n}/events")
         # The stage is the stage label added last (a person's factory:ready on a running ticket wins over the
         # label it replaces); `apply` of the stage effect removes the others.
+        # Order by event position, not timestamp: the events list is chronological and timestamps can tie.
         added = {}
-        for e in events:
+        for i, e in enumerate(events):
             if e.get("event") == "labeled":
-                added[e["label"]["name"]] = max(e.get("created_at") or "", added.get(e["label"]["name"], ""))
-        stage = max((x for x in labels if x in by_label), key=lambda x: added.get(x, ""), default=None)
+                added[e["label"]["name"]] = i
+        stage = max((x for x in labels if x in by_label), key=lambda x: added.get(x, -1), default=None)
         stage = by_label.get(stage, "none")
         blockers = [b for b in self._list(f"issues/{n}/dependencies/blocked_by") if b["state"] == "open"]
         risk = "low" if self.risk_labels["low"] in labels else "high"
