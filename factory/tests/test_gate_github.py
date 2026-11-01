@@ -441,6 +441,18 @@ class JoinTest(unittest.TestCase):
         two = [review(BOT, C.replace("focus=full", "focus=behaviour")), review(BOT, C.replace("focus=full", "focus=structure-security"))]
         self.assertEqual(tr(FakeGh(reviews=two)).facts(7)["fix_rounds"], 1)  # two reviewers, one round
 
+    def test_ready_resets_fix_rounds_and_the_fix_handoff(self):
+        class G(FakeGh):
+            def __call__(self, args):
+                if any(x.endswith("issues/7/events") for x in args):
+                    return json.dumps({"event": "labeled", "label": {"name": "factory:ready"}, "created_at": "2026-01-03T00:00:00Z"})
+                return FakeGh.__call__(self, args)
+        gh = G(reviews=[review(BOT, C, at="2026-01-02T01:00:00Z")])  # change request before the resume
+        gh.fix_events = ["2026-01-02T05:00:00Z"]  # its fix round, before the resume
+        f = tr(gh).facts(7)
+        self.assertEqual((f["fix_rounds"], f["handed_to_fix"]), (0, False))  # a fresh start after factory:ready
+        self.assertEqual((f["round_complete"], f["round_verdict"]), (True, "changes"))  # the join decides again
+
     def test_change_request_counted_by_round_1_does_not_block_round_2(self):
         # B2 of #183: the bot reviews first, the human second; round 1 counts her request, round 2 must not loop on it
         gh = FakeGh(reviews=[review(BOT, M, commit="h0", at="2026-01-02T01:00:00Z"),

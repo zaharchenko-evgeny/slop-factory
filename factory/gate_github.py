@@ -124,7 +124,8 @@ class GitHubGateTracker:
         cmds = ("factory:implement-", "factory:fix-", "factory:update-")
         events = {t: self._list(f"issues/{t}/events") for t in [n] + ([pr] if pr else [])}
         name = lambda e: (e.get("label") or {}).get("name", "") if e.get("event") == "labeled" else ""
-        since = max((e.get("created_at") or "" for e in events[n] if name(e) == self.stages.get("ready")), default="")
+        since = self._since = max((e.get("created_at") or "" for e in events[n] if name(e) == self.stages.get("ready")),
+                                  default="")
         return sum(1 for es in events.values() for e in es if name(e).startswith(cmds) and (e.get("created_at") or "") >= since)
 
     def parent(self, n):
@@ -207,7 +208,8 @@ class GitHubGateTracker:
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
             ci = self._ci(head)
-            writes = self._fix_writes(pr["number"])
+            since = getattr(self, "_since", "")  # a person's factory:ready starts a fresh round count
+            writes = [t for t in self._fix_writes(pr["number"]) if t >= since]
             f["handed_to_fix"] = bool(writes) and max(writes) > self._api(f"commits/{head}")["commit"]["committer"]["date"]
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
@@ -216,7 +218,8 @@ class GitHubGateTracker:
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                     fix_rounds=len({r["commit_id"] for r in reviews if r["agent"] and r["verdict"] == "changes"}))  # rounds: heads with an agent change request
+                     fix_rounds=len({r["commit_id"] for r in reviews if r["agent"] and r["verdict"] == "changes"
+                                     and (r.get("submitted_at") or "") >= since}))  # rounds since ready: heads with an agent change request
         return f
 
     # --- effects: read the target first, write only when it differs

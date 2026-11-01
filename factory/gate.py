@@ -250,10 +250,13 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
                        "[factory] Stopped: the fix round ended without a commit, so nothing starts the next "
                        "review. A person decides, then sets factory:ready.")},
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
+    after = []  # effects that must follow the stage change
     if name == "implement" and outcome == "done" and facts.get("pr") and facts.get("ci") in ("green", "red") \
             and local_head() == facts.get("head"):
         # A resumed ticket implemented on its open PR with no new commit: no push, so no CI label would come.
+        # Re-fire it, and run the join once the stage is in-review: reviews already at this head decide.
         effects = refire_ci(ticket, facts["ci"]) + effects
+        after = [{"kind": "join", "ticket": ticket, "value": "all-approve", "tier": fix_tier(facts)}]
     starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(COMMANDS)]
     stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith("factory:fix-") for e in starts))
     if stop:
@@ -278,7 +281,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     why = matches(node, facts, {**payload, "id": payload.get("event")}, out)
     if why:
         return NO_GO, {"applied": False, "reason": why}
-    return GO, {"applied": True, "written": [e["kind"] for e in effects if tracker.apply(e)]}
+    return GO, {"applied": True, "written": [e["kind"] for e in effects + after if tracker.apply(e)]}
 
 
 SWEEP_STAGES = ("approved", "merged", "split", "in-review")

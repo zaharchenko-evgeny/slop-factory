@@ -331,6 +331,8 @@ class TriggerTest(unittest.TestCase):
             gate.local_head = orig
         self.assertIn(("label", "factory:ci-green", "pr"), seen)
         self.assertEqual(tr.tickets["7"]["stage"], "in-review")
+        self.assertEqual(seen[-1][0], "join")  # after the stage change: reviews already at this head decide
+        self.assertEqual(seen[-2], ("stage", "in-review", None))
 
     def test_bug_intake_proceeds(self):
         h = {"handoff": "ROUTER-INTAKE", "kind": "bug", "ready": "yes", "split": "none"}
