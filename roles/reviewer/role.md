@@ -49,8 +49,9 @@ focus; stay in yours.
 7. Before writing findings, read the other reviews of the current head and the
    previous review round on the PR. Do not repeat a finding another review
    already raised; put `agree with <focus> B1` in the summary instead. You may
-   dispute one with a reason in the summary. On a later round, check each
-   earlier blocking finding and say which are resolved in the summary.
+   dispute one with a reason in the summary. On a later round, rerun the check
+   behind every earlier blocking finding, then say which are resolved in the
+   summary. Do not mark an earlier finding resolved from diff inspection alone.
 
 Handoff, JSON only (`findings` is one list of items; `case` is required for
 `blocking`):
