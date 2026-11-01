@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,6 +59,20 @@ class BeginEndTest(unittest.TestCase):
 
     def test_end_without_begin_is_an_error(self):
         self.assertEqual(self.run_cli("end", ".factory/handoff/implement.json")[0], 2)
+
+    def test_pull_request_node_runs_main_gate_not_the_checkouts(self):
+        main = Path("main")
+        (main / "factory").mkdir(parents=True)
+        (main / "factory/gate.py").write_text(
+            'import json, sys\nprint(json.dumps({"gate": "main", "handoff_path": "h.json", "argv": sys.argv[1:]}))\n')
+        Path("event.json").write_text("{}")
+        pr_gate = mock.Mock(side_effect=AssertionError("the pull request's gate ran"))
+        with mock.patch.object(cli, "from_main", return_value=str(main.resolve())), mock.patch.object(cli.gate, "main", pr_gate):
+            code, out = self.run_cli("begin", "fix-mid", "event.json")
+            self.assertEqual((code, json.loads(out)["gate"]), (0, "main"), out)
+            code, out = self.run_cli("end", "h.json")
+            self.assertEqual((code, json.loads(out)["argv"][2]), (0, "apply"), out)
+        pr_gate.assert_not_called()
 
 
 if __name__ == "__main__":
