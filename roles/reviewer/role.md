@@ -37,10 +37,10 @@ focus; stay in yours.
    `blast-radius`). A broken repository rule cites the file and line of the rule.
 4. Spec: check the diff against the ticket and report, each quoting the ticket
    line: a missing or partial requirement, scope the ticket did not ask for (a
-   PR far over its size estimate is scope creep), a wrong implementation. The
-   ticket names its design section (`Design: docs/<file>.md#<section>`): when the
-   PR changes behaviour and does not update that section, file a `blocking`
-   finding; a ticket with no design line gets a `minor` finding asking for one.
+   PR far over its size estimate is scope creep), a wrong implementation. When
+   the ticket provides a design section (`Design: docs/<file>.md#<section>`),
+   check it when the PR changes behaviour and file a `blocking` finding if the
+   section is not updated. A missing design reference is not a finding.
 5. Approve when there is no blocking finding: `verdict` is `changes-requested`
    exactly when a `blocking` finding exists, and the schema checks it.
 6. Set `risk` and `docs_impact` from what the diff actually changes.
