@@ -18,7 +18,7 @@ The `merge` wait runs from the last timestamped event of the run (the approval) 
 
 `loop.log` lines start with `<ISO timestamp> cycle=<cycle id> `.
 
-`drive.py report [--since DATE] [--ticket N] [--json]` prints per ticket the
+The report command (`report [--since DATE] [--ticket N] [--json]`) prints per ticket the
 final state, wall time (first to last event), active agent time (sum of
 `step.end`), wait time, cost by role and model, fix rounds, retries, fallbacks
 and blocked/failed reasons, then a total line. Logs from before this schema
