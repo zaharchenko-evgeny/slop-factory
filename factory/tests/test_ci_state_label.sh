@@ -11,11 +11,11 @@ case "$*" in
   'pr list '*) printf '7\n' ;;
   'pr view '*) printf '%s\n' "$(cat "$state/label" 2>/dev/null || true)" ;;
   *'commits/'*'/status --jq'*)
-    sha=${1#*commits/}; sha=${sha%%/*}
+    sha=${2#*commits/}; sha=${sha%%/*}
     cat "$state/$sha" 2>/dev/null || true
     ;;
   *'statuses/'*)
-    sha=${1#*statuses/}
+    sha=${2#*statuses/}
     last=${*: -1}
     printf '%s\n' "${last#description=}" > "$state/$sha"
     ;;
