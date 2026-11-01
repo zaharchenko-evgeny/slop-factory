@@ -5,7 +5,7 @@
 # ///
 """Schedule the local factory loop with a launchd LaunchAgent (factory.yaml targets.local.schedule).
 
-The job runs `uv run factory/drive.py loop --once` from the factory root every interval under
+The job runs `uv run factory/gate.py sweep --tracker github` from the factory root every interval under
 `lockf -t 0`, so a cycle started while another runs exits at once (75) without running the driver.
 Output goes to <run_dir>/loop/loop.log. `env_from_keychain` (variable → Keychain service) wraps the cycle
 in /bin/sh, which exports each variable from `security find-generic-password` at run time; a failed
@@ -41,7 +41,7 @@ def render(config: dict, root: Path = ROOT) -> dict:
     loop_dir = root / local.get("run_dir", ".factory/runs") / "loop"
     log = str(loop_dir / "loop.log")
     cycle = ["/usr/bin/lockf", "-t", "0", str(loop_dir / "loop.lock"),
-             "uv", "run", "factory/drive.py", "loop", "--once"]
+             "uv", "run", "factory/gate.py", "sweep", "--tracker", "github"]
     return {
         "Label": sched["label"],
         "ProgramArguments": wrap(cycle, keychain(config)),

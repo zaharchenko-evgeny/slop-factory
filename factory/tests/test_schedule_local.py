@@ -34,7 +34,7 @@ class Schedule(unittest.TestCase):
         self.assertEqual(job["WorkingDirectory"], "/f")
         self.assertEqual(job["EnvironmentVariables"], {"PATH": "/a:/b"})
         self.assertEqual(job["ProgramArguments"][:4], ["/usr/bin/lockf", "-t", "0", "/f/.factory/runs/loop/loop.lock"])
-        self.assertEqual(job["ProgramArguments"][4:], ["uv", "run", "factory/drive.py", "loop", "--once"])
+        self.assertEqual(job["ProgramArguments"][4:], ["uv", "run", "factory/gate.py", "sweep", "--tracker", "github"])
         self.assertEqual(job["StandardOutPath"], "/f/.factory/runs/loop/loop.log")
 
     def test_path_expands_home(self):
@@ -53,7 +53,7 @@ class Schedule(unittest.TestCase):
         self.assertEqual(args[:2], ["/bin/sh", "-c"])
         self.assertIn("security find-generic-password -s test-anthropic", args[2])
         self.assertIn("export ANTHROPIC_API_KEY", args[2])
-        self.assertIn("exec /usr/bin/lockf -t 0 /f/.factory/runs/loop/loop.lock uv run factory/drive.py loop --once", args[2])
+        self.assertIn("exec /usr/bin/lockf -t 0 /f/.factory/runs/loop/loop.lock uv run factory/gate.py sweep --tracker github", args[2])
 
     def test_central_access_needs_no_keychain(self):
         cfg = copy.deepcopy(FIXTURE)

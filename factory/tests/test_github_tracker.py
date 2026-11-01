@@ -5,11 +5,8 @@
 # ///
 """Unit tests for factory/github_tracker.py with a stubbed gh. Run: uv run factory/tests/test_github_tracker.py"""
 import json
-import os
 import re
-import shutil
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -17,14 +14,10 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-import sm_v1 as sm  # noqa: E402
-import drive as driver  # noqa: E402
-from drive import drive  # noqa: E402
 from github_tracker import GitHubTracker  # noqa: E402
 from local_tracker import ClaimError  # noqa: E402
 
-M = sm.load_machine(sm.ROOT / "workflows/delivery.v1.sm.yaml", sm.ROOT / "factory.yaml")
-STAGES = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())["tracker"]["stages"]
+STAGES = yaml.safe_load((HERE.parents[1] / "factory.yaml").read_text())["tracker"]["stages"]
 REPO = "o/r"
 
 
@@ -99,21 +92,6 @@ def tracker(fake):
 
 
 class GitHub(unittest.TestCase):
-    def test_drive_ready_to_approved(self):
-        fake = FakeGh({23: {"labels": ["factory:ready", "risk:high"], "comments": [
-            {"id": 1, "body": "<!-- factory-state {\"risk\": \"low\"} --> not a [factory] comment",
-             "user": {"login": "bot"}}]}})
-        events = yaml.safe_load((HERE / "fixtures/happy.yaml").read_text())["events"]
-        t, trace = drive(M, tracker(fake), 23, "bot", events)
-        self.assertEqual((t["state"], trace[-1]["wait"]), ("approved", "human"))
-        i = fake.issues[23]
-        self.assertEqual(sorted(i["labels"]), ["factory:approved", "risk:high"])
-        self.assertEqual(i["assignees"], [])
-        state = [c for c in i["comments"] if c["body"].startswith("[factory]")]
-        self.assertEqual(len(state), 1)  # created once, then edited in place
-        self.assertTrue(state[0]["body"].endswith("Factory-Run: local:20261028T1200-19"))
-        self.assertEqual(tracker(fake).read_vars(23), sm.persisted(t))
-        self.assertEqual((t["vars"]["risk"], t["vars"]["reviewed_sha"]), ("high", "bbb"))
 
     def test_done_closes_the_issue_once(self):
         fake = FakeGh({23: {"labels": ["factory:merged"]}})
@@ -132,11 +110,6 @@ class GitHub(unittest.TestCase):
         tracker(fake).set_review_labels(23, "high")
         self.assertEqual(sorted(fake.issues[23]["labels"]), ["docs-impact", "factory:approved", "risk:high"])
 
-    def test_second_executor_stops_without_writing(self):
-        fake = FakeGh({23: {"labels": ["factory:ready"], "assignees": ["executor-b"]}})
-        with self.assertRaisesRegex(ClaimError, "claimed by executor-b"):
-            drive(M, tracker(fake), 23, "executor-a", ["stage.ready"])
-        self.assertEqual(fake.writes, [])
 
     def test_claim_race_backs_off(self):
         fake = FakeGh({23: {"labels": ["factory:ready"]}})
@@ -202,26 +175,6 @@ class GitHub(unittest.TestCase):
         fake.issues[2]["state"] = "CLOSED"
         self.assertEqual(tracker(fake).frontier(), [1])
 
-    def test_loop_once_moves_a_closed_approved_issue_to_done(self):
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp)
-        config = yaml.safe_load((sm.ROOT / "factory.yaml").read_text())
-        config["knowledge"]["distill_every_days"] = 0  # no git repository here: no distill
-        config["targets"]["local"]["model_access"] = "env"  # central needs jbcentral, absent in CI
-        (tmp / "factory.yaml").write_text(yaml.safe_dump(config))
-        shutil.copytree(sm.ROOT / "workflows", tmp / "workflows")
-        stub = tmp / "gh"  # `gh pr view`: every PR merged
-        stub.write_text('#!/bin/bash\necho \'{"state":"MERGED","mergedAt":"2026-01-01T00:00:00Z"}\'\n')
-        stub.chmod(0o755)
-        self.addCleanup(os.environ.pop, "FACTORY_GH", None)
-        os.environ["FACTORY_GH"] = str(stub)
-        state = '[factory] s\n<!-- factory-state {"pr_urls": ["https://x/pull/1"], "run_id": "r1"} -->'
-        fake = FakeGh({30: {"labels": ["factory:approved"], "state": "CLOSED",  # GitHub closed it at merge
-                            "comments": [{"id": 1, "body": state, "user": {"login": "bot"}}]},
-                       31: {"labels": ["factory:done"], "state": "CLOSED"}})
-        self.assertEqual(driver.loop(tmp, tracker(fake), "bot", once=True), 0)
-        self.assertEqual((fake.issues[30]["labels"], fake.issues[30]["assignees"]), (["factory:done"], []))
-        self.assertFalse([w for w in fake.writes if "31" in w])
 
 
 if __name__ == "__main__":
