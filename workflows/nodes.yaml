@@ -36,9 +36,10 @@ nodes:
       grill: { effects: [{ comment: questions }, { stage: needs-answers }] }
       split: { effects: [{ create-issues: children }, { stage: split }] }
       not-actionable: { effects: [{ comment: reason }, { stage: not-actionable }] }
-      bug: { effects: [{ stage: reproduce }] }
+      bug: { enabled: false, ticket: 161, effects: [{ stage: reproduce }] }   # reproduce is not built yet
   reproduce:
     enabled: false
+    ticket: 161
     triggers: ["issues.labeled factory:reproduce"]
     when: { stage: reproduce }
     role: developer
@@ -49,6 +50,7 @@ nodes:
       not-reproduced: { effects: [{ comment: questions }, { stage: needs-answers }] }
   diagnose:
     enabled: false
+    ticket: 161
     triggers: ["issues.labeled factory:diagnose"]
     when: { stage: diagnose }
     role: developer
@@ -58,6 +60,7 @@ nodes:
       diagnosed: { effects: [{ comment: diagnosis }, { stage: verify }] }
   verify:
     enabled: false
+    ticket: 161
     triggers: ["issues.labeled factory:verify"]
     when: { stage: verify }
     role: router
@@ -80,6 +83,7 @@ nodes:
       failed: { effects: [{ comment: reason }, { stage: failed }] }
   adopt:
     enabled: false
+    ticket: 160
     ci-independent: true
     triggers: ["pull_request.labeled factory:adopt"]
     when: { stage: none }
@@ -125,8 +129,32 @@ nodes:
       # People who requested changes are asked again, after the push, so round 2 waits for them.
       done: { effects: [{ unlabel: "factory:fix-*", "on": pr }, { request-reviewers: changes }, { stage: in-review }] }
       blocked: { from: [changes-requested], effects: [{ comment: reason }, { stage: blocked }] }
+  update:
+    enabled: false
+    ticket: 158
+    tiers: [cheap, mid, strong]
+    ci-independent: true
+    triggers: ["pull_request.labeled factory:update-<tier>"]
+    when: { stage: changes-requested }
+    role: developer
+    output: push-to-source
+    outcomes:
+      resolved: { effects: [{ unlabel: "factory:update-*", "on": pr }, { stage: in-review }] }
+      escalate: { effects: [{ unlabel: "factory:update-*", "on": pr }, { label: "factory:update-<next tier>", "on": pr }, { stage: changes-requested }] }
+      unresolvable: { effects: [{ comment: reason }, { stage: blocked }] }
+  reopen:
+    enabled: false
+    ticket: 196
+    ci-independent: true
+    triggers: ["pull_request.synchronize"]
+    when: { stage: approved }
+    role: script
+    output: read-only
+    outcomes:
+      reopened: { from: [approved], effects: [{ stage: in-review }] }
   merge:
     enabled: false
+    ticket: 159
     triggers: ["pull_request.labeled factory:merge"]
     when: { stage: approved, round: complete-at-head, ci: green }
     role: script
@@ -137,6 +165,7 @@ nodes:
       fix: { from: [approved], effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
   merging:
     enabled: false
+    ticket: 159
     ci-independent: true
     triggers: ["workflow_run.completed"]
     when: { stage: merging }
@@ -155,14 +184,15 @@ nodes:
     run: uv run factory/gate.py sweep
     output: read-only
     outcomes:
-      answered: { enabled: false, from: [needs-answers], effects: [{ stage: ready }] }
+      answered: { enabled: false, ticket: 157, from: [needs-answers], effects: [{ stage: ready }] }
       children-done: { from: [split], effects: [{ stage: done }] }
       child-failed: { from: [split], effects: [{ stage: blocked }] }
-      conflict: { enabled: false, from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
+      conflict: { enabled: false, ticket: 158, from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [approved], effects: [{ stage: merged }] }
       retro: { from: [merged], effects: [{ comment: retro }, { stage: done }] }
   routines:
     enabled: false
+    ticket: 162
     triggers: ["schedule routines"]
     when: { due: true }
     role: distill
