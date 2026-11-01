@@ -2,6 +2,8 @@
 # repository, tracker, model name from this file (design §2).
 version: 1
 
+project: { name: "Slop factory" }
+
 repositories:
   - name: offline-eval-factory
     url: https://github.com/zaharchenko-evgeny/offline-eval-factory

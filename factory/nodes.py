@@ -46,6 +46,9 @@ def edges(nodes):
 
 def validate(nodes, config):
     errs = []
+    project = config.get("project")
+    if not isinstance(project, dict) or not isinstance(project.get("name"), str) or not project["name"].strip():
+        errs.append("project-name: project.name must be a non-empty string")
     stages, tiers = config["tracker"]["stages"], config["models"]
     roles = config["roles"]
     envs, scheds = nodes.get("environments") or {}, nodes.get("schedules") or {}

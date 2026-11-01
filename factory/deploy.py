@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nodes as nodes_mod
 
 ROOT = Path(__file__).resolve().parents[1]
-PREFIX = "[factory:"
 PROMPT = (
     "You are the {role} of {project}.\n\n{role_intro}\n\n"
     "Your job in this flow: triggered by {triggers}; outcomes: {outcomes}.\n\n"
@@ -71,10 +70,7 @@ def role_intro(role: str) -> str:
 
 
 def project_name(config: dict) -> str:
-    if config.get("project", {}).get("name"):
-        return config["project"]["name"]
-    first = (ROOT / "AGENTS.md").read_text().splitlines()[0]
-    return first.removeprefix("# ").strip()
+    return config["project"]["name"]
 
 
 def flow_triggers(node: dict) -> str:
@@ -140,6 +136,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     envs_def = nodes.get("environments") or {}
     scheds = nodes.get("schedules") or {}
     bot = config["targets"]["air"]["bot_login"]
+    prefix = f"[{project_name(config)}] "
     automations, used = [], []
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human":
@@ -157,12 +154,12 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 elif str(t) != "manual":
                     trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None))
             automations.append({
-                "name": f"{PREFIX}{aname}]",
+                "name": f"{prefix}{aname}",
                 "triggers": trig,
                 "triggerVcs": [{"outputBehaviour": n.get("output", "read-only")}],
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
-                "environmentConfigId": f"{PREFIX}{env}] env",
+                "environmentConfigId": f"{prefix}{env}",
                 "prompt": (PR_SCRIPT_PROMPT if name in PR_TRIGGERED_NODES else
                            STALE_PROMPT if "--stale" in n.get("run", "") else SCRIPT_PROMPT)
                 if n["role"] == "script" else PROMPT.format(
@@ -183,7 +180,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
         d = envs_def[env]
         repo = repos.get(d["repository"]) or primary
         envs.append({
-            "name": f"{PREFIX}{env}] env",
+            "name": f"{prefix}{env}",
             "repository": repo["url"],
             "startup": d["startup"],
             "variables": {"FACTORY_ENV": env},
@@ -191,7 +188,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
-    return {"automations": automations, "environments": envs, "labels": labels(nodes, config)}
+    return {"prefix": prefix, "automations": automations, "environments": envs, "labels": labels(nodes, config)}
 
 
 def labels(nodes: dict, config: dict) -> list[str]:
