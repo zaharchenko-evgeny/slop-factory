@@ -99,7 +99,7 @@ class GitHubGateTracker:
     def _reviews(self, pr):
         out = []
         for r in self._list(f"pulls/{pr['number']}/reviews"):
-            m = MARKER.search(r.get("body") or "")
+            m = next(iter(list(MARKER.finditer(r.get("body") or ""))[-1:]), None)  # the footer marker is last; prose cannot follow it
             agent = bool(m) and r["user"]["login"] == self.bot
             verdict = (m[3] if agent else {"APPROVED": "approve", "CHANGES_REQUESTED": "changes"}.get(r["state"]))
             out.append({"author": r["user"]["login"], "state": r["state"], "commit_id": r["commit_id"],
@@ -340,8 +340,9 @@ class GitHubGateTracker:
         verdict = "approve" if e["value"].startswith("approve") else "changes"
         marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict} -->"
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
-        lines = [f"**{x['id']}** {x['file']} — {x['finding']}" for x in found]
-        summary = f"[factory] {e['summary']}" if e.get("summary") else "[factory]"
+        defang = lambda t: str(t).replace("<!--", "<!\u200b--")  # noqa: E731  # prose never carries a marker
+        lines = [defang(f"**{x['id']}** {x['file']} — {x['finding']}") for x in found]
+        summary = f"[factory] {defang(e['summary'])}" if e.get("summary") else "[factory]"
         body = "\n\n".join(x for x in (summary, "\n".join(lines), marker) if x)
         if e.get("run_id"):
             body += f"\n\nFactory-Run: {e['run_id']}"
@@ -361,21 +362,32 @@ class GitHubGateTracker:
         for c in children:
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
             new = open_issues.get(c["title"])
-            if c["title"] in subs and (new is None or new["id"] in blockers):
-                prev = (new or subs[c["title"]]).get("id")
+            if c["title"] in subs and new is None:  # not created by this ticket: leave it alone
+                prev = subs[c["title"]].get("id")
                 continue
+            want = f"{c.get('body', '')}\n\n{mark}"
             if new is None:
                 new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
-                                           "-f", f"body={c.get('body', '')}\n\n{mark}",
+                                           "-f", f"body={want}",
                                            "-f", f"labels[]={self.stages['draft']}", *[x for r in risk for x in ("-f", f"labels[]={r}")]]))
                 chained = False
-            else:
+            else:  # a reused child converges too: body, risk labels, chain
+                path = f"repos/{self.repo}/issues/{new['number']}"
+                if (new.get("body") or "") != want:
+                    self.run(["api", "-X", "PATCH", path, "-f", f"body={want}"])
+                    wrote = True
+                have = {x["name"] for x in new.get("labels") or []}
+                if [r for r in risk if r not in have]:
+                    self.run(["api", "-X", "POST", f"{path}/labels", *[x for r in risk for x in ("-f", f"labels[]={r}")]])
+                    wrote = True
                 chained = bool(prev) and prev in {b["id"] for b in self._list(f"issues/{new['number']}/dependencies/blocked_by")}
             if prev and not chained:
+                wrote = True
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/dependencies/blocked_by", "-F", f"issue_id={prev}"])
             if c["title"] not in subs:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
             if new["id"] not in blockers:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={new['id']}"])
-            prev, wrote = new["id"], True
+            wrote = wrote or c["title"] not in subs or new["id"] not in blockers
+            prev = new["id"]
         return wrote

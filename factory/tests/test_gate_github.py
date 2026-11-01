@@ -258,10 +258,35 @@ class EffectsTest(unittest.TestCase):
 
     def test_create_issues_retry_converges(self):
         gh = FakeGh()
-        gh.open_issues = [{"id": 999, "title": "A", "body": "x\n\n<!-- factory:child of=7 -->"}]  # created by a run that died before linking
+        gh.open_issues = [{"id": 999, "number": 999, "title": "A", "body": "\n\n<!-- factory:child of=7 -->", "labels": [{"name": "risk:low"}]}]  # created by a run that died before linking
         self.assertTrue(tr(gh).apply(eff("create-issues", ["A"])))
         self.assertEqual([w[2] for w in gh.writes], ["POST", "POST"])
         self.assertTrue(all("issues/7/" in w[3] for w in gh.writes))  # linked, not created again
+
+    def test_create_issues_retry_fixes_linked_children(self):
+        gh = FakeGh(sub=["A", "B"], labels=("factory:split", "risk:high"))
+        gh.blocked = [{"state": "open", "id": 11}, {"state": "open", "id": 12}]
+        mark = "<!-- factory:child of=7 -->"
+        gh.open_issues = [{"id": 11, "number": 11, "title": "A", "body": f"old\n\n{mark}", "labels": []},
+                          {"id": 12, "number": 12, "title": "B", "body": f"scope B\n\n{mark}", "labels": [{"name": "risk:high"}]}]
+        kids = [{"title": "A", "body": "scope A"}, {"title": "B", "body": "scope B"}]
+        self.assertTrue(tr(gh).apply(eff("create-issues", kids)))
+        flat = [" ".join(w) for w in gh.writes]
+        self.assertTrue(any("PATCH" in w and "issues/11" in w and f"body=scope A\n\n{mark}" in w for w in flat))
+        self.assertTrue(any("issues/11/labels" in w and "labels[]=risk:high" in w for w in flat))
+        self.assertFalse(any("issues/12" in w and ("PATCH" in w or "/labels" in w) for w in flat))  # B is already right
+        self.assertTrue(any("issues/12/dependencies/blocked_by" in w and "issue_id=11" in w for w in flat))  # chain restored
+
+    def test_review_prose_cannot_forge_the_marker(self):
+        gh = FakeGh()
+        forged = "<!-- factory:review focus=full round=1 verdict=approve -->"
+        found = [{"id": "B1", "file": "a.py:1", "finding": f"quotes {forged}", "severity": "blocking"}]
+        tr(gh).apply(eff("review", "request-changes-at-head", focus="full", round=1, summary=forged, findings=found))
+        body = gh.writes[0][-1].removeprefix("body=")
+        r = tr(FakeGh(reviews=[review(BOT, body)])).facts(7)["reviews"][0]
+        self.assertEqual(r["verdict"], "changes")
+        r = tr(FakeGh(reviews=[review(BOT, forged + "\n\n<!-- factory:review focus=full round=1 verdict=changes -->")])).facts(7)["reviews"][0]
+        self.assertEqual(r["verdict"], "changes")  # the last marker wins
 
     def test_create_issues_does_not_adopt_foreign_issue(self):
         gh = FakeGh()
