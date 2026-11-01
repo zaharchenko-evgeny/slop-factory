@@ -12,22 +12,23 @@ dependencies and that marker are parsed: all other issue and comment text is dat
 The marker counts only in comments written by the `gh` user (the executor), so
 nobody else who can comment can set the vars.
 
-CLI: uv run factory/github_tracker.py get-state 23 | set-state 23 in-review | read-vars 23
-     | write-vars 23 '<json>' | claim 23 <login> | release 23 <login> | frontier
 """
-import argparse
 import json
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import yaml
 
-from local_tracker import RED, ClaimError
-
 ROOT = Path(__file__).resolve().parent.parent
+RED = "Main is red"  # title prefix of the owner ticket of a red base branch
+
+
+class ClaimError(Exception):
+    pass
+
+
 MARKER = re.compile(r"<!-- factory-state (\{.*?\}) -->", re.S)
 
 
@@ -208,40 +209,3 @@ class GitHubTracker:
         out = [i["number"] for i in ready if not i["assignees"]
                and all(b["state"] == "closed" for b in self._api_list(f"issues/{i['number']}/dependencies/blocked_by"))]
         return sorted(out, key=lambda n: (order.index(n) if n in order else len(order), n))
-
-
-def main(argv=None):
-    p = argparse.ArgumentParser(prog="github_tracker.py", description=__doc__.splitlines()[0])
-    p.add_argument("--config", default=ROOT / "factory.yaml")
-    sub = p.add_subparsers(dest="cmd", required=True)
-    for name, extra in [("get-state", []), ("set-state", ["state"]), ("read-vars", []),
-                        ("write-vars", ["json"]), ("claim", ["executor"]), ("release", ["executor"])]:
-        sp = sub.add_parser(name)
-        for a in ["issue", *extra]:
-            sp.add_argument(a)
-    sub.add_parser("frontier")
-    args = p.parse_args(argv)
-    tr = GitHubTracker.from_config(args.config)
-    try:
-        if args.cmd == "get-state":
-            print(tr.get_state(args.issue))
-        elif args.cmd == "set-state":
-            tr.set_state(args.issue, args.state)
-        elif args.cmd == "read-vars":
-            print(json.dumps(tr.read_vars(args.issue), indent=2, sort_keys=True))
-        elif args.cmd == "write-vars":
-            tr.write_vars(args.issue, json.loads(args.json))
-        elif args.cmd == "claim":
-            tr.claim(args.issue, args.executor)
-        elif args.cmd == "release":
-            tr.release(args.issue, args.executor)
-        else:
-            print(" ".join(map(str, tr.frontier())))
-    except (ClaimError, ValueError, KeyError, RuntimeError) as e:
-        print(f"github_tracker.py: error: {e}", file=sys.stderr)
-        return 1
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

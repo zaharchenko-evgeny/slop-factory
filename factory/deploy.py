@@ -5,10 +5,9 @@
 # ///
 """Render the nodes of workflows/nodes.yaml as deployable specs (ADR-0014). Output is JSON.
 
-Usage: deploy.py plan --target air|local
-air:   {"automations": [...], "environments": [...]}: one automation per enabled node (per tier or focus
-       where the node has them) and one environment per environment in use, for the factory-deploy skill.
-local: the launchd job of the local loop (factory/schedule_local.py).
+Usage: deploy.py plan --target air
+air: {"automations": [...], "environments": [...]}: one automation per enabled node (per tier or focus
+     where the node has them) and one environment per environment in use, for the factory-deploy skill.
 """
 import json
 import re
@@ -19,7 +18,6 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nodes as nodes_mod
-import schedule_local
 
 ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "[factory:"
@@ -216,14 +214,11 @@ def labels(nodes: dict, config: dict) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3 or argv[0] != "plan" or argv[1] != "--target" or argv[2] not in ("air", "local"):
+    if len(argv) != 3 or argv[0] != "plan" or argv[1] != "--target" or argv[2] != "air":
         print(__doc__)
         return 2
     config = yaml.safe_load((ROOT / "factory.yaml").read_text())
-    if argv[2] == "local":
-        out = schedule_local.render(config)
-    else:
-        out = plan_air(nodes_mod.load(), config)
+    out = plan_air(nodes_mod.load(), config)
     print(json.dumps(out, indent=2, sort_keys=True))
     return 0
 
