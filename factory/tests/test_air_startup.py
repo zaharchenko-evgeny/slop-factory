@@ -29,7 +29,7 @@ SCRIPT = ROOT / ".air/cloud/startup.sh"
 STUBS = {
     "curl": 'echo curl >> "$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\ncat "$STUB_TAR" > "$out"\n',
     "gh": "",
-    "git": 'echo git "$@" >> "$LOG"\n',
+    "git": 'echo git "$@" >> "$LOG"\ncase "$*" in\n  "fetch --depth 1 origin main") [ "${GIT_FAIL:-}" != fetch ] ;;\n  "worktree add --detach "*) [ "${GIT_FAIL:-}" != worktree-add ] ;;\n  *) exit 0 ;;\nesac\n',
     "uv": 'echo uv "$@" >> "$LOG"\nprintf "#!/bin/sh\\n" > "$HOME/.local/bin/decide"; chmod +x "$HOME/.local/bin/decide"\n',
 }
 
@@ -91,6 +91,20 @@ class StartupTest(unittest.TestCase):
         r = self.run_script()
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("startup: factory install failed", r.stderr)
+
+    def test_factory_fetch_failure_is_reported(self):
+        self.env["GIT_FAIL"] = "fetch"
+        r = self.run_script()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("startup: factory install failed", r.stderr)
+        self.assertNotIn("worktree add", self.log.read_text())
+
+    def test_factory_worktree_add_failure_is_reported(self):
+        self.env["GIT_FAIL"] = "worktree-add"
+        r = self.run_script()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("startup: factory install failed", r.stderr)
+        self.assertNotIn("uv tool install --force", self.log.read_text())
 
     def test_checksum_mismatch_fails_closed(self):
         self.script.write_text(SCRIPT.read_text())  # the real pins: the stub's file does not match
