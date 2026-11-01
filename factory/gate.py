@@ -412,7 +412,7 @@ def sweep_plan(facts):
 def sweep(tracker, nodes, dry_run=False, closed_ticket=None):
     """Move every listed ticket through each step its facts allow (a merged PR goes approved to done in one
     step). A ticket that reaches done or blocked also lets its split parent finish. Returns (results, failed)."""
-    results, failed = [], False
+    results, failed, done_tickets = [], False, []
     queue, seen = list(tracker.sweep_tickets(SWEEP_STAGES)), set()
     while queue:
         n = queue.pop(0)
@@ -432,30 +432,43 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None):
                 r.update(applied=out["applied"], written=out.get("written", []))
                 if not out["applied"]:
                     break
+                if outcome in ("merged", "children-done"):
+                    done_tickets.append(n)
                 if outcome in ("merged", "children-done") and hasattr(tracker, "parent") and (p := tracker.parent(n)):
                     queue.append(p)
             except Exception as e:  # one ticket failing does not stop the others
                 failed = True
                 results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
                 break
-    if closed_ticket is not None and hasattr(tracker, "blocking"):
-        for dependent in tracker.blocking(closed_ticket):
-            n = dependent["number"] if isinstance(dependent, dict) else dependent
+    wake_sources = list(dict.fromkeys(([closed_ticket] if closed_ticket is not None else []) + done_tickets))
+    woken = set()
+    if hasattr(tracker, "blocking"):
+        for source in wake_sources:
             try:
-                facts = tracker.facts(n)
-                if facts["stage"] != "ready" or facts["blockers_open"]:
-                    continue
-                results.append({"ticket": n, "stage": "ready", "node": "intake", "outcome": "unblocked"})
-                if dry_run:
-                    continue
-                for effect in ({"kind": "unlabel", "ticket": n, "value": "factory:ready"},
-                               {"kind": "label", "ticket": n, "value": "factory:ready"},
-                               {"kind": "comment", "ticket": n, "value": f"[factory] unblocked by #{closed_ticket}",
-                                "run_id": "finish:unblocked"}):
-                    tracker.apply(effect)
-            except Exception as e:
-                failed = True
-                results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+                dependents = tracker.blocking(source)
+            except Exception as e:  # a tracker lookup must not fail the whole sweep
+                results.append({"ticket": source, "error": f"{type(e).__name__}: {e}"})
+                continue
+            for dependent in dependents:
+                n = dependent["number"] if isinstance(dependent, dict) else dependent
+                try:
+                    if n in woken:
+                        continue
+                    facts = tracker.facts(n)
+                    if facts["stage"] != "ready" or facts["blockers_open"]:
+                        continue
+                    woken.add(n)
+                    results.append({"ticket": n, "stage": "ready", "node": "intake", "outcome": "unblocked"})
+                    if dry_run:
+                        continue
+                    for effect in ({"kind": "unlabel", "ticket": n, "value": "factory:ready"},
+                                   {"kind": "label", "ticket": n, "value": "factory:ready"},
+                                   {"kind": "comment", "ticket": n, "value": f"[factory] unblocked by #{source}",
+                                    "run_id": "finish:unblocked"}):
+                        tracker.apply(effect)
+                except Exception as e:
+                    failed = True
+                    results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
     return results, failed
 
 
