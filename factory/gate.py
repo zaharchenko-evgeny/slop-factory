@@ -24,6 +24,7 @@ uses factory/gate_github.py (bot login from `targets.air.bot_login`).
 import argparse
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -291,6 +292,20 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             payload = {**payload, "tier": node.get("else_tier") or nodes["nodes"]["fix"]["tiers"][0]}
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     facts = tracker.facts(ticket)
+    if name in ("implement", "fix") and outcome == "done":
+        estimate = size_estimate(facts.get("body", ""))
+        if estimate is not None:
+            config = config_mod.load()
+            base = next((r["default_branch"] for r in config["repositories"] if r.get("role") == "primary"), "main")
+            size, files = branch_size(f"origin/{base}")
+            limit = config.get("limits", {}).get("max_diff_lines", 400)
+            if size * 2 > estimate * 3 and size > limit:
+                largest = ", ".join(f"{path} ({count})" for path, count in files[:5]) or "none"
+                reason = (f"[factory] Blocked: branch size is {size} lines against a {estimate}-line estimate "
+                          f"(1.5× estimate: {estimate * 1.5:g}; max_diff_lines: {limit}). "
+                          f"Largest files: {largest}. Edit the ticket's size line or split it, then set factory:ready.")
+                effects = [{"kind": "comment", "ticket": ticket, "value": reason},
+                           {"kind": "stage", "ticket": ticket, "value": "blocked"}]
     if name == "fix" and outcome == "done" and facts.get("handed_to_fix") and local_head() == facts.get("head"):
         # The platform pushes after the run; an unchanged HEAD means the fix made no commit, and no event
         # would ever start the next round. A person decides.
@@ -369,6 +384,35 @@ def local_head():
     import subprocess
     r = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else None
+
+
+def size_estimate(body):
+    """The current estimate recorded on an intake ticket, else None."""
+    m = re.search(r"(?im)^\s*(?:size_estimate:\s*~?|Size:\s*about\s+)(\d+)\b", body or "")
+    return int(m[1]) if m else None
+
+
+def branch_size(base):
+    """Changed lines against the default branch, with whole-file deletions counted once."""
+    result = subprocess.run(
+        ["git", "diff", "--no-renames", "--numstat", f"{base}...HEAD", "--", ".", ":(exclude)skills/vendor/**"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if result.returncode:
+        raise Bad(f"could not measure branch diff against {base}: {result.stderr.strip()}")
+    files = []
+    for line in result.stdout.splitlines():
+        added, deleted, path = line.split("\t", 2)
+        if path.startswith("skills/vendor/"):
+            continue
+        if added == deleted == "-":  # binary files have no line count
+            continue
+        added, deleted = int(added), int(deleted)
+        count = 1 if added == 0 and deleted and not (ROOT / path).exists() else max(added, deleted)
+        if count:
+            files.append((path, count))
+    files.sort(key=lambda item: (-item[1], item[0]))
+    return sum(count for _, count in files), files
 
 
 def join_decision(facts):
