@@ -18,7 +18,7 @@ every reviewer has approved and before the PR is published. It has three layers:
 | --- | --- | --- | --- |
 | 1. Hard rules | `policies/auto-approve.rego` | Rego `deny` rules, checked by Conftest over a JSON summary of the PR | yes |
 | 2. Judge | `judgments/auto-approve.yaml` | decisions-kit questions answered by an LLM, with a confidence threshold and an abstain option | no |
-| 3. Combine rule | `factory.yaml` `roles.approver` | which layers must pass before a merge, per risk level (#91) | yes |
+| 3. Combine rule | `factory.descriptor.yaml` `roles.approver` | which layers must pass before a merge, per risk level (#91) | yes |
 
 Any `deny` message, any judge answer other than `yes`, a missing tool, or an
 unavailable engine is a reason. The verdict is `auto-approve` only when there
@@ -41,7 +41,7 @@ Today's rules deny a PR when:
 - the risk is not `low`
 - more than 200 lines changed
 - dependencies changed
-- it touches `.github/`, `deploy/`, `secrets/`, `policies/`, `judgments/`, `factory.yaml` or `.env`
+- it touches `.github/`, `deploy/`, `secrets/`, `policies/`, `judgments/`, `factory.descriptor.yaml` or `.env`
 
 To add a criterion, add a `deny` rule. Rego supports AND, OR, NOT, counts and
 path patterns:
@@ -99,7 +99,7 @@ To add a criterion, add a question:
 Keep an `uncertain` option with `abstain: true`. A doubtful judge then sends
 the PR to a person rather than approving it.
 
-The model and engine are set in `factory.yaml` `roles.approver`: `tier`
+The model and engine are set in `factory.descriptor.yaml` `roles.approver`: `tier`
 (`cheap` is Haiku; `mid` or `strong` is Sonnet) and `engine`. A stronger judge
 is a one-line change.
 
@@ -160,7 +160,7 @@ The `merge` action:
 
 ## Safety
 
-- **The gate cannot loosen itself.** `policies/`, `judgments/` and `factory.yaml` are on the blocked list, so any change to the criteria, including one the factory proposes in its weekly improvement (#64), needs a person to merge it (ADR-0007).
+- **The gate cannot loosen itself.** `policies/`, `judgments/` and `factory.descriptor.yaml` are on the blocked list, so any change to the criteria, including one the factory proposes in its weekly improvement (#64), needs a person to merge it (ADR-0007).
 - **Kill switches.** The `factory:hold` label on a ticket, or `enabled: false`, sends every PR to a person.
 - **Fail closed.** A missing `conftest` or `decide`, an unavailable engine, or unreadable output is a reason, never an approval.
 - **Two human gates** (ADR-0001) are amended (#91): gate 2 is a human merge unless this policy passes.

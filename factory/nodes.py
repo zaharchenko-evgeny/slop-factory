@@ -14,6 +14,9 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import config  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "set-field", "join", "request-reviewers"}
 OUTPUTS = {"read-only", "create-pr", "push-to-source", "push-to-new-branch", "as-instructed"}
@@ -22,7 +25,7 @@ NO_ROLE = {"script", "human"}
 
 
 def load(path=None):
-    return yaml.safe_load(Path(path or ROOT / "workflows/nodes.yaml").read_text())
+    return yaml.safe_load(Path(path or config.resolve("workflows/nodes.yaml")).read_text())
 
 
 def effect_stage(outcome):
@@ -230,6 +233,7 @@ def block(nodes):
 
 
 def main(argv):
+    argv = config.pop_team(argv)
     if not argv or argv[0] not in ("validate", "chart"):
         print(__doc__)
         return 2
@@ -237,7 +241,7 @@ def main(argv):
     if argv[0] == "chart":
         print(block(nodes), end="")
         return 0
-    errs = validate(nodes, yaml.safe_load((ROOT / "factory.yaml").read_text()))
+    errs = validate(nodes, config.load())
     print("\n".join(errs) or "nodes.yaml: ok")
     return 1 if errs else 0
 

@@ -1,7 +1,7 @@
 # Role: distill
 
 You merge the knowledge inbox into the knowledge base, once a week, outside
-any ticket. The input holds every retro entry from the `factory.yaml`
+any ticket. The input holds every retro entry from the `factory.descriptor.yaml`
 `knowledge.branch` that the default branch has not merged yet, the knowledge
 dir and the repository names. You run in a worktree of a new branch from the
 default branch; the driver commits your edits, opens one PR to the default

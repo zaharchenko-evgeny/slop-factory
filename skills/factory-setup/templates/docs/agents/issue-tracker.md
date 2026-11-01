@@ -1,7 +1,7 @@
 # Issue tracker: GitHub
 
 Issues and specs for this repo live as GitHub issues in
-`tracker.repository` of `factory.yaml`. Use the `gh` CLI for all operations.
+`tracker.repository` of `factory.descriptor.yaml`. Use the `gh` CLI for all operations.
 This file follows the per-tracker templates of the mattpocock
 `setup-matt-pocock-skills` skill (GitHub, GitLab, local markdown), so
 `triage`, `to-tickets`, `wayfinder` and the factory share one board. The
@@ -46,7 +46,7 @@ Read it as in **Read an issue** above.
 
 The gate (`factory/gate.py`, [ADR-0014](../adr/0014-node-model.md)) reaches the tracker only through
 these operations, in `factory/github_tracker.py`.
-A state is a stage name from `factory.yaml` `tracker.stages`; vars are the
+A state is a stage name from `factory.descriptor.yaml` `tracker.stages`; vars are the
 ticket's `factory-state` marker.
 
 | Operation | Does | GitHub Issues (`factory/github_tracker.py`) |
@@ -76,7 +76,7 @@ Rules:
 ## GitHub Issues adapter
 
 `factory/github_tracker.py`. It reads `tracker.repository`,
-`tracker.stages` and `tracker.map_label` from `factory.yaml` and calls `gh`
+`tracker.stages` and `tracker.map_label` from `factory.descriptor.yaml` and calls `gh`
 through one runner (tests stub it).
 
 - Stage: the one `tracker.stages` label; `set_state` adds the new label and

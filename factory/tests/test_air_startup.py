@@ -10,6 +10,7 @@ import hashlib
 import io
 import os
 import re
+import sys
 import tarfile
 import subprocess
 import tempfile
@@ -17,6 +18,10 @@ import unittest
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import config as cfg  # noqa: E402
+cfg.set_team(Path(__file__).resolve().parents[2])
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / ".air/cloud/startup.sh"
@@ -96,7 +101,7 @@ class StartupTest(unittest.TestCase):
         self.assertNotIn("curl", self.log.read_text())
 
     def test_air_models_in_config(self):
-        m = yaml.safe_load((ROOT / "factory.yaml").read_text())["targets"]["air"]["models"]
+        m = cfg.load()["targets"]["air"]["models"]
         self.assertEqual(set(m), {"cheap", "mid", "strong", "review", "review_strong"})
         self.assertNotEqual(m["review"].split("/")[0], m["mid"].split("/")[0])
 

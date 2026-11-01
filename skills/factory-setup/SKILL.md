@@ -51,7 +51,7 @@ with the interview answer (`render.py ANSWERS.json OUT_DIR` fills them; a
 missing answer is an error). Never overwrite a file that has local edits
 without showing the diff.
 
-- `factory.yaml` ← `templates/factory.yaml`
+- `factory.descriptor.yaml` ← `templates/factory.descriptor.yaml`
 - `AGENTS.md`: the "Development workflow" section ← `templates/AGENTS.workflow.md`;
   add the other sections from the interview (step 1.9)
 - `roles/_common.md`, `roles/_setup-common.sh`, `roles/<role>/role.md` for
@@ -64,24 +64,24 @@ without showing the diff.
 - `docs/automations/<name>.md` (one record per automation)
 
 Then run `sm.py validate` on the rendered `delivery.sm.yaml` with the rendered
-`factory.yaml`.
+`factory.descriptor.yaml`.
 
 Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 `tests/test_templates.py` checks that they reproduce its files):
 
 | Placeholder | Meaning | Used in |
 | --- | --- | --- |
-| `PROJECT_NAME` | Project name in the header comment | `factory.yaml` |
-| `REPOSITORIES` | `repositories:` entries (name, url, default_branch, role), indented two spaces | `factory.yaml` |
-| `BRANCH_PREFIX` | Branch prefix before `/{ticket}-{slug}` | `factory.yaml`, developer `role.md` |
-| `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.yaml` |
-| `AIR_TARGET` | Lines of the `targets.air` block (Air model ids per tier), indented two spaces; empty when the project has no Air target | `factory.yaml` |
-| `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG` | Developer and router model tiers | `factory.yaml` |
-| `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Reviewer models (different family from the developer) | `factory.yaml` |
-| `REVIEW_STRONG_NOTE` | Optional comment line above `review_strong` (may be empty) | `factory.yaml` |
-| `PR_APPROVAL_NOTE` | Optional trailing comment on `pr_approval` (may be empty) | `factory.yaml` |
-| `CHECKS_NOTE` | Comment lines above `checks:` about known limits | `factory.yaml` |
-| `PROJECT_CHECKS` | Project-specific check entries, after the generic ones | `factory.yaml` |
+| `PROJECT_NAME` | Project name in the header comment | `factory.descriptor.yaml` |
+| `REPOSITORIES` | `repositories:` entries (name, url, default_branch, role), indented two spaces | `factory.descriptor.yaml` |
+| `BRANCH_PREFIX` | Branch prefix before `/{ticket}-{slug}` | `factory.descriptor.yaml`, developer `role.md` |
+| `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.descriptor.yaml` |
+| `AIR_TARGET` | Lines of the `targets.air` block (Air model ids per tier), indented two spaces; empty when the project has no Air target | `factory.descriptor.yaml` |
+| `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG` | Developer and router model tiers | `factory.descriptor.yaml` |
+| `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Reviewer models (different family from the developer) | `factory.descriptor.yaml` |
+| `REVIEW_STRONG_NOTE` | Optional comment line above `review_strong` (may be empty) | `factory.descriptor.yaml` |
+| `PR_APPROVAL_NOTE` | Optional trailing comment on `pr_approval` (may be empty) | `factory.descriptor.yaml` |
+| `CHECKS_NOTE` | Comment lines above `checks:` about known limits | `factory.descriptor.yaml` |
+| `PROJECT_CHECKS` | Project-specific check entries, after the generic ones | `factory.descriptor.yaml` |
 | `DESIGN_REF` | Pointer to the design document, e.g. `(design §5)` | `workflows/delivery.md` |
 | `MAP_ISSUE_LINK` | Markdown link to the map issue | `AGENTS.workflow.md` |
 | `MODEL_POLICY` | One line on which models may be used | `AGENTS.workflow.md` |
@@ -91,7 +91,7 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 
 For each selected target, show a plan first:
 
-- **air** — compare `factory.yaml` with live `[factory]` automations, workflows
+- **air** — compare `factory.descriptor.yaml` with live `[factory]` automations, workflows
   and the environment, using the air-automations and air-cloud MCPs. List
   creates, updates and prunes. Apply only after the user approves. Never touch
   an automation without the `[factory]` prefix.

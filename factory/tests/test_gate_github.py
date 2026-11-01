@@ -17,11 +17,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
+import config as cfg  # noqa: E402
+cfg.set_team(Path(__file__).resolve().parents[2])
 import gate  # noqa: E402
 import nodes  # noqa: E402
 from gate_github import GitHubGateTracker  # noqa: E402
 
-CONFIG = yaml.safe_load((ROOT / "factory.yaml").read_text())
+CONFIG = cfg.load()
 STAGES, BOT, REPO = CONFIG["tracker"]["stages"], CONFIG["targets"]["air"]["bot_login"], "o/r"
 M = "<!-- factory:review focus=full round=1 verdict=approve -->"
 

@@ -17,7 +17,7 @@ Input: a request (free text or a tracker issue).
    checks, affected repositories, and a size estimate. If anything is missing,
    recommend stage `blocked` with the question to ask the human.
 3. Choose the risk path: `low` when the issue carries the low-risk label from
-   `factory.yaml`, otherwise `high`.
+   `factory.descriptor.yaml`, otherwise `high`.
 4. Estimate the size as the lines a reviewer must read: added lines plus
    modified lines, counting tests and fixtures, not only production code. A
    whole file deleted counts as one line because it is checked by listing it;

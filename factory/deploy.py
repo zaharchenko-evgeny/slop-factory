@@ -17,6 +17,7 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import config as config_mod
 import nodes as nodes_mod
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,16 +26,18 @@ PROMPT = (
     "Your job in this flow: triggered by {triggers}; outcomes: {outcomes}.\n\n"
     "Save the trigger payload (the <trigger_event> JSON) to a file. "
     "{gate_setup}"
-    "Run `uv run {gate_root}factory/gate.py check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
+    "Run `uv run {gate_root}factory/gate.py{team} check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
     "Otherwise {role_read}, and do the role's work on the `branch` of the output "
     "(create it from the default branch when it does not exist; the platform pushes). "
     "Write the role's handoff to `handoff_path`, then run "
-    "`uv run {gate_root}factory/gate.py apply --node {node}{sel} --event <file> --handoff <handoff_path>`."
+    "`uv run {gate_root}factory/gate.py{team} apply --node {node}{sel} --event <file> --handoff <handoff_path>`."
 )
 PR_GATE_SETUP = (
     "For this pull-request-triggered node, first run `git fetch origin main` and "
     "`git worktree add --detach <tmp>/factory-main origin/main`. Use that worktree for the gate, role file, "
     "and listed skills; use this checkout only as the code under review or fix. "
+    "Always pass `--team <tmp>/factory-main` to the gate, so the descriptor, graph and role overrides come from "
+    "main, never from the pull request. "
 )
 PR_TRIGGERED_NODES = {"review", "join", "fix", "finish"}
 BOT_FILTERED = ("review-", "join")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
@@ -59,7 +62,7 @@ OUTCOME_WORDS = {
 
 def role_intro(role: str) -> str:
     """The role's opening section, which states its responsibility and limits."""
-    path = ROOT / "roles" / role / "role.md"
+    path = config_mod.resolve(f"roles/{role}/role.md")
     lines = path.read_text().splitlines()
     section = []
     for line in lines[1:]:
@@ -102,7 +105,7 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None) -> dict:
 
 
 def repository(r: dict) -> dict:
-    """The `repository` input of create_automation from a factory.yaml repository."""
+    """The `repository` input of create_automation from a factory.descriptor.yaml repository."""
     url = r["url"].rstrip("/")
     return {"fullName": "/".join(url.split("/")[-2:]), "cloneUrl": url + ".git", "browseUrl": url,
             "provider": "github" if "github.com" in url else "other"}
@@ -114,7 +117,7 @@ SCRIPT_PROMPT = ("Run `uv run factory/gate.py sweep` once and report its JSON ou
                  "change no file, label, comment or review yourself.")
 STALE_PROMPT = SCRIPT_PROMPT.replace("gate.py sweep`", "gate.py sweep --stale`")
 PR_SCRIPT_PROMPT = (
-    f"{PR_GATE_SETUP}Run `uv run <tmp>/factory-main/factory/gate.py sweep` once and report its JSON output. "
+    f"{PR_GATE_SETUP}Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep` once and report its JSON output. "
     "Do nothing else: change no file, label, comment or review yourself."
 )
 
@@ -171,6 +174,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     node=name,
                     sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else ""),
                     gate_root="<tmp>/factory-main/" if name in PR_TRIGGERED_NODES else "",
+                    team=" --team <tmp>/factory-main" if name in PR_TRIGGERED_NODES else "",
                     gate_setup=PR_GATE_SETUP if name in PR_TRIGGERED_NODES else "",
                     role_read="read `role_file` and every skill it lists from <tmp>/factory-main"
                     if name in PR_TRIGGERED_NODES else "read `role_file` and every skill it lists"),
@@ -211,10 +215,11 @@ def labels(nodes: dict, config: dict) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
+    argv = config_mod.pop_team(argv)
     if len(argv) != 3 or argv[0] != "plan" or argv[1] != "--target" or argv[2] != "air":
         print(__doc__)
         return 2
-    config = yaml.safe_load((ROOT / "factory.yaml").read_text())
+    config = config_mod.load()
     out = plan_air(nodes_mod.load(), config)
     print(json.dumps(out, indent=2, sort_keys=True))
     return 0

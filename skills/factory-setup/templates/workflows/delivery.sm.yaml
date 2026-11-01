@@ -1,7 +1,7 @@
 # Delivery workflow as a state machine. `factory/sm.py validate` checks it;
 # `sm.py next` and `sm.py simulate` run it. Semantics: factory/sm.py docstring.
 #
-# - States are tracker stages (factory.yaml `tracker.stages`). The engine runs
+# - States are tracker stages (factory.descriptor.yaml `tracker.stages`). The engine runs
 #   actions only in `agent` states and waits in `human` and `external` states.
 # - `on` is `<action>.<result>` (the action's handoff becomes `out.<action>`)
 #   or a declared external event. The first matching transition wins.
@@ -45,8 +45,8 @@ actions:
   intake: { kind: agent, role: router, mode: intake, cwd: root, retry: 1 }
   start: { kind: script }
   implement: { kind: agent, role: developer, mode: implement, tier_by: risk, retry: 1 }
-  checks: { kind: script, run: "factory.yaml checks, stage pre-review; only blocking ones fail" }
-  # Reviewer focuses are modes of the reviewer role; factory.yaml
+  checks: { kind: script, run: "factory.descriptor.yaml checks, stage pre-review; only blocking ones fail" }
+  # Reviewer focuses are modes of the reviewer role; factory.descriptor.yaml
   # `roles.reviewer.modes` gives each its model and fallback.
   review_full: { kind: agent, role: reviewer, mode: full, session: fresh, retry: 1 }
   review_behaviour: { kind: agent, role: reviewer, mode: behaviour, session: fresh, retry: 1 }
@@ -63,13 +63,13 @@ actions:
   ci: { kind: script, run: "blocking checks on the branch merged with the base, then the PR's CI checks" }
   summary: { kind: agent, role: router, mode: summary, retry: 1 }
   # The retro role (roles/retro/role.md) judges in the factory root (the worktree is gone after the
-  # merge); the script writes the entry to factory.yaml `knowledge.branch`, never a default branch.
+  # merge); the script writes the entry to factory.descriptor.yaml `knowledge.branch`, never a default branch.
   retro: { kind: script, role: retro, mode: record, cwd: root, retry: 1 }
   # Weekly, outside any ticket (the distill routine): the distill role (roles/distill/role.md) merges the
   # knowledge inbox in its own worktree; the script opens one PR to the default branch. No ticket input.
   distill: { kind: agent, role: distill, mode: merge, ticket: none, retry: 1 }
   # on_enter actions: `diagnose` posts a short reason on the ticket; `notify`
-  # sends one line to each factory.yaml `channels` entry.
+  # sends one line to each factory.descriptor.yaml `channels` entry.
   diagnose: { kind: agent, role: router, mode: diagnose, cwd: root, retry: 1 }
   notify: { kind: script }
   # Cheap check of new comments in a `resume_on` state; run by the driver, outside the machine.

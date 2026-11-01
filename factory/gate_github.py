@@ -13,7 +13,8 @@ from pathlib import Path
 
 import yaml
 
-from github_tracker import ROOT, gh
+import config
+from github_tracker import gh
 
 
 def gate_clear(n):
@@ -40,11 +41,11 @@ class GitHubGateTracker:
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
     @classmethod
-    def from_config(cls, path=ROOT / "factory.yaml", run=gh):
-        c = yaml.safe_load(Path(path).read_text())
+    def from_config(cls, path=None, run=gh):
+        c = yaml.safe_load(Path(path).read_text()) if path else config.load()
         bot = ((c.get("targets") or {}).get("air") or {}).get("bot_login")
         if not bot:
-            raise ValueError("factory.yaml: targets.air.bot_login is not set")
+            raise ValueError("descriptor: targets.air.bot_login is not set")
         t = c["tracker"]
         return cls(t["repository"], t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run,
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8))

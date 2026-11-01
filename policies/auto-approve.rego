@@ -11,7 +11,7 @@ import rego.v1
 max_lines := 200
 
 # CI, deploy, secrets and the approval gate itself.
-blocked_prefixes := [".github/", "deploy/", "secrets/", "policies/", "judgments/", "factory.yaml", ".env"]
+blocked_prefixes := [".github/", "deploy/", "secrets/", "policies/", "judgments/", "factory.descriptor.yaml", ".env"]
 
 deny contains "no reviewer report" if {
 	count(input.reviews) == 0

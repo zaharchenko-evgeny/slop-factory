@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The factory's blocking checks (factory.yaml `checks`), one list for CI and the driver.
+  # The factory's blocking checks (factory.descriptor.yaml `checks`), one list for CI and the driver.
   factory-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -38,8 +38,10 @@ jobs:
         run: |
           set -o pipefail
           uv run --quiet --with pyyaml python - <<'PY' 2>&1 | tee checks.log
-          import os, shutil, subprocess, sys, yaml
-          config = yaml.safe_load(open("factory.yaml"))
+          import os, shutil, subprocess, sys
+          sys.path.insert(0, "factory")
+          import config as factory_config
+          config = factory_config.load()
           base = os.environ.get("FACTORY_BASE") or config["repositories"][0].get("default_branch", "main")
           for check in config.get("checks", []):
               if check.get("stage", "pre-review") != "pre-review" or check.get("mode") != "blocking":

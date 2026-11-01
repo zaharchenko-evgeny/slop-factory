@@ -14,12 +14,16 @@ nobody else who can comment can set the vars.
 
 """
 import json
+import sys
 import os
 import re
 import subprocess
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import config  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 RED = "Main is red"  # title prefix of the owner ticket of a red base branch
@@ -56,8 +60,8 @@ class GitHubTracker:
         return self._login
 
     @classmethod
-    def from_config(cls, path=ROOT / "factory.yaml", run=gh):
-        t = yaml.safe_load(Path(path).read_text())["tracker"]
+    def from_config(cls, path=None, run=gh):
+        t = (yaml.safe_load(Path(path).read_text()) if path else config.load())["tracker"]
         return cls(t["repository"], t["stages"], t.get("map_label", "factory:map"), run,
                    t.get("risk_labels"), t.get("docs_impact_label", "docs-impact"))
 

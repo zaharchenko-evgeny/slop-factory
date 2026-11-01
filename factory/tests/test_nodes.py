@@ -14,9 +14,11 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
+import config as cfg  # noqa: E402
+cfg.set_team(Path(__file__).resolve().parents[2])
 import nodes  # noqa: E402
 
-CONFIG = yaml.safe_load((ROOT / "factory.yaml").read_text())
+CONFIG = cfg.load()
 
 
 def broken(mutate):

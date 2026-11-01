@@ -10,7 +10,7 @@ On Air each node is a `[factory:<node>]` automation (`workflows/nodes.yaml`,
 steps yourself, for one node and one ticket. The gate alone changes labels,
 posts reviews and comments, and moves the stage; you never do.
 
-Read first: `factory.yaml`, `workflows/delivery.md`, `AGENTS.md`.
+Read first: `factory.descriptor.yaml`, `workflows/delivery.md`, `AGENTS.md`.
 
 ## Run
 

@@ -1,0 +1,26 @@
+# What every team shares (ADR-0015). A team descriptor overrides it key by key, one level deep.
+branch_pattern: "ez/{ticket}-{slug}"
+commit_prefix: "#{ticket} "
+
+tracker:
+  # Stage → label. Exactly one stage label is set on an issue at a time.
+  stages:
+    draft: factory:draft
+    ready: factory:ready
+    in-dev: factory:in-dev
+    in-review: factory:in-review
+    changes-requested: factory:changes-requested
+    approved: factory:approved
+    done: factory:done
+    blocked: factory:blocked
+    needs-answers: factory:needs-answers
+    split: factory:split
+    not-actionable: factory:not-actionable
+    investigating: factory:investigating
+  # The map issue; its sub-issues give the frontier order.
+  map_label: factory:map
+  review_trigger: factory:review
+  risk_labels: { low: "risk:low", high: "risk:high" }
+  docs_impact_label: docs-impact
+  bot_logins: []
+  hold_label: factory:hold
