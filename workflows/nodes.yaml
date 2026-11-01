@@ -101,8 +101,9 @@ nodes:
     role: reviewer
     output: read-only
     outcomes:
-      approve: { effects: [{ review: approve-at-head }, { join: all-approve }] }
-      changes: { effects: [{ review: request-changes-at-head }, { join: all-approve }] }
+      # The posted review starts the join (pull_request_review.submitted); only the join chooses the fix tier.
+      approve: { effects: [{ review: approve-at-head }] }
+      changes: { effects: [{ review: request-changes-at-head }] }
   join:
     pilot: true
     ci-independent: true

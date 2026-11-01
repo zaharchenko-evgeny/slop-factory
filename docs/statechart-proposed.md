@@ -82,8 +82,6 @@ flowchart LR
     S_none -.-> N_adopt
     N_adopt -. "adopted" -.-> S_in_review
     S_in_review --> N_review
-    N_review -- "approve join" --> N_join
-    N_review -- "changes join" --> N_join
     S_in_review --> N_join
     N_join -- "changes +factory:fix-{tier}" --> S_changes_requested
     N_join -- "approved" --> S_approved
@@ -136,7 +134,7 @@ flowchart LR
 | `verify` | `issue +factory:verify` | bug: → in-dev<br>intended: → not-actionable | router · cheap | planned #161 |
 | `implement` | `issue +factory:implement-{cheap|mid|strong}` | done: → in-review<br>error: +factory:implement-{next} → in-dev<br>blocked: → blocked<br>failed: → failed | developer · cheap/mid/strong | built |
 | `adopt` | `PR +factory:adopt` | adopted: → in-review | router · cheap | planned #160 |
-| `review` | `PR +factory:ci-green` | approve: join<br>changes: join | reviewer · per focus | built |
+| `review` | `PR +factory:ci-green` | approve: —<br>changes: — | reviewer · per focus | built |
 | `join` | `PR review submitted`<br>`PR +factory:ci-red` | changes: +factory:fix-{tier} → changes-requested<br>approved: → approved<br>waiting: join | script | built |
 | `fix` | `PR +factory:fix-{cheap|mid|strong}` | done: → in-review<br>blocked: → blocked | developer · cheap/mid/strong | built |
 | `update` | `PR +factory:update-{cheap|mid|strong}` | resolved: → in-review<br>escalate: +factory:update-{next} → changes-requested<br>unresolvable: → blocked | developer · cheap/mid/strong | planned #158 |

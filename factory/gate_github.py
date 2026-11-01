@@ -338,31 +338,44 @@ class GitHubGateTracker:
             return False
         rnd = e.get("round") or self.facts(n)["fix_rounds"] + 1
         verdict = "approve" if e["value"].startswith("approve") else "changes"
+        marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict} -->"
+        found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
+        lines = [f"**{x['id']}** {x['file']} — {x['finding']}" for x in found]
+        summary = f"[factory] {e['summary']}" if e.get("summary") else "[factory]"
+        body = "\n\n".join(x for x in (summary, "\n".join(lines), marker) if x)
+        if e.get("run_id"):
+            body += f"\n\nFactory-Run: {e['run_id']}"
         self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
-                  "-f", "event=COMMENT",
-                  "-f", f"body=[factory] <!-- factory:review focus={focus} round={rnd} verdict={verdict} -->"])
+                  "-f", "event=COMMENT", "-f", f"body={body}"])
         return True
 
     def _create(self, n, children):
         """Per child: reuse an open issue of that title, then add each link that is missing (a retry converges)."""
-        subs = {c["title"] for c in self._list(f"issues/{n}/sub_issues")}
+        subs = {c["title"]: c for c in self._list(f"issues/{n}/sub_issues")}
         blockers = {b["id"] for b in self._list(f"issues/{n}/dependencies/blocked_by")}
         mark = f"<!-- factory:child of={n} -->"  # only an issue this ticket created is reused
         open_issues = {i["title"]: i for i in reversed(self._list("issues?state=open&per_page=100"))
                        if "pull_request" not in i and mark in (i.get("body") or "")}
-        wrote = False
+        risk = [x for x in self._labels(n) if x.startswith("risk:")]  # a slice keeps its parent's risk path
+        wrote, prev = False, None  # prev: the id of the slice before, which blocks the next
         for c in children:
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
             new = open_issues.get(c["title"])
             if c["title"] in subs and (new is None or new["id"] in blockers):
+                prev = (new or subs[c["title"]]).get("id")
                 continue
             if new is None:
                 new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
                                            "-f", f"body={c.get('body', '')}\n\n{mark}",
-                                           "-f", f"labels[]={self.stages['draft']}"]))
+                                           "-f", f"labels[]={self.stages['draft']}", *[x for r in risk for x in ("-f", f"labels[]={r}")]]))
+                chained = False
+            else:
+                chained = bool(prev) and prev in {b["id"] for b in self._list(f"issues/{new['number']}/dependencies/blocked_by")}
+            if prev and not chained:
+                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/dependencies/blocked_by", "-F", f"issue_id={prev}"])
             if c["title"] not in subs:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
             if new["id"] not in blockers:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={new['id']}"])
-            wrote = True
+            prev, wrote = new["id"], True
         return wrote

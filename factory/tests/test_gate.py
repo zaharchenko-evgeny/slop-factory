@@ -289,6 +289,8 @@ class TriggerTest(unittest.TestCase):
         code, _ = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(split)), "--event", ev, "--tracker", f"memory:{tr}"])
         self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "split"))
         self.assertEqual([c["title"] for c in gate.intake_fields(split)["children"]], ["First", "Second"])
+        objs = [{"title": "One", "body": "scope\nchecks"}, {"title": "Two"}]
+        self.assertEqual(gate.slices(objs), [{"title": "One", "body": "scope\nchecks"}, {"title": "Two", "body": "Two"}])
         tr = self.file({"7": {"stage": "in-dev", "head": "abc"}})
         blocked = {"handoff": "DEVELOPER", "status": "blocked", "branch": "ez/7-x", "blocked_reason": "ambiguous acceptance"}
         code, _ = self.run_main(["apply", "--node", "implement", "--handoff", str(self.file(blocked)), "--event", ev, "--tracker", f"memory:{tr}"])
