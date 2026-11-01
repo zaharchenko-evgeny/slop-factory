@@ -13,8 +13,11 @@ change, whether you are a person, a pi session or a factory role.
    repository, added as a sub-issue of the map
    ([#21](https://github.com/zaharchenko-evgeny/offline-eval-factory/issues/21)).
    The body has the scope, acceptance checks, affected repositories and a size
-   estimate that counts tests and fixtures. Dependencies use GitHub's native
-   blocked-by links, not text in the body. Tracker operations are in
+   estimate that counts tests and fixtures. Each acceptance check that searches
+   files names the paths it covers or excludes, and uses a command or test name
+   instead of an unbounded judgement word such as "history", "clean" or
+   "appropriate". Dependencies use GitHub's native blocked-by links, not text
+   in the body. Tracker operations are in
    [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 2. **Stage labels.** A ticket carries exactly one `factory:*` stage label:
    `draft → ready → in-dev → in-review → approved → merged → done`, with

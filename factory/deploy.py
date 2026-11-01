@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROMPT = (
     "You are the {role} of {project}.\n\n{role_intro}\n\n"
     "Your job in this flow: triggered by {triggers}; outcomes: {outcomes}.\n\n"
+    "{spec_block}"
     "Save the trigger payload (the <trigger_event> JSON) to a file. "
     "{gate_setup}"
     "Run `uv run {gate_root}factory/gate.py{team} check --node {node} --event <file>{sel}`; on exit 10 stop and report why. "
@@ -58,6 +59,29 @@ OUTCOME_WORDS = {
     "waiting": "the review round is still waiting",
     "approved": "all required reviewers approved",
 }
+
+
+SPEC_SAVE = ("Save this node spec (the JSON block) to a file next to the trigger payload and pass it as `--spec <spec file>`; "
+             "the gate then reads no node graph.\n\n")
+
+
+def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | None, nodes: dict, top: bool = True) -> dict:
+    """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
+    spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
+            "when": n.get("when"), "outcomes": n["outcomes"]}
+    if any((o or {}).get("else") for o in n["outcomes"].values()):
+        spec["else_tier"] = nodes["nodes"]["fix"]["tiers"][0]  # the fix tier a red CI hands the ticket to
+    if top and n["role"] == "script":  # a sweep applies the other script nodes (join, finish) too
+        spec["runs"] = {k: node_spec(k, v, config, None, None, nodes, False) for k, v in nodes["nodes"].items()
+                        if v["role"] == "script" and k != name and v.get("enabled") is not False}
+    return spec
+
+
+def spec_block(spec: dict, node: dict) -> str:
+    lines = "\n".join(f"- `{o}`: {OUTCOME_WORDS.get(o, o.replace('-', ' '))}"
+                      + (f" (from stage {', '.join(v['from'])})" if (v or {}).get("from") else "")
+                      for o, v in node["outcomes"].items())
+    return f"{SPEC_SAVE}```json\n{json.dumps(spec, sort_keys=True)}\n```\n\nOutcomes:\n{lines}\n\n"
 
 
 def role_intro(role: str) -> str:
@@ -113,18 +137,24 @@ def repository(r: dict) -> dict:
 
 # A script node runs no agent work: the gate's sweep decides every scripted step (join, waiting reviewers,
 # merged to done) from facts, so the automation only runs it.
-SCRIPT_PROMPT = ("Run `uv run factory/gate.py sweep` once and report its JSON output. Do nothing else: "
+SCRIPT_PROMPT = ("Run `uv run factory/gate.py sweep --spec <spec file>` once and report its JSON output. Do nothing else: "
                  "change no file, label, comment or review yourself.")
+STALE_PROMPT = SCRIPT_PROMPT.replace("sweep --spec", "sweep --stale --spec")
 JOIN_SCRIPT_PROMPT = (
-    f"{PR_GATE_SETUP}Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep` once "
+    f"{PR_GATE_SETUP}Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep --spec <spec file>` once "
     "and report its JSON output. Do nothing else: change no file, label, comment or review yourself."
 )
-STALE_PROMPT = SCRIPT_PROMPT.replace("gate.py sweep`", "gate.py sweep --stale`")
 FINISH_SCRIPT_PROMPT = (
     f"{PR_GATE_SETUP}Read the issue number from the trigger payload. "
-    "Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep --issue <issue number>` once and report its JSON output. "
+    "Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep --issue <issue number> --spec <spec file>` once and report its JSON output. "
     "Do nothing else: change no file, label, comment or review yourself."
 )
+
+
+def script_prompt(name: str, n: dict, spec: dict) -> str:
+    return spec_block(spec, n) + (FINISH_SCRIPT_PROMPT if name == "finish" else
+                                  JOIN_SCRIPT_PROMPT if name == "join" else
+                                  STALE_PROMPT if "--stale" in n.get("run", "") else SCRIPT_PROMPT)
 
 
 def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str, str | None]]:
@@ -155,6 +185,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
         for aname, tier_arg, tier, focus in variants(name, n, roles):
             agent, _, model = air[tier].partition("/")
             trig = []
+            spec = node_spec(name, n, config, tier_arg or tier, focus, nodes)
             for t in n["triggers"]:
                 if str(t).startswith("schedule "):
                     trig.append({"triggerType": "SCHEDULED", "cronExpression": scheds[str(t)[9:]]["cron"],
@@ -164,21 +195,20 @@ def plan_air(nodes: dict, config: dict) -> dict:
             automations.append({
                 "name": f"{prefix}{aname}",
                 "triggers": trig,
-                "triggerVcs": [{"outputBehaviour": n.get("output", "read-only")}],
+                "triggerVcs": [{"outputBehaviour": n.get("output", "read-only")} for _ in trig],
+                "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{prefix}{env}",
-                "prompt": (FINISH_SCRIPT_PROMPT if name == "finish" else
-                           JOIN_SCRIPT_PROMPT if name == "join" else
-                           STALE_PROMPT if "--stale" in n.get("run", "") else SCRIPT_PROMPT)
-                if n["role"] == "script" else PROMPT.format(
+                "prompt": script_prompt(name, n, spec) if n["role"] == "script" else PROMPT.format(
+                    spec_block=spec_block(spec, n),
                     role=n["role"],
                     project=project_name(config),
                     role_intro=role_intro(n["role"]),
                     triggers=flow_triggers(n),
                     outcomes=flow_outcomes(n),
                     node=name,
-                    sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else ""),
+                    sel=(f" --focus {focus}" if focus else "") + (f" --tier {tier_arg or tier}" if tier_arg or focus else "") + " --spec <spec file>",
                     gate_root="<tmp>/factory-main/" if name in PR_TRIGGERED_NODES else "",
                     team=" --team <tmp>/factory-main" if name in PR_TRIGGERED_NODES else "",
                     gate_setup=PR_GATE_SETUP if name in PR_TRIGGERED_NODES else "",

@@ -16,6 +16,11 @@ Input: a request (free text or a tracker issue).
 2. For a ticket in stage `ready`, check the definition of ready: acceptance
    checks, affected repositories, and a size estimate. If anything is missing,
    recommend stage `blocked` with the question to ask the human.
+   If an acceptance check searches files, it names the paths it covers or
+   excludes. If it does not, or uses a judgement word such as "history",
+   "clean" or "appropriate" instead of a command or test name, choose `grill`:
+   mark the ticket not ready and ask which paths the check should cover or
+   exclude, and what command or test should verify it.
 3. Choose the risk path: `low` when the issue carries the low-risk label from
    `factory.descriptor.yaml`, otherwise `high`.
 4. Estimate the size as the lines a reviewer must read: added lines plus

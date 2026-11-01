@@ -45,7 +45,7 @@ class PlanTest(unittest.TestCase):
     def test_script_nodes_only_run_the_sweep(self):
         plan = json.loads((FIX / "air-plan.json").read_text())
         a = {x["name"]: x for x in plan["automations"]}
-        self.assertEqual(a["[Slop factory] sweep"]["prompt"], deploy.SCRIPT_PROMPT)
+        self.assertTrue(a["[Slop factory] sweep"]["prompt"].endswith(deploy.SCRIPT_PROMPT))
         self.assertIn("gate.py check --node intake", a["[Slop factory] intake"]["prompt"])
 
     def test_recover_runs_the_stale_sweep_twice_a_day_on_the_cheap_tier(self):
@@ -53,7 +53,7 @@ class PlanTest(unittest.TestCase):
                      deploy.plan_air(nodes.load(), cfg.load())):
             a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] recover")
             self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "0 6,18 * * *", "timezone": "UTC"}])
-            self.assertEqual(a["prompt"], deploy.STALE_PROMPT)
+            self.assertTrue(a["prompt"].endswith(deploy.STALE_PROMPT))
             intake = next(x for x in plan["automations"] if x["name"] == "[Slop factory] intake")  # router: cheap
             self.assertEqual(a["agentAndModel"], intake["agentAndModel"])
 
@@ -75,16 +75,27 @@ class PlanTest(unittest.TestCase):
                          [("pull_request_review.submitted", None), ("pull_request.labeled", "factory:ci-red")])
         assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] != "[Slop factory] recover" for x in a["triggers"]), "no polling"  # recover is the one safety net
 
+    def test_one_triggervcs_entry_per_trigger_and_a_spec_per_automation(self):
+        for a in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
+            self.assertEqual(len(a["triggerVcs"]), len(a["triggers"]), a["name"])
+            self.assertIn(json.dumps(a["spec"], sort_keys=True), a["prompt"])
+        a = {x["name"]: x for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
+        spec = a["[Slop factory] implement-mid"]["spec"]
+        self.assertEqual((spec["node"], spec["tier"], spec["engine"]), ("implement", "mid", cfg.load()["engine"]))
+        self.assertEqual(set(spec["outcomes"]), {"done", "error", "blocked", "failed"})
+        self.assertIn("- `error`: the work needs the next tier", a["[Slop factory] implement-mid"]["prompt"])
+        self.assertEqual(set(a["[Slop factory] join"]["spec"]["runs"]), {"finish", "recover"})
+
     def test_prompt_carries_focus_and_tier(self):
         config = cfg.load()
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), config)["automations"]}
-        self.assertIn("check --node review --event <file> --focus behaviour --tier review`", a["[Slop factory] review-behaviour"])
-        self.assertIn("check --node fix --event <file> --tier mid`", a["[Slop factory] fix-mid"])
+        self.assertIn("check --node review --event <file> --focus behaviour --tier review --spec <spec file>`", a["[Slop factory] review-behaviour"])
+        self.assertIn("check --node fix --event <file> --tier mid --spec <spec file>`", a["[Slop factory] fix-mid"])
         for f, tier in (("full", "review_strong"), ("behaviour", "review"), ("structure-security", "review_strong")):
-            self.assertIn(f"check --node review --event <file> --focus {f} --tier {tier}`", a[f"[Slop factory] review-{f}"])
-        self.assertIn("apply --node review --focus behaviour --tier review --event", a["[Slop factory] review-behaviour"])
-        self.assertIn("apply --node fix --tier mid --event", a["[Slop factory] fix-mid"])
-        self.assertIn("check --node intake --event <file>`", a["[Slop factory] intake"])
+            self.assertIn(f"check --node review --event <file> --focus {f} --tier {tier} --spec <spec file>`", a[f"[Slop factory] review-{f}"])
+        self.assertIn("apply --node review --focus behaviour --tier review --spec <spec file> --event", a["[Slop factory] review-behaviour"])
+        self.assertIn("apply --node fix --tier mid --spec <spec file> --event", a["[Slop factory] fix-mid"])
+        self.assertIn("check --node intake --event <file> --spec <spec file>`", a["[Slop factory] intake"])
 
     def test_agent_prompts_open_with_role_and_flow(self):
         config = cfg.load()
@@ -104,14 +115,14 @@ class PlanTest(unittest.TestCase):
             with self.subTest(name=name):
                 prompt = a[name]
                 if name == "[Slop factory] join":
-                    self.assertEqual(prompt, deploy.JOIN_SCRIPT_PROMPT)
+                    self.assertTrue(prompt.endswith(deploy.JOIN_SCRIPT_PROMPT))
                     self.assertIn("git worktree add --detach <tmp>/factory-main origin/main", prompt)
                     self.assertIn("uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep", prompt)
                     self.assertNotIn("event.json", prompt)
                     self.assertNotIn("--issue", prompt)
                 elif name == "[Slop factory] finish":
                     self.assertIn("git worktree add --detach <tmp>/factory-main origin/main", prompt)
-                    self.assertIn("sweep --issue <issue number>", prompt)
+                    self.assertIn("sweep --issue <issue number> --spec <spec file>", prompt)
                     self.assertNotIn("event.json", prompt)
                 else:
                     self.assertIn("git worktree add --detach <tmp>/factory-main origin/main", prompt)

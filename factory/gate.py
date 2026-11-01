@@ -8,7 +8,9 @@
 Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py apply --node N --outcome O --payload FILE [--tracker github|memory:FILE]
        gate.py apply --node N --handoff FILE [--event FILE]   (outcome and payload derived from the role's handoff)
-       gate.py sweep [--tracker github] [--dry-run] [--stale] [--event FILE | --issue N] (no agent: lists the tickets itself;
+       --spec FILE (check, apply, sweep): the node spec of the automation (deploy plan); no workflows/nodes.yaml is read
+       gate.py sweep [--tracker github] [--dry-run] [--stale] [--event FILE | --issue N] (no agent: lists the tickets itself,
+                                                                 one stage per ticket;
                                                                  --stale also re-fires nodes whose run died silently)
 Exit 0 go / done, 10 no go (stale, duplicate or the node no longer matches), 2 bad event, payload, node
 or outcome, 1 a failing effect (the stage is untouched: it is the last effect).
@@ -77,6 +79,20 @@ def holds(when, facts, event):
             return bool(want)
         return bool(facts["due"]) == bool(want)  # due
     return all(one(k, v) for k, v in when.items())
+
+
+def spec_nodes(path):
+    """A `nodes` mapping from a node spec file: the spec's node and the script nodes it `runs`."""
+    try:
+        spec = json.loads(Path(path).read_text())
+        out = {}
+        for s in [spec, *(spec.get("runs") or {}).values()]:
+            node = {k: s[k] for k in ("role", "when", "outcomes", "else_tier") if k in s}
+            node.update({"tier": s["tier"]} if s.get("tier") else {}, **({"focuses": [s["focus"]]} if s.get("focus") else {}))
+            out[s["node"]] = node
+    except (OSError, ValueError, KeyError, AttributeError, TypeError) as e:
+        raise Bad(f"malformed spec: {e!r}")
+    return {"nodes": out}
 
 
 def load_node(name, nodes):
@@ -254,7 +270,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if out.get("ci") and tracker.facts(ticket)["ci"] not in out["ci"] and out.get("else") in node["outcomes"]:
         out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
         if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
-            payload = {**payload, "tier": nodes["nodes"]["fix"]["tiers"][0]}
+            payload = {**payload, "tier": node.get("else_tier") or nodes["nodes"]["fix"]["tiers"][0]}
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     facts = tracker.facts(ticket)
     if name == "fix" and outcome == "done" and facts.get("handed_to_fix") and local_head() == facts.get("head"):
@@ -516,6 +532,7 @@ def main(argv):
     p.add_argument("--handoff")
     p.add_argument("--tracker", default="")
     p.add_argument("--nodes")
+    p.add_argument("--spec")
     p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
     p.add_argument("--tier")
     try:
@@ -534,7 +551,7 @@ def main(argv):
                 raise Bad(f"malformed --tracker file: {e}")
         else:
             raise Bad("--tracker is github or memory:FILE")
-        nodes = nodes_mod.load(a.nodes)
+        nodes = spec_nodes(a.spec) if a.spec else nodes_mod.load(a.nodes)
         config = config_mod.load()
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):

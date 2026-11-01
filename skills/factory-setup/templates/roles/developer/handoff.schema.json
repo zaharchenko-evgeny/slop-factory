@@ -36,7 +36,18 @@
     ]
    },
    "checks": {
-    "type": "array"
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": ["text", "result"],
+     "properties": {
+      "text": { "type": "string" },
+      "result": { "enum": ["pass", "fail", "not-run"] },
+      "reason": { "type": "string" }
+     },
+     "if": { "properties": { "result": { "const": "not-run" } } },
+     "then": { "required": ["reason"] }
+    }
    },
    "acceptance": {
     "type": "array"

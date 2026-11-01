@@ -9,12 +9,21 @@
       },
       "environmentConfigId": "[Slop factory] default",
       "name": "[Slop factory] intake",
-      "prompt": "You are the router of Slop factory.\n\nYou are the single entry point of the factory. You classify requests and hand\nthem off. You never build or review anything yourself.\n\nYour job in this flow: triggered by ticket labeled factory:ready; outcomes: .\n\nSave the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node intake --event <file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work on the `branch` of the output (create it from the default branch when it does not exist; the platform pushes). Write the role's handoff to `handoff_path`, then run `uv run factory/gate.py apply --node intake --event <file> --handoff <handoff_path>`.",
+      "prompt": "You are the router of Slop factory.\n\nYou are the single entry point of the factory. You classify requests and hand\nthem off. You never build or review anything yourself.\n\nYour job in this flow: triggered by ticket labeled factory:ready; outcomes: .\n\nSave this node spec (the JSON block) to a file next to the trigger payload and pass it as `--spec <spec file>`; the gate then reads no node graph.\n\n```json\n{\"engine\": null, \"focus\": null, \"node\": \"intake\", \"outcomes\": {}, \"role\": \"router\", \"tier\": \"cheap\", \"when\": null}\n```\n\nOutcomes:\n\n\nSave the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node intake --event <file> --spec <spec file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work on the `branch` of the output (create it from the default branch when it does not exist; the platform pushes). Write the role's handoff to `handoff_path`, then run `uv run factory/gate.py apply --node intake --spec <spec file> --event <file> --handoff <handoff_path>`.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
         "fullName": "o/main",
         "provider": "other"
+      },
+      "spec": {
+        "engine": null,
+        "focus": null,
+        "node": "intake",
+        "outcomes": {},
+        "role": "router",
+        "tier": "cheap",
+        "when": null
       },
       "triggerVcs": [
         {
@@ -41,12 +50,21 @@
       },
       "environmentConfigId": "[Slop factory] default",
       "name": "[Slop factory] implement-cheap",
-      "prompt": "You are the developer of Slop factory.\n\nYou implement one ticket in its worktree and branch. You also run in `fix`\nmode to address blocking review findings.\n\nYour job in this flow: triggered by ticket labeled factory:implement-<tier>; outcomes: .\n\nSave the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file> --tier cheap`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work on the `branch` of the output (create it from the default branch when it does not exist; the platform pushes). Write the role's handoff to `handoff_path`, then run `uv run factory/gate.py apply --node implement --tier cheap --event <file> --handoff <handoff_path>`.",
+      "prompt": "You are the developer of Slop factory.\n\nYou implement one ticket in its worktree and branch. You also run in `fix`\nmode to address blocking review findings.\n\nYour job in this flow: triggered by ticket labeled factory:implement-<tier>; outcomes: .\n\nSave this node spec (the JSON block) to a file next to the trigger payload and pass it as `--spec <spec file>`; the gate then reads no node graph.\n\n```json\n{\"engine\": null, \"focus\": null, \"node\": \"implement\", \"outcomes\": {}, \"role\": \"developer\", \"tier\": \"cheap\", \"when\": null}\n```\n\nOutcomes:\n\n\nSave the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file> --tier cheap --spec <spec file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work on the `branch` of the output (create it from the default branch when it does not exist; the platform pushes). Write the role's handoff to `handoff_path`, then run `uv run factory/gate.py apply --node implement --tier cheap --spec <spec file> --event <file> --handoff <handoff_path>`.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
         "fullName": "o/main",
         "provider": "other"
+      },
+      "spec": {
+        "engine": null,
+        "focus": null,
+        "node": "implement",
+        "outcomes": {},
+        "role": "developer",
+        "tier": "cheap",
+        "when": null
       },
       "triggerVcs": [
         {
@@ -73,12 +91,21 @@
       },
       "environmentConfigId": "[Slop factory] default",
       "name": "[Slop factory] implement-mid",
-      "prompt": "You are the developer of Slop factory.\n\nYou implement one ticket in its worktree and branch. You also run in `fix`\nmode to address blocking review findings.\n\nYour job in this flow: triggered by ticket labeled factory:implement-<tier>; outcomes: .\n\nSave the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file> --tier mid`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work on the `branch` of the output (create it from the default branch when it does not exist; the platform pushes). Write the role's handoff to `handoff_path`, then run `uv run factory/gate.py apply --node implement --tier mid --event <file> --handoff <handoff_path>`.",
+      "prompt": "You are the developer of Slop factory.\n\nYou implement one ticket in its worktree and branch. You also run in `fix`\nmode to address blocking review findings.\n\nYour job in this flow: triggered by ticket labeled factory:implement-<tier>; outcomes: .\n\nSave this node spec (the JSON block) to a file next to the trigger payload and pass it as `--spec <spec file>`; the gate then reads no node graph.\n\n```json\n{\"engine\": null, \"focus\": null, \"node\": \"implement\", \"outcomes\": {}, \"role\": \"developer\", \"tier\": \"mid\", \"when\": null}\n```\n\nOutcomes:\n\n\nSave the trigger payload (the <trigger_event> JSON) to a file. Run `uv run factory/gate.py check --node implement --event <file> --tier mid --spec <spec file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists, and do the role's work on the `branch` of the output (create it from the default branch when it does not exist; the platform pushes). Write the role's handoff to `handoff_path`, then run `uv run factory/gate.py apply --node implement --tier mid --spec <spec file> --event <file> --handoff <handoff_path>`.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
         "fullName": "o/main",
         "provider": "other"
+      },
+      "spec": {
+        "engine": null,
+        "focus": null,
+        "node": "implement",
+        "outcomes": {},
+        "role": "developer",
+        "tier": "mid",
+        "when": null
       },
       "triggerVcs": [
         {
@@ -105,14 +132,26 @@
       },
       "environmentConfigId": "[Slop factory] default",
       "name": "[Slop factory] review-full",
-      "prompt": "You are the reviewer of Slop factory.\n\nYou review one branch independently. You never see the developer's reasoning,\nonly the ticket, the diff and the repository. You never edit files, commit,\npush or comment on the tracker.\n\nYour job in this flow: triggered by pull request.opened or pull request.synchronize; outcomes: .\n\nSave the trigger payload (the <trigger_event> JSON) to a file. For this pull-request-triggered node, first run `git fetch origin main` and `git worktree add --detach <tmp>/factory-main origin/main`. Use that worktree for the gate, role file, and listed skills; use this checkout only as the code under review or fix. Always pass `--team <tmp>/factory-main` to the gate, so the descriptor, graph and role overrides come from main, never from the pull request. Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main check --node review --event <file> --focus full --tier review_strong`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists from <tmp>/factory-main, and do the role's work on the `branch` of the output (create it from the default branch when it does not exist; the platform pushes). Write the role's handoff to `handoff_path`, then run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main apply --node review --focus full --tier review_strong --event <file> --handoff <handoff_path>`.",
+      "prompt": "You are the reviewer of Slop factory.\n\nYou review one branch independently. You never see the developer's reasoning,\nonly the ticket, the diff and the repository. You never edit files, commit,\npush or comment on the tracker.\n\nYour job in this flow: triggered by pull request.opened or pull request.synchronize; outcomes: .\n\nSave this node spec (the JSON block) to a file next to the trigger payload and pass it as `--spec <spec file>`; the gate then reads no node graph.\n\n```json\n{\"engine\": null, \"focus\": \"full\", \"node\": \"review\", \"outcomes\": {}, \"role\": \"reviewer\", \"tier\": \"review_strong\", \"when\": null}\n```\n\nOutcomes:\n\n\nSave the trigger payload (the <trigger_event> JSON) to a file. For this pull-request-triggered node, first run `git fetch origin main` and `git worktree add --detach <tmp>/factory-main origin/main`. Use that worktree for the gate, role file, and listed skills; use this checkout only as the code under review or fix. Always pass `--team <tmp>/factory-main` to the gate, so the descriptor, graph and role overrides come from main, never from the pull request. Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main check --node review --event <file> --focus full --tier review_strong --spec <spec file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists from <tmp>/factory-main, and do the role's work on the `branch` of the output (create it from the default branch when it does not exist; the platform pushes). Write the role's handoff to `handoff_path`, then run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main apply --node review --focus full --tier review_strong --spec <spec file> --event <file> --handoff <handoff_path>`.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
         "fullName": "o/main",
         "provider": "other"
       },
+      "spec": {
+        "engine": null,
+        "focus": "full",
+        "node": "review",
+        "outcomes": {},
+        "role": "reviewer",
+        "tier": "review_strong",
+        "when": null
+      },
       "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        },
         {
           "outputBehaviour": "read-only"
         }
@@ -145,14 +184,26 @@
       },
       "environmentConfigId": "[Slop factory] default",
       "name": "[Slop factory] review-behaviour",
-      "prompt": "You are the reviewer of Slop factory.\n\nYou review one branch independently. You never see the developer's reasoning,\nonly the ticket, the diff and the repository. You never edit files, commit,\npush or comment on the tracker.\n\nYour job in this flow: triggered by pull request.opened or pull request.synchronize; outcomes: .\n\nSave the trigger payload (the <trigger_event> JSON) to a file. For this pull-request-triggered node, first run `git fetch origin main` and `git worktree add --detach <tmp>/factory-main origin/main`. Use that worktree for the gate, role file, and listed skills; use this checkout only as the code under review or fix. Always pass `--team <tmp>/factory-main` to the gate, so the descriptor, graph and role overrides come from main, never from the pull request. Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main check --node review --event <file> --focus behaviour --tier review`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists from <tmp>/factory-main, and do the role's work on the `branch` of the output (create it from the default branch when it does not exist; the platform pushes). Write the role's handoff to `handoff_path`, then run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main apply --node review --focus behaviour --tier review --event <file> --handoff <handoff_path>`.",
+      "prompt": "You are the reviewer of Slop factory.\n\nYou review one branch independently. You never see the developer's reasoning,\nonly the ticket, the diff and the repository. You never edit files, commit,\npush or comment on the tracker.\n\nYour job in this flow: triggered by pull request.opened or pull request.synchronize; outcomes: .\n\nSave this node spec (the JSON block) to a file next to the trigger payload and pass it as `--spec <spec file>`; the gate then reads no node graph.\n\n```json\n{\"engine\": null, \"focus\": \"behaviour\", \"node\": \"review\", \"outcomes\": {}, \"role\": \"reviewer\", \"tier\": \"review\", \"when\": null}\n```\n\nOutcomes:\n\n\nSave the trigger payload (the <trigger_event> JSON) to a file. For this pull-request-triggered node, first run `git fetch origin main` and `git worktree add --detach <tmp>/factory-main origin/main`. Use that worktree for the gate, role file, and listed skills; use this checkout only as the code under review or fix. Always pass `--team <tmp>/factory-main` to the gate, so the descriptor, graph and role overrides come from main, never from the pull request. Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main check --node review --event <file> --focus behaviour --tier review --spec <spec file>`; on exit 10 stop and report why. Otherwise read `role_file` and every skill it lists from <tmp>/factory-main, and do the role's work on the `branch` of the output (create it from the default branch when it does not exist; the platform pushes). Write the role's handoff to `handoff_path`, then run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main apply --node review --focus behaviour --tier review --spec <spec file> --event <file> --handoff <handoff_path>`.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
         "fullName": "o/main",
         "provider": "other"
       },
+      "spec": {
+        "engine": null,
+        "focus": "behaviour",
+        "node": "review",
+        "outcomes": {},
+        "role": "reviewer",
+        "tier": "review",
+        "when": null
+      },
       "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        },
         {
           "outputBehaviour": "read-only"
         }
@@ -185,12 +236,34 @@
       },
       "environmentConfigId": "[Slop factory] default",
       "name": "[Slop factory] sweep",
-      "prompt": "Run `uv run factory/gate.py sweep` once and report its JSON output. Do nothing else: change no file, label, comment or review yourself.",
+      "prompt": "Save this node spec (the JSON block) to a file next to the trigger payload and pass it as `--spec <spec file>`; the gate then reads no node graph.\n\n```json\n{\"engine\": null, \"focus\": null, \"node\": \"sweep\", \"outcomes\": {}, \"role\": \"script\", \"runs\": {\"recover\": {\"engine\": null, \"focus\": null, \"node\": \"recover\", \"outcomes\": {}, \"role\": \"script\", \"tier\": null, \"when\": {\"always\": true}}}, \"tier\": \"cheap\", \"when\": null}\n```\n\nOutcomes:\n\n\nRun `uv run factory/gate.py sweep --spec <spec file>` once and report its JSON output. Do nothing else: change no file, label, comment or review yourself.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
         "fullName": "o/main",
         "provider": "other"
+      },
+      "spec": {
+        "engine": null,
+        "focus": null,
+        "node": "sweep",
+        "outcomes": {},
+        "role": "script",
+        "runs": {
+          "recover": {
+            "engine": null,
+            "focus": null,
+            "node": "recover",
+            "outcomes": {},
+            "role": "script",
+            "tier": null,
+            "when": {
+              "always": true
+            }
+          }
+        },
+        "tier": "cheap",
+        "when": null
       },
       "triggerVcs": [
         {
@@ -214,12 +287,34 @@
       },
       "environmentConfigId": "[Slop factory] default",
       "name": "[Slop factory] recover",
-      "prompt": "Run `uv run factory/gate.py sweep --stale` once and report its JSON output. Do nothing else: change no file, label, comment or review yourself.",
+      "prompt": "Save this node spec (the JSON block) to a file next to the trigger payload and pass it as `--spec <spec file>`; the gate then reads no node graph.\n\n```json\n{\"engine\": null, \"focus\": null, \"node\": \"recover\", \"outcomes\": {}, \"role\": \"script\", \"runs\": {\"sweep\": {\"engine\": null, \"focus\": null, \"node\": \"sweep\", \"outcomes\": {}, \"role\": \"script\", \"tier\": null, \"when\": null}}, \"tier\": \"cheap\", \"when\": {\"always\": true}}\n```\n\nOutcomes:\n\n\nRun `uv run factory/gate.py sweep --stale --spec <spec file>` once and report its JSON output. Do nothing else: change no file, label, comment or review yourself.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
         "fullName": "o/main",
         "provider": "other"
+      },
+      "spec": {
+        "engine": null,
+        "focus": null,
+        "node": "recover",
+        "outcomes": {},
+        "role": "script",
+        "runs": {
+          "sweep": {
+            "engine": null,
+            "focus": null,
+            "node": "sweep",
+            "outcomes": {},
+            "role": "script",
+            "tier": null,
+            "when": null
+          }
+        },
+        "tier": "cheap",
+        "when": {
+          "always": true
+        }
       },
       "triggerVcs": [
         {
