@@ -110,8 +110,8 @@ is a one-line change.
 3. Run decisions-kit calibration on `judgments/auto-approve.yaml` with those labels, and record the result in the file's header comment.
 4. When the judge agrees with your labels, the judgment counts as calibrated and `require: judgment` may be used.
 
-`drive.py report` (#83) helps here: it lists each ticket's approval verdict
-next to its outcome.
+Compare each ticket's approval verdict (in its approver handoff) with its
+outcome.
 
 ## Layer 3: the combine rule
 
@@ -156,7 +156,7 @@ The `merge` action:
 1. Run in dry-run, with today's defaults, and collect verdicts.
 2. Turn on `auto_merge` with `require: hard-rules` and `max_risk: low`.
 3. Calibrate the judge, then use `require: judgment` for `medium` if you want.
-4. Raise `max_risk` only when `drive.py report` shows auto-merged tickets did not cause fix-up tickets.
+4. Raise `max_risk` only when the approval verdicts show auto-merged tickets did not cause fix-up tickets.
 
 ## Safety
 
