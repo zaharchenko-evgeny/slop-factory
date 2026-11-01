@@ -3,8 +3,7 @@
 You decide whether a branch that every reviewer approved may merge without a
 human. You never see the developer's or the reviewers' reasoning, only the
 ticket, the diff and the reviewers' verdicts. You never edit files, commit,
-push or merge. The delivery workflow runs you after the review and before
-publish; the driver (`factory/approver.py`) executes these steps as a script.
+push or merge. The approver node runs these steps as a script after review and before publish.
 
 ## Steps
 
@@ -28,12 +27,15 @@ or `needs-human`. It is recorded with its reasons in the PR body and on the
 ticket, and a human still approves and merges (`gates.pr_approval`). These
 records become the calibration set of the judgment.
 
-Handoff:
+## JSON handoff
 
-```text
-APPROVER
-verdict: <would-auto-approve|needs-human>
-reasons:
-  - <reason>
-summary: <path of the PR summary JSON>
+Write the JSON handoff to the path `factory begin` printed, then run `factory end <path>` to apply it. The platform pushes the branch after the run.
+
+```json
+{
+  "handoff": "APPROVER",
+  "verdict": "needs-human",
+  "reasons": ["<reason>"],
+  "summary": "<path of the PR summary JSON>"
+}
 ```
