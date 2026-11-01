@@ -636,6 +636,46 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertEqual(results, [])
         self.assertNotIn("log", tr.tickets[11])
 
+    def test_merged_ticket_refires_ready_dependent_in_same_sweep(self):
+        tr = MemoryTracker({
+            10: {"stage": "approved", "pr_state": "merged", "blocking": [11]},
+            11: {"stage": "ready", "blockers_open": 0},
+        })
+        tr.sweep_tickets = lambda stages: [10]
+        facts = tr.facts
+        tr.facts = lambda ticket: {**facts(ticket), **({"pr_state": "merged", "pr": 20,
+                                                          "reviews": [], "fix_rounds": 0}
+                                                         if ticket == 10 else {})}
+
+        results, failed = gate.sweep(tr, NODES)
+
+        self.assertFalse(failed)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(10, "merged"), (11, "unblocked")])
+        self.assertIn(["comment", '"[factory] unblocked by #10"'], tr.tickets[11]["log"])
+
+    def test_blocking_error_does_not_fail_sweep(self):
+        class BrokenBlockingTracker(MemoryTracker):
+            def blocking(self, ticket):
+                raise RuntimeError("tracker unavailable")
+
+        tr = BrokenBlockingTracker({})
+        tr.sweep_tickets = lambda stages: []
+
+        results, failed = gate.sweep(tr, NODES, closed_ticket=10)
+
+        self.assertFalse(failed)
+        self.assertEqual(results, [{"ticket": 10, "error": "RuntimeError: tracker unavailable"}])
+
+    def test_dependent_is_refired_once_when_listed_more_than_once(self):
+        tr = MemoryTracker({11: {"stage": "ready", "blockers_open": 0}})
+        tr.sweep_tickets = lambda stages: []
+        tr.blocking = lambda ticket: [11, 11]
+
+        results, failed = gate.sweep(tr, NODES, closed_ticket=10)
+
+        self.assertFalse(failed)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(11, "unblocked")])
+
 
 if __name__ == "__main__":
     unittest.main()
