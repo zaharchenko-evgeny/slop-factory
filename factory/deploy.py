@@ -121,8 +121,8 @@ def labels(nodes: dict, config: dict) -> list[str]:
     """Every label the gate may write or a trigger filters on: stage labels, risk and complexity labels, and
     the command labels of the nodes with `<tier>` expanded over each node's tiers (a missing label makes
     `gh issue edit --add-label` fail, so the deploy creates them first)."""
-    t = config["tracker"]
-    out = set(t["stages"].values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
+    t = config.get("tracker") or {}
+    out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     found = []
