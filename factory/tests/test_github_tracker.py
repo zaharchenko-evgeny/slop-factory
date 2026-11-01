@@ -14,8 +14,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from github_tracker import GitHubTracker  # noqa: E402
-from local_tracker import ClaimError  # noqa: E402
+from github_tracker import ClaimError, GitHubTracker  # noqa: E402
 
 STAGES = yaml.safe_load((HERE.parents[1] / "factory.yaml").read_text())["tracker"]["stages"]
 REPO = "o/r"

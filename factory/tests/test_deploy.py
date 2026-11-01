@@ -31,6 +31,9 @@ class PlanTest(unittest.TestCase):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
 
+    def test_local_target_is_rejected(self):
+        self.assertEqual(deploy.main(["plan", "--target", "local"]), 2)
+
     def test_plan_lists_every_label_the_gate_writes(self):
         plan = deploy.plan_air(nodes.load(), yaml.safe_load((HERE.parent.parent / "factory.yaml").read_text()))
         for want in ("factory:ready", "factory:implement-cheap", "factory:fix-strong", "complexity:small", "risk:high"):
@@ -122,10 +125,6 @@ class PlanTest(unittest.TestCase):
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
                          {"intake", "implement", "review", "join", "fix", "finish", "recover"})
         self.assertEqual(deploy.plan_air(n, config), plan)
-
-    def test_local_is_launchd_job(self):
-        job = deploy.schedule_local.render(yaml.safe_load((ROOT / "factory.yaml").read_text()))
-        self.assertEqual(job["Label"], "com.offline-eval-factory.loop")
 
 
 if __name__ == "__main__":
