@@ -1,0 +1,21 @@
+{
+  "source": "github",
+  "eventType": "issues.labeled",
+  "repository_host": "github.com",
+  "repository": "zaharchenko-evgeny/offline-eval-factory",
+  "label": "factory:implement-cheap",
+  "issue_author": "zaharchenko-evgeny",
+  "existing_labels": ["factory:ready", "risk:low", "factory:implement-cheap", "complexity:small"],
+  "data": {
+    "action": "labeled",
+    "issue": {
+      "number": 228,
+      "title": "gate check accepts Air's trigger payload wrapper",
+      "updated_at": "2026-11-01T13:35:57Z",
+      "body": "[factory] `gate.py check --event` rejects the payload Air gives the agent. The reviewer on PR #226 had to pass the nested `data` object by hand.\n\n## Scope\n\n- `gate.py`: when the event file is Air's wrapper (an object whose `data` holds the GitHub event), unwrap it. The raw GitHub event keeps working.\n- Add a test fixture with Air's wrapper shape, taken from a real run, with the secrets removed.\n- The deploy prompt keeps \"save the trigger payload to a file\" with no extra step.\n\n## Acceptance checks\n\n- [ ] A test: `check` accepts the wrapper and the raw event, and gives the same facts\n- [ ] The `state-machine` check passes\n\nAffected repositories: offline-eval-factory. Size: about 40 lines with tests.\n\nFactory-Run: manual:pi-session-2026-10-31\n"
+    },
+    "label": {"name": "factory:implement-cheap"},
+    "repository": {"full_name": "zaharchenko-evgeny/offline-eval-factory", "default_branch": "main"},
+    "sender": {"login": "jetbrains-air[bot]"}
+  }
+}

@@ -89,6 +89,9 @@ class NoTicket(Exception):
 
 def from_trigger(d):
     """{id, ticket, head, actor} of a raw webhook payload (issues, pull_request, pull_request_review)."""
+    if not any(isinstance(d.get(key), dict) for key in ("pull_request", "issue", "review")):
+        if isinstance(d.get("data"), dict):
+            d = d["data"]
     pr, issue, review = d.get("pull_request"), d.get("issue"), d.get("review")
     if not isinstance(pr, dict) and not isinstance(issue, dict):
         raise Bad("malformed event: needs `ticket` or a trigger payload")
