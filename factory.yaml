@@ -1,4 +1,4 @@
-# Offline Evaluation software factory. Roles and workflows read every
+# Slop software factory. Roles and workflows read every
 # repository, tracker, model and harness name from this file (design §2).
 version: 1
 

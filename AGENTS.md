@@ -1,7 +1,7 @@
-# Offline Evaluation factory: project rules
+# Slop factory: project rules
 
 This repository holds the factory setup skill (`skills/factory-setup/`) and the
-Offline Evaluation factory generated from it. Design: `docs/design.md`,
+Slop factory generated from it. Design: `docs/design.md`,
 decisions: `docs/adr/`, plan: `docs/plan.md`.
 
 ## Development workflow
