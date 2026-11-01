@@ -1,6 +1,6 @@
 # ADR-0014: The node model
 
-Status: accepted when #148 merges. Supersedes the mechanism of ADR-0013 and of `docs/statechart-proposed.md`. The states and outcomes in both stay.
+Status: accepted when #148 merges. Partly superseded by ADR-0015 (engine package, environments, no sweep). Supersedes the mechanism of ADR-0013 and of `docs/statechart-proposed.md`. The states and outcomes in both stay.
 
 ## Context
 
