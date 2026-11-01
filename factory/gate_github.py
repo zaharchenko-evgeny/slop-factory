@@ -23,8 +23,8 @@ WRITE = {"admin", "maintain", "write"}  # repository roles with write access
 
 
 class GitHubGateTracker:
-    def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=()):
-        self.trusted = set(trusted_bots)
+    def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8):
+        self.trusted, self.run_cap = set(trusted_bots), run_cap
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, run
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
@@ -36,7 +36,7 @@ class GitHubGateTracker:
             raise ValueError("factory.yaml: targets.air.bot_login is not set")
         t = c["tracker"]
         return cls(t["repository"], t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run,
-                   (c.get("reviews") or {}).get("trusted_bots") or [])
+                   (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8))
 
     # --- reads
     def _api(self, path, *flags):
@@ -50,10 +50,10 @@ class GitHubGateTracker:
         return [x["name"] for x in self._api(f"issues/{n}")["labels"]]
 
     def sweep_tickets(self, stages):
-        """Issue numbers (open or closed) whose stage label is one of `stages`; in-review and changes-requested only when open."""
+        """Issue numbers (open or closed) whose stage label is one of `stages`; in-review, changes-requested and in-dev only when open."""
         found = set()
         for st in stages:
-            state = "open" if st in ("in-review", "changes-requested") else "all"
+            state = "open" if st in ("in-review", "changes-requested", "in-dev") else "all"
             found |= {i["number"] for i in self._list(f"issues?state={state}&labels={self.stages[st]}&per_page=100")
                       if "pull_request" not in i}
         return sorted(found)
@@ -103,6 +103,14 @@ class GitHubGateTracker:
             if "404" in str(e):  # a stranger is no collaborator
                 return False
             raise  # any other failure must not drop a blocking review: the join fails and is retried
+
+    def _agent_runs(self, n, pr):
+        """Developer runs the factory started for ticket `n`: each `labeled` event of a command label
+        (`factory:implement-*`, `fix-*`, `update-*`) on the issue or its PR. Reviews follow pushes, so this
+        bounds them too."""
+        cmds = ("factory:implement-", "factory:fix-", "factory:update-")
+        return sum(1 for t in [n] + ([pr] if pr else []) for e in self._list(f"issues/{t}/events")
+                   if e.get("event") == "labeled" and (e.get("label") or {}).get("name", "").startswith(cmds))
 
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
@@ -160,6 +168,7 @@ class GitHubGateTracker:
              "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
              "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
+             "agent_runs": self._agent_runs(n, pr["number"] if pr else None), "run_cap": self.run_cap,
              "issue_state": issue.get("state", "open"),
              "title": issue.get("title", ""), "body": issue.get("body") or "", "branch": None}
         if stage == "split":

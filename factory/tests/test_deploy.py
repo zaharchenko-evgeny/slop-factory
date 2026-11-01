@@ -31,6 +31,12 @@ class PlanTest(unittest.TestCase):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
 
+    def test_plan_lists_every_label_the_gate_writes(self):
+        plan = deploy.plan_air(nodes.load(), yaml.safe_load((HERE.parent.parent / "factory.yaml").read_text()))
+        for want in ("factory:ready", "factory:implement-cheap", "factory:fix-strong", "complexity:small", "risk:high"):
+            self.assertIn(want, plan["labels"])
+        self.assertFalse([x for x in plan["labels"] if "<" in x])
+
     def test_script_nodes_only_run_the_sweep(self):
         plan = json.loads((FIX / "air-plan.json").read_text())
         a = {x["name"]: x for x in plan["automations"]}

@@ -85,7 +85,7 @@ targets:
       strong: claude/claude-sonnet-5-5[1m]
       # Review tiers use another model family than the developer (claude).
       review: codex/gpt-6-luna
-      review_strong: codex/gpt-6-luna
+      review_strong: codex/gpt-6.1-sol
 
 # Model tiers (design §10a). Escalate one tier only after a failure.
 models:
@@ -143,6 +143,8 @@ gates:
 limits:
   concurrent_deliveries: 2
   fix_rounds: 3
+  # Air spend guard (gate.check refuses, the sweep blocks): implement, fix and update runs per ticket.
+  agent_runs_per_ticket: 8
   resume_cap: 3   # comment resumes of a waiting ticket before it stays for a person
   runs_per_day: 20
   environment_repair_attempts: 2

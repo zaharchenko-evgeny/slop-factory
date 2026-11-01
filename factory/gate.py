@@ -190,6 +190,8 @@ def check(name, event, tracker, nodes, config):
         raise Bad("malformed event: needs `id`")
     facts = tracker.facts(event["ticket"])
     why = matches(node, facts, event)
+    if not why and node["role"] not in ("script", "human") and facts.get("agent_runs", 0) >= facts.get("run_cap", 8):
+        why = f"agent run cap: {facts['agent_runs']} runs for this ticket (limits.agent_runs_per_ticket)"
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     facts = {k: v for k, v in facts.items() if k != "body"}
     role, roles = node["role"], config["roles"]
@@ -260,7 +262,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     return GO, {"applied": True, "written": [e["kind"] for e in effects if tracker.apply(e)]}
 
 
-SWEEP_STAGES = ("approved", "merged", "split", "in-review")
+SWEEP_STAGES = ("approved", "merged", "split", "in-review", "in-dev", "changes-requested")
 
 
 def join_decision(facts):
@@ -275,6 +277,9 @@ def join_decision(facts):
 def sweep_plan(facts):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
+    if stage in ("in-dev", "changes-requested", "in-review") and facts.get("agent_runs", 0) >= facts.get("run_cap", 8):
+        return "sweep", "run-cap", {"reason": f"[factory] Stopped: {facts['agent_runs']} developer runs for this ticket "
+                                    f"reached limits.agent_runs_per_ticket. A person decides, then sets factory:ready."}
     if stage == "approved" and facts.get("pr_state") == "merged":
         return "sweep", "merged", {}
     if stage == "merged":

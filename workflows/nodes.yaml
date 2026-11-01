@@ -16,7 +16,7 @@ adapters:
   ticket: github-issues   # stage, fields, labels, blockers
   pr: github              # state, head, CI, reviews by head SHA
 schedules:
-  sweep: { cron: "*/10 * * * *" }
+  sweep: { cron: "*/30 * * * *" }
   routines: { cron: "0 6 * * *" }
 nodes:
   human:
@@ -160,6 +160,8 @@ nodes:
       retro: { from: [merged], effects: [{ comment: retro }, { stage: done }] }
       # A handled change request whose author has not decided again: ask them again, move nothing.
       waiting: { from: [in-review], effects: [{ join: all-approve }] }
+      # Spend guard: a ticket whose developer runs reach limits.agent_runs_per_ticket waits for a person.
+      run-cap: { from: [in-dev, changes-requested, in-review], effects: [{ comment: reason }, { stage: blocked }] }
   routines:
     enabled: false
     triggers: ["schedule routines"]

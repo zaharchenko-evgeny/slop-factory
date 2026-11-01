@@ -285,6 +285,15 @@ class TriggerTest(unittest.TestCase):
         code, _ = self.run_main(["apply", "--node", "implement", "--handoff", str(self.file(blocked)), "--event", ev, "--tracker", f"memory:{tr}"])
         self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "blocked"))
 
+    def test_check_refuses_an_agent_node_at_the_run_cap(self):
+        class T:
+            def facts(self, n):
+                return {"stage": "changes-requested", "head": None, "blockers_open": 0, "focus_missing": [],
+                        "round_complete": True, "round_head": None, "fix_rounds": 0, "fix_cap": 3, "ci": "green",
+                        "due": False, "seen": [], "attrs": [], "agent_runs": 8, "run_cap": 8}
+        code, out = gate.check("fix", {"id": "e", "ticket": 7}, T(), nodes.load(), CONFIG)
+        self.assertEqual((code, out["reason"][:13]), (gate.NO_GO, "agent run cap"))
+
     def test_bug_intake_proceeds(self):
         h = {"handoff": "ROUTER-INTAKE", "kind": "bug", "ready": "yes", "split": "none"}
         self.assertEqual(gate.outcome_of(h), "proceed")

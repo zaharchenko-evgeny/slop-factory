@@ -114,7 +114,26 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
-    return {"automations": automations, "environments": envs}
+    return {"automations": automations, "environments": envs, "labels": labels(nodes, config)}
+
+
+def labels(nodes: dict, config: dict) -> list[str]:
+    """Every label the gate may write or a trigger filters on: stage labels, risk and complexity labels, and
+    the command labels of the nodes with `<tier>` expanded over each node's tiers (a missing label makes
+    `gh issue edit --add-label` fail, so the deploy creates them first)."""
+    t = config["tracker"]
+    out = set(t["stages"].values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
+    out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
+    tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
+    found = []
+    for n in nodes["nodes"].values():
+        found += [t.split(" ", 1)[1] for t in n.get("triggers") or [] if t.endswith(">") or t.count(" ") == 1
+                  and t.split(" ", 1)[1].startswith("factory:")]
+        found += [v for o in (n.get("outcomes") or {}).values() for e in (o or {}).get("effects") or []
+                  for k, v in e.items() if k == "label"]
+    for x in found:
+        out |= {x.replace("<tier>", t) for t in tiers} if "<tier>" in x else {x} if "<" not in x else set()
+    return sorted(out)
 
 
 def main(argv: list[str]) -> int:

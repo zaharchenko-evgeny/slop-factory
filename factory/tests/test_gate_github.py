@@ -66,6 +66,9 @@ class FakeGh:
             if who not in self.roles:
                 raise RuntimeError("404")
             return json.dumps({"role_name": self.roles[who]})
+        if a.endswith("issues/7/events"):
+            return "\n".join(json.dumps({"event": "labeled", "label": {"name": "factory:implement-cheap"}})
+                             for _ in range(getattr(self, "impl_runs", 0)))
         if a.endswith("issues/5/events"):
             return "\n".join(json.dumps({"event": "labeled", "label": {"name": "factory:fix-mid"}, "created_at": t})
                              for t in getattr(self, "fix_events", []))
@@ -379,6 +382,19 @@ class JoinTest(unittest.TestCase):
         t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, trusted_bots=["rev[bot]"])
         f = t.facts(7)
         self.assertEqual((f["round_complete"], f["waiting_reviewers"], f["round_verdict"]), (True, [], "approve"))
+
+    def test_agent_run_cap(self):
+        gh = FakeGh(labels=["factory:changes-requested", "risk:low"])
+        gh.impl_runs, gh.fix_events = 2, ["t"] * 6  # 8 developer runs: implement twice, fix six times
+        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, run_cap=8)
+        f = t.facts(7)
+        self.assertEqual(f["agent_runs"], 8)
+        self.assertEqual(gate.sweep_plan(f)[:2], ("sweep", "run-cap"))
+        res, _ = gate.sweep(t, nodes.load())
+        self.assertEqual([r["outcome"] for r in res], ["run-cap"])
+        self.assertIn("factory:blocked", gh.labels)
+        gh.fix_events = []
+        self.assertIsNone(gate.sweep_plan({**t.facts(7), "stage": "changes-requested"}))
 
     def test_change_request_counted_by_round_1_does_not_block_round_2(self):
         # B2 of #183: the bot reviews first, the human second; round 1 counts her request, round 2 must not loop on it
