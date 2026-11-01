@@ -1,0 +1,11 @@
+name: probe-label
+on: pull_request
+permissions:
+  issues: write
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh issue edit 199 --add-label factory:probe-a -R ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
