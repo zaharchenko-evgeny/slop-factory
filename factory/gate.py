@@ -546,8 +546,9 @@ def main(argv):
                     if not isinstance(raw, dict):
                         raise ValueError("expected an event object")
                     raw = raw.get("data", raw)
-                    if not isinstance(raw, dict) or not isinstance(raw.get("action"), str):
-                        raise ValueError("expected an event with an action")
+                    if (not isinstance(raw, dict) or not isinstance(raw.get("action"), str)
+                            or not any(isinstance(raw.get(key), dict) for key in ("issue", "pull_request"))):
+                        raise ValueError("expected an event with an action and issue or pull request")
                     if raw["action"] == "closed" and isinstance(raw.get("issue"), dict):
                         closed_ticket = raw["issue"].get("number")
                 except (OSError, ValueError) as e:

@@ -287,6 +287,15 @@ class TriggerTest(unittest.TestCase):
         finally:
             f.unlink(missing_ok=True)
 
+    def test_sweep_non_event_object_warns_and_runs_full_sweep(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({})
+        tracker.sweep_tickets = lambda stages: []
+        f = self.file({"action": "closed"})
+        code, out, warning = self.run_sweep(["--event", str(f)], tracker)
+        self.assertEqual((code, out["sweep"]), (gate.GO, []))
+        self.assertIn("running full sweep", warning)
+
     def test_sweep_issue_refires_ready_dependent_of_closed_blocker(self):
         from gate_port import MemoryTracker
         tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "ready", "blockers_open": 0}})
