@@ -15,18 +15,18 @@ Today the factory runs only for this repository, and everything is in it: the ga
 
 ## Decision
 
-The product is **Slop factory**. Labels (`factory:*`), automation names (`[factory:*]`) and the `[factory]` text prefix stay.
+The product's display name is **Slop factory**. Every identifier uses the plain word `factory`: the engine repository `factory`, team repositories `<team>-factory`, the `factory` command, labels `factory:*`, automation names `[factory:*]` and the `[factory]` text prefix.
 
 **Two kinds of repository.**
 
-- **`slop-factory`, the engine**, shared by every team and installed as a dependency: `uv tool install git+…/slop-factory@vX`, which gives the `slop-factory` command (alias `factory`). It holds the gate and its tracker adapters, `deploy`, `chart` and `validate`, the roles, the vendored skills and the base node graph. The retired transition engine is deleted first (#179), which leaves about 1,400 lines of gate code.
-- **`<team>-slop-factory`, the team repo.** It holds the descriptor `factory.descriptor.yaml`, override files, the knowledge inbox, and the routines. A project repository holds only `ci-state.yml` and its own CI checks.
+- **`factory`, the engine**, shared by every team and installed as a dependency: `uv tool install git+…/factory@vX`, which gives the `factory` command. It holds the gate and its tracker adapters, `deploy`, `chart` and `validate`, the roles, the vendored skills and the base node graph. The retired transition engine is deleted first (#179), which leaves about 1,400 lines of gate code.
+- **`<team>-factory`, the team repo.** It holds the descriptor `factory.descriptor.yaml`, override files, the knowledge inbox, and the routines. A project repository holds only `ci-state.yml` and its own CI checks.
 
 **The descriptor** chooses settings and holds no logic: the engine version, the tracker, the project repositories with read and write access per role, models per tier, limits, gates, which optional engine nodes are switched on, the knowledge targets, and Air Mate settings. Teams never add or rewrite nodes. A new node goes into the engine through a ticket.
 
 **Overrides by path.** A file at `roles/<role>/…` or `skills/<name>/…` in the team repo replaces the engine's file at the same path, whole. Everything else comes from the engine. `validate` warns when an overridden file changed in a newer engine version.
 
-**Deploy compiles.** `slop-factory deploy` reads the engine graph plus the descriptor and creates the Air automations, labels and environments. Each automation's prompt carries its node spec: its condition, its outcomes with their effects, its role, and the outcomes listed in words. Nothing reads the graph at run time. Deploy runs from the operator's machine with their Air OAuth.
+**Deploy compiles.** `factory deploy` reads the engine graph plus the descriptor and creates the Air automations, labels and environments. Each automation's prompt carries its node spec: its condition, its outcomes with their effects, its role, and the outcomes listed in words. Nothing reads the graph at run time. Deploy runs from the operator's machine with their Air OAuth.
 
 **Install and isolation.** `.air/cloud/startup.sh` installs the whole factory: the engine at the pinned version, every skill and every tool, before the agent starts. Nodes in one environment differ only by role: the role file says which skills to use. Access is isolated by environment config: `read` (intake, review, join, finish), `write` (implement, fix) and `ops` (routines). `startup.sh` reads `FACTORY_ENV` to install that environment's tools.
 
@@ -46,9 +46,9 @@ The product is **Slop factory**. Labels (`factory:*`), automation names (`[facto
 
 1. #179: delete the retired engine.
 2. #203: simplify stages and fix two stalls.
-3. Package the engine: the `slop-factory` CLI, a descriptor loader that replaces `factory.yaml`, overrides by path, and node specs compiled into prompts.
+3. Package the engine: the `factory` CLI, a descriptor loader that replaces `factory.yaml`, overrides by path, and node specs compiled into prompts.
 4. `startup.sh` installs the pinned engine. Environments `read`, `write` and `ops`.
-5. Create `offline-eval-slop-factory`, move this repository's configuration into it, and redeploy from it. This repository becomes the engine, `slop-factory`.
+5. Create the engine repository `factory` and move the engine into it with its history. This repository, `offline-eval-factory`, keeps its tickets and becomes the team repo: the descriptor, overrides and knowledge. Redeploy from it.
 6. The knowledge routines and the knowledge reviewer (#162).
 7. One project repository from the eval repositories.
 8. Several repositories per ticket, the YouTrack adapter, Air Mate, and the local loop.
