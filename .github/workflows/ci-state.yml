@@ -4,11 +4,17 @@ name: ci-state
 # factory PR as a label, and the label starts the next node: factory:ci-green starts the reviewers,
 # factory:ci-red starts the join (a fix round). Runs from main's copy of this file and checks out no PR code.
 on:
-  workflow_run:
+  # The job checks out no code, reads no artifact and writes only labels; a fork's ez/* PR gains nothing,
+  # because the Air triggers accept only the factory bot's PRs.
+  workflow_run: # jactionlint ignore=dangerous-triggers
     workflows: [quality-gates]
     types: [completed]
 
 permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
 
 jobs:
   label:
