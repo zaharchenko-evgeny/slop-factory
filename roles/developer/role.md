@@ -47,9 +47,11 @@ the same format as implement mode. A failed check cannot be handed off as
 - Stop and report `blocked` when the ticket is ambiguous or a check cannot run
   after two repair attempts that test different causes.
 
+
+
 ## JSON handoff
 
-The handoff is JSON. Write it to the path `factory begin` printed, then run `factory end <path>` to apply it. The platform pushes the branch after the run.
+Write the handoff as JSON to the path printed by `factory begin`, then run `factory end <path>` to apply it.
 
 ```
 {

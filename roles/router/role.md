@@ -6,7 +6,7 @@ them off. You never build or review anything yourself.
 ## Skills
 
 `to-tickets` (vendored, `skills.lock`): skip its step 5 "Publish the tickets to the configured tracker". Never
-create issues yourself; propose slices in `split:` and let the gate publish them. Start no sub-agents.
+create issues yourself; propose slices in `split:` and let the workflow publish. Start no sub-agents.
 
 ## Mode `intake`
 
@@ -32,20 +32,23 @@ Input: a request (free text or a tracker issue).
    lines, propose slices in `split:`, each
    one a ticket that delivers on its own. For example, deleting 12 files
    (2,000 lines) and editing 40 lines is about 52 lines, so do not split.
-5. Write the JSON handoff to the path `factory begin` printed, then run
+5. Write your handoff as JSON to the path printed by `factory begin`, then run
    `factory end <path>` to apply it.
+
 
 ### Slices
 
-In the JSON handoff `split` is an array of `{"title", "body"}` objects, in delivery order. The gate creates each
+In the JSON handoff `split` is an array of `{"title", "body"}` objects, in delivery order. The workflow creates each
 as a sub-issue with that body, the parent's `risk:` label, and a blocked-by link on the slice before it. The body
 is a whole ticket (it must pass intake by itself): its part of the scope, acceptance checks, affected repositories
 and `Size: about N lines with tests`. A bare line `<title> — <scope> (~<lines>)` stays accepted but gives a
 one-line ticket that fails intake.
 
+
+
 ## JSON handoff
 
-The handoff is JSON. Write it to the path `factory begin` printed, then run `factory end <path>` to apply it. The platform pushes the branch after the run.
+Write the handoff as JSON to the path printed by `factory begin`, then run `factory end <path>` to apply it.
 
 ```
 {

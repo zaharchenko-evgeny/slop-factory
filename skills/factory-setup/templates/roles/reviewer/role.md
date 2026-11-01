@@ -53,16 +53,13 @@ focus; stay in yours.
    behind every earlier blocking finding, then say which are resolved in the
    summary. Do not mark an earlier finding resolved from diff inspection alone.
 
-Handoff, JSON only (`findings` is one list of items; `case` is required for
-`blocking`):
-
 
 The gate posts `summary` and the findings (blocking first) as the review body;
 the fixer reads nothing else, so make each finding stand alone.
 
 ## JSON handoff
 
-The handoff is JSON. Write it to the path `factory begin` printed, then run `factory end <path>` to apply it. The platform pushes the branch after the run.
+Write the handoff as JSON to the path printed by `factory begin`, then run `factory end <path>` to apply it.
 
 ```
 {
