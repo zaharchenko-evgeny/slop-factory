@@ -73,8 +73,24 @@ class StartupTest(unittest.TestCase):
         self.assertIn("curl", first)
         self.assertIn("uv tool install", first)
         self.assertEqual(self.run_script().returncode, 0)
-        self.assertEqual(self.log.read_text(), first)
+        self.assertGreater(self.log.read_text().count("uv tool install --force"), first.count("uv tool install --force"))
         self.assertEqual((self.home / ".bashrc").read_text().count(".local/bin"), 1)
+
+    def test_installs_factory_from_main_worktree(self):
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        log = self.log.read_text()
+        self.assertIn('git fetch --depth 1 origin main', log)
+        self.assertIn('git worktree add --detach ' + str(self.home / "factory-main") + ' origin/main', log)
+        self.assertIn('uv tool install --force ' + str(self.home / "factory-main"), log)
+
+    def test_factory_install_failure_is_reported(self):
+        uv = Path(self.env["PATH"].split(":", 1)[0]) / "uv"
+        uv.write_text("#!/bin/sh\nexit 1\n")
+        uv.chmod(0o755)
+        r = self.run_script()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("startup: factory install failed", r.stderr)
 
     def test_checksum_mismatch_fails_closed(self):
         self.script.write_text(SCRIPT.read_text())  # the real pins: the stub's file does not match
@@ -91,14 +107,14 @@ class StartupTest(unittest.TestCase):
     def test_no_jbeval(self):
         r = self.run_script()
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertNotIn("uv", self.log.read_text())
+        self.assertIn("uv tool install --force", self.log.read_text())
 
     def test_light_env_skips_approver_tools(self):
         self.env["FACTORY_ENV"] = "light"
         r = self.run_script()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("FACTORY_ENV=light", r.stdout)
-        self.assertNotIn("curl", self.log.read_text())
+        self.assertIn("uv tool install --force", self.log.read_text())
 
     def test_air_models_in_config(self):
         m = cfg.load()["targets"]["air"]["models"]

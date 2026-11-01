@@ -32,6 +32,15 @@ if ! command -v gh >/dev/null 2>&1; then
   tar -xzf "$TMP/pkg.tgz" -C "$TMP"
   cp "$TMP"/gh_*/bin/gh "$BIN/gh"
 fi
+if ! {
+  git worktree remove --force "$HOME/factory-main" 2>/dev/null || rm -rf "$HOME/factory-main"
+  git fetch --depth 1 origin main
+  git worktree add --detach "$HOME/factory-main" origin/main
+  uv tool install --force "$HOME/factory-main"
+}; then
+  echo "startup: factory install failed" >&2
+  exit 1
+fi
 # FACTORY_ENV (the environment's variable) picks the branch: `light` has no approver tools.
 case "${FACTORY_ENV:-default}" in
   light|probe) echo "startup ran $(date -u +%FT%TZ) FACTORY_ENV=$FACTORY_ENV"; exit 0 ;;
