@@ -66,6 +66,10 @@ class FakeGh:
             if who not in self.roles:
                 raise RuntimeError("404")
             return json.dumps({"role_name": self.roles[who]})
+        if a.endswith("/parent"):
+            if getattr(self, "parent_of", None) is None:
+                raise RuntimeError("HTTP 404: Not Found")
+            return json.dumps({"number": self.parent_of})
         if a.endswith("issues/7/events"):
             return "\n".join(json.dumps({"event": "labeled", "label": {"name": "factory:implement-cheap"}})
                              for _ in range(getattr(self, "impl_runs", 0)))
@@ -370,7 +374,7 @@ class JoinTest(unittest.TestCase):
                              review("alice", "looking", state="COMMENTED", at="2026-01-02T05:00:00Z")])
         gh.fix_events, gh.requested = ["2026-01-02T02:05:00Z"], []
         res, _ = gate.sweep(tr(gh), nodes.load())
-        self.assertEqual([(r["node"], r["outcome"]) for r in res], [("sweep", "waiting")])
+        self.assertEqual([(r["node"], r["outcome"]) for r in res], [("join", "waiting")])
         self.assertTrue(any("reviewers[]=alice" in " ".join(w) for w in gh.writes))
         self.assertIn("factory:in-review", gh.labels)  # nothing moved
 
@@ -383,18 +387,16 @@ class JoinTest(unittest.TestCase):
         f = t.facts(7)
         self.assertEqual((f["round_complete"], f["waiting_reviewers"], f["round_verdict"]), (True, [], "approve"))
 
-    def test_agent_run_cap(self):
-        gh = FakeGh(labels=["factory:changes-requested", "risk:low"])
-        gh.impl_runs, gh.fix_events = 2, ["t"] * 6  # 8 developer runs: implement twice, fix six times
-        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, run_cap=8)
-        f = t.facts(7)
-        self.assertEqual(f["agent_runs"], 8)
-        self.assertEqual(gate.sweep_plan(f)[:2], ("sweep", "run-cap"))
-        res, _ = gate.sweep(t, nodes.load())
-        self.assertEqual([r["outcome"] for r in res], ["run-cap"])
-        self.assertIn("factory:blocked", gh.labels)
-        gh.fix_events = []
-        self.assertIsNone(gate.sweep_plan({**t.facts(7), "stage": "changes-requested"}))
+    def test_agent_runs_count_since_the_last_ready(self):
+        class G(FakeGh):
+            def __call__(self, args):
+                if any(x.endswith("issues/7/events") for x in args):
+                    ev = lambda name, t: json.dumps({"event": "labeled", "label": {"name": name}, "created_at": t})
+                    return "\n".join([ev("factory:implement-cheap", "2026-01-01T00:00:00Z")] * 8
+                                      + [ev("factory:ready", "2026-01-02T00:00:00Z"), ev("factory:implement-mid", "2026-01-02T01:00:00Z")])
+                return FakeGh.__call__(self, args)
+        f = GitHubGateTracker(REPO, STAGES, BOT, run=G(), run_cap=8).facts(7)
+        self.assertEqual(f["agent_runs"], 1)  # a person's ready starts a fresh budget
 
     def test_change_request_counted_by_round_1_does_not_block_round_2(self):
         # B2 of #183: the bot reviews first, the human second; round 1 counts her request, round 2 must not loop on it
@@ -471,19 +473,16 @@ class SweepTest(unittest.TestCase):
     def run_sweep(self, gh, dry=False):
         return gate.sweep(tr(gh), nodes.load(), dry)
 
-    def test_merged_pr_walks_approved_to_done_one_stage_per_sweep(self):
+    def test_merged_pr_walks_approved_to_done_in_one_run(self):
         gh = FakeGh(labels=["factory:approved", "risk:low"], reviews=[review(BOT, M)])
         gh.merged, gh.state = True, "closed"  # a closed issue in approved is still found
         res, failed = self.run_sweep(gh)
-        self.assertEqual([(r["ticket"], r["outcome"]) for r in res], [(7, "merged")])
-        self.assertEqual(sorted(gh.labels), ["factory:merged", "risk:low"])
-        res, _ = self.run_sweep(gh)
-        self.assertEqual([r["outcome"] for r in res], ["retro"])
+        self.assertEqual(([(r["ticket"], r["outcome"]) for r in res], failed), ([(7, "merged"), (7, "retro")], False))
         self.assertEqual(sorted(gh.labels), ["factory:done", "risk:low"])
         comments = [w for w in gh.writes if w[:2] == ["issue", "comment"]]
         self.assertEqual(len(comments), 1)
         self.assertIn("Retro: PR #5 merged; fix rounds 0; reviews 1 (1 approve, 0 changes)", comments[0][-1])
-        self.assertTrue(comments[0][-1].endswith("Factory-Run: sweep:retro"))
+        self.assertTrue(comments[0][-1].endswith("Factory-Run: finish:retro"))
         n = len(gh.writes)
         self.assertEqual(self.run_sweep(gh), ([], False))  # no new facts: nothing written
         self.assertEqual(len(gh.writes), n)

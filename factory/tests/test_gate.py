@@ -25,7 +25,7 @@ PAYLOAD = {"risk": "low", "complexity": "small", "tier": "mid"}
 
 
 def make(cls, tid, **kw):
-    t = {"head": "abc", "blockers_open": 0}
+    t = {"head": "abc", "blockers_open": 0, "ci": "green"}  # reviewers start on green CI
     if cls is TagTracker:
         t["tags"] = ["stage:ready", "risk:low"]
     else:
@@ -174,7 +174,7 @@ class CliAndValidate(unittest.TestCase):
             def apply(self, e):
                 self.seen_effects.append(e)
                 return True
-        tr = Rec({"7": {"stage": "in-review", "head": "abc", "focus_missing": ["full"]}})
+        tr = Rec({"7": {"stage": "in-review", "head": "abc", "ci": "green", "focus_missing": ["full"]}})
         code, _ = gate.apply("review", "approve", {"ticket": "7", "event": "e", "round": 1}, tr, NODES, focus="behaviour")
         self.assertEqual(code, 10)  # focus behaviour is not missing: not applied
         tr.tickets["7"]["focus_missing"] = ["behaviour"]
@@ -187,8 +187,8 @@ class CliAndValidate(unittest.TestCase):
             code, _ = gate.apply(node, "approved", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
             return code, tr.tickets["7"]["stage"]
         for node in ("join",):
-            self.assertEqual(run(node, "none"), (10, "in-review"), node)  # no check run yet: no transition
-            self.assertEqual(run(node, "pending"), (0, "approved"), node)
+            self.assertEqual(run(node, "none"), (10, "in-review"), node)  # no CI result yet: no transition
+            self.assertEqual(run(node, "pending"), (10, "in-review"), node)  # a new push waits for its CI label
             self.assertEqual(run(node, "green"), (0, "approved"), node)
             self.assertEqual(run(node, "red"), (0, "changes-requested"), node)
         tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "round_complete": True, "round_head": "abc", "ci": "red"}})
@@ -285,14 +285,14 @@ class TriggerTest(unittest.TestCase):
         code, _ = self.run_main(["apply", "--node", "implement", "--handoff", str(self.file(blocked)), "--event", ev, "--tracker", f"memory:{tr}"])
         self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "blocked"))
 
-    def test_check_refuses_an_agent_node_at_the_run_cap(self):
-        class T:
-            def facts(self, n):
-                return {"stage": "changes-requested", "head": None, "blockers_open": 0, "focus_missing": [],
-                        "round_complete": True, "round_head": None, "fix_rounds": 0, "fix_cap": 3, "ci": "green",
-                        "due": False, "seen": [], "attrs": [], "agent_runs": 8, "run_cap": 8}
-        code, out = gate.check("fix", {"id": "e", "ticket": 7}, T(), nodes.load(), CONFIG)
-        self.assertEqual((code, out["reason"][:13]), (gate.NO_GO, "agent run cap"))
+    def test_run_cap_blocks_the_transition_that_would_start_a_run(self):
+        tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "ci": "red", "agent_runs": 8, "run_cap": 8}})
+        code, out = gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        self.assertEqual((code, tr.tickets["7"]["stage"]), (0, "blocked"))
+        self.assertNotIn(["label", '"factory:fix-mid"'], tr.tickets["7"].get("log", []))  # no fix run starts
+        tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "ci": "red", "agent_runs": 7, "run_cap": 8}})
+        gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "changes-requested")
 
     def test_bug_intake_proceeds(self):
         h = {"handoff": "ROUTER-INTAKE", "kind": "bug", "ready": "yes", "split": "none"}

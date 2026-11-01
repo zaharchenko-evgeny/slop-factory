@@ -33,7 +33,7 @@ class MemoryTracker:
     def facts(self, ticket):
         t = self._t(ticket)
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
-                "round_verdict": None, "round_head": None, "attrs": [], "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False}
+                "round_verdict": None, "round_head": None, "attrs": [], "agent_runs": 0, "run_cap": 8, "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False}
         return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr")}, "stage": self.get_stage(t),
                 "seen": list(t.get("seen", []))}
 

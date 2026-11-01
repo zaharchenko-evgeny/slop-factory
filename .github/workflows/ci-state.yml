@@ -1,0 +1,40 @@
+name: ci-state
+
+# Air delivers no event for a successful workflow run (probe on #197), so CI writes its result to the
+# factory PR as a label, and the label starts the next node: factory:ci-green starts the reviewers,
+# factory:ci-red starts the join (a fix round). Runs from main's copy of this file and checks out no PR code.
+on:
+  workflow_run:
+    workflows: [quality-gates]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  label:
+    if: github.event.workflow_run.event == 'pull_request' && startsWith(github.event.workflow_run.head_branch, 'ez/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+    steps:
+      - name: Label the PR with the CI result of its current head
+        run: |
+          pr=$(gh pr list --head "$BRANCH" --state open --json number,headRefOid --jq ".[] | select(.headRefOid == \"$SHA\") | .number")
+          if [ -z "$pr" ]; then echo "no open PR at $SHA (head moved or PR closed): nothing to label"; exit 0; fi
+          case "$CONCLUSION" in
+            success) want=factory:ci-green ;;
+            cancelled|skipped) echo "conclusion $CONCLUSION: no result"; exit 0 ;;
+            *) want=factory:ci-red ;;
+          esac
+          # Remove first: re-adding a label the PR already has fires no event, and every head needs one.
+          gh pr edit "$pr" --remove-label factory:ci-green --remove-label factory:ci-red >/dev/null 2>&1 || true
+          gh pr edit "$pr" --add-label "$want"
+          echo "PR #$pr at $SHA: $want"

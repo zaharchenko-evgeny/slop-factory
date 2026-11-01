@@ -16,7 +16,6 @@ adapters:
   ticket: github-issues   # stage, fields, labels, blockers
   pr: github              # state, head, CI, reviews by head SHA
 schedules:
-  sweep: { cron: "*/30 * * * *" }
   routines: { cron: "0 6 * * *" }
 nodes:
   human:
@@ -92,9 +91,9 @@ nodes:
   review:
     pilot: true
     focuses: [full, behaviour, structure-security]
-    ci-independent: true
-    triggers: ["pull_request.opened", "pull_request.synchronize"]
-    when: { stage: in-review, focus: required-by-risk }
+    # CI labels the PR when it finishes (.github/workflows/ci-state.yml): reviewers only read green code.
+    triggers: ["pull_request.labeled factory:ci-green"]
+    when: { stage: in-review, focus: required-by-risk, ci: [green] }
     role: reviewer
     output: read-only
     outcomes:
@@ -103,13 +102,16 @@ nodes:
   join:
     pilot: true
     ci-independent: true
-    triggers: ["pull_request_review.submitted"]   # CI completion is picked up by the sweep
-    when: { stage: in-review, round: complete-at-head, ci: [green, pending, red] }
+    # A review completes a round; red CI (factory:ci-red) is a fix round with no review.
+    triggers: ["pull_request_review.submitted", "pull_request.labeled factory:ci-red"]
+    when: { stage: in-review, ci: [green, red] }   # a pending head waits for its CI label
     role: script
     output: read-only
     outcomes:
       changes: { effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
-      approved: { ci: [green, pending], else: changes, effects: [{ stage: approved }] }
+      approved: { ci: [green], else: changes, effects: [{ stage: approved }] }
+      # A handled change request whose author has not decided again: ask them again, move nothing.
+      waiting: { from: [in-review], effects: [{ join: all-approve }] }
   fix:
     pilot: true
     tiers: [cheap, mid, strong]
@@ -143,10 +145,11 @@ nodes:
     outcomes:
       merged: { effects: [{ stage: merged }] }
       moved: { effects: [{ stage: approved }] }
-  sweep:
+  finish:
     pilot: true
-    triggers: ["schedule sweep"]
-    when: { always: true }   # the script picks each ticket's outcome from its facts (pr-state, children, round)
+    ci-independent: true   # runs after the merge
+    triggers: ["pull_request.merged"]
+    when: { always: true }   # the script picks each ticket's outcome from its facts (pr-state, children)
     role: script
     tier: cheap   # Air automation model; it does no work: the automation runs `uv run factory/gate.py sweep`
     run: uv run factory/gate.py sweep
@@ -158,10 +161,6 @@ nodes:
       conflict: { enabled: false, from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [approved], effects: [{ stage: merged }] }
       retro: { from: [merged], effects: [{ comment: retro }, { stage: done }] }
-      # A handled change request whose author has not decided again: ask them again, move nothing.
-      waiting: { from: [in-review], effects: [{ join: all-approve }] }
-      # Spend guard: a ticket whose developer runs reach limits.agent_runs_per_ticket waits for a person.
-      run-cap: { from: [in-dev, changes-requested, in-review], effects: [{ comment: reason }, { stage: blocked }] }
   routines:
     enabled: false
     triggers: ["schedule routines"]

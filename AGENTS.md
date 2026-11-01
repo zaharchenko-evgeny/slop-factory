@@ -32,13 +32,16 @@ change, whether you are a person, a pi session or a factory role.
    reviews and comments, and moves the stage. An agent never edits labels,
    never approves, and never merges. On Air the platform pushes the branch
    (`create-pr` for implement, `push-to-source` for fix); work on the
-   `branch` that `check` prints. Scripted steps (join, sweep) run only
-   `gate.py sweep`. Agent reviews are `COMMENT` reviews pinned to the head,
+   `branch` that `check` prints. Every automation starts on a label or a PR
+   event, never on a schedule: CI labels the PR `factory:ci-green` or
+   `factory:ci-red` when it finishes (`.github/workflows/ci-state.yml`).
+   Scripted steps (join, finish) run only `gate.py sweep`. Agent reviews are `COMMENT` reviews pinned to the head,
    with the verdict in a `<!-- factory:review ... -->` marker.
 5. **Merge gate.** A human merges a PR after CI is green at its exact head
    and the join set `factory:approved`: update a branch that is behind
    `main` first, then merge with `--match-head-commit`, one PR at a time.
-   The sweep then moves the ticket to `merged` and `done`, and closes it.
+   The `finish` node, on the merge event, then moves the ticket to
+   `merged` and `done`, and closes it.
    GitHub cannot require status checks here (private repository, no Pro),
    so merge only a PR whose `factory-checks` ran after the latest push to
    `main`.

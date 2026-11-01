@@ -105,12 +105,23 @@ class GitHubGateTracker:
             raise  # any other failure must not drop a blocking review: the join fails and is retried
 
     def _agent_runs(self, n, pr):
-        """Developer runs the factory started for ticket `n`: each `labeled` event of a command label
-        (`factory:implement-*`, `fix-*`, `update-*`) on the issue or its PR. Reviews follow pushes, so this
-        bounds them too."""
+        """Developer runs started for ticket `n` since a person last set `factory:ready`: each `labeled` event
+        of a command label (`factory:implement-*`, `fix-*`, `update-*`) on the issue or its PR after it. A
+        person's `ready` starts a fresh budget. Reviews follow pushes, so this bounds them too."""
         cmds = ("factory:implement-", "factory:fix-", "factory:update-")
-        return sum(1 for t in [n] + ([pr] if pr else []) for e in self._list(f"issues/{t}/events")
-                   if e.get("event") == "labeled" and (e.get("label") or {}).get("name", "").startswith(cmds))
+        events = {t: self._list(f"issues/{t}/events") for t in [n] + ([pr] if pr else [])}
+        name = lambda e: (e.get("label") or {}).get("name", "") if e.get("event") == "labeled" else ""
+        since = max((e.get("created_at") or "" for e in events[n] if name(e) == self.stages.get("ready")), default="")
+        return sum(1 for es in events.values() for e in es if name(e).startswith(cmds) and (e.get("created_at") or "") >= since)
+
+    def parent(self, n):
+        """The parent issue number of sub-issue `n`, else None."""
+        try:
+            return self._api(f"issues/{n}/parent").get("number")
+        except Exception as e:
+            if "404" in str(e):
+                return None
+            raise
 
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
@@ -140,7 +151,9 @@ class GitHubGateTracker:
         others = {r["author"]: r for r in reviews if not r["agent"] and r["verdict"]
                   and (r["author"] in self.trusted if r["bot"] else self._can_write(r["author"]))}
         ignored = [r["author"] for r in reviews if r["bot"] and not r["agent"] and r["author"] not in self.trusted]
-        complete = all(x in at_head for x in required) and not requested and ci in ("green", "red")
+        if ci == "red":  # a red head needs a fix whatever the reviews say; reviewers only start on green
+            return True, "changes", ignored, []
+        complete = all(x in at_head for x in required) and not requested and ci == "green"
         if not complete:
             return False, None, ignored, []
         late = [r for r in others.values() if r["verdict"] == "changes"]

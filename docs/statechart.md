@@ -323,15 +323,12 @@ stateDiagram-v2
     approved --> changes_requested: merge: fix
     merging --> merged: merging: merged
     merging --> approved: merging: moved
-    needs_answers --> ready: sweep (P): answered
-    split --> done: sweep (P): children-done
-    split --> blocked: sweep (P): child-failed
-    approved --> changes_requested: sweep (P): conflict
-    approved --> merged: sweep (P): merged
-    merged --> done: sweep (P): retro
-    in_dev --> blocked: sweep (P): run-cap
-    changes_requested --> blocked: sweep (P): run-cap
-    in_review --> blocked: sweep (P): run-cap
+    needs_answers --> ready: finish (P): answered
+    split --> done: finish (P): children-done
+    split --> blocked: finish (P): child-failed
+    approved --> changes_requested: finish (P): conflict
+    approved --> merged: finish (P): merged
+    merged --> done: finish (P): retro
     done --> [*]
 ```
 <!-- /nodes-chart -->
