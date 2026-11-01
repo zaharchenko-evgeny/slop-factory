@@ -37,6 +37,14 @@ class MemoryTracker:
         return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr")}, "stage": self.get_stage(t),
                 "seen": list(t.get("seen", []))}
 
+    def stale_facts(self, ticket):
+        """facts plus the stale-sweep fields a record may set (since, command, command_at, commit_at, ci_label);
+        the recover comments come from the log."""
+        t = self._t(ticket)
+        sent = [json.loads(v) for k, v in t.get("log", []) if k == "comment"]
+        return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "command", "command_at", "commit_at", "ci_label", "pr_state", "issue_state") if k in t},
+                "recover_comments": [c for c in sent if c.startswith("[factory] recover:")]}
+
     def apply(self, effect):
         if effect["kind"] == self.fail_on:
             raise RuntimeError(f"effect failed: {effect['kind']}")

@@ -690,5 +690,32 @@ class GateTest(unittest.TestCase):
             self.assertEqual(json.loads(p.stdout)["context"]["stage"], "ready")
 
 
+class StaleFactsTest(unittest.TestCase):
+    def test_since_command_and_recover_comments(self):
+        gh = FakeGh(labels=("factory:in-review", "factory:ci-green", "risk:low"),
+                    comments=("[factory] recover: stage=in-review re-fired factory:ci-green", "[factory] other"))
+        base = gh.__call__
+
+        def run(args):
+            a = next((x for x in args if x.startswith("repos/")), "")
+            ev = lambda *items: "\n".join(json.dumps({"event": "labeled", "label": {"name": n}, "created_at": t}) for n, t in items)  # noqa: E731
+            if a.endswith("issues/7/events"):
+                return ev(("factory:in-review", "2026-01-02T03:00:00Z"))
+            if a.endswith("issues/5/events"):
+                return ev(("factory:ci-green", "2026-01-02T05:00:00Z"))
+            if a.endswith("issues/7/comments"):
+                return "\n".join(json.dumps({"body": c, "created_at": "2026-01-02T04:00:00Z"}) for c in gh.comments)
+            return base(args)
+
+        f = tr(run).stale_facts(7)
+        self.assertEqual((f["since"], f["ci_label"], f["command"]), ("2026-01-02T05:00:00Z", "green", None))
+        self.assertEqual(len(f["recover_comments"]), 1)
+        self.assertEqual(gate.recovered(f, "in-review"), 1)
+
+    def test_ci_label_of_an_earlier_head_is_ignored(self):
+        t = tr(FakeGh(labels=("factory:in-review", "factory:ci-green", "risk:low")))
+        t._ci = lambda sha: "none"  # the new head has no CI result yet, the label is left from the old head
+        self.assertIsNone(t.stale_facts(7)["ci_label"])
+
 if __name__ == "__main__":
     unittest.main()

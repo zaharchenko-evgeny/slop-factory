@@ -8,7 +8,8 @@
 Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py apply --node N --outcome O --payload FILE [--tracker github|memory:FILE]
        gate.py apply --node N --handoff FILE [--event FILE]   (outcome and payload derived from the role's handoff)
-       gate.py sweep [--tracker github] [--dry-run]   (no agent: lists the tickets itself, one stage per ticket)
+       gate.py sweep [--tracker github] [--dry-run] [--stale]   (no agent: lists the tickets itself, one stage per ticket;
+                                                                 --stale also re-fires nodes whose run died silently)
 Exit 0 go / done, 10 no go (stale, duplicate or the node no longer matches), 2 bad event, payload, node
 or outcome, 1 a failing effect (the stage is untouched: it is the last effect).
 An event is JSON {id, ticket, head?, actor?}. A payload is JSON {ticket, event?, head?, actor?, ...}
@@ -22,6 +23,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -396,11 +398,90 @@ def sweep(tracker, nodes, dry_run=False):
     return results, failed
 
 
+STALE_STAGES = ("ready", "in-dev", "in-review", "changes-requested", "approved")
+RECOVER = "[factory] recover:"
+
+
+def recovered(facts, stage):
+    """Re-fires already recorded for `stage` (the counter is the `[factory] recover: stage=<stage> re-fired ...` comment; comment-only notes do not count)."""
+    return sum(f"stage={stage} re-fired" in c for c in facts.get("recover_comments", []))
+
+
+def stale_plan(facts, now, hours):
+    """(kind, label, on, text) when the ticket's waking event is visibly missing after `hours` in its stage:
+    kind `refire` (remove, then add `label` on `on`), `comment` (no label to re-fire) or `finish` (the PR merged),
+    else None. `since` is the last label or commit event (ISO); an unknown one never makes a ticket stale."""
+    stage, since = facts["stage"], facts.get("since")
+    if facts.get("issue_state", "open") != "open" or not since:
+        return None
+    if now - datetime.fromisoformat(since.replace("Z", "+00:00")) <= timedelta(hours=hours):
+        return None
+    cmd, cmd_at, commit_at = facts.get("command"), facts.get("command_at") or "", facts.get("commit_at") or ""
+    if stage == "ready" and not facts.get("blockers_open"):
+        return "refire", "factory:ready", "issue", "no intake outcome"
+    if stage == "in-dev" and cmd and (not facts.get("pr") or commit_at < cmd_at):
+        return "refire", cmd, "issue", "no PR or commit since the command label"
+    if stage == "in-review" and facts.get("pr"):
+        head = facts.get("head")
+        if facts.get("ci_label") == "green" and not any(r["agent"] and r["commit_id"] == head for r in facts.get("reviews", [])):
+            return "refire", "factory:ci-green", "pr", "no agent review at the head"
+        if not facts.get("ci_label"):
+            return "comment", None, None, f"no CI label at head {head}: CI's job"
+    if stage == "changes-requested" and cmd and commit_at < cmd_at:
+        return "refire", cmd, "pr", "no commit since the fix label"
+    if stage == "approved" and facts.get("pr_state") == "merged":
+        return "finish", None, None, "the PR merged"
+    return None
+
+
+def sweep_stale(tracker, nodes, hours, now=None, dry_run=False):
+    """Recover tickets whose Air run died: one re-fire per ticket and stage, a second stale finding blocks it.
+    Returns (results, failed)."""
+    now, results, failed = now or datetime.now(timezone.utc), [], False
+    for n in tracker.sweep_tickets(STALE_STAGES):
+        try:
+            facts = tracker.stale_facts(n)
+            plan = stale_plan(facts, now, hours)
+            if plan is None:
+                continue
+            kind, label, on, why = plan
+            stage = facts["stage"]
+            r = {"ticket": n, "stage": stage, "recover": kind, "why": why}
+            results.append(r)
+            if dry_run:
+                continue
+            run = "recover:stale"
+            if kind == "finish":
+                _, out = apply("finish", "merged", {"ticket": n}, tracker, nodes)
+                r["applied"] = out["applied"]
+            elif kind == "comment":
+                r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
+                                              "value": f"{RECOVER} stage={stage} {why}"})
+            elif recovered(facts, stage):
+                r["recover"] = "blocked"
+                tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
+                               "value": f"[factory] Stopped: the node did not respond twice in {stage}. "
+                                        "A person decides, then sets factory:ready."})
+                for e in clear_commands(n):
+                    tracker.apply(e)
+                r["applied"] = tracker.apply({"ticket": n, "kind": "stage", "value": "blocked"})
+            else:  # the comment last: for `ready` the re-added stage label starts the stage, and the comment must follow it
+                tracker.apply({"ticket": n, "kind": "unlabel", "value": label, "on": on})
+                r["applied"] = tracker.apply({"ticket": n, "kind": "label", "value": label, "on": on})
+                tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
+                               "value": f"{RECOVER} stage={stage} re-fired {label} ({why})"})
+        except Exception as e:  # one ticket failing does not stop the others
+            failed = True
+            results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+    return results, failed
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
     p.add_argument("cmd", choices=["check", "apply", "sweep"])
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--stale", action="store_true")
     p.add_argument("--event")
     p.add_argument("--outcome")
     p.add_argument("--payload")
@@ -431,7 +512,12 @@ def main(argv):
             if not hasattr(tracker, "sweep_tickets"):
                 raise Bad("sweep needs --tracker github")
             results, failed = sweep(tracker, nodes, a.dry_run)
-            print(json.dumps({"dry_run": a.dry_run, "sweep": results}))
+            out = {"dry_run": a.dry_run, "sweep": results}
+            if a.stale:
+                out["stale"], stale_failed = sweep_stale(tracker, nodes, config["limits"].get("stale_hours", 2),
+                                                         dry_run=a.dry_run)
+                failed = failed or stale_failed
+            print(json.dumps(out))
             return FAILED if failed else GO
         if not a.node:
             raise Bad("--node is required")
