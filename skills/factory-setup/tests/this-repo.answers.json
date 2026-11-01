@@ -6,9 +6,6 @@
     "    default_branch: main",
     "    role: primary"
   ],
-  "SCHEDULE_LABEL": "com.offline-eval-factory.loop",
-  "SCHEDULE_KEYCHAIN": " {}",
-  "MODEL_ACCESS": "central",
   "BRANCH_PREFIX": "ez",
   "TRACKER_REPOSITORY": "zaharchenko-evgeny/offline-eval-factory",
   "MODEL_CHEAP": "anthropic/claude-haiku-5-5",
@@ -39,8 +36,7 @@
   ],
   "DESIGN_REF": "(design \u00a75, \u00a76)",
   "MAP_ISSUE_LINK": "[#21](https://github.com/zaharchenko-evgeny/offline-eval-factory/issues/21)",
-  "DECISIONS_ENGINE": "agent:claude",
-  "MODEL_POLICY": "Models: Air tiers come from `targets.air.models` in `factory.yaml`. The old local driver (`factory/drive.py`, `workflows/delivery.v1.sm.yaml`) is retired and is removed in #179; do not use it.",
+  "MODEL_POLICY": "Models: Air tiers come from `targets.air.models` in `factory.yaml`.",
   "ROLES": {
     "router": "git gh pi",
     "developer": "git pi",
@@ -51,8 +47,8 @@
     "distill": "git pi"
   },
   "AIR_TARGET": [
-    "  # Air model ids per tier. Only the Air target reads `targets.air.models`; local runs use `models`.",
-    "  # Air ids differ from local ones: `[1m]` suffix, no Haiku 5.5.",
+    "  # Air model ids per tier. Only the Air target reads `targets.air.models`.",
+    "  # Air ids differ from the `models` ones below: `[1m]` suffix, no Haiku 5.5.",
     "  air:",
     "    # Author of the agents' reviews; a factory:review marker counts only on its reviews (never `gh api user`: 403 in a run).",
     "    bot_login: jetbrains-air[bot]",

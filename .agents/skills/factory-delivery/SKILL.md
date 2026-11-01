@@ -1,59 +1,46 @@
 ---
 name: factory-delivery
-description: Run the factory delivery workflow locally on one tracker ticket — router intake, developer, pre-review checks, independent reviewer, fix rounds, PR and router summary — with one pi subagent process per role. Use when the user asks to deliver, run the factory on, or push a ready ticket through the factory locally.
+description: Run one factory node by hand on a GitHub ticket or PR — the gate check, the role's work, the handoff, the gate apply. Use when the user asks to run a factory node, or to push a ticket one step through the factory without waiting for its Air automation.
 ---
 
-# Factory delivery (local target)
+# Factory delivery (one node by hand)
 
-A ticket is delivered with `uv run factory/drive.py run <N>` directly; an
-orchestrator agent is not needed. Whoever runs it never implement, review or repair a handoff
-yourself: the driver runs each role as its own `pi -p` process and does every
-tracker, git and `gh` write. Each role starts lean
-(`--no-skills --no-extensions --no-prompt-templates` plus its `skills.txt`), and the run
-ends with a cost table.
+On Air each node is a `[factory:<node>]` automation (`workflows/nodes.yaml`,
+[ADR-0014](../../../docs/adr/0014-node-model.md)). This skill does the same
+steps yourself, for one node and one ticket. The gate alone changes labels,
+posts reviews and comments, and moves the stage; you never do.
 
 Read first: `factory.yaml`, `workflows/delivery.md`, `AGENTS.md`.
 
 ## Run
 
-From the factory root (`git rev-parse --show-toplevel`), with `N` a ticket from
-the frontier (`uv run --quiet factory/github_tracker.py frontier`):
+From the checkout (the code under review or fix), with `N` a GitHub ticket
+or PR and `<node>` the node to run (a `factory:*` command label starts it on
+Air). The gate, the role file and the skills come from a fetched default
+branch, never from the ticket or PR branch: a PR can change `gate.py` or its
+imports, and `apply` runs with your GitHub credentials.
 
-```bash
-uv run --quiet factory/drive.py run "$N"                       # GitHub Issues tracker
-uv run --quiet factory/drive.py run "$N" --tracker local:<effort dir>
-```
+1. Fetch the trusted copy: `git fetch origin main`, then
+   `git worktree add --detach <tmp>/factory-main origin/main`. `<tmp>` is a
+   fresh temp directory (`mktemp -d`). Use `<tmp>/factory-main` for `gate.py`,
+   the role file and the skills; use your checkout only for the code.
+2. Save the trigger as JSON in a file, for example `<tmp>/event.json`: the
+   GitHub event payload that would start the node (`gh api repos/<repo>/issues/<N>`
+   wrapped as `{"eventType": "issues.labeled", "label": "<label>", "data": {"issue": ...}}`,
+   or the PR payload under `pull_request`).
+3. `uv run <tmp>/factory-main/factory/gate.py check --node <node> --event <file> [--tier <tier>]`.
+   Exit 10 means the gate refused: report the reason and stop. Otherwise it
+   prints `role_file`, `skills`, `branch` and `handoff_path`.
+4. Read `role_file` and every listed skill from `<tmp>/factory-main`, and do the
+   role's work on `branch` in your checkout (create it from the default branch
+   when it does not exist). Commit; do not push.
+5. Write the role's handoff to `handoff_path`.
+6. `uv run <tmp>/factory-main/factory/gate.py apply --node <node> [--tier <tier>] --event <file> --handoff <handoff_path>`.
 
-The driver claims the ticket and runs the machine (`workflows/delivery.sm.yaml`)
-until it waits on a human: preflight, intake, start, implement, checks, the
-reviewers by risk, fix rounds, publish (push, PR with `Refs #N`, risk and
-docs-impact labels, one nits comment), `ci` (blocking checks on the branch
-merged with the base, then the CI watch once checks register; a failure is a
-fix round with the failing log, then a re-review and a rebuilt PR body), then,
-after the stage moves to `approved`, the summary (posted on the ticket; the PR
-body becomes `Closes #N` when it says `complete: yes`) and, once CI passed, the
-worktree cleanup. The reviewers of a high-risk fork run in parallel. It prints each step and exits 0 at `approved`. After the human merges,
-`drive.py run "$N"` on the `approved` ticket (or `drive.py loop --once` for all
-of them) moves it through `merged` (the retro entry, pushed to the
-`knowledge` branch) to `done`; while a PR is open it prints
-"waiting for pr.merged" and writes nothing. `drive.py loop` keeps every ticket
-moving from the machine alone: it runs tickets in agent states (frontier
-first) within `limits.concurrent_deliveries` and `limits.runs_per_day`, polls
-the `factory.yaml` `events` detectors of the others, and stops when nothing
-moves. Entering `blocked` or `failed` runs `diagnose` (a reason on the
-ticket) and `notify` once. Run
-artefacts stay in `.factory/runs/<N>/`.
+Scripted nodes (join, finish) are just `uv run <tmp>/factory-main/factory/gate.py sweep`.
 
-Schedule the loop locally: `uv run factory/schedule_local.py install` (launchd,
-every `targets.local.schedule.interval`, under `lockf`, log in
-`.factory/runs/loop/loop.log`), `status` (loaded? last cycle line), `uninstall`.
-
-If it stops in `blocked` or `failed`, do not continue by hand: report the last
-step and the reason from the printed trace and `.factory/runs/<N>/`
-(`<step>.log`, `<step>-attempt<k>.out.md`, `checks-<round>.md`). Once the
-cause is fixed, `drive.py run "$N" --resume` restarts a `failed` ticket at the
-step that failed. Exit 2 with "claimed by" means another executor holds the
-ticket; nothing was written.
+If the gate reports `blocked` or `failed`, do not continue by hand: report the
+reason. Run artefacts stay in `.factory/` (git-ignored).
 
 ## External writes
 
@@ -64,6 +51,5 @@ Never merge: that is the human's gate.
 
 ## Report
 
-Tell the user: the PR link, the final stage, fix rounds, checks with results,
-each review verdict, CI result, the router's acceptance table and the writes
-made. Say what was not verified.
+Tell the user: the node, the gate's decision and the final stage, the handoff
+status, checks with results, and the writes made. Say what was not verified.

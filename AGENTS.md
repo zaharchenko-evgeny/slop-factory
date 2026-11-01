@@ -58,7 +58,7 @@ change, whether you are a person, a pi session or a factory role.
    Identify the ticket that will fix a process gap (or open a new ticket); do
    not fix the factory inside an unrelated ticket.
 
-Models: Air tiers come from `targets.air.models` in `factory.yaml`. The old local driver (`factory/drive.py`, `workflows/delivery.v1.sm.yaml`) is retired and is removed in #179; do not use it.
+Models: Air tiers come from `targets.air.models` in `factory.yaml`.
 
 ## Tracker and git
 

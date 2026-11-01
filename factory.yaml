@@ -1,5 +1,5 @@
 # Slop software factory. Roles and workflows read every
-# repository, tracker, model and harness name from this file (design §2).
+# repository, tracker, model name from this file (design §2).
 version: 1
 
 repositories:
@@ -47,35 +47,9 @@ tracker:
 reviews:
   trusted_bots: []
 
-channels: [local]
-
-# Event detectors: external event → detector, a
-# built-in name or `{ run: <bash> }` (exit 0 fires it, stdout an optional JSON
-# payload, $FACTORY_TICKET the ticket). An event with no detector is never fired.
-events:
-  pr.merged: github-pr-merged
-  # Every blocker of the waiting ticket (the `Main is red` ticket) is closed: the fix merged.
-  main.green: { run: 'set -o pipefail; open=$(gh api --paginate repos/zaharchenko-evgeny/offline-eval-factory/issues/$FACTORY_TICKET/dependencies/blocked_by --jq "select(.state==\"open\")") || exit 1; [ -z "$open" ]' }
-
 targets:
-  local:
-    harness: pi
-    skill: .agents/skills/factory-delivery
-    run_dir: .factory/runs      # handoffs per ticket, git-ignored
-    worktree_dir: .factory/worktrees
-    # Claude access of role calls: `env` (the caller's ANTHROPIC_API_KEY) or `central` (the JetBrains
-    # Central proxy via `jbcentral`, no key. The Air target does not use this.
-    model_access: central
-    # launchd job for the local scheduler; `path` is the PATH the jobs need.
-    schedule:
-      label: com.offline-eval-factory.loop
-      interval: 10m
-      path: $HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
-      # Env var → macOS Keychain service, read by the job at run time (names only, never values);
-      # ignored with model_access: central.
-      env_from_keychain: {}
-  # Air model ids per tier. Only the Air target reads `targets.air.models`; local runs use `models`.
-  # Air ids differ from local ones: `[1m]` suffix, no Haiku 5.5.
+  # Air model ids per tier. Only the Air target reads `targets.air.models`.
+  # Air ids differ from the `models` ones below: `[1m]` suffix, no Haiku 5.5.
   air:
     # Author of the agents' reviews; a factory:review marker counts only on its reviews (never `gh api user`: 403 in a run).
     bot_login: jetbrains-air[bot]
@@ -98,32 +72,29 @@ models:
   review_strong: anthropic/claude-sonnet-5-5
 
 roles:
-  # `harness` (default: `targets.local.harness`, then pi): one of the harnesses in
-  # skills/factory-setup/references/harnesses.md. Model ids stay per role.
-  router: { harness: pi, tier: cheap }
+  router: { tier: cheap }
   # `fallback` reruns the developer once, in its resumed session, after a malformed handoff.
-  developer: { harness: pi, tier: mid, tier_high_risk: strong, fallback: mid }
+  developer: { tier: mid, tier_high_risk: strong, fallback: mid }
   # One entry per reviewer focus (an action mode in the node workflow).
   # `fallback` reruns the same focus once when the reviewer's output has no valid handoff.
   reviewer:
-    harness: pi
     tools: read-only
     modes:
       full: { tier: review_strong, fallback: cheap }             # risk low: one reviewer, covers every focus
       behaviour: { tier: review, fallback: cheap }               # risk high
       structure-security: { tier: review_strong, fallback: cheap }  # risk high
   # Runs when a reviewer reports docs_impact, before the approver.
-  doc-writer: { harness: pi, tier: mid }
+  doc-writer: { tier: mid }
   # Records the run on the knowledge branch after the merge.
-  retro: { harness: pi, tier: cheap }
+  retro: { tier: cheap }
   # Weekly, outside any ticket: merges the knowledge inbox into `knowledge/` as one PR.
-  distill: { harness: pi, tier: mid }
+  distill: { tier: mid }
   # Auto-approval (design §8): `tier` is the soft judgment's model, run by decisions-kit
-  # `decide` with `engine`. Dry-run records the verdict only; a human still merges.
+  # `decide`. Dry-run records the verdict only; a human still merges.
   # Auto-merge (docs/recipes/auto-approve.md): needs `dry_run: false`. `max_risk`: the highest risk that may merge;
   # `require`: `hard-rules` or `judgment` (needs a calibrated judgment), or a mapping per risk level.
   approver:
-    { harness: pi, tier: cheap, engine: agent:claude, dry_run: true, auto_merge: { enabled: false, max_risk: low, require: judgment } }
+    { tier: cheap, dry_run: true, auto_merge: { enabled: false, max_risk: low, require: judgment } }
 
 # Retro entries (design §11, ADR-0007): pushed to `branch` under `<dir>/<repo>/`,
 # never to a default branch. The distill runs every

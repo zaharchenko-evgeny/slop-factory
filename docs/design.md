@@ -90,7 +90,7 @@ hypothesis, acceptance check.
 The tracker label is the ticket's state. Each GitHub event starts one step that
 runs one role, and the step script decides the next state. The chart, the
 events, and the automations are in [the delivery state chart](statechart.md).
-Both targets run the same steps; locally `drive.py loop` polls the events.
+Every step runs the same way: one node of `workflows/nodes.yaml`, started by an Air automation or by hand.
 
 ## 7. Plugins (ADR-0004)
 

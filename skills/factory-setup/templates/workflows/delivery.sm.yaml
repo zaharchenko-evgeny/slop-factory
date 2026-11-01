@@ -9,9 +9,8 @@
 #   without starting an action (a pass-through state).
 # - `on_enter` (human and external states only): actions the driver runs once
 #   when a ticket enters the state, best effort; their results fire no event.
-# - `drive.py loop` runs tickets in agent states and, in the other states,
-#   polls the external events of their transitions that have a detector in
-#   factory.yaml `events`.
+# - The local loop runs tickets in agent states and, in the other states,
+#   polls the external events of their transitions that have a detector.
 # - `resume_on: comment` (human states): the driver also watches the ticket's comments. Each new one
 #   that is not a `[factory]` comment or from a `tracker.bot_logins` login is rechecked once (router
 #   `recheck`) and fired as `comment.added` with `actionable: yes|no`; `yes` returns the ticket to `ready`,
@@ -66,7 +65,7 @@ actions:
   # The retro role (roles/retro/role.md) judges in the factory root (the worktree is gone after the
   # merge); the script writes the entry to factory.yaml `knowledge.branch`, never a default branch.
   retro: { kind: script, role: retro, mode: record, cwd: root, retry: 1 }
-  # Weekly, outside any ticket (`drive.py distill`): the distill role (roles/distill/role.md) merges the
+  # Weekly, outside any ticket (the distill routine): the distill role (roles/distill/role.md) merges the
   # knowledge inbox in its own worktree; the script opens one PR to the default branch. No ticket input.
   distill: { kind: agent, role: distill, mode: merge, ticket: none, retry: 1 }
   # on_enter actions: `diagnose` posts a short reason on the ticket; `notify`
@@ -227,7 +226,7 @@ transitions:
   - { from: in-review, on: merge.moved, to: approved }   # a human decides
   - { from: in-review, on: merge.failed, to: approved }
 
-  # `drive.py run` / `loop` fire pr.merged (detector in factory.yaml `events`) once every PR is merged.
+  # The local loop fires pr.merged once every PR is merged.
   # Post-merge: the retro records the run; best effort, a failed retro still ends `done`.
   - { from: approved, on: pr.merged, if: "$count(event.open_pr_urls) = 0", do: retro, to: merged }
   - { from: merged, on: retro.done, to: done }

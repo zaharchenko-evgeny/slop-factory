@@ -1,10 +1,10 @@
 # Harnesses
 
 Selected per role by `roles.<role>.harness` (a reviewer mode may set its own) in
-`factory.yaml`, defaulting to `targets.local.harness`, then `pi`. Values: `pi`,
+`factory.yaml`, defaulting to `pi`. Values: `pi`,
 `claude-code`, `codex`, `junie`; an unknown value fails `sm.py validate`. Model ids
-stay per role. Adapters live in `factory/harnesses.py`; `run_role.py` and
-`preflight.py` dispatch through them.
+stay per role. Adapters live in `factory/harnesses.py`; the local role runner and
+preflight dispatch through them.
 
 ## Adapter contract (local target)
 
@@ -28,7 +28,7 @@ stay per role. Adapters live in `factory/harnesses.py`; `run_role.py` and
 - A run takes a prompt, returns the final text, and writes no state outside
   its worktree and run directory.
 - Skills in `skills.txt` must be installed; setup reports missing ones.
-- `targets.local.model_access: central` applies to `pi` only.
+- `targets.local.model_access: central` applies to `pi` only (projects that keep the local target).
 - A read-only reviewer on `claude-code` runs `git diff|log|show|status` only;
   on `codex` it has a read-only sandbox, so the prompt must carry what it needs.
 
