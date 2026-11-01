@@ -9,7 +9,8 @@ Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py apply --node N --outcome O --payload FILE [--tracker github|memory:FILE]
        gate.py apply --node N --handoff FILE [--event FILE]   (outcome and payload derived from the role's handoff)
        --spec FILE (check, apply, sweep): the node spec of the automation (deploy plan); no workflows/nodes.yaml is read
-       gate.py sweep [--tracker github] [--dry-run] [--stale]   (no agent: lists the tickets itself, one stage per ticket;
+       gate.py sweep [--tracker github] [--dry-run] [--stale] [--event FILE | --issue N] (no agent: lists the tickets itself,
+                                                                 one stage per ticket;
                                                                  --stale also re-fires nodes whose run died silently)
 Exit 0 go / done, 10 no go (stale, duplicate or the node no longer matches), 2 bad event, payload, node
 or outcome, 1 a failing effect (the stage is untouched: it is the last effect).
@@ -525,6 +526,7 @@ def main(argv):
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
     p.add_argument("--event")
+    p.add_argument("--issue", type=int)
     p.add_argument("--outcome")
     p.add_argument("--payload")
     p.add_argument("--handoff")
@@ -554,12 +556,20 @@ def main(argv):
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):
                 raise Bad("sweep needs --tracker github")
-            closed_ticket = None
-            if a.event:
-                raw = json.loads(Path(a.event).read_text())
-                raw = raw.get("data", raw)
-                if raw.get("action") == "closed" and isinstance(raw.get("issue"), dict):
-                    closed_ticket = raw["issue"].get("number")
+            closed_ticket = a.issue
+            if a.event and a.issue is None:
+                try:
+                    raw = json.loads(Path(a.event).read_text())
+                    if not isinstance(raw, dict):
+                        raise ValueError("expected an event object")
+                    raw = raw.get("data", raw)
+                    if (not isinstance(raw, dict) or not isinstance(raw.get("action"), str)
+                            or not any(isinstance(raw.get(key), dict) for key in ("issue", "pull_request"))):
+                        raise ValueError("expected an event with an action and issue or pull request")
+                    if raw["action"] == "closed" and isinstance(raw.get("issue"), dict):
+                        closed_ticket = raw["issue"].get("number")
+                except (OSError, ValueError) as e:
+                    print(f"warning: ignoring invalid sweep event; running full sweep: {e}", file=sys.stderr)
             results, failed = sweep(tracker, nodes, a.dry_run, closed_ticket)
             out = {"dry_run": a.dry_run, "sweep": results}
             if a.stale:

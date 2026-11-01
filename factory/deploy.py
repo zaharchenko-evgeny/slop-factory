@@ -140,15 +140,20 @@ def repository(r: dict) -> dict:
 SCRIPT_PROMPT = ("Run `uv run factory/gate.py sweep --spec <spec file>` once and report its JSON output. Do nothing else: "
                  "change no file, label, comment or review yourself.")
 STALE_PROMPT = SCRIPT_PROMPT.replace("sweep --spec", "sweep --stale --spec")
-PR_SCRIPT_PROMPT = (
-    f"{PR_GATE_SETUP}Run `mkdir -p .factory` and save the trigger payload (the <trigger_event> JSON) to `.factory/event.json`. "
-    "Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep --event .factory/event.json --spec <spec file>` once and report its JSON output. "
+JOIN_SCRIPT_PROMPT = (
+    f"{PR_GATE_SETUP}Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep --spec <spec file>` once "
+    "and report its JSON output. Do nothing else: change no file, label, comment or review yourself."
+)
+FINISH_SCRIPT_PROMPT = (
+    f"{PR_GATE_SETUP}Read the issue number from the trigger payload. "
+    "Run `uv run <tmp>/factory-main/factory/gate.py --team <tmp>/factory-main sweep --issue <issue number> --spec <spec file>` once and report its JSON output. "
     "Do nothing else: change no file, label, comment or review yourself."
 )
 
 
 def script_prompt(name: str, n: dict, spec: dict) -> str:
-    return spec_block(spec, n) + (PR_SCRIPT_PROMPT if name in PR_TRIGGERED_NODES else
+    return spec_block(spec, n) + (FINISH_SCRIPT_PROMPT if name == "finish" else
+                                  JOIN_SCRIPT_PROMPT if name == "join" else
                                   STALE_PROMPT if "--stale" in n.get("run", "") else SCRIPT_PROMPT)
 
 

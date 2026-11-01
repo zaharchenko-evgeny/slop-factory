@@ -7,6 +7,7 @@
 import copy
 from datetime import datetime, timezone
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -245,6 +246,65 @@ class TriggerTest(unittest.TestCase):
         for name, payload in TRIGGERS.items():
             ev = gate.read(self.file(payload), "event", raw=True)
             self.assertEqual((ev["ticket"], ev["head"], ev["id"]), (7, *want[name]), name)
+
+    def test_check_names_a_truncated_event_as_malformed(self):
+        fd, name = tempfile.mkstemp()
+        os.close(fd)
+        f = Path(name)
+        f.write_text('{"issue":')
+        try:
+            code, out = self.run_main(["check", "--node", "intake", "--event", str(f), "--tracker", "memory:" + str(self.file({}))])
+            self.assertEqual(code, gate.BAD)
+            self.assertIn("malformed event", out["error"])
+        finally:
+            f.unlink(missing_ok=True)
+
+    def run_sweep(self, args, tracker, stderr=None):
+        import contextlib
+        import io
+        from unittest.mock import patch
+        stdout = io.StringIO()
+        stderr = stderr or io.StringIO()
+        with patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = gate.main(["sweep", *args])
+        return code, json.loads(stdout.getvalue()), stderr.getvalue()
+
+    def test_sweep_invalid_event_warns_and_runs_full_sweep(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({1: {"stage": "in-review"}})
+        tracker.sweep_tickets = lambda stages: [1]
+        facts = tracker.facts
+        tracker.facts = lambda ticket: {**facts(ticket), "round_complete": True, "round_verdict": "approve"}
+        fd, name = tempfile.mkstemp()
+        os.close(fd)
+        f = Path(name)
+        f.write_text('{"action":')
+        try:
+            code, out, warning = self.run_sweep(["--event", str(f)], tracker)
+            self.assertEqual(code, gate.GO)
+            self.assertEqual((out["sweep"][0]["ticket"], out["sweep"][0]["outcome"]), (1, "approved"))
+            self.assertIn("running full sweep", warning)
+        finally:
+            f.unlink(missing_ok=True)
+
+    def test_sweep_non_event_object_warns_and_runs_full_sweep(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({})
+        tracker.sweep_tickets = lambda stages: []
+        f = self.file({"action": "closed"})
+        code, out, warning = self.run_sweep(["--event", str(f)], tracker)
+        self.assertEqual((code, out["sweep"]), (gate.GO, []))
+        self.assertIn("running full sweep", warning)
+
+    def test_sweep_issue_refires_ready_dependent_of_closed_blocker(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "ready", "blockers_open": 0}})
+        tracker.sweep_tickets = lambda stages: []
+        code, out, _ = self.run_sweep(["--issue", "10"], tracker)
+        self.assertEqual(code, gate.GO)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in out["sweep"]], [(11, "unblocked")])
+        self.assertEqual(tracker.tickets[11]["log"][0], ["label", '"factory:ready"'])
 
     def test_check_accepts_air_trigger_wrapper_with_same_facts_as_raw_event(self):
         wrapper = json.loads((ROOT / "factory/tests/fixtures/air-issues-labeled.json").read_text())
