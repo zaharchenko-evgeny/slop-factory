@@ -43,8 +43,8 @@ focus; stay in yours.
    section is not updated. A missing design reference is not a finding.
    When an acceptance check fails, run it and include every hit in one finding,
    listing all affected paths and lines rather than stopping at the first hit.
-5. Approve when there is no blocking finding: `verdict` is `changes-requested`
-   exactly when a `blocking` finding exists, and the schema checks it.
+5. Use `verdict: approve` when there is no blocking finding and
+   `verdict: changes` exactly when a `blocking` finding exists.
 6. Set `risk` and `docs_impact` from what the diff actually changes.
 7. Before writing findings, read the other reviews of the current head and the
    previous review round on the PR. Do not repeat a finding another review
@@ -70,7 +70,7 @@ The field names are the keys of the handoff JSON below. Write the handoff as JSO
 ```
 {
   "handoff": "REVIEWER",
-  "verdict": "changes-requested",
+  "verdict": "changes",
   "reviewed_sha": "1a2b3c4",
   "summary": "Adds x; the empty input crashes it.",
   "risk": "low",
