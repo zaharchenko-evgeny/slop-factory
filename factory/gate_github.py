@@ -10,7 +10,6 @@ import json
 import re
 import sys
 import time
-from datetime import datetime, timedelta
 from pathlib import Path
 
 import yaml
@@ -111,9 +110,8 @@ class GitHubGateTracker:
                 latest[key] = r
         return latest
 
-    def _ci_failure(self, sha):
-        """Failed steps at the head, with only the last 60 lines of each step log."""
-        failures = []
+    def ci_failure(self, sha):
+        """Best-effort details for the first failed step at the head."""
         for run in self._workflow_runs(sha).values():
             if run.get("conclusion") not in BAD_CI:
                 continue
@@ -126,24 +124,17 @@ class GitHubGateTracker:
                 steps = [step for step in job.get("steps", []) if step.get("conclusion") in BAD_CI]
                 if not steps:
                     continue
-                logs = self.run(["api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs"])
                 for step in steps:
-                    section = []
-                    if step.get("started_at") and step.get("completed_at"):
-                        started = datetime.fromisoformat(step["started_at"].replace("Z", "+00:00"))
-                        completed = datetime.fromisoformat(step["completed_at"].replace("Z", "+00:00"))
-                        # Logs and step metadata can use different fractional precision; include
-                        # every line in the completion second.
-                        completed = completed.replace(microsecond=0) + timedelta(seconds=1)
-                        for log_line in logs.splitlines():
-                            match = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)", log_line)
-                            if match:
-                                at = datetime.fromisoformat(match[1].replace("Z", "+00:00"))
-                                if started <= at < completed:
-                                    section.append(log_line)
-                    failures.append({"job": job["name"], "step": step["name"],
-                                     "log_tail": "\n".join(section[-60:])})
-        return failures
+                    failure = {"job": job["name"], "step": step["name"], "log": None}
+                    try:
+                        logs = self.run(["api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs"], timeout=10)
+                        if not logs.strip():
+                            raise RuntimeError("empty log response")
+                        failure["log"] = "\n".join(logs.splitlines()[-60:])
+                    except Exception as e:
+                        failure["error"] = " ".join(str(e).splitlines()) or type(e).__name__
+                    return failure
+        return None
 
     def _reviews(self, pr):
         out = []
@@ -291,8 +282,6 @@ class GitHubGateTracker:
                      fix_rounds=len({(r["commit_id"], r["rereview"]) for r in reviews
                                      if r["agent"] and r["verdict"] == "changes"
                                      and (r.get("submitted_at") or "") >= since}))  # same-head dispute rereviews count as a new round
-            if ci == "red":
-                f["ci_failure"] = self._ci_failure(head)
         return f
 
     def stale_facts(self, n):

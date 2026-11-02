@@ -12,14 +12,14 @@ environments:
     repository: primary
     startup: .air/cloud/startup.sh
     secrets: []   # gh is jetbrains-air[bot] through the platform's GH_TOKEN
-    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org]
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, '*.blob.core.windows.net', pypi.org, files.pythonhosted.org]
     vm: default
   write:
     repository: primary
     startup: .air/cloud/startup.sh
     secrets: []
     # registry.npmjs.org: `npx agnix` of the acceptance checks
-    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org, registry.npmjs.org]
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, '*.blob.core.windows.net', pypi.org, files.pythonhosted.org, registry.npmjs.org]
     vm: default
   ops:
     repository: primary

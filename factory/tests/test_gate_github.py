@@ -37,10 +37,11 @@ class FakeGh:
         self.roles = {"alice": "write", "bob": "admin", "eve": "read"}
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
+        self.log_calls = 0
         self.blocked = [{"state": "open", "id": 1}, {"state": "closed", "id": 2}]
         self.open_issues, self.state, self.sub_state = [], "open", ["open"] * 9
 
-    def __call__(self, args):
+    def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
         a = a + " POST" if "POST" in args else a
         assert args[:2] != ["api", "user"], "gh api user must never be called"
@@ -54,6 +55,12 @@ class FakeGh:
                  "started_at": "2026-11-02T10:00:00Z", "completed_at": "2026-11-02T10:00:00Z"},
                 {"name": "Upload artifacts", "conclusion": "success"}]})
         if "/actions/jobs/200/logs" in a:
+            self.log_calls += 1
+            self.assert_timeout = timeout
+            if getattr(self, "forbidden", False):
+                raise RuntimeError("Forbidden\nredirected download")
+            if getattr(self, "empty_log", False):
+                return ""
             return "\n".join(["2026-11-02T10:00:00.1000000Z ##[group]Run tests",
                                 "2026-11-02T10:00:00.1000000Z ##[endgroup]"] +
                                [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)])
@@ -168,13 +175,25 @@ class FactsTest(unittest.TestCase):
         f = tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)
         self.assertEqual((f["focus_missing"], f["round_head"]), (["full"], "old"))
 
-    def test_red_ci_facts_carry_failed_step_log_tail(self):
-        f = tr(FakeGh(checks=["failure"])).facts(7)
+    def test_log_fetch_forbidden_does_not_raise(self):
+        gh = FakeGh(checks=["failure"])
+        gh.forbidden = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": "tests", "step": "Run tests", "log": None, "error": "Forbidden redirected download"})
+        self.assertEqual(gh.assert_timeout, 10)
+
+    def test_empty_log_is_reported_without_raising(self):
+        gh = FakeGh(checks=["failure"])
+        gh.empty_log = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": "tests", "step": "Run tests", "log": None, "error": "empty log response"})
+
+    def test_sweep_facts_do_not_fetch_logs(self):
+        gh = FakeGh(checks=["failure"])
+        f = tr(gh).facts(7)
         self.assertEqual(f["ci"], "red")
-        self.assertEqual(f["ci_failure"], [{"job": "tests", "step": "Run tests",
-                                             "log_tail": "\n".join(
-                                                 f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(5, 65))}])
-        self.assertIn("line 64", f["ci_failure"][0]["log_tail"])
+        self.assertNotIn("ci_failure", f)
+        self.assertEqual(gh.log_calls, 0)
 
     def test_no_stage_label(self):
         self.assertEqual(tr(FakeGh(labels=["x"])).facts(7)["stage"], "none")
