@@ -85,7 +85,8 @@ class FakeGh:
             return json.dumps({"number": 7}) if on else ""
         if a.endswith("/pulls/5"):
             return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
-                               "requested_reviewers": [{"login": u} for u in self.requested]})
+                               "requested_reviewers": [{"login": u} for u in self.requested],
+                               "labels": [{"name": x} for x in self.labels]})
         if a.endswith("/git/ref/heads/main"):
             return json.dumps({"object": {"sha": "m1"}})
         if "pulls?state=closed" in a:
@@ -564,6 +565,13 @@ class JoinTest(unittest.TestCase):
         t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, trusted_bots=["other[bot]"])
         self.assertEqual(t.facts(7)["round_verdict"], "changes")
 
+    def test_person_change_request_starts_fix(self):
+        gh = FakeGh(reviews=[review(BOT, M), review("alice", "please change this", state="CHANGES_REQUESTED")])
+        facts = tr(gh).facts(7)
+        self.assertEqual(facts["round_verdict"], "changes")
+        self.assertEqual(join(gh), (True, 2))
+        self.assertIn("factory:fix-mid", gh.labels)
+
     def test_late_human_review_counts_in_the_next_round(self):
         gh = FakeGh(reviews=[review(BOT, C)])
         join(gh)  # round 1 ends: fix label, changes-requested
@@ -662,7 +670,7 @@ class JoinTest(unittest.TestCase):
                           at="2026-01-02T06:00:00Z")
         gh.reviews.append(rereview)
         f = tr(gh).facts(7)
-        self.assertTrue(f["handed_to_fix"])
+        self.assertFalse(f["handed_to_fix"])
         self.assertEqual(join(gh), (True, 1))
         self.assertIn("factory:approved", gh.labels)
 
@@ -740,6 +748,15 @@ class JoinTest(unittest.TestCase):
         f = tr(gh).facts(7)
         self.assertEqual((f["fix_rounds"], f["handed_to_fix"]), (0, False))  # a fresh start after factory:ready
         self.assertEqual((f["round_complete"], f["round_verdict"]), (True, "changes"))  # the join decides again
+
+    def test_old_fix_label_before_new_review_not_handed(self):
+        gh = FakeGh(reviews=[review(BOT, C, at="2026-01-02T01:00:00Z"),
+                             review("alice", "please change this", state="CHANGES_REQUESTED",
+                                    at="2026-01-02T06:00:00Z")])
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        facts = tr(gh).facts(7)
+        self.assertFalse(facts["handed_to_fix"])
+        self.assertEqual(join(gh), (True, 2))
 
     def test_change_request_counted_by_round_1_does_not_block_round_2(self):
         # B2 of #183: the bot reviews first, the human second; round 1 counts her request, round 2 must not loop on it
@@ -1030,6 +1047,19 @@ class StaleFactsTest(unittest.TestCase):
         self.assertEqual((f["since"], f["ci_label"], f["command"]), ("2026-01-02T05:00:00Z", "green", None))
         self.assertEqual(len(f["recover_comments"]), 1)
         self.assertEqual(gate.recovered(f, "in-review"), 1)
+
+    def test_ci_label_read_from_pr_labels(self):
+        recorded = json.loads((ROOT / "factory/tests/fixtures/pull-298.json").read_text())
+        class G(FakeGh):
+            def __call__(self, args, timeout=None):
+                out = super().__call__(args, timeout)
+                if any(x.endswith("/pulls/5") for x in args):
+                    response = json.loads(out)
+                    response["labels"] = recorded["labels"]
+                    return json.dumps(response)
+                return out
+        gh = G(labels=("factory:in-review", "risk:low"))
+        self.assertEqual(tr(gh).stale_facts(7)["ci_label"], "green")
 
     def test_ci_label_of_an_earlier_head_is_ignored(self):
         t = tr(FakeGh(labels=("factory:in-review", "factory:ci-green", "risk:low")))
