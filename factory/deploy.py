@@ -95,6 +95,7 @@ def repository(r: dict) -> dict:
 SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no file, label, comment or review "
                  "itself. Run `factory sweep{args}` once and report its JSON output.")
 SCRIPT_ARGS = {"join": " --main", "finish": " --main --issue <issue number from the trigger payload>",
+               "reopen": " --main",
                "recover": " --stale"}
 
 

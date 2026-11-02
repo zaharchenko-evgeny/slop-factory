@@ -123,6 +123,7 @@ class PlanTest(unittest.TestCase):
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
         self.assertIn("`factory sweep --main`", a["[Slop factory] join"])
         self.assertIn("`factory sweep --main --issue <issue number from the trigger payload>`", a["[Slop factory] finish"])
+        self.assertIn("`factory sweep --main`", a["[Slop factory] reopen"])
         self.assertNotIn("--main", a["[Slop factory] recover"])
 
     def test_real_plan_is_prefixed_and_covers_pilot(self):
