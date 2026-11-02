@@ -42,6 +42,12 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_writer_answer_resumes_needs_answers(self):
+        self.assertEqual(gate.sweep_plan({"stage": "needs-answers", "answered": True}), ("finish", "answered", {}))
+
+    def test_bot_comment_does_not_resume(self):
+        self.assertIsNone(gate.sweep_plan({"stage": "needs-answers", "answered": False}))
+
     def test_verdict_approve_and_approved_both_approve(self):
         for verdict in ("approve", "approved"):
             with self.subTest(verdict=verdict):
@@ -435,6 +441,15 @@ class TriggerTest(unittest.TestCase):
         self.assertIn("running full sweep", warning)
 
     def test_sweep_issue_refires_ready_dependent_of_closed_blocker(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "ready", "blockers_open": 0}})
+        tracker.sweep_tickets = lambda stages: []
+        code, out, _ = self.run_sweep(["--issue", "10"], tracker)
+        self.assertEqual(code, gate.GO)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in out["sweep"]], [(11, "unblocked")])
+        self.assertEqual(tracker.tickets[11]["log"][0], ["label", '"factory:ready"'])
+
+    def test_sweep_refires_body_linked_dependent_after_blocker_closes(self):
         from gate_port import MemoryTracker
         tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "ready", "blockers_open": 0}})
         tracker.sweep_tickets = lambda stages: []

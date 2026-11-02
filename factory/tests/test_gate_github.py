@@ -39,6 +39,7 @@ class FakeGh:
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
         self.log_calls = 0
         self.blocked = [{"state": "open", "id": 1}, {"state": "closed", "id": 2}]
+        self.fail_blocked_by = False
         self.open_issues, self.state, self.sub_state = [], "open", ["open"] * 9
 
     def __call__(self, args, timeout=None):
@@ -96,6 +97,8 @@ class FakeGh:
                 raise RuntimeError("HTTP 404: Not Found")
             return json.dumps({"number": self.parent_of})
         if a.endswith("issues/7/events"):
+            if hasattr(self, "issue_events"):
+                return "\n".join(json.dumps(e) for e in self.issue_events)
             return "\n".join([json.dumps({"event": "labeled", "label": {"name": n}, "created_at": t})
                               for n, t in getattr(self, "label_events", [])] +
                              [json.dumps({"event": "labeled", "label": {"name": "factory:implement-cheap"}})
@@ -105,14 +108,17 @@ class FakeGh:
                              for t in getattr(self, "fix_events", []))
         if a.endswith("/pulls/5/reviews"):
             return "\n".join(json.dumps(r) for r in self.reviews)
-        if a.endswith(("issues/7", "issues/5")):
-            return json.dumps({"labels": [{"name": x} for x in self.labels], "state": self.state})
+        if a.endswith(("issues/7", "issues/5")) and "PATCH" not in args:
+            return json.dumps({"labels": [{"name": x} for x in self.labels], "state": self.state,
+                               "body": getattr(self, "issue_body", "")})
         if a.endswith("issues/7/dependencies/blocking"):
             return "\n".join(json.dumps(i) for i in getattr(self, "blocking_issues", []))
-        if a.endswith("issues/7/dependencies/blocked_by"):
+        if a.endswith("issues/7/dependencies/blocked_by") and "POST" not in a:
             return "\n".join(json.dumps(b) for b in self.blocked)
+        if a.endswith("issues/12"):
+            return json.dumps({"number": 12, "state": getattr(self, "blocker_state", "open"), "labels": []})
         if a.endswith("issues/7/comments"):
-            return "\n".join(json.dumps({"body": c}) for c in self.comments)
+            return "\n".join(json.dumps(c if isinstance(c, dict) else {"body": c}) for c in self.comments)
         if a.endswith("issues?state=open&per_page=100"):
             return "\n".join(json.dumps(i) for i in self.open_issues)
         if a.endswith("issues/7/sub_issues"):
@@ -121,6 +127,8 @@ class FakeGh:
                                          "labels": [{"name": x} for x in ls]})
                              for i, (t, st, r, ls) in enumerate(zip(self.sub, self.sub_state, reasons, labels)))
         self.writes.append(args)
+        if self.fail_blocked_by and "/dependencies/blocked_by" in a:
+            raise RuntimeError("HTTP 403: Resource not accessible by integration")
         if args[1] == "close":
             self.state = "closed"
         if args[1] == "edit":
@@ -332,6 +340,25 @@ class EffectsTest(unittest.TestCase):
             self.assertIn("labels[]=risk:high", w)
         chain = [w for w in gh.writes if "/dependencies/blocked_by" in " ".join(w) and "issues/999/" in " ".join(w)]
         self.assertEqual(len(chain), 1)  # B (the second 999) is blocked by A
+
+    def test_create_children_falls_back_to_blocked_by_line(self):
+        gh = FakeGh(labels=("factory:split", "risk:low"))
+        gh.blocked, gh.fail_blocked_by = [], True
+        tr(gh).apply(eff("create-issues", [{"title": "A", "body": "scope A"}]))
+        patch = next(w for w in gh.writes if "PATCH" in w and "issues/7" in " ".join(w))
+        self.assertIn("body=Blocked by: #999", " ".join(patch))
+        self.assertFalse(any("PATCH" in w and "issues/999" in " ".join(w) for w in gh.writes))
+
+    def test_blocked_by_line_counts_as_open_blocker(self):
+        gh = FakeGh(labels=("factory:ready", "risk:low"))
+        gh.blocked, gh.issue_body = [], "Blocked by: #12\n\nChild"
+        original = gh.__call__
+        def run(args):
+            a = next((x for x in args if x.startswith("repos/")), "")
+            if a.endswith("issues/7"):
+                return json.dumps({"labels": [{"name": x} for x in gh.labels], "state": "open", "body": gh.issue_body})
+            return original(args)
+        self.assertEqual(tr(run).facts(7)["blockers_open"], 1)
 
     def test_create_issues_retry_converges(self):
         gh = FakeGh()
@@ -809,6 +836,22 @@ class SweepTest(unittest.TestCase):
         gh.blocking_issues = [{"number": 12, "state": "open"}]
         self.assertEqual(tr(gh).blocking(7), gh.blocking_issues)
 
+    def test_blocking_lists_body_fallback_dependents(self):
+        gh = FakeGh()
+        gh.open_issues = [{"number": 12, "state": "open", "body": "Blocked by: #7\n\nSecond slice"}]
+        self.assertEqual(tr(gh).blocking(7), gh.open_issues)
+
+    def test_sweep_releases_body_linked_ticket_when_blocker_closes(self):
+        gh = FakeGh(labels=(STAGES["ready"], "risk:low"))
+        gh.blocked, gh.issue_body = [], "Blocked by: #12\n\nSecond slice"
+        gh.open_issues = [{"number": 7, "state": "open", "body": gh.issue_body}]
+        gh.blocker_state = "closed"
+        results, failed = gate.sweep(tr(gh), nodes.load(), closed_ticket=12)
+        self.assertFalse(failed)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(7, "unblocked")])
+        self.assertIn(["issue", "edit", "7", "-R", REPO, "--remove-label", STAGES["ready"]], gh.writes)
+        self.assertIn(["issue", "edit", "7", "-R", REPO, "--add-label", STAGES["ready"]], gh.writes)
+
     def test_in_review_complete_round_runs_join_and_disabled_outcomes_refuse(self):
         gh = FakeGh(reviews=[review(BOT, M)])
         res, _ = self.run_sweep(gh)
@@ -824,6 +867,24 @@ class SweepTest(unittest.TestCase):
 
 
 class ResumeTest(unittest.TestCase):
+    def test_only_authorized_comment_after_needs_answers_resumes(self):
+        gh = FakeGh(labels=(STAGES["needs-answers"], "risk:low"))
+        gh.issue_events = [
+            {"event": "labeled", "label": {"name": STAGES["ready"]}, "created_at": "2026-01-01T00:00:00Z",
+             "actor": {"login": "alice"}},
+            {"event": "labeled", "label": {"name": STAGES["needs-answers"]}, "created_at": "2026-01-02T00:00:00Z"},
+        ]
+        gh.comments = [{"created_at": "2026-01-01T12:00:00Z", "user": {"login": "alice", "type": "User"}}]
+        self.assertFalse(tr(gh).facts(7).get("answered", False))  # predates the question
+        gh.comments = [{"created_at": "2026-01-03T00:00:00Z", "user": {"login": "helper[bot]", "type": "Bot"}}]
+        self.assertFalse(tr(gh).facts(7).get("answered", False))
+        gh.comments = [{"created_at": "2026-01-03T00:00:00Z", "user": {"login": "eve", "type": "User"}}]
+        self.assertFalse(tr(gh).facts(7).get("answered", False))
+        gh.comments = [{"created_at": "2026-01-03T00:00:00Z", "user": {"login": "alice", "type": "User"}}]
+        self.assertTrue(tr(gh).facts(7)["answered"])
+        gh.comments = [{"created_at": "2026-01-03T00:00:00Z", "user": {"login": "bob", "type": "User"}}]
+        self.assertTrue(tr(gh).facts(7)["answered"])
+
     def test_stage_is_the_latest_stage_label_added(self):
         gh = FakeGh(labels=["factory:in-review", "factory:ready", "risk:low"])
         gh.label_events = [("factory:in-review", "2026-01-01T00:00:00Z"), ("factory:ready", "2026-01-02T00:00:00Z")]
