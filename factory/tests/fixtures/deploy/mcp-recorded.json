@@ -3,7 +3,7 @@
   "content": [
    {
     "type": "text",
-    "text": "{\"personal\": [{\"automationId\": \"810b9399-2adf-4924-bf82-c9bad8de686a\", \"name\": \"[Slop factory] reopen\", \"repository\": \"zaharchenko-evgeny/offline-eval-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/810b9399-2adf-4924-bf82-c9bad8de686a\"}, {\"automationId\": \"e7e51c0d-4d53-425f-a5b2-6d0f03edc779\", \"name\": \"[Slop factory] update-strong\", \"repository\": \"zaharchenko-evgeny/offline-eval-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e7e51c0d-4d53-425f-a5b2-6d0f03edc779\"}], \"project\": []}"
+    "text": "{\"personal\": [{\"automationId\": \"810b9399-2adf-4924-bf82-c9bad8de686a\", \"name\": \"[Slop factory] reopen\", \"repository\": \"zaharchenko-evgeny/offline-eval-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/810b9399-2adf-4924-bf82-c9bad8de686a\"}, {\"automationId\": \"e7e51c0d-4d53-425f-a5b2-6d0f03edc779\", \"name\": \"[Slop factory] update-strong\", \"repository\": \"zaharchenko-evgeny/offline-eval-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e7e51c0d-4d53-425f-a5b2-6d0f03edc779\"}], \"project\": [], \"personalListUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations?privacy=private\", \"projectListUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations?privacy=public\"}"
    }
   ]
  },

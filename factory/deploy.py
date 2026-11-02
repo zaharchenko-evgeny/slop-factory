@@ -313,7 +313,7 @@ def automation_detail(x: dict) -> dict:
 
 def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url: str) -> tuple[list[dict], list[dict]]:
     listed = automations.call("list_automations", {"privacy": "private"})
-    automation_items = listed if isinstance(listed, list) else [x for group in listed.values() for x in group]
+    automation_items = listed if isinstance(listed, list) else listed["personal"]
     automation_items = [automation_detail(automations.call("get_automation", {"automationId": x["automationId"]}))
                         for x in automation_items if x["name"].startswith(prefix)]
     env_items = _items(cloud.call("list_environments", {"repositoryUrl": repository_url}))

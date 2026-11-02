@@ -47,8 +47,8 @@ for line in sys.stdin:
             raise ValueError(f"unexpected {kind} tool: {tool}")
         if tool == "list_automations":
             assert a == {"privacy": "private"}, a
-            out = {"personal": [{"automationId": i["id"], "name": i["name"]} for i in db["items"][::2]],
-                   "project": [{"automationId": i["id"], "name": i["name"]} for i in db["items"][1::2]]}
+            out = {"personal": [{"automationId": i["id"], "name": i["name"]} for i in db["items"]],
+                   "project": []}
         elif tool == "list_environments":
             assert list(a) == ["repositoryUrl"] and a["repositoryUrl"].startswith("https://github.com/"), a
             out = [{"id": i["id"], "name": i["name"]} for i in db["items"]]
