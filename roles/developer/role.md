@@ -18,7 +18,7 @@ mode to address blocking review findings.
    off as `done`.
 4. Run the pre-review checks from `factory.descriptor.yaml` yourself and fix failures.
 5. Commit on the current branch. Subjects start with the commit prefix from
-   `factory.descriptor.yaml`. Do not push; the workflow publishes.
+   `factory.descriptor.yaml`. Do not push; the platform pushes the branch after the run.
 
 ## Mode `fix`
 
@@ -43,49 +43,13 @@ the same format as implement mode. A failed check cannot be handed off as
 ## Rules
 
 - Stay on the given branch and worktree. Never push, open PRs or change labels.
-- When the prompt names a handoff path, write the handoff JSON there.
+- Write the handoff JSON to the path printed by `factory begin`.
 - Stop and report `blocked` when the ticket is ambiguous or a check cannot run
   after two repair attempts that test different causes.
 
-Handoff:
-
-```text
-DEVELOPER
-status: <done|blocked>
-branch: <name>
-commits:
-  - <sha> <subject>
-files: <changed files>
-checks:
-  - text: <acceptance check text>
-    result: <pass|fail|not-run>
-    reason: <required when result is not-run>
-acceptance:
-  - <check>: <how it is met>
-findings_addressed:   # fix mode only
-  - <finding id>: <fixed in sha | rejected — reason>
-blocked_reason: <text, or none>
-```
-
-Example, the last block of your reply, fenced as here, nothing after it:
-
-```text
-DEVELOPER
-status: done
-branch: ez/12-add-x
-commits:
-  - 1a2b3c4 #12 Add x
-files: factory/x.py
-checks:
-  - whitespace: pass — clean
-acceptance:
-  - x works: test_x passes
-blocked_reason: none
-```
-
 ## JSON handoff
 
-The driver validates the handoff as JSON against `roles/developer/handoff.schema.json`; the field names are the keys of the Handoff block above, lists are arrays. An invalid one is rerun once with the error in the prompt. Write it as JSON with your write tool to the file named by `$FACTORY_HANDOFF` (the prompt also gives the path), as the last thing you do; text around the object is ignored. The fenced text format above stays accepted for one release.
+The field names are the keys of the handoff JSON below, lists are arrays. Write the handoff as JSON to the path printed by `factory begin`, then run `factory end <path>` to apply it. The platform pushes the branch after the run. Write it as the last thing you do.
 
 ```
 {
