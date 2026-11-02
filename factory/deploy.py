@@ -276,6 +276,12 @@ def _items(res) -> list[dict]:
     return res if isinstance(res, list) else next(v for v in res.values() if isinstance(v, list))
 
 
+def same(key: str, have, want) -> bool:
+    if key == "repository" and isinstance(have, dict) and have.keys() == {"fullName"}:
+        return have["fullName"] == want["fullName"]
+    return have == want
+
+
 def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
     """(action, kind, name, planned item, existing item, changed fields) per create, update, delete; by name, prefix only.
     `plan["renames"]` ({old name: new name}) matches an existing item under its old name, so the update keeps its id."""
@@ -288,41 +294,53 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
             p = {k: v for k, v in raw.items() if k != "spec"}
             x = have.pop(p["name"], None) or have.pop(new_to_old.get(p["name"]), None)
             want = {**p, "environmentConfigId": env_ids.get(p.get("environmentConfigId"), p.get("environmentConfigId"))}
-            changed = [k for k in p if x is not None and x.get(k) != want[k]]
+            changed = [k for k in p if x is not None and not same(k, x.get(k), want[k])]
             if x is None or changed:
                 out.append(("create" if x is None else "update", kind, p["name"], p, x, changed))
         out += [("delete", kind, n, None, x, []) for n, x in have.items()]
     return out
 
 
-def read_state(automations: Mcp, cloud: Mcp, prefix: str) -> tuple[list[dict], list[dict]]:
-    listed = automations.call("list_automations", {})
+def automation_detail(x: dict) -> dict:
+    """A get_automation result as the plan's shape: `id` for `automationId`, no per-trigger server fields."""
+    x = {**x, "id": x["automationId"]}
+    x["triggers"] = [{k: v for k, v in t.items() if k not in ("triggerId", "isEnabled", "automationSnapshotId")}
+                     for t in x.get("triggers") or []]
+    if isinstance(x.get("repository"), str):  # "owner/repo" stands for the planned repository object
+        x["repository"] = {"fullName": x["repository"]}
+    return x
+
+
+def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url: str) -> tuple[list[dict], list[dict]]:
+    listed = automations.call("list_automations", {"privacy": "private"})
     automation_items = listed if isinstance(listed, list) else [x for group in listed.values() for x in group]
-    automation_items = [automations.call("get_automation", {"id": x["id"]})
+    automation_items = [automation_detail(automations.call("get_automation", {"automationId": x["automationId"]}))
                         for x in automation_items if x["name"].startswith(prefix)]
-    env_items = _items(cloud.call("list_environments", {}))
+    env_items = _items(cloud.call("list_environments", {"repositoryUrl": repository_url}))
     env_items = [cloud.call("get_environment", {"id": x["id"]})
                  for x in env_items if x["name"].startswith(prefix)]
     return automation_items, env_items
 
 
-def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp) -> None:
+def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url: str = "") -> None:
     """Environments before automations on create and update, after them on delete."""
     order = {"create": 0, "update": 0, "delete": 1}
     env_ids = None
     for action, kind, name, p, x, _ in sorted(changes, key=lambda c: (order[c[0]], (c[1] == "automation") == (c[0] != "delete"))):
         client, noun = (cloud, "environment") if kind == "environment" else (automations, "automation")
         if p and kind == "automation":  # the environment id exists only after its create
-            env_ids = env_ids or {e["name"]: e["id"] for e in _items(cloud.call("list_environments", {}))}
+            env_ids = env_ids or {e["name"]: e["id"] for e in _items(cloud.call("list_environments", {"repositoryUrl": repo_url}))}
             p = {**p, "environmentConfigId": env_ids[p["environmentConfigId"]]}
         p = {k: v for k, v in (p or {}).items() if k != "spec"}
         tool_action = ("edit" if kind == "environment" else "update") if action == "update" else action
-        args = {**p, "id": x["id"]} if action == "update" else p if p else {"id": x["id"]}
+        id_key = "automationId" if kind == "automation" else "id"
+        args = {**p, id_key: x["id"]} if action == "update" else p if p else {id_key: x["id"]}
         client.call(f"{tool_action}_{noun}", args)
 
 
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp) -> int:
-    changes = diff(plan, *read_state(automations, cloud, plan["prefix"]))
+    repo_url = plan["environments"][0]["repository"] if plan["environments"] else ""
+    changes = diff(plan, *read_state(automations, cloud, plan["prefix"], repo_url))
     for action, kind, name, _, _, changed in changes:
         print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
     if not changes:
@@ -332,8 +350,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     if any(c[0] == "delete" for c in changes) and not allow_delete:
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
-    apply_diff(changes, automations, cloud)
-    left = diff(plan, *read_state(automations, cloud, plan["prefix"]))
+    apply_diff(changes, automations, cloud, repo_url)
+    left = diff(plan, *read_state(automations, cloud, plan["prefix"], repo_url))
     for action, kind, name, *_ in left:
         print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
     return 1 if left else 0
