@@ -102,8 +102,9 @@ def repository(r: dict) -> dict:
 # A script node runs one command and judges nothing: the gate's sweep decides every scripted step (join, waiting
 # reviewers, merged to done) from facts. `--main` runs it from main's graph (a PR-triggered node never trusts the PR).
 SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no file, label, comment or review "
-                 "itself. Run `factory sweep{args}` once and report its JSON output.")
-SCRIPT_ARGS = {"join": " --main", "finish": " --main --issue <issue number from the trigger payload>",
+                 "itself. Run `factory sweep{args}` in the foreground with no time limit, wait until it exits, "
+                 "and report its JSON output.")
+SCRIPT_ARGS = {"join": " --main", "start": " --main", "finish": " --main --issue <issue number from the trigger payload>",
                "reopen": " --main", "merge": " --main",
                "recover": " --stale",
                "notify": " notify --issue <issue number from the trigger payload>"}
@@ -111,7 +112,8 @@ SCRIPT_ARGS = {"join": " --main", "finish": " --main --issue <issue number from 
 
 def script_prompt(name: str) -> str:
     if name == "notify":
-        return "Run `factory notify --issue <issue number from the trigger payload>` once and report its JSON output."
+        return ("Run `factory notify --issue <issue number from the trigger payload>` in the foreground with no "
+                "time limit, wait until it exits, and report its output.")
     return SCRIPT_PROMPT.format(args=SCRIPT_ARGS.get(name, ""))
 
 
