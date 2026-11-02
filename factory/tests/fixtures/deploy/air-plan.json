@@ -464,17 +464,6 @@
                 "needs-answers"
               ]
             }
-          },
-          "recover": {
-            "engine": null,
-            "focus": null,
-            "node": "recover",
-            "outcomes": {},
-            "role": "script",
-            "tier": null,
-            "when": {
-              "always": true
-            }
           }
         },
         "tier": "cheap",
@@ -488,102 +477,6 @@
       "triggers": [
         {
           "cronExpression": "*/10 * * * *",
-          "timezone": "UTC",
-          "triggerType": "SCHEDULED"
-        }
-      ]
-    },
-    {
-      "agentAndModel": {
-        "agentId": "codex",
-        "id": "small",
-        "isDefault": false,
-        "name": "small"
-      },
-      "environmentConfigId": "[Slop factory] read",
-      "name": "[Slop factory] recover",
-      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --stale` once and report its JSON output.",
-      "repository": {
-        "browseUrl": "https://example.com/o/main",
-        "cloneUrl": "https://example.com/o/main.git",
-        "fullName": "o/main",
-        "provider": "other"
-      },
-      "spec": {
-        "engine": null,
-        "focus": null,
-        "node": "recover",
-        "outcomes": {},
-        "role": "script",
-        "runs": {
-          "merge": {
-            "engine": null,
-            "focus": null,
-            "node": "merge",
-            "outcomes": {
-              "merged": {
-                "effects": [
-                  {
-                    "merge": "match-head"
-                  }
-                ],
-                "from": [
-                  "approved"
-                ]
-              }
-            },
-            "role": "script",
-            "tier": null,
-            "when": {
-              "ci": "green",
-              "round": "complete-at-head",
-              "stage": "approved"
-            }
-          },
-          "notify": {
-            "engine": null,
-            "focus": null,
-            "node": "notify",
-            "outcomes": {
-              "notified": {
-                "from": [
-                  "blocked",
-                  "needs-answers"
-                ]
-              }
-            },
-            "role": "script",
-            "tier": null,
-            "when": {
-              "stage": [
-                "blocked",
-                "needs-answers"
-              ]
-            }
-          },
-          "sweep": {
-            "engine": null,
-            "focus": null,
-            "node": "sweep",
-            "outcomes": {},
-            "role": "script",
-            "tier": null,
-            "when": null
-          }
-        },
-        "tier": "cheap",
-        "when": {
-          "always": true
-        }
-      },
-      "triggerVcs": [
-        {
-          "outputBehaviour": "read-only"
-        }
-      ],
-      "triggers": [
-        {
-          "cronExpression": "15 * * * *",
           "timezone": "UTC",
           "triggerType": "SCHEDULED"
         }
@@ -642,17 +535,6 @@
                 "blocked",
                 "needs-answers"
               ]
-            }
-          },
-          "recover": {
-            "engine": null,
-            "focus": null,
-            "node": "recover",
-            "outcomes": {},
-            "role": "script",
-            "tier": null,
-            "when": {
-              "always": true
             }
           },
           "sweep": {
@@ -751,17 +633,6 @@
               "ci": "green",
               "round": "complete-at-head",
               "stage": "approved"
-            }
-          },
-          "recover": {
-            "engine": null,
-            "focus": null,
-            "node": "recover",
-            "outcomes": {},
-            "role": "script",
-            "tier": null,
-            "when": {
-              "always": true
             }
           },
           "sweep": {

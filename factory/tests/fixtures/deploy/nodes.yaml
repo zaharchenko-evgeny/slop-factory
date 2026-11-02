@@ -3,7 +3,6 @@ environments:
   write: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
 schedules:
   sweep: { cron: "*/10 * * * *" }
-  recover: { cron: "15 * * * *"}
 nodes:
   human: { triggers: [manual], when: { actor: human }, role: human, outcomes: {} }
   intake: { env: read, triggers: ["issues.labeled factory:ready"], role: router, tier: cheap, output: read-only, outcomes: {} }
@@ -12,6 +11,5 @@ nodes:
   review: { env: read, focuses: [full, behaviour], triggers: ["pull_request.opened", "pull_request.synchronize", "pull_request.labeled factory:rereview-<focus>"], role: reviewer, outcomes: {} }
   off: { env: read, enabled: false, triggers: ["issues.labeled factory:x"], role: router, outcomes: {} }
   sweep: { env: read, triggers: ["schedule sweep"], role: script, output: read-only, outcomes: {} }
-  recover: { env: read, triggers: ["schedule recover"], when: { always: true }, role: script, tier: cheap, run: uv run factory/gate.py sweep --stale, output: read-only, outcomes: {} }
   merge: { env: read, triggers: ["issues.labeled factory:approved", "pull_request.labeled factory:ci-green"], when: { stage: approved, round: complete-at-head, ci: green }, role: script, tier: cheap, run: uv run factory/gate.py sweep, output: read-only, outcomes: { merged: { from: [approved], effects: [{ merge: match-head }] } } }
   notify: { env: read, pilot: true, triggers: ["issues.labeled factory:blocked", "issues.labeled factory:needs-answers"], when: { stage: [blocked, needs-answers] }, role: script, tier: cheap, run: uv run factory/cli.py notify --issue <issue number from the trigger payload>, output: read-only, outcomes: { notified: { from: [blocked, needs-answers] } } }

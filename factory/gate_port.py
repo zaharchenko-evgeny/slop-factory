@@ -12,6 +12,11 @@ from typing import Protocol
 
 class Tracker(Protocol):
     def facts(self, ticket) -> dict: ...
+    # A node run's marker: set by `check`, cleared by `apply`; `recover` re-fires the `command` of an old one.
+    def mark_running(self, ticket, node, command, on, run, since) -> None: ...
+    def clear_running(self, ticket) -> bool: ...
+    def running_marks(self) -> list: ...  # [{ticket, node, command, on, run, since}]
+    def refire(self, ticket, command, on="issue") -> bool: ...
     def apply(self, effect: dict) -> bool: ...
 
 
@@ -49,6 +54,20 @@ class MemoryTracker:
         sent = [json.loads(v) for k, v in t.get("log", []) if k == "comment"]
         return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "command", "command_at", "commit_at", "ci_label", "command_pending", "pr_state", "issue_state") if k in t},
                 "recover_comments": [c for c in sent if c.startswith("[factory] recover:")]}
+
+    def mark_running(self, ticket, node, command, on, run, since):
+        self._t(ticket)["running"] = {"node": node, "command": command, "on": on, "run": run, "since": since}
+
+    def clear_running(self, ticket):
+        return self._t(ticket).pop("running", None) is not None
+
+    def running_marks(self):
+        return [{**t["running"], "ticket": k} for k, t in self.tickets.items() if t.get("running")]
+
+    def refire(self, ticket, command, on="issue"):
+        """Remove, then add the command label on the object that woke the node."""
+        self.apply({"ticket": ticket, "kind": "unlabel", "value": command, "on": on})
+        return self.apply({"ticket": ticket, "kind": "label", "value": command, "on": on})
 
     def apply(self, effect):
         if effect["kind"] == self.fail_on:

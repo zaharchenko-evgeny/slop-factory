@@ -272,14 +272,9 @@ class PlanTest(unittest.TestCase):
                                "filters": {"label": f"factory:rereview-{a['name'].rsplit('-', 1)[1]}",
                                            "pr_author": "jetbrains-air[bot]"}}, a["triggers"])
 
-    def test_recover_runs_the_stale_sweep_hourly_on_the_cheap_tier(self):
-        for plan in (json.loads((FIX / "air-plan.json").read_text()),
-                     deploy.plan_air(nodes.load(), cfg.load())):
-            a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] recover")
-            self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "15 * * * *", "timezone": "UTC"}])
-            self.assertTrue(a["prompt"].endswith("Run `factory sweep --stale` once and report its JSON output."))
-            intake = next(x for x in plan["automations"] if x["name"] == "[Slop factory] intake")  # router: cheap
-            self.assertEqual(a["agentAndModel"], intake["agentAndModel"])
+    def test_recover_is_not_an_air_automation(self):
+        for plan in (json.loads((FIX / "air-plan.json").read_text()), deploy.plan_air(nodes.load(), cfg.load())):
+            self.assertNotIn("[Slop factory] recover", {x["name"] for x in plan["automations"]})
 
     def test_air_shape_and_no_github_token(self):
         plan = json.loads((FIX / "air-plan.json").read_text())
@@ -305,7 +300,7 @@ class PlanTest(unittest.TestCase):
                           for x in reopen["triggers"]],
                          [("pull_request.synchronize", None, "jetbrains-air[bot]"),
                           ("pull_request.labeled", "factory:ci-red", "jetbrains-air[bot]")])
-        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] recover", "[Slop factory] retro", "[Slop factory] distill") for x in a["triggers"]), "no polling"  # recover is the one safety net
+        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] retro", "[Slop factory] distill") for x in a["triggers"]), "no polling"
 
     def test_one_triggervcs_entry_per_trigger_and_a_spec_per_automation(self):
         for a in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
@@ -353,7 +348,6 @@ class PlanTest(unittest.TestCase):
         self.assertIn("`factory sweep --main`", a["[Slop factory] join"])
         self.assertIn("`factory sweep --main --issue <issue number from the trigger payload>`", a["[Slop factory] finish"])
         self.assertIn("`factory sweep --main`", a["[Slop factory] reopen"])
-        self.assertNotIn("--main", a["[Slop factory] recover"])
 
     def test_real_plan_is_prefixed_and_covers_pilot(self):
         config = cfg.load()
@@ -363,7 +357,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["prefix"], "[Slop factory] ")
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
-            "intake", "join", "finish", "recover", "reopen", "merge", "notify", "retro", "distill",
+            "intake", "join", "finish", "reopen", "merge", "notify", "retro", "distill",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}
         self.assertEqual(names, pilot)

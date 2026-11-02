@@ -1,0 +1,35 @@
+name: factory-recover
+
+# Re-fires a factory node run that died: `factory begin` marks the object with factory:running and `factory end`
+# clears it, so a marker older than limits.run_timeout_minutes is a dead run. No model and no Air quota; any CI
+# that can run `factory recover` with tracker credentials does the same for another tracker.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: factory-recover
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - run: pipx install uv
+      - run: uv tool install .
+      - run: factory recover

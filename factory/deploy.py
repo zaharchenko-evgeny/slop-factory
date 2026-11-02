@@ -180,7 +180,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     automations = []
     used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human"))
     for name, n in nodes["nodes"].items():
-        if n.get("enabled") is False or n["role"] == "human":
+        if n.get("enabled") is False or n.get("air") is False or n["role"] == "human":
             continue
         env = n["env"]
         for aname, tier_arg, tier, focus in variants(name, n, roles):

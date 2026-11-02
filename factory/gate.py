@@ -132,7 +132,8 @@ def from_trigger(d):
     label = (d.get("label") or {}).get("name", "")
     rereview = label.removeprefix("factory:rereview-") if label.startswith("factory:rereview-") else None
     return {"id": f"{name}:{when}", "ticket": ticket, "head": ((pr or {}).get("head") or {}).get("sha"),
-            "actor": (d.get("sender") or {}).get("login"), "rereview": rereview}
+            "actor": (d.get("sender") or {}).get("login"), "rereview": rereview,
+            "command": label if label.startswith("factory:") else None, "on": "pr" if pr else "issue"}
 
 
 def read(path, what, raw=False):
@@ -757,9 +758,44 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
     return results, failed
 
 
+def recover_running(tracker, nodes, minutes, now=None, dry_run=False):
+    """Re-fire the command of every node run still marked `running` after `minutes` (its run died): one re-fire per
+    ticket and stage, a second stall blocks the ticket. Returns (results, failed)."""
+    now, results, failed = now or datetime.now(timezone.utc), [], False
+    for m in tracker.running_marks():
+        if now - datetime.fromisoformat(m["since"].replace("Z", "+00:00")) <= timedelta(minutes=minutes):
+            continue
+        n = m["ticket"]
+        try:
+            facts = tracker.stale_facts(n)
+            stage = facts["stage"]
+            r = {"ticket": n, "stage": stage, "recover": "refire", "why": f"run {m['run']} of {m['node']} marked running since {m['since']}"}
+            results.append(r)
+            if dry_run:
+                continue
+            tracker.clear_running(n)
+            run = "recover:running"
+            if stage not in STALE_STAGES:
+                r["recover"] = "cleared"
+            elif recovered(facts, stage):
+                r["recover"] = "blocked"
+                _, out = apply("recover", "blocked", {"ticket": n, "run_id": run,
+                                                          "reason": f"[factory] Stopped: the node did not respond twice in {stage}. A person decides, then sets factory:ready."},
+                               tracker, nodes)
+                r["applied"] = out["applied"]
+            else:
+                r["applied"] = tracker.refire(n, m["command"], m["on"])
+                tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
+                               "value": f"{RECOVER} stage={stage} re-fired {m['command']} ({r['why']})"})
+        except Exception as e:  # one ticket failing does not stop the others
+            failed = True
+            results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+    return results, failed
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply", "sweep"])
+    p.add_argument("cmd", choices=["check", "apply", "sweep", "recover"])
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
@@ -791,6 +827,13 @@ def main(argv):
             raise Bad("--tracker is github or memory:FILE")
         nodes = spec_nodes(a.spec) if a.spec else nodes_mod.load(a.nodes)
         config = config_mod.load()
+        if a.cmd == "recover":
+            limits = config["limits"]
+            found, failed = recover_running(tracker, nodes, limits.get("run_timeout_minutes", 30), dry_run=a.dry_run)
+            stale, stale_failed = sweep_stale(tracker, nodes, limits.get("stale_hours", 2), dry_run=a.dry_run,
+                                              command_minutes=limits.get("stale_command_minutes", 30))
+            print(json.dumps({"dry_run": a.dry_run, "running": found, "stale": stale}))
+            return FAILED if failed or stale_failed else GO
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):
                 raise Bad("sweep needs --tracker github")
@@ -836,6 +879,10 @@ def main(argv):
             code, out = check(a.node, event, tracker, nodes, config)
             if a.node == "implement" and code == GO:
                 save_check_state(event["ticket"], out["context"].get("head"))
+            if code == GO and event.get("command"):  # a run that dies leaves this marker for `recover`
+                tracker.mark_running(event["ticket"], a.node, event["command"], event.get("on", "issue"), event.get("id"),
+                                     datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                path and Path(path).write_text(json.dumps(tracker.tickets))
         else:
             if a.handoff:
                 try:
@@ -854,6 +901,7 @@ def main(argv):
                 payload, out_name = read(a.payload or "", "payload"), a.outcome or ""
             code, out = apply(a.node, out_name, payload, tracker, nodes, a.focus, a.tier,
                               checked_head(payload["ticket"]) if a.node == "implement" else None)
+            tracker.clear_running(payload["ticket"])
             path and Path(path).write_text(json.dumps(tracker.tickets))
     except NoTicket as e:
         print(json.dumps({"go": False, "reason": str(e)}))

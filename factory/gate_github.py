@@ -18,6 +18,9 @@ import yaml
 import config
 from github_tracker import gh
 
+RUNNING = "factory:running"
+MARKER = re.compile(r"<!-- factory:running run=(\S+) node=(\S+) since=(\S+) command=(\S+) on=(\S+) ticket=(\d+) -->")
+
 
 def gate_clear(n):
     from gate import clear_commands
@@ -71,6 +74,39 @@ class GitHubGateTracker:
             found |= {i["number"] for i in self._list(f"issues?state={state}&labels={self.stages[st]}&per_page=100")
                       if "pull_request" not in i}
         return sorted(found)
+
+    def _target(self, n, on):
+        pr = self._pr(n) if on == "pr" else None
+        return (pr["number"], "pr") if pr else (n, "issue")
+
+    def mark_running(self, n, node, command, on, run, since):
+        """The `factory:running` label on the object that woke the node, and a hidden comment with the marker."""
+        target, on = self._target(n, on)
+        self.run(["label", "create", RUNNING, "--force", "-R", self.repo])
+        self._edit(target, [RUNNING], on=on)
+        self.run(["issue", "comment", str(target), "-R", self.repo, "--body",
+                  f"<!-- factory:running run={run} node={node} since={since} command={command} on={on} ticket={n} -->"])
+
+    def clear_running(self, n):
+        pr = self._pr(n)
+        cleared = False
+        for target, on in [(n, "issue")] + ([(pr["number"], "pr")] if pr else []):
+            if RUNNING in self._labels(target):
+                cleared = self._edit(target, remove=[RUNNING], on=on)
+        return cleared
+
+    def running_marks(self):
+        marks = []
+        for i in self._list(f"issues?state=open&labels={RUNNING}&per_page=100"):
+            found = [m for c in self._list(f"issues/{i['number']}/comments") for m in MARKER.findall(c["body"])]
+            if found:
+                run, node, since, command, on, ticket = found[-1]
+                marks.append({"ticket": int(ticket), "node": node, "command": command, "on": on, "run": run, "since": since})
+        return marks
+
+    def refire(self, n, command, on="issue"):
+        self.apply({"ticket": n, "kind": "unlabel", "value": command, "on": on})
+        return self.apply({"ticket": n, "kind": "label", "value": command, "on": on})
 
     def config_change_merged(self, pr):
         """Ask open factory PRs to merge main when this merge changes engine configuration."""

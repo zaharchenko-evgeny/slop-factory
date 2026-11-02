@@ -8,6 +8,7 @@
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> [payload file]   (payload on stdin by default; exit 10: the node must not act)
        factory end <handoff_path>
+       factory recover [--dry-run]                 (re-fires runs still marked running; no model, run from CI)
        factory sweep --main ...                    (the gate's sweep from main's graph)
 """
 import argparse
@@ -146,7 +147,7 @@ def main(argv=None):
     load_engine(HERE)
     if team:
         config.set_team(team)
-    if cmd in ("check", "apply", "sweep"):
+    if cmd in ("check", "apply", "sweep", "recover"):
         return gate.main([cmd, *rest])
     if cmd == "deploy":
         return deploy.main(rest)

@@ -178,6 +178,9 @@
         "stale_hours": {
           "type": "integer"
         },
+        "run_timeout_minutes": {
+          "type": "integer"
+        },
         "stale_command_minutes": {
           "type": "integer"
         },
