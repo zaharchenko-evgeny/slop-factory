@@ -204,6 +204,17 @@ class EffectsTest(unittest.TestCase):
         self.assertIn("event=COMMENT", gh.writes[0])
         self.assertIn("verdict=changes", gh.writes[0][-1])
 
+    def test_dispute_rereview_is_allowed_once_at_the_same_head(self):
+        old = "<!-- factory:review focus=behaviour round=1 verdict=changes -->"
+        gh = FakeGh(labels=["factory:in-review", "risk:high", "factory:rereview-behaviour"],
+                    reviews=[review(BOT, old)])
+        self.assertTrue(tr(gh).apply(eff("review", "approve-at-head", focus="behaviour", round=1)))
+        post, remove = gh.writes
+        self.assertIn("rereview=1", post[-1])
+        self.assertEqual(remove[:3], ["pr", "edit", "5"])
+        self.assertIn("--remove-label", remove)
+        self.assertFalse(tr(gh).apply(eff("review", "approve-at-head", focus="behaviour")))
+
     def test_changes_review_body_carries_findings(self):
         gh = FakeGh()
         found = [{"id": "M1", "file": "a.py:2", "finding": "name it", "severity": "minor"},
@@ -514,6 +525,62 @@ class JoinTest(unittest.TestCase):
         self.assertEqual(join(gh), (False, 0))
         gh.labels = ["factory:changes-requested", "risk:low"]
         self.assertEqual(gate.check("fix", {"id": "e", "ticket": 7}, tr(gh), nodes.load(), CONFIG)[0], gate.GO)
+
+    def test_dispute_rereview_joins_after_fix_handoff(self):
+        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
+        gh = FakeGh(labels=["factory:in-review", "risk:low", "factory:fix-mid"], reviews=[old])
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        rereview = review(BOT, "<!-- factory:review focus=full round=1 verdict=approve rereview=1 -->",
+                          at="2026-01-02T06:00:00Z")
+        gh.reviews.append(rereview)
+        f = tr(gh).facts(7)
+        self.assertTrue(f["handed_to_fix"])
+        self.assertEqual(join(gh), (True, 1))
+        self.assertIn("factory:approved", gh.labels)
+
+    def test_disputed_finding_starts_a_counted_fix_round_and_rearms_label(self):
+        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
+        latest = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes rereview=1 -->",
+                       at="2026-01-02T06:00:00Z")
+        gh = FakeGh(labels=["factory:in-review", "risk:low", "factory:fix-mid"], reviews=[old, latest])
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        facts = tr(gh).facts(7)
+        self.assertEqual(facts["fix_rounds"], 2)
+        self.assertEqual(join(gh, tier="mid"), (True, 3))
+        self.assertIn("factory:changes-requested", gh.labels)
+        self.assertIn("factory:fix-mid", gh.labels)
+        self.assertTrue(any("--remove-label" in call and "factory:fix-mid" in call for call in gh.writes))
+
+    def test_unauthenticated_rereview_marker_does_not_reopen_join(self):
+        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
+        forged = review("mallory", "<!-- factory:review focus=full round=1 verdict=approve rereview=1 -->")
+        gh = FakeGh(labels=["factory:in-review", "risk:low"], reviews=[old, forged])
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        facts = tr(gh).facts(7)
+        self.assertFalse(facts["reviews"][1]["agent"])
+        self.assertTrue(facts["reviews"][1]["rereview"])  # join must authenticate the marker's author
+        self.assertTrue(facts["handed_to_fix"])
+        self.assertEqual(join(gh), (False, 0))
+
+    def test_join_waits_for_every_disputed_focus_rereview(self):
+        old_behaviour = review(BOT, "<!-- factory:review focus=behaviour round=1 verdict=changes -->")
+        old_structure = review(BOT, "<!-- factory:review focus=structure-security round=1 verdict=changes -->")
+        behaviour = review(BOT, "<!-- factory:review focus=behaviour round=1 verdict=approve rereview=1 -->",
+                           at="2026-01-02T06:00:00Z")
+        gh = FakeGh(labels=["factory:in-review", "risk:high", "factory:rereview-structure-security"],
+                    reviews=[old_behaviour, old_structure, behaviour])
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        facts = tr(gh).facts(7)
+        self.assertEqual(facts["pending_rereviews"], ["structure-security"])
+        self.assertEqual(join(gh), (False, 0))
+
+        gh.labels.remove("factory:rereview-structure-security")
+        structure = review(BOT, "<!-- factory:review focus=structure-security round=1 verdict=approve rereview=1 -->",
+                           at="2026-01-02T07:00:00Z")
+        gh.reviews.append(structure)
+        self.assertEqual(tr(gh).facts(7)["pending_rereviews"], [])
+        self.assertEqual(join(gh), (True, 1))
+        self.assertIn("factory:approved", gh.labels)
 
     def test_fix_that_pushed_nothing_blocks(self):
         gh = FakeGh(labels=["factory:changes-requested", "risk:low"], reviews=[review(BOT, C)])
