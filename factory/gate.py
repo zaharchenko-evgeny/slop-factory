@@ -605,8 +605,13 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, pr
                 facts = tracker.facts(n)
                 plan = sweep_plan(facts, auto_merge)
                 if plan is None or (n, facts["stage"]) in seen:
+                    if progress:
+                        progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
                     break
                 if plan[:2] == ("merge", "merged") and merged:
+                    if progress:
+                        progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped",
+                                  "why": "one merge at a time"})
                     break  # one merge at a time; the next sweep reads the rest against the new main
                 seen.add((n, facts["stage"]))
                 node, outcome, payload = plan
@@ -649,9 +654,13 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, pr
                 n = dependent["number"] if isinstance(dependent, dict) else dependent
                 try:
                     if n in woken:
+                        if progress:
+                            progress({"ticket": n, "outcome": "skipped", "why": "already inspected"})
                         continue
                     facts = tracker.facts(n)
                     if facts["stage"] != "ready" or facts["blockers_open"]:
+                        if progress:
+                            progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
                         continue
                     woken.add(n)
                     results.append({"ticket": n, "stage": "ready", "node": "intake", "outcome": "unblocked"})
@@ -731,6 +740,8 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
             facts = tracker.stale_facts(n)
             plan = stale_plan(facts, now, hours, command_minutes)
             if plan is None:
+                if progress:
+                    progress({"ticket": n, "stage": facts["stage"], "recover": "skipped"})
                 continue
             kind, label, on, why = plan
             stage = facts["stage"]
@@ -752,6 +763,8 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                                               "value": f"{RECOVER} stage={stage} {why}"})
             elif kind == "human":
                 if "factory:needs-human" in facts.get("attrs", []):
+                    if progress:
+                        progress({**r, "recover": "skipped"})
                     continue  # preserve an existing human wait and its assignee
                 tracker.apply({"ticket": n, "kind": "label", "value": "factory:needs-human"})
                 tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"]})

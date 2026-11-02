@@ -474,6 +474,22 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual((code, out["sweep"]), (gate.GO, []))
         self.assertIn("running full sweep", warning)
 
+    def test_sweep_reports_skipped_ticket_as_progress_without_changing_result(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({1: {"stage": "ready", "blockers_open": 1}})
+        tracker.sweep_tickets = lambda stages: [1]
+        code, out, progress = self.run_sweep([], tracker)
+        self.assertEqual((code, out["sweep"]), (gate.GO, []))
+        self.assertEqual(json.loads(progress), {"ticket": 1, "stage": "ready", "outcome": "skipped"})
+
+    def test_sweep_reports_ineligible_dependent_as_progress(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "in-dev"}})
+        tracker.sweep_tickets = lambda stages: []
+        code, out, progress = self.run_sweep(["--issue", "10"], tracker)
+        self.assertEqual((code, out["sweep"]), (gate.GO, []))
+        self.assertEqual(json.loads(progress), {"ticket": 11, "stage": "in-dev", "outcome": "skipped"})
+
     def test_sweep_issue_refires_ready_dependent_of_closed_blocker(self):
         from gate_port import MemoryTracker
         tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "ready", "blockers_open": 0}})
@@ -702,6 +718,17 @@ class StaleSweepTest(unittest.TestCase):
         results, failed = gate.sweep_stale(tr, NODES, 2, self.NOW, progress=progress.append)
         self.assertFalse(failed)
         self.assertEqual(progress, results)
+
+    def test_stale_sweep_reports_fresh_ticket_as_progress_without_changing_result(self):
+        class Tr(MemoryTracker):
+            def sweep_tickets(self, stages):
+                return [1]
+        tr = Tr({1: {"stage": "ready", "since": self.FRESH}})
+        progress = []
+        results, failed = gate.sweep_stale(tr, NODES, 2, self.NOW, progress=progress.append)
+        self.assertFalse(failed)
+        self.assertEqual(results, [])
+        self.assertEqual(progress, [{"ticket": 1, "stage": "ready", "recover": "skipped"}])
 
     def test_fresh_ticket_is_not_touched(self):
         tr, res = self.sweep({1: {"stage": "ready", "since": self.FRESH}, 2: {"stage": "ready", "since": self.OLD,
