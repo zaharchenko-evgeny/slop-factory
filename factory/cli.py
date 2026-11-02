@@ -43,7 +43,7 @@ def from_main():
     if shared.is_dir():
         return str(shared)
     root = tempfile.mkdtemp(prefix="factory-main-") + "/main"
-    for cmd in (["fetch", "origin", "main"], ["worktree", "add", "--detach", root, "origin/main"]):
+    for cmd in (["fetch", "origin", "main"], ["worktree", "add", "--detach", root, "FETCH_HEAD"]):
         subprocess.run(["git", *cmd], check=True, capture_output=True)
     return root
 

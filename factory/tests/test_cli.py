@@ -129,7 +129,7 @@ class ImportTimeBoundaryTest(unittest.TestCase):
                 f.write_text(f'open({str(marker)!r}, "w").write("x")\n' + f.read_text())
             Path(pr / "event.json").write_text("{}")
             done = subprocess.run([sys.executable, str(pr / "factory/cli.py"), "begin", "fix-mid", "event.json"], cwd=pr,
-                                  capture_output=True, text=True)
+                                  env={**os.environ, "HOME": str(tmp)}, capture_output=True, text=True)
             self.assertFalse(marker.exists(), "the pull request's engine module ran at import")
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertEqual(json.loads(done.stdout)["gate"], "main")
