@@ -5,7 +5,9 @@
 # ///
 """Tests for factory/gate.py on both fakes. Run: uv run factory/tests/test_gate.py"""
 import copy
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
+from io import StringIO
 import json
 import os
 import sys
@@ -45,6 +47,47 @@ class GateTest(unittest.TestCase):
 
     def test_bot_comment_does_not_resume(self):
         self.assertIsNone(gate.sweep_plan({"stage": "needs-answers", "answered": False}))
+
+    def test_verdict_approve_and_approved_both_approve(self):
+        for verdict in ("approve", "approved"):
+            with self.subTest(verdict=verdict):
+                self.assertEqual(gate.outcome_of({"verdict": verdict}), "approve")
+        for verdict in ("changes", "changes-requested"):
+            with self.subTest(verdict=verdict):
+                self.assertEqual(gate.outcome_of({"verdict": verdict}), "changes")
+
+    def test_unknown_verdict_fails_without_writing(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            event = root / "event.json"
+            handoff = root / "handoff.json"
+            tracker = root / "tracker.json"
+            event.write_text(json.dumps({"id": "e", "ticket": "7"}))
+            original = json.dumps({"7": {"stage": "in-review"}})
+            tracker.write_text(original)
+            for verdict in ("maybe", "", None, ["approve"], {"value": "approve"}):
+                with self.subTest(verdict=verdict):
+                    handoff.write_text(json.dumps({"ticket": "7", "verdict": verdict, "findings": []}))
+                    output = StringIO()
+                    with redirect_stdout(output):
+                        result = gate.main(["apply", "--node", "review", "--event", str(event),
+                                            "--handoff", str(handoff), "--tracker", f"memory:{tracker}"])
+                    self.assertEqual(result, gate.BAD)
+                    self.assertIn(repr(verdict), output.getvalue())
+                    self.assertEqual(tracker.read_text(), original)
+
+    def test_changes_without_blocking_finding_rejected(self):
+        tr = MemoryTracker({"7": {"stage": "in-review"}})
+        with self.assertRaisesRegex(gate.Bad, "requires a blocking finding"):
+            gate.apply("review", "changes", {"ticket": "7", "findings": []}, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "in-review")
+
+    def test_approve_with_blocking_finding_rejected(self):
+        tr = MemoryTracker({"7": {"stage": "in-review"}})
+        finding = {"severity": "blocking"}
+        with self.assertRaisesRegex(gate.Bad, "cannot include a blocking finding"):
+            gate.apply("review", "approve", {"ticket": "7", "findings": [finding]}, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "in-review")
 
 
 def tests_for(cls, tid):
@@ -717,6 +760,40 @@ class ConflictTest(unittest.TestCase):
         self.assertEqual(tr.tickets[1]["stage"], "changes-requested")
         self.assertIn("conflicts with main", json.dumps(tr.tickets[2]["log"]))
         self.assertEqual(tr.tickets[2]["stage"], "in-review")
+
+
+class ApprovedSweepTest(unittest.TestCase):
+    def sweep(self, ticket):
+        tr = MemoryTracker({7: ticket})
+        tr.sweep_tickets = lambda stages: [n for n, t in tr.tickets.items() if t["stage"] in stages]
+        return tr, gate.sweep(tr, NODES)
+
+    def test_approved_with_new_head_returns_to_review(self):
+        tr, (results, failed) = self.sweep({"stage": "approved", "pr_state": "open", "head": "new",
+                                            "round_head": "old", "ci": "green"})
+
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("reopen", "reopened")])
+        self.assertEqual(tr.tickets[7]["stage"], "in-review")
+
+    def test_approved_with_red_ci_returns_to_review_and_join_changes(self):
+        tr, (results, failed) = self.sweep({"stage": "approved", "pr_state": "open", "head": "same",
+                                            "round_head": "same", "ci": "red", "round_complete": True,
+                                            "round_verdict": "changes"})
+
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results],
+                         [("reopen", "reopened"), ("join", "changes")])
+        self.assertEqual(tr.tickets[7]["stage"], "changes-requested")
+        self.assertIn(["label", json.dumps("factory:fix-mid")], tr.tickets[7]["log"])
+
+    def test_approved_green_unchanged_stays(self):
+        tr, (results, failed) = self.sweep({"stage": "approved", "pr_state": "open", "head": "same",
+                                            "round_head": "same", "ci": "green"})
+
+        self.assertFalse(failed)
+        self.assertEqual(results, [])
+        self.assertEqual(tr.tickets[7]["stage"], "approved")
 
 
 class UnblockedSweepTest(unittest.TestCase):

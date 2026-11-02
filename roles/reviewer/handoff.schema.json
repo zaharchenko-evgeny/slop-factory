@@ -18,8 +18,8 @@
    },
    "verdict": {
     "enum": [
-     "approved",
-     "changes-requested"
+     "approve",
+     "changes"
     ]
    },
    "summary": {

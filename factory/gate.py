@@ -175,8 +175,13 @@ def outcome_of(h):
     """The node outcome a handoff names: `outcome`, a reviewer `verdict`, a router intake, else `status`."""
     if h.get("outcome"):
         return h["outcome"]
-    if h.get("verdict"):
-        return "approve" if h["verdict"] == "approved" else "changes"
+    if "verdict" in h:
+        verdict = h["verdict"]
+        verdicts = {"approve": "approve", "approved": "approve", "changes": "changes",
+                    "changes-requested": "changes"}
+        if not isinstance(verdict, str) or verdict not in verdicts:
+            raise Bad(f"unknown reviewer verdict: {verdict!r}")
+        return verdicts[verdict]
     if h.get("handoff") == "ROUTER-INTAKE":
         # shortcut: a ready bug proceeds until the bug path (#161) is enabled: `reproduce` is disabled
         return "proceed" if h.get("ready") == "yes" and h.get("split") in (None, "none") else (
@@ -281,6 +286,14 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
         raise Bad(f"unknown outcome: {outcome}")
+    if name == "review":
+        if "verdict" in payload and outcome_of({"verdict": payload["verdict"]}) != outcome:
+            raise Bad(f"review verdict {payload['verdict']!r} does not match outcome {outcome!r}")
+        blocking = any(f.get("severity") == "blocking" for f in payload.get("findings", []))
+        if outcome == "approve" and blocking:
+            raise Bad("review verdict approve cannot include a blocking finding")
+        if outcome == "changes" and not blocking:
+            raise Bad("review verdict changes requires a blocking finding")
     out = node["outcomes"][outcome]
     if out.get("enabled") is False:
         raise Bad(f"disabled outcome: {outcome}")
@@ -453,6 +466,10 @@ def sweep_plan(facts):
         return "finish", "merged", retro_payload(facts)
     if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
         return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
+    if stage == "approved" and facts.get("pr_state") == "open" \
+            and ((facts.get("round_head") is not None and facts.get("head") != facts.get("round_head"))
+                 or facts.get("ci") == "red"):
+        return "reopen", "reopened", {}
     if stage == "split" and (kids := facts.get("children")):
         if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
             what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)
