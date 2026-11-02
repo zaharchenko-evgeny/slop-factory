@@ -130,6 +130,45 @@ class StartupTest(unittest.TestCase):
         self.assertIn("FACTORY_ENV=light", r.stdout)
         self.assertIn("uv tool install --force", self.log.read_text())
 
+    def dry_run(self, env):
+        r = subprocess.run(["sh", str(SCRIPT)], cwd=ROOT, capture_output=True, text=True,
+                           env={"PATH": "/usr/bin:/bin", "HOME": str(self.home), "FACTORY_DRY": "1", "FACTORY_ENV": env})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_dry_run_read_installs_reviewer_skills_only(self):
+        out = self.dry_run("read")
+        self.assertIn("would install skills: ponytail-review to-tickets", out)
+        for developer in ("tdd", "diagnosing-bugs", "shellcheck", "jactionlint"):
+            self.assertNotIn(developer, out)
+        self.assertFalse((self.home / ".claude").exists())
+
+    def test_dry_run_write_installs_developer_tools(self):
+        out = self.dry_run("write")
+        self.assertIn("tdd", out)
+        self.assertIn("shellcheck-py==0.10.0.1 jactionlint==2.3.0", out)
+        self.assertNotIn("to-tickets", out)
+
+    def test_every_node_role_is_installed_by_its_environment(self):
+        graph = yaml.safe_load((ROOT / "workflows/nodes.yaml").read_text())["nodes"]
+        for env in ("read", "write", "ops"):
+            out = self.dry_run(env).splitlines()[0]
+            for n in graph.values():
+                if n.get("env") == env and n["role"] not in ("script", "human"):
+                    self.assertIn(n["role"], out.split("roles=")[1].split(), (env, n["role"]))
+
+    def test_path_like_skill_name_is_rejected_and_files_survive(self):
+        self.env["FACTORY_ENV"] = "write"
+        (self.repo / "roles/developer").mkdir(parents=True)
+        (self.repo / "roles/developer/skills.txt").write_text("../victim\n")
+        keep = self.home / ".agents/victim/keep"
+        keep.parent.mkdir(parents=True)
+        keep.write_text("x")
+        r = self.run_script()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("invalid skill name", r.stderr)
+        self.assertTrue(keep.exists())
+
     def test_air_models_in_config(self):
         m = cfg.load()["targets"]["air"]["models"]
         self.assertEqual(set(m), {"cheap", "mid", "strong", "review", "review_strong"})
