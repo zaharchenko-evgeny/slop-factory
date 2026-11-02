@@ -43,18 +43,12 @@ roles:
       full: { tier: review_strong, fallback: cheap }             # risk low: one reviewer, covers every focus
       behaviour: { tier: review, fallback: cheap }               # risk high
       structure-security: { tier: review_strong, fallback: cheap }  # risk high
-  # Runs when a reviewer reports docs_impact, before the approver.
+  # Runs when a reviewer reports docs_impact.
   doc-writer: { tier: mid }
   # Records the run on the knowledge branch after the merge.
   retro: { tier: cheap }
   # Weekly, outside any ticket: merges the knowledge inbox into `knowledge/` as one PR.
   distill: { tier: mid }
-  # Auto-approval (design §8): `tier` is the soft judgment's model, run by decisions-kit
-  # `decide`. Dry-run records the verdict only; a human still merges.
-  # Auto-merge (docs/recipes/auto-approve.md): needs `dry_run: false`. `max_risk`: the highest risk that may merge;
-  # `require`: `hard-rules` or `judgment` (needs a calibrated judgment), or a mapping per risk level.
-  approver:
-    { tier: cheap, dry_run: true, auto_merge: { enabled: false, max_risk: low, require: judgment } }
 
 # Retro entries (design §11, ADR-0007): pushed to `branch` under `<dir>/<repo>/`,
 # never to a default branch. The distill runs every
@@ -64,10 +58,11 @@ knowledge: { branch: knowledge-inbox, dir: knowledge, distill_branch: knowledge-
 
 gates:
   ticket_approval: human
-  pr_approval: human{{PR_APPROVAL_NOTE}}
+  # The `merge` node merges an approved PR at risk <= `max_risk`; `enabled: false` restores human merging.
+  auto_merge: { enabled: true, max_risk: high }
   # Until the factory gates are live, the listed external writes are shown to
   # the user and wait for approval. Issue and PR text, comments and label
-  # changes are auto-approved; merges stay with the human (pr_approval).
+  # changes are auto-approved; merges follow `auto_merge`.
   confirm_external_writes: true
   confirm_external_writes_scope: []
 
