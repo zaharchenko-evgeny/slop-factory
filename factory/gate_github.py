@@ -217,6 +217,11 @@ class GitHubGateTracker:
                 known.add(issue["number"])
         return dependents
 
+    def not_planned(self, n):
+        """True when issue `n` was closed with state_reason not_planned."""
+        issue = self._api(f"issues/{n}")
+        return issue.get("state") == "closed" and issue.get("state_reason") == "not_planned"
+
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
         the label when it finishes, so every round adds it again)."""
