@@ -37,5 +37,8 @@ class CheckRefsTest(unittest.TestCase):
     def test_missing_link_path_is_reported(self):
         self.assertEqual(self.scan("missing-link.md"), ["README.md:1: missing-link-target.md"])
 
+    def test_ignored_run_directory_is_allowed(self):
+        self.assertEqual(self.scan("ignored-path.md"), [])
+
 if __name__ == "__main__":
     unittest.main()
