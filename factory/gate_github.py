@@ -292,7 +292,7 @@ class GitHubGateTracker:
              "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
              "handed_to_fix": False, "risk": risk, "behind": False,
              "issue_state": issue.get("state", "open"),
-             "title": issue.get("title", ""), "body": body, "branch": None}
+             "title": issue.get("title", ""), "body": body, "author": (issue.get("user") or {}).get("login"), "branch": None}
         if stage == "needs-answers":
             waiting = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["needs-answers"]]
             comments = self._list(f"issues/{n}/comments")
@@ -412,6 +412,15 @@ class GitHubGateTracker:
             have = [x for x in self._labels(n) if x.startswith(f"{k}:")]
             return have != [f"{k}:{v}"] and self._edit(n, [f"{k}:{v}"] if f"{k}:{v}" not in have else [],
                                                        [x for x in have if x != f"{k}:{v}"])
+        if kind in ("assign", "unassign"):
+            current = {a["login"] for a in self._api(f"issues/{n}").get("assignees", [])}
+            desired = set((value if isinstance(value, list) else [value])) if kind == "assign" else set()
+            if current == desired:
+                return False
+            flags = [x for a in sorted(desired - current) for x in ("--add-assignee", a)]
+            flags += [x for a in sorted(current - desired) for x in ("--remove-assignee", a)]
+            self.run(["issue", "edit", str(n), "-R", self.repo, *flags])
+            return True
         if kind == "comment":
             body = value if value.startswith("[factory]") else f"[factory] {value}"
             if e.get("run_id") and "Factory-Run:" not in body:

@@ -352,6 +352,17 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             payload = {**payload, "tier": node.get("else_tier") or nodes["nodes"]["fix"]["tiers"][0]}
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     facts = tracker.facts(ticket)
+    if name == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
+            and not facts.get("focus_missing") and facts.get("ci") == "green" and facts.get("pr") and facts.get("head"):
+        people = facts["waiting_reviewers"]
+        effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
+                    {"kind": "assign", "ticket": ticket, "value": people},
+                    {"kind": "comment", "ticket": ticket,
+                     "value": f"[factory] Re-review PR #{facts['pr']}: your change request was addressed at {facts['head']}",
+                     "on": "pr"}]
+    if name == "merge" and outcome == "waiting":
+        effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
+                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]}]
     if name == "join" and outcome == "changes" and facts.get("handed_to_fix") and has_dispute_rereview(facts):
         effects.insert(0, {"kind": "unlabel", "ticket": ticket, "value": "factory:fix-*", "on": "pr"})
     if name in ("implement", "fix") and outcome == "done":
@@ -415,6 +426,20 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
     if any(e["kind"] == "stage" and e["value"] == "blocked" for e in effects):
         effects = clear_commands(ticket) + effects
+    stage_effect = next((e for e in effects if e["kind"] == "stage"), None)
+    if stage_effect:
+        target = stage_effect["value"]
+        human_effects = []
+        human_state = target in ("blocked", "needs-answers")
+        if not human_state and "factory:needs-human" in facts.get("attrs", []):
+            human_effects += [{"kind": "unlabel", "ticket": ticket, "value": "factory:needs-human"},
+                              {"kind": "unassign", "ticket": ticket, "value": None}]
+        if human_state:
+            person = (facts.get("author") if target == "needs-answers" else
+                      config_mod.load()["notify"]["github_user"])
+            human_effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
+                              {"kind": "assign", "ticket": ticket, "value": person}]
+        effects[:0] = human_effects
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
         if e["kind"] == "stage":
@@ -533,7 +558,8 @@ def merge_decision(facts, auto_merge):
             or facts.get("round_head") is None or facts["round_head"] != facts.get("head"):
         return None
     if not auto_merge.get("enabled") or RISK_RANK.get(facts.get("risk", "high"), 1) > RISK_RANK.get(auto_merge.get("max_risk"), -1):
-        return "waiting", {"reason": "[factory] waiting for a person to merge: auto-merge is off or the risk is above its limit."}
+        next_step = f"Merge PR #{facts['pr']}" if facts.get("pr") else "waiting for a person to merge"
+        return "waiting", {"reason": f"[factory] {next_step}: auto-merge is off or this PR exceeds its risk limit."}
     return ("updated" if facts.get("behind") else "merged"), {}
 
 
@@ -674,7 +700,11 @@ def stale_plan(facts, now, hours, command_minutes=30):
         return "finish", None, None, "the PR merged"
     if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
         return "conflict", None, None, "the approved PR conflicts with main"
-    return None
+    if stage == "ready" and facts.get("blockers_open"):
+        return None
+    if stage == "changes-requested" and cmd and commit_at >= cmd_at:
+        return None
+    return "human", None, None, f"no recovery rule re-fired after {hours} hours in {stage}"
 
 
 def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=30):
@@ -703,14 +733,19 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
             elif kind == "comment":
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
                                               "value": f"{RECOVER} stage={stage} {why}"})
+            elif kind == "human":
+                if "factory:needs-human" in facts.get("attrs", []):
+                    continue  # preserve an existing human wait and its assignee
+                tracker.apply({"ticket": n, "kind": "label", "value": "factory:needs-human"})
+                tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"]})
+                r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
+                                              "value": f"{RECOVER} stage={stage}: {why}. A person decides, then sets factory:ready."})
             elif recovered(facts, stage):
                 r["recover"] = "blocked"
-                tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
-                               "value": f"[factory] Stopped: the node did not respond twice in {stage}. "
-                                        "A person decides, then sets factory:ready."})
-                for e in clear_commands(n):
-                    tracker.apply(e)
-                r["applied"] = tracker.apply({"ticket": n, "kind": "stage", "value": "blocked"})
+                _, out = apply("recover", "blocked", {"ticket": n, "run_id": run,
+                                                          "reason": f"[factory] Stopped: the node did not respond twice in {stage}. A person decides, then sets factory:ready."},
+                               tracker, nodes)
+                r["applied"] = out["applied"]
             else:  # the comment last: for `ready` the re-added stage label starts the stage, and the comment must follow it
                 tracker.apply({"ticket": n, "kind": "unlabel", "value": label, "on": on})
                 r["applied"] = tracker.apply({"ticket": n, "kind": "label", "value": label, "on": on})

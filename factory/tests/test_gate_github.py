@@ -35,6 +35,7 @@ class FakeGh:
     def __init__(self, labels=("factory:in-review", "risk:low"), reviews=(), comments=(), checks=("success",), sub=(), requested=()):
         self.head_sha = "h1"
         self.requested = list(requested)
+        self.assignees = []
         self.roles = {"alice": "write", "bob": "admin", "eve": "read"}
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
@@ -118,7 +119,9 @@ class FakeGh:
             return "\n".join(json.dumps(r) for r in self.reviews)
         if a.endswith(("issues/7", "issues/5")) and "PATCH" not in args:
             return json.dumps({"labels": [{"name": x} for x in self.labels], "state": self.state,
-                               "body": getattr(self, "issue_body", "")})
+                               "body": getattr(self, "issue_body", ""),
+                               "assignees": [{"login": x} for x in self.assignees],
+                               "user": {"login": "author"}})
         if a.endswith("issues/7/dependencies/blocking"):
             return "\n".join(json.dumps(i) for i in getattr(self, "blocking_issues", []))
         if a.endswith("issues/7/dependencies/blocked_by") and "POST" not in a:
@@ -144,8 +147,12 @@ class FakeGh:
             for flag, v in zip(it, it):
                 if flag == "--add-label":
                     self.labels.append(v)
-                else:
+                elif flag == "--remove-label" and v in self.labels:
                     self.labels.remove(v)
+                elif flag == "--add-assignee":
+                    self.assignees.append(v)
+                elif flag == "--remove-assignee" and v in self.assignees:
+                    self.assignees.remove(v)
         return json.dumps({"id": 999, "number": 999}) if a.endswith("/issues POST") else ""
 
 
@@ -911,7 +918,7 @@ class SweepTest(unittest.TestCase):
         gh.sub_state, gh.sub_reason = ["closed", "closed"], ["completed", "not_planned"]
         res, _ = self.run_sweep(gh)
         self.assertEqual([r["outcome"] for r in res], ["child-blocked"])
-        self.assertEqual(gh.labels, ["factory:blocked"])
+        self.assertEqual(sorted(gh.labels), ["factory:blocked", "factory:needs-human"])
         self.assertIn("#2 (closed as not planned)", [w for w in gh.writes if w[:2] == ["issue", "comment"]][0][-1])
 
     def test_blocked_child_blocks_the_parent(self):
@@ -919,7 +926,7 @@ class SweepTest(unittest.TestCase):
         gh.sub_labels = [[], ["factory:blocked"]]
         res, _ = self.run_sweep(gh)
         self.assertEqual([r["outcome"] for r in res], ["child-blocked"])
-        self.assertEqual(gh.labels, ["factory:blocked"])
+        self.assertEqual(sorted(gh.labels), ["factory:blocked", "factory:needs-human"])
         self.assertIn("#2 (blocked)", [w for w in gh.writes if w[:2] == ["issue", "comment"]][0][-1])
 
     def test_children_closed_as_completed_finish_the_parent(self):
