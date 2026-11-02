@@ -264,7 +264,7 @@ class Mcp:
         if res.get("isError"):
             raise RuntimeError(f"{tool}: {res['content']}")
         text = "".join(c.get("text", "") for c in res.get("content", []))
-        return res.get("structuredContent") or (json.loads(text) if text else None)
+        return json.loads(text) if text else res.get("structuredContent")  # the text is the tool's JSON; structuredContent may wrap it
 
     def close(self) -> None:
         self.proc.stdin.close()

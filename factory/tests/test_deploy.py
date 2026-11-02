@@ -75,6 +75,54 @@ for line in sys.stdin:
 """
 
 
+RECORDED_SERVER = r"""
+import json, os, sys
+rec = json.load(open(sys.argv[1]))
+server = sys.argv[2]  # air-automations or air-cloud
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m:
+        continue
+    if m["method"] == "initialize":
+        res = {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "fake", "version": "0"}}
+    else:
+        tool, a = m["params"]["name"], m["params"]["arguments"]
+        if tool == "get_environment":  # not recorded: answer with the listed item
+            items = json.loads(rec["air-cloud.list_environments"]["content"][0]["text"])["items"]
+            res = {"content": [{"type": "text", "text": json.dumps(next(i for i in items if i["id"] == a["id"]))}]}
+        else:
+            res = rec[f"{server}.{tool}"]
+            if os.environ.get("WRAP_STRUCTURED"):  # a server that also wraps the text in structuredContent
+                res = {**res, "structuredContent": {"result": res["content"][0]["text"]}}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": res}), flush=True)
+"""
+
+
+class RecordedTest(unittest.TestCase):
+    """`read_state` on responses recorded from the real Air MCP servers: tools/call text content holding JSON."""
+
+    def test_read_state_decodes_recorded_responses(self):
+        self.read_recorded()
+
+    def test_read_state_ignores_wrapped_structured_content(self):
+        with mock.patch.dict(os.environ, {"WRAP_STRUCTURED": "1"}):
+            self.read_recorded()
+
+    def read_recorded(self):
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "server.py").write_text(RECORDED_SERVER)
+        servers = [deploy.Mcp(f"{sys.executable} {tmp / 'server.py'} {FIX / 'mcp-recorded.json'} {k}")
+                   for k in ("air-automations", "air-cloud")]
+        try:
+            automations, envs = deploy.read_state(*servers, "[Slop factory] ", "https://github.com/zaharchenko-evgeny/offline-eval-factory")
+        finally:
+            for s in servers:
+                s.close()
+        self.assertEqual([a["id"] for a in automations], ["b007905e-dad5-4ce9-b5aa-f8788b0dc100"] * 2)
+        self.assertEqual(automations[0]["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "0 6,18 * * *", "timezone": "UTC"}])
+        self.assertEqual([e["name"] for e in envs], ["[Slop factory] default", "[Slop factory] read", "[Slop factory] write", "[Slop factory] ops"])
+
+
 class ApplyTest(unittest.TestCase):
     """`deploy --apply` against a fake MCP server over stdio that records the calls."""
 
