@@ -26,8 +26,10 @@ Read repository names, tracker stages, models, limits and checks from
 
 ## Output
 
-End with the structured handoff your role file defines, as JSON (see its JSON handoff section).
-Hand off facts (files, commits, commands, results), not your reasoning.
+Write the JSON handoff to the path printed by `factory begin`, then run
+`factory end <path>` to apply it. The platform pushes the branch after the run.
+Hand off facts (files, commits, commands,
+results), not your reasoning.
 
 ## Notes and process gaps
 
