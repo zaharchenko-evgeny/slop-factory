@@ -5,7 +5,9 @@
 # ///
 """Tests for factory/gate.py on both fakes. Run: uv run factory/tests/test_gate.py"""
 import copy
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
+from io import StringIO
 import json
 import os
 import sys
@@ -55,13 +57,18 @@ class GateTest(unittest.TestCase):
             handoff = root / "handoff.json"
             tracker = root / "tracker.json"
             event.write_text(json.dumps({"id": "e", "ticket": "7"}))
-            handoff.write_text(json.dumps({"ticket": "7", "verdict": "maybe", "findings": []}))
             original = json.dumps({"7": {"stage": "in-review"}})
             tracker.write_text(original)
-            result = gate.main(["apply", "--node", "review", "--event", str(event), "--handoff", str(handoff),
-                                "--tracker", f"memory:{tracker}"])
-            self.assertEqual(result, gate.BAD)
-            self.assertEqual(tracker.read_text(), original)
+            for verdict in ("maybe", "", None, ["approve"], {"value": "approve"}):
+                with self.subTest(verdict=verdict):
+                    handoff.write_text(json.dumps({"ticket": "7", "verdict": verdict, "findings": []}))
+                    output = StringIO()
+                    with redirect_stdout(output):
+                        result = gate.main(["apply", "--node", "review", "--event", str(event),
+                                            "--handoff", str(handoff), "--tracker", f"memory:{tracker}"])
+                    self.assertEqual(result, gate.BAD)
+                    self.assertIn(repr(verdict), output.getvalue())
+                    self.assertEqual(tracker.read_text(), original)
 
     def test_changes_without_blocking_finding_rejected(self):
         tr = MemoryTracker({"7": {"stage": "in-review"}})

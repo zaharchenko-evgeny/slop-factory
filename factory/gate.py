@@ -175,12 +175,13 @@ def outcome_of(h):
     """The node outcome a handoff names: `outcome`, a reviewer `verdict`, a router intake, else `status`."""
     if h.get("outcome"):
         return h["outcome"]
-    if h.get("verdict"):
+    if "verdict" in h:
+        verdict = h["verdict"]
         verdicts = {"approve": "approve", "approved": "approve", "changes": "changes",
                     "changes-requested": "changes"}
-        if h["verdict"] not in verdicts:
-            raise Bad(f"unknown reviewer verdict: {h['verdict']!r}")
-        return verdicts[h["verdict"]]
+        if not isinstance(verdict, str) or verdict not in verdicts:
+            raise Bad(f"unknown reviewer verdict: {verdict!r}")
+        return verdicts[verdict]
     if h.get("handoff") == "ROUTER-INTAKE":
         # shortcut: a ready bug proceeds until the bug path (#161) is enabled: `reproduce` is disabled
         return "proceed" if h.get("ready") == "yes" and h.get("split") in (None, "none") else (
