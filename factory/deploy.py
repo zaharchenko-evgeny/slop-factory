@@ -269,6 +269,7 @@ class Mcp:
     def close(self) -> None:
         self.proc.stdin.close()
         self.proc.wait(timeout=10)
+        self.proc.stdout.close()
 
 
 def _items(res) -> list[dict]:
@@ -283,7 +284,8 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
     out = []
     for kind, planned, have in (("environment", plan["environments"], envs), ("automation", plan["automations"], automations)):
         have = {x["name"]: x for x in have if x["name"].startswith(plan["prefix"])}
-        for p in planned:
+        for raw in planned:
+            p = {k: v for k, v in raw.items() if k != "spec"}
             x = have.pop(p["name"], None) or have.pop(new_to_old.get(p["name"]), None)
             want = {**p, "environmentConfigId": env_ids.get(p.get("environmentConfigId"), p.get("environmentConfigId"))}
             changed = [k for k in p if x is not None and x.get(k) != want[k]]
@@ -293,8 +295,15 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
     return out
 
 
-def read_state(automations: Mcp, cloud: Mcp) -> tuple[list[dict], list[dict]]:
-    return _items(automations.call("list_automations", {})), _items(cloud.call("list_environment_configs", {}))
+def read_state(automations: Mcp, cloud: Mcp, prefix: str) -> tuple[list[dict], list[dict]]:
+    listed = automations.call("list_automations", {})
+    automation_items = listed if isinstance(listed, list) else [x for group in listed.values() for x in group]
+    automation_items = [automations.call("get_automation", {"id": x["id"]})
+                        for x in automation_items if x["name"].startswith(prefix)]
+    env_items = _items(cloud.call("list_environments", {}))
+    env_items = [cloud.call("get_environment", {"id": x["id"]})
+                 for x in env_items if x["name"].startswith(prefix)]
+    return automation_items, env_items
 
 
 def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp) -> None:
@@ -302,16 +311,18 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp) -> None:
     order = {"create": 0, "update": 0, "delete": 1}
     env_ids = None
     for action, kind, name, p, x, _ in sorted(changes, key=lambda c: (order[c[0]], (c[1] == "automation") == (c[0] != "delete"))):
-        client, noun = (cloud, "environment_config") if kind == "environment" else (automations, "automation")
+        client, noun = (cloud, "environment") if kind == "environment" else (automations, "automation")
         if p and kind == "automation":  # the environment id exists only after its create
-            env_ids = env_ids or {e["name"]: e["id"] for e in _items(cloud.call("list_environment_configs", {}))}
+            env_ids = env_ids or {e["name"]: e["id"] for e in _items(cloud.call("list_environments", {}))}
             p = {**p, "environmentConfigId": env_ids[p["environmentConfigId"]]}
-        args = {"create": lambda: p, "update": lambda: {**p, "id": x["id"]}, "delete": lambda: {"id": x["id"]}}[action]()
-        client.call(f"{action}_{noun}", args)
+        p = {k: v for k, v in (p or {}).items() if k != "spec"}
+        tool_action = ("edit" if kind == "environment" else "update") if action == "update" else action
+        args = {**p, "id": x["id"]} if action == "update" else p if p else {"id": x["id"]}
+        client.call(f"{tool_action}_{noun}", args)
 
 
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp) -> int:
-    changes = diff(plan, *read_state(automations, cloud))
+    changes = diff(plan, *read_state(automations, cloud, plan["prefix"]))
     for action, kind, name, _, _, changed in changes:
         print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
     if not changes:
@@ -322,7 +333,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
     apply_diff(changes, automations, cloud)
-    left = diff(plan, *read_state(automations, cloud))
+    left = diff(plan, *read_state(automations, cloud, plan["prefix"]))
     for action, kind, name, *_ in left:
         print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
     return 1 if left else 0

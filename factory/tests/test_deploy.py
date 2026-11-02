@@ -31,6 +31,8 @@ FIX = HERE / "fixtures/deploy"
 FAKE_SERVER = r"""
 import json, sys
 state, kind = sys.argv[1], sys.argv[2]  # state file: {"items": [...], "calls": [...]}
+TOOLS = {"automation": {"list_automations", "get_automation", "create_automation", "update_automation", "delete_automation"},
+         "environment": {"list_environments", "get_environment", "create_environment", "edit_environment", "delete_environment"}}
 for line in sys.stdin:
     m = json.loads(line)
     if "id" not in m:
@@ -41,12 +43,19 @@ for line in sys.stdin:
     else:
         tool, a = m["params"]["name"], m["params"]["arguments"]
         db["calls"].append([tool, a])
-        if tool.startswith("list_"):
-            out = db["items"]
+        if tool not in TOOLS[kind]:
+            raise ValueError(f"unexpected {kind} tool: {tool}")
+        if tool == "list_automations":
+            out = {"personal": [{"id": i["id"], "name": i["name"]} for i in db["items"][::2]],
+                   "project": [{"id": i["id"], "name": i["name"]} for i in db["items"][1::2]]}
+        elif tool == "list_environments":
+            out = [{"id": i["id"], "name": i["name"]} for i in db["items"]]
+        elif tool in ("get_automation", "get_environment"):
+            out = next(i for i in db["items"] if i["id"] == a["id"])
         elif tool.startswith("create_"):
             db["items"].append({**a, "id": f"{kind}-{len(db['items'])}"})
             out = {}
-        elif tool.startswith("update_"):
+        elif tool in ("update_automation", "edit_environment"):
             db["items"] = [{**i, **a} if i["id"] == a["id"] else i for i in db["items"]]
             out = {}
         else:
@@ -81,14 +90,36 @@ class ApplyTest(unittest.TestCase):
                 s.close()
 
     def calls(self, kind):
-        return [c for c in json.loads(self.state[kind].read_text())["calls"] if not c[0].startswith("list_")]
+        return [c for c in json.loads(self.state[kind].read_text())["calls"]
+                if c[0].startswith(("create_", "update_", "edit_", "delete_"))]
+
+    def test_fake_server_matches_cached_tool_names(self):
+        self.seed([{"id": "other", "name": "[Other] automation"},
+                   {"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1"}],
+                  [{"id": "other-env", "name": "[Other] environment"},
+                   {"id": "e1", "name": "[F] read", "startup": "x"}])
+        automations, cloud = [deploy.Mcp(f"{sys.executable} {self.tmp / 'server.py'} {self.state[k]} {k}")
+                              for k in self.state]
+        try:
+            deploy.read_state(automations, cloud, "[F]")
+        finally:
+            automations.close()
+            cloud.close()
+        calls = {k: [x[0] for x in json.loads(self.state[k].read_text())["calls"]] for k in self.state}
+        self.assertEqual(calls["automation"], ["list_automations", "get_automation"])
+        self.assertEqual(calls["environment"], ["list_environments", "get_environment"])
+        details = {k: [x[1]["id"] for x in json.loads(self.state[k].read_text())["calls"] if x[0].startswith("get_")]
+                   for k in self.state}
+        self.assertEqual(details, {"automation": ["a1"], "environment": ["e1"]})
 
     def test_apply_updates_in_place(self):
+        self.plan["automations"][0]["spec"] = {"node": "intake"}
         self.seed([{"id": "a1", "name": "[F] a", "prompt": "old", "environmentConfigId": "e1"}],
                   [{"id": "e1", "name": "[F] read", "startup": "x"}])
         self.assertEqual(self.run_deploy("--apply"), 0)
         self.assertEqual(self.calls("automation"), [["update_automation", {
             "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "id": "a1"}]])
+        self.assertNotIn("spec", self.calls("automation")[0][1])
         self.assertEqual(self.calls("environment"), [])
 
     def test_apply_renames_in_place(self):
@@ -99,6 +130,13 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
         self.assertEqual(self.calls("automation"), [["update_automation", {
             "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "id": "a1"}]])
+
+    def test_apply_edits_environment(self):
+        self.seed([{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1"}],
+                  [{"id": "e1", "name": "[F] read", "startup": "old"}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual(self.calls("environment"), [["edit_environment", {
+            "name": "[F] read", "startup": "x", "id": "e1"}]])
 
     def test_main_rename_flag_updates_in_place(self):
         self.seed([{"id": "a1", "name": "[Slop factory] old-intake"}], [])
@@ -127,7 +165,7 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--dry-run"), 0)
         self.assertEqual(self.calls("environment") + self.calls("automation"), [])
         self.assertEqual(self.run_deploy("--apply"), 0)
-        self.assertEqual([c[0] for c in self.calls("environment")], ["create_environment_config"])
+        self.assertEqual([c[0] for c in self.calls("environment")], ["create_environment"])
         self.assertEqual(self.run_deploy("--apply"), 0)  # now unchanged: no further write
         self.assertEqual(len(self.calls("automation")), 1)
         # the server drops the update: the verify step reports the difference
