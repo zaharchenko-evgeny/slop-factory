@@ -24,7 +24,9 @@ Input: a request (free text or a tracker issue).
 3. Choose the risk path: `low` when the issue carries the low-risk label from
    `factory.descriptor.yaml`, otherwise `high`.
 4. Estimate the size as the lines a reviewer must read: added lines plus
-   modified lines, counting tests and fixtures, not only production code. A
+   modified lines, counting tests and fixtures, not only production code.
+   Exclude paths listed in `engine/defaults.yaml` under `limits.generated_paths`;
+   those files are checked through their generator comparison test. A
    whole file deleted counts as one line because it is checked by listing it;
    lines removed from a file that remains count as modified. Keep
    `size_estimate` to the changed-line count only, for example `~40`; mention
