@@ -751,7 +751,7 @@
       ],
       "triggers": [
         {
-          "cronExpression": "15 * * * *",
+          "cronExpression": "0 6,18 * * *",
           "timezone": "UTC",
           "triggerType": "SCHEDULED"
         }

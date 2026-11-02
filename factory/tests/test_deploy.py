@@ -282,11 +282,11 @@ class PlanTest(unittest.TestCase):
                                "filters": {"label": f"factory:rereview-{a['name'].rsplit('-', 1)[1]}",
                                            "pr_author": "jetbrains-air[bot]"}}, a["triggers"])
 
-    def test_recover_runs_the_stale_sweep_hourly_on_the_cheap_tier(self):
+    def test_recover_runs_twice_daily_as_a_backstop_on_the_cheap_tier(self):
         for plan in (json.loads((FIX / "air-plan.json").read_text()),
                      deploy.plan_air(nodes.load(), cfg.load())):
             a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] recover")
-            self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "15 * * * *", "timezone": "UTC"}])
+            self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "0 6,18 * * *", "timezone": "UTC"}])
             self.assertIn("Run `factory sweep --stale` in the foreground", a["prompt"])
             intake = next(x for x in plan["automations"] if x["name"] == "[Slop factory] intake")  # router: cheap
             self.assertEqual(a["agentAndModel"], intake["agentAndModel"])
