@@ -291,6 +291,7 @@ class EffectsTest(unittest.TestCase):
         tr(gh).apply(eff("create-issues", [{"title": "A", "body": "scope A"}]))
         patch = next(w for w in gh.writes if "PATCH" in w and "issues/7" in " ".join(w))
         self.assertIn("body=Blocked by: #999", " ".join(patch))
+        self.assertFalse(any("PATCH" in w and "issues/999" in " ".join(w) for w in gh.writes))
 
     def test_blocked_by_line_counts_as_open_blocker(self):
         gh = FakeGh(labels=("factory:ready", "risk:low"))
@@ -783,6 +784,17 @@ class SweepTest(unittest.TestCase):
         gh = FakeGh()
         gh.open_issues = [{"number": 12, "state": "open", "body": "Blocked by: #7\n\nSecond slice"}]
         self.assertEqual(tr(gh).blocking(7), gh.open_issues)
+
+    def test_sweep_releases_body_linked_ticket_when_blocker_closes(self):
+        gh = FakeGh(labels=(STAGES["ready"], "risk:low"))
+        gh.blocked, gh.issue_body = [], "Blocked by: #12\n\nSecond slice"
+        gh.open_issues = [{"number": 7, "state": "open", "body": gh.issue_body}]
+        gh.blocker_state = "closed"
+        results, failed = gate.sweep(tr(gh), nodes.load(), closed_ticket=12)
+        self.assertFalse(failed)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(7, "unblocked")])
+        self.assertIn(["issue", "edit", "7", "-R", REPO, "--remove-label", STAGES["ready"]], gh.writes)
+        self.assertIn(["issue", "edit", "7", "-R", REPO, "--add-label", STAGES["ready"]], gh.writes)
 
     def test_in_review_complete_round_runs_join_and_disabled_outcomes_refuse(self):
         gh = FakeGh(reviews=[review(BOT, M)])
