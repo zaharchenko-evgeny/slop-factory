@@ -5,10 +5,14 @@
 # ///
 """Tests for factory/deploy.py. Run: uv run factory/tests/test_deploy.py
 Regenerate the fixture: UPDATE_FIXTURE=1 uv run factory/tests/test_deploy.py"""
+import contextlib
+import io
 import json
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import yaml
@@ -22,6 +26,115 @@ import deploy
 import nodes
 
 FIX = HERE / "fixtures/deploy"
+
+
+FAKE_SERVER = r"""
+import json, sys
+state, kind = sys.argv[1], sys.argv[2]  # state file: {"items": [...], "calls": [...]}
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m:
+        continue
+    db = json.load(open(state))
+    if m["method"] == "initialize":
+        res = {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "fake", "version": "0"}}
+    else:
+        tool, a = m["params"]["name"], m["params"]["arguments"]
+        db["calls"].append([tool, a])
+        if tool.startswith("list_"):
+            out = db["items"]
+        elif tool.startswith("create_"):
+            db["items"].append({**a, "id": f"{kind}-{len(db['items'])}"})
+            out = {}
+        elif tool.startswith("update_"):
+            db["items"] = [{**i, **a} if i["id"] == a["id"] else i for i in db["items"]]
+            out = {}
+        else:
+            db["items"] = [i for i in db["items"] if i["id"] != a["id"]]
+            out = {}
+        res = {"content": [{"type": "text", "text": json.dumps(out)}]}
+    json.dump(db, open(state, "w"))
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": res}), flush=True)
+"""
+
+
+class ApplyTest(unittest.TestCase):
+    """`deploy --apply` against a fake MCP server over stdio that records the calls."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / "server.py").write_text(FAKE_SERVER)
+        self.plan = {"prefix": "[F] ", "environments": [{"name": "[F] read", "startup": "x"}],
+                     "automations": [{"name": "[F] a", "prompt": "new", "environmentConfigId": "[F] read"}]}
+        self.state = {k: self.tmp / f"{k}.json" for k in ("automation", "environment")}
+
+    def seed(self, automations, envs):
+        for k, items in (("automation", automations), ("environment", envs)):
+            self.state[k].write_text(json.dumps({"items": items, "calls": []}))
+
+    def run_deploy(self, mode, allow_delete=False):
+        servers = [deploy.Mcp(f"{sys.executable} {self.tmp / 'server.py'} {self.state[k]} {k}") for k in self.state]
+        try:
+            return deploy.deploy(mode, allow_delete, self.plan, *servers)
+        finally:
+            for s in servers:
+                s.close()
+
+    def calls(self, kind):
+        return [c for c in json.loads(self.state[kind].read_text())["calls"] if not c[0].startswith("list_")]
+
+    def test_apply_updates_in_place(self):
+        self.seed([{"id": "a1", "name": "[F] a", "prompt": "old", "environmentConfigId": "e1"}],
+                  [{"id": "e1", "name": "[F] read", "startup": "x"}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual(self.calls("automation"), [["update_automation", {
+            "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "id": "a1"}]])
+        self.assertEqual(self.calls("environment"), [])
+
+    def test_apply_renames_in_place(self):
+        self.plan["renames"] = {"[F] old": "[F] a"}
+        self.seed([{"id": "a1", "name": "[F] old", "prompt": "new", "environmentConfigId": "e1"},
+                   {"id": "a3", "name": "[Other] keep"}],
+                  [{"id": "e1", "name": "[F] read", "startup": "x"}])
+        self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
+        self.assertEqual(self.calls("automation"), [["update_automation", {
+            "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "id": "a1"}]])
+
+    def test_main_rename_flag_updates_in_place(self):
+        self.seed([{"id": "a1", "name": "[Slop factory] old-intake"}], [])
+        env = {"FACTORY_MCP_AIR_AUTOMATIONS": f"{sys.executable} {self.tmp / 'server.py'} {self.state['automation']} automation",
+               "FACTORY_MCP_AIR_CLOUD": f"{sys.executable} {self.tmp / 'server.py'} {self.state['environment']} environment"}
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(out):
+            self.assertEqual(deploy.main(["--dry-run", "--rename", "[Slop factory] old-intake=[Slop factory] intake"]), 0)
+            self.assertEqual(deploy.main(["--dry-run", "--rename", "nope"]), 2)
+        lines = out.getvalue().splitlines()
+        self.assertTrue(any(l.startswith("update automation [Slop factory] intake") for l in lines))
+        self.assertNotIn("delete automation [Slop factory] old-intake", lines)
+        self.assertNotIn("create automation [Slop factory] intake", lines)
+
+    def test_apply_refuses_delete_without_flag(self):
+        self.seed([{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1"},
+                   {"id": "a2", "name": "[F] gone"}, {"id": "a3", "name": "[Other] keep"}],
+                  [{"id": "e1", "name": "[F] read", "startup": "x"}])
+        self.assertEqual(self.run_deploy("--apply"), 1)
+        self.assertEqual(self.calls("automation"), [])
+        self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
+        self.assertEqual(self.calls("automation"), [["delete_automation", {"id": "a2"}]])
+
+    def test_apply_verifies_after_write(self):
+        self.seed([], [])
+        self.assertEqual(self.run_deploy("--dry-run"), 0)
+        self.assertEqual(self.calls("environment") + self.calls("automation"), [])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual([c[0] for c in self.calls("environment")], ["create_environment_config"])
+        self.assertEqual(self.run_deploy("--apply"), 0)  # now unchanged: no further write
+        self.assertEqual(len(self.calls("automation")), 1)
+        # the server drops the update: the verify step reports the difference
+        self.seed([{"id": "a1", "name": "[F] a", "prompt": "old", "environmentConfigId": "e1"}],
+                  [{"id": "e1", "name": "[F] read", "startup": "x"}])
+        (self.tmp / "server.py").write_text(FAKE_SERVER.replace('db["items"] = [{**i, **a}', 'db["items"] = [{**i}'))
+        self.assertEqual(self.run_deploy("--apply"), 1)
 
 
 class PlanTest(unittest.TestCase):
