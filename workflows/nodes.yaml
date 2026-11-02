@@ -125,10 +125,9 @@ nodes:
       escalate: { effects: [{ unlabel: "factory:update-*", "on": pr }, { label: "factory:update-<next tier>", "on": pr }, { stage: changes-requested }] }
       unresolvable: { effects: [{ comment: reason }, { stage: blocked }] }
   reopen:
-    enabled: false
-    ticket: 196
+    pilot: true
     ci-independent: true
-    triggers: ["pull_request.synchronize"]
+    triggers: ["pull_request.synchronize", "pull_request.labeled factory:ci-red"]
     when: { stage: approved }
     role: script
     output: read-only
