@@ -176,7 +176,11 @@ def outcome_of(h):
     if h.get("outcome"):
         return h["outcome"]
     if h.get("verdict"):
-        return "approve" if h["verdict"] == "approved" else "changes"
+        verdicts = {"approve": "approve", "approved": "approve", "changes": "changes",
+                    "changes-requested": "changes"}
+        if h["verdict"] not in verdicts:
+            raise Bad(f"unknown reviewer verdict: {h['verdict']!r}")
+        return verdicts[h["verdict"]]
     if h.get("handoff") == "ROUTER-INTAKE":
         # shortcut: a ready bug proceeds until the bug path (#161) is enabled: `reproduce` is disabled
         return "proceed" if h.get("ready") == "yes" and h.get("split") in (None, "none") else (
@@ -281,6 +285,14 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
         raise Bad(f"unknown outcome: {outcome}")
+    if name == "review":
+        if "verdict" in payload and outcome_of({"verdict": payload["verdict"]}) != outcome:
+            raise Bad(f"review verdict {payload['verdict']!r} does not match outcome {outcome!r}")
+        blocking = any(f.get("severity") == "blocking" for f in payload.get("findings", []))
+        if outcome == "approve" and blocking:
+            raise Bad("review verdict approve cannot include a blocking finding")
+        if outcome == "changes" and not blocking:
+            raise Bad("review verdict changes requires a blocking finding")
     out = node["outcomes"][outcome]
     if out.get("enabled") is False:
         raise Bad(f"disabled outcome: {outcome}")
