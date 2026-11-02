@@ -258,20 +258,30 @@ class GitHubGateTracker:
         """facts plus what the stale sweep needs: `since` (last label or commit event, ISO), the command label
         (`factory:implement-*` on the issue, `factory:fix-*` on the PR) and when it was added, the head commit
         date, the PR's CI label, and the `[factory] recover:` comments written since the stage began."""
-        f, labeled = self.facts(n), {}
+        f, labeled, events = self.facts(n), {}, []
         pr = f["pr"]
         for t in [n] + ([pr] if pr else []):
             for e in self._list(f"issues/{t}/events"):
+                events.append((t, e))
                 if e.get("event") == "labeled":
                     labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
         pr_labels = self._labels(pr) if pr else []
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
         cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-"))), None)
+        command_labels = ("factory:ready", "factory:triage", "factory:implement-", "factory:fix-",
+                          "factory:update-", "factory:ci-green")
+        active_commands = {(t, x) for t, x in have if x == "factory:ready" or x == "factory:triage"
+                           or x == "factory:ci-green" or x.startswith(command_labels[2:5])}
+        command_events = [e for t, e in events if e.get("event") == "labeled"
+                          and (t, e.get("label", {}).get("name")) in active_commands]
         commit_at = self._api(f"commits/{f['head']}")["commit"]["committer"]["date"] if f["head"] else None
+        latest_event = max([e.get("created_at", "") for _, e in events] + [commit_at or ""])
+        latest_command = max((e["created_at"] for e in command_events), default="")
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
         comments = [c["body"] for c in self._list(f"issues/{n}/comments") if c["body"].startswith("[factory] recover:")
                     and c["created_at"] >= stage_at]
         return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1],
+                "command_pending": bool(latest_command and latest_command == latest_event),
                 "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
                 "ci_label": next((x[11:] for x in pr_labels if x in ("factory:ci-green", "factory:ci-red")
                                  and x[11:] == f.get("ci")), None)}  # a label left over from an earlier head is not this head's CI

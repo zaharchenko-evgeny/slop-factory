@@ -493,7 +493,7 @@
       ],
       "triggers": [
         {
-          "cronExpression": "0 6,18 * * *",
+          "cronExpression": "15 * * * *",
           "timezone": "UTC",
           "triggerType": "SCHEDULED"
         }

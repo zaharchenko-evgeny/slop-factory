@@ -32,7 +32,7 @@ adapters:
   pr: github              # state, head, CI, reviews by head SHA
 schedules:
   routines: { cron: "0 6 * * *" }
-  recover: { cron: "0 6,18 * * *" }
+  recover: { cron: "15 * * * *" }
 nodes:
   human:
     triggers: ["manual"]

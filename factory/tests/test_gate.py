@@ -619,6 +619,15 @@ class StaleSweepTest(unittest.TestCase):
         self.assertNotIn("log", tr.tickets[1])
         self.assertNotIn("log", tr.tickets[2])  # waiting on a blocker, not on a lost run
 
+    def test_command_label_without_outcome_stale_after_30_minutes(self):
+        tr, res = self.sweep({1: {"stage": "ready", "since": "2026-11-01T11:00:00Z", "command_pending": True}})
+        self.assertEqual([(r["recover"], r["stage"]) for r in res], [("refire", "ready")])
+
+    def test_fresh_command_label_not_stale(self):
+        tr, res = self.sweep({1: {"stage": "ready", "since": "2026-11-01T11:45:00Z", "command_pending": True}})
+        self.assertEqual(res, [])
+        self.assertNotIn("log", tr.tickets[1])
+
     def test_in_review_with_ci_green_and_no_review_refires_ci_green(self):
         tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": "green", "reviews": []}})
         self.assertEqual([(r["recover"], r["stage"]) for r in res], [("refire", "in-review")])
