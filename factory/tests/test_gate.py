@@ -634,6 +634,15 @@ class StaleSweepTest(unittest.TestCase):
         self.assertNotIn("log", tr.tickets[1])
         self.assertNotIn("log", tr.tickets[2])  # waiting on a blocker, not on a lost run
 
+    def test_command_label_without_outcome_stale_after_30_minutes(self):
+        tr, res = self.sweep({1: {"stage": "ready", "since": "2026-11-01T11:00:00Z", "command_pending": True}})
+        self.assertEqual([(r["recover"], r["stage"]) for r in res], [("refire", "ready")])
+
+    def test_fresh_command_label_not_stale(self):
+        tr, res = self.sweep({1: {"stage": "ready", "since": "2026-11-01T11:45:00Z", "command_pending": True}})
+        self.assertEqual(res, [])
+        self.assertNotIn("log", tr.tickets[1])
+
     def test_in_review_with_ci_green_and_no_review_refires_ci_green(self):
         tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": "green", "reviews": []}})
         self.assertEqual([(r["recover"], r["stage"]) for r in res], [("refire", "in-review")])
@@ -660,6 +669,15 @@ class StaleSweepTest(unittest.TestCase):
                                   "command_at": "2026-11-01T07:00:00Z", "commit_at": "2026-11-01T07:30:00Z"}})
         self.assertEqual(sorted(r["ticket"] for r in res), [4, 5])
         self.assertIn(["label", '"factory:implement-mid"'], tr.tickets[4]["log"])
+
+    def test_stale_update_command_is_refired_once_then_blocked(self):
+        tr, res = self.sweep({5: {"stage": "changes-requested", "since": self.OLD, "pr": 7,
+                                  "command": "factory:update-cheap", "command_at": self.FRESH,
+                                  "commit_at": self.OLD}})
+        self.assertEqual([r["recover"] for r in res], ["refire"])
+        res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
+        self.assertEqual([r["recover"] for r in res], ["blocked"])
+        self.assertEqual(tr.tickets[5]["stage"], "blocked")
 
     def test_dry_run_writes_nothing(self):
         tr = MemoryTracker({1: {"stage": "ready", "since": self.OLD}})

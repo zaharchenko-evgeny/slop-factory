@@ -65,6 +65,15 @@ class BeginEndTest(unittest.TestCase):
     def test_end_without_begin_is_an_error(self):
         self.assertEqual(self.run_cli("end", ".factory/handoff/implement.json")[0], 2)
 
+    def test_begin_fix_prints_ci_failure(self):
+        failure = [{"job": "tests", "step": "Run tests", "log_tail": "assert False"}]
+        tracker = self.tracker(stage="changes-requested", ci="red", round_complete=True,
+                               round_verdict="changes", ci_failure=failure)
+        with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
+            code, out = self.run_cli("begin", "fix-cheap", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(out)["context"]["ci_failure"], failure)
+
     def test_pull_request_node_runs_main_gate_not_the_checkouts(self):
         main = Path("main")
         shutil.copytree(ROOT, main, ignore=shutil.ignore_patterns(".git", ".factory", "tests"))

@@ -47,8 +47,17 @@ class FakeGh:
         assert args[:2] != ["api", "user"], "gh api user must never be called"
         if "actions/runs?head_sha=" in a:  # one workflow per entry of `checks`; None = still running
             return "\n".join(json.dumps({"workflow_id": k, "event": "pull_request", "run_number": 1,
-                                          "status": "completed" if c else "in_progress", "conclusion": c})
+                                          "id": 100 + k, "status": "completed" if c else "in_progress", "conclusion": c})
                              for k, c in enumerate(self.checks))
+        if "/actions/runs/100/jobs?" in a:
+            return json.dumps({"id": 200, "name": "tests", "steps": [
+                {"name": "Run tests", "conclusion": "failure",
+                 "started_at": "2026-11-02T10:00:00Z", "completed_at": "2026-11-02T10:00:00Z"},
+                {"name": "Upload artifacts", "conclusion": "success"}]})
+        if "/actions/jobs/200/logs" in a:
+            return "\n".join(["2026-11-02T10:00:00.1000000Z ##[group]Run tests",
+                                "2026-11-02T10:00:00.1000000Z ##[endgroup]"] +
+                               [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)])
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
             return "\n".join(json.dumps(p) for p in (
@@ -166,6 +175,14 @@ class FactsTest(unittest.TestCase):
         self.assertEqual(tr(Rerun()).facts(7)["ci"], "green")
         f = tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)
         self.assertEqual((f["focus_missing"], f["round_head"]), (["full"], "old"))
+
+    def test_red_ci_facts_carry_failed_step_log_tail(self):
+        f = tr(FakeGh(checks=["failure"])).facts(7)
+        self.assertEqual(f["ci"], "red")
+        self.assertEqual(f["ci_failure"], [{"job": "tests", "step": "Run tests",
+                                             "log_tail": "\n".join(
+                                                 f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(5, 65))}])
+        self.assertIn("line 64", f["ci_failure"][0]["log_tail"])
 
     def test_no_stage_label(self):
         self.assertEqual(tr(FakeGh(labels=["x"])).facts(7)["stage"], "none")
@@ -893,6 +910,22 @@ class GateTest(unittest.TestCase):
 
 
 class StaleFactsTest(unittest.TestCase):
+    def test_update_command_reaches_stale_planner(self):
+        gh = FakeGh(labels=("factory:changes-requested", "risk:low", "factory:update-cheap"))
+        gh.head_date = "2026-11-01T09:00:00Z"
+        gh.label_events = [("factory:update-cheap", "2026-11-01T10:00:00Z")]
+        facts = tr(gh).stale_facts(7)
+        self.assertEqual(gate.stale_plan(facts, gate.datetime.fromisoformat("2026-11-01T11:00:00+00:00"), 2)[0:3],
+                         ("refire", "factory:update-cheap", "pr"))
+
+    def test_command_is_pending_only_when_its_label_is_the_latest_event(self):
+        gh = FakeGh(labels=("factory:in-dev", "factory:implement-cheap", "risk:low"))
+        gh.label_events = [("factory:in-dev", "2026-01-02T02:00:00Z"),
+                           ("factory:implement-cheap", "2026-01-02T03:00:00Z")]
+        self.assertTrue(tr(gh).stale_facts(7)["command_pending"])
+        gh.label_events.append(("factory:in-review", "2026-01-02T03:01:00Z"))
+        self.assertFalse(tr(gh).stale_facts(7)["command_pending"])
+
     def test_since_command_and_recover_comments(self):
         gh = FakeGh(labels=("factory:in-review", "factory:ci-green", "risk:low"),
                     comments=("[factory] recover: stage=in-review re-fired factory:ci-green", "[factory] other"))

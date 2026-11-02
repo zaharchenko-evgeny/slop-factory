@@ -36,8 +36,10 @@ class MemoryTracker:
     def facts(self, ticket):
         t = self._t(ticket)
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
-                "round_verdict": None, "round_head": None, "attrs": [], "agent_runs": 0, "run_cap": 8, "handed_to_fix": False, "pending_rereviews": [], "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False, "conflict": False, "pr_state": "none", "answered": False}
-        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr")}, "stage": self.get_stage(t),
+                "round_verdict": None, "round_head": None, "attrs": [], "agent_runs": 0, "run_cap": 8, "handed_to_fix": False,
+                "pending_rereviews": [], "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False, "conflict": False,
+                "pr_state": "none", "answered": False}
+        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr", "ci_failure")}, "stage": self.get_stage(t),
                 "seen": list(t.get("seen", []))}
 
     def stale_facts(self, ticket):
@@ -45,7 +47,7 @@ class MemoryTracker:
         the recover comments come from the log."""
         t = self._t(ticket)
         sent = [json.loads(v) for k, v in t.get("log", []) if k == "comment"]
-        return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "command", "command_at", "commit_at", "ci_label", "pr_state", "issue_state") if k in t},
+        return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "command", "command_at", "commit_at", "ci_label", "command_pending", "pr_state", "issue_state") if k in t},
                 "recover_comments": [c for c in sent if c.startswith("[factory] recover:")]}
 
     def apply(self, effect):
