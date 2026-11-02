@@ -332,21 +332,29 @@ class EffectsTest(unittest.TestCase):
     def test_create_issues(self):
         gh = FakeGh(sub=["old"])
         self.assertTrue(tr(gh).apply(eff("create-issues", [{"title": "new", "body": "b"}, "old"])))
-        self.assertEqual(len(gh.writes), 3)  # create, sub-issue link, blocked-by link
+        self.assertEqual(len(gh.writes), 4)  # create, sub-issue link, blocked-by link, then ready
         self.assertIn("issue_id=999", gh.writes[2])
+        self.assertIn("labels[]=factory:ready", gh.writes[3])
         self.assertFalse(tr(FakeGh(sub=["old"])).apply(eff("create-issues", ["old"])))
 
     def test_create_issues_bodies_risk_and_order(self):
         gh = FakeGh(labels=("factory:split", "risk:high"))
         kids = [{"title": "A", "body": "scope A"}, {"title": "B", "body": "scope B"}]
         self.assertTrue(tr(gh).apply(eff("create-issues", kids)))
-        creates = [w for w in gh.writes if "labels[]=factory:ready" in w]
+        creates = [w for w in gh.writes if "-f" in w and any(x.startswith("title=") for x in w)]
         self.assertEqual(len(creates), 2)
         for w, k in zip(creates, kids):
             self.assertIn(f"body={k['body']}\n\n<!-- factory:child of=7 -->", w)
             self.assertIn("labels[]=risk:high", w)
         chain = [w for w in gh.writes if "/dependencies/blocked_by" in " ".join(w) and "issues/999/" in " ".join(w)]
         self.assertEqual(len(chain), 1)  # B (the second 999) is blocked by A
+        flat = [" ".join(w) for w in gh.writes]
+        ready = [i for i, w in enumerate(flat) if "labels[]=factory:ready" in w]
+        last_link = max(i for i, w in enumerate(flat) if "/dependencies/blocked_by" in w or "/sub_issues" in w)
+        self.assertEqual(len(ready), 2)
+        self.assertFalse(any("labels[]=factory:ready" in w for w in creates))  # created without a stage
+        self.assertGreater(ready[0], flat.index(next(w for w in flat if "/dependencies/blocked_by" in w)))  # no ready before a link
+        self.assertGreater(ready[-1], last_link)
 
     def test_create_children_falls_back_to_blocked_by_line(self):
         gh = FakeGh(labels=("factory:split", "risk:low"))
@@ -371,15 +379,16 @@ class EffectsTest(unittest.TestCase):
         gh = FakeGh()
         gh.open_issues = [{"id": 999, "number": 999, "title": "A", "body": "\n\n<!-- factory:child of=7 -->", "labels": [{"name": "risk:low"}]}]  # created by a run that died before linking
         self.assertTrue(tr(gh).apply(eff("create-issues", ["A"])))
-        self.assertEqual([w[2] for w in gh.writes], ["POST", "POST"])
-        self.assertTrue(all("issues/7/" in w[3] for w in gh.writes))  # linked, not created again
+        self.assertEqual([w[2] for w in gh.writes], ["POST", "POST", "POST"])
+        self.assertTrue(all("issues/7/" in w[3] for w in gh.writes[:2]))  # linked, not created again
+        self.assertIn("labels[]=factory:ready", gh.writes[2])  # then published
 
     def test_create_issues_retry_fixes_linked_children(self):
         gh = FakeGh(sub=["A", "B"], labels=("factory:split", "risk:high"))
         gh.blocked = [{"state": "open", "id": 11}, {"state": "open", "id": 12}]
         mark = "<!-- factory:child of=7 -->"
         gh.open_issues = [{"id": 11, "number": 11, "title": "A", "body": f"old\n\n{mark}", "labels": []},
-                          {"id": 12, "number": 12, "title": "B", "body": f"scope B\n\n{mark}", "labels": [{"name": "risk:high"}]}]
+                          {"id": 12, "number": 12, "title": "B", "body": f"scope B\n\n{mark}", "labels": [{"name": "risk:high"}, {"name": "factory:ready"}]}]
         kids = [{"title": "A", "body": "scope A"}, {"title": "B", "body": "scope B"}]
         self.assertTrue(tr(gh).apply(eff("create-issues", kids)))
         flat = [" ".join(w) for w in gh.writes]
@@ -416,7 +425,7 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(tr(gh).apply(eff("create-issues", ["A"])))
         self.assertIn("title=A", gh.writes[0])  # a new issue, carrying this ticket's marker
         self.assertTrue(any("factory:child of=7" in x for x in gh.writes[0]))
-        self.assertIn("labels[]=factory:ready", gh.writes[0])
+        self.assertNotIn("labels[]=factory:ready", gh.writes[0])  # ready comes after the links
 
     def test_fix_rounds_grow_per_reviewed_head(self):
         C = M.replace("approve", "changes")

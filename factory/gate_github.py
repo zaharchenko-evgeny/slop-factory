@@ -552,8 +552,8 @@ class GitHubGateTracker:
             if new is None:
                 new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
                                            "-f", f"body={want}",
-                                           "-f", f"labels[]={self.stages['ready']}", *[x for r in risk for x in ("-f", f"labels[]={r}")]]))
-                chained = False
+                                           *[x for r in risk for x in ("-f", f"labels[]={r}")]]))  # no stage yet: not runnable
+                chained, have = False, set()
             else:  # a reused child converges too: body, risk labels, chain
                 path = f"repos/{self.repo}/issues/{new['number']}"
                 if (new.get("body") or "") != want:
@@ -588,6 +588,9 @@ class GitHubGateTracker:
                     parent_body = self._blocked_body(parent_body, new["number"])
                     self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{n}", "-f",
                               f"body={parent_body}"])
+                wrote = True
+            if not any(x.startswith("factory:") for x in have):  # publish `ready` only once the links exist
+                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/labels", "-f", f"labels[]={self.stages['ready']}"])
                 wrote = True
             wrote = wrote or c["title"] not in subs or new["id"] not in blockers
             prev = new["id"]
