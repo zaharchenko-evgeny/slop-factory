@@ -290,7 +290,7 @@ class CliAndValidate(unittest.TestCase):
             with tempfile.TemporaryDirectory() as d:
                 d = Path(d)
                 (d / "ev.json").write_text(json.dumps({"source": "schedule", "schedule": name}))
-                (d / "h.json").write_text(json.dumps({"handoff": name.upper(), "status": "done"}))
+                (d / "h.json").write_text(json.dumps({"status": "done"}))
                 tr = ["--tracker", f"memory:{d / 't.json'}"]
                 (d / "t.json").write_text("{}")
                 out = StringIO()
