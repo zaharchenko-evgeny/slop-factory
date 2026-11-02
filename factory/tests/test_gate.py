@@ -261,6 +261,24 @@ class CliAndValidate(unittest.TestCase):
                                  (13, [("retained.txt", 12), ("deleted.txt", 1)]))
             self.assertEqual(run.call_args.kwargs["cwd"], Path(delivery))
 
+    def test_generated_paths_do_not_count_toward_size(self):
+        with tempfile.TemporaryDirectory() as delivery:
+            result = type("Result", (), {
+                "returncode": 0,
+                "stdout": "175\t0\tfactory/tests/fixtures/deploy/air-plan.json\n"
+                          "12\t3\tdocs/statechart.md\n"
+                          "9\t0\tskills/factory-setup/templates/roles/router/role.md\n"
+                          "4\t1\tfactory/gate.py\n",
+                "stderr": "",
+            })()
+            with patch.object(gate.subprocess, "run", return_value=result):
+                self.assertEqual(gate.branch_size(
+                    "origin/main", checkout=delivery,
+                    generated_paths=["factory/tests/fixtures/deploy/air-plan.json",
+                                     "docs/statechart.md", "docs/statechart-proposed.md",
+                                     "skills/factory-setup/templates/**"],
+                ), (5, [("factory/gate.py", 5)]))
+
     def test_intake_size_uses_first_number(self):
         fields = gate.intake_fields({
             "size_estimate": "about 40 lines changed; deletions about 2,200 lines",
@@ -989,6 +1007,30 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertFalse(failed)
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(10, "merged"), (11, "unblocked")])
         self.assertIn(["comment", '"[factory] unblocked by #10"'], tr.tickets[11]["log"])
+
+    def test_config_change_merge_updates_open_prs(self):
+        class ConfigTracker(MemoryTracker):
+            def config_change_merged(self, pr):
+                self.updated_prs = getattr(self, "updated_prs", []) + [pr]
+
+        tr = ConfigTracker({10: {"stage": "approved", "pr_state": "open", "head": "h", "round_head": "h",
+                                 "round_complete": True, "round_verdict": "approve", "ci": "green", "risk": "low"}})
+        tr.sweep_tickets = lambda stages: [10]
+        facts = tr.facts
+        tr.facts = lambda ticket: {**facts(ticket), "pr": 300, "reviews": [], "fix_rounds": 0}
+
+        results, failed = gate.sweep(tr, NODES, auto_merge={"enabled": True, "max_risk": "high"})
+
+        self.assertFalse(failed, results)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("merge", "merged")])
+        self.assertFalse(hasattr(tr, "updated_prs"))
+
+        tr.tickets[10]["pr_state"] = "merged"
+        results, failed = gate.sweep(tr, NODES)
+
+        self.assertFalse(failed, results)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.updated_prs, [300])
 
     def test_blocking_error_does_not_fail_sweep(self):
         class BrokenBlockingTracker(MemoryTracker):

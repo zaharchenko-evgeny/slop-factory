@@ -52,6 +52,19 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
         self.assertEqual((code, json.loads(out)["reason"]), (10, "duplicate event"))
 
+    def test_begin_accepts_ez_branch_from_payload(self):
+        pr_event = {"action": "labeled", "pull_request": {"number": 300, "updated_at": "T2",
+                    "head": {"ref": "refs/heads/ez/299-urgent-ci-log-fetch", "sha": "abc"}},
+                    "label": {"name": "factory:ci-green"}}
+        Path("event.json").write_text(json.dumps(pr_event))
+        Path("tickets.json").write_text(json.dumps({"299": {"stage": "changes-requested", "branch": "ez/299-urgent-ci-log-fetch",
+                                                               "pr": 300, "pr_state": "open", "round_complete": True,
+                                                               "head": "abc"}}))
+        with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
+            code, out = self.run_cli("begin", "fix-cheap", "event.json", "--tracker", "memory:tickets.json")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(out)["ticket"], 299)
+
     def test_end_applies_handoff_for_begun_node(self):
         tracker = self.tracker()
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
