@@ -190,8 +190,15 @@ class GitHubGateTracker:
             raise
 
     def blocking(self, n):
-        """Issues whose native dependency list names `n` as a blocker."""
-        return self._list(f"issues/{n}/dependencies/blocking")
+        """Issues whose native or body fallback dependency list names `n` as a blocker."""
+        dependents = self._list(f"issues/{n}/dependencies/blocking")
+        known = {i["number"] for i in dependents}
+        for issue in self._list("issues?state=open&per_page=100"):
+            if issue["number"] != n and issue["number"] not in known and re.search(
+                    rf"(?im)^Blocked by: #{n}\s*$", issue.get("body") or ""):
+                dependents.append(issue)
+                known.add(issue["number"])
+        return dependents
 
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
@@ -253,6 +260,11 @@ class GitHubGateTracker:
         stage = max((x for x in labels if x in by_label), key=lambda x: added.get(x, -1), default=None)
         stage = by_label.get(stage, "none")
         blockers = [b for b in self._list(f"issues/{n}/dependencies/blocked_by") if b["state"] == "open"]
+        body = issue.get("body") or ""
+        for number in re.findall(r"(?im)^Blocked by: #(\d+)\s*$", body):
+            blocker = self._api(f"issues/{number}")
+            if blocker.get("state") == "open":
+                blockers.append({"number": int(number)})
         risk = "low" if self.risk_labels["low"] in labels else "high"
         required, pr = FOCUSES[risk], self._pr(n)
         f = {"stage": stage, "attrs": [x for x in labels if x not in by_label], "blockers_open": len(blockers),
@@ -263,7 +275,20 @@ class GitHubGateTracker:
              "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
              "handed_to_fix": False,
              "issue_state": issue.get("state", "open"),
-             "title": issue.get("title", ""), "body": issue.get("body") or "", "branch": None}
+             "title": issue.get("title", ""), "body": body, "branch": None}
+        if stage == "needs-answers":
+            waiting = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["needs-answers"]]
+            comments = self._list(f"issues/{n}/comments")
+            if waiting and comments:
+                started = waiting[-1].get("created_at", "")
+                ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["ready"]]
+                setter = (ready[-1].get("actor") or {}).get("login") if ready else None
+                f["answered"] = any((c.get("created_at") or "") > started and
+                                     (c.get("user") or {}).get("type") != "Bot" and
+                                     not (c.get("user") or {}).get("login", "").endswith("[bot]") and
+                                     ((c.get("user") or {}).get("login") == setter or
+                                      self._can_write((c.get("user") or {}).get("login", "")))
+                                     for c in comments)
         if stage == "split":
             kids = self._list(f"issues/{n}/sub_issues")
             f.update(children=[{"number": k.get("number"), "state": k.get("state"), "not_planned": k.get("state") == "closed" and k.get("state_reason") == "not_planned",
@@ -482,12 +507,14 @@ class GitHubGateTracker:
         open_issues = {i["title"]: i for i in reversed(self._list("issues?state=open&per_page=100"))
                        if "pull_request" not in i and mark in (i.get("body") or "")}
         risk = [x for x in self._labels(n) if x.startswith("risk:")]  # a slice keeps its parent's risk path
-        wrote, prev = False, None  # prev: the id of the slice before, which blocks the next
+        wrote, prev, prev_number = False, None, None  # prior slice blocks the next
+        parent_body = self._api(f"issues/{n}").get("body") or ""
         for c in children:
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
             new = open_issues.get(c["title"])
             if c["title"] in subs and new is None:  # not created by this ticket: leave it alone
                 prev = subs[c["title"]].get("id")
+                prev_number = subs[c["title"]].get("number")
                 continue
             want = f"{c.get('body', '')}\n\n{mark}"
             if new is None:
@@ -510,12 +537,32 @@ class GitHubGateTracker:
                 wrote = wrote or bool(stale or missing)
                 chained = bool(prev) and prev in {b["id"] for b in self._list(f"issues/{new['number']}/dependencies/blocked_by")}
             if prev and not chained:
+                try:
+                    self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/dependencies/blocked_by", "-F", f"issue_id={prev}"])
+                except RuntimeError as e:
+                    if "403" not in str(e) and "Resource not accessible" not in str(e):
+                        raise
+                    want = self._blocked_body(want, prev_number) if prev_number else want
+                    self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{new['number']}", "-f", f"body={want}"])
                 wrote = True
-                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/dependencies/blocked_by", "-F", f"issue_id={prev}"])
             if c["title"] not in subs:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
             if new["id"] not in blockers:
-                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={new['id']}"])
+                try:
+                    self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={new['id']}"])
+                except RuntimeError as e:
+                    if "403" not in str(e) and "Resource not accessible" not in str(e):
+                        raise
+                    parent_body = self._blocked_body(parent_body, new["number"])
+                    self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{n}", "-f",
+                              f"body={parent_body}"])
+                wrote = True
             wrote = wrote or c["title"] not in subs or new["id"] not in blockers
             prev = new["id"]
+            prev_number = new["number"]
         return wrote
+
+    @staticmethod
+    def _blocked_body(body, number):
+        line = f"Blocked by: #{number}"
+        return body if re.search(rf"(?m)^{re.escape(line)}$", body) else f"{line}\n\n{body}"

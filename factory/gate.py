@@ -397,7 +397,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     return GO, {"applied": True, "written": [e["kind"] for e in effects + after if tracker.apply(e)]}
 
 
-SWEEP_STAGES = ("approved", "split", "in-review")
+SWEEP_STAGES = ("approved", "split", "in-review", "needs-answers")
 COMMANDS = ("factory:implement-", "factory:fix-", "factory:update-")
 
 
@@ -494,6 +494,8 @@ def retro_payload(facts):
 def sweep_plan(facts):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
+    if stage == "needs-answers" and facts.get("answered"):
+        return "finish", "answered", {}
     if stage == "approved" and facts.get("pr_state") == "merged":
         return "finish", "merged", retro_payload(facts)
     if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
