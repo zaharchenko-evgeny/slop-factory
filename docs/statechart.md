@@ -95,9 +95,9 @@ event, because only those triggers allow `push-to-source` (Air automation API).
 | `sweep` | scheduled, every 10 minutes | none | `as-instructed` | router, cheap | frontier offers, comment rechecks, pending triggers, lost joins, stale leases and intents, pending human reviews, CI backstop, retro, distill, cleanup |
 
 Every automation has the same thin prompt. The prompt tells the agent to save the `<trigger_event>`
-JSON to a file and run `factory/step.py begin` on it. If `begin` prints `SKIP`, the agent stops.
+JSON to a file and run `factory/gate.py check` on it. If the gate says to stop, the agent stops.
 Otherwise it follows the role file that `begin` names, writes the handoff to the path `begin` gives, and
-runs `factory/step.py end`. The agent does the role's work. The script owns every state decision.
+runs `factory/gate.py apply`. The agent does the role's work. The gate owns every state decision.
 
 ## The step contract
 
@@ -277,9 +277,9 @@ Each slice is a factory ticket under #100 and ends in a state that can be checke
 
 1. The transition table in `workflows/delivery.sm.yaml`: states, events with their source, guards, and
    command labels, without `parallel` and `loop`. `sm.py validate` and `sm.py simulate` cover the table.
-2. `factory/step.py`: `begin` and `end` with the GitHub adapter. The tests stub `gh` and cover each
+2. `factory/gate.py`: `check` and `apply` with the GitHub adapter. The tests stub `gh` and cover each
    of the 30 numbered problems above.
-3. The local target runs on `step.py`: the local driver (since retired) turned polled events into the same calls. The fork
+3. The local target runs on `gate.py`: the local driver (since retired) turned polled events into the same calls. The fork
    and loop engine code is deleted in the same change.
 4. The Air target (#7): render the automations in the table from `delivery.sm.yaml` and `factory.yaml`.
 5. The sweep on both targets.
