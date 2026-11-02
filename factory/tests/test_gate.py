@@ -999,6 +999,30 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(10, "merged"), (11, "unblocked")])
         self.assertIn(["comment", '"[factory] unblocked by #10"'], tr.tickets[11]["log"])
 
+    def test_config_change_merge_updates_open_prs(self):
+        class ConfigTracker(MemoryTracker):
+            def config_change_merged(self, pr):
+                self.updated_prs = getattr(self, "updated_prs", []) + [pr]
+
+        tr = ConfigTracker({10: {"stage": "approved", "pr_state": "open", "head": "h", "round_head": "h",
+                                 "round_complete": True, "round_verdict": "approve", "ci": "green", "risk": "low"}})
+        tr.sweep_tickets = lambda stages: [10]
+        facts = tr.facts
+        tr.facts = lambda ticket: {**facts(ticket), "pr": 300, "reviews": [], "fix_rounds": 0}
+
+        results, failed = gate.sweep(tr, NODES, auto_merge={"enabled": True, "max_risk": "high"})
+
+        self.assertFalse(failed, results)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("merge", "merged")])
+        self.assertFalse(hasattr(tr, "updated_prs"))
+
+        tr.tickets[10]["pr_state"] = "merged"
+        results, failed = gate.sweep(tr, NODES)
+
+        self.assertFalse(failed, results)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.updated_prs, [300])
+
     def test_blocking_error_does_not_fail_sweep(self):
         class BrokenBlockingTracker(MemoryTracker):
             def blocking(self, ticket):

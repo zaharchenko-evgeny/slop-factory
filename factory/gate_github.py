@@ -72,6 +72,27 @@ class GitHubGateTracker:
                       if "pull_request" not in i}
         return sorted(found)
 
+    def config_change_merged(self, pr):
+        """Ask open factory PRs to merge main when this merge changes engine configuration."""
+        if not pr:
+            return
+        files = self._list(f"pulls/{pr}/files?per_page=100")
+        if not any(f["filename"] == "factory.descriptor.yaml" or f["filename"].startswith(("engine/", "workflows/"))
+                   for f in files):
+            return
+        for other in self._list("pulls?state=open&per_page=100"):
+            head = other.get("head") or {}
+            match = re.match(r"ez/(\d+)-", head.get("ref") or "")
+            if not match or \
+                    ((head.get("repo") or {}).get("full_name") or "").lower() != self.repo.lower():
+                continue
+            # The update node only starts from changes-requested. Move the ticket
+            # before adding its PR command label so the label event can pass check.
+            self.apply({"ticket": int(match[1]), "kind": "stage", "value": "changes-requested"})
+            labels = [x["name"] for x in self._api(f"issues/{other['number']}")["labels"]]
+            if "factory:update-cheap" not in labels:
+                self._edit(other["number"], ["factory:update-cheap"], on="pr")
+
     def _pr(self, n):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""
         prs = [p for p in self._list("pulls?state=all&per_page=100") if p["head"]["ref"].startswith(f"ez/{n}-")
@@ -292,7 +313,7 @@ class GitHubGateTracker:
                                for k in kids])
         if pr:
             head, reviews = pr["head"]["sha"], self._reviews(pr)
-            pr_labels = {x["name"] for x in self._api(f"issues/{pr['number']}")["labels"]}
+            pr_labels = {x["name"] for x in pr.get("labels", [])}
             pending_rereviews = [focus for focus in required if f"factory:rereview-{focus}" in pr_labels]
             latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
             heads = {latest[x]["commit_id"] for x in required if x in latest}
@@ -300,7 +321,9 @@ class GitHubGateTracker:
             ci = self._ci(head)
             since = getattr(self, "_since", "")  # a person's factory:ready starts a fresh round count
             writes = [t for t in self._fix_writes(pr["number"]) if t >= since]
-            f["handed_to_fix"] = bool(writes) and max(writes) > self._api(f"commits/{head}")["commit"]["committer"]["date"]
+            latest_review = max((r.get("submitted_at") or "" for r in reviews if r["commit_id"] == head), default="")
+            commit_date = self._api(f"commits/{head}")["commit"]["committer"]["date"]
+            f["handed_to_fix"] = bool(writes) and max(writes) > max(latest_review, commit_date)
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
             if stage == "approved" and pr.get("state") == "open":  # only the merge gates read it
@@ -308,7 +331,7 @@ class GitHubGateTracker:
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), conflict=pr.get("mergeable") is False, ci=ci, reviews=reviews,
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
-                     pending_rereviews=pending_rereviews,
+                     pending_rereviews=pending_rereviews, pr_labels=sorted(pr_labels),
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
                      fix_rounds=len({(r["commit_id"], r["rereview"]) for r in reviews
@@ -327,7 +350,7 @@ class GitHubGateTracker:
                 events.append((t, e))
                 if e.get("event") == "labeled":
                     labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
-        pr_labels = self._labels(pr) if pr else []
+        pr_labels = f.get("pr_labels", [])
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
         cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-", "factory:update-"))), None)
         command_labels = ("factory:ready", "factory:triage", "factory:implement-", "factory:fix-",
