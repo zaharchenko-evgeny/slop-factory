@@ -20,6 +20,8 @@ import re
 import shlex
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -243,6 +245,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
             out |= {x.replace("<focus>", f) for f in focuses}
         elif "<" not in x:
             out.add(x)
+    out.add("factory:canary")
     return sorted(out)
 
 
@@ -350,23 +353,72 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url: str
         client.call(f"{tool_action}_{noun}", args)
 
 
-def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp) -> int:
+def canary_body(deploy_id: str) -> str:
+    return (f"[factory] Canary for deploy {deploy_id}. Write the deploy timestamp as one line to `docs/canary.md`.\n\n"
+            "## Acceptance checks\n\n"
+            f"- [ ] `grep -q {deploy_id} docs/canary.md`\n\n"
+            "Affected repositories: slop-factory. Size: about 1 line with tests.\n\n"
+            f"Factory-Run: deploy:{deploy_id}")
+
+
+def failure_body(deploy_id: str, stage: str, summary: str, reason: str) -> str:
+    return (f"[factory] Canary for deploy {deploy_id} did not reach `done`.\n\n"
+            f"Stage: {stage}\nReason: {reason}\nLast run summary: {summary or 'none'}\n\n"
+            f"Factory-Run: deploy:{deploy_id}")
+
+
+def wait_for_canary(tracker, ticket, deploy_id, *, sleep=time.sleep, clock=time.monotonic,
+                    timeout=45 * 60, interval=30):
+    deadline = clock() + timeout
+    while True:
+        status = tracker.canary_status(ticket)
+        stage = status["stage"]
+        if stage == "done":
+            return 0
+        reason = "node error" if status["error"] or stage in ("blocked", "failed", "error") else None
+        if reason or clock() >= deadline:
+            reason = reason or "timed out after 45 minutes"
+            tracker.create_issue(f"Canary failed after deploy {deploy_id}",
+                                 failure_body(deploy_id, stage, status["summary"], reason),
+                                 risk="low", stage="triage")
+            print(f"canary failed: stage={stage}; last run summary={status['summary'] or 'none'}; {reason}",
+                  file=sys.stderr)
+            return 1
+        sleep(min(interval, deadline - clock()))
+
+
+def create_canary(tracker, deploy_id, *, sleep=time.sleep, clock=time.monotonic):
+    for old in tracker.canary_tickets():
+        tracker.close_issue(old, f"[factory] Superseded by deploy {deploy_id}.\n\nFactory-Run: deploy:{deploy_id}")
+    ticket = tracker.create_issue(f"Canary after deploy {deploy_id}", canary_body(deploy_id), risk="low", stage="triage")
+    tracker.add_label(ticket, "factory:canary")
+    return wait_for_canary(tracker, ticket, deploy_id, sleep=sleep, clock=clock)
+
+
+def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, tracker=None,
+           deploy_id=None, sleep=time.sleep, clock=time.monotonic) -> int:
     repo_url = plan["environments"][0]["repository"] if plan["environments"] else ""
     changes = diff(plan, *read_state(automations, cloud, plan["prefix"], repo_url))
     for action, kind, name, _, _, changed in changes:
         print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
     if not changes:
         print("unchanged")
-    if mode == "--dry-run" or not changes:
+    if mode == "--dry-run":
         return 0
     if any(c[0] == "delete" for c in changes) and not allow_delete:
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
-    apply_diff(changes, automations, cloud, repo_url)
-    left = diff(plan, *read_state(automations, cloud, plan["prefix"], repo_url))
-    for action, kind, name, *_ in left:
-        print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
-    return 1 if left else 0
+    if changes:
+        apply_diff(changes, automations, cloud, repo_url)
+        left = diff(plan, *read_state(automations, cloud, plan["prefix"], repo_url))
+        for action, kind, name, *_ in left:
+            print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
+        if left:
+            return 1
+    if tracker:
+        deploy_id = deploy_id or datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        return create_canary(tracker, deploy_id, sleep=sleep, clock=clock)
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -384,7 +436,11 @@ def main(argv: list[str]) -> int:
         servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
         try:
             plan = {**plan_air(nodes_mod.load(), config_mod.load()), "renames": renames}
-            return deploy(argv[0], "--allow-delete" in argv, plan, *servers)
+            tracker = None
+            if argv[0] == "--apply":
+                from github_tracker import GitHubTracker
+                tracker = GitHubTracker.from_config()
+            return deploy(argv[0], "--allow-delete" in argv, plan, *servers, tracker=tracker)
         finally:
             for server in servers:
                 server.close()

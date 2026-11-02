@@ -36,7 +36,8 @@ class FakeGh:
             return "bot\n"
         if args[:2] == ["issue", "view"]:
             i = self.issues[int(args[2])]
-            return json.dumps({"state": i["state"], "labels": [{"name": x} for x in i["labels"]],
+            return json.dumps({"title": i.get("title", ""), "body": i.get("body", ""),
+                               "state": i["state"], "labels": [{"name": x} for x in i["labels"]],
                                "assignees": [{"login": x} for x in i["assignees"]]})
         if args[:2] == ["issue", "edit"]:
             self.writes.append(args)
@@ -93,6 +94,18 @@ def tracker(fake):
 
 
 class GitHub(unittest.TestCase):
+
+    def test_canary_issue_operations(self):
+        fake = FakeGh({23: {"title": "Canary", "labels": ["factory:canary", "factory:in-dev"],
+                            "comments": [{"id": 8, "body": "[factory] Last run summary", "user": {"login": "bot"}}]}})
+        tr = tracker(fake)
+        self.assertEqual(tr.canary_tickets(), [23])
+        self.assertEqual(tr.canary_status(23), {"stage": "in-dev", "summary": "[factory] Last run summary",
+                                                "error": False})
+        tr.add_label(23, "risk:low")
+        tr.close_issue(23, "[factory] Superseded.\n\nFactory-Run: test")
+        self.assertEqual(fake.issues[23]["state"], "CLOSED")
+        self.assertIn("risk:low", fake.issues[23]["labels"])
 
     def test_done_closes_the_issue_once(self):
         fake = FakeGh({23: {"labels": ["factory:merged"]}})

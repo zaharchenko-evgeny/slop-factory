@@ -193,6 +193,24 @@ class GitHubTracker:
                         "--label", self.risk_labels[risk], "--label", self.stages[stage]]).strip()
         return int(url.rsplit("/", 1)[1])
 
+    def canary_tickets(self):
+        found = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
+                                     "factory:canary", "--json", "number", "--limit", "1000"]))
+        return [i["number"] for i in found]
+
+    def close_issue(self, n, reason):
+        self.run(["issue", "close", str(n), "-R", self.repo, "--comment", reason])
+
+    def add_label(self, n, label):
+        self._edit(n, "--add-label", label)
+
+    def canary_status(self, n):
+        issue = self.issue(n)
+        comments = self.comments(n)
+        summary = next((c["body"] for c in reversed(comments) if c["body"].startswith("[factory]")), "")
+        return {"stage": self.get_state(n) or "none", "summary": summary,
+                "error": "factory:failed" in issue["labels"]}
+
     def add_blocker(self, n, blocker):
         """Native dependency: issue `n` is blocked by `blocker`."""
         bid = self.run(["api", f"repos/{self.repo}/issues/{blocker}", "--jq", ".id"]).strip()

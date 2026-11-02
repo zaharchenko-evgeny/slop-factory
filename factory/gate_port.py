@@ -115,6 +115,31 @@ class MemoryTracker:
         t["attrs"] = [x for x in attrs if x != value]
         return present or len(t["attrs"]) != len(attrs)
 
+    # Small issue operations used by deploy's end-to-end canary. They keep the
+    # deploy tests on the same in-memory ticket records as the gate tests.
+    def canary_tickets(self):
+        return [n for n, t in self.tickets.items()
+                if "factory:canary" in t.get("labels", []) and t.get("state", "open") != "closed"]
+
+    def close_issue(self, ticket, reason):
+        self._t(ticket)["state"] = "closed"
+
+    def add_label(self, ticket, label):
+        labels = self._t(ticket).setdefault("labels", [])
+        if label not in labels:
+            labels.append(label)
+
+    def create_issue(self, title, body, risk="low", stage="triage"):
+        number = max((int(n) for n in self.tickets), default=0) + 1
+        self.tickets[number] = {"title": title, "body": body, "risk": risk, "stage": stage,
+                                "labels": [f"risk:{risk}", f"factory:{stage}"], "state": "open"}
+        return number
+
+    def canary_status(self, ticket):
+        t = self._t(ticket)
+        return {"stage": t.get("stage", "none"), "summary": t.get("last_summary", ""),
+                "error": bool(t.get("node_error"))}
+
 
 class TagTracker(MemoryTracker):
     """String ids (PROJ-1), stage held as a `stage:<name>` tag among the other tags, as in YouTrack."""

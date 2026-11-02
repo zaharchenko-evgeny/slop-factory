@@ -24,6 +24,7 @@ import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parents[2])
 import deploy
 import nodes
+from gate_port import MemoryTracker
 
 FIX = HERE / "fixtures/deploy"
 
@@ -145,6 +146,57 @@ class ApplyTest(unittest.TestCase):
             for s in servers:
                 s.close()
 
+    def test_canary_created_after_apply(self):
+        self.seed([], [])
+        tracker = MemoryTracker({})
+        now = [0]
+        def sleep(seconds):
+            now[0] += seconds
+            canary = next(iter(tracker.canary_tickets()), None)
+            if canary:
+                tracker.tickets[canary]["stage"] = "done"
+        servers = [deploy.Mcp(f"{sys.executable} {self.tmp / 'server.py'} {self.state[k]} {k}") for k in self.state]
+        try:
+            self.assertEqual(deploy.deploy("--apply", False, self.plan, *servers, tracker=tracker,
+                                           deploy_id="d-123", sleep=sleep, clock=lambda: now[0]), 0)
+        finally:
+            for server in servers:
+                server.close()
+        ticket = tracker.tickets[1]
+        self.assertEqual(ticket["title"], "Canary after deploy d-123")
+        self.assertEqual(ticket["stage"], "done")
+        self.assertCountEqual(ticket["labels"], ["risk:low", "factory:triage", "factory:canary"])
+        self.assertIn("grep -q d-123 docs/canary.md", ticket["body"])
+        self.assertEqual([x[0] for x in self.calls("environment")], ["create_environment"])
+
+    def test_canary_timeout_opens_ticket(self):
+        tracker = MemoryTracker({7: {"stage": "in-dev"}})
+        now = [0]
+        def sleep(seconds):
+            now[0] += seconds
+        self.assertEqual(deploy.wait_for_canary(tracker, 7, "d-7", sleep=sleep,
+                                                clock=lambda: now[0], timeout=45, interval=15), 1)
+        self.assertEqual(tracker.tickets[8]["title"], "Canary failed after deploy d-7")
+        self.assertIn("timed out", tracker.tickets[8]["body"])
+
+    def test_blocked_canary_reports_stage_and_last_summary(self):
+        tracker = MemoryTracker({7: {"stage": "blocked", "last_summary": "check failed"}})
+        self.assertEqual(deploy.wait_for_canary(tracker, 7, "d-7", clock=lambda: 0), 1)
+        failure = tracker.tickets[8]
+        self.assertIn("Stage: blocked", failure["body"])
+        self.assertIn("Last run summary: check failed", failure["body"])
+
+    def test_new_deploy_closes_old_canary(self):
+        tracker = MemoryTracker({1: {"title": "Canary after deploy old", "labels": ["factory:canary"],
+                                     "stage": "in-dev", "state": "open"}})
+        now = [0]
+        def sleep(seconds):
+            now[0] += seconds
+            tracker.tickets[2]["stage"] = "done"
+        self.assertEqual(deploy.create_canary(tracker, "new", sleep=sleep, clock=lambda: now[0]), 0)
+        self.assertEqual(tracker.tickets[1]["state"], "closed")
+        self.assertEqual(tracker.tickets[2]["title"], "Canary after deploy new")
+
     def calls(self, kind):
         return [c for c in json.loads(self.state[kind].read_text())["calls"]
                 if c[0].startswith(("create_", "update_", "edit_", "delete_"))]
@@ -255,7 +307,8 @@ class PlanTest(unittest.TestCase):
 
     def test_plan_lists_every_label_the_gate_writes(self):
         plan = deploy.plan_air(nodes.load(), cfg.load())
-        for want in ("factory:ready", "factory:implement-cheap", "factory:fix-strong", "complexity:small", "risk:high"):
+        for want in ("factory:ready", "factory:implement-cheap", "factory:fix-strong", "factory:canary",
+                     "complexity:small", "risk:high"):
             self.assertIn(want, plan["labels"])
         self.assertFalse([x for x in plan["labels"] if "<" in x])
 
