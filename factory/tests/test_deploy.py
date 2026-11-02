@@ -171,6 +171,13 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(a["[Slop factory] sweep"]["prompt"].endswith("Run `factory sweep` once and report its JSON output."))
         self.assertIn("`factory begin intake`", a["[Slop factory] intake"]["prompt"])
 
+    def test_review_automations_trigger_on_focus_rerequest_labels(self):
+        for a in json.loads((FIX / "air-plan.json").read_text())["automations"]:
+            if a["name"].startswith("[Slop factory] review-"):
+                self.assertIn({"triggerType": "EVENT", "source": "github", "eventType": "pull_request.labeled",
+                               "filters": {"label": f"factory:rereview-{a['name'].rsplit('-', 1)[1]}",
+                                           "pr_author": "jetbrains-air[bot]"}}, a["triggers"])
+
     def test_recover_runs_the_stale_sweep_twice_a_day_on_the_cheap_tier(self):
         for plan in (json.loads((FIX / "air-plan.json").read_text()),
                      deploy.plan_air(nodes.load(), cfg.load())):
