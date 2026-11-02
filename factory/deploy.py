@@ -21,7 +21,7 @@ import config as config_mod
 import nodes as nodes_mod
 
 ROOT = Path(__file__).resolve().parents[1]
-PR_TRIGGERED_NODES = {"review", "join", "fix", "finish"}
+PR_TRIGGERED_NODES = {"review", "join", "fix", "update", "finish"}
 BOT_FILTERED = ("review-", "join")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
 
@@ -46,6 +46,8 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
     """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
     spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
             "when": n.get("when"), "outcomes": n["outcomes"]}
+    if n.get("tiers"):
+        spec["tiers"] = n["tiers"]  # the ordered tiers the gate escalates through
     if any((o or {}).get("else") for o in n["outcomes"].values()):
         spec["else_tier"] = nodes["nodes"]["fix"]["tiers"][0]  # the fix tier a red CI hands the ticket to
     if top and n["role"] == "script":  # a sweep applies the other script nodes (join, finish) too

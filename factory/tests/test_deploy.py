@@ -128,11 +128,11 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
             "intake", "join", "finish", "recover",
-            *(f"{b}-{t}" for b in ("implement", "fix") for t in ("cheap", "mid", "strong")),
+            *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security")))}
         self.assertEqual(names, pilot)
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
-                         {"intake", "implement", "review", "join", "fix", "finish", "recover"})
+                         {"intake", "implement", "review", "join", "fix", "update", "finish", "recover"})
         self.assertEqual(deploy.plan_air(n, config), plan)
 
 

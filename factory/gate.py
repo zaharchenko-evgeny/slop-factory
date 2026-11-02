@@ -88,7 +88,7 @@ def spec_nodes(path):
         spec = json.loads(Path(path).read_text())
         out = {}
         for s in [spec, *(spec.get("runs") or {}).values()]:
-            node = {k: s[k] for k in ("role", "when", "outcomes", "else_tier") if k in s}
+            node = {k: s[k] for k in ("role", "when", "outcomes", "else_tier", "tiers") if k in s}
             node.update({"tier": s["tier"]} if s.get("tier") else {}, **({"focuses": [s["focus"]]} if s.get("focus") else {}))
             out[s["node"]] = node
     except (OSError, ValueError, KeyError, AttributeError, TypeError) as e:
@@ -235,6 +235,7 @@ def check(name, event, tracker, nodes, config):
         "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
+        "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and name in ("fix", "update")),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
     }
 
@@ -285,6 +286,14 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         raise Bad(f"disabled outcome: {outcome}")
     ticket = payload["ticket"]
     payload = {**{k: v for k, v in (("focus", focus), ("tier", tier)) if v}, **payload}  # the automation's own
+    tiers = node.get("tiers") or []
+    if tiers and payload.get("tier") in tiers and "next tier" not in payload:  # the successor comes from the trusted tier list
+        i = tiers.index(payload["tier"]) + 1
+        if i < len(tiers):
+            payload = {**payload, "next tier": tiers[i]}
+        elif outcome == "escalate" and "unresolvable" in node["outcomes"]:  # no higher tier: a person decides
+            outcome = "unresolvable"
+            payload = {**payload, "reason": payload.get("reason") or f"[factory] Blocked: the {payload['tier']} tier could not resolve it and no higher tier exists. A person decides."}
     out = node["outcomes"][outcome]
     if out.get("ci") and tracker.facts(ticket)["ci"] not in out["ci"] and out.get("else") in node["outcomes"]:
         out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
@@ -440,6 +449,8 @@ def sweep_plan(facts):
     stage = facts["stage"]
     if stage == "approved" and facts.get("pr_state") == "merged":
         return "finish", "merged", retro_payload(facts)
+    if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
+        return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
     if stage == "split" and (kids := facts.get("children")):
         if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
             what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)
@@ -528,7 +539,8 @@ def recovered(facts, stage):
 
 def stale_plan(facts, now, hours):
     """(kind, label, on, text) when the ticket's waking event is visibly missing after `hours` in its stage:
-    kind `refire` (remove, then add `label` on `on`), `comment` (no label to re-fire) or `finish` (the PR merged),
+    kind `refire` (remove, then add `label` on `on`), `comment` (no label to re-fire), `finish` (the PR merged)
+    or `conflict` (an approved PR conflicts: the sweep's update-cheap),
     else None. `since` is the last label or commit event (ISO); an unknown one never makes a ticket stale."""
     stage, since = facts["stage"], facts.get("since")
     if facts.get("issue_state", "open") != "open" or not since:
@@ -545,11 +557,15 @@ def stale_plan(facts, now, hours):
         if facts.get("ci_label") == "green" and not any(r["agent"] and r["commit_id"] == head for r in facts.get("reviews", [])):
             return "refire", "factory:ci-green", "pr", "no agent review at the head"
         if not facts.get("ci_label"):
+            if facts.get("conflict"):
+                return "comment", None, None, f"no CI label at head {head}: the PR conflicts with main (GitHub starts no CI on a conflict); the update runs after the join"
             return "comment", None, None, f"no CI label at head {head}: CI's job"
     if stage == "changes-requested" and cmd and commit_at < cmd_at:
         return "refire", cmd, "pr", "no commit since the fix label"
     if stage == "approved" and facts.get("pr_state") == "merged":
         return "finish", None, None, "the PR merged"
+    if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
+        return "conflict", None, None, "the approved PR conflicts with main"
     return None
 
 
@@ -572,6 +588,9 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False):
             run = "recover:stale"
             if kind == "finish":
                 _, out = apply("finish", "merged", {"ticket": n, **retro_payload(facts)}, tracker, nodes)
+                r["applied"] = out["applied"]
+            elif kind == "conflict":
+                _, out = apply("finish", "conflict", {"ticket": n}, tracker, nodes)
                 r["applied"] = out["applied"]
             elif kind == "comment":
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,

@@ -9,6 +9,7 @@ A marker `<!-- factory:review focus=<f> round=<n> verdict=approve|changes -->` c
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -75,7 +76,15 @@ class GitHubGateTracker:
         prs = [p for p in self._list("pulls?state=all&per_page=100") if p["head"]["ref"].startswith(f"ez/{n}-")
                and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.repo.lower()]  # never a fork's PR
         prs.sort(key=lambda p: (p["state"] == "open", p["number"]))
-        return self._api(f"pulls/{prs[-1]['number']}") if prs else None
+        if not prs:
+            return None
+        pr = self._api(f"pulls/{prs[-1]['number']}")
+        for _ in range(3):  # GitHub computes `mergeable` lazily: null means UNKNOWN, read again
+            if pr.get("state") != "open" or pr.get("mergeable") is not None:
+                break
+            time.sleep(2)
+            pr = self._api(f"pulls/{prs[-1]['number']}")
+        return pr
 
     def _ci(self, sha):
         """CI at `sha` from the Actions workflow runs (the Air GitHub App has Actions: read, not Checks: read, so
@@ -206,7 +215,7 @@ class GitHubGateTracker:
         risk = "low" if self.risk_labels["low"] in labels else "high"
         required, pr = FOCUSES[risk], self._pr(n)
         f = {"stage": stage, "attrs": [x for x in labels if x not in by_label], "blockers_open": len(blockers),
-             "head": None, "pr": None, "mergeable": None, "ci": "none", "reviews": [], "requested_reviewers": [],
+             "head": None, "pr": None, "mergeable": None, "conflict": False, "ci": "none", "reviews": [], "requested_reviewers": [],
              "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
              "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
@@ -231,7 +240,7 @@ class GitHubGateTracker:
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
-            f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), ci=ci, reviews=reviews,
+            f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), conflict=pr.get("mergeable") is False, ci=ci, reviews=reviews,
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,

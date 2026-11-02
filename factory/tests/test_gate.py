@@ -632,6 +632,80 @@ class SpecTest(unittest.TestCase):
             self.assertEqual((code, json.loads(out)["reason"]), (10, "stage in-dev is not in the outcome's from"))
 
 
+class ConflictTest(unittest.TestCase):
+    def sweep(self, tickets):
+        tr = MemoryTracker(tickets)
+        tr.sweep_tickets = lambda stages: [n for n, t in tr.tickets.items() if t["stage"] in stages]
+        return tr, gate.sweep(tr, NODES)
+
+    def test_merge_flags_approved_conflicting_pr_for_update(self):
+        tr, (results, failed) = self.sweep({
+            7: {"stage": "approved", "pr_state": "open", "conflict": True},
+            8: {"stage": "approved", "pr_state": "open"}})
+        self.assertFalse(failed)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(7, "conflict")])
+        self.assertIn(["label", '"factory:update-cheap"'], tr.tickets[7]["log"])
+        self.assertEqual(tr.tickets[7]["stage"], "changes-requested")
+        self.assertNotIn("log", tr.tickets[8])
+
+    def test_conflict_waits_for_join_then_rides_fix_round(self):
+        tr, (results, _) = self.sweep({7: {"stage": "in-review", "pr_state": "open", "conflict": True,
+                                           "round_complete": False}})
+        self.assertEqual((results, tr.tickets[7]["stage"]), ([], "in-review"))
+        tr.tickets[7].update(round_complete=True, round_verdict="changes", ci="green")
+        gate.sweep(tr, NODES)
+        self.assertEqual(tr.tickets[7]["stage"], "changes-requested")
+        code, out = gate.check("fix", {"id": "e", "ticket": 7}, tr, NODES, CONFIG)
+        self.assertEqual((code, out["merge_main"]), (0, True))
+        tr.tickets[7]["conflict"] = False
+        self.assertFalse(gate.check("fix", {"id": "e", "ticket": 7}, tr, NODES, CONFIG)[1]["merge_main"])
+
+    def test_unresolvable_update_blocks_with_files(self):
+        tr = MemoryTracker({7: {"stage": "changes-requested"}})
+        reason = "[factory] Blocked: merge conflict in factory/gate.py, workflows/nodes.yaml"
+        code, _ = gate.apply("update", "unresolvable", {"ticket": 7, "event": "e", "reason": reason}, tr, NODES)
+        self.assertEqual((code, tr.tickets[7]["stage"]), (0, "blocked"))
+        self.assertIn(["comment", json.dumps(reason)], tr.tickets[7]["log"])
+
+
+    def test_escalate_labels_next_tier_and_strong_blocks(self):
+        for tier, label in (("cheap", "mid"), ("mid", "strong")):
+            tr = MemoryTracker({7: {"stage": "changes-requested"}})
+            code, _ = gate.apply("update", "escalate", {"ticket": 7, "event": "e"}, tr, NODES, tier=tier)
+            self.assertEqual(code, 0)
+            self.assertIn(["label", json.dumps(f"factory:update-{label}")], tr.tickets[7]["log"])
+        tr = MemoryTracker({7: {"stage": "changes-requested"}})
+        code, _ = gate.apply("update", "escalate", {"ticket": 7, "event": "e", "reason": "[factory] conflicts in a.py"},
+                             tr, NODES, tier="strong")
+        self.assertEqual((code, tr.tickets[7]["stage"]), (0, "blocked"))
+        self.assertIn(["comment", json.dumps("[factory] conflicts in a.py")], tr.tickets[7]["log"])
+
+    def test_deployed_update_spec_escalates_through_its_tiers(self):
+        with tempfile.TemporaryDirectory() as d:
+            spec = deploy.node_spec("update", NODES["nodes"]["update"], CONFIG, "cheap", None, NODES)
+            (Path(d) / "s.json").write_text(json.dumps(spec))
+            nodes = gate.spec_nodes(Path(d) / "s.json")
+            tr = MemoryTracker({7: {"stage": "changes-requested"}})
+            code, _ = gate.apply("update", "escalate", {"ticket": 7, "event": "e"}, tr, nodes, tier="cheap")
+            self.assertEqual(code, 0)
+            self.assertIn(["label", json.dumps("factory:update-mid")], tr.tickets[7]["log"])
+
+    def test_recover_flags_approved_conflict_and_names_conflict_without_ci(self):
+        class Tr(MemoryTracker):
+            def sweep_tickets(self, stages):
+                return [n for n, t in self.tickets.items() if self.get_stage(t) in stages]
+        old = "2026-11-01T08:00:00Z"
+        now = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+        tr = Tr({1: {"stage": "approved", "since": old, "pr_state": "open", "conflict": True},
+                 2: {"stage": "in-review", "since": old, "pr": 9, "ci_label": None, "conflict": True}})
+        res = gate.sweep_stale(tr, NODES, 2, now)[0]
+        self.assertEqual([r["recover"] for r in res], ["conflict", "comment"])
+        self.assertIn(["label", '"factory:update-cheap"'], tr.tickets[1]["log"])
+        self.assertEqual(tr.tickets[1]["stage"], "changes-requested")
+        self.assertIn("conflicts with main", json.dumps(tr.tickets[2]["log"]))
+        self.assertEqual(tr.tickets[2]["stage"], "in-review")
+
+
 class UnblockedSweepTest(unittest.TestCase):
     def sweep(self, tickets, closed=10):
         tr = MemoryTracker(tickets)
