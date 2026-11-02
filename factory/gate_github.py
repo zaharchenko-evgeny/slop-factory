@@ -71,6 +71,23 @@ class GitHubGateTracker:
                       if "pull_request" not in i}
         return sorted(found)
 
+    def config_change_merged(self, pr):
+        """Ask open factory PRs to merge main when this merge changes engine configuration."""
+        if not pr:
+            return
+        files = self._list(f"pulls/{pr}/files?per_page=100")
+        if not any(f["filename"] == "factory.descriptor.yaml" or f["filename"].startswith(("engine/", "workflows/"))
+                   for f in files):
+            return
+        for other in self._list("pulls?state=open&per_page=100"):
+            head = other.get("head") or {}
+            if not (head.get("ref") or "").startswith("ez/") or \
+                    ((head.get("repo") or {}).get("full_name") or "").lower() != self.repo.lower():
+                continue
+            labels = [x["name"] for x in self._api(f"issues/{other['number']}")["labels"]]
+            if "factory:update-cheap" not in labels:
+                self._edit(other["number"], ["factory:update-cheap"], on="pr")
+
     def _pr(self, n):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""
         prs = [p for p in self._list("pulls?state=all&per_page=100") if p["head"]["ref"].startswith(f"ez/{n}-")

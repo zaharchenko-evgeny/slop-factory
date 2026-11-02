@@ -313,6 +313,40 @@ class EffectsTest(unittest.TestCase):
         tr(gh).apply(eff("label", "factory:fix-mid"))
         self.assertEqual(gh.writes[0][:3], ["issue", "edit", "7"])
 
+    def test_config_change_merge_labels_only_open_factory_prs(self):
+        calls = []
+        def run(args):
+            calls.append(args)
+            if args[:2] == ["pr", "edit"]:
+                return ""
+            path = next((x for x in args if x.startswith("repos/")), "")
+            if path.endswith("pulls/300/files?per_page=100"):
+                return json.dumps({"filename": "workflows/nodes.yaml"})
+            if path.endswith("pulls?state=open&per_page=100"):
+                return "\n".join(json.dumps(p) for p in [
+                    {"number": 301, "head": {"ref": "ez/299-x", "repo": {"full_name": REPO}}},
+                    {"number": 302, "head": {"ref": "feature/x", "repo": {"full_name": REPO}}},
+                    {"number": 303, "head": {"ref": "ez/302-y", "repo": {"full_name": "fork/r"}}},
+                ])
+            if path.endswith("issues/301"):
+                return json.dumps({"labels": []})
+            raise AssertionError(args)
+
+        GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
+        edits = [c for c in calls if c[:2] == ["pr", "edit"]]
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0][2:4], ["301", "-R"])
+        self.assertIn("factory:update-cheap", edits[0])
+
+    def test_config_change_merge_ignores_other_files(self):
+        def run(args):
+            path = next((x for x in args if x.startswith("repos/")), "")
+            if path.endswith("pulls/300/files?per_page=100"):
+                return json.dumps({"filename": "factory/tests/test_gate.py"})
+            raise AssertionError(args)
+
+        GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
+
     def test_nodes_yaml_on_pr_reaches_the_effect(self):
         n = nodes.load()["nodes"]["join"]["outcomes"]["changes"]["effects"][0]
         self.assertEqual(gate.resolve(n, {"tier": "mid"}, 7)["on"], "pr")
