@@ -68,7 +68,7 @@ class NodesTest(unittest.TestCase):
         c = nodes.chart(nodes.load())
         self.assertIn("on: issue +factory:ready", c)
         self.assertIn("on: PR +factory:ci-green", c)
-        self.assertRegex(c, r'N_merge\[.*\]:::planned')
+        self.assertRegex(c, r'N_adopt\[.*\]:::planned')
         self.assertIn("-.->", c)
 
 

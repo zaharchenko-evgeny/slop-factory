@@ -24,3 +24,5 @@ tracker:
   docs_impact_label: docs-impact
   bot_logins: []
   hold_label: factory:hold
+gates:
+  auto_merge: { enabled: true, max_risk: high }

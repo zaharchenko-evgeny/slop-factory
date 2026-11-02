@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parents[2])
 import gate  # noqa: E402
+import gate_github as M_GH  # noqa: E402
 import nodes  # noqa: E402
 from gate_github import GitHubGateTracker  # noqa: E402
 
@@ -83,9 +84,15 @@ class FakeGh:
             on = want in self.labels and (self.state == "open" or "state=all" in a)
             return json.dumps({"number": 7}) if on else ""
         if a.endswith("/pulls/5"):
-            return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
+            return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": u} for u in self.requested],
                                "labels": [{"name": x} for x in self.labels]})
+        if a.endswith("/git/ref/heads/main"):
+            return json.dumps({"object": {"sha": "m1"}})
+        if "pulls?state=closed" in a:
+            return json.dumps(getattr(self, "recent_pulls", []))
+        if "/compare/" in a:
+            return json.dumps({"behind_by": getattr(self, "behind_by", 0)})
         if "/commits/" in a:
             return json.dumps({"commit": {"committer": {"date": getattr(self, "head_date", "2026-01-02T00:00:00Z")}}})
         if "/collaborators/" in a:
@@ -444,10 +451,48 @@ class EffectsTest(unittest.TestCase):
     def test_merge(self):
         gh = FakeGh()
         self.assertTrue(tr(gh).apply(eff("merge", "match-head")))
-        self.assertEqual(gh.writes[0][:3], ["pr", "merge", "5"])
-        self.assertEqual(gh.writes[0][-2:], ["--match-head-commit", "h1"])
+        merge = next(w for w in gh.writes if w[:3] == ["pr", "merge", "5"])
+        self.assertEqual(merge[-2:], ["--match-head-commit", "h1"])
+        self.assertIn("DELETE", gh.writes[-1])  # the lock is released
         gh.merged = True
         self.assertFalse(tr(gh).apply(eff("merge", "match-head")))
+
+    def test_merge_waits_out_a_recent_merge_then_merges(self):
+        from datetime import datetime, timezone
+        from unittest import mock
+        gh = FakeGh()
+        gh.recent_pulls = [{"number": 6, "merged_at": datetime.now(timezone.utc).isoformat()}]
+        with mock.patch.object(M_GH.time, "sleep") as sleep:
+            self.assertTrue(tr(gh).apply(eff("merge", "match-head")))
+        self.assertTrue(0 < sleep.call_args[0][0] <= 60)
+        self.assertTrue(any(w[:2] == ["pr", "merge"] for w in gh.writes))
+
+    def test_merge_waits_for_a_moved_base(self):
+        gh = FakeGh()
+        gh.behind_by = 1
+        self.assertFalse(tr(gh).apply(eff("merge", "match-head")))
+        self.assertFalse(any(w[:2] == ["pr", "merge"] for w in gh.writes))
+        self.assertTrue(any("PUT" in w and w[3].endswith("/update-branch") for w in gh.writes))  # a retry event must follow
+        self.assertIn("DELETE", gh.writes[-1])
+
+    def test_merge_refused_while_another_run_holds_the_lock(self):
+        gh = FakeGh()
+        run = gh.__call__
+        def held(args):
+            if "POST" in args and any("git/refs" in x for x in args):
+                raise RuntimeError("422 Reference already exists")
+            return run(args)
+        self.assertFalse(tr(held).apply(eff("merge", "match-head")))
+
+    def test_update_branch_merges_main_into_the_pr(self):
+        gh = FakeGh()
+        self.assertTrue(tr(gh).apply({**eff("update-branch", "match-head"), "head": "h1"}))
+        self.assertEqual(gh.writes[0], ["api", "-X", "PUT", f"repos/{REPO}/pulls/5/update-branch", "-f", "expected_head_sha=h1"])
+
+    def test_approved_facts_read_risk_and_behind(self):
+        gh = FakeGh(labels=("factory:approved", "risk:low"))
+        gh.behind_by = 2
+        self.assertEqual((tr(gh).facts(7)["risk"], tr(gh).facts(7)["behind"]), ("low", True))
 
     def test_seen_is_a_no_op(self):
         gh = FakeGh()
