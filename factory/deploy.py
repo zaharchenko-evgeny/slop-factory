@@ -294,6 +294,18 @@ def same(key: str, have, want) -> bool:
     return have == want
 
 
+def environment_detail(x: dict) -> dict:
+    """Normalize get_environment's cloud fields to the deploy plan's environment shape."""
+    x = dict(x)
+    if {"serviceHost", "organization", "repositoryName"} <= x.keys():
+        x["repository"] = f"https://{x.pop('serviceHost')}/{x.pop('organization')}/{x.pop('repositoryName')}"
+    if "allowedDomains" in x:
+        x["domains"] = x.pop("allowedDomains")
+    if "instanceTypeKey" in x:
+        x["vm"] = x.pop("instanceTypeKey") or "default"
+    return x
+
+
 def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
     """(action, kind, name, planned item, existing item, changed fields) per create, update, delete; by name, prefix only.
     `plan["renames"]` ({old name: new name}) matches an existing item under its old name, so the update keeps its id."""
@@ -329,7 +341,7 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url: str) -
     automation_items = [automation_detail(automations.call("get_automation", {"automationId": x["automationId"]}))
                         for x in automation_items if x["name"].startswith(prefix)]
     env_items = _items(cloud.call("list_environments", {"repositoryUrl": repository_url}))
-    env_items = [cloud.call("get_environment", {"id": x["id"]})
+    env_items = [environment_detail(cloud.call("get_environment", {"id": x["id"]}))
                  for x in env_items if x["name"].startswith(prefix)]
     return automation_items, env_items
 
