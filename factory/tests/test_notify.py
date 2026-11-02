@@ -22,10 +22,9 @@ class NotifyTest(unittest.TestCase):
 
         def gh(args):
             calls.append(args)
-            if args[0] == "api" and args[1].endswith("/comments"):
-                return json.dumps(list(comments))
-            if args[0] == "api" and args[1].endswith("/timeline"):
-                return json.dumps(timeline)
+            if args[:3] == ["api", "--paginate", "--slurp"]:
+                items = comments if args[3].endswith("/comments") else timeline
+                return json.dumps([items[i:i + 30] for i in range(0, len(items), 30)])
             if args[0] == "api":
                 return json.dumps(issue)
             if args[0] == "issue" and args[1] == "comment":
@@ -57,6 +56,15 @@ class NotifyTest(unittest.TestCase):
                                                        {"body": "already done <!-- factory-notify:blocked -->"}])
         self.assertFalse(invoke())
         self.assertFalse(any(call[0] == "issue" for call in calls))
+
+    def test_markers_and_reasons_beyond_first_page_are_seen(self):
+        filler = [{"body": "chatter"}] * 30
+        calls, invoke = self.run_notify("blocked", filler + [{"body": "[factory] Late reason."}])
+        self.assertTrue(invoke())
+        self.assertIn("Late reason.", calls[-1][-1])
+        self.assertFalse(invoke())
+        calls, invoke = self.run_notify("blocked", filler + [{"body": "<!-- factory-notify:blocked -->"}])
+        self.assertFalse(invoke())
 
 
 if __name__ == "__main__":

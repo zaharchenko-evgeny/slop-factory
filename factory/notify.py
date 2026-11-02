@@ -15,6 +15,11 @@ def gh(args):
     return result.stdout
 
 
+def paged(run, endpoint):
+    pages = json.loads(run(["api", "--paginate", "--slurp", endpoint]))
+    return [item for page in pages for item in page]
+
+
 def notify(issue_number, run=gh):
     settings = config.load()
     repo = settings["tracker"]["repository"]
@@ -25,12 +30,12 @@ def notify(issue_number, run=gh):
     if stage is None:
         raise ValueError(f"issue {issue_number} is not blocked or waiting for answers")
 
-    comments = json.loads(run(["api", f"repos/{repo}/issues/{issue_number}/comments"]))
+    comments = paged(run, f"repos/{repo}/issues/{issue_number}/comments")
     marker = f"<!-- factory-notify:{stage} -->"
     if any(marker in comment["body"] for comment in comments):
         return False
     reason = next((c["body"] for c in reversed(comments) if c["body"].startswith("[factory]")), "No reason was recorded.")
-    timeline = json.loads(run(["api", f"repos/{repo}/issues/{issue_number}/timeline"]))
+    timeline = paged(run, f"repos/{repo}/issues/{issue_number}/timeline")
     pr = next((event.get("source", {}).get("issue", {}).get("html_url") for event in reversed(timeline)
                if event.get("source", {}).get("issue", {}).get("pull_request")), None)
     body = (f"[factory] Ticket needs attention: `{stage}`.\n\n{reason}\n\n"
