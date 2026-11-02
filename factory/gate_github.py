@@ -67,7 +67,7 @@ class GitHubGateTracker:
         """Issue numbers (open or closed) whose stage label is one of `stages`; ready, in-review, changes-requested and in-dev only when open."""
         found = set()
         for st in stages:
-            state = "open" if st in ("ready", "in-review", "changes-requested", "in-dev") else "all"
+            state = "open" if st in ("triage", "ready", "in-review", "changes-requested", "in-dev") else "all"
             found |= {i["number"] for i in self._list(f"issues?state={state}&labels={self.stages[st]}&per_page=100")
                       if "pull_request" not in i}
         return sorted(found)
@@ -277,7 +277,7 @@ class GitHubGateTracker:
             comments = self._list(f"issues/{n}/comments")
             if waiting and comments:
                 started = waiting[-1].get("created_at", "")
-                ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["ready"]]
+                ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") in (self.stages["triage"], self.stages["ready"])]
                 setter = (ready[-1].get("actor") or {}).get("login") if ready else None
                 f["answered"] = any((c.get("created_at") or "") > started and
                                      (c.get("user") or {}).get("type") != "Bot" and
@@ -552,7 +552,7 @@ class GitHubGateTracker:
             if new is None:
                 new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
                                            "-f", f"body={want}",
-                                           "-f", f"labels[]={self.stages['draft']}", *[x for r in risk for x in ("-f", f"labels[]={r}")]]))
+                                           "-f", f"labels[]={self.stages['ready']}", *[x for r in risk for x in ("-f", f"labels[]={r}")]]))
                 chained = False
             else:  # a reused child converges too: body, risk labels, chain
                 path = f"repos/{self.repo}/issues/{new['number']}"

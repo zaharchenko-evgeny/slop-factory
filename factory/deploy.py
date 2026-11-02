@@ -103,7 +103,7 @@ def repository(r: dict) -> dict:
 # reviewers, merged to done) from facts. `--main` runs it from main's graph (a PR-triggered node never trusts the PR).
 SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no file, label, comment or review "
                  "itself. Run `factory sweep{args}` once and report its JSON output.")
-SCRIPT_ARGS = {"join": " --main", "finish": " --main --issue <issue number from the trigger payload>",
+SCRIPT_ARGS = {"join": " --main", "start": " --main", "finish": " --main --issue <issue number from the trigger payload>",
                "reopen": " --main", "merge": " --main",
                "recover": " --stale"}
 
