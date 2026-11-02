@@ -470,13 +470,15 @@ def join_decision(facts):
     which counts every required agent focus, human change requests and CI. A fix label takes the ticket's
     complexity tier (mid when unlabelled)."""
     rereviewed = has_dispute_rereview(facts)
-    if (facts.get("handed_to_fix") and not rereviewed) or not facts.get("round_complete") or facts.get("round_verdict") is None:
+    if (facts.get("handed_to_fix") and not rereviewed) or facts.get("pending_rereviews") \
+            or not facts.get("round_complete") or facts.get("round_verdict") is None:
         return None  # an open round, or a head whose round already went to a fix (its push comes next)
     return ("changes" if facts["round_verdict"] == "changes" else "approved"), {"tier": fix_tier(facts)}
 
 
 def has_dispute_rereview(facts):
-    return any(r.get("rereview") and r.get("commit_id") == facts.get("head") for r in facts.get("reviews", []))
+    return any(r.get("agent") and r.get("rereview") and r.get("commit_id") == facts.get("head")
+               for r in facts.get("reviews", []))
 
 
 def retro_payload(facts):

@@ -220,7 +220,7 @@ class GitHubGateTracker:
              "head": None, "pr": None, "mergeable": None, "conflict": False, "ci": "none", "reviews": [], "requested_reviewers": [],
              "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
              "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
-             "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
+             "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none", "pending_rereviews": [],
              "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
              "handed_to_fix": False,
              "issue_state": issue.get("state", "open"),
@@ -232,6 +232,8 @@ class GitHubGateTracker:
                                for k in kids])
         if pr:
             head, reviews = pr["head"]["sha"], self._reviews(pr)
+            pr_labels = {x["name"] for x in self._api(f"issues/{pr['number']}")["labels"]}
+            pending_rereviews = [focus for focus in required if f"factory:rereview-{focus}" in pr_labels]
             latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
@@ -244,6 +246,7 @@ class GitHubGateTracker:
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), conflict=pr.get("mergeable") is False, ci=ci, reviews=reviews,
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
+                     pending_rereviews=pending_rereviews,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
                      fix_rounds=len({(r["commit_id"], r["rereview"]) for r in reviews
@@ -348,9 +351,11 @@ class GitHubGateTracker:
         f = self.facts(n)
         for who in f["ignored_reviews"]:
             print(f"join: ignored unmarked bot review by {who}", file=sys.stderr)
-        rereviewed = any(r["rereview"] and r["commit_id"] == f["head"] for r in f["reviews"])
+        rereviewed = any(r["agent"] and r["rereview"] and r["commit_id"] == f["head"] for r in f["reviews"])
         if f["handed_to_fix"] and not rereviewed:
             return False  # this head already went to a fix; its push starts the next round
+        if f["pending_rereviews"]:
+            return False  # every disputed focus gets its same-head review before the round can move
         if f["stage"] == "in-review" and f["waiting_reviewers"]:
             return self._rerequest(n, f["waiting_reviewers"])  # nothing moves until they decide again
         if not f["round_complete"] or f["stage"] != "in-review":

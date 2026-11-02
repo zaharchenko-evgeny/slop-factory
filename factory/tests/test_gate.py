@@ -755,6 +755,19 @@ class ConflictTest(unittest.TestCase):
                                           "round_complete": False, "waiting_reviewers": ["alice"],
                                           "reviews": [pending]}), ("join", "waiting", {}))
 
+    def test_dispute_join_requires_agent_and_all_requested_focuses(self):
+        untrusted = {"agent": False, "focus": "behaviour", "verdict": "approve", "commit_id": "abc",
+                     "rereview": True}
+        facts = {"stage": "in-review", "head": "abc", "handed_to_fix": True, "round_complete": True,
+                 "round_verdict": "approve", "reviews": [untrusted]}
+        self.assertIsNone(gate.join_decision(facts))
+
+        facts.update(handed_to_fix=False, pending_rereviews=["structure-security"])
+        self.assertIsNone(gate.join_decision(facts))
+        tr, (results, failed) = self.sweep({7: {**facts, "stage": "in-review", "ci": "green"}})
+        self.assertFalse(failed)
+        self.assertEqual((results, tr.tickets[7]["stage"]), ([], "in-review"))
+
     def test_unresolvable_update_blocks_with_files(self):
         tr = MemoryTracker({7: {"stage": "changes-requested"}})
         reason = "[factory] Blocked: merge conflict in factory/gate.py, workflows/nodes.yaml"
