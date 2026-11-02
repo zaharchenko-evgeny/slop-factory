@@ -40,7 +40,9 @@ focus; stay in yours.
    PR far over its size estimate is scope creep), a wrong implementation. When
    the ticket provides a design section (`Design: docs/<file>.md#<section>`),
    check it when the PR changes behaviour and file a `blocking` finding if the
-   section is not updated. A missing design reference is not a finding.
+   section is not updated. A missing design reference is not a finding. For
+   paths listed in `engine/defaults.yaml` under `limits.generated_paths`, check
+   them through the test that compares them with their generator.
    When an acceptance check fails, run it and include every hit in one finding,
    listing all affected paths and lines rather than stopping at the first hit.
 5. Use `verdict: approve` when there is no blocking finding and

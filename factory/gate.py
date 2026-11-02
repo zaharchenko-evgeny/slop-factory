@@ -23,6 +23,7 @@ uses factory/gate_github.py (bot login from `targets.air.bot_login`).
 """
 import argparse
 from collections import Counter
+import fnmatch
 import json
 import re
 import subprocess
@@ -331,7 +332,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         if estimate is not None:
             config = config_mod.load()
             base = next((r["default_branch"] for r in config["repositories"] if r.get("role") == "primary"), "main")
-            size, files = branch_size(f"origin/{base}")
+            size, files = branch_size(f"origin/{base}", generated_paths=config.get("limits", {}).get("generated_paths", []))
             limit = config.get("limits", {}).get("max_diff_lines", 400)
             if size * 2 > estimate * 3 and size > limit:
                 largest = ", ".join(f"{path} ({count})" for path, count in files[:5]) or "none"
@@ -452,7 +453,7 @@ def size_estimate(body):
     return int(m[1]) if m else None
 
 
-def branch_size(base, checkout=None):
+def branch_size(base, checkout=None, generated_paths=()):
     """Changed lines in the delivery checkout against the default branch, with whole-file deletions counted once."""
     checkout = Path(checkout or Path.cwd())
     result = subprocess.run(
@@ -465,6 +466,8 @@ def branch_size(base, checkout=None):
     for line in result.stdout.splitlines():
         added, deleted, path = line.split("\t", 2)
         if path.startswith("skills/vendor/"):
+            continue
+        if any(fnmatch.fnmatchcase(path, pattern) for pattern in generated_paths):
             continue
         if added == deleted == "-":  # binary files have no line count
             continue
