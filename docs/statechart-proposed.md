@@ -19,7 +19,8 @@ flowchart LR
     classDef planned fill:#fafafa,stroke:#999,stroke-dasharray:5 5,color:#666
     classDef ext fill:#efe,stroke:#393
     N_human["<b>human</b><br/>on: a person<br/>human"]:::node
-    N_intake["<b>intake</b><br/>on: issue +factory:ready<br/>router · cheap"]:::node
+    N_intake["<b>intake</b><br/>on: issue +factory:triage<br/>router · cheap"]:::node
+    N_start["<b>start</b><br/>on: issue +factory:ready<br/>script"]:::node
     N_investigate["<b>investigate</b> (#161)<br/>on: issue +factory:investigating<br/>developer · mid"]:::planned
     N_implement["<b>implement</b><br/>on: issue +factory:implement-{cheap|mid|strong}<br/>developer · cheap|mid|strong"]:::node
     N_adopt["<b>adopt</b> (#160)<br/>on: PR +factory:adopt<br/>router · cheap"]:::planned
@@ -49,8 +50,10 @@ flowchart LR
     S_not_actionable(["not-actionable"]):::stage
     S_ready(["ready"]):::stage
     S_split(["split"]):::stage
+    S_triage(["triage"]):::stage
     S_none(["PR with no stage"]):::stage
     S_draft --> N_human
+    S_ready --> N_human
     S_in_dev --> N_human
     S_in_review --> N_human
     S_changes_requested --> N_human
@@ -60,14 +63,18 @@ flowchart LR
     S_split --> N_human
     S_not_actionable --> N_human
     S_investigating --> N_human
+    N_human -- "triage" --> S_triage
+    S_triage --> N_human
     N_human -- "ready" --> S_ready
-    S_ready --> N_intake
-    N_intake -- "proceed +factory:implement-{tier}" --> S_in_dev
+    S_triage --> N_intake
+    N_intake -- "proceed" --> S_ready
     N_intake -- "grill" --> S_needs_answers
     N_intake -- "split" --> S_split
     N_intake -- "not-actionable" --> S_not_actionable
-    S_ready -.-> N_intake
+    S_triage -.-> N_intake
     N_intake -. "bug (#161)" -.-> S_investigating
+    S_ready --> N_start
+    N_start -- "started +factory:implement-{tier}" --> S_in_dev
     S_investigating -.-> N_investigate
     N_investigate -. "bug" -.-> S_in_dev
     N_investigate -. "intended" -.-> S_not_actionable
@@ -94,7 +101,7 @@ flowchart LR
     N_reopen -- "reopened" --> S_in_review
     S_approved --> N_merge
     S_needs_answers --> N_finish
-    N_finish -- "answered" --> S_ready
+    N_finish -- "answered" --> S_triage
     S_split --> N_finish
     N_finish -- "children-done" --> S_done
     N_finish -- "child-blocked" --> S_blocked
@@ -119,8 +126,9 @@ flowchart LR
 
 | Node | Starts on | Writes (labels it adds, stage it sets) | Role · tier | Status |
 |---|---|---|---|---|
-| `human` | `a person` | ready: → ready | human | built |
-| `intake` | `issue +factory:ready` | proceed: +factory:implement-{tier} → in-dev<br>grill: → needs-answers<br>split: → split<br>not-actionable: → not-actionable<br>bug: → investigating (planned #161) | router · cheap | built |
+| `human` | `a person` | triage: → triage<br>ready: → ready | human | built |
+| `intake` | `issue +factory:triage` | proceed: → ready<br>grill: → needs-answers<br>split: → split<br>not-actionable: → not-actionable<br>bug: → investigating (planned #161) | router · cheap | built |
+| `start` | `issue +factory:ready` | started: +factory:implement-{tier} → in-dev | script | built |
 | `investigate` | `issue +factory:investigating` | bug: → in-dev<br>intended: → not-actionable<br>cannot-reproduce: → needs-answers | developer · mid | planned #161 |
 | `implement` | `issue +factory:implement-{cheap|mid|strong}` | done: → in-review<br>error: +factory:implement-{next} → in-dev<br>blocked: → blocked<br>failed: → blocked | developer · cheap/mid/strong | built |
 | `adopt` | `PR +factory:adopt` | adopted: → in-review | router · cheap | planned #160 |
@@ -130,7 +138,7 @@ flowchart LR
 | `update` | `PR +factory:update-{cheap|mid|strong}` | resolved: → in-review<br>escalate: +factory:update-{next} → changes-requested<br>unresolvable: → blocked | developer · cheap/mid/strong | built |
 | `reopen` | `PR push`<br>`PR +factory:ci-red` | reopened: → in-review | script | built |
 | `merge` | `issue +factory:approved`<br>`PR +factory:ci-green` | merged: —<br>updated: —<br>waiting: — | script | built |
-| `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked`<br>`issues.comment` | answered: → ready<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
+| `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked`<br>`issues.comment` | answered: → triage<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
 | `notify` | `issue +factory:blocked`<br>`issue +factory:needs-answers` | notified: — | script | built |
 | `recover` | `cron 15 * * * *` | blocked: → blocked | script | built |
 | `doctor` | `cron 0 5 * * *` | probed: — | script | built |
