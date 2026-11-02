@@ -12,14 +12,14 @@ environments:
     repository: primary
     startup: .air/cloud/startup.sh
     secrets: []   # gh is jetbrains-air[bot] through the platform's GH_TOKEN
-    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org]
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, '*.blob.core.windows.net', pypi.org, files.pythonhosted.org]
     vm: default
   write:
     repository: primary
     startup: .air/cloud/startup.sh
     secrets: []
     # registry.npmjs.org: `npx agnix` of the acceptance checks
-    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org, registry.npmjs.org]
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, '*.blob.core.windows.net', pypi.org, files.pythonhosted.org, registry.npmjs.org]
     vm: default
   ops:
     repository: primary
@@ -32,7 +32,7 @@ adapters:
   pr: github              # state, head, CI, reviews by head SHA
 schedules:
   routines: { cron: "0 6 * * *" }
-  recover: { cron: "0 6,18 * * *" }
+  recover: { cron: "15 * * * *" }
 nodes:
   human:
     triggers: ["manual"]
@@ -98,7 +98,7 @@ nodes:
     pilot: true
     focuses: [full, behaviour, structure-security]
     # CI labels the PR when it finishes (.github/workflows/ci-state.yml): reviewers only read green code.
-    triggers: ["pull_request.labeled factory:ci-green"]
+    triggers: ["pull_request.labeled factory:ci-green", "pull_request.labeled factory:rereview-<focus>"]
     when: { stage: in-review, focus: required-by-risk, ci: [green] }
     role: reviewer
     output: read-only
@@ -149,10 +149,9 @@ nodes:
       unresolvable: { effects: [{ comment: reason }, { stage: blocked }] }
   reopen:
     env: read
-    enabled: false
-    ticket: 196
+    pilot: true
     ci-independent: true
-    triggers: ["pull_request.synchronize"]
+    triggers: ["pull_request.synchronize", "pull_request.labeled factory:ci-red"]
     when: { stage: approved }
     role: script
     output: read-only
@@ -175,14 +174,14 @@ nodes:
     pilot: true
     ci-independent: true   # runs after the merge
     # A closed or blocked child lets the sweep check its split parent.
-    triggers: ["pull_request.merged", "issues.closed", "issues.labeled factory:blocked"]
+    triggers: ["pull_request.merged", "issues.closed", "issues.labeled factory:blocked", "issues.comment"]
     when: { always: true }   # the script picks each ticket's outcome from its facts (pr-state, children)
     role: script
     tier: cheap   # Air automation model; it does no work: the automation runs `uv run factory/gate.py sweep`
     run: uv run factory/gate.py sweep
     output: read-only
     outcomes:
-      answered: { enabled: false, ticket: 157, from: [needs-answers], effects: [{ stage: ready }] }
+      answered: { from: [needs-answers], effects: [{ stage: ready }] }
       children-done: { from: [split], effects: [{ stage: done }] }
       child-blocked: { from: [split], effects: [{ comment: reason }, { stage: blocked }] }
       conflict: { from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }

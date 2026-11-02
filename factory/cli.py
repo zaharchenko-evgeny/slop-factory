@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 # node must import them from main's worktree, because importing runs module-level code with the node's credentials.
 config = deploy = gate = nodes = None
 # Mirrors deploy.PR_TRIGGERED_NODES (a test keeps them equal); it cannot be read from deploy before the engine is chosen.
-PR_NODES = {"review", "join", "fix", "update", "finish"}
+PR_NODES = {"review", "join", "fix", "update", "finish", "reopen"}
 
 STATE = Path(".factory/begin.json")
 
@@ -43,7 +43,7 @@ def from_main():
     if shared.is_dir():
         return str(shared)
     root = tempfile.mkdtemp(prefix="factory-main-") + "/main"
-    for cmd in (["fetch", "origin", "main"], ["worktree", "add", "--detach", root, "origin/main"]):
+    for cmd in (["fetch", "origin", "main"], ["worktree", "add", "--detach", root, "FETCH_HEAD"]):
         subprocess.run(["git", *cmd], check=True, capture_output=True)
     return root
 

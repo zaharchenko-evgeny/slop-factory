@@ -28,7 +28,7 @@ def gate_stop(f):
     from gate import stop_reason
     return stop_reason(f, fix=True)
 
-MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))? -->")
+MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))?(?: rereview=(1))? -->")
 FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
 GOOD_CI = {"success", "neutral", "skipped"}
@@ -89,8 +89,17 @@ class GitHubGateTracker:
     def _ci(self, sha):
         """CI at `sha` from the Actions workflow runs (the Air GitHub App has Actions: read, not Checks: read, so
         check-runs answers 403 in a run). Per workflow the latest run counts, so a rerun replaces a failure."""
+        latest = self._workflow_runs(sha)
+        if not latest:
+            return "none"
+        done = [r.get("conclusion") if r.get("status") == "completed" else None for r in latest.values()]
+        if any(c in BAD_CI for c in done):
+            return "red"
+        return "green" if all(c in GOOD_CI for c in done) else "pending"
+
+    def _workflow_runs(self, sha, timeout=None):
         out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs?head_sha={sha}&per_page=100",
-                        "--jq", ".workflow_runs[]"])
+                        "--jq", ".workflow_runs[]"], **({"timeout": timeout} if timeout is not None else {}))
         latest = {}
         for r in (json.loads(x) for x in out.splitlines() if x.strip()):
             if r.get("event") == "workflow_run":  # ci-state.yml reports CI; it is not CI
@@ -99,12 +108,37 @@ class GitHubGateTracker:
             if key not in latest or (r.get("run_number"), r.get("run_attempt", 1)) > (
                     latest[key].get("run_number"), latest[key].get("run_attempt", 1)):
                 latest[key] = r
-        if not latest:
-            return "none"
-        done = [r.get("conclusion") if r.get("status") == "completed" else None for r in latest.values()]
-        if any(c in BAD_CI for c in done):
-            return "red"
-        return "green" if all(c in GOOD_CI for c in done) else "pending"
+        return latest
+
+    def ci_failure(self, sha):
+        """Best-effort details for the first failed step at the head."""
+        try:
+            for run in self._workflow_runs(sha, timeout=10).values():
+                if run.get("conclusion") not in BAD_CI:
+                    continue
+                out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs/{run['id']}/jobs?per_page=100",
+                                "--jq", ".jobs[]"], timeout=10)
+                for line in out.splitlines():
+                    if not line.strip():
+                        continue
+                    job = json.loads(line)
+                    steps = [step for step in job.get("steps", []) if step.get("conclusion") in BAD_CI]
+                    if not steps:
+                        continue
+                    for step in steps:
+                        failure = {"job": job["name"], "step": step["name"], "log": None}
+                        try:
+                            logs = self.run(["api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs"], timeout=10)
+                            if not logs.strip():
+                                raise RuntimeError("empty log response")
+                            failure["log"] = "\n".join(logs.splitlines()[-60:])
+                        except Exception as e:
+                            failure["error"] = " ".join(str(e).splitlines()) or type(e).__name__
+                        return failure
+        except Exception as e:
+            return {"job": None, "step": None, "log": None,
+                    "error": " ".join(str(e).splitlines()) or type(e).__name__}
+        return None
 
     def _reviews(self, pr):
         out = []
@@ -114,8 +148,10 @@ class GitHubGateTracker:
             verdict = (m[3] if agent else {"APPROVED": "approve", "CHANGES_REQUESTED": "changes"}.get(r["state"]))
             out.append({"author": r["user"]["login"], "state": r["state"], "commit_id": r["commit_id"],
                         "focus": m[1] if m else None, "round": int(m[2]) if m else None,
+                        "rereview": bool(m and m[4]),
                         "verdict": verdict, "agent": agent, "assoc": r.get("author_association"), "submitted_at": r.get("submitted_at"),
                         "bot": r["user"].get("type") == "Bot" or r["user"]["login"].endswith("[bot]")})
+            out[-1]["findings"] = re.findall(r"^\*\*([A-Z]\d+)\*\*", r.get("body") or "", re.M)
         return out
 
     def _can_write(self, login):
@@ -149,8 +185,15 @@ class GitHubGateTracker:
             raise
 
     def blocking(self, n):
-        """Issues whose native dependency list names `n` as a blocker."""
-        return self._list(f"issues/{n}/dependencies/blocking")
+        """Issues whose native or body fallback dependency list names `n` as a blocker."""
+        dependents = self._list(f"issues/{n}/dependencies/blocking")
+        known = {i["number"] for i in dependents}
+        for issue in self._list("issues?state=open&per_page=100"):
+            if issue["number"] != n and issue["number"] not in known and re.search(
+                    rf"(?im)^Blocked by: #{n}\s*$", issue.get("body") or ""):
+                dependents.append(issue)
+                known.add(issue["number"])
+        return dependents
 
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
@@ -212,17 +255,35 @@ class GitHubGateTracker:
         stage = max((x for x in labels if x in by_label), key=lambda x: added.get(x, -1), default=None)
         stage = by_label.get(stage, "none")
         blockers = [b for b in self._list(f"issues/{n}/dependencies/blocked_by") if b["state"] == "open"]
+        body = issue.get("body") or ""
+        for number in re.findall(r"(?im)^Blocked by: #(\d+)\s*$", body):
+            blocker = self._api(f"issues/{number}")
+            if blocker.get("state") == "open":
+                blockers.append({"number": int(number)})
         risk = "low" if self.risk_labels["low"] in labels else "high"
         required, pr = FOCUSES[risk], self._pr(n)
         f = {"stage": stage, "attrs": [x for x in labels if x not in by_label], "blockers_open": len(blockers),
              "head": None, "pr": None, "mergeable": None, "conflict": False, "ci": "none", "reviews": [], "requested_reviewers": [],
              "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
              "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
-             "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
+             "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none", "pending_rereviews": [],
              "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
              "handed_to_fix": False,
              "issue_state": issue.get("state", "open"),
-             "title": issue.get("title", ""), "body": issue.get("body") or "", "branch": None}
+             "title": issue.get("title", ""), "body": body, "branch": None}
+        if stage == "needs-answers":
+            waiting = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["needs-answers"]]
+            comments = self._list(f"issues/{n}/comments")
+            if waiting and comments:
+                started = waiting[-1].get("created_at", "")
+                ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["ready"]]
+                setter = (ready[-1].get("actor") or {}).get("login") if ready else None
+                f["answered"] = any((c.get("created_at") or "") > started and
+                                     (c.get("user") or {}).get("type") != "Bot" and
+                                     not (c.get("user") or {}).get("login", "").endswith("[bot]") and
+                                     ((c.get("user") or {}).get("login") == setter or
+                                      self._can_write((c.get("user") or {}).get("login", "")))
+                                     for c in comments)
         if stage == "split":
             kids = self._list(f"issues/{n}/sub_issues")
             f.update(children=[{"number": k.get("number"), "state": k.get("state"), "not_planned": k.get("state") == "closed" and k.get("state_reason") == "not_planned",
@@ -230,6 +291,8 @@ class GitHubGateTracker:
                                for k in kids])
         if pr:
             head, reviews = pr["head"]["sha"], self._reviews(pr)
+            pr_labels = {x["name"] for x in self._api(f"issues/{pr['number']}")["labels"]}
+            pending_rereviews = [focus for focus in required if f"factory:rereview-{focus}" in pr_labels]
             latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
@@ -242,30 +305,42 @@ class GitHubGateTracker:
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), conflict=pr.get("mergeable") is False, ci=ci, reviews=reviews,
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
+                     pending_rereviews=pending_rereviews,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                     fix_rounds=len({r["commit_id"] for r in reviews if r["agent"] and r["verdict"] == "changes"
-                                     and (r.get("submitted_at") or "") >= since}))  # rounds since ready: heads with an agent change request
+                     fix_rounds=len({(r["commit_id"], r["rereview"]) for r in reviews
+                                     if r["agent"] and r["verdict"] == "changes"
+                                     and (r.get("submitted_at") or "") >= since}))  # same-head dispute rereviews count as a new round
         return f
 
     def stale_facts(self, n):
         """facts plus what the stale sweep needs: `since` (last label or commit event, ISO), the command label
         (`factory:implement-*` on the issue, `factory:fix-*` on the PR) and when it was added, the head commit
         date, the PR's CI label, and the `[factory] recover:` comments written since the stage began."""
-        f, labeled = self.facts(n), {}
+        f, labeled, events = self.facts(n), {}, []
         pr = f["pr"]
         for t in [n] + ([pr] if pr else []):
             for e in self._list(f"issues/{t}/events"):
+                events.append((t, e))
                 if e.get("event") == "labeled":
                     labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
         pr_labels = self._labels(pr) if pr else []
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
-        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-"))), None)
+        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-", "factory:update-"))), None)
+        command_labels = ("factory:ready", "factory:triage", "factory:implement-", "factory:fix-",
+                          "factory:update-", "factory:ci-green")
+        active_commands = {(t, x) for t, x in have if x == "factory:ready" or x == "factory:triage"
+                           or x == "factory:ci-green" or x.startswith(command_labels[2:5])}
+        command_events = [e for t, e in events if e.get("event") == "labeled"
+                          and (t, e.get("label", {}).get("name")) in active_commands]
         commit_at = self._api(f"commits/{f['head']}")["commit"]["committer"]["date"] if f["head"] else None
+        latest_event = max([e.get("created_at", "") for _, e in events] + [commit_at or ""])
+        latest_command = max((e["created_at"] for e in command_events), default="")
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
         comments = [c["body"] for c in self._list(f"issues/{n}/comments") if c["body"].startswith("[factory] recover:")
                     and c["created_at"] >= stage_at]
         return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1],
+                "command_pending": bool(latest_command and latest_command == latest_event),
                 "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
                 "ci_label": next((x[11:] for x in pr_labels if x in ("factory:ci-green", "factory:ci-red")
                                  and x[11:] == f.get("ci")), None)}  # a label left over from an earlier head is not this head's CI
@@ -315,9 +390,13 @@ class GitHubGateTracker:
             body = value if value.startswith("[factory]") else f"[factory] {value}"
             if e.get("run_id") and "Factory-Run:" not in body:
                 body += f"\n\nFactory-Run: {e['run_id']}"
-            if any(c["body"] == body for c in self._list(f"issues/{n}/comments")):
+            target = e.get("on") or "issue"
+            pr = self._pr(n) if target == "pr" else None
+            if target == "pr" and pr is None:
+                raise RuntimeError(f"comment: no PR for ticket {n}")
+            if any(c["body"] == body for c in self._list(f"issues/{pr['number'] if pr else n}/comments")):
                 return False
-            self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
+            self.run(["issue", "comment", str(pr["number"] if pr else n), "-R", self.repo, "--body", body])
             return True
         if kind == "review":
             return self._review(n, e)
@@ -341,8 +420,11 @@ class GitHubGateTracker:
         f = self.facts(n)
         for who in f["ignored_reviews"]:
             print(f"join: ignored unmarked bot review by {who}", file=sys.stderr)
-        if f["handed_to_fix"]:
+        rereviewed = any(r["agent"] and r["rereview"] and r["commit_id"] == f["head"] for r in f["reviews"])
+        if f["handed_to_fix"] and not rereviewed:
             return False  # this head already went to a fix; its push starts the next round
+        if f["pending_rereviews"]:
+            return False  # every disputed focus gets its same-head review before the round can move
         if f["stage"] == "in-review" and f["waiting_reviewers"]:
             return self._rerequest(n, f["waiting_reviewers"])  # nothing moves until they decide again
         if not f["round_complete"] or f["stage"] != "in-review":
@@ -355,6 +437,8 @@ class GitHubGateTracker:
             for e in gate_clear(n):
                 self.apply(e)
             return self.apply({"ticket": n, "kind": "stage", "value": "blocked"})
+        if rereviewed:
+            self.apply({"ticket": n, "kind": "unlabel", "value": "factory:fix-*", "on": "pr"})
         wrote = self.apply({"ticket": n, "kind": "label", "value": f"factory:fix-{tier}", "on": "pr"})
         return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote
 
@@ -382,7 +466,10 @@ class GitHubGateTracker:
         if pr is None or not focus:
             raise RuntimeError("review: needs a PR and a payload `focus`")
         head = pr["head"]["sha"]
-        if any(r["agent"] and r["focus"] == focus and r["commit_id"] == head for r in self._reviews(pr)):
+        existing = [r for r in self._reviews(pr) if r["agent"] and r["focus"] == focus and r["commit_id"] == head]
+        labels = self._labels(pr["number"])
+        rereview = f"factory:rereview-{focus}" in labels
+        if existing and (not rereview or any(r["rereview"] for r in existing)):
             return False
         facts = self.facts(n)
         earlier_change_heads = {r["commit_id"] for r in facts["reviews"]
@@ -391,7 +478,7 @@ class GitHubGateTracker:
                                 and (r.get("submitted_at") or "") >= self._since}
         rnd = e.get("round") or len(earlier_change_heads) + 1
         verdict = "approve" if e["value"].startswith("approve") else "changes"
-        marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict} -->"
+        marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict}{' rereview=1' if rereview else ''} -->"
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
         defang = lambda t: str(t).replace("<!--", "<!\u200b--")  # noqa: E731  # prose never carries a marker
         lines = [defang(f"**{x['id']}** {x['file']} — {x['finding']}") for x in found]
@@ -401,6 +488,8 @@ class GitHubGateTracker:
             body += f"\n\nFactory-Run: {e['run_id']}"
         self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
                   "-f", "event=COMMENT", "-f", f"body={body}"])
+        if rereview:
+            self._edit(pr["number"], remove=[f"factory:rereview-{focus}"], on="pr")
         return True
 
     def _create(self, n, children):
@@ -411,12 +500,14 @@ class GitHubGateTracker:
         open_issues = {i["title"]: i for i in reversed(self._list("issues?state=open&per_page=100"))
                        if "pull_request" not in i and mark in (i.get("body") or "")}
         risk = [x for x in self._labels(n) if x.startswith("risk:")]  # a slice keeps its parent's risk path
-        wrote, prev = False, None  # prev: the id of the slice before, which blocks the next
+        wrote, prev, prev_number = False, None, None  # prior slice blocks the next
+        parent_body = self._api(f"issues/{n}").get("body") or ""
         for c in children:
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
             new = open_issues.get(c["title"])
             if c["title"] in subs and new is None:  # not created by this ticket: leave it alone
                 prev = subs[c["title"]].get("id")
+                prev_number = subs[c["title"]].get("number")
                 continue
             want = f"{c.get('body', '')}\n\n{mark}"
             if new is None:
@@ -439,12 +530,32 @@ class GitHubGateTracker:
                 wrote = wrote or bool(stale or missing)
                 chained = bool(prev) and prev in {b["id"] for b in self._list(f"issues/{new['number']}/dependencies/blocked_by")}
             if prev and not chained:
+                try:
+                    self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/dependencies/blocked_by", "-F", f"issue_id={prev}"])
+                except RuntimeError as e:
+                    if "403" not in str(e) and "Resource not accessible" not in str(e):
+                        raise
+                    want = self._blocked_body(want, prev_number) if prev_number else want
+                    self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{new['number']}", "-f", f"body={want}"])
                 wrote = True
-                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/dependencies/blocked_by", "-F", f"issue_id={prev}"])
             if c["title"] not in subs:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
             if new["id"] not in blockers:
-                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={new['id']}"])
+                try:
+                    self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={new['id']}"])
+                except RuntimeError as e:
+                    if "403" not in str(e) and "Resource not accessible" not in str(e):
+                        raise
+                    parent_body = self._blocked_body(parent_body, new["number"])
+                    self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{n}", "-f",
+                              f"body={parent_body}"])
+                wrote = True
             wrote = wrote or c["title"] not in subs or new["id"] not in blockers
             prev = new["id"]
+            prev_number = new["number"]
         return wrote
+
+    @staticmethod
+    def _blocked_body(body, number):
+        line = f"Blocked by: #{number}"
+        return body if re.search(rf"(?m)^{re.escape(line)}$", body) else f"{line}\n\n{body}"

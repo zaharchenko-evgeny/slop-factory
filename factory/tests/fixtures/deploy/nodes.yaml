@@ -1,15 +1,15 @@
 environments:
-  read: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com], vm: default }
-  write: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com], vm: default }
+  read: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
+  write: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
 schedules:
   sweep: { cron: "*/10 * * * *" }
-  recover: { cron: "0 6,18 * * *" }
+  recover: { cron: "15 * * * *"}
 nodes:
   human: { triggers: [manual], when: { actor: human }, role: human, outcomes: {} }
   intake: { env: read, triggers: ["issues.labeled factory:ready"], role: router, tier: cheap, output: read-only, outcomes: {} }
   implement: { env: write, tiers: [cheap, mid], triggers: ["issues.labeled factory:implement-<tier>"], role: developer, output: create-pr, outcomes: {} }
   update: { env: write, tiers: [cheap, mid, strong], triggers: ["pull_request.labeled factory:update-<tier>"], role: developer, output: push-to-source, outcomes: {} }
-  review: { env: read, focuses: [full, behaviour], triggers: ["pull_request.opened", "pull_request.synchronize"], role: reviewer, outcomes: {} }
+  review: { env: read, focuses: [full, behaviour], triggers: ["pull_request.opened", "pull_request.synchronize", "pull_request.labeled factory:rereview-<focus>"], role: reviewer, outcomes: {} }
   off: { env: read, enabled: false, triggers: ["issues.labeled factory:x"], role: router, outcomes: {} }
   sweep: { env: read, triggers: ["schedule sweep"], role: script, output: read-only, outcomes: {} }
   recover: { env: read, triggers: ["schedule recover"], when: { always: true }, role: script, tier: cheap, run: uv run factory/gate.py sweep --stale, output: read-only, outcomes: {} }

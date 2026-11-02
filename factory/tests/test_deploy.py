@@ -171,11 +171,18 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(a["[Slop factory] sweep"]["prompt"].endswith("Run `factory sweep` once and report its JSON output."))
         self.assertIn("`factory begin intake`", a["[Slop factory] intake"]["prompt"])
 
-    def test_recover_runs_the_stale_sweep_twice_a_day_on_the_cheap_tier(self):
+    def test_review_automations_trigger_on_focus_rerequest_labels(self):
+        for a in json.loads((FIX / "air-plan.json").read_text())["automations"]:
+            if a["name"].startswith("[Slop factory] review-"):
+                self.assertIn({"triggerType": "EVENT", "source": "github", "eventType": "pull_request.labeled",
+                               "filters": {"label": f"factory:rereview-{a['name'].rsplit('-', 1)[1]}",
+                                           "pr_author": "jetbrains-air[bot]"}}, a["triggers"])
+
+    def test_recover_runs_the_stale_sweep_hourly_on_the_cheap_tier(self):
         for plan in (json.loads((FIX / "air-plan.json").read_text()),
                      deploy.plan_air(nodes.load(), cfg.load())):
             a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] recover")
-            self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "0 6,18 * * *", "timezone": "UTC"}])
+            self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "15 * * * *", "timezone": "UTC"}])
             self.assertTrue(a["prompt"].endswith("Run `factory sweep --stale` once and report its JSON output."))
             intake = next(x for x in plan["automations"] if x["name"] == "[Slop factory] intake")  # router: cheap
             self.assertEqual(a["agentAndModel"], intake["agentAndModel"])
@@ -192,10 +199,18 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(a["[Slop factory] intake"]["triggerVcs"], [{"outputBehaviour": "read-only"}])
         for e in deploy.plan_air(nodes.load(), cfg.load())["environments"]:
             self.assertNotIn("GITHUB_TOKEN", e["secrets"])
+            if e["name"] in ("[Slop factory] read", "[Slop factory] write"):
+                self.assertIn("*.blob.core.windows.net", e["domains"])
         join = next(x for x in deploy.plan_air(nodes.load(), cfg.load())
                     ["automations"] if x["name"] == "[Slop factory] join")
         self.assertEqual([(x["eventType"], x["filters"].get("label")) for x in join["triggers"]],
                          [("pull_request_review.submitted", None), ("pull_request.labeled", "factory:ci-red")])
+        reopen = next(x for x in deploy.plan_air(nodes.load(), cfg.load())
+                       ["automations"] if x["name"] == "[Slop factory] reopen")
+        self.assertEqual([(x["eventType"], x["filters"].get("label"), x["filters"].get("pr_author"))
+                          for x in reopen["triggers"]],
+                         [("pull_request.synchronize", None, "jetbrains-air[bot]"),
+                          ("pull_request.labeled", "factory:ci-red", "jetbrains-air[bot]")])
         assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] != "[Slop factory] recover" for x in a["triggers"]), "no polling"  # recover is the one safety net
 
     def test_one_triggervcs_entry_per_trigger_and_a_spec_per_automation(self):
@@ -207,7 +222,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual((spec["node"], spec["tier"], spec["engine"]), ("implement", "mid", cfg.load()["engine"]))
         self.assertEqual(set(spec["outcomes"]), {"done", "error", "blocked", "failed"})
         self.assertIn("- `error`: the work needs the next tier", a["[Slop factory] implement-mid"]["prompt"])
-        self.assertEqual(set(a["[Slop factory] join"]["spec"]["runs"]), {"finish", "recover"})
+        self.assertEqual(set(a["[Slop factory] join"]["spec"]["runs"]), {"finish", "recover", "reopen"})
 
     def test_compile_automation_gives_the_gate_options(self):
         config, graph = cfg.load(), nodes.load()
@@ -240,6 +255,7 @@ class PlanTest(unittest.TestCase):
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
         self.assertIn("`factory sweep --main`", a["[Slop factory] join"])
         self.assertIn("`factory sweep --main --issue <issue number from the trigger payload>`", a["[Slop factory] finish"])
+        self.assertIn("`factory sweep --main`", a["[Slop factory] reopen"])
         self.assertNotIn("--main", a["[Slop factory] recover"])
 
     def test_real_plan_is_prefixed_and_covers_pilot(self):
@@ -250,12 +266,12 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["prefix"], "[Slop factory] ")
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
-            "intake", "join", "finish", "recover",
+            "intake", "join", "finish", "recover", "reopen",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security")))}
         self.assertEqual(names, pilot)
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
-                         {"intake", "implement", "review", "join", "fix", "update", "finish", "recover"})
+                         {"intake", "implement", "review", "join", "fix", "update", "finish", "recover", "reopen"})
         self.assertEqual(deploy.plan_air(n, config), plan)
 
 

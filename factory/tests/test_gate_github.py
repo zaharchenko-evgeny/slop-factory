@@ -37,17 +37,40 @@ class FakeGh:
         self.roles = {"alice": "write", "bob": "admin", "eve": "read"}
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
+        self.log_calls = 0
         self.blocked = [{"state": "open", "id": 1}, {"state": "closed", "id": 2}]
+        self.fail_blocked_by = False
         self.open_issues, self.state, self.sub_state = [], "open", ["open"] * 9
 
-    def __call__(self, args):
+    def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
         a = a + " POST" if "POST" in args else a
         assert args[:2] != ["api", "user"], "gh api user must never be called"
         if "actions/runs?head_sha=" in a:  # one workflow per entry of `checks`; None = still running
+            self.workflow_timeout = timeout
+            if getattr(self, "workflow_error", False):
+                raise RuntimeError("workflow lookup failed")
             return "\n".join(json.dumps({"workflow_id": k, "event": "pull_request", "run_number": 1,
-                                          "status": "completed" if c else "in_progress", "conclusion": c})
+                                          "id": 100 + k, "status": "completed" if c else "in_progress", "conclusion": c})
                              for k, c in enumerate(self.checks))
+        if "/actions/runs/100/jobs?" in a:
+            self.jobs_timeout = timeout
+            if getattr(self, "jobs_error", False):
+                raise RuntimeError("jobs lookup failed")
+            return json.dumps({"id": 200, "name": "tests", "steps": [
+                {"name": "Run tests", "conclusion": "failure",
+                 "started_at": "2026-11-02T10:00:00Z", "completed_at": "2026-11-02T10:00:00Z"},
+                {"name": "Upload artifacts", "conclusion": "success"}]})
+        if "/actions/jobs/200/logs" in a:
+            self.log_calls += 1
+            self.assert_timeout = timeout
+            if getattr(self, "forbidden", False):
+                raise RuntimeError("Forbidden\nredirected download")
+            if getattr(self, "empty_log", False):
+                return ""
+            return "\n".join(["2026-11-02T10:00:00.1000000Z ##[group]Run tests",
+                                "2026-11-02T10:00:00.1000000Z ##[endgroup]"] +
+                               [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)])
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
             return "\n".join(json.dumps(p) for p in (
@@ -74,6 +97,8 @@ class FakeGh:
                 raise RuntimeError("HTTP 404: Not Found")
             return json.dumps({"number": self.parent_of})
         if a.endswith("issues/7/events"):
+            if hasattr(self, "issue_events"):
+                return "\n".join(json.dumps(e) for e in self.issue_events)
             return "\n".join([json.dumps({"event": "labeled", "label": {"name": n}, "created_at": t})
                               for n, t in getattr(self, "label_events", [])] +
                              [json.dumps({"event": "labeled", "label": {"name": "factory:implement-cheap"}})
@@ -83,14 +108,17 @@ class FakeGh:
                              for t in getattr(self, "fix_events", []))
         if a.endswith("/pulls/5/reviews"):
             return "\n".join(json.dumps(r) for r in self.reviews)
-        if a.endswith(("issues/7", "issues/5")):
-            return json.dumps({"labels": [{"name": x} for x in self.labels], "state": self.state})
+        if a.endswith(("issues/7", "issues/5")) and "PATCH" not in args:
+            return json.dumps({"labels": [{"name": x} for x in self.labels], "state": self.state,
+                               "body": getattr(self, "issue_body", "")})
         if a.endswith("issues/7/dependencies/blocking"):
             return "\n".join(json.dumps(i) for i in getattr(self, "blocking_issues", []))
-        if a.endswith("issues/7/dependencies/blocked_by"):
+        if a.endswith("issues/7/dependencies/blocked_by") and "POST" not in a:
             return "\n".join(json.dumps(b) for b in self.blocked)
+        if a.endswith("issues/12"):
+            return json.dumps({"number": 12, "state": getattr(self, "blocker_state", "open"), "labels": []})
         if a.endswith("issues/7/comments"):
-            return "\n".join(json.dumps({"body": c}) for c in self.comments)
+            return "\n".join(json.dumps(c if isinstance(c, dict) else {"body": c}) for c in self.comments)
         if a.endswith("issues?state=open&per_page=100"):
             return "\n".join(json.dumps(i) for i in self.open_issues)
         if a.endswith("issues/7/sub_issues"):
@@ -99,6 +127,8 @@ class FakeGh:
                                          "labels": [{"name": x} for x in ls]})
                              for i, (t, st, r, ls) in enumerate(zip(self.sub, self.sub_state, reasons, labels)))
         self.writes.append(args)
+        if self.fail_blocked_by and "/dependencies/blocked_by" in a:
+            raise RuntimeError("HTTP 403: Resource not accessible by integration")
         if args[1] == "close":
             self.state = "closed"
         if args[1] == "edit":
@@ -159,6 +189,40 @@ class FactsTest(unittest.TestCase):
         f = tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)
         self.assertEqual((f["focus_missing"], f["round_head"]), (["full"], "old"))
 
+    def test_log_fetch_forbidden_does_not_raise(self):
+        gh = FakeGh(checks=["failure"])
+        gh.forbidden = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": "tests", "step": "Run tests", "log": None, "error": "Forbidden redirected download"})
+        self.assertEqual(gh.assert_timeout, 10)
+
+    def test_empty_log_is_reported_without_raising(self):
+        gh = FakeGh(checks=["failure"])
+        gh.empty_log = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": "tests", "step": "Run tests", "log": None, "error": "empty log response"})
+
+    def test_workflow_lookup_failure_is_best_effort_and_timed(self):
+        gh = FakeGh(checks=["failure"])
+        gh.workflow_error = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": None, "step": None, "log": None, "error": "workflow lookup failed"})
+        self.assertEqual(gh.workflow_timeout, 10)
+
+    def test_jobs_lookup_failure_is_best_effort_and_timed(self):
+        gh = FakeGh(checks=["failure"])
+        gh.jobs_error = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": None, "step": None, "log": None, "error": "jobs lookup failed"})
+        self.assertEqual(gh.jobs_timeout, 10)
+
+    def test_sweep_facts_do_not_fetch_logs(self):
+        gh = FakeGh(checks=["failure"])
+        f = tr(gh).facts(7)
+        self.assertEqual(f["ci"], "red")
+        self.assertNotIn("ci_failure", f)
+        self.assertEqual(gh.log_calls, 0)
+
     def test_no_stage_label(self):
         self.assertEqual(tr(FakeGh(labels=["x"])).facts(7)["stage"], "none")
 
@@ -203,6 +267,17 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(tr(gh).apply(eff("review", "request-changes-at-head", focus="full")))
         self.assertIn("event=COMMENT", gh.writes[0])
         self.assertIn("verdict=changes", gh.writes[0][-1])
+
+    def test_dispute_rereview_is_allowed_once_at_the_same_head(self):
+        old = "<!-- factory:review focus=behaviour round=1 verdict=changes -->"
+        gh = FakeGh(labels=["factory:in-review", "risk:high", "factory:rereview-behaviour"],
+                    reviews=[review(BOT, old)])
+        self.assertTrue(tr(gh).apply(eff("review", "approve-at-head", focus="behaviour", round=1)))
+        post, remove = gh.writes
+        self.assertIn("rereview=1", post[-1])
+        self.assertEqual(remove[:3], ["pr", "edit", "5"])
+        self.assertIn("--remove-label", remove)
+        self.assertFalse(tr(gh).apply(eff("review", "approve-at-head", focus="behaviour")))
 
     def test_changes_review_body_carries_findings(self):
         gh = FakeGh()
@@ -265,6 +340,25 @@ class EffectsTest(unittest.TestCase):
             self.assertIn("labels[]=risk:high", w)
         chain = [w for w in gh.writes if "/dependencies/blocked_by" in " ".join(w) and "issues/999/" in " ".join(w)]
         self.assertEqual(len(chain), 1)  # B (the second 999) is blocked by A
+
+    def test_create_children_falls_back_to_blocked_by_line(self):
+        gh = FakeGh(labels=("factory:split", "risk:low"))
+        gh.blocked, gh.fail_blocked_by = [], True
+        tr(gh).apply(eff("create-issues", [{"title": "A", "body": "scope A"}]))
+        patch = next(w for w in gh.writes if "PATCH" in w and "issues/7" in " ".join(w))
+        self.assertIn("body=Blocked by: #999", " ".join(patch))
+        self.assertFalse(any("PATCH" in w and "issues/999" in " ".join(w) for w in gh.writes))
+
+    def test_blocked_by_line_counts_as_open_blocker(self):
+        gh = FakeGh(labels=("factory:ready", "risk:low"))
+        gh.blocked, gh.issue_body = [], "Blocked by: #12\n\nChild"
+        original = gh.__call__
+        def run(args):
+            a = next((x for x in args if x.startswith("repos/")), "")
+            if a.endswith("issues/7"):
+                return json.dumps({"labels": [{"name": x} for x in gh.labels], "state": "open", "body": gh.issue_body})
+            return original(args)
+        self.assertEqual(tr(run).facts(7)["blockers_open"], 1)
 
     def test_create_issues_retry_converges(self):
         gh = FakeGh()
@@ -515,6 +609,62 @@ class JoinTest(unittest.TestCase):
         gh.labels = ["factory:changes-requested", "risk:low"]
         self.assertEqual(gate.check("fix", {"id": "e", "ticket": 7}, tr(gh), nodes.load(), CONFIG)[0], gate.GO)
 
+    def test_dispute_rereview_joins_after_fix_handoff(self):
+        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
+        gh = FakeGh(labels=["factory:in-review", "risk:low", "factory:fix-mid"], reviews=[old])
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        rereview = review(BOT, "<!-- factory:review focus=full round=1 verdict=approve rereview=1 -->",
+                          at="2026-01-02T06:00:00Z")
+        gh.reviews.append(rereview)
+        f = tr(gh).facts(7)
+        self.assertTrue(f["handed_to_fix"])
+        self.assertEqual(join(gh), (True, 1))
+        self.assertIn("factory:approved", gh.labels)
+
+    def test_disputed_finding_starts_a_counted_fix_round_and_rearms_label(self):
+        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
+        latest = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes rereview=1 -->",
+                       at="2026-01-02T06:00:00Z")
+        gh = FakeGh(labels=["factory:in-review", "risk:low", "factory:fix-mid"], reviews=[old, latest])
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        facts = tr(gh).facts(7)
+        self.assertEqual(facts["fix_rounds"], 2)
+        self.assertEqual(join(gh, tier="mid"), (True, 3))
+        self.assertIn("factory:changes-requested", gh.labels)
+        self.assertIn("factory:fix-mid", gh.labels)
+        self.assertTrue(any("--remove-label" in call and "factory:fix-mid" in call for call in gh.writes))
+
+    def test_unauthenticated_rereview_marker_does_not_reopen_join(self):
+        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
+        forged = review("mallory", "<!-- factory:review focus=full round=1 verdict=approve rereview=1 -->")
+        gh = FakeGh(labels=["factory:in-review", "risk:low"], reviews=[old, forged])
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        facts = tr(gh).facts(7)
+        self.assertFalse(facts["reviews"][1]["agent"])
+        self.assertTrue(facts["reviews"][1]["rereview"])  # join must authenticate the marker's author
+        self.assertTrue(facts["handed_to_fix"])
+        self.assertEqual(join(gh), (False, 0))
+
+    def test_join_waits_for_every_disputed_focus_rereview(self):
+        old_behaviour = review(BOT, "<!-- factory:review focus=behaviour round=1 verdict=changes -->")
+        old_structure = review(BOT, "<!-- factory:review focus=structure-security round=1 verdict=changes -->")
+        behaviour = review(BOT, "<!-- factory:review focus=behaviour round=1 verdict=approve rereview=1 -->",
+                           at="2026-01-02T06:00:00Z")
+        gh = FakeGh(labels=["factory:in-review", "risk:high", "factory:rereview-structure-security"],
+                    reviews=[old_behaviour, old_structure, behaviour])
+        gh.fix_events = ["2026-01-02T05:00:00Z"]
+        facts = tr(gh).facts(7)
+        self.assertEqual(facts["pending_rereviews"], ["structure-security"])
+        self.assertEqual(join(gh), (False, 0))
+
+        gh.labels.remove("factory:rereview-structure-security")
+        structure = review(BOT, "<!-- factory:review focus=structure-security round=1 verdict=approve rereview=1 -->",
+                           at="2026-01-02T07:00:00Z")
+        gh.reviews.append(structure)
+        self.assertEqual(tr(gh).facts(7)["pending_rereviews"], [])
+        self.assertEqual(join(gh), (True, 1))
+        self.assertIn("factory:approved", gh.labels)
+
     def test_fix_that_pushed_nothing_blocks(self):
         gh = FakeGh(labels=["factory:changes-requested", "risk:low"], reviews=[review(BOT, C)])
         gh.fix_events = ["2026-01-02T05:00:00Z"]
@@ -686,6 +836,22 @@ class SweepTest(unittest.TestCase):
         gh.blocking_issues = [{"number": 12, "state": "open"}]
         self.assertEqual(tr(gh).blocking(7), gh.blocking_issues)
 
+    def test_blocking_lists_body_fallback_dependents(self):
+        gh = FakeGh()
+        gh.open_issues = [{"number": 12, "state": "open", "body": "Blocked by: #7\n\nSecond slice"}]
+        self.assertEqual(tr(gh).blocking(7), gh.open_issues)
+
+    def test_sweep_releases_body_linked_ticket_when_blocker_closes(self):
+        gh = FakeGh(labels=(STAGES["ready"], "risk:low"))
+        gh.blocked, gh.issue_body = [], "Blocked by: #12\n\nSecond slice"
+        gh.open_issues = [{"number": 7, "state": "open", "body": gh.issue_body}]
+        gh.blocker_state = "closed"
+        results, failed = gate.sweep(tr(gh), nodes.load(), closed_ticket=12)
+        self.assertFalse(failed)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(7, "unblocked")])
+        self.assertIn(["issue", "edit", "7", "-R", REPO, "--remove-label", STAGES["ready"]], gh.writes)
+        self.assertIn(["issue", "edit", "7", "-R", REPO, "--add-label", STAGES["ready"]], gh.writes)
+
     def test_in_review_complete_round_runs_join_and_disabled_outcomes_refuse(self):
         gh = FakeGh(reviews=[review(BOT, M)])
         res, _ = self.run_sweep(gh)
@@ -701,6 +867,24 @@ class SweepTest(unittest.TestCase):
 
 
 class ResumeTest(unittest.TestCase):
+    def test_only_authorized_comment_after_needs_answers_resumes(self):
+        gh = FakeGh(labels=(STAGES["needs-answers"], "risk:low"))
+        gh.issue_events = [
+            {"event": "labeled", "label": {"name": STAGES["ready"]}, "created_at": "2026-01-01T00:00:00Z",
+             "actor": {"login": "alice"}},
+            {"event": "labeled", "label": {"name": STAGES["needs-answers"]}, "created_at": "2026-01-02T00:00:00Z"},
+        ]
+        gh.comments = [{"created_at": "2026-01-01T12:00:00Z", "user": {"login": "alice", "type": "User"}}]
+        self.assertFalse(tr(gh).facts(7).get("answered", False))  # predates the question
+        gh.comments = [{"created_at": "2026-01-03T00:00:00Z", "user": {"login": "helper[bot]", "type": "Bot"}}]
+        self.assertFalse(tr(gh).facts(7).get("answered", False))
+        gh.comments = [{"created_at": "2026-01-03T00:00:00Z", "user": {"login": "eve", "type": "User"}}]
+        self.assertFalse(tr(gh).facts(7).get("answered", False))
+        gh.comments = [{"created_at": "2026-01-03T00:00:00Z", "user": {"login": "alice", "type": "User"}}]
+        self.assertTrue(tr(gh).facts(7)["answered"])
+        gh.comments = [{"created_at": "2026-01-03T00:00:00Z", "user": {"login": "bob", "type": "User"}}]
+        self.assertTrue(tr(gh).facts(7)["answered"])
+
     def test_stage_is_the_latest_stage_label_added(self):
         gh = FakeGh(labels=["factory:in-review", "factory:ready", "risk:low"])
         gh.label_events = [("factory:in-review", "2026-01-01T00:00:00Z"), ("factory:ready", "2026-01-02T00:00:00Z")]
@@ -765,6 +949,22 @@ class GateTest(unittest.TestCase):
 
 
 class StaleFactsTest(unittest.TestCase):
+    def test_update_command_reaches_stale_planner(self):
+        gh = FakeGh(labels=("factory:changes-requested", "risk:low", "factory:update-cheap"))
+        gh.head_date = "2026-11-01T09:00:00Z"
+        gh.label_events = [("factory:update-cheap", "2026-11-01T10:00:00Z")]
+        facts = tr(gh).stale_facts(7)
+        self.assertEqual(gate.stale_plan(facts, gate.datetime.fromisoformat("2026-11-01T11:00:00+00:00"), 2)[0:3],
+                         ("refire", "factory:update-cheap", "pr"))
+
+    def test_command_is_pending_only_when_its_label_is_the_latest_event(self):
+        gh = FakeGh(labels=("factory:in-dev", "factory:implement-cheap", "risk:low"))
+        gh.label_events = [("factory:in-dev", "2026-01-02T02:00:00Z"),
+                           ("factory:implement-cheap", "2026-01-02T03:00:00Z")]
+        self.assertTrue(tr(gh).stale_facts(7)["command_pending"])
+        gh.label_events.append(("factory:in-review", "2026-01-02T03:01:00Z"))
+        self.assertFalse(tr(gh).stale_facts(7)["command_pending"])
+
     def test_since_command_and_recover_comments(self):
         gh = FakeGh(labels=("factory:in-review", "factory:ci-green", "risk:low"),
                     comments=("[factory] recover: stage=in-review re-fired factory:ci-green", "[factory] other"))
