@@ -310,7 +310,7 @@ flowchart LR
     N_merge["<b>merge</b><br/>on: issue +factory:approved<br/>on: PR +factory:ci-green<br/>script"]:::node
     N_finish["<b>finish</b><br/>on: PR merged<br/>on: issue closed<br/>on: issue +factory:blocked<br/>on: issues.comment<br/>script"]:::node
     N_notify["<b>notify</b><br/>on: issue +factory:blocked<br/>on: issue +factory:needs-answers<br/>script"]:::node
-    N_recover["<b>recover</b><br/>on: cron 15 * * * *<br/>script"]:::node
+    N_recover["<b>recover</b><br/>on: cron 0 6,18 * * *<br/>script"]:::node
     N_doctor["<b>doctor</b><br/>on: cron 0 5 * * *<br/>script"]:::node
     N_doctor_write["<b>doctor-write</b><br/>on: cron 0 5 * * *<br/>script"]:::node
     N_retro["<b>retro</b><br/>on: cron 0 2 * * *<br/>retro · review tiers"]:::node
@@ -418,7 +418,7 @@ flowchart LR
 | `merge` | `issue +factory:approved`<br>`PR +factory:ci-green` | merged: —<br>updated: —<br>waiting: — | script | built |
 | `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked`<br>`issues.comment` | answered: → triage<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
 | `notify` | `issue +factory:blocked`<br>`issue +factory:needs-answers` | notified: — | script | built |
-| `recover` | `cron 15 * * * *` | blocked: → blocked | script | built |
+| `recover` | `cron 0 6,18 * * *` | blocked: → blocked | script | built |
 | `doctor` | `cron 0 5 * * *` | probed: — | script | built |
 | `doctor-write` | `cron 0 5 * * *` | probed: — | script | built |
 | `retro` | `cron 0 2 * * *` | recorded: — | retro · per focus | built |
