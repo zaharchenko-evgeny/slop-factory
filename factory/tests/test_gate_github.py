@@ -317,7 +317,7 @@ class EffectsTest(unittest.TestCase):
         calls = []
         def run(args):
             calls.append(args)
-            if args[:2] == ["pr", "edit"]:
+            if args[:2] in (["pr", "edit"], ["issue", "edit"]):
                 return ""
             path = next((x for x in args if x.startswith("repos/")), "")
             if path.endswith("pulls/300/files?per_page=100"):
@@ -328,7 +328,7 @@ class EffectsTest(unittest.TestCase):
                     {"number": 302, "head": {"ref": "feature/x", "repo": {"full_name": REPO}}},
                     {"number": 303, "head": {"ref": "ez/302-y", "repo": {"full_name": "fork/r"}}},
                 ])
-            if path.endswith("issues/301"):
+            if path.endswith(("issues/299", "issues/301")):
                 return json.dumps({"labels": []})
             raise AssertionError(args)
 
@@ -337,6 +337,10 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(len(edits), 1)
         self.assertEqual(edits[0][2:4], ["301", "-R"])
         self.assertIn("factory:update-cheap", edits[0])
+        stage_edit = next(c for c in calls if c[:3] == ["issue", "edit", "299"])
+        self.assertIn("--add-label", stage_edit)
+        self.assertIn(STAGES["changes-requested"], stage_edit)
+        self.assertLess(calls.index(stage_edit), calls.index(edits[0]))
 
     def test_config_change_merge_ignores_other_files(self):
         def run(args):

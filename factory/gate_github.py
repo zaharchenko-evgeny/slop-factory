@@ -81,9 +81,13 @@ class GitHubGateTracker:
             return
         for other in self._list("pulls?state=open&per_page=100"):
             head = other.get("head") or {}
-            if not (head.get("ref") or "").startswith("ez/") or \
+            match = re.match(r"ez/(\d+)-", head.get("ref") or "")
+            if not match or \
                     ((head.get("repo") or {}).get("full_name") or "").lower() != self.repo.lower():
                 continue
+            # The update node only starts from changes-requested. Move the ticket
+            # before adding its PR command label so the label event can pass check.
+            self.apply({"ticket": int(match[1]), "kind": "stage", "value": "changes-requested"})
             labels = [x["name"] for x in self._api(f"issues/{other['number']}")["labels"]]
             if "factory:update-cheap" not in labels:
                 self._edit(other["number"], ["factory:update-cheap"], on="pr")
