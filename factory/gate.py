@@ -506,23 +506,13 @@ def merge_decision(facts, auto_merge):
     return ("updated" if facts.get("behind") else "merged"), {}
 
 
-def retro_payload(facts):
-    """The `finish` retro comment of a merged ticket, from its facts."""
-    agent = [r for r in facts["reviews"] if r["agent"]]
-    pr = f"PR #{facts['pr']} {facts['pr_state']}" if facts["pr"] else "no PR found"
-    text = (f"Retro: {pr}; fix rounds {facts['fix_rounds']}; "
-            f"reviews {len(agent)} ({sum(r['verdict'] == 'approve' for r in agent)} approve, "
-            f"{sum(r['verdict'] == 'changes' for r in agent)} changes)")
-    return {"retro": text, "run_id": "finish:retro"}
-
-
 def sweep_plan(facts, auto_merge=None):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
     if stage == "needs-answers" and facts.get("answered"):
         return "finish", "answered", {}
     if stage == "approved" and facts.get("pr_state") == "merged":
-        return "finish", "merged", retro_payload(facts)
+        return "finish", "merged", {}
     if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
         return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
     if stage == "approved" and facts.get("pr_state") == "open" \
@@ -672,7 +662,7 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                 continue
             run = "recover:stale"
             if kind == "finish":
-                _, out = apply("finish", "merged", {"ticket": n, **retro_payload(facts)}, tracker, nodes)
+                _, out = apply("finish", "merged", {"ticket": n}, tracker, nodes)
                 r["applied"] = out["applied"]
             elif kind == "conflict":
                 _, out = apply("finish", "conflict", {"ticket": n}, tracker, nodes)

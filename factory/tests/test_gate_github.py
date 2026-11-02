@@ -823,10 +823,7 @@ class SweepTest(unittest.TestCase):
         res, failed = self.run_sweep(gh)
         self.assertEqual(([(r["ticket"], r["outcome"]) for r in res], failed), ([(7, "merged")], False))
         self.assertEqual(sorted(gh.labels), ["factory:done", "risk:low"])
-        comments = [w for w in gh.writes if w[:2] == ["issue", "comment"]]
-        self.assertEqual(len(comments), 1)
-        self.assertIn("Retro: PR #5 merged; fix rounds 0; reviews 1 (1 approve, 0 changes)", comments[0][-1])
-        self.assertTrue(comments[0][-1].endswith("Factory-Run: finish:retro"))
+        self.assertEqual([w for w in gh.writes if w[:2] == ["issue", "comment"]], [])  # the retro node writes the entry
         n = len(gh.writes)
         self.assertEqual(self.run_sweep(gh), ([], False))  # no new facts: nothing written
         self.assertEqual(len(gh.writes), n)
