@@ -54,6 +54,8 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
     """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
     spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
             "when": n.get("when"), "outcomes": n["outcomes"]}
+    if n.get("routine"):
+        spec["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
     if n.get("tiers"):
         spec["tiers"] = n["tiers"]  # the ordered tiers the gate escalates through
     if any((o or {}).get("else") for o in n["outcomes"].values()):
