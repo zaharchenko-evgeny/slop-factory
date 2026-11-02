@@ -30,6 +30,7 @@ flowchart LR
     N_reopen["<b>reopen</b><br/>on: PR push<br/>on: PR +factory:ci-red<br/>script"]:::node
     N_merge["<b>merge</b><br/>on: issue +factory:approved<br/>on: PR +factory:ci-green<br/>script"]:::node
     N_finish["<b>finish</b><br/>on: PR merged<br/>on: issue closed<br/>on: issue +factory:blocked<br/>on: issues.comment<br/>script"]:::node
+    N_notify["<b>notify</b><br/>on: issue +factory:blocked<br/>on: issue +factory:needs-answers<br/>script"]:::node
     N_recover["<b>recover</b><br/>on: cron 15 * * * *<br/>script"]:::node
     N_retro["<b>retro</b><br/>on: cron 0 2 * * *<br/>retro · review tiers"]:::node
     N_distill["<b>distill</b><br/>on: cron 0 3 * * 1<br/>distill · review tiers"]:::node
@@ -98,6 +99,8 @@ flowchart LR
     S_approved --> N_finish
     N_finish -- "conflict +factory:update-cheap" --> S_changes_requested
     N_finish -- "merged" --> S_done
+    S_blocked --> N_notify
+    S_needs_answers --> N_notify
     N_recover -- "blocked" --> S_blocked
     S_in_review -- "push" --> CI
     CI -- "+factory:ci-green" --> N_review
@@ -126,6 +129,7 @@ flowchart LR
 | `reopen` | `PR push`<br>`PR +factory:ci-red` | reopened: → in-review | script | built |
 | `merge` | `issue +factory:approved`<br>`PR +factory:ci-green` | merged: —<br>updated: —<br>waiting: — | script | built |
 | `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked`<br>`issues.comment` | answered: → ready<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
+| `notify` | `issue +factory:blocked`<br>`issue +factory:needs-answers` | notified: — | script | built |
 | `recover` | `cron 15 * * * *` | blocked: → blocked | script | built |
 | `retro` | `cron 0 2 * * *` | recorded: — | retro · per focus | built |
 | `distill` | `cron 0 3 * * 1` | proposed: — | distill · per focus | built |

@@ -105,10 +105,13 @@ SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no f
                  "itself. Run `factory sweep{args}` once and report its JSON output.")
 SCRIPT_ARGS = {"join": " --main", "finish": " --main --issue <issue number from the trigger payload>",
                "reopen": " --main", "merge": " --main",
-               "recover": " --stale"}
+               "recover": " --stale",
+               "notify": " notify --issue <issue number from the trigger payload>"}
 
 
 def script_prompt(name: str) -> str:
+    if name == "notify":
+        return "Run `factory notify --issue <issue number from the trigger payload>` once and report its JSON output."
     return SCRIPT_PROMPT.format(args=SCRIPT_ARGS.get(name, ""))
 
 
