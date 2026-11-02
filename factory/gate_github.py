@@ -621,7 +621,10 @@ class GitHubGateTracker:
                     self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{n}", "-f",
                               f"body={parent_body}"])
                 wrote = True
-            if not any(x.startswith("factory:") for x in have):  # publish `ready` only once the links exist
+            if self.stages["ready"] not in have:  # publish `ready` only once the links exist
+                for x in have:  # a reused draft child leaves its old stage
+                    if x.startswith("factory:") and x != self.stages["ready"]:
+                        self.run(["api", "-X", "DELETE", f"repos/{self.repo}/issues/{new['number']}/labels/{x}"])
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/labels", "-f", f"labels[]={self.stages['ready']}"])
                 wrote = True
             wrote = wrote or c["title"] not in subs or new["id"] not in blockers

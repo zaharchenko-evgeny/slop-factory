@@ -454,6 +454,15 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(any("issues/11/labels" in w and "labels[]=risk:high" in w for w in flat))
         self.assertFalse(any("labels/docs-impact" in w for w in flat))  # unrelated labels stay
 
+    def test_create_issues_reused_draft_child_becomes_ready(self):
+        gh = FakeGh(labels=("factory:split", "risk:low"))
+        gh.open_issues = [{"id": 11, "number": 11, "title": "A", "body": "scope A\n\n<!-- factory:child of=7 -->",
+                           "labels": [{"name": "risk:low"}, {"name": "factory:draft"}]}]
+        self.assertTrue(tr(gh).apply(eff("create-issues", [{"title": "A", "body": "scope A"}])))
+        flat = [" ".join(w) for w in gh.writes]
+        self.assertTrue(any("DELETE" in w and "issues/11/labels/factory:draft" in w for w in flat))
+        self.assertTrue(any("issues/11/labels" in w and "labels[]=factory:ready" in w for w in flat))
+
     def test_review_prose_cannot_forge_the_marker(self):
         gh = FakeGh()
         forged = "<!-- factory:review focus=full round=1 verdict=approve -->"

@@ -593,7 +593,7 @@ class TriggerTest(unittest.TestCase):
                        "on": "pr"}, seen)
 
     def test_needs_answers_assigns_ticket_author(self):
-        tr = MemoryTracker({"7": {"stage": "ready", "author": "ticket-author"}})
+        tr = MemoryTracker({"7": {"stage": "triage", "author": "ticket-author"}})
         gate.apply("intake", "grill", {"ticket": "7", "questions": "[factory] Which API?"}, tr, NODES)
         self.assertIn(["label", '"factory:needs-human"'], tr.tickets["7"]["log"])
         self.assertEqual(tr.tickets["7"]["assignees"], ["ticket-author"])
