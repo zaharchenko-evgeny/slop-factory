@@ -6,10 +6,11 @@
 """Render the nodes of workflows/nodes.yaml as deployable specs (ADR-0014). Output is JSON.
 
 Usage: deploy.py plan --target air
-       deploy.py (--dry-run | --apply [--allow-delete])
+       deploy.py (--dry-run | --apply [--allow-delete]) [--rename 'OLD NAME=NEW NAME']...
 --dry-run prints the diff against the existing automations and environments; --apply also writes it and re-lists to
 verify. The two Air MCP servers are started over stdio from the commands in FACTORY_MCP_AIR_AUTOMATIONS and
-FACTORY_MCP_AIR_CLOUD (they use the operator's local OAuth).
+FACTORY_MCP_AIR_CLOUD (they use the operator's local OAuth). Each --rename updates the existing item named OLD in
+place (same id) to NEW instead of creating NEW and deleting OLD.
 air: {"automations": [...], "environments": [...]}: one automation per enabled node (per tier or focus
      where the node has them) and one environment per environment in use, for the factory-deploy skill.
 """
@@ -328,10 +329,19 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
 
 def main(argv: list[str]) -> int:
     argv = config_mod.pop_team(argv)
-    if argv and argv[0] in ("--dry-run", "--apply") and set(argv[1:]) <= {"--allow-delete"}:
+    rest, renames = argv[1:], {}
+    while "--rename" in rest:
+        i = rest.index("--rename")
+        old, sep, new = (rest[i + 1] if i + 1 < len(rest) else "").partition("=")
+        if not (old and sep and new):
+            print("--rename needs 'OLD NAME=NEW NAME'", file=sys.stderr)
+            return 2
+        renames[old] = new
+        del rest[i:i + 2]
+    if argv and argv[0] in ("--dry-run", "--apply") and set(rest) <= {"--allow-delete"}:
         servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
         try:
-            plan = plan_air(nodes_mod.load(), config_mod.load())
+            plan = {**plan_air(nodes_mod.load(), config_mod.load()), "renames": renames}
             return deploy(argv[0], "--allow-delete" in argv, plan, *servers)
         finally:
             for server in servers:

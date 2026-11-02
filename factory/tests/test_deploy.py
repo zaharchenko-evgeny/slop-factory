@@ -5,11 +5,14 @@
 # ///
 """Tests for factory/deploy.py. Run: uv run factory/tests/test_deploy.py
 Regenerate the fixture: UPDATE_FIXTURE=1 uv run factory/tests/test_deploy.py"""
+import contextlib
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import yaml
@@ -96,6 +99,19 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
         self.assertEqual(self.calls("automation"), [["update_automation", {
             "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "id": "a1"}]])
+
+    def test_main_rename_flag_updates_in_place(self):
+        self.seed([{"id": "a1", "name": "[Slop factory] old-intake"}], [])
+        env = {"FACTORY_MCP_AIR_AUTOMATIONS": f"{sys.executable} {self.tmp / 'server.py'} {self.state['automation']} automation",
+               "FACTORY_MCP_AIR_CLOUD": f"{sys.executable} {self.tmp / 'server.py'} {self.state['environment']} environment"}
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(out):
+            self.assertEqual(deploy.main(["--dry-run", "--rename", "[Slop factory] old-intake=[Slop factory] intake"]), 0)
+            self.assertEqual(deploy.main(["--dry-run", "--rename", "nope"]), 2)
+        lines = out.getvalue().splitlines()
+        self.assertTrue(any(l.startswith("update automation [Slop factory] intake") for l in lines))
+        self.assertNotIn("delete automation [Slop factory] old-intake", lines)
+        self.assertNotIn("create automation [Slop factory] intake", lines)
 
     def test_apply_refuses_delete_without_flag(self):
         self.seed([{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1"},

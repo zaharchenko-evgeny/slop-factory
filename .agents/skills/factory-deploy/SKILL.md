@@ -19,7 +19,7 @@ Run from the factory root. Whoever runs this applies the plan and changes no cod
 0. Precondition: `factory/gate.py` must exist on the default branch (the thin prompt runs it). If not, stop and report; do not apply.
 1. Check nodes: `uv run --quiet factory/nodes.py validate`.
 2. Dry run: `factory deploy --dry-run`. It renders the plan, lists the existing automations and environments through the air-automations and air-cloud MCP servers over stdio (commands in `FACTORY_MCP_AIR_AUTOMATIONS` and `FACTORY_MCP_AIR_CLOUD`, local OAuth), diffs by name and prints `create|update|delete <kind> <name>` with the changed fields. Show it and review it.
-3. Apply after the user approves the dry run: `factory deploy --apply` (add `--allow-delete` only when the dry run lists deletes the user approved). It writes environments before automations on create and update, updates in place with `name`, then re-lists and fails if anything still differs.
+3. Apply after the user approves the dry run: `factory deploy --apply` (add `--allow-delete` only when the dry run lists deletes the user approved). It writes environments before automations on create and update, updates in place with `name`, then re-lists and fails if anything still differs. To rename an automation or environment, pass `--rename 'OLD NAME=NEW NAME'` (repeatable) to both the dry run and the apply: the item keeps its id instead of becoming a create plus a delete.
 4. Create missing labels from the plan's `labels[]` (`gh label create <name>`); a missing label fails every handoff that adds it.
 5. Run `factory deploy --dry-run` again: it must print `unchanged`.
 
