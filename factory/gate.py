@@ -271,6 +271,8 @@ def check_routine(name, nodes, config):
 def apply_routine(name, outcome, nodes):
     """A routine writes through its role (a branch, a PR): the gate only checks the outcome and changes nothing."""
     outcomes = load_node(name, nodes)["outcomes"]
+    if outcome == "done" and "done" not in outcomes:  # the role handoff's `status: done` means the routine's one outcome
+        outcome = ""
     if not outcome and len(outcomes) == 1:
         outcome = next(iter(outcomes))
     if outcome not in outcomes:
