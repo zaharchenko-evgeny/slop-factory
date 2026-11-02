@@ -76,6 +76,13 @@
         }
       }
     },
+    "notify": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "github_user": { "type": "string" }
+      }
+    },
     "targets": {
       "type": "object",
       "additionalProperties": false,
@@ -230,6 +237,9 @@
           "type": "string"
         },
         "distill_every_days": {
+          "type": "integer"
+        },
+        "agents_md_lines": {
           "type": "integer"
         }
       }
