@@ -88,6 +88,15 @@ class ApplyTest(unittest.TestCase):
             "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "id": "a1"}]])
         self.assertEqual(self.calls("environment"), [])
 
+    def test_apply_renames_in_place(self):
+        self.plan["renames"] = {"[F] old": "[F] a"}
+        self.seed([{"id": "a1", "name": "[F] old", "prompt": "new", "environmentConfigId": "e1"},
+                   {"id": "a3", "name": "[Other] keep"}],
+                  [{"id": "e1", "name": "[F] read", "startup": "x"}])
+        self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
+        self.assertEqual(self.calls("automation"), [["update_automation", {
+            "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "id": "a1"}]])
+
     def test_apply_refuses_delete_without_flag(self):
         self.seed([{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1"},
                    {"id": "a2", "name": "[F] gone"}, {"id": "a3", "name": "[Other] keep"}],

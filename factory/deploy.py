@@ -274,13 +274,15 @@ def _items(res) -> list[dict]:
 
 
 def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
-    """(action, kind, name, planned item, existing item, changed fields) per create, update, delete; by name, prefix only."""
+    """(action, kind, name, planned item, existing item, changed fields) per create, update, delete; by name, prefix only.
+    `plan["renames"]` ({old name: new name}) matches an existing item under its old name, so the update keeps its id."""
+    new_to_old = {new: old for old, new in (plan.get("renames") or {}).items()}
     env_ids = {e["name"]: e.get("id") for e in envs}
     out = []
     for kind, planned, have in (("environment", plan["environments"], envs), ("automation", plan["automations"], automations)):
         have = {x["name"]: x for x in have if x["name"].startswith(plan["prefix"])}
         for p in planned:
-            x = have.pop(p["name"], None)
+            x = have.pop(p["name"], None) or have.pop(new_to_old.get(p["name"]), None)
             want = {**p, "environmentConfigId": env_ids.get(p.get("environmentConfigId"), p.get("environmentConfigId"))}
             changed = [k for k in p if x is not None and x.get(k) != want[k]]
             if x is None or changed:
