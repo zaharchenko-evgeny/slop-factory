@@ -76,6 +76,13 @@
         }
       }
     },
+    "notify": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "github_user": { "type": "string" }
+      }
+    },
     "targets": {
       "type": "object",
       "additionalProperties": false,

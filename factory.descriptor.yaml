@@ -17,6 +17,9 @@ tracker:
   adapter: github-issues
   repository: zaharchenko-evgeny/slop-factory
 
+notify:
+  github_user: zaharchenko-evgeny
+
 # Bots other than targets.air.bot_login whose APPROVED / CHANGES_REQUESTED reviews count in a round.
 reviews:
   trusted_bots: []

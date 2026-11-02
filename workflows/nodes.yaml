@@ -189,6 +189,17 @@ nodes:
       child-blocked: { from: [split], effects: [{ comment: reason }, { stage: blocked }] }
       conflict: { from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [approved], effects: [{ comment: retro }, { stage: done }] }
+  notify:
+    env: ops
+    pilot: true
+    triggers: ["issues.labeled factory:blocked", "issues.labeled factory:needs-answers"]
+    when: { stage: [blocked, needs-answers] }
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py notify --issue <issue number from the trigger payload>
+    output: read-only
+    outcomes:
+      notified: { from: [blocked, needs-answers] }
   recover:
     env: read
     pilot: true
