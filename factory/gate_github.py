@@ -649,13 +649,7 @@ class GitHubGateTracker:
                                        "-f", f"labels[]={self.stages['triage']}"]))
         if red["id"] in {b["id"] for b in self._list(f"issues/{n}/dependencies/blocked_by")}:
             return False
-        try:
-            self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={red['id']}"])
-        except RuntimeError as e:
-            if "403" not in str(e) and "Resource not accessible" not in str(e):
-                raise
-            self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{n}", "-f",
-                      f"body={self._blocked_body(self._api(f'issues/{n}').get('body') or '', red['number'])}"])
+        self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={red['id']}"])
         return True
 
     @staticmethod

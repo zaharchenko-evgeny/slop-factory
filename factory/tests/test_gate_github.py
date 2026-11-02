@@ -410,6 +410,14 @@ class EffectsTest(unittest.TestCase):
         self.assertIn("body=Blocked by: #999", " ".join(patch))
         self.assertFalse(any("PATCH" in w and "issues/999" in " ".join(w) for w in gh.writes))
 
+    def test_park_without_native_link_fails_instead_of_reporting_success(self):
+        gh = FakeGh(labels=("factory:in-dev", "risk:low"))
+        gh.blocked, gh.fail_blocked_by = [], True
+        gh.open_issues = [{"id": 50, "number": 50, "title": "Main is red in Air: gate"}]
+        with self.assertRaisesRegex(RuntimeError, "403"):
+            tr(gh).apply(eff("park-behind-main-red", "gate"))
+        self.assertFalse(any("PATCH" in w for w in gh.writes))
+
     def test_blocked_by_line_counts_as_open_blocker(self):
         gh = FakeGh(labels=("factory:ready", "risk:low"))
         gh.blocked, gh.issue_body = [], "Blocked by: #12\n\nChild"
