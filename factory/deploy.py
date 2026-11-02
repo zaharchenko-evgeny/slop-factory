@@ -6,11 +6,19 @@
 """Render the nodes of workflows/nodes.yaml as deployable specs (ADR-0014). Output is JSON.
 
 Usage: deploy.py plan --target air
+       deploy.py (--dry-run | --apply [--allow-delete]) [--rename 'OLD NAME=NEW NAME']...
+--dry-run prints the diff against the existing automations and environments; --apply also writes it and re-lists to
+verify. The two Air MCP servers are started over stdio from the commands in FACTORY_MCP_AIR_AUTOMATIONS and
+FACTORY_MCP_AIR_CLOUD (they use the operator's local OAuth). Each --rename updates the existing item named OLD in
+place (same id) to NEW instead of creating NEW and deleting OLD.
 air: {"automations": [...], "environments": [...]}: one automation per enabled node (per tier or focus
      where the node has them) and one environment per environment in use, for the factory-deploy skill.
 """
 import json
+import os
 import re
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -164,13 +172,12 @@ def plan_air(nodes: dict, config: dict) -> dict:
     scheds = nodes.get("schedules") or {}
     bot = config["targets"]["air"]["bot_login"]
     prefix = f"[{project_name(config)}] "
-    automations, used = [], []
+    automations = []
+    used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human"))
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human":
             continue
-        env = n.get("environment", "default")
-        if env not in used:
-            used.append(env)
+        env = n["env"]
         for aname, tier_arg, tier, focus in variants(name, n, roles):
             agent, _, model = air[tier].partition("/")
             trig = []
@@ -226,8 +233,119 @@ def labels(nodes: dict, config: dict) -> list[str]:
     return sorted(out)
 
 
+class Mcp:
+    """A minimal MCP client over stdio (newline-delimited JSON-RPC): initialize, then tools/call."""
+
+    def __init__(self, command: str):
+        self.proc = subprocess.Popen(shlex.split(command), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.n = 0
+        self.rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
+                                "clientInfo": {"name": "factory-deploy", "version": "0"}})
+        self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    def _send(self, msg: dict) -> None:
+        self.proc.stdin.write(json.dumps(msg) + "\n")
+        self.proc.stdin.flush()
+
+    def rpc(self, method: str, params: dict):
+        self.n += 1
+        self._send({"jsonrpc": "2.0", "id": self.n, "method": method, "params": params})
+        for line in self.proc.stdout:
+            msg = json.loads(line)
+            if msg.get("id") == self.n:
+                if "error" in msg:
+                    raise RuntimeError(f"{method}: {msg['error']}")
+                return msg["result"]
+        raise RuntimeError(f"{method}: server closed")
+
+    def call(self, tool: str, args: dict):
+        res = self.rpc("tools/call", {"name": tool, "arguments": args})
+        if res.get("isError"):
+            raise RuntimeError(f"{tool}: {res['content']}")
+        text = "".join(c.get("text", "") for c in res.get("content", []))
+        return res.get("structuredContent") or (json.loads(text) if text else None)
+
+    def close(self) -> None:
+        self.proc.stdin.close()
+        self.proc.wait(timeout=10)
+
+
+def _items(res) -> list[dict]:
+    return res if isinstance(res, list) else next(v for v in res.values() if isinstance(v, list))
+
+
+def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
+    """(action, kind, name, planned item, existing item, changed fields) per create, update, delete; by name, prefix only.
+    `plan["renames"]` ({old name: new name}) matches an existing item under its old name, so the update keeps its id."""
+    new_to_old = {new: old for old, new in (plan.get("renames") or {}).items()}
+    env_ids = {e["name"]: e.get("id") for e in envs}
+    out = []
+    for kind, planned, have in (("environment", plan["environments"], envs), ("automation", plan["automations"], automations)):
+        have = {x["name"]: x for x in have if x["name"].startswith(plan["prefix"])}
+        for p in planned:
+            x = have.pop(p["name"], None) or have.pop(new_to_old.get(p["name"]), None)
+            want = {**p, "environmentConfigId": env_ids.get(p.get("environmentConfigId"), p.get("environmentConfigId"))}
+            changed = [k for k in p if x is not None and x.get(k) != want[k]]
+            if x is None or changed:
+                out.append(("create" if x is None else "update", kind, p["name"], p, x, changed))
+        out += [("delete", kind, n, None, x, []) for n, x in have.items()]
+    return out
+
+
+def read_state(automations: Mcp, cloud: Mcp) -> tuple[list[dict], list[dict]]:
+    return _items(automations.call("list_automations", {})), _items(cloud.call("list_environment_configs", {}))
+
+
+def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp) -> None:
+    """Environments before automations on create and update, after them on delete."""
+    order = {"create": 0, "update": 0, "delete": 1}
+    env_ids = None
+    for action, kind, name, p, x, _ in sorted(changes, key=lambda c: (order[c[0]], (c[1] == "automation") == (c[0] != "delete"))):
+        client, noun = (cloud, "environment_config") if kind == "environment" else (automations, "automation")
+        if p and kind == "automation":  # the environment id exists only after its create
+            env_ids = env_ids or {e["name"]: e["id"] for e in _items(cloud.call("list_environment_configs", {}))}
+            p = {**p, "environmentConfigId": env_ids[p["environmentConfigId"]]}
+        args = {"create": lambda: p, "update": lambda: {**p, "id": x["id"]}, "delete": lambda: {"id": x["id"]}}[action]()
+        client.call(f"{action}_{noun}", args)
+
+
+def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp) -> int:
+    changes = diff(plan, *read_state(automations, cloud))
+    for action, kind, name, _, _, changed in changes:
+        print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
+    if not changes:
+        print("unchanged")
+    if mode == "--dry-run" or not changes:
+        return 0
+    if any(c[0] == "delete" for c in changes) and not allow_delete:
+        print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
+        return 1
+    apply_diff(changes, automations, cloud)
+    left = diff(plan, *read_state(automations, cloud))
+    for action, kind, name, *_ in left:
+        print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
+    return 1 if left else 0
+
+
 def main(argv: list[str]) -> int:
     argv = config_mod.pop_team(argv)
+    rest, renames = argv[1:], {}
+    while "--rename" in rest:
+        i = rest.index("--rename")
+        old, sep, new = (rest[i + 1] if i + 1 < len(rest) else "").partition("=")
+        if not (old and sep and new):
+            print("--rename needs 'OLD NAME=NEW NAME'", file=sys.stderr)
+            return 2
+        renames[old] = new
+        del rest[i:i + 2]
+    if argv and argv[0] in ("--dry-run", "--apply") and set(rest) <= {"--allow-delete"}:
+        servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
+        try:
+            plan = {**plan_air(nodes_mod.load(), config_mod.load()), "renames": renames}
+            return deploy(argv[0], "--allow-delete" in argv, plan, *servers)
+        finally:
+            for server in servers:
+                server.close()
     if len(argv) != 3 or argv[0] != "plan" or argv[1] != "--target" or argv[2] != "air":
         print(__doc__)
         return 2

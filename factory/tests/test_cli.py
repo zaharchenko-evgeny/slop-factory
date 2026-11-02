@@ -128,8 +128,15 @@ class ImportTimeBoundaryTest(unittest.TestCase):
                 f = pr / "factory" / f"{mod}.py"
                 f.write_text(f'open({str(marker)!r}, "w").write("x")\n' + f.read_text())
             Path(pr / "event.json").write_text("{}")
-            done = subprocess.run([sys.executable, str(pr / "factory/cli.py"), "begin", "fix-mid", "event.json"], cwd=pr,
-                                  capture_output=True, text=True)
+            outer_home = tmp / "outer-home"
+            shared = outer_home / "factory-main" / "factory"
+            shared.mkdir(parents=True)
+            (shared / "gate.py").write_text(
+                'import json\nif __name__ == "__main__":\n    print(json.dumps({"gate": "outer-home"}))\n')
+            env = {**os.environ, "HOME": str(tmp / "isolated-home")}
+            with mock.patch.dict(os.environ, {"HOME": str(outer_home)}):
+                done = subprocess.run([sys.executable, str(pr / "factory/cli.py"), "begin", "fix-mid", "event.json"], cwd=pr,
+                                      capture_output=True, text=True, env=env)
             self.assertFalse(marker.exists(), "the pull request's engine module ran at import")
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertEqual(json.loads(done.stdout)["gate"], "main")
