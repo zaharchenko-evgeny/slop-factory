@@ -102,10 +102,11 @@ def repository(r: dict) -> dict:
 # A script node runs one command and judges nothing: the gate's sweep decides every scripted step (join, waiting
 # reviewers, merged to done) from facts. `--main` runs it from main's graph (a PR-triggered node never trusts the PR).
 SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no file, label, comment or review "
-                 "itself. Run `factory sweep{args}` in the foreground with no time limit, wait until it exits, "
+                 "itself. Run `factory sweep{args}` in the foreground with no time limit{event_input}; "
+                 "wait until it exits, "
                  "and report its JSON output.")
-SCRIPT_ARGS = {"join": " --main", "start": " --main", "finish": " --main --issue <issue number from the trigger payload>",
-               "reopen": " --main", "merge": " --main",
+SCRIPT_ARGS = {"join": " --main --event", "start": " --main --event", "finish": " --main --event",
+               "reopen": " --main --event", "merge": " --main --event",
                "recover": " --stale",
                "notify": " notify --issue <issue number from the trigger payload>"}
 
@@ -114,7 +115,9 @@ def script_prompt(name: str) -> str:
     if name == "notify":
         return ("Run `factory notify --issue <issue number from the trigger payload>` in the foreground with no "
                 "time limit, wait until it exits, and report its output.")
-    return SCRIPT_PROMPT.format(args=SCRIPT_ARGS.get(name, ""))
+    args = SCRIPT_ARGS.get(name, "")
+    event_input = " and pass the trigger payload on stdin" if "--event" in args else ""
+    return SCRIPT_PROMPT.format(args=args, event_input=event_input)
 
 
 def skill_lines(role: str) -> str:

@@ -360,10 +360,21 @@ class PlanTest(unittest.TestCase):
 
     def test_pull_request_scripts_run_from_main(self):
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
-        self.assertIn("`factory sweep --main`", a["[Slop factory] join"])
-        self.assertIn("`factory sweep --main --issue <issue number from the trigger payload>`", a["[Slop factory] finish"])
-        self.assertIn("`factory sweep --main`", a["[Slop factory] reopen"])
+        self.assertIn("`factory sweep --main --event`", a["[Slop factory] join"])
+        self.assertIn("`factory sweep --main --event`", a["[Slop factory] finish"])
+        self.assertIn("`factory sweep --main --event`", a["[Slop factory] reopen"])
         self.assertNotIn("--main", a["[Slop factory] recover"])
+
+    def test_event_script_nodes_scope_to_one_ticket(self):
+        scripts = {"join", "start", "finish", "reopen", "merge"}
+        for automation in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
+            name = automation["name"].removeprefix("[Slop factory] ")
+            if name in scripts:
+                self.assertIn("factory sweep --main --event", automation["prompt"], name)
+            elif name == "recover":
+                self.assertIn("factory sweep --stale", automation["prompt"])
+            elif "factory sweep" in automation["prompt"]:
+                self.assertTrue("--issue" in automation["prompt"] or "--event" in automation["prompt"], name)
 
     def test_real_plan_is_prefixed_and_covers_pilot(self):
         config = cfg.load()
