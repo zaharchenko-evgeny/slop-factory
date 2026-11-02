@@ -420,6 +420,30 @@
         "outcomes": {},
         "role": "script",
         "runs": {
+          "merge": {
+            "engine": null,
+            "focus": null,
+            "node": "merge",
+            "outcomes": {
+              "merged": {
+                "effects": [
+                  {
+                    "merge": "match-head"
+                  }
+                ],
+                "from": [
+                  "approved"
+                ]
+              }
+            },
+            "role": "script",
+            "tier": null,
+            "when": {
+              "ci": "green",
+              "round": "complete-at-head",
+              "stage": "approved"
+            }
+          },
           "recover": {
             "engine": null,
             "focus": null,
@@ -471,6 +495,30 @@
         "outcomes": {},
         "role": "script",
         "runs": {
+          "merge": {
+            "engine": null,
+            "focus": null,
+            "node": "merge",
+            "outcomes": {
+              "merged": {
+                "effects": [
+                  {
+                    "merge": "match-head"
+                  }
+                ],
+                "from": [
+                  "approved"
+                ]
+              }
+            },
+            "role": "script",
+            "tier": null,
+            "when": {
+              "ci": "green",
+              "round": "complete-at-head",
+              "stage": "approved"
+            }
+          },
           "sweep": {
             "engine": null,
             "focus": null,
@@ -496,6 +544,95 @@
           "cronExpression": "0 6,18 * * *",
           "timezone": "UTC",
           "triggerType": "SCHEDULED"
+        }
+      ]
+    },
+    {
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "small",
+        "isDefault": false,
+        "name": "small"
+      },
+      "environmentConfigId": "[Slop factory] read",
+      "name": "[Slop factory] merge",
+      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --main` once and report its JSON output.",
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
+      },
+      "spec": {
+        "engine": null,
+        "focus": null,
+        "node": "merge",
+        "outcomes": {
+          "merged": {
+            "effects": [
+              {
+                "merge": "match-head"
+              }
+            ],
+            "from": [
+              "approved"
+            ]
+          }
+        },
+        "role": "script",
+        "runs": {
+          "recover": {
+            "engine": null,
+            "focus": null,
+            "node": "recover",
+            "outcomes": {},
+            "role": "script",
+            "tier": null,
+            "when": {
+              "always": true
+            }
+          },
+          "sweep": {
+            "engine": null,
+            "focus": null,
+            "node": "sweep",
+            "outcomes": {},
+            "role": "script",
+            "tier": null,
+            "when": null
+          }
+        },
+        "tier": "cheap",
+        "when": {
+          "ci": "green",
+          "round": "complete-at-head",
+          "stage": "approved"
+        }
+      },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        },
+        {
+          "outputBehaviour": "read-only"
+        }
+      ],
+      "triggers": [
+        {
+          "eventType": "issues.labeled",
+          "filters": {
+            "label": "factory:approved"
+          },
+          "source": "github",
+          "triggerType": "EVENT"
+        },
+        {
+          "eventType": "pull_request.labeled",
+          "filters": {
+            "label": "factory:ci-green"
+          },
+          "source": "github",
+          "triggerType": "EVENT"
         }
       ]
     }
@@ -534,6 +671,8 @@
     "complexity:large",
     "complexity:medium",
     "complexity:small",
+    "factory:approved",
+    "factory:ci-green",
     "factory:implement-cheap",
     "factory:implement-mid",
     "factory:implement-strong",

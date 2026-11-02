@@ -60,8 +60,10 @@ class FakeGh:
             on = want in self.labels and (self.state == "open" or "state=all" in a)
             return json.dumps({"number": 7}) if on else ""
         if a.endswith("/pulls/5"):
-            return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
+            return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": u} for u in self.requested]})
+        if "/compare/" in a:
+            return json.dumps({"behind_by": getattr(self, "behind_by", 0)})
         if "/commits/" in a:
             return json.dumps({"commit": {"committer": {"date": getattr(self, "head_date", "2026-01-02T00:00:00Z")}}})
         if "/collaborators/" in a:
@@ -364,6 +366,16 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(gh.writes[0][-2:], ["--match-head-commit", "h1"])
         gh.merged = True
         self.assertFalse(tr(gh).apply(eff("merge", "match-head")))
+
+    def test_update_branch_merges_main_into_the_pr(self):
+        gh = FakeGh()
+        self.assertTrue(tr(gh).apply({**eff("update-branch", "match-head"), "head": "h1"}))
+        self.assertEqual(gh.writes[0], ["api", "-X", "PUT", f"repos/{REPO}/pulls/5/update-branch", "-f", "expected_head_sha=h1"])
+
+    def test_approved_facts_read_risk_and_behind(self):
+        gh = FakeGh(labels=("factory:approved", "risk:low"))
+        gh.behind_by = 2
+        self.assertEqual((tr(gh).facts(7)["risk"], tr(gh).facts(7)["behind"]), ("low", True))
 
     def test_seen_is_a_no_op(self):
         gh = FakeGh()

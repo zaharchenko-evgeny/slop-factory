@@ -222,7 +222,7 @@ class GitHubGateTracker:
              "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none", "pending_rereviews": [],
              "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
-             "handed_to_fix": False,
+             "handed_to_fix": False, "risk": risk, "behind": False,
              "issue_state": issue.get("state", "open"),
              "title": issue.get("title", ""), "body": issue.get("body") or "", "branch": None}
         if stage == "split":
@@ -243,6 +243,8 @@ class GitHubGateTracker:
             f["handed_to_fix"] = bool(writes) and max(writes) > self._api(f"commits/{head}")["commit"]["committer"]["date"]
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
+            if stage == "approved" and pr.get("state") == "open":  # only the merge gates read it
+                f["behind"] = self._api(f"compare/{pr['base']['ref']}...{head}")["behind_by"] > 0
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), conflict=pr.get("mergeable") is False, ci=ci, reviews=reviews,
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
@@ -342,7 +344,14 @@ class GitHubGateTracker:
             if pr["merged"]:
                 return False
             self.run(["pr", "merge", str(pr["number"]), "-R", self.repo, "--merge",
-                      "--match-head-commit", pr["head"]["sha"]])
+                      "--match-head-commit", e.get("head") or pr["head"]["sha"]])
+            return True
+        if kind == "update-branch":  # a merge commit of the base into the PR branch; refused when the head moved
+            pr = self._pr(n)
+            if pr is None or pr["merged"]:
+                return False
+            self.run(["api", "-X", "PUT", f"repos/{self.repo}/pulls/{pr['number']}/update-branch",
+                      "-f", f"expected_head_sha={e.get('head') or pr['head']['sha']}"])
             return True
         raise ValueError(f"unknown effect: {kind}")
 

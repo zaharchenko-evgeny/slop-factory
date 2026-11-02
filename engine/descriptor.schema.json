@@ -189,8 +189,17 @@
         "ticket_approval": {
           "type": "string"
         },
-        "pr_approval": {
-          "type": "string"
+        "auto_merge": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "max_risk": {
+              "type": "string"
+            }
+          }
         },
         "confirm_external_writes": {
           "type": "boolean"

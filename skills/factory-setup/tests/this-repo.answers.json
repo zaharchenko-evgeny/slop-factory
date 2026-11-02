@@ -14,7 +14,6 @@
   "MODEL_REVIEW": "anthropic/claude-haiku-5-5",
   "MODEL_REVIEW_STRONG": "anthropic/claude-sonnet-5-5",
   "REVIEW_STRONG_NOTE": "  # Only Haiku 5.5 and Sonnet 5.5 are used (retro of 29 October); `strong` is Sonnet too.",
-  "PR_APPROVAL_NOTE": "          # the approver runs in dry-run (roles.approver)",
   "CHECKS_NOTE": [
     "# shortcut: ShellCheck runs only when installed and Betterleaks is not run",
     "# locally yet; #5 adds both as blocking CI gates."

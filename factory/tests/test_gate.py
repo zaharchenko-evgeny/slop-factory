@@ -848,6 +848,66 @@ class ApprovedSweepTest(unittest.TestCase):
         self.assertEqual(tr.tickets[7]["stage"], "approved")
 
 
+class AutoMergeTest(unittest.TestCase):
+    OPEN = {"stage": "approved", "pr_state": "open", "head": "h", "round_head": "h", "round_complete": True,
+            "round_verdict": "approve", "ci": "green", "risk": "high"}
+    ON = {"enabled": True, "max_risk": "high"}
+
+    def sweep(self, auto_merge=ON, **kw):
+        tr = MemoryTracker({7: {**self.OPEN, **kw}})
+        tr.sweep_tickets = lambda stages: [n for n, t in tr.tickets.items() if t["stage"] in stages]
+        results, failed = gate.sweep(tr, NODES, auto_merge=auto_merge)
+        return tr, [(r["node"], r["outcome"]) for r in results if not failed]
+
+    def log(self, tr, kind):
+        return [json.loads(v) for k, v in tr.tickets[7].get("log", []) if k == kind]
+
+    def test_merge_when_all_gates_pass(self):
+        tr, results = self.sweep()
+        self.assertEqual(results, [("merge", "merged")])
+        self.assertEqual(self.log(tr, "merge"), ["match-head"])
+
+    def test_no_merge_when_head_not_reviewed(self):
+        for kw in ({"round_head": "old"}, {"round_head": None}, {"round_verdict": "changes"}, {"round_complete": False}):
+            with self.subTest(kw=kw):
+                tr, results = self.sweep(**kw)
+                self.assertNotIn(("merge", "merged"), results)
+                self.assertEqual(self.log(tr, "merge"), [])
+
+    def test_no_merge_when_ci_not_green_at_head(self):
+        for ci in ("pending", "red", "none"):
+            with self.subTest(ci=ci):
+                tr, results = self.sweep(ci=ci)
+                self.assertNotIn(("merge", "merged"), results)
+                self.assertEqual(self.log(tr, "merge"), [])
+
+    def test_behind_main_updates_branch_not_merge(self):
+        tr, results = self.sweep(behind=True)
+        self.assertEqual(results, [("merge", "updated")])
+        self.assertEqual((self.log(tr, "merge"), self.log(tr, "update-branch")), ([], ["match-head"]))
+        self.assertEqual(tr.tickets[7]["stage"], "approved")
+
+    def test_risk_above_limit_waits_for_person(self):
+        for auto_merge in ({"enabled": True, "max_risk": "low"}, {"enabled": False, "max_risk": "high"}):
+            with self.subTest(auto_merge=auto_merge):
+                tr, results = self.sweep(auto_merge)
+                self.assertEqual(results, [("merge", "waiting")])
+                self.assertEqual(self.log(tr, "merge"), [])
+                self.assertEqual(tr.tickets[7]["stage"], "approved")
+                self.assertIn("waiting for a person to merge", self.log(tr, "comment")[0])
+
+    def test_one_merge_per_sweep(self):
+        tr = MemoryTracker({7: dict(self.OPEN), 8: dict(self.OPEN)})
+        tr.sweep_tickets = lambda stages: [7, 8]
+        results, _ = gate.sweep(tr, NODES, auto_merge=self.ON)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results if r["node"] == "merge"], [(7, "merged")])
+
+    def test_apply_refuses_a_merge_whose_gate_failed(self):
+        tr = MemoryTracker({7: {**self.OPEN, "ci": "red"}})
+        code, out = gate.apply("merge", "merged", {"ticket": 7}, tr, NODES)
+        self.assertEqual((code, out["applied"]), (gate.NO_GO, False))
+
+
 class UnblockedSweepTest(unittest.TestCase):
     def sweep(self, tickets, closed=10):
         tr = MemoryTracker(tickets)

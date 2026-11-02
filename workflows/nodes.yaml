@@ -159,16 +159,19 @@ nodes:
       reopened: { from: [approved], effects: [{ stage: in-review }] }
   merge:
     env: read
-    enabled: false
-    ticket: 159
-    triggers: ["pull_request.labeled factory:merge"]
+    pilot: true
+    # No agent judges: the sweep merges only when gate.merge_decision holds. `finish` takes over on `pull_request.merged`.
+    triggers: ["issues.labeled factory:approved", "pull_request.labeled factory:ci-green"]
     when: { stage: approved, round: complete-at-head, ci: green }
     role: script
+    tier: cheap   # Air automation model; it does no work: the automation runs `uv run factory/gate.py sweep`
+    run: uv run factory/gate.py sweep
     output: read-only
     outcomes:
       merged: { from: [approved], effects: [{ merge: match-head }] }
-      update-or-hold: { from: [approved], effects: [{ comment: reason }, { stage: approved }] }
-      fix: { from: [approved], effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
+      # Behind main: CI reruns and its `ci-green` wakes `merge` again.
+      updated: { from: [approved], effects: [{ update-branch: match-head }] }
+      waiting: { from: [approved], effects: [{ comment: reason, "on": pr }] }
   finish:
     env: read
     pilot: true

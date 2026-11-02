@@ -79,7 +79,6 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG` | Developer and router model tiers | `factory.descriptor.yaml` |
 | `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Reviewer models (different family from the developer) | `factory.descriptor.yaml` |
 | `REVIEW_STRONG_NOTE` | Optional comment line above `review_strong` (may be empty) | `factory.descriptor.yaml` |
-| `PR_APPROVAL_NOTE` | Optional trailing comment on `pr_approval` (may be empty) | `factory.descriptor.yaml` |
 | `CHECKS_NOTE` | Comment lines above `checks:` about known limits | `factory.descriptor.yaml` |
 | `PROJECT_CHECKS` | Project-specific check entries, after the generic ones | `factory.descriptor.yaml` |
 | `DESIGN_REF` | Pointer to the design document, e.g. `(design §5)` | `workflows/delivery.md` |

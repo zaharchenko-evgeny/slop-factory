@@ -287,7 +287,7 @@ def resolve(effect, payload, ticket):
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
-def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None):
+def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None, auto_merge=None):
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
         raise Bad(f"unknown outcome: {outcome}")
@@ -362,6 +362,10 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                            "[factory] Stopped: the fix round ended without a commit, so nothing starts the next "
                            "review. A person decides, then sets factory:ready.")},
                        {"kind": "stage", "ticket": ticket, "value": "blocked"}]
+    if name == "merge":  # the plan may be seconds old
+        decision = merge_decision(facts, auto_merge if auto_merge is not None else config_mod.load()["gates"].get("auto_merge"))
+        if decision is None or decision[0] != outcome:
+            return NO_GO, {"applied": False, "reason": "a merge gate no longer holds"}
     after = []  # effects that must follow the stage change
     if name == "implement" and outcome == "done" and facts.get("pr") and facts.get("ci") in ("green", "red") \
             and checked_pr_head is not None and facts.get("head") == checked_pr_head and local_head() == facts.get("head"):
@@ -387,6 +391,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             e["findings"], e["summary"], e["run_id"] = payload.get("findings"), payload.get("summary"), payload.get("run_id")
         if e["kind"] == "join":
             e["tier"] = payload.get("tier")
+        if e["kind"] in ("merge", "update-branch"):
+            e["head"] = facts.get("head")  # the head the gates judged
         if e["kind"] == "comment" and payload.get("run_id"):
             e["run_id"] = payload["run_id"]
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
@@ -481,6 +487,21 @@ def has_dispute_rereview(facts):
                for r in facts.get("reviews", []))
 
 
+RISK_RANK = {"low": 0, "high": 1}
+
+
+def merge_decision(facts, auto_merge):
+    """(outcome, payload) of the `merge` node, else None while a gate fails: the current head approved by every required
+    focus, green CI at it, no conflict. Then `waiting` (auto-merge off or risk above `max_risk`), `updated` (behind) or `merged`."""
+    if auto_merge is None or facts.get("stage") != "approved" or facts.get("pr_state") != "open" or facts.get("conflict") \
+            or facts.get("ci") != "green" or not facts.get("round_complete") or facts.get("round_verdict") != "approve" \
+            or facts.get("round_head") is None or facts["round_head"] != facts.get("head"):
+        return None
+    if not auto_merge.get("enabled") or RISK_RANK.get(facts.get("risk", "high"), 1) > RISK_RANK.get(auto_merge.get("max_risk"), -1):
+        return "waiting", {"reason": "[factory] waiting for a person to merge: auto-merge is off or the risk is above its limit."}
+    return ("updated" if facts.get("behind") else "merged"), {}
+
+
 def retro_payload(facts):
     """The `finish` retro comment of a merged ticket, from its facts."""
     agent = [r for r in facts["reviews"] if r["agent"]]
@@ -491,7 +512,7 @@ def retro_payload(facts):
     return {"retro": text, "run_id": "finish:retro"}
 
 
-def sweep_plan(facts):
+def sweep_plan(facts, auto_merge=None):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
     if stage == "approved" and facts.get("pr_state") == "merged":
@@ -502,6 +523,8 @@ def sweep_plan(facts):
             and ((facts.get("round_head") is not None and facts.get("head") != facts.get("round_head"))
                  or facts.get("ci") == "red"):
         return "reopen", "reopened", {}
+    if stage == "approved" and (m := merge_decision(facts, auto_merge)):
+        return "merge", *m
     if stage == "split" and (kids := facts.get("children")):
         if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
             what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)
@@ -517,32 +540,35 @@ def sweep_plan(facts):
     return None
 
 
-def sweep(tracker, nodes, dry_run=False, closed_ticket=None):
+def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None):
     """Move every listed ticket through each step its facts allow (a merged PR goes approved to done in one
     step). A ticket that reaches done or blocked also lets its split parent finish. Returns (results, failed)."""
     results, failed, done_tickets = [], False, []
-    queue, seen = list(tracker.sweep_tickets(SWEEP_STAGES)), set()
+    queue, seen, merged = list(tracker.sweep_tickets(SWEEP_STAGES)), set(), False
     while queue:
         n = queue.pop(0)
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
             try:
                 facts = tracker.facts(n)
-                plan = sweep_plan(facts)
+                plan = sweep_plan(facts, auto_merge)
                 if plan is None or (n, facts["stage"]) in seen:
                     break
+                if plan[:2] == ("merge", "merged") and merged:
+                    break  # one merge at a time; the next sweep reads the rest against the new main
                 seen.add((n, facts["stage"]))
                 node, outcome, payload = plan
                 r = {"ticket": n, "stage": facts["stage"], "node": node, "outcome": outcome}
                 results.append(r)
                 if dry_run:
                     break
-                code, out = apply(node, outcome, {"ticket": n, **payload}, tracker, nodes)
+                code, out = apply(node, outcome, {"ticket": n, **payload}, tracker, nodes, auto_merge=auto_merge)
                 r.update(applied=out["applied"], written=out.get("written", []))
                 if not out["applied"]:
                     break
-                if outcome in ("merged", "children-done"):
+                merged = merged or (node, outcome) == ("merge", "merged")
+                if node == "finish" and outcome in ("merged", "children-done"):
                     done_tickets.append(n)
-                if outcome in ("merged", "children-done") and hasattr(tracker, "parent") and (p := tracker.parent(n)):
+                if node == "finish" and outcome in ("merged", "children-done") and hasattr(tracker, "parent") and (p := tracker.parent(n)):
                     queue.append(p)
             except Exception as e:  # one ticket failing does not stop the others
                 failed = True
@@ -717,7 +743,7 @@ def main(argv):
                         closed_ticket = raw["issue"].get("number")
                 except (OSError, ValueError) as e:
                     print(f"warning: ignoring invalid sweep event; running full sweep: {e}", file=sys.stderr)
-            results, failed = sweep(tracker, nodes, a.dry_run, closed_ticket)
+            results, failed = sweep(tracker, nodes, a.dry_run, closed_ticket, config["gates"].get("auto_merge"))
             out = {"dry_run": a.dry_run, "sweep": results}
             if a.stale:
                 out["stale"], stale_failed = sweep_stale(tracker, nodes, config["limits"].get("stale_hours", 2),
