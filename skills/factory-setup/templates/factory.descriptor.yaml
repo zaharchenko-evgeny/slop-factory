@@ -85,6 +85,10 @@ limits:
 # `requires: <command>`: when the command is missing the check reports `skipped`.
 {{CHECKS_NOTE}}
 checks:
+  - name: doc-references
+    stage: pre-review
+    mode: blocking
+    run: uv run --quiet factory/check_refs.py
   - name: whitespace
     stage: pre-review
     mode: blocking

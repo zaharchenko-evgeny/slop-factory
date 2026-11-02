@@ -1,10 +1,10 @@
 # Proposed state chart for the whole factory
 
-> Superseded in mechanism by [ADR-0014](adr/0014-node-model.md) (nodes, facts and effects replace vars, leases and step.py). The states and outcomes stay.
+> Superseded in mechanism by [ADR-0014](adr/0014-node-model.md) (nodes, facts and effects replace vars, leases and the earlier step script). The states and outcomes stay.
 
 Status is a proposal in #111 (30 October 2026). It extends [the delivery state chart](statechart.md)
 and keeps its rules: the tracker label is the only state, one event starts one short step, and
-`factory/step.py` owns every state decision. Nothing here changes slices #106 to #109. Each new part
+`factory/gate.py` owns every state decision. Nothing here changes slices #106 to #109. Each new part
 is a later slice, listed under the delivery order below.
 
 ## The factory as nodes: built and planned
@@ -157,7 +157,7 @@ Every unit of work is a ticket, and every ticket has one stage label.
 | Delivery | no `routine:*` label | `workflows/delivery.sm.yaml` | "Add a timestamped run log" |
 | Routine | label `routine:<kind>` | `workflows/routine.sm.yaml` | "Weekly improve, 2026-W44" |
 
-`step.py begin` picks the machine from the kind label. The router stays the one entry point (ADR-0002).
+`gate.py` picks the machine from the kind label. The router stays the one entry point (ADR-0002).
 A routine ticket is created by the sweep from a schedule table. It is never written by a person, though
 a person can open one by hand to run a routine early.
 
@@ -467,7 +467,7 @@ These slices come after #106 to #109. Each ends in a state you can check with `s
 3. `routine.sm.yaml`, the schedule table in the sweep, and `distill` moved onto it. The `distill` command is then deleted.
 4. `collect`, `digest` and `audit` as routines (#63, #10).
 5. Session pointer, fix routing and handoff (#113), then conflict detection and `update` (#114).
-6. `merging` and the gap check (#91's merge step on `step.py`, and #64's gap rule).
+6. `merging` and the gap check (#91's merge step on `gate.py`, and #64's gap rule).
 7. Bug path: `reproduce`, `diagnose`, `verify` (#95).
 8. `evals` and the `improve` routine with probing and adoption (#96, #64, #65).
 

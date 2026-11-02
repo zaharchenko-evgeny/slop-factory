@@ -11,8 +11,8 @@ Status:
 
 ## How the approver decides
 
-The approver (`roles/approver/role.md`, run by `factory/approver.py`) runs after
-every reviewer has approved and before the PR is published. It has three layers:
+The approver (`roles/approver/role.md`) runs after every reviewer has approved
+and before the PR is published. It has three layers:
 
 | Layer | File | What it is | Deterministic |
 | --- | --- | --- | --- |
@@ -26,7 +26,7 @@ are no reasons. Otherwise it is `needs-human`.
 
 ## Layer 1: hard rules
 
-`factory/approver.py` writes this summary of the branch against its base:
+The rules evaluate this summary of the branch against its base:
 
 ```json
 {"paths": ["..."], "lines_changed": 42, "ci": "passed", "risk": "low",
@@ -68,8 +68,8 @@ deny contains "ticket is labelled needs-human" if {
 
 A rule can only use facts that are in the summary. To add a new fact, such as
 coverage, test count, author or the ticket's repository, add it to the summary
-builder in `factory/approver.py`. That is a small code change, made once per
-fact.
+builder that supplies the policy input. That is a small code change, made once
+per fact.
 
 Check a rule locally with `conftest test --policy policies summary.json`.
 
