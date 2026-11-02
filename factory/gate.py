@@ -255,6 +255,33 @@ def check(name, event, tracker, nodes, config):
     }
 
 
+def check_routine(name, nodes, config):
+    """A routine (a scheduled node outside any ticket, ADR-0015): no tracker facts, so it always matches."""
+    node = load_node(name, nodes)
+    role, roles = node["role"], config["roles"]
+    skills = config_mod.resolve(f"roles/{role}/skills.txt")
+    return GO, {
+        "go": True, "reason": None, "ticket": None, "node": name, "role": role,
+        "tier": node.get("tier") or roles.get(role, {}).get("tier"), "focus": None,
+        "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
+        "skills": skills.read_text().split() if skills.exists() else [],
+        "context": {}, "outcomes": list(node["outcomes"]), "merge_main": False, "branch": None,
+        "handoff_path": f".factory/handoff/{name}.json",
+    }
+
+
+def apply_routine(name, outcome, nodes):
+    """A routine writes through its role (a branch, a PR): the gate only checks the outcome and changes nothing."""
+    outcomes = load_node(name, nodes)["outcomes"]
+    if outcome == "done" and "done" not in outcomes:  # the role handoff's `status: done` means the routine's one outcome
+        outcome = ""
+    if not outcome and len(outcomes) == 1:
+        outcome = next(iter(outcomes))
+    if outcome not in outcomes:
+        raise Bad(f"unknown outcome: {outcome}")
+    return GO, {"applied": True, "written": []}
+
+
 def check_state_path(ticket):
     return Path(".factory") / "check" / f"{ticket}.json"
 
@@ -325,6 +352,17 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             payload = {**payload, "tier": node.get("else_tier") or nodes["nodes"]["fix"]["tiers"][0]}
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     facts = tracker.facts(ticket)
+    if name == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
+            and not facts.get("focus_missing") and facts.get("ci") == "green" and facts.get("pr") and facts.get("head"):
+        people = facts["waiting_reviewers"]
+        effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
+                    {"kind": "assign", "ticket": ticket, "value": people},
+                    {"kind": "comment", "ticket": ticket,
+                     "value": f"[factory] Re-review PR #{facts['pr']}: your change request was addressed at {facts['head']}",
+                     "on": "pr"}]
+    if name == "merge" and outcome == "waiting":
+        effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
+                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]}]
     if name == "join" and outcome == "changes" and facts.get("handed_to_fix") and has_dispute_rereview(facts):
         effects.insert(0, {"kind": "unlabel", "ticket": ticket, "value": "factory:fix-*", "on": "pr"})
     if name in ("implement", "fix") and outcome == "done":
@@ -388,6 +426,20 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
     if any(e["kind"] == "stage" and e["value"] == "blocked" for e in effects):
         effects = clear_commands(ticket) + effects
+    stage_effect = next((e for e in effects if e["kind"] == "stage"), None)
+    if stage_effect:
+        target = stage_effect["value"]
+        human_effects = []
+        human_state = target in ("blocked", "needs-answers")
+        if not human_state and "factory:needs-human" in facts.get("attrs", []):
+            human_effects += [{"kind": "unlabel", "ticket": ticket, "value": "factory:needs-human"},
+                              {"kind": "unassign", "ticket": ticket, "value": None}]
+        if human_state:
+            person = (facts.get("author") if target == "needs-answers" else
+                      config_mod.load()["notify"]["github_user"])
+            human_effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
+                              {"kind": "assign", "ticket": ticket, "value": person}]
+        effects[:0] = human_effects
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
         if e["kind"] == "stage":
@@ -506,18 +558,9 @@ def merge_decision(facts, auto_merge):
             or facts.get("round_head") is None or facts["round_head"] != facts.get("head"):
         return None
     if not auto_merge.get("enabled") or RISK_RANK.get(facts.get("risk", "high"), 1) > RISK_RANK.get(auto_merge.get("max_risk"), -1):
-        return "waiting", {"reason": "[factory] waiting for a person to merge: auto-merge is off or the risk is above its limit."}
+        next_step = f"Merge PR #{facts['pr']}" if facts.get("pr") else "waiting for a person to merge"
+        return "waiting", {"reason": f"[factory] {next_step}: auto-merge is off or this PR exceeds its risk limit."}
     return ("updated" if facts.get("behind") else "merged"), {}
-
-
-def retro_payload(facts):
-    """The `finish` retro comment of a merged ticket, from its facts."""
-    agent = [r for r in facts["reviews"] if r["agent"]]
-    pr = f"PR #{facts['pr']} {facts['pr_state']}" if facts["pr"] else "no PR found"
-    text = (f"Retro: {pr}; fix rounds {facts['fix_rounds']}; "
-            f"reviews {len(agent)} ({sum(r['verdict'] == 'approve' for r in agent)} approve, "
-            f"{sum(r['verdict'] == 'changes' for r in agent)} changes)")
-    return {"retro": text, "run_id": "finish:retro"}
 
 
 def sweep_plan(facts, auto_merge=None):
@@ -526,7 +569,7 @@ def sweep_plan(facts, auto_merge=None):
     if stage == "needs-answers" and facts.get("answered"):
         return "finish", "answered", {}
     if stage == "approved" and facts.get("pr_state") == "merged":
-        return "finish", "merged", retro_payload(facts)
+        return "finish", "merged", {}
     if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
         return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
     if stage == "approved" and facts.get("pr_state") == "open" \
@@ -657,7 +700,11 @@ def stale_plan(facts, now, hours, command_minutes=30):
         return "finish", None, None, "the PR merged"
     if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
         return "conflict", None, None, "the approved PR conflicts with main"
-    return None
+    if stage == "ready" and facts.get("blockers_open"):
+        return None
+    if stage == "changes-requested" and cmd and commit_at >= cmd_at:
+        return None
+    return "human", None, None, f"no recovery rule re-fired after {hours} hours in {stage}"
 
 
 def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=30):
@@ -678,7 +725,7 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                 continue
             run = "recover:stale"
             if kind == "finish":
-                _, out = apply("finish", "merged", {"ticket": n, **retro_payload(facts)}, tracker, nodes)
+                _, out = apply("finish", "merged", {"ticket": n}, tracker, nodes)
                 r["applied"] = out["applied"]
             elif kind == "conflict":
                 _, out = apply("finish", "conflict", {"ticket": n}, tracker, nodes)
@@ -686,14 +733,19 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
             elif kind == "comment":
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
                                               "value": f"{RECOVER} stage={stage} {why}"})
+            elif kind == "human":
+                if "factory:needs-human" in facts.get("attrs", []):
+                    continue  # preserve an existing human wait and its assignee
+                tracker.apply({"ticket": n, "kind": "label", "value": "factory:needs-human"})
+                tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"]})
+                r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
+                                              "value": f"{RECOVER} stage={stage}: {why}. A person decides, then sets factory:ready."})
             elif recovered(facts, stage):
                 r["recover"] = "blocked"
-                tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
-                               "value": f"[factory] Stopped: the node did not respond twice in {stage}. "
-                                        "A person decides, then sets factory:ready."})
-                for e in clear_commands(n):
-                    tracker.apply(e)
-                r["applied"] = tracker.apply({"ticket": n, "kind": "stage", "value": "blocked"})
+                _, out = apply("recover", "blocked", {"ticket": n, "run_id": run,
+                                                          "reason": f"[factory] Stopped: the node did not respond twice in {stage}. A person decides, then sets factory:ready."},
+                               tracker, nodes)
+                r["applied"] = out["applied"]
             else:  # the comment last: for `ready` the re-added stage label starts the stage, and the comment must follow it
                 tracker.apply({"ticket": n, "kind": "unlabel", "value": label, "on": on})
                 r["applied"] = tracker.apply({"ticket": n, "kind": "label", "value": label, "on": on})
@@ -767,7 +819,18 @@ def main(argv):
             return FAILED if failed else GO
         if not a.node:
             raise Bad("--node is required")
-        if a.cmd == "check":
+        routine = bool(((nodes.get("nodes") or {}).get(a.node) or {}).get("routine"))
+        if routine and a.cmd == "check":
+            code, out = check_routine(a.node, nodes, config)
+        elif routine:
+            try:
+                h = json.loads(Path(a.handoff).read_text()) if a.handoff else {}
+            except (OSError, ValueError) as e:
+                raise Bad(f"malformed handoff: {e}")
+            if not isinstance(h, dict):
+                raise Bad("malformed handoff: needs an object")
+            code, out = apply_routine(a.node, a.outcome or h.get("outcome") or h.get("status") or "", nodes)
+        elif a.cmd == "check":
             event = read(a.event or "", "event", raw=True)
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
             code, out = check(a.node, event, tracker, nodes, config)
