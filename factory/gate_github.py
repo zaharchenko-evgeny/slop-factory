@@ -267,7 +267,7 @@ class GitHubGateTracker:
                     labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
         pr_labels = self._labels(pr) if pr else []
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
-        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-"))), None)
+        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-", "factory:update-"))), None)
         command_labels = ("factory:ready", "factory:triage", "factory:implement-", "factory:fix-",
                           "factory:update-", "factory:ci-green")
         active_commands = {(t, x) for t, x in have if x == "factory:ready" or x == "factory:triage"

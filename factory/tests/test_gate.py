@@ -655,6 +655,15 @@ class StaleSweepTest(unittest.TestCase):
         self.assertEqual(sorted(r["ticket"] for r in res), [4, 5])
         self.assertIn(["label", '"factory:implement-mid"'], tr.tickets[4]["log"])
 
+    def test_stale_update_command_is_refired_once_then_blocked(self):
+        tr, res = self.sweep({5: {"stage": "changes-requested", "since": self.OLD, "pr": 7,
+                                  "command": "factory:update-cheap", "command_at": self.FRESH,
+                                  "commit_at": self.OLD}})
+        self.assertEqual([r["recover"] for r in res], ["refire"])
+        res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
+        self.assertEqual([r["recover"] for r in res], ["blocked"])
+        self.assertEqual(tr.tickets[5]["stage"], "blocked")
+
     def test_dry_run_writes_nothing(self):
         tr = MemoryTracker({1: {"stage": "ready", "since": self.OLD}})
         tr.sweep_tickets = lambda stages: [1]

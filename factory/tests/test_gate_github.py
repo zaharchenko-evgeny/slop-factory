@@ -832,6 +832,14 @@ class GateTest(unittest.TestCase):
 
 
 class StaleFactsTest(unittest.TestCase):
+    def test_update_command_reaches_stale_planner(self):
+        gh = FakeGh(labels=("factory:changes-requested", "risk:low", "factory:update-cheap"))
+        gh.head_date = "2026-11-01T09:00:00Z"
+        gh.label_events = [("factory:update-cheap", "2026-11-01T10:00:00Z")]
+        facts = tr(gh).stale_facts(7)
+        self.assertEqual(gate.stale_plan(facts, gate.datetime.fromisoformat("2026-11-01T11:00:00+00:00"), 2)[0:3],
+                         ("refire", "factory:update-cheap", "pr"))
+
     def test_command_is_pending_only_when_its_label_is_the_latest_event(self):
         gh = FakeGh(labels=("factory:in-dev", "factory:implement-cheap", "risk:low"))
         gh.label_events = [("factory:in-dev", "2026-01-02T02:00:00Z"),
