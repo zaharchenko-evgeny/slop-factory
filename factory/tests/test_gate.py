@@ -461,9 +461,8 @@ class TriggerTest(unittest.TestCase):
         f.write_text('{"action":')
         try:
             code, out, warning = self.run_sweep(["--event", str(f)], tracker)
-            self.assertEqual(code, gate.GO)
-            self.assertEqual((out["sweep"][0]["ticket"], out["sweep"][0]["outcome"]), (1, "approved"))
-            self.assertIn("running full sweep", warning)
+            self.assertEqual(code, gate.BAD)
+            self.assertIn("invalid sweep event", out["error"])
         finally:
             f.unlink(missing_ok=True)
 
@@ -473,14 +472,36 @@ class TriggerTest(unittest.TestCase):
         tracker.sweep_tickets = lambda stages: []
         f = self.file({"action": "closed"})
         code, out, warning = self.run_sweep(["--event", str(f)], tracker)
-        self.assertEqual((code, out["sweep"]), (gate.GO, []))
-        self.assertIn("running full sweep", warning)
+        self.assertEqual(code, gate.BAD)
+        self.assertIn("invalid sweep event", out["error"])
+
+    def test_sweep_event_resolves_ticket_from_pr_title(self):
+        from gate_port import MemoryTracker
+        cases = (("#335 API rate limit fix", ""),
+                 ("Factory change", "Closes #335"),
+                 ("Factory change\n\nCloses #335", ""))
+        for title, body in cases:
+            with self.subTest(title=title, body=body):
+                tracker = MemoryTracker({335: {"stage": "ready"}, 336: {"stage": "ready"}})
+                tracker.sweep_tickets = lambda stages: self.fail("event sweep must not list all tickets")
+                f = self.file({"action": "labeled", "pull_request": {"title": title, "body": body}})
+                code, out, _ = self.run_sweep(["--event", str(f), "--dry-run"], tracker)
+                self.assertEqual(code, gate.GO)
+                self.assertEqual([x["ticket"] for x in out["sweep"]], [335])
+
+    def test_sweep_without_scope_is_rejected_except_stale(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({})
+        tracker.sweep_tickets = lambda stages: self.fail("unscoped sweep must be rejected")
+        code, out, _ = self.run_sweep([], tracker)
+        self.assertEqual(code, gate.BAD)
+        self.assertIn("needs --issue or --event", out["error"])
 
     def test_sweep_reports_skipped_ticket_as_progress_without_changing_result(self):
         from gate_port import MemoryTracker
         tracker = MemoryTracker({1: {"stage": "ready", "blockers_open": 1}})
         tracker.sweep_tickets = lambda stages: [1]
-        code, out, progress = self.run_sweep([], tracker)
+        code, out, progress = self.run_sweep(["--issue", "1"], tracker)
         self.assertEqual((code, out["sweep"]), (gate.GO, []))
         self.assertEqual(json.loads(progress), {"ticket": 1, "stage": "ready", "outcome": "skipped"})
 
@@ -490,7 +511,7 @@ class TriggerTest(unittest.TestCase):
         tracker.sweep_tickets = lambda stages: []
         code, out, progress = self.run_sweep(["--issue", "10"], tracker)
         self.assertEqual((code, out["sweep"]), (gate.GO, []))
-        self.assertEqual(json.loads(progress), {"ticket": 11, "stage": "in-dev", "outcome": "skipped"})
+        self.assertEqual(json.loads(progress.splitlines()[-1]), {"ticket": 11, "stage": "in-dev", "outcome": "skipped"})
 
     def test_sweep_issue_refires_ready_dependent_of_closed_blocker(self):
         from gate_port import MemoryTracker
