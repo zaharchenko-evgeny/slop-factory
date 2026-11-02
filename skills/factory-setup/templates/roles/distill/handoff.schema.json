@@ -3,7 +3,6 @@
   "type": "object",
   "required": [
    "status",
-   "files",
    "summary",
    "blocked_reason"
   ],
@@ -12,12 +11,6 @@
     "enum": [
      "done",
      "blocked"
-    ]
-   },
-   "files": {
-    "type": [
-     "string",
-     "array"
     ]
    },
    "summary": {

@@ -33,10 +33,6 @@ The field names are the keys of the handoff JSON below, lists are arrays. Write 
 ```
 {
   "status": "done",
-  "commits": [
-    "1a2b3c4 #12 Document x"
-  ],
-  "files": "README.md",
   "blocked_reason": "none"
 }
 ```

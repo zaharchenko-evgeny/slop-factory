@@ -21,8 +21,7 @@ Input: a request (free text or a tracker issue).
    "clean" or "appropriate" instead of a command or test name, choose `grill`:
    mark the ticket not ready and ask which paths the check should cover or
    exclude, and what command or test should verify it.
-3. Choose the risk path: `low` when the issue carries the low-risk label from
-   `factory.descriptor.yaml`, otherwise `high`.
+3. The gate derives the risk path from the issue's risk label; do not state it.
 4. Estimate the size as the lines a reviewer must read: added lines plus
    modified lines, counting tests and fixtures, not only production code. A
    whole file deleted counts as one line because it is checked by listing it;
@@ -50,8 +49,8 @@ one-line ticket that fails intake.
 Run `factory end <outcome>` with the data the outcome needs; the gate already knows the ticket, PR, branch and head. Write it as the last thing you do.
 
 ```
-factory end proceed --size-estimate "~120" --risk low
-factory end grill --size-estimate "~120" --risk low --reason "acceptance check 2"
-factory end split --size-estimate "~900" --risk low --slices slices.json
+factory end proceed --size-estimate "~120"
+factory end grill --size-estimate "~120" --reason "acceptance check 2"
+factory end split --size-estimate "~900" --slices slices.json
 factory end not-actionable --reason "duplicate of #12"
 ```

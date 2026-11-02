@@ -6,6 +6,7 @@
 """Tests for `factory begin` and `factory end` (factory/cli.py). Run: uv run factory/tests/test_cli.py"""
 import contextlib
 import io
+import argparse
 import json
 import os
 import shutil
@@ -90,6 +91,14 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.run_cli("end", "done", "--checks", "c.json")
         self.assertEqual(code, 2, out)
         self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-dev")
+
+    def test_end_carries_dispute_data(self):
+        Path("a.json").write_text(json.dumps(["B1: disputed — intended"]))
+        a = argparse.Namespace(outcome="done", findings=None, slices=None, checks=None, reason=None, summary=None,
+                               size_estimate=None, addressed="a.json", disputed_focuses="behaviour,full")
+        data = cli.handoff_of(a)
+        self.assertEqual(data["findings_addressed"], ["B1: disputed — intended"])
+        self.assertEqual(data["disputed_focuses"], ["behaviour", "full"])
 
     def test_begin_fix_prints_ci_failure(self):
         failure = [{"job": "tests", "step": "Run tests", "log_tail": "assert False"}]

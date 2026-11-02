@@ -27,7 +27,6 @@ The field names are the keys of the handoff JSON below, lists are arrays. Write 
 ```
 {
   "status": "done",
-  "files": "knowledge/_shared/lessons.md",
   "summary": [
     "automated checks: run ShellCheck before review (2 entries)"
   ],

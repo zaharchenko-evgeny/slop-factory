@@ -2,18 +2,11 @@
  "ROUTER-INTAKE": {
   "type": "object",
   "required": [
-   "size_estimate",
-   "risk"
+   "size_estimate"
   ],
   "properties": {
    "size_estimate": {
     "type": "string"
-   },
-   "risk": {
-    "enum": [
-     "low",
-     "high"
-    ]
    },
    "reason": {
     "type": "string"
@@ -34,7 +27,6 @@
   "type": "object",
   "required": [
    "complete",
-   "acceptance",
    "comment"
   ],
   "properties": {
@@ -43,9 +35,6 @@
      "yes",
      "no"
     ]
-   },
-   "acceptance": {
-    "type": "array"
    },
    "comment": {
     "type": "string"

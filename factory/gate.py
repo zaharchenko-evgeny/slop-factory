@@ -317,6 +317,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
         if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
             payload = {**payload, "tier": node.get("else_tier") or nodes["nodes"]["fix"]["tiers"][0]}
+    if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
+        payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     facts = tracker.facts(ticket)
     if name == "join" and outcome == "changes" and facts.get("handed_to_fix") and has_dispute_rereview(facts):

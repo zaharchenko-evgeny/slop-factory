@@ -39,10 +39,10 @@ When `ci_failure` is present and there are no review findings, fix the failed
 CI step using its job, step and log tail. A red CI fix round without review
 findings is valid.
 
-List those answers in `findings_addressed`, one per finding, as
+List those answers with `--addressed`, one per finding, as
 `<finding id>: fixed in <sha>` or `<finding id>: disputed — <reason>`.
 When every finding is disputed, also list the affected reviewer focus names in
-`disputed_focuses` (for example `behaviour`). The gate posts these disputes and
+`--disputed-focuses` (for example `behaviour`). The gate posts these disputes and
 requests one review from each focus again at the same head.
 Before the handoff, run every acceptance check that can run locally, including
 checks relevant to the blocking findings. Record every check in `checks` using
@@ -88,5 +88,6 @@ factory end failed --reason "the check cannot run"
 ```
 
 `checks.json` is an array of `{"text": "acceptance check text", "result": "pass"}` (`fail`, or `not-run` with a
-`"reason"`). `done` with a failed check is refused. A `fix` run also puts `findings_addressed` and `disputed_focuses`
-in the file.
+`"reason"`). `done` with a failed check is refused. A `fix` run passes `--addressed addressed.json` (an array of
+`"<finding id>: fixed in <sha>"` or `"<finding id>: disputed — <reason>"`) and, when every finding is
+disputed, `--disputed-focuses behaviour,structure-security`.

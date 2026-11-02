@@ -28,7 +28,7 @@ Read repository names, tracker stages, models, limits and checks from
 
 Run `factory end <outcome>` to apply it, with a JSON file only for the data the
 outcome needs (`--findings`, `--slices`, `--checks`, `--reason`). The platform pushes the branch after the run.
-Hand off facts (files, commits, commands,
+Hand off facts (commands,
 results), not your reasoning.
 
 ## Notes and process gaps

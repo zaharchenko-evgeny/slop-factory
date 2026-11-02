@@ -8,7 +8,8 @@
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> [payload file]   (payload on stdin by default; exit 10: the node must not act)
        factory end <outcome> [--findings F.json] [--slices S.json] [--checks C.json] [--reason TEXT]
-                   [--summary TEXT] [--size-estimate N] [--risk low|high]   (the outcome and the data its effects use)
+                   [--summary TEXT] [--size-estimate N] [--addressed A.json] [--disputed-focuses a,b]
+                   (the outcome and the data its effects use)
        factory sweep --main ...                    (the gate's sweep from main's graph)
 """
 import argparse
@@ -105,15 +106,18 @@ def handoff_of(a):
     for key, path in (("findings", a.findings), ("slices", a.slices), ("checks", a.checks)):
         if path:
             data[key] = json.loads(Path(path).read_text())
-    data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate),
-                                   ("risk", a.risk)) if v})
+    data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate)) if v})
+    if a.addressed:
+        data["findings_addressed"] = json.loads(Path(a.addressed).read_text())
+    if a.disputed_focuses:
+        data["disputed_focuses"] = a.disputed_focuses.split(",")
     return data
 
 
 def end(argv, team=None):
     p = argparse.ArgumentParser(prog="factory end")
     p.add_argument("outcome")
-    for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "risk"):
+    for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "addressed", "disputed-focuses"):
         p.add_argument(f"--{opt}")
     try:
         a = p.parse_args(argv)

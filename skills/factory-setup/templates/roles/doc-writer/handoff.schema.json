@@ -3,8 +3,6 @@
   "type": "object",
   "required": [
    "status",
-   "commits",
-   "files",
    "blocked_reason"
   ],
   "properties": {
@@ -12,15 +10,6 @@
     "enum": [
      "done",
      "blocked"
-    ]
-   },
-   "commits": {
-    "type": "array"
-   },
-   "files": {
-    "type": [
-     "string",
-     "array"
     ]
    },
    "blocked_reason": {
