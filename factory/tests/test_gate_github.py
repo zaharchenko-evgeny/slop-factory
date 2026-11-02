@@ -62,6 +62,10 @@ class FakeGh:
         if a.endswith("/pulls/5"):
             return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": u} for u in self.requested]})
+        if a.endswith("/git/ref/heads/main"):
+            return json.dumps({"object": {"sha": "m1"}})
+        if "pulls?state=closed" in a:
+            return json.dumps(getattr(self, "recent_pulls", []))
         if "/compare/" in a:
             return json.dumps({"behind_by": getattr(self, "behind_by", 0)})
         if "/commits/" in a:
@@ -362,10 +366,31 @@ class EffectsTest(unittest.TestCase):
     def test_merge(self):
         gh = FakeGh()
         self.assertTrue(tr(gh).apply(eff("merge", "match-head")))
-        self.assertEqual(gh.writes[0][:3], ["pr", "merge", "5"])
-        self.assertEqual(gh.writes[0][-2:], ["--match-head-commit", "h1"])
+        merge = next(w for w in gh.writes if w[:3] == ["pr", "merge", "5"])
+        self.assertEqual(merge[-2:], ["--match-head-commit", "h1"])
+        self.assertIn("DELETE", gh.writes[-1])  # the lock is released
         gh.merged = True
         self.assertFalse(tr(gh).apply(eff("merge", "match-head")))
+
+    def test_merge_waits_for_a_recent_merge_or_a_moved_base(self):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        for setup in (lambda g: setattr(g, "recent_pulls", [{"number": 6, "merged_at": now}]),
+                      lambda g: setattr(g, "behind_by", 1)):
+            gh = FakeGh()
+            setup(gh)
+            self.assertFalse(tr(gh).apply(eff("merge", "match-head")))
+            self.assertFalse(any(w[:2] == ["pr", "merge"] for w in gh.writes))
+            self.assertIn("DELETE", gh.writes[-1])
+
+    def test_merge_refused_while_another_run_holds_the_lock(self):
+        gh = FakeGh()
+        run = gh.__call__
+        def held(args):
+            if "POST" in args and any("git/refs" in x for x in args):
+                raise RuntimeError("422 Reference already exists")
+            return run(args)
+        self.assertFalse(tr(held).apply(eff("merge", "match-head")))
 
     def test_update_branch_merges_main_into_the_pr(self):
         gh = FakeGh()

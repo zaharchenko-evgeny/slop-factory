@@ -10,6 +10,7 @@ import json
 import re
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -343,9 +344,7 @@ class GitHubGateTracker:
                 raise RuntimeError(f"merge: no PR for ticket {n}")
             if pr["merged"]:
                 return False
-            self.run(["pr", "merge", str(pr["number"]), "-R", self.repo, "--merge",
-                      "--match-head-commit", e.get("head") or pr["head"]["sha"]])
-            return True
+            return self._locked_merge(pr, e.get("head") or pr["head"]["sha"])
         if kind == "update-branch":  # a merge commit of the base into the PR branch; refused when the head moved
             pr = self._pr(n)
             if pr is None or pr["merged"]:
@@ -354,6 +353,32 @@ class GitHubGateTracker:
                       "-f", f"expected_head_sha={e.get('head') or pr['head']['sha']}"])
             return True
         raise ValueError(f"unknown effect: {kind}")
+
+    MERGE_LOCK, RECENT_MERGE_SECONDS = "factory-merge-lock", 60
+
+    def _locked_merge(self, pr, head):
+        """One merge at a time across runs: the lock is a branch, created atomically (GitHub refuses a second create).
+        Under it, re-read `behind` and refuse while another PR merged within RECENT_MERGE_SECONDS, so the base this
+        merge integrates is the one the gates judged. False (nothing merged) means the next sweep reads it again.
+        A crashed run leaves the branch; a person deletes it."""
+        base = pr["base"]["ref"]
+        try:
+            self.run(["api", "-X", "POST", f"repos/{self.repo}/git/refs", "-f", f"ref=refs/heads/{self.MERGE_LOCK}",
+                      "-f", f"sha={self._api(f'git/ref/heads/{base}')['object']['sha']}"])
+        except RuntimeError:
+            return False  # another run holds the lock
+        try:
+            if self._api(f"compare/{base}...{head}")["behind_by"] > 0:
+                return False
+            now = datetime.now(timezone.utc)
+            for other in self._api(f"pulls?state=closed&base={base}&sort=updated&direction=desc&per_page=5"):
+                if other["number"] != pr["number"] and other.get("merged_at") and \
+                        (now - datetime.fromisoformat(other["merged_at"].replace("Z", "+00:00"))).total_seconds() < self.RECENT_MERGE_SECONDS:
+                    return False
+            self.run(["pr", "merge", str(pr["number"]), "-R", self.repo, "--merge", "--match-head-commit", head])
+            return True
+        finally:
+            self.run(["api", "-X", "DELETE", f"repos/{self.repo}/git/refs/heads/{self.MERGE_LOCK}"])
 
     def _join(self, n, tier):
         """Nothing while the round is open; else changes -> PR label fix-<tier> + stage changes-requested, approve -> approved."""
