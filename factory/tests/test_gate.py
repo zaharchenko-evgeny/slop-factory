@@ -476,6 +476,22 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual((code, out["sweep"]), (gate.GO, []))
         self.assertIn("running full sweep", warning)
 
+    def test_sweep_reports_skipped_ticket_as_progress_without_changing_result(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({1: {"stage": "ready", "blockers_open": 1}})
+        tracker.sweep_tickets = lambda stages: [1]
+        code, out, progress = self.run_sweep([], tracker)
+        self.assertEqual((code, out["sweep"]), (gate.GO, []))
+        self.assertEqual(json.loads(progress), {"ticket": 1, "stage": "ready", "outcome": "skipped"})
+
+    def test_sweep_reports_ineligible_dependent_as_progress(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "in-dev"}})
+        tracker.sweep_tickets = lambda stages: []
+        code, out, progress = self.run_sweep(["--issue", "10"], tracker)
+        self.assertEqual((code, out["sweep"]), (gate.GO, []))
+        self.assertEqual(json.loads(progress), {"ticket": 11, "stage": "in-dev", "outcome": "skipped"})
+
     def test_sweep_issue_refires_ready_dependent_of_closed_blocker(self):
         from gate_port import MemoryTracker
         tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "ready", "blockers_open": 0}})
@@ -746,6 +762,27 @@ class StaleSweepTest(unittest.TestCase):
         self.assertEqual(tr.tickets[1]["stage"], "blocked")
         self.assertIn("did not respond twice", json.dumps(tr.tickets[1]["log"]))
 
+    def test_stale_sweep_reports_ticket_as_progress(self):
+        class Tr(MemoryTracker):
+            def sweep_tickets(self, stages):
+                return [1]
+        tr = Tr({1: {"stage": "ready", "since": self.OLD}})
+        progress = []
+        results, failed = gate.sweep_stale(tr, NODES, 2, self.NOW, progress=progress.append)
+        self.assertFalse(failed)
+        self.assertEqual(progress, results)
+
+    def test_stale_sweep_reports_fresh_ticket_as_progress_without_changing_result(self):
+        class Tr(MemoryTracker):
+            def sweep_tickets(self, stages):
+                return [1]
+        tr = Tr({1: {"stage": "ready", "since": self.FRESH}})
+        progress = []
+        results, failed = gate.sweep_stale(tr, NODES, 2, self.NOW, progress=progress.append)
+        self.assertFalse(failed)
+        self.assertEqual(results, [])
+        self.assertEqual(progress, [{"ticket": 1, "stage": "ready", "recover": "skipped"}])
+
     def test_fresh_ticket_is_not_touched(self):
         tr, res = self.sweep({1: {"stage": "ready", "since": self.FRESH}, 2: {"stage": "ready", "since": self.OLD,
                                                                               "blockers_open": 1}})
@@ -797,6 +834,15 @@ class StaleSweepTest(unittest.TestCase):
         res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
         self.assertEqual([r["recover"] for r in res], ["blocked"])
         self.assertEqual(tr.tickets[5]["stage"], "blocked")
+
+    def test_conflicting_pr_with_old_update_label_refired(self):
+        tr, res = self.sweep({5: {"stage": "changes-requested", "since": self.OLD, "pr": 7, "conflict": True,
+                                  "attrs": ["factory:update-cheap"],
+                                  "command": "factory:update-cheap", "command_at": "2026-10-31T08:00:00Z",
+                                  "commit_at": self.OLD, "command_pending": False}})
+        self.assertEqual([(r["recover"], r["why"]) for r in res],
+                         [("refire", "conflicting PR has an update label with no later run")])
+        self.assertIn(["label", '"factory:update-cheap"'], tr.tickets[5]["log"])
 
     def test_dry_run_writes_nothing(self):
         tr = MemoryTracker({1: {"stage": "ready", "since": self.OLD}})
@@ -934,11 +980,18 @@ class ConflictTest(unittest.TestCase):
         self.assertEqual((results, tr.tickets[7]["stage"]), ([], "in-review"))
 
     def test_unresolvable_update_blocks_with_files(self):
-        tr = MemoryTracker({7: {"stage": "changes-requested"}})
+        tr = MemoryTracker({7: {"stage": "changes-requested", "attrs": ["factory:update-cheap"]}})
         reason = "[factory] Blocked: merge conflict in factory/gate.py, workflows/nodes.yaml"
         code, _ = gate.apply("update", "unresolvable", {"ticket": 7, "event": "e", "reason": reason}, tr, NODES)
         self.assertEqual((code, tr.tickets[7]["stage"]), (0, "blocked"))
         self.assertIn(["comment", json.dumps(reason)], tr.tickets[7]["log"])
+        self.assertNotIn("factory:update-cheap", tr.tickets[7]["attrs"])
+
+    def test_update_resolved_removes_label(self):
+        tr = MemoryTracker({7: {"stage": "changes-requested", "attrs": ["factory:update-cheap"]}})
+        code, _ = gate.apply("update", "resolved", {"ticket": 7, "event": "e"}, tr, NODES)
+        self.assertEqual((code, tr.tickets[7]["stage"]), (gate.GO, "in-review"))
+        self.assertNotIn("factory:update-cheap", tr.tickets[7]["attrs"])
 
 
     def test_escalate_labels_next_tier_and_strong_blocks(self):

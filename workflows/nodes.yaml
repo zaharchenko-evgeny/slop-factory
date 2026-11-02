@@ -33,7 +33,7 @@ adapters:
 schedules:
   retro: { cron: "0 2 * * *" }
   distill: { cron: "0 3 * * 1" }
-  recover: { cron: "15 * * * *" }
+  recover: { cron: "0 6,18 * * *" }
 nodes:
   human:
     triggers: ["manual"]
@@ -161,7 +161,7 @@ nodes:
     outcomes:
       resolved: { effects: [{ unlabel: "factory:update-*", "on": pr }, { stage: in-review }] }
       escalate: { effects: [{ unlabel: "factory:update-*", "on": pr }, { label: "factory:update-<next tier>", "on": pr }, { stage: changes-requested }] }
-      unresolvable: { effects: [{ comment: reason }, { stage: blocked }] }
+      unresolvable: { effects: [{ unlabel: "factory:update-*", "on": pr }, { comment: reason }, { stage: blocked }] }
   reopen:
     env: read
     pilot: true

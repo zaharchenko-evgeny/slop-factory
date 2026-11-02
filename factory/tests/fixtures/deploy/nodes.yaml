@@ -3,7 +3,7 @@ environments:
   write: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
 schedules:
   sweep: { cron: "*/10 * * * *" }
-  recover: { cron: "15 * * * *"}
+  recover: { cron: "0 6,18 * * *"}
 nodes:
   human: { triggers: [manual], when: { actor: human }, role: human, outcomes: {} }
   intake: { env: read, triggers: ["issues.labeled factory:triage"], role: router, tier: cheap, output: read-only, outcomes: {} }

@@ -262,8 +262,18 @@ class PlanTest(unittest.TestCase):
     def test_script_nodes_only_run_the_sweep(self):
         plan = json.loads((FIX / "air-plan.json").read_text())
         a = {x["name"]: x for x in plan["automations"]}
-        self.assertTrue(a["[Slop factory] sweep"]["prompt"].endswith("Run `factory sweep` once and report its JSON output."))
+        self.assertIn("Run `factory sweep` in the foreground", a["[Slop factory] sweep"]["prompt"])
         self.assertIn("`factory begin intake`", a["[Slop factory] intake"]["prompt"])
+
+    def test_every_script_prompt_waits_for_command_exit(self):
+        plans = (deploy.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
+        for plan in plans:
+            for automation in plan["automations"]:
+                if automation["name"].startswith(("[Slop factory] sweep", "[Slop factory] join",
+                                                   "[Slop factory] finish", "[Slop factory] merge",
+                                                   "[Slop factory] reopen", "[Slop factory] recover",
+                                                   "[Slop factory] notify")):
+                    self.assertIn("wait until it exits", automation["prompt"])
 
     def test_review_automations_trigger_on_focus_rerequest_labels(self):
         for a in json.loads((FIX / "air-plan.json").read_text())["automations"]:
@@ -272,12 +282,12 @@ class PlanTest(unittest.TestCase):
                                "filters": {"label": f"factory:rereview-{a['name'].rsplit('-', 1)[1]}",
                                            "pr_author": "jetbrains-air[bot]"}}, a["triggers"])
 
-    def test_recover_runs_the_stale_sweep_hourly_on_the_cheap_tier(self):
+    def test_recover_runs_twice_daily_as_a_backstop_on_the_cheap_tier(self):
         for plan in (json.loads((FIX / "air-plan.json").read_text()),
                      deploy.plan_air(nodes.load(), cfg.load())):
             a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] recover")
-            self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "15 * * * *", "timezone": "UTC"}])
-            self.assertTrue(a["prompt"].endswith("Run `factory sweep --stale` once and report its JSON output."))
+            self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "0 6,18 * * *", "timezone": "UTC"}])
+            self.assertIn("Run `factory sweep --stale` in the foreground", a["prompt"])
             intake = next(x for x in plan["automations"] if x["name"] == "[Slop factory] intake")  # router: cheap
             self.assertEqual(a["agentAndModel"], intake["agentAndModel"])
 
