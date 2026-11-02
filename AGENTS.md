@@ -26,7 +26,9 @@ change, whether you are a person, a pi session or a factory role.
    blocker is closed. The next ticket to work on comes from the frontier: open, `ready`,
    every blocker closed, unclaimed (no assignee), in map order.
 3. **Split large tickets.** Estimate size as lines a reviewer must read: added
-   lines plus modified lines, counting tests and fixtures. A whole file deleted
+   lines plus modified lines, counting tests and fixtures. Exclude paths listed
+   in `engine/defaults.yaml` under `limits.generated_paths`; verify those files
+   through their generator comparison test. A whole file deleted
    counts as one line because it is checked by listing it; lines removed from a
    file that remains count as modified. A ticket may report both changed lines
    and deletion volume; use changed lines for the size estimate. Above about

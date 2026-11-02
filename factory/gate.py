@@ -23,6 +23,7 @@ uses factory/gate_github.py (bot login from `targets.air.bot_login`).
 """
 import argparse
 from collections import Counter
+import fnmatch
 import json
 import re
 import subprocess
@@ -120,7 +121,8 @@ def from_trigger(d):
     name = "pull_request_review" if review and pr else "pull_request" if pr else "issues"
     src = pr or issue
     if pr:
-        m = re.match(r"ez/(\d+)-", (pr.get("head") or {}).get("ref") or "")
+        ref = (pr.get("head") or {}).get("ref") or ""
+        m = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
         if not m:
             raise NoTicket(f"PR #{pr.get('number')} is not on an ez/<n>- branch")
         ticket = int(m[1])
@@ -330,7 +332,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         if estimate is not None:
             config = config_mod.load()
             base = next((r["default_branch"] for r in config["repositories"] if r.get("role") == "primary"), "main")
-            size, files = branch_size(f"origin/{base}")
+            size, files = branch_size(f"origin/{base}", generated_paths=config.get("limits", {}).get("generated_paths", []))
             limit = config.get("limits", {}).get("max_diff_lines", 400)
             if size * 2 > estimate * 3 and size > limit:
                 largest = ", ".join(f"{path} ({count})" for path, count in files[:5]) or "none"
@@ -451,7 +453,7 @@ def size_estimate(body):
     return int(m[1]) if m else None
 
 
-def branch_size(base, checkout=None):
+def branch_size(base, checkout=None, generated_paths=()):
     """Changed lines in the delivery checkout against the default branch, with whole-file deletions counted once."""
     checkout = Path(checkout or Path.cwd())
     result = subprocess.run(
@@ -464,6 +466,8 @@ def branch_size(base, checkout=None):
     for line in result.stdout.splitlines():
         added, deleted, path = line.split("\t", 2)
         if path.startswith("skills/vendor/"):
+            continue
+        if any(fnmatch.fnmatchcase(path, pattern) for pattern in generated_paths):
             continue
         if added == deleted == "-":  # binary files have no line count
             continue
@@ -573,6 +577,8 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                 r.update(applied=out["applied"], written=out.get("written", []))
                 if not out["applied"]:
                     break
+                if node == "finish" and outcome == "merged" and hasattr(tracker, "config_change_merged"):
+                    tracker.config_change_merged(facts.get("pr"))
                 merged = merged or (node, outcome) == ("merge", "merged")
                 if node == "finish" and outcome in ("merged", "children-done"):
                     done_tickets.append(n)
