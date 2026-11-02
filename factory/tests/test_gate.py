@@ -696,6 +696,24 @@ class ConflictTest(unittest.TestCase):
         tr.tickets[7]["conflict"] = False
         self.assertFalse(gate.check("fix", {"id": "e", "ticket": 7}, tr, NODES, CONFIG)[1]["merge_main"])
 
+    def test_dispute_rereview_sweep_approves_or_starts_a_new_fix_round(self):
+        original = {"agent": True, "focus": "full", "verdict": "changes", "commit_id": "abc",
+                    "findings": ["B1"]}
+        for verdict, expected in (("approve", "approved"), ("changes", "changes-requested")):
+            rereview = {**original, "verdict": verdict, "rereview": True}
+            tr, (results, failed) = self.sweep({7: {"stage": "in-review", "head": "abc", "handed_to_fix": True,
+                                                    "round_complete": True, "round_verdict": verdict,
+                                                    "reviews": [original, rereview], "ci": "green",
+                                                    "attrs": ["risk:low", "complexity:small"],
+                                                    "labels": ["factory:fix-mid"]}})
+            self.assertFalse(failed)
+            self.assertEqual(tr.tickets[7]["stage"], expected)
+
+        pending = {"agent": True, "focus": "full", "verdict": "approve", "commit_id": "abc", "rereview": True}
+        self.assertEqual(gate.sweep_plan({"stage": "in-review", "head": "abc", "handed_to_fix": True,
+                                          "round_complete": False, "waiting_reviewers": ["alice"],
+                                          "reviews": [pending]}), ("join", "waiting", {}))
+
     def test_unresolvable_update_blocks_with_files(self):
         tr = MemoryTracker({7: {"stage": "changes-requested"}})
         reason = "[factory] Blocked: merge conflict in factory/gate.py, workflows/nodes.yaml"

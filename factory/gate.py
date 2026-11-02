@@ -306,6 +306,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             payload = {**payload, "tier": node.get("else_tier") or nodes["nodes"]["fix"]["tiers"][0]}
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     facts = tracker.facts(ticket)
+    if name == "join" and outcome == "changes" and facts.get("handed_to_fix") and has_dispute_rereview(facts):
+        effects.insert(0, {"kind": "unlabel", "ticket": ticket, "value": "factory:fix-*", "on": "pr"})
     if name in ("implement", "fix") and outcome == "done":
         estimate = size_estimate(facts.get("body", ""))
         if estimate is not None:
@@ -454,9 +456,14 @@ def join_decision(facts):
     """The join's outcome and payload, or None while the round is open. Uses the adapter's `round_verdict`,
     which counts every required agent focus, human change requests and CI. A fix label takes the ticket's
     complexity tier (mid when unlabelled)."""
-    if facts.get("handed_to_fix") or not facts.get("round_complete") or facts.get("round_verdict") is None:
+    rereviewed = has_dispute_rereview(facts)
+    if (facts.get("handed_to_fix") and not rereviewed) or not facts.get("round_complete") or facts.get("round_verdict") is None:
         return None  # an open round, or a head whose round already went to a fix (its push comes next)
     return ("changes" if facts["round_verdict"] == "changes" else "approved"), {"tier": fix_tier(facts)}
+
+
+def has_dispute_rereview(facts):
+    return any(r.get("rereview") and r.get("commit_id") == facts.get("head") for r in facts.get("reviews", []))
 
 
 def retro_payload(facts):
@@ -483,7 +490,8 @@ def sweep_plan(facts):
                                                          "Fix them, then set factory:ready on this ticket."}
         if all(c["state"] == "closed" for c in kids):
             return "finish", "children-done", {}
-    if stage == "in-review" and facts.get("waiting_reviewers") and not facts.get("handed_to_fix"):
+    if stage == "in-review" and facts.get("waiting_reviewers") and (
+            not facts.get("handed_to_fix") or has_dispute_rereview(facts)):
         return "join", "waiting", {}  # ask them again; nothing moves until they decide
     if stage == "in-review" and (j := join_decision(facts)):
         return "join", *j

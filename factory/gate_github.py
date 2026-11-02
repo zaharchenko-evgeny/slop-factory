@@ -246,8 +246,9 @@ class GitHubGateTracker:
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                     fix_rounds=len({r["commit_id"] for r in reviews if r["agent"] and r["verdict"] == "changes"
-                                     and (r.get("submitted_at") or "") >= since}))  # rounds since ready: heads with an agent change request
+                     fix_rounds=len({(r["commit_id"], r["rereview"]) for r in reviews
+                                     if r["agent"] and r["verdict"] == "changes"
+                                     and (r.get("submitted_at") or "") >= since}))  # same-head dispute rereviews count as a new round
         return f
 
     def stale_facts(self, n):
@@ -347,7 +348,8 @@ class GitHubGateTracker:
         f = self.facts(n)
         for who in f["ignored_reviews"]:
             print(f"join: ignored unmarked bot review by {who}", file=sys.stderr)
-        if f["handed_to_fix"]:
+        rereviewed = any(r["rereview"] and r["commit_id"] == f["head"] for r in f["reviews"])
+        if f["handed_to_fix"] and not rereviewed:
             return False  # this head already went to a fix; its push starts the next round
         if f["stage"] == "in-review" and f["waiting_reviewers"]:
             return self._rerequest(n, f["waiting_reviewers"])  # nothing moves until they decide again
@@ -361,6 +363,8 @@ class GitHubGateTracker:
             for e in gate_clear(n):
                 self.apply(e)
             return self.apply({"ticket": n, "kind": "stage", "value": "blocked"})
+        if rereviewed:
+            self.apply({"ticket": n, "kind": "unlabel", "value": "factory:fix-*", "on": "pr"})
         wrote = self.apply({"ticket": n, "kind": "label", "value": f"factory:fix-{tier}", "on": "pr"})
         return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote
 
