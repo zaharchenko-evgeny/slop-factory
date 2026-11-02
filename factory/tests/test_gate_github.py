@@ -37,24 +37,37 @@ class FakeGh:
         self.roles = {"alice": "write", "bob": "admin", "eve": "read"}
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
+        self.log_calls = 0
         self.blocked = [{"state": "open", "id": 1}, {"state": "closed", "id": 2}]
         self.fail_blocked_by = False
         self.open_issues, self.state, self.sub_state = [], "open", ["open"] * 9
 
-    def __call__(self, args):
+    def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
         a = a + " POST" if "POST" in args else a
         assert args[:2] != ["api", "user"], "gh api user must never be called"
         if "actions/runs?head_sha=" in a:  # one workflow per entry of `checks`; None = still running
+            self.workflow_timeout = timeout
+            if getattr(self, "workflow_error", False):
+                raise RuntimeError("workflow lookup failed")
             return "\n".join(json.dumps({"workflow_id": k, "event": "pull_request", "run_number": 1,
                                           "id": 100 + k, "status": "completed" if c else "in_progress", "conclusion": c})
                              for k, c in enumerate(self.checks))
         if "/actions/runs/100/jobs?" in a:
+            self.jobs_timeout = timeout
+            if getattr(self, "jobs_error", False):
+                raise RuntimeError("jobs lookup failed")
             return json.dumps({"id": 200, "name": "tests", "steps": [
                 {"name": "Run tests", "conclusion": "failure",
                  "started_at": "2026-11-02T10:00:00Z", "completed_at": "2026-11-02T10:00:00Z"},
                 {"name": "Upload artifacts", "conclusion": "success"}]})
         if "/actions/jobs/200/logs" in a:
+            self.log_calls += 1
+            self.assert_timeout = timeout
+            if getattr(self, "forbidden", False):
+                raise RuntimeError("Forbidden\nredirected download")
+            if getattr(self, "empty_log", False):
+                return ""
             return "\n".join(["2026-11-02T10:00:00.1000000Z ##[group]Run tests",
                                 "2026-11-02T10:00:00.1000000Z ##[endgroup]"] +
                                [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)])
@@ -176,13 +189,39 @@ class FactsTest(unittest.TestCase):
         f = tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)
         self.assertEqual((f["focus_missing"], f["round_head"]), (["full"], "old"))
 
-    def test_red_ci_facts_carry_failed_step_log_tail(self):
-        f = tr(FakeGh(checks=["failure"])).facts(7)
+    def test_log_fetch_forbidden_does_not_raise(self):
+        gh = FakeGh(checks=["failure"])
+        gh.forbidden = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": "tests", "step": "Run tests", "log": None, "error": "Forbidden redirected download"})
+        self.assertEqual(gh.assert_timeout, 10)
+
+    def test_empty_log_is_reported_without_raising(self):
+        gh = FakeGh(checks=["failure"])
+        gh.empty_log = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": "tests", "step": "Run tests", "log": None, "error": "empty log response"})
+
+    def test_workflow_lookup_failure_is_best_effort_and_timed(self):
+        gh = FakeGh(checks=["failure"])
+        gh.workflow_error = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": None, "step": None, "log": None, "error": "workflow lookup failed"})
+        self.assertEqual(gh.workflow_timeout, 10)
+
+    def test_jobs_lookup_failure_is_best_effort_and_timed(self):
+        gh = FakeGh(checks=["failure"])
+        gh.jobs_error = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": None, "step": None, "log": None, "error": "jobs lookup failed"})
+        self.assertEqual(gh.jobs_timeout, 10)
+
+    def test_sweep_facts_do_not_fetch_logs(self):
+        gh = FakeGh(checks=["failure"])
+        f = tr(gh).facts(7)
         self.assertEqual(f["ci"], "red")
-        self.assertEqual(f["ci_failure"], [{"job": "tests", "step": "Run tests",
-                                             "log_tail": "\n".join(
-                                                 f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(5, 65))}])
-        self.assertIn("line 64", f["ci_failure"][0]["log_tail"])
+        self.assertNotIn("ci_failure", f)
+        self.assertEqual(gh.log_calls, 0)
 
     def test_no_stage_label(self):
         self.assertEqual(tr(FakeGh(labels=["x"])).facts(7)["stage"], "none")
