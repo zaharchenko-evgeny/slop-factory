@@ -866,7 +866,10 @@ def main(argv):
                             closed_ticket = issue
                     else:
                         title = pr_payload.get("title") or ""
-                        match = re.match(r"\s*#(\d+)\b", title) or re.search(r"(?im)^\s*closes\s+#(\d+)\b", title)
+                        body = pr_payload.get("body") or ""
+                        match = re.match(r"\s*#(\d+)\b", title) or re.search(
+                            r"(?im)^\s*closes\s+#(\d+)\b", f"{title}\n{body}"
+                        )
                         if not match:
                             raise ValueError("PR title must start with #<ticket> or contain Closes #<ticket>")
                         issue = int(match[1])

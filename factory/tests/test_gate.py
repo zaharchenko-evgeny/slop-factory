@@ -477,11 +477,14 @@ class TriggerTest(unittest.TestCase):
 
     def test_sweep_event_resolves_ticket_from_pr_title(self):
         from gate_port import MemoryTracker
-        for title in ("#335 API rate limit fix", "Factory change\n\nCloses #335"):
-            with self.subTest(title=title):
+        cases = (("#335 API rate limit fix", ""),
+                 ("Factory change", "Closes #335"),
+                 ("Factory change\n\nCloses #335", ""))
+        for title, body in cases:
+            with self.subTest(title=title, body=body):
                 tracker = MemoryTracker({335: {"stage": "ready"}, 336: {"stage": "ready"}})
                 tracker.sweep_tickets = lambda stages: self.fail("event sweep must not list all tickets")
-                f = self.file({"action": "labeled", "pull_request": {"title": title}})
+                f = self.file({"action": "labeled", "pull_request": {"title": title, "body": body}})
                 code, out, _ = self.run_sweep(["--event", str(f), "--dry-run"], tracker)
                 self.assertEqual(code, gate.GO)
                 self.assertEqual([x["ticket"] for x in out["sweep"]], [335])
