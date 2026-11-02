@@ -87,9 +87,13 @@ for line in sys.stdin:
         res = {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "fake", "version": "0"}}
     else:
         tool, a = m["params"]["name"], m["params"]["arguments"]
-        if tool == "get_environment":  # not recorded: answer with the listed item
-            items = json.loads(rec["air-cloud.list_environments"]["content"][0]["text"])["items"]
-            res = {"content": [{"type": "text", "text": json.dumps(next(i for i in items if i["id"] == a["id"]))}]}
+        if tool == "get_environment":
+            recorded = rec.get("air-cloud.get_environment", {}).get(a["id"])
+            if recorded:
+                res = recorded
+            else:  # Older recordings only contain the list response.
+                items = json.loads(rec["air-cloud.list_environments"]["content"][0]["text"])["items"]
+                res = {"content": [{"type": "text", "text": json.dumps(next(i for i in items if i["id"] == a["id"]))}]}
         else:
             res = rec[f"{server}.{tool}"]
             if os.environ.get("WRAP_STRUCTURED"):  # a server that also wraps the text in structuredContent
@@ -107,6 +111,20 @@ class RecordedTest(unittest.TestCase):
     def test_read_state_ignores_wrapped_structured_content(self):
         with mock.patch.dict(os.environ, {"WRAP_STRUCTURED": "1"}):
             self.read_recorded()
+
+    def test_unchanged_environment_is_unchanged(self):
+        recorded = json.loads((FIX / "mcp-recorded.json").read_text())
+        get_environment = recorded["air-cloud.get_environment"]["7462a87c-fbe2-40d6-9b28-f3f5c4fc1ca9"]
+        have = deploy.environment_detail(json.loads(get_environment["content"][0]["text"]))
+        plan = {"prefix": "[Slop factory] ", "automations": [], "environments": [{
+            "name": "[Slop factory] read",
+            "repository": "https://github.com/zaharchenko-evgeny/offline-eval-factory",
+            "startup": ".air/cloud/startup.sh", "variables": {"FACTORY_ENV": "read"}, "secrets": [],
+            "domains": ["github.com", "api.github.com", "objects.githubusercontent.com",
+                        "release-assets.githubusercontent.com", "*.blob.core.windows.net",
+                        "pypi.org", "files.pythonhosted.org"], "vm": "default",
+        }]}
+        self.assertEqual(deploy.diff(plan, [], [have]), [])
 
     def read_recorded(self):
         tmp = Path(tempfile.mkdtemp())
