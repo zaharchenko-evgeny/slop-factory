@@ -68,34 +68,25 @@ Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
    `checks`.
 5. Hand off `outcome: resolved`. When the tier cannot resolve it, hand
    off `outcome: escalate`; when no tier can, hand off `outcome: unresolvable`
-   with `blocked_reason` listing the conflicting files.
+   with `--reason` listing the conflicting files.
 
 ## Rules
 
 - Stay on the given branch and worktree. Never push, open PRs or change labels.
-- Write the handoff JSON to the path printed by `factory begin`.
 - Stop and report `blocked` when the ticket is ambiguous or a check cannot run
   after two repair attempts that test different causes.
 
-## JSON handoff
+## Ending the run
 
-The field names are the keys of the handoff JSON below, lists are arrays. Write the handoff as JSON to the path printed by `factory begin`, then run `factory end <path>` to apply it. The platform pushes the branch after the run. Write it as the last thing you do.
+Run `factory end <outcome>` with the data the outcome needs; the gate already knows the ticket, PR, branch and head. Write it as the last thing you do.
 
 ```
-{
-  "handoff": "DEVELOPER",
-  "status": "done",
-  "branch": "ez/12-add-x",
-  "commits": [
-    "1a2b3c4 #12 Add x"
-  ],
-  "files": "factory/x.py",
-  "checks": [
-    { "text": "acceptance check text", "result": "pass" }
-  ],
-  "acceptance": [
-    "x works: test_x passes"
-  ],
-  "blocked_reason": "none"
-}
+factory end done --checks checks.json
+factory end error
+factory end blocked --reason "ambiguous acceptance"
+factory end failed --reason "the check cannot run"
 ```
+
+`checks.json` is an array of `{"text": "acceptance check text", "result": "pass"}` (`fail`, or `not-run` with a
+`"reason"`). `done` with a failed check is refused. A `fix` run also puts `findings_addressed` and `disputed_focuses`
+in the file.

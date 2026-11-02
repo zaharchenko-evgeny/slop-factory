@@ -56,14 +56,40 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(out)["handoff_path"], ".factory/handoff/implement.json")
-        Path(".factory/handoff").mkdir()
-        Path(".factory/handoff/implement.json").write_text(json.dumps({"handoff": "DEVELOPER", "status": "done", "branch": "ez/7-add-x"}))
-        code, out = self.run_cli("end", ".factory/handoff/implement.json")
+        code, out = self.run_cli("end", "done")
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-review")
 
     def test_end_without_begin_is_an_error(self):
-        self.assertEqual(self.run_cli("end", ".factory/handoff/implement.json")[0], 2)
+        self.assertEqual(self.run_cli("end", "done")[0], 2)
+
+    def end_review(self, outcome, *opts):
+        """Begin a review of ticket 7 at its head, then end it with `outcome`."""
+        Path("tickets.json").write_text(json.dumps({"7": {"stage": "in-review", "head": "abc", "ci": "green",
+                                                           "risk": "low", "pr": 5, "focus_missing": ["full"]}}))
+        Path("event.json").write_text(json.dumps({**PAYLOAD, "label": {"name": "factory:ci-green"}}))
+        with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
+            code, out = self.run_cli("begin", "review-full", "event.json", "--tracker", "memory:tickets.json")
+            self.assertEqual(code, 0, out)
+            return self.run_cli("end", outcome, *opts)
+
+    def test_end_approve_needs_no_file(self):
+        code, out = self.end_review("approve")
+        self.assertEqual(code, 0, out)
+
+    def test_end_changes_requires_blocking_finding(self):
+        Path("f.json").write_text(json.dumps([{"id": "M1", "file": "x.py:1", "finding": "name it", "severity": "minor"}]))
+        code, out = self.end_review("changes", "--findings", "f.json")
+        self.assertEqual(code, 2, out)
+        self.assertIn("requires a blocking finding", out)
+
+    def test_end_done_refuses_failed_check(self):
+        tracker = self.tracker()
+        self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        Path("c.json").write_text(json.dumps([{"text": "tests pass", "result": "fail"}]))
+        code, out = self.run_cli("end", "done", "--checks", "c.json")
+        self.assertEqual(code, 2, out)
+        self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-dev")
 
     def test_begin_fix_prints_ci_failure(self):
         failure = [{"job": "tests", "step": "Run tests", "log_tail": "assert False"}]

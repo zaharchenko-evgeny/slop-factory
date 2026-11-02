@@ -263,10 +263,7 @@ class CliAndValidate(unittest.TestCase):
 
     def test_intake_size_uses_first_number(self):
         fields = gate.intake_fields({
-            "handoff": "ROUTER-INTAKE",
             "size_estimate": "about 40 lines changed; deletions about 2,200 lines",
-            "missing": "none",
-            "split": "none",
         })
         self.assertEqual((fields["complexity"], fields["tier"]), ("small", "cheap"))
 
@@ -489,8 +486,7 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual((code, out["branch"]), (0, "ez/7-x"))
 
     def test_apply_handoff_router_intake(self):
-        h = {"handoff": "ROUTER-INTAKE", "kind": "feature", "ready": "yes", "split": "none", "risk": "high",
-             "size_estimate": "~250", "missing": "none", "next": "delivery"}
+        h = {"outcome": "proceed", "risk": "high", "size_estimate": "~250"}
         tr = self.file({"7": {"stage": "ready", "head": "abc"}})
         code, out = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(h)),
                                    "--event", str(self.file(TRIGGERS["issues"])), "--tracker", f"memory:{tr}"])
@@ -506,13 +502,12 @@ class TriggerTest(unittest.TestCase):
             ev = gate.read(self.file(payload), "event", raw=True)
             code, out = gate.check("intake", {**ev, "head": None}, tr, NODES, CONFIG)
             self.assertEqual((code, out["ticket"], out["branch"]), (0, 7, "ez/7-t"))
-        grill = {"handoff": "ROUTER-INTAKE", "kind": "feature", "ready": "no", "missing": "acceptance check 2",
-                 "risk": "low", "size_estimate": "~120", "split": "none", "next": "blocked"}
+        grill = {"outcome": "grill", "reason": "acceptance check 2", "risk": "low", "size_estimate": "~120"}
         tr = self.file({"7": {"stage": "ready", "head": "abc"}})
         ev = str(self.file(TRIGGERS["issues"]))
         code, _ = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(grill)), "--event", ev, "--tracker", f"memory:{tr}"])
         self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "needs-answers"))
-        split = {**grill, "ready": "yes", "missing": "none", "split": "\n  - First — scope (~100)\n  - Second — more (~90)"}
+        split = {**grill, "outcome": "split", "slices": "\n  - First — scope (~100)\n  - Second — more (~90)"}
         tr = self.file({"7": {"stage": "ready", "head": "abc"}})
         code, _ = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(split)), "--event", ev, "--tracker", f"memory:{tr}"])
         self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "split"))
@@ -520,7 +515,7 @@ class TriggerTest(unittest.TestCase):
         objs = [{"title": "One", "body": "scope\nchecks"}, {"title": "Two"}]
         self.assertEqual(gate.slices(objs), [{"title": "One", "body": "scope\nchecks"}, {"title": "Two", "body": "Two"}])
         tr = self.file({"7": {"stage": "in-dev", "head": "abc"}})
-        blocked = {"handoff": "DEVELOPER", "status": "blocked", "branch": "ez/7-x", "blocked_reason": "ambiguous acceptance"}
+        blocked = {"outcome": "blocked", "reason": "ambiguous acceptance"}
         code, _ = self.run_main(["apply", "--node", "implement", "--handoff", str(self.file(blocked)), "--event", ev, "--tracker", f"memory:{tr}"])
         self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "blocked"))
 
@@ -593,10 +588,6 @@ class TriggerTest(unittest.TestCase):
             gate.apply("implement", "done", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES,
                        checked_pr_head="abc")
         self.assertNotIn(("label", "factory:ci-green", "pr"), seen)
-
-    def test_bug_intake_proceeds(self):
-        h = {"handoff": "ROUTER-INTAKE", "kind": "bug", "ready": "yes", "split": "none"}
-        self.assertEqual(gate.outcome_of(h), "proceed")
 
     def test_join_tier_from_complexity_label(self):
         facts = {"round_complete": True, "round_verdict": "changes", "attrs": ["complexity:large"]}

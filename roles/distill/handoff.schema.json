@@ -2,18 +2,12 @@
  "DISTILL": {
   "type": "object",
   "required": [
-   "handoff",
    "status",
    "files",
    "summary",
    "blocked_reason"
   ],
   "properties": {
-   "handoff": {
-    "enum": [
-     "DISTILL"
-    ]
-   },
    "status": {
     "enum": [
      "done",

@@ -63,33 +63,15 @@ Handoff fields (`findings` is one list of items; `case` is required for
 The gate posts `summary` and the findings (blocking first) as the review body;
 the fixer reads nothing else, so make each finding stand alone.
 
-## JSON handoff
+## Ending the run
 
-The field names are the keys of the handoff JSON below. Write the handoff as JSON to the path printed by `factory begin`, then run `factory end <path>` to apply it. Write it as the last thing you do.
+Run `factory end <outcome>` with the data the outcome needs; the gate already knows the ticket, PR, branch and head. Write it as the last thing you do.
 
 ```
-{
-  "handoff": "REVIEWER",
-  "verdict": "changes",
-  "reviewed_sha": "1a2b3c4",
-  "summary": "Adds x; the empty input crashes it.",
-  "risk": "low",
-  "docs_impact": "no",
-  "findings": [
-    {
-      "id": "B1",
-      "file": "factory/x.py:10",
-      "finding": "the empty input crashes",
-      "case": "x.run('') raises IndexError",
-      "severity": "blocking"
-    },
-    {
-      "id": "M1",
-      "file": "factory/x.py:12",
-      "finding": "name the constant",
-      "case": "",
-      "severity": "minor"
-    }
-  ]
-}
+factory end approve --summary "Adds x; no findings."
+factory end changes --summary "Adds x; the empty input crashes it." --findings findings.json
 ```
+
+`findings.json` is an array of `{"id": "B1", "file": "factory/x.py:10", "finding": "the empty input crashes",
+"case": "x.run('') raises IndexError", "severity": "blocking"}` (`minor` findings need no `case`). `changes` needs at
+least one blocking finding; `approve` has none.

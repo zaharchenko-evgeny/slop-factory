@@ -26,8 +26,8 @@ Read repository names, tracker stages, models, limits and checks from
 
 ## Output
 
-Write the JSON handoff to the path printed by `factory begin`, then run
-`factory end <path>` to apply it. The platform pushes the branch after the run.
+Run `factory end <outcome>` to apply it, with a JSON file only for the data the
+outcome needs (`--findings`, `--slices`, `--checks`, `--reason`). The platform pushes the branch after the run.
 Hand off facts (files, commits, commands,
 results), not your reasoning.
 

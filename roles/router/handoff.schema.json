@@ -2,41 +2,12 @@
  "ROUTER-INTAKE": {
   "type": "object",
   "required": [
-   "handoff",
-   "kind",
-   "ready",
-   "missing",
-   "risk",
    "size_estimate",
-   "split",
-   "next"
+   "risk"
   ],
   "properties": {
-   "handoff": {
-    "enum": [
-     "ROUTER-INTAKE"
-    ]
-   },
-   "kind": {
-    "enum": [
-     "feature",
-     "bug",
-     "investigation",
-     "review",
-     "docs"
-    ]
-   },
-   "ready": {
-    "enum": [
-     "yes",
-     "no"
-    ]
-   },
-   "missing": {
-    "type": [
-     "string",
-     "array"
-    ]
+   "size_estimate": {
+    "type": "string"
    },
    "risk": {
     "enum": [
@@ -44,40 +15,29 @@
      "high"
     ]
    },
-   "size_estimate": {
+   "reason": {
     "type": "string"
    },
-   "split": {
-    "type": [
-     "string",
-     "array"
-    ]
-   },
-   "next": {
-    "enum": [
-     "delivery",
-     "designer",
-     "investigator",
-     "reviewer",
-     "blocked"
-    ]
+   "slices": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "title",
+      "body"
+     ]
+    }
    }
   }
  },
  "ROUTER-SUMMARY": {
   "type": "object",
   "required": [
-   "handoff",
    "complete",
    "acceptance",
    "comment"
   ],
   "properties": {
-   "handoff": {
-    "enum": [
-     "ROUTER-SUMMARY"
-    ]
-   },
    "complete": {
     "enum": [
      "yes",
@@ -95,16 +55,10 @@
  "ROUTER-DIAGNOSE": {
   "type": "object",
   "required": [
-   "handoff",
    "step",
    "comment"
   ],
   "properties": {
-   "handoff": {
-    "enum": [
-     "ROUTER-DIAGNOSE"
-    ]
-   },
    "step": {
     "type": "string"
    },
@@ -116,16 +70,10 @@
  "ROUTER-RECHECK": {
   "type": "object",
   "required": [
-   "handoff",
    "actionable",
    "reason"
   ],
   "properties": {
-   "handoff": {
-    "enum": [
-     "ROUTER-RECHECK"
-    ]
-   },
    "actionable": {
     "enum": [
      "yes",

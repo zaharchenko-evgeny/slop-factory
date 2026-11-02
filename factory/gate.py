@@ -7,7 +7,7 @@
 
 Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py apply --node N --outcome O --payload FILE [--tracker github|memory:FILE]
-       gate.py apply --node N --handoff FILE [--event FILE]   (outcome and payload derived from the role's handoff)
+       gate.py apply --node N --handoff FILE [--event FILE]   (outcome and payload derived from the handoff)
        --spec FILE (check, apply, sweep): the node spec of the automation (deploy plan); no workflows/nodes.yaml is read
        gate.py sweep [--tracker github] [--dry-run] [--stale] [--event FILE | --issue N] (no agent: lists the tickets itself,
                                                                  one stage per ticket;
@@ -161,22 +161,20 @@ def slices(split):
 
 def intake_fields(h):
     """Payload fields the outcomes need and the handoff names otherwise.
-    ROUTER-INTAKE: complexity and tier from the size, `questions` from `missing`, `children` from `split`.
-    A blocked or failed handoff: `reason` from `blocked_reason`."""
-    out = {"reason": h["blocked_reason"]} if h.get("blocked_reason") not in (None, "", "none") else {}
-    if h.get("handoff") != "ROUTER-INTAKE":
-        return out
-    size = re.search(r"\d+", str(h.get("size_estimate", "")))
+    With a `size_estimate` (the router's intake): complexity and tier from the size, `questions` from `reason`,
+    `children` from `slices`."""
+    if "size_estimate" not in h:
+        return {}
+    size = re.search(r"\d+", str(h["size_estimate"]))
     n = int(size[0]) if size else 0
-    missing = ", ".join(h["missing"]) if isinstance(h.get("missing"), list) else str(h.get("missing", ""))
-    return {**out, "complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
+    return {"complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
             "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong",
-            "questions": f"[factory] Needs answers before work starts: {missing}",
-            "children": slices(h.get("split")) if h.get("split") not in (None, "none") else []}
+            "questions": f"[factory] Needs answers before work starts: {h.get('reason', '')}",
+            "children": slices(h.get("slices"))}
 
 
 def outcome_of(h):
-    """The node outcome a handoff names: `outcome`, a reviewer `verdict`, a router intake, else `status`."""
+    """The node outcome a handoff names: `outcome`, else a reviewer `verdict`."""
     if h.get("outcome"):
         return h["outcome"]
     if "verdict" in h:
@@ -186,10 +184,6 @@ def outcome_of(h):
         if not isinstance(verdict, str) or verdict not in verdicts:
             raise Bad(f"unknown reviewer verdict: {verdict!r}")
         return verdicts[verdict]
-    if h.get("handoff") == "ROUTER-INTAKE":
-        # shortcut: a ready bug proceeds until the bug path (#161) is enabled: `reproduce` is disabled
-        return "proceed" if h.get("ready") == "yes" and h.get("split") in (None, "none") else (
-            "split" if h.get("split") not in (None, "none") else "grill")
     return h.get("status")
 
 
@@ -303,6 +297,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             raise Bad("review verdict approve cannot include a blocking finding")
         if outcome == "changes" and not blocking:
             raise Bad("review verdict changes requires a blocking finding")
+    if outcome == "done" and any(c.get("result") == "fail" for c in payload.get("checks", [])):
+        raise Bad("done with a failed check is refused")
     out = node["outcomes"][outcome]
     if out.get("enabled") is False:
         raise Bad(f"disabled outcome: {outcome}")
