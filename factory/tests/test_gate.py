@@ -1172,6 +1172,36 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertEqual(results, [])
         self.assertNotIn("log", tr.tickets[11])
 
+    def test_not_planned_blocker_sends_dependent_to_triage_with_comment(self):
+        tr, (results, failed) = self.sweep({
+            10: {"blocking": [11], "state_reason": "not_planned"},
+            11: {"stage": "ready", "blockers_open": 0},
+        })
+        self.assertFalse(failed)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(11, "re-triage")])
+        self.assertEqual(tr.tickets[11]["stage"], "triage")
+        self.assertEqual(tr.tickets[11]["log"], [
+            ["comment", '"[factory] Blocker #10 was closed as not planned; re-triage this ticket"']])
+
+    def test_completed_blocker_wakes_dependent(self):
+        tr, (results, failed) = self.sweep({
+            10: {"blocking": [11], "state_reason": "completed"},
+            11: {"stage": "ready", "blockers_open": 0},
+        })
+        self.assertFalse(failed)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(11, "unblocked")])
+        self.assertEqual(tr.tickets[11]["stage"], "ready")
+
+    def test_dependent_with_other_open_blocker_untouched(self):
+        tr, (results, failed) = self.sweep({
+            10: {"blocking": [11], "state_reason": "not_planned"},
+            11: {"stage": "ready", "blockers_open": 1},
+        })
+        self.assertFalse(failed)
+        self.assertEqual(results, [])
+        self.assertEqual(tr.tickets[11]["stage"], "ready")
+        self.assertNotIn("log", tr.tickets[11])
+
     def test_dependent_outside_ready_is_untouched(self):
         tr, (results, failed) = self.sweep({
             10: {"blocking": [11]},

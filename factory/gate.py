@@ -659,6 +659,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
         for source in wake_sources:
             try:
                 dependents = tracker.blocking(source)
+                not_planned = hasattr(tracker, "not_planned") and tracker.not_planned(source)
             except Exception as e:  # a tracker lookup must not fail the whole sweep
                 results.append({"ticket": source, "error": f"{type(e).__name__}: {e}"})
                 continue
@@ -675,15 +676,19 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                             progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
                         continue
                     woken.add(n)
-                    results.append({"ticket": n, "stage": "ready", "node": "start", "outcome": "unblocked"})
+                    outcome = "re-triage" if not_planned else "unblocked"
+                    results.append({"ticket": n, "stage": "ready", "node": "start", "outcome": outcome})
                     if progress:
                         progress(results[-1])
                     if dry_run:
                         continue
-                    for effect in ({"kind": "unlabel", "ticket": n, "value": "factory:ready"},
+                    effects = ({"kind": "comment", "ticket": n, "run_id": "finish:re-triage",
+                                "value": f"[factory] Blocker #{source} was closed as not planned; re-triage this ticket"},
+                               {"kind": "stage", "ticket": n, "value": "triage"}) if not_planned else ({"kind": "unlabel", "ticket": n, "value": "factory:ready"},
                                    {"kind": "label", "ticket": n, "value": "factory:ready"},
                                    {"kind": "comment", "ticket": n, "value": f"[factory] unblocked by #{source}",
-                                    "run_id": "finish:unblocked"}):
+                                    "run_id": "finish:unblocked"})
+                    for effect in effects:
                         tracker.apply(effect)
                 except Exception as e:
                     failed = True

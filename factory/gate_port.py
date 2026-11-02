@@ -33,6 +33,9 @@ class MemoryTracker:
     def blocking(self, ticket):
         return self._t(ticket).get("blocking", [])
 
+    def not_planned(self, ticket):
+        return (self.tickets.get(ticket) or self.tickets.get(str(ticket)) or {}).get("state_reason") == "not_planned"
+
     def facts(self, ticket):
         t = self._t(ticket)
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
