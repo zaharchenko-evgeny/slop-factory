@@ -52,6 +52,10 @@ focus; stay in yours.
    dispute one with a reason in the summary. On a later round, rerun the check
    behind every earlier blocking finding, then say which are resolved in the
    summary. Do not mark an earlier finding resolved from diff inspection alone.
+8. On a `factory:rereview-<focus>` trigger, read the `[factory] Disputed findings:`
+   PR comment. Approve if the dispute is sound; otherwise keep the finding and
+   explain why it still applies in the finding text. Include only findings you
+   keep, using their original IDs.
 
 Handoff fields (`findings` is one list of items; `case` is required for
 `blocking`) are the keys of the JSON in the last section.

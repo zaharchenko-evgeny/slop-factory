@@ -164,6 +164,42 @@ class CliAndValidate(unittest.TestCase):
             gate.apply("fix", "done", {"ticket": "7", "event": "e"}, tr, NODES)
         self.assertEqual(tr.tickets["7"]["stage"], "blocked")
 
+    def test_all_disputed_fix_rerequests_focus(self):
+        review = {"agent": True, "focus": "behaviour", "verdict": "changes", "commit_id": "abc",
+                  "findings": ["B1"]}
+        tr = MemoryTracker({"7": {"stage": "changes-requested", "head": "abc", "handed_to_fix": True,
+                                   "round_complete": True, "reviews": [review]}})
+        payload = {"ticket": "7", "event": "e", "findings_addressed": ["B1: disputed — operator-only redeploy"],
+                   "disputed_focuses": ["behaviour"]}
+        with patch.object(gate, "local_head", return_value="abc"):
+            gate.apply("fix", "done", payload, tr, NODES)
+        log = [(kind, json.loads(value)) for kind, value in tr.tickets["7"]["log"]]
+        self.assertIn(("label", "factory:rereview-behaviour"), log)
+        self.assertIn(("comment", "[factory] Disputed findings:\nB1: disputed — operator-only redeploy"), log)
+        self.assertEqual(tr.tickets["7"]["stage"], "in-review")
+
+    def test_undisputed_finding_without_commit_blocks(self):
+        review = {"agent": True, "focus": "behaviour", "verdict": "changes", "commit_id": "abc",
+                  "findings": ["B1", "B2"]}
+        tr = MemoryTracker({"7": {"stage": "changes-requested", "head": "abc", "handed_to_fix": True,
+                                   "round_complete": True, "reviews": [review]}})
+        payload = {"ticket": "7", "event": "e", "findings_addressed": ["B1: disputed — reason"],
+                   "disputed_focuses": ["behaviour"]}
+        with patch.object(gate, "local_head", return_value="abc"):
+            gate.apply("fix", "done", payload, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "blocked")
+
+    def test_second_dispute_on_same_head_blocks(self):
+        review = {"agent": True, "focus": "behaviour", "verdict": "changes", "commit_id": "abc",
+                  "rereview": True, "findings": ["B1"]}
+        tr = MemoryTracker({"7": {"stage": "changes-requested", "head": "abc", "handed_to_fix": True,
+                                   "round_complete": True, "reviews": [review]}})
+        payload = {"ticket": "7", "event": "e", "findings_addressed": ["B1: disputed — reason"],
+                   "disputed_focuses": ["behaviour"]}
+        with patch.object(gate, "local_head", return_value="abc"):
+            gate.apply("fix", "done", payload, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "blocked")
+
     def test_branch_size_uses_delivery_checkout_and_counts_modified_lines(self):
         with tempfile.TemporaryDirectory() as engine, tempfile.TemporaryDirectory() as delivery:
             (Path(delivery) / "retained.txt").write_text("still here\n")

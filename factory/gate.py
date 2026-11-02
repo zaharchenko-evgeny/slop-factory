@@ -22,6 +22,7 @@ event): the ticket is the issue number or the `<n>` of the PR branch `ez/<n>-*` 
 uses factory/gate_github.py (bot login from `targets.air.bot_login`).
 """
 import argparse
+from collections import Counter
 import json
 import re
 import subprocess
@@ -59,7 +60,8 @@ def holds(when, facts, event):
             return (facts["blockers_open"] == 0) == (want == "closed")
         if key == "focus":
             miss = facts["focus_missing"]
-            return bool(miss) and event.get("focus", miss[0]) in miss
+            focus = event.get("focus", miss[0] if miss else None)
+            return focus in miss or event.get("rereview") == focus
         if key == "round":
             value(want, ("complete", "complete-at-head"))
             return facts["round_complete"] and (want != "complete-at-head" or facts["round_head"] == facts["head"])
@@ -125,8 +127,10 @@ def from_trigger(d):
     else:
         ticket = issue.get("number")
     when = d.get("delivery") or d.get("delivery_id") or (review or {}).get("submitted_at") or src.get("updated_at")
+    label = (d.get("label") or {}).get("name", "")
+    rereview = label.removeprefix("factory:rereview-") if label.startswith("factory:rereview-") else None
     return {"id": f"{name}:{when}", "ticket": ticket, "head": ((pr or {}).get("head") or {}).get("sha"),
-            "actor": (d.get("sender") or {}).get("login")}
+            "actor": (d.get("sender") or {}).get("login"), "rereview": rereview}
 
 
 def read(path, what, raw=False):
@@ -273,7 +277,8 @@ def resolve(effect, payload, ticket):
         out = {"kind": kind, "ticket": ticket, "value": re.sub(r"<([^>]+)>", lambda m: str(field(m[1])), arg)}
         return {**out, "on": on} if on else out
     if kind in ("comment", "create-issues"):
-        return {"kind": kind, "ticket": ticket, "value": field(arg)}
+        out = {"kind": kind, "ticket": ticket, "value": field(arg)}
+        return {**out, "on": on} if on else out
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
@@ -316,12 +321,32 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                 effects = [{"kind": "comment", "ticket": ticket, "value": reason},
                            {"kind": "stage", "ticket": ticket, "value": "blocked"}]
     if name == "fix" and outcome == "done" and facts.get("handed_to_fix") and local_head() == facts.get("head"):
+        addressed = payload.get("findings_addressed", [])
+        focuses = payload.get("disputed_focuses", [])
+        expected = [finding for r in facts.get("reviews", []) if r.get("agent") and r.get("verdict") == "changes"
+                    and r.get("commit_id") == facts.get("head") for finding in r.get("findings", [])]
+        expected_focuses = {r.get("focus") for r in facts.get("reviews", []) if r.get("agent")
+                            and r.get("verdict") == "changes" and r.get("commit_id") == facts.get("head")
+                            and r.get("findings")}
+        disputed = [m.group(1) for x in addressed if (m := re.match(r"([A-Z]\d+): disputed — .+", str(x)))]
+        all_disputed = isinstance(addressed, list) and isinstance(focuses, list) \
+            and all(isinstance(f, str) for f in focuses) and bool(expected) and Counter(expected) == Counter(disputed) \
+            and set(focuses) == expected_focuses \
+            and all(": disputed — " in str(x) for x in addressed)
+        if all_disputed and focuses and not any(
+                r.get("focus") in focuses and r.get("rereview") for r in facts.get("reviews", [])):
+            disputes = "\n".join(str(x) for x in addressed)
+            effects = [{"kind": "comment", "ticket": ticket, "value": f"[factory] Disputed findings:\n{disputes}", "on": "pr"}]
+            effects += [{"kind": "label", "ticket": ticket, "value": f"factory:rereview-{focus}", "on": "pr"}
+                        for focus in focuses]
+            effects.append({"kind": "stage", "ticket": ticket, "value": "in-review"})
+        else:
         # The platform pushes after the run; an unchanged HEAD means the fix made no commit, and no event
         # would ever start the next round. A person decides.
-        effects = [{"kind": "comment", "ticket": ticket, "value": (
-                       "[factory] Stopped: the fix round ended without a commit, so nothing starts the next "
-                       "review. A person decides, then sets factory:ready.")},
-                   {"kind": "stage", "ticket": ticket, "value": "blocked"}]
+            effects = [{"kind": "comment", "ticket": ticket, "value": (
+                           "[factory] Stopped: the fix round ended without a commit, so nothing starts the next "
+                           "review. A person decides, then sets factory:ready.")},
+                       {"kind": "stage", "ticket": ticket, "value": "blocked"}]
     after = []  # effects that must follow the stage change
     if name == "implement" and outcome == "done" and facts.get("pr") and facts.get("ci") in ("green", "red") \
             and checked_pr_head is not None and facts.get("head") == checked_pr_head and local_head() == facts.get("head"):

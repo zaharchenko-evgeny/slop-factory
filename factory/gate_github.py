@@ -28,7 +28,7 @@ def gate_stop(f):
     from gate import stop_reason
     return stop_reason(f, fix=True)
 
-MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))? -->")
+MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))?(?: rereview=(1))? -->")
 FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
 GOOD_CI = {"success", "neutral", "skipped"}
@@ -114,8 +114,10 @@ class GitHubGateTracker:
             verdict = (m[3] if agent else {"APPROVED": "approve", "CHANGES_REQUESTED": "changes"}.get(r["state"]))
             out.append({"author": r["user"]["login"], "state": r["state"], "commit_id": r["commit_id"],
                         "focus": m[1] if m else None, "round": int(m[2]) if m else None,
+                        "rereview": bool(m and m[4]),
                         "verdict": verdict, "agent": agent, "assoc": r.get("author_association"), "submitted_at": r.get("submitted_at"),
                         "bot": r["user"].get("type") == "Bot" or r["user"]["login"].endswith("[bot]")})
+            out[-1]["findings"] = re.findall(r"^\*\*([A-Z]\d+)\*\*", r.get("body") or "", re.M)
         return out
 
     def _can_write(self, login):
@@ -315,9 +317,13 @@ class GitHubGateTracker:
             body = value if value.startswith("[factory]") else f"[factory] {value}"
             if e.get("run_id") and "Factory-Run:" not in body:
                 body += f"\n\nFactory-Run: {e['run_id']}"
-            if any(c["body"] == body for c in self._list(f"issues/{n}/comments")):
+            target = e.get("on") or "issue"
+            pr = self._pr(n) if target == "pr" else None
+            if target == "pr" and pr is None:
+                raise RuntimeError(f"comment: no PR for ticket {n}")
+            if any(c["body"] == body for c in self._list(f"issues/{pr['number'] if pr else n}/comments")):
                 return False
-            self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
+            self.run(["issue", "comment", str(pr["number"] if pr else n), "-R", self.repo, "--body", body])
             return True
         if kind == "review":
             return self._review(n, e)
@@ -382,7 +388,10 @@ class GitHubGateTracker:
         if pr is None or not focus:
             raise RuntimeError("review: needs a PR and a payload `focus`")
         head = pr["head"]["sha"]
-        if any(r["agent"] and r["focus"] == focus and r["commit_id"] == head for r in self._reviews(pr)):
+        existing = [r for r in self._reviews(pr) if r["agent"] and r["focus"] == focus and r["commit_id"] == head]
+        labels = self._labels(pr["number"])
+        rereview = f"factory:rereview-{focus}" in labels
+        if existing and (not rereview or any(r["rereview"] for r in existing)):
             return False
         facts = self.facts(n)
         earlier_change_heads = {r["commit_id"] for r in facts["reviews"]
@@ -391,7 +400,7 @@ class GitHubGateTracker:
                                 and (r.get("submitted_at") or "") >= self._since}
         rnd = e.get("round") or len(earlier_change_heads) + 1
         verdict = "approve" if e["value"].startswith("approve") else "changes"
-        marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict} -->"
+        marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict}{' rereview=1' if rereview else ''} -->"
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
         defang = lambda t: str(t).replace("<!--", "<!\u200b--")  # noqa: E731  # prose never carries a marker
         lines = [defang(f"**{x['id']}** {x['file']} — {x['finding']}") for x in found]
@@ -401,6 +410,8 @@ class GitHubGateTracker:
             body += f"\n\nFactory-Run: {e['run_id']}"
         self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
                   "-f", "event=COMMENT", "-f", f"body={body}"])
+        if rereview:
+            self._edit(pr["number"], remove=[f"factory:rereview-{focus}"], on="pr")
         return True
 
     def _create(self, n, children):

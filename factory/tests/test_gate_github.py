@@ -204,6 +204,17 @@ class EffectsTest(unittest.TestCase):
         self.assertIn("event=COMMENT", gh.writes[0])
         self.assertIn("verdict=changes", gh.writes[0][-1])
 
+    def test_dispute_rereview_is_allowed_once_at_the_same_head(self):
+        old = "<!-- factory:review focus=behaviour round=1 verdict=changes -->"
+        gh = FakeGh(labels=["factory:in-review", "risk:high", "factory:rereview-behaviour"],
+                    reviews=[review(BOT, old)])
+        self.assertTrue(tr(gh).apply(eff("review", "approve-at-head", focus="behaviour", round=1)))
+        post, remove = gh.writes
+        self.assertIn("rereview=1", post[-1])
+        self.assertEqual(remove[:3], ["pr", "edit", "5"])
+        self.assertIn("--remove-label", remove)
+        self.assertFalse(tr(gh).apply(eff("review", "approve-at-head", focus="behaviour")))
+
     def test_changes_review_body_carries_findings(self):
         gh = FakeGh()
         found = [{"id": "M1", "file": "a.py:2", "finding": "name it", "severity": "minor"},
