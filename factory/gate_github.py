@@ -149,8 +149,15 @@ class GitHubGateTracker:
             raise
 
     def blocking(self, n):
-        """Issues whose native dependency list names `n` as a blocker."""
-        return self._list(f"issues/{n}/dependencies/blocking")
+        """Issues whose native or body fallback dependency list names `n` as a blocker."""
+        dependents = self._list(f"issues/{n}/dependencies/blocking")
+        known = {i["number"] for i in dependents}
+        for issue in self._list("issues?state=open&per_page=100"):
+            if issue["number"] != n and issue["number"] not in known and re.search(
+                    rf"(?im)^Blocked by: #{n}\s*$", issue.get("body") or ""):
+                dependents.append(issue)
+                known.add(issue["number"])
+        return dependents
 
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
@@ -229,10 +236,12 @@ class GitHubGateTracker:
              "issue_state": issue.get("state", "open"),
              "title": issue.get("title", ""), "body": body, "branch": None}
         if stage == "needs-answers":
-            ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["ready"]]
+            waiting = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["needs-answers"]]
             comments = self._list(f"issues/{n}/comments")
-            if ready and comments:
-                started, setter = ready[-1].get("created_at", ""), (ready[-1].get("actor") or {}).get("login")
+            if waiting and comments:
+                started = waiting[-1].get("created_at", "")
+                ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["ready"]]
+                setter = (ready[-1].get("actor") or {}).get("login") if ready else None
                 f["answered"] = any((c.get("created_at") or "") > started and
                                      (c.get("user") or {}).get("type") != "Bot" and
                                      not (c.get("user") or {}).get("login", "").endswith("[bot]") and
@@ -428,6 +437,7 @@ class GitHubGateTracker:
                        if "pull_request" not in i and mark in (i.get("body") or "")}
         risk = [x for x in self._labels(n) if x.startswith("risk:")]  # a slice keeps its parent's risk path
         wrote, prev, prev_number = False, None, None  # prior slice blocks the next
+        parent_body = self._api(f"issues/{n}").get("body") or ""
         for c in children:
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
             new = open_issues.get(c["title"])
@@ -472,8 +482,9 @@ class GitHubGateTracker:
                 except RuntimeError as e:
                     if "403" not in str(e) and "Resource not accessible" not in str(e):
                         raise
-                    want = self._blocked_body(want, n)
-                    self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{new['number']}", "-f", f"body={want}"])
+                    parent_body = self._blocked_body(parent_body, new["number"])
+                    self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{n}", "-f",
+                              f"body={parent_body}"])
                 wrote = True
             wrote = wrote or c["title"] not in subs or new["id"] not in blockers
             prev = new["id"]

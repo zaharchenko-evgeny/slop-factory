@@ -370,6 +370,15 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual([(r["ticket"], r["outcome"]) for r in out["sweep"]], [(11, "unblocked")])
         self.assertEqual(tracker.tickets[11]["log"][0], ["label", '"factory:ready"'])
 
+    def test_sweep_refires_body_linked_dependent_after_blocker_closes(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "ready", "blockers_open": 0}})
+        tracker.sweep_tickets = lambda stages: []
+        code, out, _ = self.run_sweep(["--issue", "10"], tracker)
+        self.assertEqual(code, gate.GO)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in out["sweep"]], [(11, "unblocked")])
+        self.assertEqual(tracker.tickets[11]["log"][0], ["label", '"factory:ready"'])
+
     def test_check_accepts_air_trigger_wrapper_with_same_facts_as_raw_event(self):
         wrapper = json.loads((ROOT / "factory/tests/fixtures/air-issues-labeled.json").read_text())
         raw = wrapper["data"]
