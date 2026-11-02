@@ -10,6 +10,7 @@ import json
 import re
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import yaml
@@ -126,23 +127,20 @@ class GitHubGateTracker:
                 if not steps:
                     continue
                 logs = self.run(["api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs"])
-                groups, current = [], None
-                for log_line in logs.splitlines():
-                    if "##[group]" in log_line:
-                        current = [log_line.split("##[group]", 1)[1]]
-                        groups.append(current)
-                    elif current is not None:
-                        if "##[endgroup]" in log_line:
-                            current = None
-                        else:
-                            current.append(log_line)
                 for step in steps:
-                    section = next((g for g in groups if step["name"] in g[0]), None)
-                    if section is None and step.get("started_at") and step.get("completed_at"):
-                        section = [log_line for log_line in logs.splitlines()
-                                   if (match := re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)", log_line))
-                                   and step["started_at"] <= match[1] <= step["completed_at"]]
-                    section = section or []
+                    section = []
+                    if step.get("started_at") and step.get("completed_at"):
+                        started = datetime.fromisoformat(step["started_at"].replace("Z", "+00:00"))
+                        completed = datetime.fromisoformat(step["completed_at"].replace("Z", "+00:00"))
+                        # Logs and step metadata can use different fractional precision; include
+                        # every line in the completion second.
+                        completed = completed.replace(microsecond=0) + timedelta(seconds=1)
+                        for log_line in logs.splitlines():
+                            match = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)", log_line)
+                            if match:
+                                at = datetime.fromisoformat(match[1].replace("Z", "+00:00"))
+                                if started <= at < completed:
+                                    section.append(log_line)
                     failures.append({"job": job["name"], "step": step["name"],
                                      "log_tail": "\n".join(section[-60:])})
         return failures

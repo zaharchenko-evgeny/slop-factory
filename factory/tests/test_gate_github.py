@@ -50,10 +50,13 @@ class FakeGh:
                              for k, c in enumerate(self.checks))
         if "/actions/runs/100/jobs?" in a:
             return json.dumps({"id": 200, "name": "tests", "steps": [
-                {"name": "Run tests", "conclusion": "failure"},
+                {"name": "Run tests", "conclusion": "failure",
+                 "started_at": "2026-11-02T10:00:00Z", "completed_at": "2026-11-02T10:00:00Z"},
                 {"name": "Upload artifacts", "conclusion": "success"}]})
         if "/actions/jobs/200/logs" in a:
-            return "##[group]Run tests\n" + "\n".join(f"line {i}" for i in range(65)) + "\n##[endgroup]"
+            return "\n".join(["2026-11-02T10:00:00.1000000Z ##[group]Run tests",
+                                "2026-11-02T10:00:00.1000000Z ##[endgroup]"] +
+                               [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)])
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
             return "\n".join(json.dumps(p) for p in (
@@ -169,7 +172,9 @@ class FactsTest(unittest.TestCase):
         f = tr(FakeGh(checks=["failure"])).facts(7)
         self.assertEqual(f["ci"], "red")
         self.assertEqual(f["ci_failure"], [{"job": "tests", "step": "Run tests",
-                                             "log_tail": "\n".join(f"line {i}" for i in range(5, 65))}])
+                                             "log_tail": "\n".join(
+                                                 f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(5, 65))}])
+        self.assertIn("line 64", f["ci_failure"][0]["log_tail"])
 
     def test_no_stage_label(self):
         self.assertEqual(tr(FakeGh(labels=["x"])).facts(7)["stage"], "none")
