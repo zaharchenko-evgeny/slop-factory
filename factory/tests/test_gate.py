@@ -680,6 +680,16 @@ class ConflictTest(unittest.TestCase):
         self.assertEqual((code, tr.tickets[7]["stage"]), (0, "blocked"))
         self.assertIn(["comment", json.dumps("[factory] conflicts in a.py")], tr.tickets[7]["log"])
 
+    def test_deployed_update_spec_escalates_through_its_tiers(self):
+        with tempfile.TemporaryDirectory() as d:
+            spec = deploy.node_spec("update", NODES["nodes"]["update"], CONFIG, "cheap", None, NODES)
+            (Path(d) / "s.json").write_text(json.dumps(spec))
+            nodes = gate.spec_nodes(Path(d) / "s.json")
+            tr = MemoryTracker({7: {"stage": "changes-requested"}})
+            code, _ = gate.apply("update", "escalate", {"ticket": 7, "event": "e"}, tr, nodes, tier="cheap")
+            self.assertEqual(code, 0)
+            self.assertIn(["label", json.dumps("factory:update-mid")], tr.tickets[7]["log"])
+
     def test_recover_flags_approved_conflict_and_names_conflict_without_ci(self):
         class Tr(MemoryTracker):
             def sweep_tickets(self, stages):

@@ -46,6 +46,8 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
     """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
     spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
             "when": n.get("when"), "outcomes": n["outcomes"]}
+    if n.get("tiers"):
+        spec["tiers"] = n["tiers"]  # the ordered tiers the gate escalates through
     if any((o or {}).get("else") for o in n["outcomes"].values()):
         spec["else_tier"] = nodes["nodes"]["fix"]["tiers"][0]  # the fix tier a red CI hands the ticket to
     if top and n["role"] == "script":  # a sweep applies the other script nodes (join, finish) too

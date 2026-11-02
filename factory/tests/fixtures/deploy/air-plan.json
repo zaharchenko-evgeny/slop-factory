@@ -64,6 +64,10 @@
         "outcomes": {},
         "role": "developer",
         "tier": "cheap",
+        "tiers": [
+          "cheap",
+          "mid"
+        ],
         "when": null
       },
       "triggerVcs": [
@@ -105,6 +109,10 @@
         "outcomes": {},
         "role": "developer",
         "tier": "mid",
+        "tiers": [
+          "cheap",
+          "mid"
+        ],
         "when": null
       },
       "triggerVcs": [
@@ -146,6 +154,11 @@
         "outcomes": {},
         "role": "developer",
         "tier": "cheap",
+        "tiers": [
+          "cheap",
+          "mid",
+          "strong"
+        ],
         "when": null
       },
       "triggerVcs": [
@@ -187,6 +200,11 @@
         "outcomes": {},
         "role": "developer",
         "tier": "mid",
+        "tiers": [
+          "cheap",
+          "mid",
+          "strong"
+        ],
         "when": null
       },
       "triggerVcs": [
@@ -228,6 +246,11 @@
         "outcomes": {},
         "role": "developer",
         "tier": "strong",
+        "tiers": [
+          "cheap",
+          "mid",
+          "strong"
+        ],
         "when": null
       },
       "triggerVcs": [
