@@ -50,7 +50,7 @@
       },
       "environmentConfigId": "[Slop factory] read",
       "name": "[Slop factory] start",
-      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --main` once and report its JSON output.",
+      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --main` in the foreground with no time limit, wait until it exits, and report its JSON output.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -528,7 +528,7 @@
       },
       "environmentConfigId": "[Slop factory] read",
       "name": "[Slop factory] sweep",
-      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep` once and report its JSON output.",
+      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep` in the foreground with no time limit, wait until it exits, and report its JSON output.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -647,7 +647,7 @@
       },
       "environmentConfigId": "[Slop factory] read",
       "name": "[Slop factory] recover",
-      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --stale` once and report its JSON output.",
+      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --stale` in the foreground with no time limit, wait until it exits, and report its JSON output.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -751,7 +751,7 @@
       ],
       "triggers": [
         {
-          "cronExpression": "15 * * * *",
+          "cronExpression": "0 6,18 * * *",
           "timezone": "UTC",
           "triggerType": "SCHEDULED"
         }
@@ -766,7 +766,7 @@
       },
       "environmentConfigId": "[Slop factory] read",
       "name": "[Slop factory] merge",
-      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --main` once and report its JSON output.",
+      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --main` in the foreground with no time limit, wait until it exits, and report its JSON output.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -899,7 +899,7 @@
       },
       "environmentConfigId": "[Slop factory] read",
       "name": "[Slop factory] notify",
-      "prompt": "Run `factory notify --issue <issue number from the trigger payload>` once and report its JSON output.",
+      "prompt": "Run `factory notify --issue <issue number from the trigger payload>` in the foreground with no time limit, wait until it exits, and report its output.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
