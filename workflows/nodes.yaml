@@ -149,10 +149,9 @@ nodes:
       unresolvable: { effects: [{ comment: reason }, { stage: blocked }] }
   reopen:
     env: read
-    enabled: false
-    ticket: 196
+    pilot: true
     ci-independent: true
-    triggers: ["pull_request.synchronize"]
+    triggers: ["pull_request.synchronize", "pull_request.labeled factory:ci-red"]
     when: { stage: approved }
     role: script
     output: read-only

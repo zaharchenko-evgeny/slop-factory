@@ -464,6 +464,10 @@ def sweep_plan(facts):
         return "finish", "merged", retro_payload(facts)
     if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
         return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
+    if stage == "approved" and facts.get("pr_state") == "open" \
+            and ((facts.get("round_head") is not None and facts.get("head") != facts.get("round_head"))
+                 or facts.get("ci") == "red"):
+        return "reopen", "reopened", {}
     if stage == "split" and (kids := facts.get("children")):
         if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
             what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)

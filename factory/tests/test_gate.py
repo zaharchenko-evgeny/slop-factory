@@ -747,6 +747,40 @@ class ConflictTest(unittest.TestCase):
         self.assertEqual(tr.tickets[2]["stage"], "in-review")
 
 
+class ApprovedSweepTest(unittest.TestCase):
+    def sweep(self, ticket):
+        tr = MemoryTracker({7: ticket})
+        tr.sweep_tickets = lambda stages: [n for n, t in tr.tickets.items() if t["stage"] in stages]
+        return tr, gate.sweep(tr, NODES)
+
+    def test_approved_with_new_head_returns_to_review(self):
+        tr, (results, failed) = self.sweep({"stage": "approved", "pr_state": "open", "head": "new",
+                                            "round_head": "old", "ci": "green"})
+
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("reopen", "reopened")])
+        self.assertEqual(tr.tickets[7]["stage"], "in-review")
+
+    def test_approved_with_red_ci_returns_to_review_and_join_changes(self):
+        tr, (results, failed) = self.sweep({"stage": "approved", "pr_state": "open", "head": "same",
+                                            "round_head": "same", "ci": "red", "round_complete": True,
+                                            "round_verdict": "changes"})
+
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results],
+                         [("reopen", "reopened"), ("join", "changes")])
+        self.assertEqual(tr.tickets[7]["stage"], "changes-requested")
+        self.assertIn(["label", json.dumps("factory:fix-mid")], tr.tickets[7]["log"])
+
+    def test_approved_green_unchanged_stays(self):
+        tr, (results, failed) = self.sweep({"stage": "approved", "pr_state": "open", "head": "same",
+                                            "round_head": "same", "ci": "green"})
+
+        self.assertFalse(failed)
+        self.assertEqual(results, [])
+        self.assertEqual(tr.tickets[7]["stage"], "approved")
+
+
 class UnblockedSweepTest(unittest.TestCase):
     def sweep(self, tickets, closed=10):
         tr = MemoryTracker(tickets)
