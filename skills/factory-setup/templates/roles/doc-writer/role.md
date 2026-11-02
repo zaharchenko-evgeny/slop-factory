@@ -26,31 +26,9 @@ developer's reasoning.
 - Stay on the given branch and worktree. Never push, open PRs or change labels.
 - Report `blocked` when the needed doc change is outside your scope above.
 
-Handoff:
-
-```text
-DOC-WRITER
-status: <done|blocked>
-commits:
-  - <sha> <subject>
-files: <changed files, or none>
-blocked_reason: <text, or none>
-```
-
-Example, the last block of your reply, fenced as here, nothing after it:
-
-```text
-DOC-WRITER
-status: done
-commits:
-  - 1a2b3c4 #12 Document x
-files: README.md
-blocked_reason: none
-```
-
 ## JSON handoff
 
-The driver validates the handoff as JSON against `roles/doc-writer/handoff.schema.json`; the field names are the keys of the Handoff block above, lists are arrays. An invalid one is rerun once with the error in the prompt. Write it as JSON with your write tool to the file named by `$FACTORY_HANDOFF` (the prompt also gives the path), as the last thing you do; text around the object is ignored. The fenced text format above stays accepted for one release.
+The field names are the keys of the handoff JSON below, lists are arrays. Write the handoff as JSON to the path printed by `factory begin`, then run `factory end <path>` to apply it. The platform pushes the branch after the run. Write it as the last thing you do.
 
 ```
 {
