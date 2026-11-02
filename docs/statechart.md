@@ -310,6 +310,8 @@ flowchart LR
     N_finish["<b>finish</b><br/>on: PR merged<br/>on: issue closed<br/>on: issue +factory:blocked<br/>on: issues.comment<br/>script"]:::node
     N_notify["<b>notify</b><br/>on: issue +factory:blocked<br/>on: issue +factory:needs-answers<br/>script"]:::node
     N_recover["<b>recover</b><br/>on: cron 15 * * * *<br/>script"]:::node
+    N_doctor["<b>doctor</b><br/>on: cron 0 5 * * *<br/>script"]:::node
+    N_doctor_write["<b>doctor-write</b><br/>on: cron 0 5 * * *<br/>script"]:::node
     N_retro["<b>retro</b><br/>on: cron 0 2 * * *<br/>retro · review tiers"]:::node
     N_distill["<b>distill</b><br/>on: cron 0 3 * * 1<br/>distill · review tiers"]:::node
     CI["<b>CI</b> quality-gates + ci-state.yml<br/>on: PR push<br/>writes +factory:ci-green or +factory:ci-red"]:::ext
@@ -409,6 +411,8 @@ flowchart LR
 | `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked`<br>`issues.comment` | answered: → ready<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
 | `notify` | `issue +factory:blocked`<br>`issue +factory:needs-answers` | notified: — | script | built |
 | `recover` | `cron 15 * * * *` | blocked: → blocked | script | built |
+| `doctor` | `cron 0 5 * * *` | probed: — | script | built |
+| `doctor-write` | `cron 0 5 * * *` | probed: — | script | built |
 | `retro` | `cron 0 2 * * *` | recorded: — | retro · per focus | built |
 | `distill` | `cron 0 3 * * 1` | proposed: — | distill · per focus | built |
 <!-- /nodes-chart -->

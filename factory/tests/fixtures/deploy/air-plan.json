@@ -808,6 +808,224 @@
           "triggerType": "EVENT"
         }
       ]
+    },
+    {
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "small",
+        "isDefault": false,
+        "name": "small"
+      },
+      "environmentConfigId": "[Slop factory] read",
+      "name": "[Slop factory] doctor",
+      "prompt": "Run `factory doctor` once and report its JSON lines. It changes no ticket itself.",
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
+      },
+      "spec": {
+        "engine": null,
+        "focus": null,
+        "node": "doctor",
+        "outcomes": {
+          "probed": {}
+        },
+        "role": "script",
+        "runs": {
+          "merge": {
+            "engine": null,
+            "focus": null,
+            "node": "merge",
+            "outcomes": {
+              "merged": {
+                "effects": [
+                  {
+                    "merge": "match-head"
+                  }
+                ],
+                "from": [
+                  "approved"
+                ]
+              }
+            },
+            "role": "script",
+            "tier": null,
+            "when": {
+              "ci": "green",
+              "round": "complete-at-head",
+              "stage": "approved"
+            }
+          },
+          "notify": {
+            "engine": null,
+            "focus": null,
+            "node": "notify",
+            "outcomes": {
+              "notified": {
+                "from": [
+                  "blocked",
+                  "needs-answers"
+                ]
+              }
+            },
+            "role": "script",
+            "tier": null,
+            "when": {
+              "stage": [
+                "blocked",
+                "needs-answers"
+              ]
+            }
+          },
+          "recover": {
+            "engine": null,
+            "focus": null,
+            "node": "recover",
+            "outcomes": {},
+            "role": "script",
+            "tier": null,
+            "when": {
+              "always": true
+            }
+          },
+          "sweep": {
+            "engine": null,
+            "focus": null,
+            "node": "sweep",
+            "outcomes": {},
+            "role": "script",
+            "tier": null,
+            "when": null
+          }
+        },
+        "tier": "cheap",
+        "when": {
+          "always": true
+        }
+      },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        }
+      ],
+      "triggers": [
+        {
+          "cronExpression": "0 5 * * *",
+          "timezone": "UTC",
+          "triggerType": "SCHEDULED"
+        }
+      ]
+    },
+    {
+      "agentAndModel": {
+        "agentId": "codex",
+        "id": "small",
+        "isDefault": false,
+        "name": "small"
+      },
+      "environmentConfigId": "[Slop factory] write",
+      "name": "[Slop factory] doctor-write",
+      "prompt": "Run `factory doctor` once and report its JSON lines. It changes no ticket itself.",
+      "repository": {
+        "browseUrl": "https://example.com/o/main",
+        "cloneUrl": "https://example.com/o/main.git",
+        "fullName": "o/main",
+        "provider": "other"
+      },
+      "spec": {
+        "engine": null,
+        "focus": null,
+        "node": "doctor-write",
+        "outcomes": {
+          "probed": {}
+        },
+        "role": "script",
+        "runs": {
+          "merge": {
+            "engine": null,
+            "focus": null,
+            "node": "merge",
+            "outcomes": {
+              "merged": {
+                "effects": [
+                  {
+                    "merge": "match-head"
+                  }
+                ],
+                "from": [
+                  "approved"
+                ]
+              }
+            },
+            "role": "script",
+            "tier": null,
+            "when": {
+              "ci": "green",
+              "round": "complete-at-head",
+              "stage": "approved"
+            }
+          },
+          "notify": {
+            "engine": null,
+            "focus": null,
+            "node": "notify",
+            "outcomes": {
+              "notified": {
+                "from": [
+                  "blocked",
+                  "needs-answers"
+                ]
+              }
+            },
+            "role": "script",
+            "tier": null,
+            "when": {
+              "stage": [
+                "blocked",
+                "needs-answers"
+              ]
+            }
+          },
+          "recover": {
+            "engine": null,
+            "focus": null,
+            "node": "recover",
+            "outcomes": {},
+            "role": "script",
+            "tier": null,
+            "when": {
+              "always": true
+            }
+          },
+          "sweep": {
+            "engine": null,
+            "focus": null,
+            "node": "sweep",
+            "outcomes": {},
+            "role": "script",
+            "tier": null,
+            "when": null
+          }
+        },
+        "tier": "cheap",
+        "when": {
+          "always": true
+        }
+      },
+      "triggerVcs": [
+        {
+          "outputBehaviour": "read-only"
+        }
+      ],
+      "triggers": [
+        {
+          "cronExpression": "0 5 * * *",
+          "timezone": "UTC",
+          "triggerType": "SCHEDULED"
+        }
+      ]
     }
   ],
   "environments": [

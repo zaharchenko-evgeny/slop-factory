@@ -29,6 +29,7 @@ Run from the factory root. Whoever runs this applies the plan and changes no cod
 3. Apply after the user approves the dry run: `factory deploy --apply` (add `--allow-delete` only when the dry run lists deletes the user approved). It writes environments before automations on create and update, updates in place with `name`, then re-lists and fails if anything still differs. To rename an automation or environment, pass `--rename 'OLD NAME=NEW NAME'` (repeatable) to both the dry run and the apply: the item keeps its id instead of becoming a create plus a delete.
 4. Create missing labels from the plan's `labels[]` (`gh label create <name>`); a missing label fails every handoff that adds it.
 5. Run `factory deploy --dry-run` again: it must print `unchanged`.
+6. Run each `[Slop factory] doctor*` automation once (air-automations MCP) and report its probe lines. A failed probe has opened or updated its `Doctor: <probe> fails` ticket.
 
 The one-time rename of legacy `[factory:<node>]` items is not automated: apply it with `update_automation` or `edit_environment` (recorded ID, planned name) before step 3.
 
