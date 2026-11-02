@@ -51,6 +51,19 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
         self.assertEqual((code, json.loads(out)["reason"]), (10, "duplicate event"))
 
+    def test_begin_accepts_ez_branch_from_payload(self):
+        pr_event = {"action": "labeled", "pull_request": {"number": 300, "updated_at": "T2",
+                    "head": {"ref": "refs/heads/ez/299-urgent-ci-log-fetch", "sha": "abc"}},
+                    "label": {"name": "factory:ci-green"}}
+        Path("event.json").write_text(json.dumps(pr_event))
+        Path("tickets.json").write_text(json.dumps({"299": {"stage": "changes-requested", "branch": "ez/299-urgent-ci-log-fetch",
+                                                               "pr": 300, "pr_state": "open", "round_complete": True,
+                                                               "head": "abc"}}))
+        with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
+            code, out = self.run_cli("begin", "fix-cheap", "event.json", "--tracker", "memory:tickets.json")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(out)["ticket"], 299)
+
     def test_end_applies_handoff_for_begun_node(self):
         tracker = self.tracker()
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
@@ -64,6 +77,15 @@ class BeginEndTest(unittest.TestCase):
 
     def test_end_without_begin_is_an_error(self):
         self.assertEqual(self.run_cli("end", ".factory/handoff/implement.json")[0], 2)
+
+    def test_begin_fix_prints_ci_failure(self):
+        failure = [{"job": "tests", "step": "Run tests", "log_tail": "assert False"}]
+        tracker = self.tracker(stage="changes-requested", ci="red", round_complete=True,
+                               round_verdict="changes", ci_failure=failure)
+        with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
+            code, out = self.run_cli("begin", "fix-cheap", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(out)["context"]["ci_failure"], failure)
 
     def test_pull_request_node_runs_main_gate_not_the_checkouts(self):
         main = Path("main")

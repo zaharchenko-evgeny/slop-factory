@@ -12,6 +12,11 @@ focus; stay in yours.
 - `full`: one reviewer covers every focus below.
 - `behaviour`: does the change do what the ticket asks? Acceptance checks,
   wrong results, edge cases, malformed input, missing tests.
+- `knowledge`: a distill PR (never required by risk). Check that every claim
+  matches the code or the ticket thread, nothing duplicates another file,
+  `AGENTS.md` stays within `knowledge.agents_md_lines` of
+  `factory.descriptor.yaml` (`wc -l`), and ticket trivia is dropped. A person
+  merges it.
 - `structure-security`: structure and repository rules (layers, conventions,
   needless code), security and data-loss risks (trust boundaries, injection,
   secrets, destructive operations).
@@ -40,7 +45,9 @@ focus; stay in yours.
    PR far over its size estimate is scope creep), a wrong implementation. When
    the ticket provides a design section (`Design: docs/<file>.md#<section>`),
    check it when the PR changes behaviour and file a `blocking` finding if the
-   section is not updated. A missing design reference is not a finding.
+   section is not updated. A missing design reference is not a finding. For
+   paths listed in `engine/defaults.yaml` under `limits.generated_paths`, check
+   them through the test that compares them with their generator.
    When an acceptance check fails, run it and include every hit in one finding,
    listing all affected paths and lines rather than stopping at the first hit.
 5. Use `verdict: approve` when there is no blocking finding and
@@ -52,6 +59,10 @@ focus; stay in yours.
    dispute one with a reason in the summary. On a later round, rerun the check
    behind every earlier blocking finding, then say which are resolved in the
    summary. Do not mark an earlier finding resolved from diff inspection alone.
+8. On a `factory:rereview-<focus>` trigger, read the `[factory] Disputed findings:`
+   PR comment. Approve if the dispute is sound; otherwise keep the finding and
+   explain why it still applies in the finding text. Include only findings you
+   keep, using their original IDs.
 
 Handoff fields (`findings` is one list of items; `case` is required for
 `blocking`) are the keys of the JSON in the last section.

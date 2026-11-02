@@ -42,6 +42,12 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_writer_answer_resumes_needs_answers(self):
+        self.assertEqual(gate.sweep_plan({"stage": "needs-answers", "answered": True}), ("finish", "answered", {}))
+
+    def test_bot_comment_does_not_resume(self):
+        self.assertIsNone(gate.sweep_plan({"stage": "needs-answers", "answered": False}))
+
     def test_verdict_approve_and_approved_both_approve(self):
         for verdict in ("approve", "approved"):
             with self.subTest(verdict=verdict):
@@ -205,6 +211,42 @@ class CliAndValidate(unittest.TestCase):
             gate.apply("fix", "done", {"ticket": "7", "event": "e"}, tr, NODES)
         self.assertEqual(tr.tickets["7"]["stage"], "blocked")
 
+    def test_all_disputed_fix_rerequests_focus(self):
+        review = {"agent": True, "focus": "behaviour", "verdict": "changes", "commit_id": "abc",
+                  "findings": ["B1"]}
+        tr = MemoryTracker({"7": {"stage": "changes-requested", "head": "abc", "handed_to_fix": True,
+                                   "round_complete": True, "reviews": [review]}})
+        payload = {"ticket": "7", "event": "e", "findings_addressed": ["B1: disputed — operator-only redeploy"],
+                   "disputed_focuses": ["behaviour"]}
+        with patch.object(gate, "local_head", return_value="abc"):
+            gate.apply("fix", "done", payload, tr, NODES)
+        log = [(kind, json.loads(value)) for kind, value in tr.tickets["7"]["log"]]
+        self.assertIn(("label", "factory:rereview-behaviour"), log)
+        self.assertIn(("comment", "[factory] Disputed findings:\nB1: disputed — operator-only redeploy"), log)
+        self.assertEqual(tr.tickets["7"]["stage"], "in-review")
+
+    def test_undisputed_finding_without_commit_blocks(self):
+        review = {"agent": True, "focus": "behaviour", "verdict": "changes", "commit_id": "abc",
+                  "findings": ["B1", "B2"]}
+        tr = MemoryTracker({"7": {"stage": "changes-requested", "head": "abc", "handed_to_fix": True,
+                                   "round_complete": True, "reviews": [review]}})
+        payload = {"ticket": "7", "event": "e", "findings_addressed": ["B1: disputed — reason"],
+                   "disputed_focuses": ["behaviour"]}
+        with patch.object(gate, "local_head", return_value="abc"):
+            gate.apply("fix", "done", payload, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "blocked")
+
+    def test_second_dispute_on_same_head_blocks(self):
+        review = {"agent": True, "focus": "behaviour", "verdict": "changes", "commit_id": "abc",
+                  "rereview": True, "findings": ["B1"]}
+        tr = MemoryTracker({"7": {"stage": "changes-requested", "head": "abc", "handed_to_fix": True,
+                                   "round_complete": True, "reviews": [review]}})
+        payload = {"ticket": "7", "event": "e", "findings_addressed": ["B1: disputed — reason"],
+                   "disputed_focuses": ["behaviour"]}
+        with patch.object(gate, "local_head", return_value="abc"):
+            gate.apply("fix", "done", payload, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "blocked")
+
     def test_branch_size_uses_delivery_checkout_and_counts_modified_lines(self):
         with tempfile.TemporaryDirectory() as engine, tempfile.TemporaryDirectory() as delivery:
             (Path(delivery) / "retained.txt").write_text("still here\n")
@@ -219,6 +261,24 @@ class CliAndValidate(unittest.TestCase):
                                  (13, [("retained.txt", 12), ("deleted.txt", 1)]))
             self.assertEqual(run.call_args.kwargs["cwd"], Path(delivery))
 
+    def test_generated_paths_do_not_count_toward_size(self):
+        with tempfile.TemporaryDirectory() as delivery:
+            result = type("Result", (), {
+                "returncode": 0,
+                "stdout": "175\t0\tfactory/tests/fixtures/deploy/air-plan.json\n"
+                          "12\t3\tdocs/statechart.md\n"
+                          "9\t0\tskills/factory-setup/templates/roles/router/role.md\n"
+                          "4\t1\tfactory/gate.py\n",
+                "stderr": "",
+            })()
+            with patch.object(gate.subprocess, "run", return_value=result):
+                self.assertEqual(gate.branch_size(
+                    "origin/main", checkout=delivery,
+                    generated_paths=["factory/tests/fixtures/deploy/air-plan.json",
+                                     "docs/statechart.md", "docs/statechart-proposed.md",
+                                     "skills/factory-setup/templates/**"],
+                ), (5, [("factory/gate.py", 5)]))
+
     def test_intake_size_uses_first_number(self):
         fields = gate.intake_fields({
             "handoff": "ROUTER-INTAKE",
@@ -227,6 +287,22 @@ class CliAndValidate(unittest.TestCase):
             "split": "none",
         })
         self.assertEqual((fields["complexity"], fields["tier"]), ("small", "cheap"))
+
+    def test_routines_run_without_a_ticket(self):
+        for name in ("retro", "distill"):
+            with tempfile.TemporaryDirectory() as d:
+                d = Path(d)
+                (d / "ev.json").write_text(json.dumps({"source": "schedule", "schedule": name}))
+                (d / "h.json").write_text(json.dumps({"handoff": name.upper(), "status": "done"}))
+                tr = ["--tracker", f"memory:{d / 't.json'}"]
+                (d / "t.json").write_text("{}")
+                out = StringIO()
+                with redirect_stdout(out):
+                    self.assertEqual(gate.main(["check", "--node", name, "--event", str(d / "ev.json"), *tr]), 0)
+                self.assertEqual(json.loads(out.getvalue())["ticket"], None)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(gate.main(["apply", "--node", name, "--handoff", str(d / "h.json"), *tr]), 0)
+                    self.assertEqual(gate.main(["apply", "--node", name, "--outcome", "nope", "--handoff", str(d / "h.json"), *tr]), 2)
 
     def test_cli_exit_codes(self):
         with tempfile.TemporaryDirectory() as d:
@@ -407,6 +483,15 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual([(r["ticket"], r["outcome"]) for r in out["sweep"]], [(11, "unblocked")])
         self.assertEqual(tracker.tickets[11]["log"][0], ["label", '"factory:ready"'])
 
+    def test_sweep_refires_body_linked_dependent_after_blocker_closes(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "ready", "blockers_open": 0}})
+        tracker.sweep_tickets = lambda stages: []
+        code, out, _ = self.run_sweep(["--issue", "10"], tracker)
+        self.assertEqual(code, gate.GO)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in out["sweep"]], [(11, "unblocked")])
+        self.assertEqual(tracker.tickets[11]["log"][0], ["label", '"factory:ready"'])
+
     def test_check_accepts_air_trigger_wrapper_with_same_facts_as_raw_event(self):
         wrapper = json.loads((ROOT / "factory/tests/fixtures/air-issues-labeled.json").read_text())
         raw = wrapper["data"]
@@ -486,6 +571,38 @@ class TriggerTest(unittest.TestCase):
         tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "ci": "red", "fix_rounds": 3, "fix_cap": 3}})
         gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
         self.assertEqual(tr.tickets["7"]["stage"], "blocked")
+        self.assertIn(["label", '"factory:needs-human"'], tr.tickets["7"]["log"])
+        self.assertEqual(tr.tickets["7"]["assignees"], [CONFIG["notify"]["github_user"]])
+
+    def test_person_change_request_addressed_assigns_reviewer(self):
+        seen = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                seen.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "in-review", "head": "new-head", "pr": 42, "ci": "green",
+                             "waiting_reviewers": ["reviewer"], "focus_missing": []}})
+        gate.apply("join", "waiting", {"ticket": "7", "event": "e"}, tr, NODES)
+        self.assertIn(["label", '"factory:needs-human"'], tr.tickets["7"]["log"])
+        self.assertEqual(tr.tickets["7"]["assignees"], ["reviewer"])
+        self.assertIn('"[factory] Re-review PR #42: your change request was addressed at new-head"',
+                      [value for kind, value in tr.tickets["7"]["log"] if kind == "comment"])
+        self.assertIn({"kind": "comment", "ticket": "7",
+                       "value": "[factory] Re-review PR #42: your change request was addressed at new-head",
+                       "on": "pr"}, seen)
+
+    def test_needs_answers_assigns_ticket_author(self):
+        tr = MemoryTracker({"7": {"stage": "ready", "author": "ticket-author"}})
+        gate.apply("intake", "grill", {"ticket": "7", "questions": "[factory] Which API?"}, tr, NODES)
+        self.assertIn(["label", '"factory:needs-human"'], tr.tickets["7"]["log"])
+        self.assertEqual(tr.tickets["7"]["assignees"], ["ticket-author"])
+
+    def test_label_removed_when_stage_changes(self):
+        tr = MemoryTracker({"7": {"stage": "blocked", "attrs": ["factory:needs-human"],
+                                   "assignees": [CONFIG["notify"]["github_user"]]}})
+        gate.apply("human", "ready", {"ticket": "7", "actor": "human"}, tr, NODES)
+        self.assertNotIn("factory:needs-human", tr.tickets["7"]["attrs"])
+        self.assertEqual(tr.tickets["7"]["assignees"], [])
 
     def test_a_stop_clears_every_command_label(self):
         # review of PR #198: a label left on the ticket makes the command after factory:ready a no-op
@@ -583,6 +700,15 @@ class StaleSweepTest(unittest.TestCase):
         self.assertNotIn("log", tr.tickets[1])
         self.assertNotIn("log", tr.tickets[2])  # waiting on a blocker, not on a lost run
 
+    def test_command_label_without_outcome_stale_after_30_minutes(self):
+        tr, res = self.sweep({1: {"stage": "ready", "since": "2026-11-01T11:00:00Z", "command_pending": True}})
+        self.assertEqual([(r["recover"], r["stage"]) for r in res], [("refire", "ready")])
+
+    def test_fresh_command_label_not_stale(self):
+        tr, res = self.sweep({1: {"stage": "ready", "since": "2026-11-01T11:45:00Z", "command_pending": True}})
+        self.assertEqual(res, [])
+        self.assertNotIn("log", tr.tickets[1])
+
     def test_in_review_with_ci_green_and_no_review_refires_ci_green(self):
         tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": "green", "reviews": []}})
         self.assertEqual([(r["recover"], r["stage"]) for r in res], [("refire", "in-review")])
@@ -610,11 +736,33 @@ class StaleSweepTest(unittest.TestCase):
         self.assertEqual(sorted(r["ticket"] for r in res), [4, 5])
         self.assertIn(["label", '"factory:implement-mid"'], tr.tickets[4]["log"])
 
+    def test_stale_update_command_is_refired_once_then_blocked(self):
+        tr, res = self.sweep({5: {"stage": "changes-requested", "since": self.OLD, "pr": 7,
+                                  "command": "factory:update-cheap", "command_at": self.FRESH,
+                                  "commit_at": self.OLD}})
+        self.assertEqual([r["recover"] for r in res], ["refire"])
+        res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
+        self.assertEqual([r["recover"] for r in res], ["blocked"])
+        self.assertEqual(tr.tickets[5]["stage"], "blocked")
+
     def test_dry_run_writes_nothing(self):
         tr = MemoryTracker({1: {"stage": "ready", "since": self.OLD}})
         tr.sweep_tickets = lambda stages: [1]
         self.assertEqual(len(gate.sweep_stale(tr, NODES, 2, self.NOW, dry_run=True)[0]), 1)
         self.assertNotIn("log", tr.tickets[1])
+
+    def test_idle_unmatched_ticket_flagged_by_recover(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "issue_state": "open"}})
+        self.assertEqual([r["recover"] for r in res], ["human"])
+        self.assertIn(["label", '"factory:needs-human"'], tr.tickets[3]["log"])
+        self.assertEqual(tr.tickets[3]["assignees"], [CONFIG["notify"]["github_user"]])
+
+    def test_recover_preserves_existing_reviewer_wait(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "issue_state": "open",
+                                  "attrs": ["factory:needs-human"], "assignees": ["reviewer"]}})
+        self.assertEqual([r["recover"] for r in res], ["human"])
+        self.assertEqual(tr.tickets[3]["assignees"], ["reviewer"])
+        self.assertNotIn("log", tr.tickets[3])
 
 
 class SpecTest(unittest.TestCase):
@@ -701,6 +849,37 @@ class ConflictTest(unittest.TestCase):
         tr.tickets[7]["conflict"] = False
         self.assertFalse(gate.check("fix", {"id": "e", "ticket": 7}, tr, NODES, CONFIG)[1]["merge_main"])
 
+    def test_dispute_rereview_sweep_approves_or_starts_a_new_fix_round(self):
+        original = {"agent": True, "focus": "full", "verdict": "changes", "commit_id": "abc",
+                    "findings": ["B1"]}
+        for verdict, expected in (("approve", "approved"), ("changes", "changes-requested")):
+            rereview = {**original, "verdict": verdict, "rereview": True}
+            tr, (results, failed) = self.sweep({7: {"stage": "in-review", "head": "abc", "handed_to_fix": True,
+                                                    "round_complete": True, "round_verdict": verdict,
+                                                    "reviews": [original, rereview], "ci": "green",
+                                                    "attrs": ["risk:low", "complexity:small"],
+                                                    "labels": ["factory:fix-mid"]}})
+            self.assertFalse(failed)
+            self.assertEqual(tr.tickets[7]["stage"], expected)
+
+        pending = {"agent": True, "focus": "full", "verdict": "approve", "commit_id": "abc", "rereview": True}
+        self.assertEqual(gate.sweep_plan({"stage": "in-review", "head": "abc", "handed_to_fix": True,
+                                          "round_complete": False, "waiting_reviewers": ["alice"],
+                                          "reviews": [pending]}), ("join", "waiting", {}))
+
+    def test_dispute_join_requires_agent_and_all_requested_focuses(self):
+        untrusted = {"agent": False, "focus": "behaviour", "verdict": "approve", "commit_id": "abc",
+                     "rereview": True}
+        facts = {"stage": "in-review", "head": "abc", "handed_to_fix": True, "round_complete": True,
+                 "round_verdict": "approve", "reviews": [untrusted]}
+        self.assertIsNone(gate.join_decision(facts))
+
+        facts.update(handed_to_fix=False, pending_rereviews=["structure-security"])
+        self.assertIsNone(gate.join_decision(facts))
+        tr, (results, failed) = self.sweep({7: {**facts, "stage": "in-review", "ci": "green"}})
+        self.assertFalse(failed)
+        self.assertEqual((results, tr.tickets[7]["stage"]), ([], "in-review"))
+
     def test_unresolvable_update_blocks_with_files(self):
         tr = MemoryTracker({7: {"stage": "changes-requested"}})
         reason = "[factory] Blocked: merge conflict in factory/gate.py, workflows/nodes.yaml"
@@ -781,6 +960,80 @@ class ApprovedSweepTest(unittest.TestCase):
         self.assertEqual(tr.tickets[7]["stage"], "approved")
 
 
+class AutoMergeTest(unittest.TestCase):
+    OPEN = {"stage": "approved", "pr_state": "open", "head": "h", "round_head": "h", "round_complete": True,
+            "round_verdict": "approve", "ci": "green", "risk": "high", "pr": 9}
+    ON = {"enabled": True, "max_risk": "high"}
+
+    def sweep(self, auto_merge=ON, **kw):
+        tr = MemoryTracker({7: {**self.OPEN, **kw}})
+        tr.sweep_tickets = lambda stages: [n for n, t in tr.tickets.items() if t["stage"] in stages]
+        results, failed = gate.sweep(tr, NODES, auto_merge=auto_merge)
+        return tr, [(r["node"], r["outcome"]) for r in results if not failed]
+
+    def log(self, tr, kind):
+        return [json.loads(v) for k, v in tr.tickets[7].get("log", []) if k == kind]
+
+    def test_merge_when_all_gates_pass(self):
+        tr, results = self.sweep()
+        self.assertEqual(results, [("merge", "merged")])
+        self.assertEqual(self.log(tr, "merge"), ["match-head"])
+
+    def test_no_merge_when_head_not_reviewed(self):
+        for kw in ({"round_head": "old"}, {"round_head": None}, {"round_verdict": "changes"}, {"round_complete": False}):
+            with self.subTest(kw=kw):
+                tr, results = self.sweep(**kw)
+                self.assertNotIn(("merge", "merged"), results)
+                self.assertEqual(self.log(tr, "merge"), [])
+
+    def test_no_merge_when_ci_not_green_at_head(self):
+        for ci in ("pending", "red", "none"):
+            with self.subTest(ci=ci):
+                tr, results = self.sweep(ci=ci)
+                self.assertNotIn(("merge", "merged"), results)
+                self.assertEqual(self.log(tr, "merge"), [])
+
+    def test_behind_main_updates_branch_not_merge(self):
+        tr, results = self.sweep(behind=True)
+        self.assertEqual(results, [("merge", "updated")])
+        self.assertEqual((self.log(tr, "merge"), self.log(tr, "update-branch")), ([], ["match-head"]))
+        self.assertEqual(tr.tickets[7]["stage"], "approved")
+
+    def test_risk_above_limit_waits_for_person(self):
+        for auto_merge in ({"enabled": True, "max_risk": "low"}, {"enabled": False, "max_risk": "high"}):
+            with self.subTest(auto_merge=auto_merge):
+                tr, results = self.sweep(auto_merge)
+                self.assertEqual(results, [("merge", "waiting")])
+                self.assertEqual(self.log(tr, "merge"), [])
+                self.assertEqual(tr.tickets[7]["stage"], "approved")
+                self.assertIn("Merge PR #9", self.log(tr, "comment")[0])
+                self.assertIn(["label", '\"factory:needs-human\"'], tr.tickets[7]["log"])
+                self.assertEqual(tr.tickets[7]["assignees"], [CONFIG["notify"]["github_user"]])
+
+    def test_merge_wait_comment_targets_pr(self):
+        effects = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({7: dict(self.OPEN)})
+        tr.sweep_tickets = lambda stages: [7]
+        gate.sweep(tr, NODES, auto_merge={"enabled": False, "max_risk": "high"})
+        comment = next(e for e in effects if e["kind"] == "comment")
+        self.assertEqual(comment["on"], "pr")
+
+    def test_one_merge_per_sweep(self):
+        tr = MemoryTracker({7: dict(self.OPEN), 8: dict(self.OPEN)})
+        tr.sweep_tickets = lambda stages: [7, 8]
+        results, _ = gate.sweep(tr, NODES, auto_merge=self.ON)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results if r["node"] == "merge"], [(7, "merged")])
+
+    def test_apply_refuses_a_merge_whose_gate_failed(self):
+        tr = MemoryTracker({7: {**self.OPEN, "ci": "red"}})
+        code, out = gate.apply("merge", "merged", {"ticket": 7}, tr, NODES)
+        self.assertEqual((code, out["applied"]), (gate.NO_GO, False))
+
+
 class UnblockedSweepTest(unittest.TestCase):
     def sweep(self, tickets, closed=10):
         tr = MemoryTracker(tickets)
@@ -838,6 +1091,30 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertFalse(failed)
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(10, "merged"), (11, "unblocked")])
         self.assertIn(["comment", '"[factory] unblocked by #10"'], tr.tickets[11]["log"])
+
+    def test_config_change_merge_updates_open_prs(self):
+        class ConfigTracker(MemoryTracker):
+            def config_change_merged(self, pr):
+                self.updated_prs = getattr(self, "updated_prs", []) + [pr]
+
+        tr = ConfigTracker({10: {"stage": "approved", "pr_state": "open", "head": "h", "round_head": "h",
+                                 "round_complete": True, "round_verdict": "approve", "ci": "green", "risk": "low"}})
+        tr.sweep_tickets = lambda stages: [10]
+        facts = tr.facts
+        tr.facts = lambda ticket: {**facts(ticket), "pr": 300, "reviews": [], "fix_rounds": 0}
+
+        results, failed = gate.sweep(tr, NODES, auto_merge={"enabled": True, "max_risk": "high"})
+
+        self.assertFalse(failed, results)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("merge", "merged")])
+        self.assertFalse(hasattr(tr, "updated_prs"))
+
+        tr.tickets[10]["pr_state"] = "merged"
+        results, failed = gate.sweep(tr, NODES)
+
+        self.assertFalse(failed, results)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.updated_prs, [300])
 
     def test_blocking_error_does_not_fail_sweep(self):
         class BrokenBlockingTracker(MemoryTracker):

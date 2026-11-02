@@ -36,9 +36,9 @@ class ClaimError(Exception):
 MARKER = re.compile(r"<!-- factory-state (\{.*?\}) -->", re.S)
 
 
-def gh(args):
+def gh(args, timeout=None):
     """Run `gh` (or $FACTORY_GH) with an argument list (no shell); return stdout."""
-    p = subprocess.run([os.environ.get("FACTORY_GH", "gh"), *args], capture_output=True, text=True)
+    p = subprocess.run([os.environ.get("FACTORY_GH", "gh"), *args], capture_output=True, text=True, timeout=timeout)
     if p.returncode:
         raise RuntimeError(f"gh {' '.join(args[:3])}: {p.stderr.strip()}")
     return p.stdout

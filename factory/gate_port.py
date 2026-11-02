@@ -36,8 +36,10 @@ class MemoryTracker:
     def facts(self, ticket):
         t = self._t(ticket)
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
-                "round_verdict": None, "round_head": None, "attrs": [], "agent_runs": 0, "run_cap": 8, "handed_to_fix": False, "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False, "conflict": False, "pr_state": "none"}
-        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr")}, "stage": self.get_stage(t),
+                "round_verdict": None, "round_head": None, "attrs": [], "agent_runs": 0, "run_cap": 8, "handed_to_fix": False,
+                "pending_rereviews": [], "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False, "conflict": False,
+                "pr_state": "none", "risk": "high", "behind": False, "answered": False}
+        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr", "ci_failure", "author", "waiting_reviewers")}, "stage": self.get_stage(t),
                 "seen": list(t.get("seen", []))}
 
     def stale_facts(self, ticket):
@@ -45,7 +47,7 @@ class MemoryTracker:
         the recover comments come from the log."""
         t = self._t(ticket)
         sent = [json.loads(v) for k, v in t.get("log", []) if k == "comment"]
-        return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "command", "command_at", "commit_at", "ci_label", "pr_state", "issue_state") if k in t},
+        return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "command", "command_at", "commit_at", "ci_label", "command_pending", "pr_state", "issue_state") if k in t},
                 "recover_comments": [c for c in sent if c.startswith("[factory] recover:")]}
 
     def apply(self, effect):
@@ -68,6 +70,20 @@ class MemoryTracker:
                 return False
             fields.update(value)
             return True
+        if kind == "assign":
+            people = value if isinstance(value, list) else [value]
+            if t.get("assignees", []) == people:
+                return False
+            t["assignees"] = people
+            t.setdefault("log", []).append([kind, json.dumps(value, sort_keys=True)])
+            return True
+        if kind == "unassign":
+            people = t.get("assignees", [])
+            if not people:
+                return False
+            t["assignees"] = []
+            t.setdefault("log", []).append([kind, json.dumps(people, sort_keys=True)])
+            return True
         # label, unlabel, comment, review, create-issues, merge, join: a set of applied values
         log = t.setdefault("log", [])
         entry = [kind, json.dumps(value, sort_keys=True)]
@@ -76,20 +92,25 @@ class MemoryTracker:
         if entry in log:
             return False
         log.append(entry)
+        if kind == "label" and value not in t.setdefault("attrs", []):
+            t["attrs"].append(value)
         return True
 
     def _drop(self, t, value):
         log = t.setdefault("log", [])
+        attrs = t.get("attrs", [])
         if value.endswith("*"):  # every label with the prefix
             gone = [x for x in log if x[0] == "label" and json.loads(x[1]).startswith(value[:-1])]
             for x in gone:
                 log.remove(x)
-            return bool(gone)
+            t["attrs"] = [x for x in attrs if not x.startswith(value[:-1])]
+            return bool(gone) or len(t["attrs"]) != len(attrs)
         entry = ["label", json.dumps(value, sort_keys=True)]
-        if entry not in log:
-            return False
-        log.remove(entry)
-        return True
+        present = entry in log
+        if present:
+            log.remove(entry)
+        t["attrs"] = [x for x in attrs if x != value]
+        return present or len(t["attrs"]) != len(attrs)
 
 
 class TagTracker(MemoryTracker):

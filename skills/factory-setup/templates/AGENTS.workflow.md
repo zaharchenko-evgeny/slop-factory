@@ -19,7 +19,9 @@ change, whether you are a person, a pi session or a factory role.
    stops. The next ticket to work on comes from the frontier: open, `ready`,
    every blocker closed, unclaimed (no assignee), in map order.
 3. **Split large tickets.** Estimate size as lines a reviewer must read: added
-   lines plus modified lines, counting tests and fixtures. A whole file deleted
+   lines plus modified lines, counting tests and fixtures. Exclude paths listed
+   in `engine/defaults.yaml` under `limits.generated_paths`; verify those files
+   through their generator comparison test. A whole file deleted
    counts as one line because it is checked by listing it; lines removed from a
    file that remains count as modified. A ticket may report both changed lines
    and deletion volume; use changed lines for the size estimate. Above about
@@ -39,14 +41,16 @@ change, whether you are a person, a pi session or a factory role.
    `factory:ci-red` when it finishes (`.github/workflows/ci-state.yml`).
    Scripted steps (join, finish) run only `gate.py sweep`. Agent reviews are `COMMENT` reviews pinned to the head,
    with the verdict in a `<!-- factory:review ... -->` marker.
-5. **Merge gate.** A human merges a PR after CI is green at its exact head
-   and the join set `factory:approved`: update a branch that is behind
-   `main` first, then merge with `--match-head-commit`, one PR at a time.
-   The `finish` node, on the merge event, then moves the ticket to
-   `merged` and `done`, and closes it.
-   GitHub cannot require status checks here (private repository, no Pro),
-   so merge only a PR whose `factory-checks` ran after the latest push to
-   `main`.
+5. **Merge gate.** The `merge` node merges an approved PR when every gate
+   holds, read fresh: every required focus approved the current head, CI is
+   green at it, the PR is not conflicting or behind `main`, and the risk is at
+   most `gates.auto_merge.max_risk`. It merges with `--match-head-commit`,
+   never a squash or rebase, one PR at a time; a branch behind `main` is
+   updated first. A person merges only when `gates.auto_merge.enabled` is
+   `false` or the risk is above its limit, a PR whose `factory-checks` ran
+   after the latest push to `main` (GitHub cannot require status checks here:
+   private repository, no Pro). The `finish` node, on the merge event, then
+   moves the ticket to `merged` and `done`, and closes it.
 6. **Write notes where the role was triggered.** A role woken by a pull request
    writes every note to that PR, as a PR comment starting with `[factory]` and
    ending with a `Factory-Run:` trailer. This includes process gaps and

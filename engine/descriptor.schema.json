@@ -76,6 +76,13 @@
         }
       }
     },
+    "notify": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "github_user": { "type": "string" }
+      }
+    },
     "targets": {
       "type": "object",
       "additionalProperties": false,
@@ -171,6 +178,9 @@
         "stale_hours": {
           "type": "integer"
         },
+        "stale_command_minutes": {
+          "type": "integer"
+        },
         "resume_cap": {
           "type": "integer"
         },
@@ -179,6 +189,10 @@
         },
         "environment_repair_attempts": {
           "type": "integer"
+        },
+        "generated_paths": {
+          "type": "array",
+          "items": { "type": "string" }
         }
       }
     },
@@ -189,8 +203,17 @@
         "ticket_approval": {
           "type": "string"
         },
-        "pr_approval": {
-          "type": "string"
+        "auto_merge": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "max_risk": {
+              "type": "string"
+            }
+          }
         },
         "confirm_external_writes": {
           "type": "boolean"
@@ -214,6 +237,9 @@
           "type": "string"
         },
         "distill_every_days": {
+          "type": "integer"
+        },
+        "agents_md_lines": {
           "type": "integer"
         }
       }

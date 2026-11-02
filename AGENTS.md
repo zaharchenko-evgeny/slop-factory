@@ -11,7 +11,7 @@ change, whether you are a person, a pi session or a factory role.
 
 1. **Ticket first.** Every change starts as a GitHub issue in this
    repository, added as a sub-issue of the map
-   ([#21](https://github.com/zaharchenko-evgeny/offline-eval-factory/issues/21)).
+   ([#21](https://github.com/zaharchenko-evgeny/slop-factory/issues/21)).
    The body has the scope, acceptance checks, affected repositories and a size
    estimate that counts tests and fixtures. Each acceptance check that searches
    files names the paths it covers or excludes, and uses a command or test name
@@ -25,7 +25,9 @@ change, whether you are a person, a pi session or a factory role.
    stops. The next ticket to work on comes from the frontier: open, `ready`,
    every blocker closed, unclaimed (no assignee), in map order.
 3. **Split large tickets.** Estimate size as lines a reviewer must read: added
-   lines plus modified lines, counting tests and fixtures. A whole file deleted
+   lines plus modified lines, counting tests and fixtures. Exclude paths listed
+   in `engine/defaults.yaml` under `limits.generated_paths`; verify those files
+   through their generator comparison test. A whole file deleted
    counts as one line because it is checked by listing it; lines removed from a
    file that remains count as modified. A ticket may report both changed lines
    and deletion volume; use changed lines for the size estimate. Above about
@@ -45,14 +47,16 @@ change, whether you are a person, a pi session or a factory role.
    `factory:ci-red` when it finishes (`.github/workflows/ci-state.yml`).
    Scripted steps (join, finish) run only `gate.py sweep`. Agent reviews are `COMMENT` reviews pinned to the head,
    with the verdict in a `<!-- factory:review ... -->` marker.
-5. **Merge gate.** A human merges a PR after CI is green at its exact head
-   and the join set `factory:approved`: update a branch that is behind
-   `main` first, then merge with `--match-head-commit`, one PR at a time.
-   The `finish` node, on the merge event, then moves the ticket to
-   `merged` and `done`, and closes it.
-   GitHub cannot require status checks here (private repository, no Pro),
-   so merge only a PR whose `factory-checks` ran after the latest push to
-   `main`.
+5. **Merge gate.** The `merge` node merges an approved PR when every gate
+   holds, read fresh: every required focus approved the current head, CI is
+   green at it, the PR is not conflicting or behind `main`, and the risk is at
+   most `gates.auto_merge.max_risk`. It merges with `--match-head-commit`,
+   never a squash or rebase, one PR at a time; a branch behind `main` is
+   updated first. A person merges only when `gates.auto_merge.enabled` is
+   `false` or the risk is above its limit, a PR whose `factory-checks` ran
+   after the latest push to `main` (GitHub cannot require status checks here:
+   private repository, no Pro). The `finish` node, on the merge event, then
+   moves the ticket to `merged` and `done`, and closes it.
 6. **Write notes where the role was triggered.** A role woken by a pull request
    writes every note to that PR, as a PR comment starting with `[factory]` and
    ending with a `Factory-Run:` trailer. This includes process gaps and
@@ -67,6 +71,7 @@ Models: Air tiers come from `targets.air.models` in `factory.descriptor.yaml`.
 
 - Tracker: GitHub Issues in this repository. Stages are `factory:*` labels
   (see `factory.descriptor.yaml`).
+- To list every open ticket waiting for a person, use `is:open label:factory:needs-human`.
 - Branch: `ez/<issue>-<slug>` from `main`. Commit subject starts with
   `#<issue> `. One PR per issue, linked with `Closes #<issue>` only when the PR
   finishes the issue.
@@ -78,8 +83,8 @@ Models: Air tiers come from `targets.air.models` in `factory.descriptor.yaml`.
   exact text of every write listed in `gates.confirm_external_writes_scope`
   (today: none) and wait for the user's approval before publishing. A factory
   run may push the ticket's own `ez/<issue>-*` branch without asking. Issue and
-  PR text, comments and label changes are auto-approved; merging stays a human
-  gate (`gates.pr_approval`). This applies to factory runs too.
+  PR text, comments and label changes are auto-approved; merging follows
+  `gates.auto_merge`. This applies to factory runs too.
 - Every text a factory role writes to GitHub starts with `[factory]` and ends
   with a `Factory-Run: <run id or url>` trailer.
 

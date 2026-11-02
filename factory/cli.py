@@ -43,7 +43,7 @@ def from_main():
     if shared.is_dir():
         return str(shared)
     root = tempfile.mkdtemp(prefix="factory-main-") + "/main"
-    for cmd in (["fetch", "origin", "main"], ["worktree", "add", "--detach", root, "origin/main"]):
+    for cmd in (["fetch", "origin", "main"], ["worktree", "add", "--detach", root, "FETCH_HEAD"]):
         subprocess.run(["git", *cmd], check=True, capture_output=True)
     return root
 
@@ -154,6 +154,9 @@ def main(argv=None):
         return nodes.main(["chart", *rest])
     if cmd == "validate" and not rest:
         return validate()
+    if cmd == "notify":
+        from notify import main as notify_main
+        return notify_main(rest)
     print(__doc__)
     return 2
 

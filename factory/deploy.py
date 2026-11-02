@@ -80,10 +80,11 @@ def flow_triggers(node: dict) -> str:
     return " or ".join(words) or "manual invocation"
 
 
-def trigger(text: str, tier: str | None, pr_author: str | None = None) -> dict:
+def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: str | None = None) -> dict:
     """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations)."""
     event, _, arg = str(text).partition(" ")
     arg = arg.replace("<tier>", tier or "")
+    arg = arg.replace("<focus>", focus or "")
     labeled = event.startswith("issues.") or event.startswith("pull_request.labeled")
     filters = {"label": arg} if labeled and arg else {}
     if pr_author and event.startswith("pull_request"):
@@ -103,11 +104,14 @@ def repository(r: dict) -> dict:
 SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no file, label, comment or review "
                  "itself. Run `factory sweep{args}` once and report its JSON output.")
 SCRIPT_ARGS = {"join": " --main", "finish": " --main --issue <issue number from the trigger payload>",
-               "reopen": " --main",
-               "recover": " --stale"}
+               "reopen": " --main", "merge": " --main",
+               "recover": " --stale",
+               "notify": " notify --issue <issue number from the trigger payload>"}
 
 
 def script_prompt(name: str) -> str:
+    if name == "notify":
+        return "Run `factory notify --issue <issue number from the trigger payload>` once and report its JSON output."
     return SCRIPT_PROMPT.format(args=SCRIPT_ARGS.get(name, ""))
 
 
@@ -188,7 +192,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     trig.append({"triggerType": "SCHEDULED", "cronExpression": scheds[str(t)[9:]]["cron"],
                                  "timezone": "UTC"})
                 elif str(t) != "manual":
-                    trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None))
+                    trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus))
             automations.append({
                 "name": f"{prefix}{aname}",
                 "triggers": trig,
@@ -223,6 +227,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
+    focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
     found = []
     for n in nodes["nodes"].values():
         found += [t.split(" ", 1)[1] for t in n.get("triggers") or [] if t.endswith(">") or t.count(" ") == 1
@@ -230,7 +235,12 @@ def labels(nodes: dict, config: dict) -> list[str]:
         found += [v for o in (n.get("outcomes") or {}).values() for e in (o or {}).get("effects") or []
                   for k, v in e.items() if k == "label"]
     for x in found:
-        out |= {x.replace("<tier>", t) for t in tiers} if "<tier>" in x else {x} if "<" not in x else set()
+        if "<tier>" in x:
+            out |= {x.replace("<tier>", t) for t in tiers}
+        elif "<focus>" in x:
+            out |= {x.replace("<focus>", f) for f in focuses}
+        elif "<" not in x:
+            out.add(x)
     return sorted(out)
 
 
