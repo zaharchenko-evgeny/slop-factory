@@ -5,8 +5,8 @@ engine: 1
 project: { name: "Slop factory" }
 
 repositories:
-  - name: offline-eval-factory
-    url: https://github.com/zaharchenko-evgeny/offline-eval-factory
+  - name: slop-factory
+    url: https://github.com/zaharchenko-evgeny/slop-factory
     default_branch: main
     role: primary
 
@@ -15,7 +15,7 @@ commit_prefix: "#{ticket} "
 
 tracker:
   adapter: github-issues
-  repository: zaharchenko-evgeny/offline-eval-factory
+  repository: zaharchenko-evgeny/slop-factory
 
 # Bots other than targets.air.bot_login whose APPROVED / CHANGES_REQUESTED reviews count in a round.
 reviews:

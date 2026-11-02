@@ -641,7 +641,8 @@
     {
       "domains": [
         "github.com",
-        "release-assets.githubusercontent.com"
+        "release-assets.githubusercontent.com",
+        "*.blob.core.windows.net"
       ],
       "name": "[Slop factory] read",
       "repository": "https://example.com/o/main",
@@ -655,7 +656,8 @@
     {
       "domains": [
         "github.com",
-        "release-assets.githubusercontent.com"
+        "release-assets.githubusercontent.com",
+        "*.blob.core.windows.net"
       ],
       "name": "[Slop factory] write",
       "repository": "https://example.com/o/main",

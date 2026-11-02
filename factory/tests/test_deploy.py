@@ -199,6 +199,8 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(a["[Slop factory] intake"]["triggerVcs"], [{"outputBehaviour": "read-only"}])
         for e in deploy.plan_air(nodes.load(), cfg.load())["environments"]:
             self.assertNotIn("GITHUB_TOKEN", e["secrets"])
+            if e["name"] in ("[Slop factory] read", "[Slop factory] write"):
+                self.assertIn("*.blob.core.windows.net", e["domains"])
         join = next(x for x in deploy.plan_air(nodes.load(), cfg.load())
                     ["automations"] if x["name"] == "[Slop factory] join")
         self.assertEqual([(x["eventType"], x["filters"].get("label")) for x in join["triggers"]],

@@ -98,9 +98,9 @@ class GitHubGateTracker:
             return "red"
         return "green" if all(c in GOOD_CI for c in done) else "pending"
 
-    def _workflow_runs(self, sha):
+    def _workflow_runs(self, sha, timeout=None):
         out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs?head_sha={sha}&per_page=100",
-                        "--jq", ".workflow_runs[]"])
+                        "--jq", ".workflow_runs[]"], **({"timeout": timeout} if timeout is not None else {}))
         latest = {}
         for r in (json.loads(x) for x in out.splitlines() if x.strip()):
             if r.get("event") == "workflow_run":  # ci-state.yml reports CI; it is not CI
@@ -111,39 +111,35 @@ class GitHubGateTracker:
                 latest[key] = r
         return latest
 
-    def _ci_failure(self, sha):
-        """Failed steps at the head, with only the last 60 lines of each step log."""
-        failures = []
-        for run in self._workflow_runs(sha).values():
-            if run.get("conclusion") not in BAD_CI:
-                continue
-            out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs/{run['id']}/jobs?per_page=100",
-                            "--jq", ".jobs[]"])
-            for line in out.splitlines():
-                if not line.strip():
+    def ci_failure(self, sha):
+        """Best-effort details for the first failed step at the head."""
+        try:
+            for run in self._workflow_runs(sha, timeout=10).values():
+                if run.get("conclusion") not in BAD_CI:
                     continue
-                job = json.loads(line)
-                steps = [step for step in job.get("steps", []) if step.get("conclusion") in BAD_CI]
-                if not steps:
-                    continue
-                logs = self.run(["api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs"])
-                for step in steps:
-                    section = []
-                    if step.get("started_at") and step.get("completed_at"):
-                        started = datetime.fromisoformat(step["started_at"].replace("Z", "+00:00"))
-                        completed = datetime.fromisoformat(step["completed_at"].replace("Z", "+00:00"))
-                        # Logs and step metadata can use different fractional precision; include
-                        # every line in the completion second.
-                        completed = completed.replace(microsecond=0) + timedelta(seconds=1)
-                        for log_line in logs.splitlines():
-                            match = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)", log_line)
-                            if match:
-                                at = datetime.fromisoformat(match[1].replace("Z", "+00:00"))
-                                if started <= at < completed:
-                                    section.append(log_line)
-                    failures.append({"job": job["name"], "step": step["name"],
-                                     "log_tail": "\n".join(section[-60:])})
-        return failures
+                out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs/{run['id']}/jobs?per_page=100",
+                                "--jq", ".jobs[]"], timeout=10)
+                for line in out.splitlines():
+                    if not line.strip():
+                        continue
+                    job = json.loads(line)
+                    steps = [step for step in job.get("steps", []) if step.get("conclusion") in BAD_CI]
+                    if not steps:
+                        continue
+                    for step in steps:
+                        failure = {"job": job["name"], "step": step["name"], "log": None}
+                        try:
+                            logs = self.run(["api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs"], timeout=10)
+                            if not logs.strip():
+                                raise RuntimeError("empty log response")
+                            failure["log"] = "\n".join(logs.splitlines()[-60:])
+                        except Exception as e:
+                            failure["error"] = " ".join(str(e).splitlines()) or type(e).__name__
+                        return failure
+        except Exception as e:
+            return {"job": None, "step": None, "log": None,
+                    "error": " ".join(str(e).splitlines()) or type(e).__name__}
+        return None
 
     def _reviews(self, pr):
         out = []
@@ -190,8 +186,15 @@ class GitHubGateTracker:
             raise
 
     def blocking(self, n):
-        """Issues whose native dependency list names `n` as a blocker."""
-        return self._list(f"issues/{n}/dependencies/blocking")
+        """Issues whose native or body fallback dependency list names `n` as a blocker."""
+        dependents = self._list(f"issues/{n}/dependencies/blocking")
+        known = {i["number"] for i in dependents}
+        for issue in self._list("issues?state=open&per_page=100"):
+            if issue["number"] != n and issue["number"] not in known and re.search(
+                    rf"(?im)^Blocked by: #{n}\s*$", issue.get("body") or ""):
+                dependents.append(issue)
+                known.add(issue["number"])
+        return dependents
 
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
@@ -253,6 +256,11 @@ class GitHubGateTracker:
         stage = max((x for x in labels if x in by_label), key=lambda x: added.get(x, -1), default=None)
         stage = by_label.get(stage, "none")
         blockers = [b for b in self._list(f"issues/{n}/dependencies/blocked_by") if b["state"] == "open"]
+        body = issue.get("body") or ""
+        for number in re.findall(r"(?im)^Blocked by: #(\d+)\s*$", body):
+            blocker = self._api(f"issues/{number}")
+            if blocker.get("state") == "open":
+                blockers.append({"number": int(number)})
         risk = "low" if self.risk_labels["low"] in labels else "high"
         required, pr = FOCUSES[risk], self._pr(n)
         f = {"stage": stage, "attrs": [x for x in labels if x not in by_label], "blockers_open": len(blockers),
@@ -263,7 +271,20 @@ class GitHubGateTracker:
              "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
              "handed_to_fix": False, "risk": risk, "behind": False,
              "issue_state": issue.get("state", "open"),
-             "title": issue.get("title", ""), "body": issue.get("body") or "", "branch": None}
+             "title": issue.get("title", ""), "body": body, "branch": None}
+        if stage == "needs-answers":
+            waiting = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["needs-answers"]]
+            comments = self._list(f"issues/{n}/comments")
+            if waiting and comments:
+                started = waiting[-1].get("created_at", "")
+                ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["ready"]]
+                setter = (ready[-1].get("actor") or {}).get("login") if ready else None
+                f["answered"] = any((c.get("created_at") or "") > started and
+                                     (c.get("user") or {}).get("type") != "Bot" and
+                                     not (c.get("user") or {}).get("login", "").endswith("[bot]") and
+                                     ((c.get("user") or {}).get("login") == setter or
+                                      self._can_write((c.get("user") or {}).get("login", "")))
+                                     for c in comments)
         if stage == "split":
             kids = self._list(f"issues/{n}/sub_issues")
             f.update(children=[{"number": k.get("number"), "state": k.get("state"), "not_planned": k.get("state") == "closed" and k.get("state_reason") == "not_planned",
@@ -293,8 +314,6 @@ class GitHubGateTracker:
                      fix_rounds=len({(r["commit_id"], r["rereview"]) for r in reviews
                                      if r["agent"] and r["verdict"] == "changes"
                                      and (r.get("submitted_at") or "") >= since}))  # same-head dispute rereviews count as a new round
-            if ci == "red":
-                f["ci_failure"] = self._ci_failure(head)
         return f
 
     def stale_facts(self, n):
@@ -516,12 +535,14 @@ class GitHubGateTracker:
         open_issues = {i["title"]: i for i in reversed(self._list("issues?state=open&per_page=100"))
                        if "pull_request" not in i and mark in (i.get("body") or "")}
         risk = [x for x in self._labels(n) if x.startswith("risk:")]  # a slice keeps its parent's risk path
-        wrote, prev = False, None  # prev: the id of the slice before, which blocks the next
+        wrote, prev, prev_number = False, None, None  # prior slice blocks the next
+        parent_body = self._api(f"issues/{n}").get("body") or ""
         for c in children:
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
             new = open_issues.get(c["title"])
             if c["title"] in subs and new is None:  # not created by this ticket: leave it alone
                 prev = subs[c["title"]].get("id")
+                prev_number = subs[c["title"]].get("number")
                 continue
             want = f"{c.get('body', '')}\n\n{mark}"
             if new is None:
@@ -544,12 +565,32 @@ class GitHubGateTracker:
                 wrote = wrote or bool(stale or missing)
                 chained = bool(prev) and prev in {b["id"] for b in self._list(f"issues/{new['number']}/dependencies/blocked_by")}
             if prev and not chained:
+                try:
+                    self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/dependencies/blocked_by", "-F", f"issue_id={prev}"])
+                except RuntimeError as e:
+                    if "403" not in str(e) and "Resource not accessible" not in str(e):
+                        raise
+                    want = self._blocked_body(want, prev_number) if prev_number else want
+                    self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{new['number']}", "-f", f"body={want}"])
                 wrote = True
-                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/dependencies/blocked_by", "-F", f"issue_id={prev}"])
             if c["title"] not in subs:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
             if new["id"] not in blockers:
-                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={new['id']}"])
+                try:
+                    self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={new['id']}"])
+                except RuntimeError as e:
+                    if "403" not in str(e) and "Resource not accessible" not in str(e):
+                        raise
+                    parent_body = self._blocked_body(parent_body, new["number"])
+                    self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{n}", "-f",
+                              f"body={parent_body}"])
+                wrote = True
             wrote = wrote or c["title"] not in subs or new["id"] not in blockers
             prev = new["id"]
+            prev_number = new["number"]
         return wrote
+
+    @staticmethod
+    def _blocked_body(body, number):
+        line = f"Blocked by: #{number}"
+        return body if re.search(rf"(?m)^{re.escape(line)}$", body) else f"{line}\n\n{body}"

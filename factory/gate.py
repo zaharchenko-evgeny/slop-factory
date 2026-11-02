@@ -229,6 +229,10 @@ def check(name, event, tracker, nodes, config):
     if "id" not in event:
         raise Bad("malformed event: needs `id`")
     facts = tracker.facts(event["ticket"])
+    if name == "fix" and facts.get("ci") == "red" and facts.get("head") and hasattr(tracker, "ci_failure"):
+        failure = tracker.ci_failure(facts["head"])
+        if failure:
+            facts["ci_failure"] = failure
     why = matches(node, facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     facts = {k: v for k, v in facts.items() if k != "body"}
@@ -403,7 +407,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     return GO, {"applied": True, "written": [e["kind"] for e in effects + after if tracker.apply(e)]}
 
 
-SWEEP_STAGES = ("approved", "split", "in-review")
+SWEEP_STAGES = ("approved", "split", "in-review", "needs-answers")
 COMMANDS = ("factory:implement-", "factory:fix-", "factory:update-")
 
 
@@ -515,6 +519,8 @@ def retro_payload(facts):
 def sweep_plan(facts, auto_merge=None):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
+    if stage == "needs-answers" and facts.get("answered"):
+        return "finish", "answered", {}
     if stage == "approved" and facts.get("pr_state") == "merged":
         return "finish", "merged", retro_payload(facts)
     if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):

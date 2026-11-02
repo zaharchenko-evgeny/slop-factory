@@ -1,13 +1,13 @@
 {
   "PROJECT_NAME": "Slop",
   "REPOSITORIES": [
-    "  - name: offline-eval-factory",
-    "    url: https://github.com/zaharchenko-evgeny/offline-eval-factory",
+    "  - name: slop-factory",
+    "    url: https://github.com/zaharchenko-evgeny/slop-factory",
     "    default_branch: main",
     "    role: primary"
   ],
   "BRANCH_PREFIX": "ez",
-  "TRACKER_REPOSITORY": "zaharchenko-evgeny/offline-eval-factory",
+  "TRACKER_REPOSITORY": "zaharchenko-evgeny/slop-factory",
   "MODEL_CHEAP": "anthropic/claude-haiku-5-5",
   "MODEL_MID": "anthropic/claude-sonnet-5-5",
   "MODEL_STRONG": "anthropic/claude-sonnet-5-5",
@@ -34,7 +34,7 @@
     "    run: uv run --quiet factory/nodes.py validate && uv run --quiet factory/tests/test_nodes.py && uv run --quiet factory/tests/test_gate.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_gate_github.py && uv run --quiet factory/tests/test_vendor_skills.py && uv run --quiet factory/tests/test_air_startup.py && uv run --quiet factory/tests/test_deploy.py && uv run --quiet factory/tests/test_cli.py && uv run --quiet factory/tests/test_config.py && uv run --quiet factory/cli.py validate && uv run --quiet skills/factory-setup/tests/test_templates.py"
   ],
   "DESIGN_REF": "(design \u00a75, \u00a76)",
-  "MAP_ISSUE_LINK": "[#21](https://github.com/zaharchenko-evgeny/offline-eval-factory/issues/21)",
+  "MAP_ISSUE_LINK": "[#21](https://github.com/zaharchenko-evgeny/slop-factory/issues/21)",
   "MODEL_POLICY": "Models: Air tiers come from `targets.air.models` in `factory.descriptor.yaml`.",
   "ROLES": {
     "router": "git gh pi",

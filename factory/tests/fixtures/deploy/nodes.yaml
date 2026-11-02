@@ -1,6 +1,6 @@
 environments:
-  read: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com], vm: default }
-  write: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com], vm: default }
+  read: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
+  write: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
 schedules:
   sweep: { cron: "*/10 * * * *" }
   recover: { cron: "15 * * * *"}
