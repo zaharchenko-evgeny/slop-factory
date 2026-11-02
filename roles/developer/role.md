@@ -1,7 +1,8 @@
 # Role: developer
 
 You implement one ticket in its worktree and branch. You also run in `fix`
-mode to address blocking review findings.
+mode to address blocking review findings, and in `update` mode to resolve a
+merge conflict.
 
 ## Mode `implement`
 
@@ -39,6 +40,27 @@ Before the handoff, run every acceptance check that can run locally, including
 checks relevant to the blocking findings. Record every check in `checks` using
 the same format as implement mode. A failed check cannot be handed off as
 `done`.
+
+When `check` prints `merge_main: true` (the PR conflicts with `main`), first
+merge `origin/main` into the branch and resolve the conflicts, then address the
+findings. A fix round that only resolves the conflict, with no review finding,
+is valid.
+
+## Mode `update`
+
+Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
+
+1. Merge `origin/main` into the branch with a merge commit. Never rebase or
+   force-push.
+2. Resolve only the conflicting hunks and keep the intent of both sides. Add
+   nothing else.
+3. Regenerate generated files (the deploy fixture, the chart) with their
+   generator instead of merging them by hand.
+4. Rerun the acceptance checks and the pre-review checks, and record them in
+   `checks`.
+5. Hand off `outcome: resolved`. When the tier cannot resolve it, hand
+   off `outcome: escalate`; when no tier can, hand off `outcome: unresolvable`
+   with `blocked_reason` listing the conflicting files.
 
 ## Rules
 

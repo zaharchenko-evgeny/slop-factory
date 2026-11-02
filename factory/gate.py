@@ -235,6 +235,7 @@ def check(name, event, tracker, nodes, config):
         "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
+        "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and name in ("fix", "update")),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
     }
 
@@ -440,6 +441,8 @@ def sweep_plan(facts):
     stage = facts["stage"]
     if stage == "approved" and facts.get("pr_state") == "merged":
         return "finish", "merged", retro_payload(facts)
+    if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
+        return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
     if stage == "split" and (kids := facts.get("children")):
         if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
             what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)

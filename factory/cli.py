@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 # node must import them from main's worktree, because importing runs module-level code with the node's credentials.
 config = deploy = gate = nodes = None
 # Mirrors deploy.PR_TRIGGERED_NODES (a test keeps them equal); it cannot be read from deploy before the engine is chosen.
-PR_NODES = {"review", "join", "fix", "finish"}
+PR_NODES = {"review", "join", "fix", "update", "finish"}
 
 STATE = Path(".factory/begin.json")
 

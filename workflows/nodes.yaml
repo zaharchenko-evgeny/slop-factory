@@ -113,8 +113,7 @@ nodes:
       done: { effects: [{ unlabel: "factory:fix-*", "on": pr }, { request-reviewers: changes }, { stage: in-review }] }
       blocked: { from: [changes-requested], effects: [{ comment: reason }, { stage: blocked }] }
   update:
-    enabled: false
-    ticket: 158
+    pilot: true
     tiers: [cheap, mid, strong]
     ci-independent: true
     triggers: ["pull_request.labeled factory:update-<tier>"]
@@ -160,7 +159,7 @@ nodes:
       answered: { enabled: false, ticket: 157, from: [needs-answers], effects: [{ stage: ready }] }
       children-done: { from: [split], effects: [{ stage: done }] }
       child-blocked: { from: [split], effects: [{ comment: reason }, { stage: blocked }] }
-      conflict: { enabled: false, ticket: 158, from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
+      conflict: { from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [approved], effects: [{ comment: retro }, { stage: done }] }
   recover:
     pilot: true
