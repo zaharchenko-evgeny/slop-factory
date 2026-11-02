@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers"}
+EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red"}
 OUTPUTS = {"read-only", "create-pr", "push-to-source", "push-to-new-branch", "as-instructed"}
 WHEN_KEYS = {"stage", "blockers", "focus", "round", "fix-rounds", "ci", "actor", "always", "due", "pr-state"}
 NO_ROLE = {"script", "human"}

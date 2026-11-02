@@ -483,11 +483,12 @@ class EffectsTest(unittest.TestCase):
         self.assertNotIn("labels[]=factory:ready", gh.writes[0])  # ready comes after the links
 
     def test_fix_rounds_grow_per_reviewed_head(self):
-        C = M.replace("approve", "changes")
+        C = "**B1** x.py:1 — bug\n\n" + M.replace("approve", "changes")
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, C), review(BOT, C)])).facts(7)["fix_rounds"], 1)  # one head
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, C, commit="h0"), review(BOT, C)])).facts(7)["fix_rounds"], 2)
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)["fix_rounds"], 0)
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, C, commit="old")])).facts(7)["fix_rounds"], 1)
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, M.replace("approve", "changes"))])).facts(7)["fix_rounds"], 0)  # no blocking finding
         gh = FakeGh(reviews=[review(BOT, C, commit="old")])
         tr(gh).apply(eff("review", "approve-at-head", focus="full"))
         self.assertIn("round=2", gh.writes[0][-1])
@@ -563,7 +564,7 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(gh.writes, [])
 
 
-C = M.replace("approve", "changes")
+C = "**B1** x.py:1 — bug\n\n" + M.replace("approve", "changes")
 HUMAN = [None, "APPROVED", "CHANGES_REQUESTED"]
 
 
@@ -732,7 +733,7 @@ class JoinTest(unittest.TestCase):
         self.assertEqual(gate.check("fix", {"id": "e", "ticket": 7}, tr(gh), nodes.load(), CONFIG)[0], gate.GO)
 
     def test_dispute_rereview_joins_after_fix_handoff(self):
-        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
+        old = review(BOT, "**B1** x.py:1 — bug\n\n<!-- factory:review focus=full round=1 verdict=changes -->")
         gh = FakeGh(labels=["factory:in-review", "risk:low", "factory:fix-mid"], reviews=[old])
         gh.fix_events = ["2026-01-02T05:00:00Z"]
         rereview = review(BOT, "<!-- factory:review focus=full round=1 verdict=approve rereview=1 -->",
@@ -744,8 +745,8 @@ class JoinTest(unittest.TestCase):
         self.assertIn("factory:approved", gh.labels)
 
     def test_disputed_finding_starts_a_counted_fix_round_and_rearms_label(self):
-        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
-        latest = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes rereview=1 -->",
+        old = review(BOT, "**B1** x.py:1 — bug\n\n<!-- factory:review focus=full round=1 verdict=changes -->")
+        latest = review(BOT, "**B1** x.py:1 — bug\n\n<!-- factory:review focus=full round=1 verdict=changes rereview=1 -->",
                        at="2026-01-02T06:00:00Z")
         gh = FakeGh(labels=["factory:in-review", "risk:low", "factory:fix-mid"], reviews=[old, latest])
         gh.fix_events = ["2026-01-02T05:00:00Z"]
@@ -757,7 +758,7 @@ class JoinTest(unittest.TestCase):
         self.assertTrue(any("--remove-label" in call and "factory:fix-mid" in call for call in gh.writes))
 
     def test_unauthenticated_rereview_marker_does_not_reopen_join(self):
-        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
+        old = review(BOT, "**B1** x.py:1 — bug\n\n<!-- factory:review focus=full round=1 verdict=changes -->")
         forged = review("mallory", "<!-- factory:review focus=full round=1 verdict=approve rereview=1 -->")
         gh = FakeGh(labels=["factory:in-review", "risk:low"], reviews=[old, forged])
         gh.fix_events = ["2026-01-02T05:00:00Z"]
