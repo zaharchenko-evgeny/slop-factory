@@ -10,7 +10,7 @@ import json
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -90,6 +90,15 @@ class GitHubGateTracker:
     def _ci(self, sha):
         """CI at `sha` from the Actions workflow runs (the Air GitHub App has Actions: read, not Checks: read, so
         check-runs answers 403 in a run). Per workflow the latest run counts, so a rerun replaces a failure."""
+        latest = self._workflow_runs(sha)
+        if not latest:
+            return "none"
+        done = [r.get("conclusion") if r.get("status") == "completed" else None for r in latest.values()]
+        if any(c in BAD_CI for c in done):
+            return "red"
+        return "green" if all(c in GOOD_CI for c in done) else "pending"
+
+    def _workflow_runs(self, sha):
         out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs?head_sha={sha}&per_page=100",
                         "--jq", ".workflow_runs[]"])
         latest = {}
@@ -100,12 +109,41 @@ class GitHubGateTracker:
             if key not in latest or (r.get("run_number"), r.get("run_attempt", 1)) > (
                     latest[key].get("run_number"), latest[key].get("run_attempt", 1)):
                 latest[key] = r
-        if not latest:
-            return "none"
-        done = [r.get("conclusion") if r.get("status") == "completed" else None for r in latest.values()]
-        if any(c in BAD_CI for c in done):
-            return "red"
-        return "green" if all(c in GOOD_CI for c in done) else "pending"
+        return latest
+
+    def _ci_failure(self, sha):
+        """Failed steps at the head, with only the last 60 lines of each step log."""
+        failures = []
+        for run in self._workflow_runs(sha).values():
+            if run.get("conclusion") not in BAD_CI:
+                continue
+            out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs/{run['id']}/jobs?per_page=100",
+                            "--jq", ".jobs[]"])
+            for line in out.splitlines():
+                if not line.strip():
+                    continue
+                job = json.loads(line)
+                steps = [step for step in job.get("steps", []) if step.get("conclusion") in BAD_CI]
+                if not steps:
+                    continue
+                logs = self.run(["api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs"])
+                for step in steps:
+                    section = []
+                    if step.get("started_at") and step.get("completed_at"):
+                        started = datetime.fromisoformat(step["started_at"].replace("Z", "+00:00"))
+                        completed = datetime.fromisoformat(step["completed_at"].replace("Z", "+00:00"))
+                        # Logs and step metadata can use different fractional precision; include
+                        # every line in the completion second.
+                        completed = completed.replace(microsecond=0) + timedelta(seconds=1)
+                        for log_line in logs.splitlines():
+                            match = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)", log_line)
+                            if match:
+                                at = datetime.fromisoformat(match[1].replace("Z", "+00:00"))
+                                if started <= at < completed:
+                                    section.append(log_line)
+                    failures.append({"job": job["name"], "step": step["name"],
+                                     "log_tail": "\n".join(section[-60:])})
+        return failures
 
     def _reviews(self, pr):
         out = []
@@ -255,26 +293,38 @@ class GitHubGateTracker:
                      fix_rounds=len({(r["commit_id"], r["rereview"]) for r in reviews
                                      if r["agent"] and r["verdict"] == "changes"
                                      and (r.get("submitted_at") or "") >= since}))  # same-head dispute rereviews count as a new round
+            if ci == "red":
+                f["ci_failure"] = self._ci_failure(head)
         return f
 
     def stale_facts(self, n):
         """facts plus what the stale sweep needs: `since` (last label or commit event, ISO), the command label
         (`factory:implement-*` on the issue, `factory:fix-*` on the PR) and when it was added, the head commit
         date, the PR's CI label, and the `[factory] recover:` comments written since the stage began."""
-        f, labeled = self.facts(n), {}
+        f, labeled, events = self.facts(n), {}, []
         pr = f["pr"]
         for t in [n] + ([pr] if pr else []):
             for e in self._list(f"issues/{t}/events"):
+                events.append((t, e))
                 if e.get("event") == "labeled":
                     labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
         pr_labels = self._labels(pr) if pr else []
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
-        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-"))), None)
+        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-", "factory:update-"))), None)
+        command_labels = ("factory:ready", "factory:triage", "factory:implement-", "factory:fix-",
+                          "factory:update-", "factory:ci-green")
+        active_commands = {(t, x) for t, x in have if x == "factory:ready" or x == "factory:triage"
+                           or x == "factory:ci-green" or x.startswith(command_labels[2:5])}
+        command_events = [e for t, e in events if e.get("event") == "labeled"
+                          and (t, e.get("label", {}).get("name")) in active_commands]
         commit_at = self._api(f"commits/{f['head']}")["commit"]["committer"]["date"] if f["head"] else None
+        latest_event = max([e.get("created_at", "") for _, e in events] + [commit_at or ""])
+        latest_command = max((e["created_at"] for e in command_events), default="")
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
         comments = [c["body"] for c in self._list(f"issues/{n}/comments") if c["body"].startswith("[factory] recover:")
                     and c["created_at"] >= stage_at]
         return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1],
+                "command_pending": bool(latest_command and latest_command == latest_event),
                 "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
                 "ci_label": next((x[11:] for x in pr_labels if x in ("factory:ci-green", "factory:ci-red")
                                  and x[11:] == f.get("ci")), None)}  # a label left over from an earlier head is not this head's CI

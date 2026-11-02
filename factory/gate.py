@@ -615,7 +615,7 @@ def recovered(facts, stage):
     return sum(f"stage={stage} re-fired" in c for c in facts.get("recover_comments", []))
 
 
-def stale_plan(facts, now, hours):
+def stale_plan(facts, now, hours, command_minutes=30):
     """(kind, label, on, text) when the ticket's waking event is visibly missing after `hours` in its stage:
     kind `refire` (remove, then add `label` on `on`), `comment` (no label to re-fire), `finish` (the PR merged)
     or `conflict` (an approved PR conflicts: the sweep's update-cheap),
@@ -623,7 +623,8 @@ def stale_plan(facts, now, hours):
     stage, since = facts["stage"], facts.get("since")
     if facts.get("issue_state", "open") != "open" or not since:
         return None
-    if now - datetime.fromisoformat(since.replace("Z", "+00:00")) <= timedelta(hours=hours):
+    age = timedelta(minutes=command_minutes) if facts.get("command_pending") else timedelta(hours=hours)
+    if now - datetime.fromisoformat(since.replace("Z", "+00:00")) <= age:
         return None
     cmd, cmd_at, commit_at = facts.get("command"), facts.get("command_at") or "", facts.get("commit_at") or ""
     if stage == "ready" and not facts.get("blockers_open"):
@@ -647,14 +648,14 @@ def stale_plan(facts, now, hours):
     return None
 
 
-def sweep_stale(tracker, nodes, hours, now=None, dry_run=False):
+def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=30):
     """Recover tickets whose Air run died: one re-fire per ticket and stage, a second stale finding blocks it.
     Returns (results, failed)."""
     now, results, failed = now or datetime.now(timezone.utc), [], False
     for n in tracker.sweep_tickets(STALE_STAGES):
         try:
             facts = tracker.stale_facts(n)
-            plan = stale_plan(facts, now, hours)
+            plan = stale_plan(facts, now, hours, command_minutes)
             if plan is None:
                 continue
             kind, label, on, why = plan
@@ -747,7 +748,8 @@ def main(argv):
             out = {"dry_run": a.dry_run, "sweep": results}
             if a.stale:
                 out["stale"], stale_failed = sweep_stale(tracker, nodes, config["limits"].get("stale_hours", 2),
-                                                         dry_run=a.dry_run)
+                                                         dry_run=a.dry_run,
+                                                         command_minutes=config["limits"].get("stale_command_minutes", 30))
                 failed = failed or stale_failed
             print(json.dumps(out))
             return FAILED if failed else GO
