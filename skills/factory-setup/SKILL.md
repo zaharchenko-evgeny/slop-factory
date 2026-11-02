@@ -75,6 +75,7 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | `REPOSITORIES` | `repositories:` entries (name, url, default_branch, role), indented two spaces | `factory.descriptor.yaml` |
 | `BRANCH_PREFIX` | Branch prefix before `/{ticket}-{slug}` | `factory.descriptor.yaml`, developer `role.md` |
 | `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.descriptor.yaml` |
+| `NOTIFY_GITHUB_USER` | GitHub login assigned to blocked or needs-answers tickets | `factory.descriptor.yaml` |
 | `AIR_TARGET` | Lines of the `targets.air` block (Air model ids per tier), indented two spaces; empty when the project has no Air target | `factory.descriptor.yaml` |
 | `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG` | Developer and router model tiers | `factory.descriptor.yaml` |
 | `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Reviewer models (different family from the developer) | `factory.descriptor.yaml` |

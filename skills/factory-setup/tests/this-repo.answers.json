@@ -8,6 +8,7 @@
   ],
   "BRANCH_PREFIX": "ez",
   "TRACKER_REPOSITORY": "zaharchenko-evgeny/slop-factory",
+  "NOTIFY_GITHUB_USER": "zaharchenko-evgeny",
   "MODEL_CHEAP": "anthropic/claude-haiku-5-5",
   "MODEL_MID": "anthropic/claude-sonnet-5-5",
   "MODEL_STRONG": "anthropic/claude-sonnet-5-5",

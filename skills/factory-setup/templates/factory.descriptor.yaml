@@ -14,6 +14,9 @@ tracker:
   adapter: github-issues
   repository: {{TRACKER_REPOSITORY}}
 
+notify:
+  github_user: {{NOTIFY_GITHUB_USER}}
+
 # Bots other than targets.air.bot_login whose APPROVED / CHANGES_REQUESTED reviews count in a round.
 reviews:
   trusted_bots: []
