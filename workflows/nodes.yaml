@@ -6,10 +6,25 @@
 # Nodes marked `enabled: false` need a later slice. `pilot: true` = delivered by the pilot.
 environments:
   # `secrets` are names only; `domains` the network allow-list; `vm` the machine size (deploy.py plan).
-  default:
+  # `FACTORY_ENV` (the key) tells .air/cloud/startup.sh which skills and tools to install.
+  # `read`: intake, review, join, finish. `write`: implement, fix, update. `ops`: the routines.
+  read:
     repository: primary
     startup: .air/cloud/startup.sh
     secrets: []   # gh is jetbrains-air[bot] through the platform's GH_TOKEN
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org]
+    vm: default
+  write:
+    repository: primary
+    startup: .air/cloud/startup.sh
+    secrets: []
+    # registry.npmjs.org: `npx agnix` of the acceptance checks
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org, registry.npmjs.org]
+    vm: default
+  ops:
+    repository: primary
+    startup: .air/cloud/startup.sh
+    secrets: []
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org]
     vm: default
 adapters:
@@ -27,6 +42,7 @@ nodes:
       # A person resumes a ticket from every stage but done; the gate reads the stage as the latest stage label added.
       ready: { from: [draft, in-dev, in-review, changes-requested, approved, blocked, needs-answers, split, not-actionable, investigating], effects: [{ stage: ready }] }
   intake:
+    env: read
     pilot: true
     triggers: ["issues.labeled factory:ready"]
     when: { stage: ready, blockers: closed }
@@ -40,6 +56,7 @@ nodes:
       not-actionable: { effects: [{ comment: reason }, { stage: not-actionable }] }
       bug: { enabled: false, ticket: 161, effects: [{ stage: investigating }] }   # investigate is not built yet
   investigate:
+    env: write
     enabled: false
     ticket: 161
     triggers: ["issues.labeled factory:investigating"]
@@ -52,6 +69,7 @@ nodes:
       intended: { effects: [{ comment: reason }, { stage: not-actionable }] }
       cannot-reproduce: { effects: [{ comment: questions }, { stage: needs-answers }] }
   implement:
+    env: write
     pilot: true
     tiers: [cheap, mid, strong]
     triggers: ["issues.labeled factory:implement-<tier>"]
@@ -64,6 +82,7 @@ nodes:
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
       failed: { effects: [{ comment: reason }, { stage: blocked }] }   # one stop stage: the reason is the comment
   adopt:
+    env: read
     enabled: false
     ticket: 160
     ci-independent: true
@@ -75,6 +94,7 @@ nodes:
     outcomes:
       adopted: { from: [none], effects: [{ set-field: risk }, { stage: in-review }] }
   review:
+    env: read
     pilot: true
     focuses: [full, behaviour, structure-security]
     # CI labels the PR when it finishes (.github/workflows/ci-state.yml): reviewers only read green code.
@@ -87,6 +107,7 @@ nodes:
       approve: { effects: [{ review: approve-at-head }] }
       changes: { effects: [{ review: request-changes-at-head }] }
   join:
+    env: read
     pilot: true
     ci-independent: true
     # A review completes a round; red CI (factory:ci-red) is a fix round with no review.
@@ -100,6 +121,7 @@ nodes:
       # A handled change request whose author has not decided again: ask them again, move nothing.
       waiting: { from: [in-review], effects: [{ join: all-approve }] }
   fix:
+    env: write
     pilot: true
     tiers: [cheap, mid, strong]
     ci-independent: true
@@ -113,6 +135,7 @@ nodes:
       done: { effects: [{ unlabel: "factory:fix-*", "on": pr }, { request-reviewers: changes }, { stage: in-review }] }
       blocked: { from: [changes-requested], effects: [{ comment: reason }, { stage: blocked }] }
   update:
+    env: write
     pilot: true
     tiers: [cheap, mid, strong]
     ci-independent: true
@@ -125,6 +148,7 @@ nodes:
       escalate: { effects: [{ unlabel: "factory:update-*", "on": pr }, { label: "factory:update-<next tier>", "on": pr }, { stage: changes-requested }] }
       unresolvable: { effects: [{ comment: reason }, { stage: blocked }] }
   reopen:
+    env: read
     pilot: true
     ci-independent: true
     triggers: ["pull_request.synchronize", "pull_request.labeled factory:ci-red"]
@@ -134,6 +158,7 @@ nodes:
     outcomes:
       reopened: { from: [approved], effects: [{ stage: in-review }] }
   merge:
+    env: read
     enabled: false
     ticket: 159
     triggers: ["pull_request.labeled factory:merge"]
@@ -145,6 +170,7 @@ nodes:
       update-or-hold: { from: [approved], effects: [{ comment: reason }, { stage: approved }] }
       fix: { from: [approved], effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
   finish:
+    env: read
     pilot: true
     ci-independent: true   # runs after the merge
     # A closed or blocked child lets the sweep check its split parent.
@@ -161,6 +187,7 @@ nodes:
       conflict: { from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [approved], effects: [{ comment: retro }, { stage: done }] }
   recover:
+    env: read
     pilot: true
     # Safety net for an Air run that died silently: re-fires the label that woke it (limits.stale_hours).
     triggers: ["schedule recover"]
@@ -173,6 +200,7 @@ nodes:
       # The sweep writes these itself: one re-fire per ticket and stage, then blocked.
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
   routines:
+    env: ops
     enabled: false
     ticket: 162
     triggers: ["schedule routines"]

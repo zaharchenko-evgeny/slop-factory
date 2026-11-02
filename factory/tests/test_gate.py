@@ -5,7 +5,9 @@
 # ///
 """Tests for factory/gate.py on both fakes. Run: uv run factory/tests/test_gate.py"""
 import copy
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
+from io import StringIO
 import json
 import os
 import sys
@@ -40,7 +42,46 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
-    pass
+    def test_verdict_approve_and_approved_both_approve(self):
+        for verdict in ("approve", "approved"):
+            with self.subTest(verdict=verdict):
+                self.assertEqual(gate.outcome_of({"verdict": verdict}), "approve")
+        for verdict in ("changes", "changes-requested"):
+            with self.subTest(verdict=verdict):
+                self.assertEqual(gate.outcome_of({"verdict": verdict}), "changes")
+
+    def test_unknown_verdict_fails_without_writing(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            event = root / "event.json"
+            handoff = root / "handoff.json"
+            tracker = root / "tracker.json"
+            event.write_text(json.dumps({"id": "e", "ticket": "7"}))
+            original = json.dumps({"7": {"stage": "in-review"}})
+            tracker.write_text(original)
+            for verdict in ("maybe", "", None, ["approve"], {"value": "approve"}):
+                with self.subTest(verdict=verdict):
+                    handoff.write_text(json.dumps({"ticket": "7", "verdict": verdict, "findings": []}))
+                    output = StringIO()
+                    with redirect_stdout(output):
+                        result = gate.main(["apply", "--node", "review", "--event", str(event),
+                                            "--handoff", str(handoff), "--tracker", f"memory:{tracker}"])
+                    self.assertEqual(result, gate.BAD)
+                    self.assertIn(repr(verdict), output.getvalue())
+                    self.assertEqual(tracker.read_text(), original)
+
+    def test_changes_without_blocking_finding_rejected(self):
+        tr = MemoryTracker({"7": {"stage": "in-review"}})
+        with self.assertRaisesRegex(gate.Bad, "requires a blocking finding"):
+            gate.apply("review", "changes", {"ticket": "7", "findings": []}, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "in-review")
+
+    def test_approve_with_blocking_finding_rejected(self):
+        tr = MemoryTracker({"7": {"stage": "in-review"}})
+        finding = {"severity": "blocking"}
+        with self.assertRaisesRegex(gate.Bad, "cannot include a blocking finding"):
+            gate.apply("review", "approve", {"ticket": "7", "findings": [finding]}, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "in-review")
 
 
 def tests_for(cls, tid):

@@ -92,8 +92,8 @@ def validate(nodes, config):
         for f in n.get("focuses") or []:
             if f not in (roles.get("reviewer", {}).get("modes") or {}):
                 errs.append(f"unknown-role: {name}: reviewer focus {f}")
-        if n.get("environment", "default") not in envs:
-            errs.append(f"unknown-environment: {name}: {n.get('environment')}")
+        if role != "human" and n.get("env") not in envs:
+            errs.append(f"unknown-environment: {name}: {n.get('env')}")
         if n.get("output", "read-only") not in OUTPUTS:
             errs.append(f"bad-output: {name}: {n.get('output')}")
         for oname, o in n["outcomes"].items():
