@@ -38,6 +38,7 @@ class FakeGh:
         self.labels, self.reviews, self.comments = list(labels), list(reviews), list(comments)
         self.checks, self.sub, self.writes, self.merged = list(checks), list(sub), [], False
         self.blocked = [{"state": "open", "id": 1}, {"state": "closed", "id": 2}]
+        self.fail_blocked_by = False
         self.open_issues, self.state, self.sub_state = [], "open", ["open"] * 9
 
     def __call__(self, args):
@@ -87,8 +88,10 @@ class FakeGh:
             return json.dumps({"labels": [{"name": x} for x in self.labels], "state": self.state})
         if a.endswith("issues/7/dependencies/blocking"):
             return "\n".join(json.dumps(i) for i in getattr(self, "blocking_issues", []))
-        if a.endswith("issues/7/dependencies/blocked_by"):
+        if a.endswith("issues/7/dependencies/blocked_by") and "POST" not in a:
             return "\n".join(json.dumps(b) for b in self.blocked)
+        if a.endswith("issues/12"):
+            return json.dumps({"number": 12, "state": getattr(self, "blocker_state", "open"), "labels": []})
         if a.endswith("issues/7/comments"):
             return "\n".join(json.dumps({"body": c}) for c in self.comments)
         if a.endswith("issues?state=open&per_page=100"):
@@ -99,6 +102,8 @@ class FakeGh:
                                          "labels": [{"name": x} for x in ls]})
                              for i, (t, st, r, ls) in enumerate(zip(self.sub, self.sub_state, reasons, labels)))
         self.writes.append(args)
+        if self.fail_blocked_by and "/dependencies/blocked_by" in a:
+            raise RuntimeError("HTTP 403: Resource not accessible by integration")
         if args[1] == "close":
             self.state = "closed"
         if args[1] == "edit":
@@ -265,6 +270,24 @@ class EffectsTest(unittest.TestCase):
             self.assertIn("labels[]=risk:high", w)
         chain = [w for w in gh.writes if "/dependencies/blocked_by" in " ".join(w) and "issues/999/" in " ".join(w)]
         self.assertEqual(len(chain), 1)  # B (the second 999) is blocked by A
+
+    def test_create_children_falls_back_to_blocked_by_line(self):
+        gh = FakeGh(labels=("factory:split", "risk:low"))
+        gh.blocked, gh.fail_blocked_by = [], True
+        tr(gh).apply(eff("create-issues", [{"title": "A", "body": "scope A"}]))
+        patch = next(w for w in gh.writes if "PATCH" in w and "issues/999" in " ".join(w))
+        self.assertIn("body=Blocked by: #7\n\nscope A", " ".join(patch))
+
+    def test_blocked_by_line_counts_as_open_blocker(self):
+        gh = FakeGh(labels=("factory:ready", "risk:low"))
+        gh.blocked, gh.issue_body = [], "Blocked by: #12\n\nChild"
+        original = gh.__call__
+        def run(args):
+            a = next((x for x in args if x.startswith("repos/")), "")
+            if a.endswith("issues/7"):
+                return json.dumps({"labels": [{"name": x} for x in gh.labels], "state": "open", "body": gh.issue_body})
+            return original(args)
+        self.assertEqual(tr(run).facts(7)["blockers_open"], 1)
 
     def test_create_issues_retry_converges(self):
         gh = FakeGh()

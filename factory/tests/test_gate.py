@@ -40,7 +40,11 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
-    pass
+    def test_writer_answer_resumes_needs_answers(self):
+        self.assertEqual(gate.sweep_plan({"stage": "needs-answers", "answered": True}), ("finish", "answered", {}))
+
+    def test_bot_comment_does_not_resume(self):
+        self.assertIsNone(gate.sweep_plan({"stage": "needs-answers", "answered": False}))
 
 
 def tests_for(cls, tid):
