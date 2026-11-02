@@ -44,6 +44,10 @@ class FakeGh:
             self.issues.pop(int(args[2]))
         if args[:2] == ["issue", "list"]:
             return json.dumps([{"number": n, "title": t} for n, t in self.open_tickets])
+        if args[0] == "api" and "/actions/runs" in args[-1]:
+            return json.dumps({"workflow_runs": [{"id": 7}]})
+        if args[:2] == ["run", "view"]:
+            return "log line"
         if args[0] == "api" and args[-1].endswith("/commits/main"):
             return json.dumps({"sha": "b" * 40, "parents": [{"sha": "a" * 40}]})
         if args[0] == "api" and "/issues/" in args[-1] and not args[-1].endswith("timeline"):
@@ -82,6 +86,15 @@ class DoctorTest(unittest.TestCase):
             run(gh)
             self.assertEqual((gh.issues, gh.prs), ({}, {}))
             self.assertTrue(any(c[:2] == ["pr", "close"] and "--delete-branch" in c for c in gh.calls))
+
+    def test_published_text_has_trailer_and_run_log_is_fetched(self):
+        gh = FakeGh()
+        run(gh, run_id="run-9")
+        bodies = [c[c.index("--body") + 1] for c in gh.calls if "--body" in c]
+        self.assertTrue(bodies and all(b.endswith("Factory-Run: run-9") for b in bodies))
+        self.assertIn(["run", "view", "7", "-R", REPO, "--log"], gh.calls)
+        got = run(FakeGh(deny=("run view",)))
+        self.assertEqual(got["read:actions-run-logs"]["result"], "denied")
 
 
 if __name__ == "__main__":

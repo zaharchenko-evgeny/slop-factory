@@ -107,7 +107,7 @@ SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no f
 SCRIPT_ARGS = {"join": " --main", "start": " --main", "finish": " --main --issue <issue number from the trigger payload>",
                "reopen": " --main", "merge": " --main",
                "recover": " --stale",
-               "doctor": " doctor", "doctor-write": " doctor",
+               "doctor": " doctor", "doctor-write": " doctor", "doctor-ops": " doctor",
                "notify": " notify --issue <issue number from the trigger payload>"}
 
 

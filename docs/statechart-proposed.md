@@ -35,6 +35,7 @@ flowchart LR
     N_recover["<b>recover</b><br/>on: cron 0 6,18 * * *<br/>script"]:::node
     N_doctor["<b>doctor</b><br/>on: cron 0 5 * * *<br/>script"]:::node
     N_doctor_write["<b>doctor-write</b><br/>on: cron 0 5 * * *<br/>script"]:::node
+    N_doctor_ops["<b>doctor-ops</b><br/>on: cron 0 5 * * *<br/>script"]:::node
     N_retro["<b>retro</b><br/>on: cron 0 2 * * *<br/>retro · review tiers"]:::node
     N_distill["<b>distill</b><br/>on: cron 0 3 * * 1<br/>distill · review tiers"]:::node
     CI["<b>CI</b> quality-gates + ci-state.yml<br/>on: PR push<br/>writes +factory:ci-green or +factory:ci-red"]:::ext
@@ -143,6 +144,7 @@ flowchart LR
 | `recover` | `cron 0 6,18 * * *` | blocked: → blocked | script | built |
 | `doctor` | `cron 0 5 * * *` | probed: — | script | built |
 | `doctor-write` | `cron 0 5 * * *` | probed: — | script | built |
+| `doctor-ops` | `cron 0 5 * * *` | probed: — | script | built |
 | `retro` | `cron 0 2 * * *` | recorded: — | retro · per focus | built |
 | `distill` | `cron 0 3 * * 1` | proposed: — | distill · per focus | built |
 <!-- /nodes-chart -->

@@ -35,6 +35,14 @@ def env_needs(env, nodes, resolve=config.resolve):
     return sorted(tools), sorted(skills)
 
 
+def run_log(api, run, repo):
+    """Fetch the log of the latest finished workflow run (a run list alone does not need the logs permission)."""
+    runs = json.loads(api(f"repos/{repo}/actions/runs?per_page=1&status=completed"))["workflow_runs"]
+    if not runs:
+        raise RuntimeError("no finished workflow run to read a log from")
+    return run(["run", "view", str(runs[0]["id"]), "-R", repo, "--log"])[:50]
+
+
 def probe(results, name, fn):
     try:
         detail = fn()
@@ -43,14 +51,15 @@ def probe(results, name, fn):
         results.append({"probe": name, "result": "denied", "detail": str(e)[:200]})
 
 
-def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=None):
+def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=None, run_id="doctor"):
     """Every probe's result. Probe objects are removed at the end, also when a probe fails."""
     api = lambda *a: run(["api", *a])  # noqa: E731
+    note = lambda text: f"[factory] {text}\n\nFactory-Run: {run_id}"  # noqa: E731
     results, made = [], {"issues": [], "pr": None, "branch": None}
     issue = child = None
     try:
         def create_issue(title):
-            n = int(run(["issue", "create", "-R", repo, "--title", title, "--body", "[factory] doctor probe, deleted at once."]).strip().rsplit("/", 1)[-1])
+            n = int(run(["issue", "create", "-R", repo, "--title", title, "--body", note("doctor probe, deleted at once.")]).strip().rsplit("/", 1)[-1])
             made["issues"].append(n)
             return n
         issue, child = create_issue("Doctor probe"), create_issue("Doctor probe child")
@@ -61,16 +70,16 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
         api("-X", "POST", f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{branch}", "-f", f"sha={old}")
         made["branch"] = branch
         api("-X", "PUT", f"repos/{repo}/contents/.factory-doctor-{issue}", "-f", "message=doctor probe", "-f", "content=eA==", "-f", f"branch={branch}")
-        made["pr"] = int(run(["pr", "create", "-R", repo, "--head", branch, "--base", "main", "--title", "Doctor probe", "--body", "[factory] doctor probe, closed at once."]).strip().rsplit("/", 1)[-1])
+        made["pr"] = int(run(["pr", "create", "-R", repo, "--head", branch, "--base", "main", "--title", "Doctor probe", "--body", note("doctor probe, closed at once.")]).strip().rsplit("/", 1)[-1])
         pr = made["pr"]
         sha = head["sha"]
         probe(results, "write:label", lambda: run(["issue", "edit", str(issue), "-R", repo, "--add-label", risk_label]))
-        probe(results, "write:comment", lambda: run(["issue", "comment", str(issue), "-R", repo, "--body", "[factory] doctor probe"]))
-        probe(results, "write:pr-review", lambda: run(["pr", "review", str(pr), "-R", repo, "--comment", "--body", "[factory] doctor probe"]))
+        probe(results, "write:comment", lambda: run(["issue", "comment", str(issue), "-R", repo, "--body", note("doctor probe")]))
+        probe(results, "write:pr-review", lambda: run(["pr", "review", str(pr), "-R", repo, "--comment", "--body", note("doctor probe")]))
         probe(results, "write:sub-issue", lambda: api("-X", "POST", f"repos/{repo}/issues/{issue}/sub_issues", "-F", f"sub_issue_id={child_id}"))
         probe(results, "write:blocked-by", lambda: api("-X", "POST", f"repos/{repo}/issues/{issue}/dependencies/blocked_by", "-F", f"issue_id={child_id}"))
         probe(results, "write:update-branch", lambda: api("-X", "PUT", f"repos/{repo}/pulls/{pr}/update-branch"))
-        probe(results, "read:actions-run-logs", lambda: api(f"repos/{repo}/actions/runs?per_page=1"))
+        probe(results, "read:actions-run-logs", lambda: run_log(api, run, repo))
         probe(results, "read:check-runs", lambda: api(f"repos/{repo}/commits/{sha}/check-runs"))
         probe(results, "read:commit-statuses", lambda: api(f"repos/{repo}/commits/{sha}/status"))
         probe(results, "read:timeline", lambda: api(f"repos/{repo}/issues/{issue}/timeline"))
@@ -108,11 +117,11 @@ def cleanup(repo, made, run):
     return out
 
 
-def file_tickets(repo, failed, run):
+def file_tickets(repo, failed, run, run_id="doctor"):
     """Open `Doctor: <probe> fails`, or comment on the open one."""
     for r in failed:
         title = f"Doctor: {r['probe']} fails"
-        body = f"[factory] `factory doctor` probe `{r['probe']}`: {r['result']}. {r['detail']}\n\nFactory-Run: doctor"
+        body = f"[factory] `factory doctor` probe `{r['probe']}`: {r['result']}. {r['detail']}\n\nFactory-Run: {run_id}"
         found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--search", f'"{title}" in:title', "--json", "number,title"]))
         match = next((i["number"] for i in found if i["title"] == title), None)
         if match:
@@ -128,12 +137,13 @@ def main(argv=None, run=github_tracker.gh):
         return 2
     settings = config.load()
     repo = settings["tracker"]["repository"]
-    results = run_probes(repo, env, nodes_mod.load(), run, (settings["tracker"].get("risk_labels") or {"low": "risk:low"})["low"])
+    run_id = os.environ.get("FACTORY_RUN_ID") or f"doctor:{env}"
+    results = run_probes(repo, env, nodes_mod.load(), run, (settings["tracker"].get("risk_labels") or {"low": "risk:low"})["low"], run_id=run_id)
     for r in results:
         print(json.dumps(r))
     failed = [r for r in results if r["result"] != "ok"]
     if failed:
-        file_tickets(repo, failed, run)
+        file_tickets(repo, failed, run, run_id)
     return 1 if failed else 0
 
 

@@ -1,6 +1,7 @@
 environments:
   read: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
   write: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
+  ops: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
 schedules:
   sweep: { cron: "*/10 * * * *" }
   recover: { cron: "0 6,18 * * *"}
@@ -19,3 +20,4 @@ nodes:
   notify: { env: read, pilot: true, triggers: ["issues.labeled factory:blocked", "issues.labeled factory:needs-answers"], when: { stage: [blocked, needs-answers] }, role: script, tier: cheap, run: uv run factory/cli.py notify --issue <issue number from the trigger payload>, output: read-only, outcomes: { notified: { from: [blocked, needs-answers] } } }
   doctor: { env: read, routine: true, triggers: ["schedule doctor"], when: { always: true }, role: script, tier: cheap, run: uv run factory/cli.py doctor, output: read-only, outcomes: { probed: {} } }
   doctor-write: { env: write, routine: true, triggers: ["schedule doctor"], when: { always: true }, role: script, tier: cheap, run: uv run factory/cli.py doctor, output: read-only, outcomes: { probed: {} } }
+  doctor-ops: { env: ops, routine: true, triggers: ["schedule doctor"], when: { always: true }, role: script, tier: cheap, run: uv run factory/cli.py doctor, output: read-only, outcomes: { probed: {} } }
