@@ -37,6 +37,21 @@ class CheckRefsTest(unittest.TestCase):
     def test_missing_link_path_is_reported(self):
         self.assertEqual(self.scan("missing-link.md"), ["README.md:1: missing-link-target.md"])
 
+    def test_missing_extensionless_link_path_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("[guide](guide)\n")
+            self.assertEqual(check_refs.check(root), ["README.md:1: guide"])
+
+    def test_link_path_is_resolved_from_document_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs = root / "docs"
+            docs.mkdir()
+            (root / "guide.md").write_text("exists")
+            (docs / "README.md").write_text("[guide](guide.md)\n")
+            self.assertEqual(check_refs.check(root), ["docs/README.md:1: guide.md"])
+
     def test_ignored_run_directory_is_allowed(self):
         self.assertEqual(self.scan("ignored-path.md"), [])
 

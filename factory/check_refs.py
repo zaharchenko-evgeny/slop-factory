@@ -58,16 +58,17 @@ def references(text, source=""):
             continue
         if skip_fence:
             continue
-        found = [token.rstrip(".,:;()[]{}\"'") for match in CODE.finditer(line)
+        found = [(token.rstrip(".,:;()[]{}\"'"), False) for match in CODE.finditer(line)
                  for token in match.group(1).split()]
-        found += [m.group(1) for m in LINK.finditer(line)]
-        for ref in found:
-            if ref not in ALLOW and f"{source}:{ref}" not in ALLOW and is_path(ref):
-                yield line_no, ref
+        found += [(m.group(1), True) for m in LINK.finditer(line)]
+        for ref, is_link in found:
+            if (ref not in ALLOW and f"{source}:{ref}" not in ALLOW
+                    and (is_path(ref) or is_link and is_local_link(ref))):
+                yield line_no, ref, is_link
         for match in ISSUE.finditer(line):
             ref = "#" + match.group(1)
             if ref not in ALLOW and f"{source}:{ref}" not in ALLOW:
-                yield line_no, ref
+                yield line_no, ref, False
 
 
 def is_path(ref):
@@ -75,6 +76,11 @@ def is_path(ref):
             and "<" not in ref and "{" not in ref and
             ("/" in ref or bool(re.search(r"\.(?:md|py|sh|ya?ml|json|toml|txt|html)$", ref))
              or ref in {"Makefile", "Dockerfile", "AGENTS.md"}))
+
+
+def is_local_link(ref):
+    return (ref not in {"/", "./", "../"} and "://" not in ref and not ref.startswith("#")
+            and "*" not in ref and "<" not in ref and "{" not in ref)
 
 
 def issue_numbers():
@@ -101,14 +107,17 @@ def check(root=ROOT):
     errors = []
     for path in docs(root):
         rel = path.relative_to(root).as_posix()
-        for line_no, ref in references(path.read_text(), rel):
+        for line_no, ref, is_link in references(path.read_text(), rel):
             if ref.startswith("#"):
                 valid = ref[1:] in known
             else:
                 target = ref.split("#", 1)[0]
-                valid = exists_in_repo(root / target, root) or exists_in_repo(path.parent / target, root)
-                if not valid and "/" not in target and target:
-                    valid = any(exists_in_repo(match, root) for match in root.rglob(target))
+                if is_link:
+                    valid = exists_in_repo(path.parent / target, root)
+                else:
+                    valid = exists_in_repo(root / target, root) or exists_in_repo(path.parent / target, root)
+                    if not valid and "/" not in target and target:
+                        valid = any(exists_in_repo(match, root) for match in root.rglob(target))
             if not valid:
                 errors.append(f"{rel}:{line_no}: {ref}")
     return errors
