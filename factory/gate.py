@@ -675,6 +675,13 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                         if progress:
                             progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
                         continue
+                    facts = tracker.stale_facts(n)
+                    since = facts.get("since")
+                    recent = since and datetime.now(timezone.utc) - datetime.fromisoformat(since.replace("Z", "+00:00")) <= timedelta(minutes=5)
+                    if facts.get("issue_state", "open") != "open" or recent:  # closed, or this event's re-fire already landed
+                        if progress:
+                            progress({"ticket": n, "outcome": "skipped", "why": "closed" if facts.get("issue_state", "open") != "open" else "re-fired within 5 minutes"})
+                        continue
                     woken.add(n)
                     outcome = "re-triage" if not_planned else "unblocked"
                     results.append({"ticket": n, "stage": "ready", "node": "start", "outcome": outcome})

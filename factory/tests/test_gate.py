@@ -6,7 +6,7 @@
 """Tests for factory/gate.py on both fakes. Run: uv run factory/tests/test_gate.py"""
 import copy
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 import json
 import os
@@ -1264,6 +1264,28 @@ class UnblockedSweepTest(unittest.TestCase):
 
         self.assertFalse(failed)
         self.assertEqual(results, [{"ticket": 10, "error": "RuntimeError: tracker unavailable"}])
+
+    def test_wake_skips_closed_dependent(self):
+        tr, (results, failed) = self.sweep({
+            10: {"blocking": [11], "state_reason": "not_planned"},
+            11: {"stage": "ready", "blockers_open": 0, "issue_state": "closed"},
+        })
+        self.assertFalse(failed)
+        self.assertEqual(results, [])
+        self.assertNotIn("log", tr.tickets[11])
+        self.assertEqual(tr.tickets[11]["stage"], "ready")
+
+    def test_wake_refires_once_per_event(self):
+        tr = MemoryTracker({11: {"stage": "ready", "blockers_open": 0}})
+        tr.sweep_tickets = lambda stages: []
+        tr.blocking = lambda ticket: [11]
+        self.assertEqual([r["outcome"] for r in gate.sweep(tr, NODES, closed_ticket=10)[0]], ["unblocked"])
+        tr.tickets[11]["since"] = datetime.now(timezone.utc).isoformat()  # the re-fire label just landed
+        tr.tickets[11]["log"].clear()
+        self.assertEqual(gate.sweep(tr, NODES, closed_ticket=10), ([], False))
+        self.assertEqual(tr.tickets[11]["log"], [])
+        tr.tickets[11]["since"] = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+        self.assertEqual([r["outcome"] for r in gate.sweep(tr, NODES, closed_ticket=10)[0]], ["unblocked"])
 
     def test_dependent_is_refired_once_when_listed_more_than_once(self):
         tr = MemoryTracker({11: {"stage": "ready", "blockers_open": 0}})
