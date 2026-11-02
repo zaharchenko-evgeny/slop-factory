@@ -262,8 +262,18 @@ class PlanTest(unittest.TestCase):
     def test_script_nodes_only_run_the_sweep(self):
         plan = json.loads((FIX / "air-plan.json").read_text())
         a = {x["name"]: x for x in plan["automations"]}
-        self.assertTrue(a["[Slop factory] sweep"]["prompt"].endswith("Run `factory sweep` once and report its JSON output."))
+        self.assertIn("Run `factory sweep` in the foreground", a["[Slop factory] sweep"]["prompt"])
         self.assertIn("`factory begin intake`", a["[Slop factory] intake"]["prompt"])
+
+    def test_every_script_prompt_waits_for_command_exit(self):
+        plans = (deploy.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
+        for plan in plans:
+            for automation in plan["automations"]:
+                if automation["name"].startswith(("[Slop factory] sweep", "[Slop factory] join",
+                                                   "[Slop factory] finish", "[Slop factory] merge",
+                                                   "[Slop factory] reopen", "[Slop factory] recover",
+                                                   "[Slop factory] notify")):
+                    self.assertIn("wait until it exits", automation["prompt"])
 
     def test_review_automations_trigger_on_focus_rerequest_labels(self):
         for a in json.loads((FIX / "air-plan.json").read_text())["automations"]:
@@ -311,7 +321,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual((spec["node"], spec["tier"], spec["engine"]), ("implement", "mid", cfg.load()["engine"]))
         self.assertEqual(set(spec["outcomes"]), {"done", "error", "blocked", "failed"})
         self.assertIn("- `error`: the work needs the next tier", a["[Slop factory] implement-mid"]["prompt"])
-        self.assertEqual(set(a["[Slop factory] join"]["spec"]["runs"]), {"finish", "recover", "reopen", "merge", "notify"})
+        self.assertEqual(set(a["[Slop factory] join"]["spec"]["runs"]), {"finish", "recover", "reopen", "merge", "start", "notify"})
         notify = a["[Slop factory] notify"]
         self.assertEqual({t["filters"]["label"] for t in notify["triggers"]}, {"factory:blocked", "factory:needs-answers"})
         self.assertIn("factory notify --issue", notify["prompt"])
@@ -357,12 +367,12 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["prefix"], "[Slop factory] ")
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
-            "intake", "join", "finish", "reopen", "merge", "notify", "retro", "distill",
+            "intake", "start", "join", "finish", "reopen", "merge", "notify", "retro", "distill",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}
         self.assertEqual(names, pilot)
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
-                         {"intake", "implement", "review", "join", "fix", "update", "finish", "recover", "reopen", "merge", "notify"})
+                         {"intake", "start", "implement", "review", "join", "fix", "update", "finish", "recover", "reopen", "merge", "notify"})
         self.assertEqual(deploy.plan_air(n, config), plan)
 
 
