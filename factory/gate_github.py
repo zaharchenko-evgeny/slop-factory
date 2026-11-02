@@ -97,9 +97,9 @@ class GitHubGateTracker:
             return "red"
         return "green" if all(c in GOOD_CI for c in done) else "pending"
 
-    def _workflow_runs(self, sha):
+    def _workflow_runs(self, sha, timeout=None):
         out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs?head_sha={sha}&per_page=100",
-                        "--jq", ".workflow_runs[]"])
+                        "--jq", ".workflow_runs[]"], **({"timeout": timeout} if timeout is not None else {}))
         latest = {}
         for r in (json.loads(x) for x in out.splitlines() if x.strip()):
             if r.get("event") == "workflow_run":  # ci-state.yml reports CI; it is not CI
@@ -112,28 +112,32 @@ class GitHubGateTracker:
 
     def ci_failure(self, sha):
         """Best-effort details for the first failed step at the head."""
-        for run in self._workflow_runs(sha).values():
-            if run.get("conclusion") not in BAD_CI:
-                continue
-            out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs/{run['id']}/jobs?per_page=100",
-                            "--jq", ".jobs[]"])
-            for line in out.splitlines():
-                if not line.strip():
+        try:
+            for run in self._workflow_runs(sha, timeout=10).values():
+                if run.get("conclusion") not in BAD_CI:
                     continue
-                job = json.loads(line)
-                steps = [step for step in job.get("steps", []) if step.get("conclusion") in BAD_CI]
-                if not steps:
-                    continue
-                for step in steps:
-                    failure = {"job": job["name"], "step": step["name"], "log": None}
-                    try:
-                        logs = self.run(["api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs"], timeout=10)
-                        if not logs.strip():
-                            raise RuntimeError("empty log response")
-                        failure["log"] = "\n".join(logs.splitlines()[-60:])
-                    except Exception as e:
-                        failure["error"] = " ".join(str(e).splitlines()) or type(e).__name__
-                    return failure
+                out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs/{run['id']}/jobs?per_page=100",
+                                "--jq", ".jobs[]"], timeout=10)
+                for line in out.splitlines():
+                    if not line.strip():
+                        continue
+                    job = json.loads(line)
+                    steps = [step for step in job.get("steps", []) if step.get("conclusion") in BAD_CI]
+                    if not steps:
+                        continue
+                    for step in steps:
+                        failure = {"job": job["name"], "step": step["name"], "log": None}
+                        try:
+                            logs = self.run(["api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs"], timeout=10)
+                            if not logs.strip():
+                                raise RuntimeError("empty log response")
+                            failure["log"] = "\n".join(logs.splitlines()[-60:])
+                        except Exception as e:
+                            failure["error"] = " ".join(str(e).splitlines()) or type(e).__name__
+                        return failure
+        except Exception as e:
+            return {"job": None, "step": None, "log": None,
+                    "error": " ".join(str(e).splitlines()) or type(e).__name__}
         return None
 
     def _reviews(self, pr):

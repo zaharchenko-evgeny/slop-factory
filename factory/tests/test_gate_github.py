@@ -46,10 +46,16 @@ class FakeGh:
         a = a + " POST" if "POST" in args else a
         assert args[:2] != ["api", "user"], "gh api user must never be called"
         if "actions/runs?head_sha=" in a:  # one workflow per entry of `checks`; None = still running
+            self.workflow_timeout = timeout
+            if getattr(self, "workflow_error", False):
+                raise RuntimeError("workflow lookup failed")
             return "\n".join(json.dumps({"workflow_id": k, "event": "pull_request", "run_number": 1,
                                           "id": 100 + k, "status": "completed" if c else "in_progress", "conclusion": c})
                              for k, c in enumerate(self.checks))
         if "/actions/runs/100/jobs?" in a:
+            self.jobs_timeout = timeout
+            if getattr(self, "jobs_error", False):
+                raise RuntimeError("jobs lookup failed")
             return json.dumps({"id": 200, "name": "tests", "steps": [
                 {"name": "Run tests", "conclusion": "failure",
                  "started_at": "2026-11-02T10:00:00Z", "completed_at": "2026-11-02T10:00:00Z"},
@@ -187,6 +193,20 @@ class FactsTest(unittest.TestCase):
         gh.empty_log = True
         self.assertEqual(tr(gh).ci_failure("h1"), {
             "job": "tests", "step": "Run tests", "log": None, "error": "empty log response"})
+
+    def test_workflow_lookup_failure_is_best_effort_and_timed(self):
+        gh = FakeGh(checks=["failure"])
+        gh.workflow_error = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": None, "step": None, "log": None, "error": "workflow lookup failed"})
+        self.assertEqual(gh.workflow_timeout, 10)
+
+    def test_jobs_lookup_failure_is_best_effort_and_timed(self):
+        gh = FakeGh(checks=["failure"])
+        gh.jobs_error = True
+        self.assertEqual(tr(gh).ci_failure("h1"), {
+            "job": None, "step": None, "log": None, "error": "jobs lookup failed"})
+        self.assertEqual(gh.jobs_timeout, 10)
 
     def test_sweep_facts_do_not_fetch_logs(self):
         gh = FakeGh(checks=["failure"])
