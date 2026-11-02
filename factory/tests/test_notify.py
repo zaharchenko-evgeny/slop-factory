@@ -13,11 +13,11 @@ from notify import notify
 
 
 class NotifyTest(unittest.TestCase):
-    def run_notify(self, stage, comments=()):
+    def run_notify(self, stage, comments=(), needs_human=False):
         calls = []
         comments = list(comments)
         label = {"blocked": "factory:blocked", "needs-answers": "factory:needs-answers"}[stage]
-        issue = {"labels": [{"name": label}]}
+        issue = {"labels": [{"name": label}, *([{"name": "factory:needs-human"}] if needs_human else [])]}
         timeline = [{"source": {"issue": {"html_url": "https://github.com/o/r/pull/9", "pull_request": {"url": "api"}}}}]
 
         def gh(args):
@@ -54,6 +54,11 @@ class NotifyTest(unittest.TestCase):
     def test_second_label_same_stage_does_nothing(self):
         calls, invoke = self.run_notify("blocked", [{"body": "[factory] reason"},
                                                        {"body": "already done <!-- factory-notify:blocked -->"}])
+        self.assertFalse(invoke())
+        self.assertFalse(any(call[0] == "issue" for call in calls))
+
+    def test_gate_notification_prevents_duplicate_assignment_and_comment(self):
+        calls, invoke = self.run_notify("needs-answers", [{"body": "[factory] Which API?"}], needs_human=True)
         self.assertFalse(invoke())
         self.assertFalse(any(call[0] == "issue" for call in calls))
 

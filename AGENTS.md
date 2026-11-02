@@ -71,6 +71,7 @@ Models: Air tiers come from `targets.air.models` in `factory.descriptor.yaml`.
 
 - Tracker: GitHub Issues in this repository. Stages are `factory:*` labels
   (see `factory.descriptor.yaml`).
+- To list every open ticket waiting for a person, use `is:open label:factory:needs-human`.
 - Branch: `ez/<issue>-<slug>` from `main`. Commit subject starts with
   `#<issue> `. One PR per issue, linked with `Closes #<issue>` only when the PR
   finishes the issue.

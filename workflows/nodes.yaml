@@ -172,7 +172,7 @@ nodes:
       merged: { from: [approved], effects: [{ merge: match-head }] }
       # Behind main: CI reruns and its `ci-green` wakes `merge` again.
       updated: { from: [approved], effects: [{ update-branch: match-head }] }
-      waiting: { from: [approved], effects: [{ comment: reason, "on": pr }] }
+      waiting: { from: [approved], effects: [{ comment: reason }] }
   finish:
     env: read
     pilot: true
