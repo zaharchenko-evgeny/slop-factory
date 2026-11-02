@@ -168,7 +168,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human":
             continue
-        env = n.get("environment", "default")
+        env = n["env"]
         if env not in used:
             used.append(env)
         for aname, tier_arg, tier, focus in variants(name, n, roles):

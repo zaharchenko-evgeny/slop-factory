@@ -2,6 +2,28 @@
 # Air environment setup (docs/targets.md): runs in the repository root on every launch and resume.
 # Idempotent: a launch from a snapshot already has the tools.
 set -e
+# FACTORY_ENV picks the environment (ADR-0015): `read` (intake, review, join, finish), `write` (implement, fix),
+# `ops` (routines). Each installs the skills and tools of its roles; test_air_startup checks the roles against nodes.yaml.
+ROLES=
+TOOLS=
+case "${FACTORY_ENV:-default}" in
+  read) ROLES="router reviewer" ;;
+  write) ROLES="developer"; TOOLS="shellcheck-py==0.10.0.1 jactionlint==2.3.0" ;;  # tools of the pre-review and CI checks
+  ops) ROLES="distill retro" ;;
+esac
+# resolve <path>: the team's file in the checkout replaces the engine's file at the same path.
+ENGINE="$HOME/factory-main"
+[ -n "${FACTORY_DRY:-}" ] && ENGINE=.
+resolve() { if [ -e "./$1" ]; then echo "./$1"; else echo "$ENGINE/$1"; fi; }
+# skill_names / role_tools: the skills (skills.txt) and the `need_tools` of every role of the environment.
+skill_names() { for r in $ROLES; do cat "$(resolve "roles/$r/skills.txt")"; done | sort -u | tr '\n' ' '; }
+role_tools() { for r in $ROLES; do sed -n 's/^need_tools //p' "$(resolve "roles/$r/setup.sh")"; done | tr ' ' '\n' | sort -u | tr '\n' ' '; }
+if [ -n "${FACTORY_DRY:-}" ]; then
+  echo "startup: env=${FACTORY_ENV:-default} roles=$ROLES"
+  echo "startup: would install skills: $(skill_names)"
+  echo "startup: would install tools: $(role_tools)$TOOLS"
+  exit 0
+fi
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN"
 export PATH="$BIN:$PATH"
@@ -39,7 +61,25 @@ if ! { git worktree remove --force "$HOME/factory-main" 2>/dev/null || rm -rf "$
   echo "startup: factory install failed" >&2
   exit 1
 fi
-# FACTORY_ENV (the environment's variable) picks the branch: `light` has no approver tools.
+# Skills go to the user-level directories the harnesses scan at session start (Codex, Claude). HOME is not kept
+# across a resume, so this runs on every launch. The team's skills/<name> replaces the engine's skills/vendor/<name>.
+for s in $(skill_names); do
+  src="./skills/$s"
+  [ -d "$src" ] || src="$ENGINE/skills/vendor/$s"
+  for d in "$HOME/.agents/skills" "$HOME/.claude/skills"; do
+    mkdir -p "$d"
+    rm -rf "${d:?}/$s"
+    cp -R "$src" "$d/$s"
+  done
+done
+echo "startup: installed skills: $(skill_names)"
+for t in $TOOLS; do
+  uv tool install --quiet "$t" || { echo "startup: tool install failed: $t" >&2; exit 1; }
+done
+for r in $ROLES; do
+  bash "$(resolve "roles/$r/setup.sh")" >&2 || echo "startup: tools of role $r are missing" >&2
+done
+# `light` and `probe` have no approver tools.
 case "${FACTORY_ENV:-default}" in
   light|probe) echo "startup ran $(date -u +%FT%TZ) FACTORY_ENV=$FACTORY_ENV"; exit 0 ;;
 esac

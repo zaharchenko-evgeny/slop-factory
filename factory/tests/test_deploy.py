@@ -33,6 +33,15 @@ class PlanTest(unittest.TestCase):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
 
+    def test_nodes_get_environment_by_env(self):
+        plan = deploy.plan_air(nodes.load(), cfg.load())
+        env = {x["name"]: x["environmentConfigId"] for x in plan["automations"]}
+        for name, want in (("intake", "read"), ("join", "read"), ("finish", "read"), ("review-full", "read"),
+                           ("implement-mid", "write"), ("fix-cheap", "write"), ("update-strong", "write")):
+            self.assertEqual(env[f"[Slop factory] {name}"], f"[Slop factory] {want}")
+        self.assertEqual({e["name"]: e["variables"] for e in plan["environments"]},
+                         {"[Slop factory] read": {"FACTORY_ENV": "read"}, "[Slop factory] write": {"FACTORY_ENV": "write"}})
+
     def test_local_target_is_rejected(self):
         self.assertEqual(deploy.main(["plan", "--target", "local"]), 2)
 
