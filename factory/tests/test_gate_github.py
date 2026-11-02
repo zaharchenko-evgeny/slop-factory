@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parents[2])
 import gate  # noqa: E402
+import gate_github as M_GH  # noqa: E402
 import nodes  # noqa: E402
 from gate_github import GitHubGateTracker  # noqa: E402
 
@@ -372,16 +373,22 @@ class EffectsTest(unittest.TestCase):
         gh.merged = True
         self.assertFalse(tr(gh).apply(eff("merge", "match-head")))
 
-    def test_merge_waits_for_a_recent_merge_or_a_moved_base(self):
+    def test_merge_waits_out_a_recent_merge_then_merges(self):
         from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).isoformat()
-        for setup in (lambda g: setattr(g, "recent_pulls", [{"number": 6, "merged_at": now}]),
-                      lambda g: setattr(g, "behind_by", 1)):
-            gh = FakeGh()
-            setup(gh)
-            self.assertFalse(tr(gh).apply(eff("merge", "match-head")))
-            self.assertFalse(any(w[:2] == ["pr", "merge"] for w in gh.writes))
-            self.assertIn("DELETE", gh.writes[-1])
+        from unittest import mock
+        gh = FakeGh()
+        gh.recent_pulls = [{"number": 6, "merged_at": datetime.now(timezone.utc).isoformat()}]
+        with mock.patch.object(M_GH.time, "sleep") as sleep:
+            self.assertTrue(tr(gh).apply(eff("merge", "match-head")))
+        self.assertTrue(0 < sleep.call_args[0][0] <= 60)
+        self.assertTrue(any(w[:2] == ["pr", "merge"] for w in gh.writes))
+
+    def test_merge_waits_for_a_moved_base(self):
+        gh = FakeGh()
+        gh.behind_by = 1
+        self.assertFalse(tr(gh).apply(eff("merge", "match-head")))
+        self.assertFalse(any(w[:2] == ["pr", "merge"] for w in gh.writes))
+        self.assertIn("DELETE", gh.writes[-1])
 
     def test_merge_refused_while_another_run_holds_the_lock(self):
         gh = FakeGh()

@@ -358,7 +358,7 @@ class GitHubGateTracker:
 
     def _locked_merge(self, pr, head):
         """One merge at a time across runs: the lock is a branch, created atomically (GitHub refuses a second create).
-        Under it, re-read `behind` and refuse while another PR merged within RECENT_MERGE_SECONDS, so the base this
+        Under it, wait out RECENT_MERGE_SECONDS after another PR's merge, so the base this
         merge integrates is the one the gates judged. False (nothing merged) means the next sweep reads it again.
         A crashed run leaves the branch; a person deletes it."""
         base = pr["base"]["ref"]
@@ -368,13 +368,14 @@ class GitHubGateTracker:
         except RuntimeError:
             return False  # another run holds the lock
         try:
-            if self._api(f"compare/{base}...{head}")["behind_by"] > 0:
-                return False
             now = datetime.now(timezone.utc)
-            for other in self._api(f"pulls?state=closed&base={base}&sort=updated&direction=desc&per_page=5"):
-                if other["number"] != pr["number"] and other.get("merged_at") and \
-                        (now - datetime.fromisoformat(other["merged_at"].replace("Z", "+00:00"))).total_seconds() < self.RECENT_MERGE_SECONDS:
-                    return False
+            wait = max((self.RECENT_MERGE_SECONDS - (now - datetime.fromisoformat(o["merged_at"].replace("Z", "+00:00"))).total_seconds()
+                        for o in self._api(f"pulls?state=closed&base={base}&sort=updated&direction=desc&per_page=5")
+                        if o["number"] != pr["number"] and o.get("merged_at")), default=0)
+            if wait > 0:
+                time.sleep(wait)  # no event wakes `merge` again after the window, so wait it out under the lock
+            if self._api(f"compare/{base}...{head}")["behind_by"] > 0:
+                return False  # the merge that just landed moved the base: update-branch, CI, and ci-green wake `merge`
             self.run(["pr", "merge", str(pr["number"]), "-R", self.repo, "--merge", "--match-head-commit", head])
             return True
         finally:
