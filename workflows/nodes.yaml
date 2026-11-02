@@ -206,17 +206,19 @@ nodes:
   # Routines (ADR-0015): outside any ticket. `factory/knowledge.py` holds the entry and PR plans the roles follow.
   retro:
     env: ops
+    routine: true  # outside any ticket: the gate matches it without tracker facts
     triggers: ["schedule retro"]
-    when: { due: true }
+    when: { always: true }
     role: retro
     output: push-to-new-branch
     outcomes:
-      recorded: { effects: [{ comment: report }] }
+      recorded: {}
   distill:
     env: ops
+    routine: true  # outside any ticket: the gate matches it without tracker facts
     triggers: ["schedule distill"]
-    when: { due: true }
+    when: { always: true }
     role: distill
     output: push-to-new-branch
     outcomes:
-      proposed: { effects: [{ comment: report }] }
+      proposed: {}

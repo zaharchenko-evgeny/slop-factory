@@ -253,6 +253,31 @@ def check(name, event, tracker, nodes, config):
     }
 
 
+def check_routine(name, nodes, config):
+    """A routine (a scheduled node outside any ticket, ADR-0015): no tracker facts, so it always matches."""
+    node = load_node(name, nodes)
+    role, roles = node["role"], config["roles"]
+    skills = config_mod.resolve(f"roles/{role}/skills.txt")
+    return GO, {
+        "go": True, "reason": None, "ticket": None, "node": name, "role": role,
+        "tier": node.get("tier") or roles.get(role, {}).get("tier"), "focus": None,
+        "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
+        "skills": skills.read_text().split() if skills.exists() else [],
+        "context": {}, "outcomes": list(node["outcomes"]), "merge_main": False, "branch": None,
+        "handoff_path": f".factory/handoff/{name}.json",
+    }
+
+
+def apply_routine(name, outcome, nodes):
+    """A routine writes through its role (a branch, a PR): the gate only checks the outcome and changes nothing."""
+    outcomes = load_node(name, nodes)["outcomes"]
+    if not outcome and len(outcomes) == 1:
+        outcome = next(iter(outcomes))
+    if outcome not in outcomes:
+        raise Bad(f"unknown outcome: {outcome}")
+    return GO, {"applied": True, "written": []}
+
+
 def check_state_path(ticket):
     return Path(".factory") / "check" / f"{ticket}.json"
 
@@ -751,7 +776,18 @@ def main(argv):
             return FAILED if failed else GO
         if not a.node:
             raise Bad("--node is required")
-        if a.cmd == "check":
+        routine = bool(((nodes.get("nodes") or {}).get(a.node) or {}).get("routine"))
+        if routine and a.cmd == "check":
+            code, out = check_routine(a.node, nodes, config)
+        elif routine:
+            try:
+                h = json.loads(Path(a.handoff).read_text()) if a.handoff else {}
+            except (OSError, ValueError) as e:
+                raise Bad(f"malformed handoff: {e}")
+            if not isinstance(h, dict):
+                raise Bad("malformed handoff: needs an object")
+            code, out = apply_routine(a.node, a.outcome or h.get("outcome") or h.get("status") or "", nodes)
+        elif a.cmd == "check":
             event = read(a.event or "", "event", raw=True)
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
             code, out = check(a.node, event, tracker, nodes, config)

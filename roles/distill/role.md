@@ -13,18 +13,6 @@ You sort the knowledge inbox once a week (`schedule distill`, environment
 3. Mark each entry you consumed (`<knowledge.dir>/distilled.txt`). A person
    merges the PRs after the `knowledge` review.
 
-## Mode `merge`
-
-1. Read the entries in the input and the current files under the knowledge dir.
-2. Merge each lesson into `<dir>/<repo>/lessons.md` for the repository it is
-   about, or `<dir>/_shared/lessons.md` when it applies to every repository.
-   Group lessons by category, keep one line per lesson with the evidence of
-   each entry that reported it, merge duplicates and drop lessons a later
-   entry shows are fixed. Never copy an entry verbatim.
-3. Edit only files under the knowledge dir. Changes anywhere else stop the
-   run without a PR.
-4. Report `blocked` when no entry can be merged without a human decision.
-
 ## JSON handoff
 
 The field names are the keys of the handoff JSON below, lists are arrays. Write the handoff as JSON to the path printed by `factory begin`, then run `factory end <path>` to apply it. The platform pushes the branch after the run. Write it as the last thing you do.
@@ -33,7 +21,7 @@ The field names are the keys of the handoff JSON below, lists are arrays. Write 
 {
   "handoff": "DISTILL",
   "status": "done",
-  "files": "knowledge/_shared/lessons.md",
+  "files": "docs/agents/testing.md",
   "summary": [
     "automated checks: run ShellCheck before review (2 entries)"
   ],
