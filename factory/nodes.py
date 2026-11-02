@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "set-field", "join", "request-reviewers"}
+EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers"}
 OUTPUTS = {"read-only", "create-pr", "push-to-source", "push-to-new-branch", "as-instructed"}
 WHEN_KEYS = {"stage", "blockers", "focus", "round", "fix-rounds", "ci", "actor", "always", "due", "pr-state"}
 NO_ROLE = {"script", "human"}
@@ -101,7 +101,7 @@ def validate(nodes, config):
                 keys = [k for k in e if k != "on"] if isinstance(e, dict) else []
                 if len(keys) != 1 or keys[0] not in EFFECTS:
                     errs.append(f"unknown-effect: {name}.{oname}: {e}")
-                elif "on" in e and (e["on"] not in ("issue", "pr") or keys[0] not in ("label", "unlabel")):
+                elif "on" in e and (e["on"] not in ("issue", "pr") or keys[0] not in ("label", "unlabel", "comment")):
                     errs.append(f"unknown-effect: {name}.{oname}: bad `on` in {e}")
             if (o or {}).get("else") and o["else"] not in n["outcomes"]:
                 errs.append(f"unknown-outcome: {name}.{oname}: else {o['else']}")

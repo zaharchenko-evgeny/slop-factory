@@ -306,7 +306,7 @@ flowchart LR
     N_fix["<b>fix</b><br/>on: PR +factory:fix-{cheap|mid|strong}<br/>developer · cheap|mid|strong"]:::node
     N_update["<b>update</b><br/>on: PR +factory:update-{cheap|mid|strong}<br/>developer · cheap|mid|strong"]:::node
     N_reopen["<b>reopen</b><br/>on: PR push<br/>on: PR +factory:ci-red<br/>script"]:::node
-    N_merge["<b>merge</b> (#159)<br/>on: PR +factory:merge<br/>script"]:::planned
+    N_merge["<b>merge</b><br/>on: issue +factory:approved<br/>on: PR +factory:ci-green<br/>script"]:::node
     N_finish["<b>finish</b><br/>on: PR merged<br/>on: issue closed<br/>on: issue +factory:blocked<br/>on: issues.comment<br/>script"]:::node
     N_recover["<b>recover</b><br/>on: cron 15 * * * *<br/>script"]:::node
     N_routines["<b>routines</b> (#162)<br/>on: cron 0 6 * * *<br/>distill · review tiers"]:::planned
@@ -366,9 +366,7 @@ flowchart LR
     N_update -- "unresolvable" --> S_blocked
     S_approved --> N_reopen
     N_reopen -- "reopened" --> S_in_review
-    S_approved -.-> N_merge
-    N_merge -. "update-or-hold" -.-> S_approved
-    N_merge -. "fix +factory:fix-{tier}" -.-> S_changes_requested
+    S_approved --> N_merge
     S_needs_answers --> N_finish
     N_finish -- "answered" --> S_ready
     S_split --> N_finish
@@ -403,7 +401,7 @@ flowchart LR
 | `fix` | `PR +factory:fix-{cheap|mid|strong}` | done: → in-review<br>blocked: → blocked | developer · cheap/mid/strong | built |
 | `update` | `PR +factory:update-{cheap|mid|strong}` | resolved: → in-review<br>escalate: +factory:update-{next} → changes-requested<br>unresolvable: → blocked | developer · cheap/mid/strong | built |
 | `reopen` | `PR push`<br>`PR +factory:ci-red` | reopened: → in-review | script | built |
-| `merge` | `PR +factory:merge` | merged: —<br>update-or-hold: → approved<br>fix: +factory:fix-{tier} → changes-requested | script | planned #159 |
+| `merge` | `issue +factory:approved`<br>`PR +factory:ci-green` | merged: —<br>updated: —<br>waiting: — | script | built |
 | `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked`<br>`issues.comment` | answered: → ready<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
 | `recover` | `cron 15 * * * *` | blocked: → blocked | script | built |
 | `routines` | `cron 0 6 * * *` | proposed: — | distill · per focus | planned #162 |
