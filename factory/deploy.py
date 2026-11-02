@@ -164,13 +164,12 @@ def plan_air(nodes: dict, config: dict) -> dict:
     scheds = nodes.get("schedules") or {}
     bot = config["targets"]["air"]["bot_login"]
     prefix = f"[{project_name(config)}] "
-    automations, used = [], []
+    automations = []
+    used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human"))
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human":
             continue
-        env = n.get("environment", "default")
-        if env not in used:
-            used.append(env)
+        env = n["env"]
         for aname, tier_arg, tier, focus in variants(name, n, roles):
             agent, _, model = air[tier].partition("/")
             trig = []
