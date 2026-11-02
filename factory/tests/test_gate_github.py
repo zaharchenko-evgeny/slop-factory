@@ -46,8 +46,14 @@ class FakeGh:
         assert args[:2] != ["api", "user"], "gh api user must never be called"
         if "actions/runs?head_sha=" in a:  # one workflow per entry of `checks`; None = still running
             return "\n".join(json.dumps({"workflow_id": k, "event": "pull_request", "run_number": 1,
-                                          "status": "completed" if c else "in_progress", "conclusion": c})
+                                          "id": 100 + k, "status": "completed" if c else "in_progress", "conclusion": c})
                              for k, c in enumerate(self.checks))
+        if "/actions/runs/100/jobs?" in a:
+            return json.dumps({"id": 200, "name": "tests", "steps": [
+                {"name": "Run tests", "conclusion": "failure"},
+                {"name": "Upload artifacts", "conclusion": "success"}]})
+        if "/actions/jobs/200/logs" in a:
+            return "##[group]Run tests\n" + "\n".join(f"line {i}" for i in range(65)) + "\n##[endgroup]"
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
             return "\n".join(json.dumps(p) for p in (
@@ -158,6 +164,12 @@ class FactsTest(unittest.TestCase):
         self.assertEqual(tr(Rerun()).facts(7)["ci"], "green")
         f = tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)
         self.assertEqual((f["focus_missing"], f["round_head"]), (["full"], "old"))
+
+    def test_red_ci_facts_carry_failed_step_log_tail(self):
+        f = tr(FakeGh(checks=["failure"])).facts(7)
+        self.assertEqual(f["ci"], "red")
+        self.assertEqual(f["ci_failure"], [{"job": "tests", "step": "Run tests",
+                                             "log_tail": "\n".join(f"line {i}" for i in range(5, 65))}])
 
     def test_no_stage_label(self):
         self.assertEqual(tr(FakeGh(labels=["x"])).facts(7)["stage"], "none")

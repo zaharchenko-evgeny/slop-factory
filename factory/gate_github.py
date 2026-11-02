@@ -89,6 +89,15 @@ class GitHubGateTracker:
     def _ci(self, sha):
         """CI at `sha` from the Actions workflow runs (the Air GitHub App has Actions: read, not Checks: read, so
         check-runs answers 403 in a run). Per workflow the latest run counts, so a rerun replaces a failure."""
+        latest = self._workflow_runs(sha)
+        if not latest:
+            return "none"
+        done = [r.get("conclusion") if r.get("status") == "completed" else None for r in latest.values()]
+        if any(c in BAD_CI for c in done):
+            return "red"
+        return "green" if all(c in GOOD_CI for c in done) else "pending"
+
+    def _workflow_runs(self, sha):
         out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs?head_sha={sha}&per_page=100",
                         "--jq", ".workflow_runs[]"])
         latest = {}
@@ -99,12 +108,44 @@ class GitHubGateTracker:
             if key not in latest or (r.get("run_number"), r.get("run_attempt", 1)) > (
                     latest[key].get("run_number"), latest[key].get("run_attempt", 1)):
                 latest[key] = r
-        if not latest:
-            return "none"
-        done = [r.get("conclusion") if r.get("status") == "completed" else None for r in latest.values()]
-        if any(c in BAD_CI for c in done):
-            return "red"
-        return "green" if all(c in GOOD_CI for c in done) else "pending"
+        return latest
+
+    def _ci_failure(self, sha):
+        """Failed steps at the head, with only the last 60 lines of each step log."""
+        failures = []
+        for run in self._workflow_runs(sha).values():
+            if run.get("conclusion") not in BAD_CI:
+                continue
+            out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs/{run['id']}/jobs?per_page=100",
+                            "--jq", ".jobs[]"])
+            for line in out.splitlines():
+                if not line.strip():
+                    continue
+                job = json.loads(line)
+                steps = [step for step in job.get("steps", []) if step.get("conclusion") in BAD_CI]
+                if not steps:
+                    continue
+                logs = self.run(["api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs"])
+                groups, current = [], None
+                for log_line in logs.splitlines():
+                    if "##[group]" in log_line:
+                        current = [log_line.split("##[group]", 1)[1]]
+                        groups.append(current)
+                    elif current is not None:
+                        if "##[endgroup]" in log_line:
+                            current = None
+                        else:
+                            current.append(log_line)
+                for step in steps:
+                    section = next((g for g in groups if step["name"] in g[0]), None)
+                    if section is None and step.get("started_at") and step.get("completed_at"):
+                        section = [log_line for log_line in logs.splitlines()
+                                   if (match := re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)", log_line))
+                                   and step["started_at"] <= match[1] <= step["completed_at"]]
+                    section = section or []
+                    failures.append({"job": job["name"], "step": step["name"],
+                                     "log_tail": "\n".join(section[-60:])})
+        return failures
 
     def _reviews(self, pr):
         out = []
@@ -246,6 +287,8 @@ class GitHubGateTracker:
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
                      fix_rounds=len({r["commit_id"] for r in reviews if r["agent"] and r["verdict"] == "changes"
                                      and (r.get("submitted_at") or "") >= since}))  # rounds since ready: heads with an agent change request
+            if ci == "red":
+                f["ci_failure"] = self._ci_failure(head)
         return f
 
     def stale_facts(self, n):

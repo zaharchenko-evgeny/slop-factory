@@ -27,12 +27,17 @@ Track added and modified lines against the ticket's current size estimate. If
 work is heading past 1.5× the estimate, stop and hand off `blocked` with a
 concrete proposed split instead of finishing an oversized branch.
 
-Input: the previous handoff and the reviewer's findings. Read every
-change-request review of the current round on the PR (`gh api
+Input: the previous handoff, the reviewer's findings, and any `ci_failure`
+facts printed by `factory begin`. Read every change-request review of the
+current round on the PR (`gh api
 repos/<repo>/pulls/<n>/reviews`; each body holds the summary and one `**B1**
 path:line — text` line per finding, blocking first). Address each finding in
 your handoff as fixed (include the commit) or disputed (give a reason). Commit
 fixes separately as needed. Ignore nits.
+
+When `ci_failure` is present and there are no review findings, fix the failed
+CI step using its job, step and log tail. A red CI fix round without review
+findings is valid.
 
 List those answers in `findings_addressed`, one per finding, as
 `<finding id>: fixed in <sha>` or `<finding id>: disputed — <reason>`.
