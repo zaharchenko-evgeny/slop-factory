@@ -157,6 +157,18 @@ class StartupTest(unittest.TestCase):
                 if n.get("env") == env and n["role"] not in ("script", "human"):
                     self.assertIn(n["role"], out.split("roles=")[1].split(), (env, n["role"]))
 
+    def test_path_like_skill_name_is_rejected_and_files_survive(self):
+        self.env["FACTORY_ENV"] = "write"
+        (self.repo / "roles/developer").mkdir(parents=True)
+        (self.repo / "roles/developer/skills.txt").write_text("../victim\n")
+        keep = self.home / ".agents/victim/keep"
+        keep.parent.mkdir(parents=True)
+        keep.write_text("x")
+        r = self.run_script()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("invalid skill name", r.stderr)
+        self.assertTrue(keep.exists())
+
     def test_air_models_in_config(self):
         m = cfg.load()["targets"]["air"]["models"]
         self.assertEqual(set(m), {"cheap", "mid", "strong", "review", "review_strong"})

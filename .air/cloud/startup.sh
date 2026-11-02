@@ -64,6 +64,9 @@ fi
 # Skills go to the user-level directories the harnesses scan at session start (Codex, Claude). HOME is not kept
 # across a resume, so this runs on every launch. The team's skills/<name> replaces the engine's skills/vendor/<name>.
 for s in $(skill_names); do
+  case "$s" in
+    ""|.|..|*/*) echo "startup: invalid skill name: $s" >&2; exit 1 ;;
+  esac
   src="./skills/$s"
   [ -d "$src" ] || src="$ENGINE/skills/vendor/$s"
   for d in "$HOME/.agents/skills" "$HOME/.claude/skills"; do

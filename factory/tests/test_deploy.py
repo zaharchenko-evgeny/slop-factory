@@ -40,7 +40,8 @@ class PlanTest(unittest.TestCase):
                            ("implement-mid", "write"), ("fix-cheap", "write"), ("update-strong", "write")):
             self.assertEqual(env[f"[Slop factory] {name}"], f"[Slop factory] {want}")
         self.assertEqual({e["name"]: e["variables"] for e in plan["environments"]},
-                         {"[Slop factory] read": {"FACTORY_ENV": "read"}, "[Slop factory] write": {"FACTORY_ENV": "write"}})
+                         {"[Slop factory] read": {"FACTORY_ENV": "read"}, "[Slop factory] write": {"FACTORY_ENV": "write"},
+                          "[Slop factory] ops": {"FACTORY_ENV": "ops"}})  # ops: only a disabled node, still planned
 
     def test_local_target_is_rejected(self):
         self.assertEqual(deploy.main(["plan", "--target", "local"]), 2)
