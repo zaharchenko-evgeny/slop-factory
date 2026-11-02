@@ -1280,11 +1280,14 @@ class UnblockedSweepTest(unittest.TestCase):
         tr.sweep_tickets = lambda stages: []
         tr.blocking = lambda ticket: [11]
         self.assertEqual([r["outcome"] for r in gate.sweep(tr, NODES, closed_ticket=10)[0]], ["unblocked"])
-        tr.tickets[11]["since"] = datetime.now(timezone.utc).isoformat()  # the re-fire label just landed
+        tr.tickets[11]["stage_at"] = datetime.now(timezone.utc).isoformat()  # the re-fire label just landed
         tr.tickets[11]["log"].clear()
         self.assertEqual(gate.sweep(tr, NODES, closed_ticket=10), ([], False))
         self.assertEqual(tr.tickets[11]["log"], [])
-        tr.tickets[11]["since"] = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+        tr.tickets[11]["stage_at"] = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+        self.assertEqual([r["outcome"] for r in gate.sweep(tr, NODES, closed_ticket=10)[0]], ["unblocked"])
+        tr.tickets[11]["log"].clear()
+        tr.tickets[11]["since"] = datetime.now(timezone.utc).isoformat()  # unrelated recent activity, not a re-fire
         self.assertEqual([r["outcome"] for r in gate.sweep(tr, NODES, closed_ticket=10)[0]], ["unblocked"])
 
     def test_dependent_is_refired_once_when_listed_more_than_once(self):

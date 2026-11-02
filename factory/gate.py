@@ -676,7 +676,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                             progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
                         continue
                     facts = tracker.stale_facts(n)
-                    since = facts.get("since")
+                    since = facts.get("stage_at")  # when this ticket last got its stage label, i.e. the re-fire
                     recent = since and datetime.now(timezone.utc) - datetime.fromisoformat(since.replace("Z", "+00:00")) <= timedelta(minutes=5)
                     if facts.get("issue_state", "open") != "open" or recent:  # closed, or this event's re-fire already landed
                         if progress:
