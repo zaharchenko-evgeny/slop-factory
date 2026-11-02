@@ -231,6 +231,9 @@
         },
         "distill_every_days": {
           "type": "integer"
+        },
+        "agents_md_lines": {
+          "type": "integer"
         }
       }
     },

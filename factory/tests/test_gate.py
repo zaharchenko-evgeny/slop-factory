@@ -288,6 +288,22 @@ class CliAndValidate(unittest.TestCase):
         })
         self.assertEqual((fields["complexity"], fields["tier"]), ("small", "cheap"))
 
+    def test_routines_run_without_a_ticket(self):
+        for name in ("retro", "distill"):
+            with tempfile.TemporaryDirectory() as d:
+                d = Path(d)
+                (d / "ev.json").write_text(json.dumps({"source": "schedule", "schedule": name}))
+                (d / "h.json").write_text(json.dumps({"handoff": name.upper(), "status": "done"}))
+                tr = ["--tracker", f"memory:{d / 't.json'}"]
+                (d / "t.json").write_text("{}")
+                out = StringIO()
+                with redirect_stdout(out):
+                    self.assertEqual(gate.main(["check", "--node", name, "--event", str(d / "ev.json"), *tr]), 0)
+                self.assertEqual(json.loads(out.getvalue())["ticket"], None)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(gate.main(["apply", "--node", name, "--handoff", str(d / "h.json"), *tr]), 0)
+                    self.assertEqual(gate.main(["apply", "--node", name, "--outcome", "nope", "--handoff", str(d / "h.json"), *tr]), 2)
+
     def test_cli_exit_codes(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
