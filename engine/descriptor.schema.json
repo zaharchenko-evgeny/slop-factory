@@ -182,6 +182,10 @@
         },
         "environment_repair_attempts": {
           "type": "integer"
+        },
+        "generated_paths": {
+          "type": "array",
+          "items": { "type": "string" }
         }
       }
     },

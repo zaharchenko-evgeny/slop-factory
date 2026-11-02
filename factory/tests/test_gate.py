@@ -261,6 +261,24 @@ class CliAndValidate(unittest.TestCase):
                                  (13, [("retained.txt", 12), ("deleted.txt", 1)]))
             self.assertEqual(run.call_args.kwargs["cwd"], Path(delivery))
 
+    def test_generated_paths_do_not_count_toward_size(self):
+        with tempfile.TemporaryDirectory() as delivery:
+            result = type("Result", (), {
+                "returncode": 0,
+                "stdout": "175\t0\tfactory/tests/fixtures/deploy/air-plan.json\n"
+                          "12\t3\tdocs/statechart.md\n"
+                          "9\t0\tskills/factory-setup/templates/roles/router/role.md\n"
+                          "4\t1\tfactory/gate.py\n",
+                "stderr": "",
+            })()
+            with patch.object(gate.subprocess, "run", return_value=result):
+                self.assertEqual(gate.branch_size(
+                    "origin/main", checkout=delivery,
+                    generated_paths=["factory/tests/fixtures/deploy/air-plan.json",
+                                     "docs/statechart.md", "docs/statechart-proposed.md",
+                                     "skills/factory-setup/templates/**"],
+                ), (5, [("factory/gate.py", 5)]))
+
     def test_intake_size_uses_first_number(self):
         fields = gate.intake_fields({
             "handoff": "ROUTER-INTAKE",
