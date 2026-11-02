@@ -121,7 +121,8 @@ def from_trigger(d):
     name = "pull_request_review" if review and pr else "pull_request" if pr else "issues"
     src = pr or issue
     if pr:
-        m = re.match(r"ez/(\d+)-", (pr.get("head") or {}).get("ref") or "")
+        ref = (pr.get("head") or {}).get("ref") or ""
+        m = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
         if not m:
             raise NoTicket(f"PR #{pr.get('number')} is not on an ez/<n>- branch")
         ticket = int(m[1])
@@ -574,6 +575,8 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None):
                 r.update(applied=out["applied"], written=out.get("written", []))
                 if not out["applied"]:
                     break
+                if node == "finish" and outcome == "merged" and hasattr(tracker, "config_change_merged"):
+                    tracker.config_change_merged(facts.get("pr"))
                 merged = merged or (node, outcome) == ("merge", "merged")
                 if node == "finish" and outcome in ("merged", "children-done"):
                     done_tickets.append(n)
