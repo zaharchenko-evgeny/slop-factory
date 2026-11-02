@@ -308,7 +308,7 @@ flowchart LR
     N_reopen["<b>reopen</b><br/>on: PR push<br/>on: PR +factory:ci-red<br/>script"]:::node
     N_merge["<b>merge</b> (#159)<br/>on: PR +factory:merge<br/>script"]:::planned
     N_finish["<b>finish</b><br/>on: PR merged<br/>on: issue closed<br/>on: issue +factory:blocked<br/>script"]:::node
-    N_recover["<b>recover</b><br/>on: cron 0 6,18 * * *<br/>script"]:::node
+    N_recover["<b>recover</b><br/>on: cron 15 * * * *<br/>script"]:::node
     N_routines["<b>routines</b> (#162)<br/>on: cron 0 6 * * *<br/>distill · review tiers"]:::planned
     CI["<b>CI</b> quality-gates + ci-state.yml<br/>on: PR push<br/>writes +factory:ci-green or +factory:ci-red"]:::ext
     S_approved(["approved"]):::stage
@@ -405,7 +405,7 @@ flowchart LR
 | `reopen` | `PR push`<br>`PR +factory:ci-red` | reopened: → in-review | script | built |
 | `merge` | `PR +factory:merge` | merged: —<br>update-or-hold: → approved<br>fix: +factory:fix-{tier} → changes-requested | script | planned #159 |
 | `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked` | answered: → ready (planned #157)<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
-| `recover` | `cron 0 6,18 * * *` | blocked: → blocked | script | built |
+| `recover` | `cron 15 * * * *` | blocked: → blocked | script | built |
 | `routines` | `cron 0 6 * * *` | proposed: — | distill · per focus | planned #162 |
 <!-- /nodes-chart -->
 
