@@ -639,6 +639,12 @@ class JoinTest(unittest.TestCase):
         self.assertIn("--remove-label", gh.writes[0])
         self.assertIn("factory:fix-mid", gh.writes[0])
 
+    def test_update_resolved_removes_label(self):
+        gh = FakeGh(labels=["factory:changes-requested", "risk:low", "factory:update-cheap"])
+        code, out = gate.apply("update", "resolved", {"ticket": 7, "event": "e"}, tr(gh), nodes.load())
+        self.assertEqual((code, out["applied"]), (gate.GO, True))
+        self.assertTrue(any("--remove-label" in w and "factory:update-cheap" in w for w in gh.writes))
+
     def test_fix_done_asks_again_who_requested_changes(self):
         # review 3 of #183: without this, a request counted by round 1 is dropped and nobody asks alice again
         gh = FakeGh(reviews=[review(BOT, M), review("alice", "", commit="h0", state="CHANGES_REQUESTED"),

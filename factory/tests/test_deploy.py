@@ -168,8 +168,18 @@ class PlanTest(unittest.TestCase):
     def test_script_nodes_only_run_the_sweep(self):
         plan = json.loads((FIX / "air-plan.json").read_text())
         a = {x["name"]: x for x in plan["automations"]}
-        self.assertTrue(a["[Slop factory] sweep"]["prompt"].endswith("Run `factory sweep` once and report its JSON output."))
+        self.assertIn("Run `factory sweep` in the foreground", a["[Slop factory] sweep"]["prompt"])
         self.assertIn("`factory begin intake`", a["[Slop factory] intake"]["prompt"])
+
+    def test_every_script_prompt_waits_for_command_exit(self):
+        plans = (deploy.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
+        for plan in plans:
+            for automation in plan["automations"]:
+                if automation["name"].startswith(("[Slop factory] sweep", "[Slop factory] join",
+                                                   "[Slop factory] finish", "[Slop factory] merge",
+                                                   "[Slop factory] reopen", "[Slop factory] recover",
+                                                   "[Slop factory] notify")):
+                    self.assertIn("wait until it exits", automation["prompt"])
 
     def test_review_automations_trigger_on_focus_rerequest_labels(self):
         for a in json.loads((FIX / "air-plan.json").read_text())["automations"]:
@@ -183,7 +193,7 @@ class PlanTest(unittest.TestCase):
                      deploy.plan_air(nodes.load(), cfg.load())):
             a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] recover")
             self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "15 * * * *", "timezone": "UTC"}])
-            self.assertTrue(a["prompt"].endswith("Run `factory sweep --stale` once and report its JSON output."))
+            self.assertIn("Run `factory sweep --stale` in the foreground", a["prompt"])
             intake = next(x for x in plan["automations"] if x["name"] == "[Slop factory] intake")  # router: cheap
             self.assertEqual(a["agentAndModel"], intake["agentAndModel"])
 

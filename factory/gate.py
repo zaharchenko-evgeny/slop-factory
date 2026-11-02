@@ -593,7 +593,7 @@ def sweep_plan(facts, auto_merge=None):
     return None
 
 
-def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None):
+def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, progress=None):
     """Move every listed ticket through each step its facts allow (a merged PR goes approved to done in one
     step). A ticket that reaches done or blocked also lets its split parent finish. Returns (results, failed)."""
     results, failed, done_tickets = [], False, []
@@ -613,9 +613,13 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None):
                 r = {"ticket": n, "stage": facts["stage"], "node": node, "outcome": outcome}
                 results.append(r)
                 if dry_run:
+                    if progress:
+                        progress(r)
                     break
                 code, out = apply(node, outcome, {"ticket": n, **payload}, tracker, nodes, auto_merge=auto_merge)
                 r.update(applied=out["applied"], written=out.get("written", []))
+                if progress:
+                    progress(r)
                 if not out["applied"]:
                     break
                 if node == "finish" and outcome == "merged" and hasattr(tracker, "config_change_merged"):
@@ -627,7 +631,10 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None):
                     queue.append(p)
             except Exception as e:  # one ticket failing does not stop the others
                 failed = True
-                results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+                r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
+                results.append(r)
+                if progress:
+                    progress(r)
                 break
     wake_sources = list(dict.fromkeys(([closed_ticket] if closed_ticket is not None else []) + done_tickets))
     woken = set()
@@ -648,6 +655,8 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None):
                         continue
                     woken.add(n)
                     results.append({"ticket": n, "stage": "ready", "node": "intake", "outcome": "unblocked"})
+                    if progress:
+                        progress(results[-1])
                     if dry_run:
                         continue
                     for effect in ({"kind": "unlabel", "ticket": n, "value": "factory:ready"},
@@ -657,7 +666,10 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None):
                         tracker.apply(effect)
                 except Exception as e:
                     failed = True
-                    results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+                    r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
+                    results.append(r)
+                    if progress:
+                        progress(r)
     return results, failed
 
 
@@ -682,6 +694,9 @@ def stale_plan(facts, now, hours, command_minutes=30):
     if now - datetime.fromisoformat(since.replace("Z", "+00:00")) <= age:
         return None
     cmd, cmd_at, commit_at = facts.get("command"), facts.get("command_at") or "", facts.get("commit_at") or ""
+    if stage == "changes-requested" and facts.get("conflict") and cmd and cmd.startswith("factory:update-") \
+            and cmd_at and cmd_at < since:
+        return "refire", cmd, "pr", "conflicting PR has an update label with no later run"
     if stage == "ready" and not facts.get("blockers_open"):
         return "refire", "factory:ready", "issue", "no intake outcome"
     if stage == "in-dev" and cmd and (not facts.get("pr") or commit_at < cmd_at):
@@ -707,7 +722,7 @@ def stale_plan(facts, now, hours, command_minutes=30):
     return "human", None, None, f"no recovery rule re-fired after {hours} hours in {stage}"
 
 
-def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=30):
+def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=30, progress=None):
     """Recover tickets whose Air run died: one re-fire per ticket and stage, a second stale finding blocks it.
     Returns (results, failed)."""
     now, results, failed = now or datetime.now(timezone.utc), [], False
@@ -722,6 +737,8 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
             r = {"ticket": n, "stage": stage, "recover": kind, "why": why}
             results.append(r)
             if dry_run:
+                if progress:
+                    progress(r)
                 continue
             run = "recover:stale"
             if kind == "finish":
@@ -751,9 +768,14 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                 r["applied"] = tracker.apply({"ticket": n, "kind": "label", "value": label, "on": on})
                 tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
                                "value": f"{RECOVER} stage={stage} re-fired {label} ({why})"})
+            if progress:
+                progress(r)
         except Exception as e:  # one ticket failing does not stop the others
             failed = True
-            results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+            r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
+            results.append(r)
+            if progress:
+                progress(r)
     return results, failed
 
 
@@ -808,12 +830,15 @@ def main(argv):
                         closed_ticket = raw["issue"].get("number")
                 except (OSError, ValueError) as e:
                     print(f"warning: ignoring invalid sweep event; running full sweep: {e}", file=sys.stderr)
-            results, failed = sweep(tracker, nodes, a.dry_run, closed_ticket, config["gates"].get("auto_merge"))
+            progress = lambda item: print(json.dumps(item), file=sys.stderr, flush=True)
+            results, failed = sweep(tracker, nodes, a.dry_run, closed_ticket,
+                                    config["gates"].get("auto_merge"), progress)
             out = {"dry_run": a.dry_run, "sweep": results}
             if a.stale:
                 out["stale"], stale_failed = sweep_stale(tracker, nodes, config["limits"].get("stale_hours", 2),
                                                          dry_run=a.dry_run,
-                                                         command_minutes=config["limits"].get("stale_command_minutes", 30))
+                                                         command_minutes=config["limits"].get("stale_command_minutes", 30),
+                                                         progress=progress)
                 failed = failed or stale_failed
             print(json.dumps(out))
             return FAILED if failed else GO
