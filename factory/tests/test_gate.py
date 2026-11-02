@@ -668,6 +668,34 @@ class ConflictTest(unittest.TestCase):
         self.assertIn(["comment", json.dumps(reason)], tr.tickets[7]["log"])
 
 
+    def test_escalate_labels_next_tier_and_strong_blocks(self):
+        for tier, label in (("cheap", "mid"), ("mid", "strong")):
+            tr = MemoryTracker({7: {"stage": "changes-requested"}})
+            code, _ = gate.apply("update", "escalate", {"ticket": 7, "event": "e"}, tr, NODES, tier=tier)
+            self.assertEqual(code, 0)
+            self.assertIn(["label", json.dumps(f"factory:update-{label}")], tr.tickets[7]["log"])
+        tr = MemoryTracker({7: {"stage": "changes-requested"}})
+        code, _ = gate.apply("update", "escalate", {"ticket": 7, "event": "e", "reason": "[factory] conflicts in a.py"},
+                             tr, NODES, tier="strong")
+        self.assertEqual((code, tr.tickets[7]["stage"]), (0, "blocked"))
+        self.assertIn(["comment", json.dumps("[factory] conflicts in a.py")], tr.tickets[7]["log"])
+
+    def test_recover_flags_approved_conflict_and_names_conflict_without_ci(self):
+        class Tr(MemoryTracker):
+            def sweep_tickets(self, stages):
+                return [n for n, t in self.tickets.items() if self.get_stage(t) in stages]
+        old = "2026-11-01T08:00:00Z"
+        now = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+        tr = Tr({1: {"stage": "approved", "since": old, "pr_state": "open", "conflict": True},
+                 2: {"stage": "in-review", "since": old, "pr": 9, "ci_label": None, "conflict": True}})
+        res = gate.sweep_stale(tr, NODES, 2, now)[0]
+        self.assertEqual([r["recover"] for r in res], ["conflict", "comment"])
+        self.assertIn(["label", '"factory:update-cheap"'], tr.tickets[1]["log"])
+        self.assertEqual(tr.tickets[1]["stage"], "changes-requested")
+        self.assertIn("conflicts with main", json.dumps(tr.tickets[2]["log"]))
+        self.assertEqual(tr.tickets[2]["stage"], "in-review")
+
+
 class UnblockedSweepTest(unittest.TestCase):
     def sweep(self, tickets, closed=10):
         tr = MemoryTracker(tickets)
