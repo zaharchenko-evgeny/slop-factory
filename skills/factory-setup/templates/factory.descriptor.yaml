@@ -14,6 +14,9 @@ tracker:
   adapter: github-issues
   repository: {{TRACKER_REPOSITORY}}
 
+notify:
+  github_user: {{NOTIFY_GITHUB_USER}}
+
 # Bots other than targets.air.bot_login whose APPROVED / CHANGES_REQUESTED reviews count in a round.
 reviews:
   trusted_bots: []
@@ -43,6 +46,7 @@ roles:
       full: { tier: review_strong, fallback: cheap }             # risk low: one reviewer, covers every focus
       behaviour: { tier: review, fallback: cheap }               # risk high
       structure-security: { tier: review_strong, fallback: cheap }  # risk high
+      knowledge: { tier: review_strong, fallback: cheap }          # distill PRs only (never required by risk)
   # Runs when a reviewer reports docs_impact.
   doc-writer: { tier: mid }
   # Records the run on the knowledge branch after the merge.
@@ -54,7 +58,7 @@ roles:
 # never to a default branch. The distill runs every
 # `distill_every_days`) opens one PR from `<distill_branch>-<date>` to the default branch with the
 # entries merged into `<dir>/` and listed in `<dir>/distilled.txt`.
-knowledge: { branch: knowledge-inbox, dir: knowledge, distill_branch: knowledge-distill, distill_every_days: 7 }
+knowledge: { branch: knowledge-inbox, dir: knowledge, distill_branch: knowledge-distill, distill_every_days: 7, agents_md_lines: 150 }
 
 gates:
   ticket_approval: human

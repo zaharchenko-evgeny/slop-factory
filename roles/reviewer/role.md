@@ -12,6 +12,11 @@ focus; stay in yours.
 - `full`: one reviewer covers every focus below.
 - `behaviour`: does the change do what the ticket asks? Acceptance checks,
   wrong results, edge cases, malformed input, missing tests.
+- `knowledge`: a distill PR (never required by risk). Check that every claim
+  matches the code or the ticket thread, nothing duplicates another file,
+  `AGENTS.md` stays within `knowledge.agents_md_lines` of
+  `factory.descriptor.yaml` (`wc -l`), and ticket trivia is dropped. A person
+  merges it.
 - `structure-security`: structure and repository rules (layers, conventions,
   needless code), security and data-loss risks (trust boundaries, injection,
   secrets, destructive operations).

@@ -285,6 +285,22 @@ class CliAndValidate(unittest.TestCase):
         })
         self.assertEqual((fields["complexity"], fields["tier"]), ("small", "cheap"))
 
+    def test_routines_run_without_a_ticket(self):
+        for name in ("retro", "distill"):
+            with tempfile.TemporaryDirectory() as d:
+                d = Path(d)
+                (d / "ev.json").write_text(json.dumps({"source": "schedule", "schedule": name}))
+                (d / "h.json").write_text(json.dumps({"handoff": name.upper(), "status": "done"}))
+                tr = ["--tracker", f"memory:{d / 't.json'}"]
+                (d / "t.json").write_text("{}")
+                out = StringIO()
+                with redirect_stdout(out):
+                    self.assertEqual(gate.main(["check", "--node", name, "--event", str(d / "ev.json"), *tr]), 0)
+                self.assertEqual(json.loads(out.getvalue())["ticket"], None)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(gate.main(["apply", "--node", name, "--handoff", str(d / "h.json"), *tr]), 0)
+                    self.assertEqual(gate.main(["apply", "--node", name, "--outcome", "nope", "--handoff", str(d / "h.json"), *tr]), 2)
+
     def test_cli_exit_codes(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
@@ -550,6 +566,38 @@ class TriggerTest(unittest.TestCase):
         tr = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "ci": "red", "fix_rounds": 3, "fix_cap": 3}})
         gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
         self.assertEqual(tr.tickets["7"]["stage"], "blocked")
+        self.assertIn(["label", '"factory:needs-human"'], tr.tickets["7"]["log"])
+        self.assertEqual(tr.tickets["7"]["assignees"], [CONFIG["notify"]["github_user"]])
+
+    def test_person_change_request_addressed_assigns_reviewer(self):
+        seen = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                seen.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "in-review", "head": "new-head", "pr": 42, "ci": "green",
+                             "waiting_reviewers": ["reviewer"], "focus_missing": []}})
+        gate.apply("join", "waiting", {"ticket": "7", "event": "e"}, tr, NODES)
+        self.assertIn(["label", '"factory:needs-human"'], tr.tickets["7"]["log"])
+        self.assertEqual(tr.tickets["7"]["assignees"], ["reviewer"])
+        self.assertIn('"[factory] Re-review PR #42: your change request was addressed at new-head"',
+                      [value for kind, value in tr.tickets["7"]["log"] if kind == "comment"])
+        self.assertIn({"kind": "comment", "ticket": "7",
+                       "value": "[factory] Re-review PR #42: your change request was addressed at new-head",
+                       "on": "pr"}, seen)
+
+    def test_needs_answers_assigns_ticket_author(self):
+        tr = MemoryTracker({"7": {"stage": "ready", "author": "ticket-author"}})
+        gate.apply("intake", "grill", {"ticket": "7", "questions": "[factory] Which API?"}, tr, NODES)
+        self.assertIn(["label", '"factory:needs-human"'], tr.tickets["7"]["log"])
+        self.assertEqual(tr.tickets["7"]["assignees"], ["ticket-author"])
+
+    def test_label_removed_when_stage_changes(self):
+        tr = MemoryTracker({"7": {"stage": "blocked", "attrs": ["factory:needs-human"],
+                                   "assignees": [CONFIG["notify"]["github_user"]]}})
+        gate.apply("human", "ready", {"ticket": "7", "actor": "human"}, tr, NODES)
+        self.assertNotIn("factory:needs-human", tr.tickets["7"]["attrs"])
+        self.assertEqual(tr.tickets["7"]["assignees"], [])
 
     def test_a_stop_clears_every_command_label(self):
         # review of PR #198: a label left on the ticket makes the command after factory:ready a no-op
@@ -693,6 +741,19 @@ class StaleSweepTest(unittest.TestCase):
         tr.sweep_tickets = lambda stages: [1]
         self.assertEqual(len(gate.sweep_stale(tr, NODES, 2, self.NOW, dry_run=True)[0]), 1)
         self.assertNotIn("log", tr.tickets[1])
+
+    def test_idle_unmatched_ticket_flagged_by_recover(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "issue_state": "open"}})
+        self.assertEqual([r["recover"] for r in res], ["human"])
+        self.assertIn(["label", '"factory:needs-human"'], tr.tickets[3]["log"])
+        self.assertEqual(tr.tickets[3]["assignees"], [CONFIG["notify"]["github_user"]])
+
+    def test_recover_preserves_existing_reviewer_wait(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "issue_state": "open",
+                                  "attrs": ["factory:needs-human"], "assignees": ["reviewer"]}})
+        self.assertEqual([r["recover"] for r in res], ["human"])
+        self.assertEqual(tr.tickets[3]["assignees"], ["reviewer"])
+        self.assertNotIn("log", tr.tickets[3])
 
 
 class SpecTest(unittest.TestCase):
@@ -892,7 +953,7 @@ class ApprovedSweepTest(unittest.TestCase):
 
 class AutoMergeTest(unittest.TestCase):
     OPEN = {"stage": "approved", "pr_state": "open", "head": "h", "round_head": "h", "round_complete": True,
-            "round_verdict": "approve", "ci": "green", "risk": "high"}
+            "round_verdict": "approve", "ci": "green", "risk": "high", "pr": 9}
     ON = {"enabled": True, "max_risk": "high"}
 
     def sweep(self, auto_merge=ON, **kw):
@@ -936,7 +997,21 @@ class AutoMergeTest(unittest.TestCase):
                 self.assertEqual(results, [("merge", "waiting")])
                 self.assertEqual(self.log(tr, "merge"), [])
                 self.assertEqual(tr.tickets[7]["stage"], "approved")
-                self.assertIn("waiting for a person to merge", self.log(tr, "comment")[0])
+                self.assertIn("Merge PR #9", self.log(tr, "comment")[0])
+                self.assertIn(["label", '\"factory:needs-human\"'], tr.tickets[7]["log"])
+                self.assertEqual(tr.tickets[7]["assignees"], [CONFIG["notify"]["github_user"]])
+
+    def test_merge_wait_comment_targets_pr(self):
+        effects = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({7: dict(self.OPEN)})
+        tr.sweep_tickets = lambda stages: [7]
+        gate.sweep(tr, NODES, auto_merge={"enabled": False, "max_risk": "high"})
+        comment = next(e for e in effects if e["kind"] == "comment")
+        self.assertEqual(comment["on"], "pr")
 
     def test_one_merge_per_sweep(self):
         tr = MemoryTracker({7: dict(self.OPEN), 8: dict(self.OPEN)})

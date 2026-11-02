@@ -183,6 +183,9 @@ def main(argv=None):
         return nodes.main(["chart", *rest])
     if cmd == "validate" and not rest:
         return validate()
+    if cmd == "notify":
+        from notify import main as notify_main
+        return notify_main(rest)
     print(__doc__)
     return 2
 
