@@ -418,10 +418,13 @@ class GitHubGateTracker:
             pr = self._pr(n)
             if pr is None or pr["merged"]:
                 return False
-            self.run(["api", "-X", "PUT", f"repos/{self.repo}/pulls/{pr['number']}/update-branch",
-                      "-f", f"expected_head_sha={e.get('head') or pr['head']['sha']}"])
+            self._update_branch(pr, e.get("head") or pr["head"]["sha"])
             return True
         raise ValueError(f"unknown effect: {kind}")
+
+    def _update_branch(self, pr, head):
+        self.run(["api", "-X", "PUT", f"repos/{self.repo}/pulls/{pr['number']}/update-branch",
+                  "-f", f"expected_head_sha={head}"])
 
     MERGE_LOCK, RECENT_MERGE_SECONDS = "factory-merge-lock", 60
 
@@ -444,7 +447,8 @@ class GitHubGateTracker:
             if wait > 0:
                 time.sleep(wait)  # no event wakes `merge` again after the window, so wait it out under the lock
             if self._api(f"compare/{base}...{head}")["behind_by"] > 0:
-                return False  # the merge that just landed moved the base: update-branch, CI, and ci-green wake `merge`
+                self._update_branch(pr, head)  # the merge that just landed moved the base: CI reruns, ci-green wakes `merge`
+                return False
             self.run(["pr", "merge", str(pr["number"]), "-R", self.repo, "--merge", "--match-head-commit", head])
             return True
         finally:

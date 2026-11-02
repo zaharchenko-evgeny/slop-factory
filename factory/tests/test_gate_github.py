@@ -471,6 +471,7 @@ class EffectsTest(unittest.TestCase):
         gh.behind_by = 1
         self.assertFalse(tr(gh).apply(eff("merge", "match-head")))
         self.assertFalse(any(w[:2] == ["pr", "merge"] for w in gh.writes))
+        self.assertTrue(any("PUT" in w and w[3].endswith("/update-branch") for w in gh.writes))  # a retry event must follow
         self.assertIn("DELETE", gh.writes[-1])
 
     def test_merge_refused_while_another_run_holds_the_lock(self):
