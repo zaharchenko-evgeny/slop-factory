@@ -358,7 +358,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
                     {"kind": "assign", "ticket": ticket, "value": people},
                     {"kind": "comment", "ticket": ticket,
-                     "value": f"[factory] Re-review PR #{facts['pr']}: your change request was addressed at {facts['head']}"}]
+                     "value": f"[factory] Re-review PR #{facts['pr']}: your change request was addressed at {facts['head']}",
+                     "on": "pr"}]
     if name == "merge" and outcome == "waiting":
         effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
                     {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]}]
@@ -733,6 +734,8 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
                                               "value": f"{RECOVER} stage={stage} {why}"})
             elif kind == "human":
+                if "factory:needs-human" in facts.get("attrs", []):
+                    continue  # preserve an existing human wait and its assignee
                 tracker.apply({"ticket": n, "kind": "label", "value": "factory:needs-human"})
                 tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"]})
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,

@@ -575,13 +575,21 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual(tr.tickets["7"]["assignees"], [CONFIG["notify"]["github_user"]])
 
     def test_person_change_request_addressed_assigns_reviewer(self):
-        tr = MemoryTracker({"7": {"stage": "in-review", "head": "new-head", "pr": 42, "ci": "green",
-                                   "waiting_reviewers": ["reviewer"], "focus_missing": []}})
+        seen = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                seen.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "in-review", "head": "new-head", "pr": 42, "ci": "green",
+                             "waiting_reviewers": ["reviewer"], "focus_missing": []}})
         gate.apply("join", "waiting", {"ticket": "7", "event": "e"}, tr, NODES)
         self.assertIn(["label", '"factory:needs-human"'], tr.tickets["7"]["log"])
         self.assertEqual(tr.tickets["7"]["assignees"], ["reviewer"])
         self.assertIn('"[factory] Re-review PR #42: your change request was addressed at new-head"',
                       [value for kind, value in tr.tickets["7"]["log"] if kind == "comment"])
+        self.assertIn({"kind": "comment", "ticket": "7",
+                       "value": "[factory] Re-review PR #42: your change request was addressed at new-head",
+                       "on": "pr"}, seen)
 
     def test_needs_answers_assigns_ticket_author(self):
         tr = MemoryTracker({"7": {"stage": "ready", "author": "ticket-author"}})
@@ -748,6 +756,13 @@ class StaleSweepTest(unittest.TestCase):
         self.assertEqual([r["recover"] for r in res], ["human"])
         self.assertIn(["label", '"factory:needs-human"'], tr.tickets[3]["log"])
         self.assertEqual(tr.tickets[3]["assignees"], [CONFIG["notify"]["github_user"]])
+
+    def test_recover_preserves_existing_reviewer_wait(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "issue_state": "open",
+                                  "attrs": ["factory:needs-human"], "assignees": ["reviewer"]}})
+        self.assertEqual([r["recover"] for r in res], ["human"])
+        self.assertEqual(tr.tickets[3]["assignees"], ["reviewer"])
+        self.assertNotIn("log", tr.tickets[3])
 
 
 class SpecTest(unittest.TestCase):
@@ -994,6 +1009,18 @@ class AutoMergeTest(unittest.TestCase):
                 self.assertIn("Merge PR #9", self.log(tr, "comment")[0])
                 self.assertIn(["label", '\"factory:needs-human\"'], tr.tickets[7]["log"])
                 self.assertEqual(tr.tickets[7]["assignees"], [CONFIG["notify"]["github_user"]])
+
+    def test_merge_wait_comment_targets_pr(self):
+        effects = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({7: dict(self.OPEN)})
+        tr.sweep_tickets = lambda stages: [7]
+        gate.sweep(tr, NODES, auto_merge={"enabled": False, "max_risk": "high"})
+        comment = next(e for e in effects if e["kind"] == "comment")
+        self.assertEqual(comment["on"], "pr")
 
     def test_one_merge_per_sweep(self):
         tr = MemoryTracker({7: dict(self.OPEN), 8: dict(self.OPEN)})
