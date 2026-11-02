@@ -211,7 +211,7 @@ class PlanTest(unittest.TestCase):
                           for x in reopen["triggers"]],
                          [("pull_request.synchronize", None, "jetbrains-air[bot]"),
                           ("pull_request.labeled", "factory:ci-red", "jetbrains-air[bot]")])
-        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] != "[Slop factory] recover" for x in a["triggers"]), "no polling"  # recover is the one safety net
+        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] recover", "[Slop factory] retro", "[Slop factory] distill") for x in a["triggers"]), "no polling"  # recover is the one safety net
 
     def test_one_triggervcs_entry_per_trigger_and_a_spec_per_automation(self):
         for a in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
@@ -269,9 +269,9 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["prefix"], "[Slop factory] ")
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
-            "intake", "join", "finish", "recover", "reopen", "merge", "notify",
+            "intake", "join", "finish", "recover", "reopen", "merge", "notify", "retro", "distill",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
-            *(f"review-{f}" for f in ("full", "behaviour", "structure-security")))}
+            *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}
         self.assertEqual(names, pilot)
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
                          {"intake", "implement", "review", "join", "fix", "update", "finish", "recover", "reopen", "merge", "notify"})

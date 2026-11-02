@@ -261,6 +261,24 @@ class CliAndValidate(unittest.TestCase):
                                  (13, [("retained.txt", 12), ("deleted.txt", 1)]))
             self.assertEqual(run.call_args.kwargs["cwd"], Path(delivery))
 
+    def test_generated_paths_do_not_count_toward_size(self):
+        with tempfile.TemporaryDirectory() as delivery:
+            result = type("Result", (), {
+                "returncode": 0,
+                "stdout": "175\t0\tfactory/tests/fixtures/deploy/air-plan.json\n"
+                          "12\t3\tdocs/statechart.md\n"
+                          "9\t0\tskills/factory-setup/templates/roles/router/role.md\n"
+                          "4\t1\tfactory/gate.py\n",
+                "stderr": "",
+            })()
+            with patch.object(gate.subprocess, "run", return_value=result):
+                self.assertEqual(gate.branch_size(
+                    "origin/main", checkout=delivery,
+                    generated_paths=["factory/tests/fixtures/deploy/air-plan.json",
+                                     "docs/statechart.md", "docs/statechart-proposed.md",
+                                     "skills/factory-setup/templates/**"],
+                ), (5, [("factory/gate.py", 5)]))
+
     def test_intake_size_uses_first_number(self):
         fields = gate.intake_fields({
             "handoff": "ROUTER-INTAKE",
@@ -269,6 +287,22 @@ class CliAndValidate(unittest.TestCase):
             "split": "none",
         })
         self.assertEqual((fields["complexity"], fields["tier"]), ("small", "cheap"))
+
+    def test_routines_run_without_a_ticket(self):
+        for name in ("retro", "distill"):
+            with tempfile.TemporaryDirectory() as d:
+                d = Path(d)
+                (d / "ev.json").write_text(json.dumps({"source": "schedule", "schedule": name}))
+                (d / "h.json").write_text(json.dumps({"handoff": name.upper(), "status": "done"}))
+                tr = ["--tracker", f"memory:{d / 't.json'}"]
+                (d / "t.json").write_text("{}")
+                out = StringIO()
+                with redirect_stdout(out):
+                    self.assertEqual(gate.main(["check", "--node", name, "--event", str(d / "ev.json"), *tr]), 0)
+                self.assertEqual(json.loads(out.getvalue())["ticket"], None)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(gate.main(["apply", "--node", name, "--handoff", str(d / "h.json"), *tr]), 0)
+                    self.assertEqual(gate.main(["apply", "--node", name, "--outcome", "nope", "--handoff", str(d / "h.json"), *tr]), 2)
 
     def test_cli_exit_codes(self):
         with tempfile.TemporaryDirectory() as d:

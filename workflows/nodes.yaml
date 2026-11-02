@@ -31,7 +31,8 @@ adapters:
   ticket: github-issues   # stage, fields, labels, blockers
   pr: github              # state, head, CI, reviews by head SHA
 schedules:
-  routines: { cron: "0 6 * * *" }
+  retro: { cron: "0 2 * * *" }
+  distill: { cron: "0 3 * * 1" }
   recover: { cron: "15 * * * *" }
 nodes:
   human:
@@ -96,7 +97,7 @@ nodes:
   review:
     env: read
     pilot: true
-    focuses: [full, behaviour, structure-security]
+    focuses: [full, behaviour, structure-security, knowledge]
     # CI labels the PR when it finishes (.github/workflows/ci-state.yml): reviewers only read green code.
     triggers: ["pull_request.labeled factory:ci-green", "pull_request.labeled factory:rereview-<focus>"]
     when: { stage: in-review, focus: required-by-risk, ci: [green] }
@@ -188,7 +189,7 @@ nodes:
       children-done: { from: [split], effects: [{ stage: done }] }
       child-blocked: { from: [split], effects: [{ comment: reason }, { stage: blocked }] }
       conflict: { from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
-      merged: { from: [approved], effects: [{ comment: retro }, { stage: done }] }
+      merged: { from: [approved], effects: [{ stage: done }] }
   notify:
     env: ops
     pilot: true
@@ -213,13 +214,22 @@ nodes:
     outcomes:
       # The sweep writes these itself: one re-fire per ticket and stage, then blocked.
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
-  routines:
+  # Routines (ADR-0015): outside any ticket. `factory/knowledge.py` holds the entry and PR plans the roles follow.
+  retro:
     env: ops
-    enabled: false
-    ticket: 162
-    triggers: ["schedule routines"]
-    when: { due: true }
+    routine: true  # outside any ticket: the gate matches it without tracker facts
+    triggers: ["schedule retro"]
+    when: { always: true }
+    role: retro
+    output: push-to-new-branch
+    outcomes:
+      recorded: {}
+  distill:
+    env: ops
+    routine: true  # outside any ticket: the gate matches it without tracker facts
+    triggers: ["schedule distill"]
+    when: { always: true }
     role: distill
     output: push-to-new-branch
     outcomes:
-      proposed: { effects: [{ comment: report }] }
+      proposed: {}

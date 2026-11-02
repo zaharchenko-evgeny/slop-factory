@@ -189,6 +189,10 @@
         },
         "environment_repair_attempts": {
           "type": "integer"
+        },
+        "generated_paths": {
+          "type": "array",
+          "items": { "type": "string" }
         }
       }
     },
@@ -233,6 +237,9 @@
           "type": "string"
         },
         "distill_every_days": {
+          "type": "integer"
+        },
+        "agents_md_lines": {
           "type": "integer"
         }
       }
