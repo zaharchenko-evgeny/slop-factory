@@ -36,6 +36,9 @@ fixes separately as needed. Ignore nits.
 
 List those answers in `findings_addressed`, one per finding, as
 `<finding id>: fixed in <sha>` or `<finding id>: disputed — <reason>`.
+When every finding is disputed, also list the affected reviewer focus names in
+`disputed_focuses` (for example `behaviour`). The gate posts these disputes and
+requests one review from each focus again at the same head.
 Before the handoff, run every acceptance check that can run locally, including
 checks relevant to the blocking findings. Record every check in `checks` using
 the same format as implement mode. A failed check cannot be handed off as
