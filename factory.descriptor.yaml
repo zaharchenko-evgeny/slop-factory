@@ -100,6 +100,10 @@ limits:
 # shortcut: ShellCheck runs only when installed and Betterleaks is not run
 # locally yet; #5 adds both as blocking CI gates.
 checks:
+  - name: doc-references
+    stage: pre-review
+    mode: blocking
+    run: uv run --quiet factory/check_refs.py
   - name: whitespace
     stage: pre-review
     mode: blocking

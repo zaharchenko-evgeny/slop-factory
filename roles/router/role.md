@@ -13,7 +13,7 @@ create issues yourself; propose slices in `split:` and let the workflow publish.
 Input: a request (free text or a tracker issue).
 
 1. Classify it: `feature`, `bug`, `investigation`, `review` or `docs`.
-2. For a ticket in stage `ready`, check the definition of ready: acceptance
+2. For a ticket in stage `triage`, check the definition of ready: acceptance
    checks, affected repositories, and a size estimate. If anything is missing,
    recommend stage `blocked` with the question to ask the human.
    If an acceptance check searches files, it names the paths it covers or

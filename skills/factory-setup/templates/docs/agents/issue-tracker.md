@@ -66,6 +66,8 @@ ticket's `factory-state` marker.
 | `in_stage(s, closed)` | Open tickets in stage `s`, with `closed` also closed ones | issues with the stage label (`--state all` with `closed`) |
 | `frontier()` | Open `ready` tickets, every blocker closed, unclaimed, in map order | open issues with the `ready` label, no assignee, every native blocker closed |
 
+Stages run `draft → triage → ready → in-dev → …`: `triage` starts the router, `ready` starts a developer. The frontier is the tickets in `ready` with every blocker closed.
+
 Rules:
 
 - Claim before the first other write; release when the ticket reaches a
