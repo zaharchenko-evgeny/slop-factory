@@ -35,9 +35,9 @@ PAYLOAD = {"risk": "low", "complexity": "small", "tier": "mid"}
 def make(cls, tid, **kw):
     t = {"head": "abc", "blockers_open": 0, "ci": "green"}  # reviewers start on green CI
     if cls is TagTracker:
-        t["tags"] = ["stage:ready", "risk:low"]
+        t["tags"] = ["stage:triage", "risk:low"]
     else:
-        t["stage"] = "ready"
+        t["stage"] = "triage"
     return cls({tid: {**t, **kw}})
 
 
@@ -111,7 +111,9 @@ def tests_for(cls, tid):
             self.assertIn("grill", out["outcomes"])
 
         def test_condition_fails(self):
-            self.assertEqual(self.check(self.tr(blockers_open=1), self.ev())[0], 10)
+            tr = self.tr()
+            tr.set_stage(tr.tickets[tid], "in-dev")
+            self.assertEqual(self.check(tr, self.ev())[0], 10)
 
         def test_stale_head(self):
             code, out = self.check(self.tr(), self.ev(head="old"))
@@ -120,17 +122,17 @@ def tests_for(cls, tid):
         def test_duplicate_event(self):
             tr = self.tr()
             self.assertEqual(self.apply(tr)[0], 0)
-            tr.set_stage(tr.tickets[tid], "ready")  # a person re-readies the ticket; same event id
+            tr.set_stage(tr.tickets[tid], "triage")  # a person re-triages the ticket; same event id
             self.assertEqual(self.check(tr, self.ev())[1]["reason"], "duplicate event")
             self.assertEqual(self.check(tr, self.ev())[0], 10)
 
         def test_duplicate_event_on_apply(self):
             tr = self.tr()
             self.assertEqual(self.apply(tr)[0], 0)
-            tr.set_stage(tr.tickets[tid], "ready")
+            tr.set_stage(tr.tickets[tid], "triage")
             code, out = self.apply(tr)
             self.assertEqual((code, out["reason"]), (10, "duplicate event"))
-            self.assertEqual(tr.facts(tid)["stage"], "ready")
+            self.assertEqual(tr.facts(tid)["stage"], "triage")
 
         def test_duplicate_event_without_stage_effect(self):
             tr = self.tr(focus_missing=["full"])
@@ -147,7 +149,7 @@ def tests_for(cls, tid):
             after = copy.deepcopy(tr.tickets)
             self.assertEqual(self.apply(tr)[0], 10)
             self.assertEqual(tr.tickets, after)
-            self.assertEqual(tr.facts(tid)["stage"], "in-dev")
+            self.assertEqual(tr.facts(tid)["stage"], "ready")
 
         def test_effects_skip_when_state_holds(self):
             tr = self.tr()
@@ -156,24 +158,24 @@ def tests_for(cls, tid):
 
         def test_failing_effect_leaves_stage(self):
             tr = self.tr()
-            tr.fail_on = "label"
+            tr.fail_on = "set-field"
             with self.assertRaises(RuntimeError):
                 self.apply(tr)
-            self.assertEqual(tr.facts(tid)["stage"], "ready")
+            self.assertEqual(tr.facts(tid)["stage"], "triage")
             tr.fail_on = None
             self.assertEqual(self.apply(tr)[0], 0)  # a retry completes
-            self.assertEqual(tr.facts(tid)["stage"], "in-dev")
+            self.assertEqual(tr.facts(tid)["stage"], "ready")
 
         def test_bad_payload_names_field(self):
             tr = self.tr()
             with self.assertRaisesRegex(gate.Bad, "`complexity`"):
                 self.apply(tr, {"risk": "low", "tier": "mid"})
-            self.assertEqual(tr.facts(tid)["stage"], "ready")
+            self.assertEqual(tr.facts(tid)["stage"], "triage")
 
         def test_outcome_from(self):
             tr = self.tr()
-            code, _ = gate.apply("human", "ready", {"ticket": tid, "actor": "human"}, tr, NODES)
-            self.assertEqual(code, 10)  # stage ready is not in the outcome's from
+            code, _ = gate.apply("human", "triage", {"ticket": tid, "actor": "human"}, tr, NODES)
+            self.assertEqual(code, 10)  # stage triage is not in the outcome's from
 
         def test_unknown_node(self):
             with self.assertRaises(gate.Bad):
@@ -307,7 +309,7 @@ class CliAndValidate(unittest.TestCase):
     def test_cli_exit_codes(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            (d / "t.json").write_text(json.dumps({"7": {"stage": "ready", "head": "abc"}}))
+            (d / "t.json").write_text(json.dumps({"7": {"stage": "triage", "head": "abc"}}))
             (d / "bad.json").write_text("{")
             (d / "ev.json").write_text(json.dumps({"id": "e", "ticket": "7"}))
             (d / "p.json").write_text(json.dumps({"ticket": "7", "risk": "low"}))
@@ -531,39 +533,38 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual((code, out["go"]), (10, False))
 
     def test_check_branch_from_title_or_pr(self):
-        tr = self.file({"7": {"stage": "ready", "head": "abc", "title": "Add the widget thing"}})
+        tr = self.file({"7": {"stage": "triage", "head": "abc", "title": "Add the widget thing"}})
         code, out = self.run_main(["check", "--node", "intake", "--event", str(self.file(TRIGGERS["issues"])), "--tracker", f"memory:{tr}"])
         self.assertEqual((out["branch"], out["handoff_path"]), ("ez/7-add-widget-thing", ".factory/handoff/intake.json"))
-        tr = self.file({"7": {"stage": "ready", "head": "abc", "title": "t", "branch": "ez/7-x"}})
+        tr = self.file({"7": {"stage": "triage", "head": "abc", "title": "t", "branch": "ez/7-x"}})
         code, out = self.run_main(["check", "--node", "intake", "--event", str(self.file(TRIGGERS["pull_request"])), "--tracker", f"memory:{tr}"])
         self.assertEqual((code, out["branch"]), (0, "ez/7-x"))
 
     def test_apply_handoff_router_intake(self):
         h = {"handoff": "ROUTER-INTAKE", "kind": "feature", "ready": "yes", "split": "none", "risk": "high",
              "size_estimate": "~250", "missing": "none", "next": "delivery"}
-        tr = self.file({"7": {"stage": "ready", "head": "abc"}})
+        tr = self.file({"7": {"stage": "triage", "head": "abc"}})
         code, out = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(h)),
                                    "--event", str(self.file(TRIGGERS["issues"])), "--tracker", f"memory:{tr}"])
         t = json.loads(tr.read_text())["7"]
-        self.assertEqual((code, t["stage"]), (0, "in-dev"))
+        self.assertEqual((code, t["stage"]), (0, "ready"))
         self.assertEqual(t["fields"]["risk"], "high")
         self.assertEqual(t["fields"]["complexity"], "medium")
-        self.assertIn(["label", '"factory:implement-mid"'], t["log"])
 
     def test_check_on_recorded_payload_and_other_handoffs(self):
-        tr = MemoryTracker({7: {"stage": "ready", "head": "abc", "title": "t"}})
+        tr = MemoryTracker({7: {"stage": "triage", "head": "abc", "title": "t"}})
         for payload in TRIGGERS.values():
             ev = gate.read(self.file(payload), "event", raw=True)
             code, out = gate.check("intake", {**ev, "head": None}, tr, NODES, CONFIG)
             self.assertEqual((code, out["ticket"], out["branch"]), (0, 7, "ez/7-t"))
         grill = {"handoff": "ROUTER-INTAKE", "kind": "feature", "ready": "no", "missing": "acceptance check 2",
                  "risk": "low", "size_estimate": "~120", "split": "none", "next": "blocked"}
-        tr = self.file({"7": {"stage": "ready", "head": "abc"}})
+        tr = self.file({"7": {"stage": "triage", "head": "abc"}})
         ev = str(self.file(TRIGGERS["issues"]))
         code, _ = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(grill)), "--event", ev, "--tracker", f"memory:{tr}"])
         self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "needs-answers"))
         split = {**grill, "ready": "yes", "missing": "none", "split": "\n  - First — scope (~100)\n  - Second — more (~90)"}
-        tr = self.file({"7": {"stage": "ready", "head": "abc"}})
+        tr = self.file({"7": {"stage": "triage", "head": "abc"}})
         code, _ = self.run_main(["apply", "--node", "intake", "--handoff", str(self.file(split)), "--event", ev, "--tracker", f"memory:{tr}"])
         self.assertEqual((code, json.loads(tr.read_text())["7"]["stage"]), (0, "split"))
         self.assertEqual([c["title"] for c in gate.intake_fields(split)["children"]], ["First", "Second"])
@@ -608,7 +609,7 @@ class TriggerTest(unittest.TestCase):
                        "on": "pr"}, seen)
 
     def test_needs_answers_assigns_ticket_author(self):
-        tr = MemoryTracker({"7": {"stage": "ready", "author": "ticket-author"}})
+        tr = MemoryTracker({"7": {"stage": "triage", "author": "ticket-author"}})
         gate.apply("intake", "grill", {"ticket": "7", "questions": "[factory] Which API?"}, tr, NODES)
         self.assertIn(["label", '"factory:needs-human"'], tr.tickets["7"]["log"])
         self.assertEqual(tr.tickets["7"]["assignees"], ["ticket-author"])
@@ -685,6 +686,58 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual(gate.join_decision(facts), ("changes", {"tier": "strong"}))
         self.assertEqual(gate.join_decision({**facts, "attrs": []})[1], {"tier": "mid"})
         self.assertIsNone(gate.join_decision({**facts, "round_complete": False}))
+
+
+class TriageReadyTest(unittest.TestCase):
+    """`factory:triage` runs the router; `factory:ready` starts a developer (the `start` script node)."""
+
+    def sweep(self, ticket, default_tier="mid"):
+        tr = MemoryTracker({7: ticket})
+        tr.sweep_tickets = lambda stages: [7]
+        return tr, gate.sweep(tr, NODES, default_tier=default_tier)[0]
+
+    def test_triage_proceed_sets_ready_and_complexity(self):
+        tr = MemoryTracker({7: {"stage": "triage"}})
+        code, _ = gate.apply("intake", "proceed", {"ticket": 7, "risk": "low", "complexity": "large"}, tr, NODES)
+        self.assertEqual((code, tr.tickets[7]["stage"]), (gate.GO, "ready"))
+        self.assertEqual(tr.tickets[7]["fields"], {"risk": "low", "complexity": "large"})
+        self.assertNotIn("factory:implement-strong", json.dumps(tr.tickets[7].get("log", [])))  # `start` adds it
+
+    def test_ready_starts_implement_at_complexity_tier(self):
+        for attrs, tier in ((["complexity:small"], "cheap"), (["complexity:large"], "strong"), ([], "mid")):
+            with self.subTest(attrs=attrs):
+                tr, res = self.sweep({"stage": "ready", "attrs": attrs})
+                self.assertEqual([(r["node"], r["outcome"]) for r in res], [("start", "started")])
+                self.assertEqual(tr.tickets[7]["stage"], "in-dev")
+                self.assertIn(["label", json.dumps(f"factory:implement-{tier}")], tr.tickets[7]["log"])
+        tr, _ = self.sweep({"stage": "ready"}, default_tier="cheap")  # no complexity label: descriptor default
+        self.assertIn(["label", '"factory:implement-cheap"'], tr.tickets[7]["log"])
+
+    def test_ready_with_open_blocker_waits(self):
+        tr, res = self.sweep({"stage": "ready", "blockers_open": 1})
+        self.assertEqual(res, [])
+        self.assertEqual(tr.tickets[7]["stage"], "ready")
+        self.assertNotIn("log", tr.tickets[7])
+        self.assertEqual(gate.check("start", {"id": "e", "ticket": 7}, tr, NODES, CONFIG)[0], gate.NO_GO)
+
+    def test_split_children_are_ready_in_order(self):
+        tr = MemoryTracker({7: {"stage": "triage"}})
+        h = {"handoff": "ROUTER-INTAKE", "ready": "yes", "risk": "low", "size_estimate": "~900", "missing": "none",
+             "split": [{"title": "First"}, {"title": "Second"}]}
+        self.assertEqual(gate.outcome_of(h), "split")
+        code, _ = gate.apply("intake", "split", {"ticket": 7, **gate.intake_fields(h)}, tr, NODES)
+        self.assertEqual((code, tr.tickets[7]["stage"]), (gate.GO, "split"))
+        kids = json.loads(next(v for k, v in tr.tickets[7]["log"] if k == "create-issues"))
+        self.assertEqual([c["title"] for c in kids], ["First", "Second"])  # GitHubGateTracker creates them `factory:ready`
+
+    def test_stale_triage_is_refired(self):
+        tr = MemoryTracker({1: {"stage": "triage", "since": "2026-11-01T08:00:00Z"}})
+        tr.sweep_tickets = lambda stages: [1] if "triage" in stages else []
+        now = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+        res = gate.sweep_stale(tr, NODES, 2, now)[0]
+        self.assertEqual([(r["recover"], r["stage"], r["why"]) for r in res], [("refire", "triage", "no intake outcome")])
+        self.assertIn(["label", '"factory:triage"'], tr.tickets[1]["log"])
+        self.assertEqual([r["recover"] for r in gate.sweep_stale(tr, NODES, 2, now)[0]], ["blocked"])
 
 
 class StaleSweepTest(unittest.TestCase):

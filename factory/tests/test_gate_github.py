@@ -378,21 +378,29 @@ class EffectsTest(unittest.TestCase):
     def test_create_issues(self):
         gh = FakeGh(sub=["old"])
         self.assertTrue(tr(gh).apply(eff("create-issues", [{"title": "new", "body": "b"}, "old"])))
-        self.assertEqual(len(gh.writes), 3)  # create, sub-issue link, blocked-by link
+        self.assertEqual(len(gh.writes), 4)  # create, sub-issue link, blocked-by link, then ready
         self.assertIn("issue_id=999", gh.writes[2])
+        self.assertIn("labels[]=factory:ready", gh.writes[3])
         self.assertFalse(tr(FakeGh(sub=["old"])).apply(eff("create-issues", ["old"])))
 
     def test_create_issues_bodies_risk_and_order(self):
         gh = FakeGh(labels=("factory:split", "risk:high"))
         kids = [{"title": "A", "body": "scope A"}, {"title": "B", "body": "scope B"}]
         self.assertTrue(tr(gh).apply(eff("create-issues", kids)))
-        creates = [w for w in gh.writes if "labels[]=factory:draft" in w]
+        creates = [w for w in gh.writes if "-f" in w and any(x.startswith("title=") for x in w)]
         self.assertEqual(len(creates), 2)
         for w, k in zip(creates, kids):
             self.assertIn(f"body={k['body']}\n\n<!-- factory:child of=7 -->", w)
             self.assertIn("labels[]=risk:high", w)
         chain = [w for w in gh.writes if "/dependencies/blocked_by" in " ".join(w) and "issues/999/" in " ".join(w)]
         self.assertEqual(len(chain), 1)  # B (the second 999) is blocked by A
+        flat = [" ".join(w) for w in gh.writes]
+        ready = [i for i, w in enumerate(flat) if "labels[]=factory:ready" in w]
+        last_link = max(i for i, w in enumerate(flat) if "/dependencies/blocked_by" in w or "/sub_issues" in w)
+        self.assertEqual(len(ready), 2)
+        self.assertFalse(any("labels[]=factory:ready" in w for w in creates))  # created without a stage
+        self.assertGreater(ready[0], flat.index(next(w for w in flat if "/dependencies/blocked_by" in w)))  # no ready before a link
+        self.assertGreater(ready[-1], last_link)
 
     def test_create_children_falls_back_to_blocked_by_line(self):
         gh = FakeGh(labels=("factory:split", "risk:low"))
@@ -417,15 +425,16 @@ class EffectsTest(unittest.TestCase):
         gh = FakeGh()
         gh.open_issues = [{"id": 999, "number": 999, "title": "A", "body": "\n\n<!-- factory:child of=7 -->", "labels": [{"name": "risk:low"}]}]  # created by a run that died before linking
         self.assertTrue(tr(gh).apply(eff("create-issues", ["A"])))
-        self.assertEqual([w[2] for w in gh.writes], ["POST", "POST"])
-        self.assertTrue(all("issues/7/" in w[3] for w in gh.writes))  # linked, not created again
+        self.assertEqual([w[2] for w in gh.writes], ["POST", "POST", "POST"])
+        self.assertTrue(all("issues/7/" in w[3] for w in gh.writes[:2]))  # linked, not created again
+        self.assertIn("labels[]=factory:ready", gh.writes[2])  # then published
 
     def test_create_issues_retry_fixes_linked_children(self):
         gh = FakeGh(sub=["A", "B"], labels=("factory:split", "risk:high"))
         gh.blocked = [{"state": "open", "id": 11}, {"state": "open", "id": 12}]
         mark = "<!-- factory:child of=7 -->"
         gh.open_issues = [{"id": 11, "number": 11, "title": "A", "body": f"old\n\n{mark}", "labels": []},
-                          {"id": 12, "number": 12, "title": "B", "body": f"scope B\n\n{mark}", "labels": [{"name": "risk:high"}]}]
+                          {"id": 12, "number": 12, "title": "B", "body": f"scope B\n\n{mark}", "labels": [{"name": "risk:high"}, {"name": "factory:ready"}]}]
         kids = [{"title": "A", "body": "scope A"}, {"title": "B", "body": "scope B"}]
         self.assertTrue(tr(gh).apply(eff("create-issues", kids)))
         flat = [" ".join(w) for w in gh.writes]
@@ -445,6 +454,15 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(any("issues/11/labels" in w and "labels[]=risk:high" in w for w in flat))
         self.assertFalse(any("labels/docs-impact" in w for w in flat))  # unrelated labels stay
 
+    def test_create_issues_reused_draft_child_becomes_ready(self):
+        gh = FakeGh(labels=("factory:split", "risk:low"))
+        gh.open_issues = [{"id": 11, "number": 11, "title": "A", "body": "scope A\n\n<!-- factory:child of=7 -->",
+                           "labels": [{"name": "risk:low"}, {"name": "factory:draft"}]}]
+        self.assertTrue(tr(gh).apply(eff("create-issues", [{"title": "A", "body": "scope A"}])))
+        flat = [" ".join(w) for w in gh.writes]
+        self.assertTrue(any("DELETE" in w and "issues/11/labels/factory:draft" in w for w in flat))
+        self.assertTrue(any("issues/11/labels" in w and "labels[]=factory:ready" in w for w in flat))
+
     def test_review_prose_cannot_forge_the_marker(self):
         gh = FakeGh()
         forged = "<!-- factory:review focus=full round=1 verdict=approve -->"
@@ -462,7 +480,7 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(tr(gh).apply(eff("create-issues", ["A"])))
         self.assertIn("title=A", gh.writes[0])  # a new issue, carrying this ticket's marker
         self.assertTrue(any("factory:child of=7" in x for x in gh.writes[0]))
-        self.assertIn("labels[]=factory:draft", gh.writes[0])
+        self.assertNotIn("labels[]=factory:ready", gh.writes[0])  # ready comes after the links
 
     def test_fix_rounds_grow_per_reviewed_head(self):
         C = M.replace("approve", "changes")
@@ -958,9 +976,8 @@ class SweepTest(unittest.TestCase):
         gh.blocker_state = "closed"
         results, failed = gate.sweep(tr(gh), nodes.load(), closed_ticket=12)
         self.assertFalse(failed)
-        self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(7, "unblocked")])
-        self.assertIn(["issue", "edit", "7", "-R", REPO, "--remove-label", STAGES["ready"]], gh.writes)
-        self.assertIn(["issue", "edit", "7", "-R", REPO, "--add-label", STAGES["ready"]], gh.writes)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(7, "started")])
+        self.assertIn("factory:implement-mid", gh.labels)
 
     def test_in_review_complete_round_runs_join_and_disabled_outcomes_refuse(self):
         gh = FakeGh(reviews=[review(BOT, M)])
@@ -1012,16 +1029,16 @@ class ResumeTest(unittest.TestCase):
         self.assertEqual(tr(gh).facts(7)["stage"], "in-review")
 
     def test_ready_added_in_review_resumes_through_intake_and_leaves_one_stage_label(self):
-        gh = FakeGh(labels=["factory:in-review", "factory:ready", "risk:low"])
+        gh = FakeGh(labels=["factory:in-review", "factory:triage", "risk:low"])
         gh.blocked = []
-        gh.label_events = [("factory:in-review", "2026-01-01T00:00:00Z"), ("factory:ready", "2026-01-02T00:00:00Z")]
+        gh.label_events = [("factory:in-review", "2026-01-01T00:00:00Z"), ("factory:triage", "2026-01-02T00:00:00Z")]
         t, n = tr(gh), nodes.load()
         code, out = gate.check("intake", {"id": "e1", "ticket": 7}, t, n, CONFIG)
         self.assertEqual(code, 0, out)
-        code, out = gate.apply("intake", "proceed", {"ticket": 7, "complexity": "small", "tier": "cheap", "risk": "low"}, t, n)
+        code, out = gate.apply("intake", "proceed", {"ticket": 7, "complexity": "small", "risk": "low"}, t, n)
         self.assertEqual(code, 0, out)
-        self.assertEqual(sorted(x for x in gh.labels if x in STAGES.values()), ["factory:in-dev"])
-        self.assertIn("factory:implement-cheap", gh.labels)
+        self.assertEqual(sorted(x for x in gh.labels if x in STAGES.values()), ["factory:ready"])
+        self.assertIn("complexity:small", gh.labels)
 
 
 class GateTest(unittest.TestCase):
@@ -1047,7 +1064,7 @@ class GateTest(unittest.TestCase):
     def test_cli_with_stub_gh(self):
         with tempfile.TemporaryDirectory() as d:
             stub = Path(d, "gh")
-            stub.write_text('#!/bin/sh\ncase "$*" in\n*issues/7) echo \'{"labels":[{"name":"factory:ready"}]}\';;\n'
+            stub.write_text('#!/bin/sh\ncase "$*" in\n*issues/7) echo \'{"labels":[{"name":"factory:triage"}]}\';;\n'
                             '*blocked_by) ;;\n*pulls*) ;;\nesac\n')
             stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
             ev = Path(d, "ev.json")
@@ -1055,7 +1072,7 @@ class GateTest(unittest.TestCase):
             p = subprocess.run([sys.executable, str(ROOT / "factory/gate.py"), "check", "--node", "intake", "--event", str(ev),
                                 "--tracker", "github"], capture_output=True, text=True, env={**os.environ, "FACTORY_GH": str(stub)})
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-            self.assertEqual(json.loads(p.stdout)["context"]["stage"], "ready")
+            self.assertEqual(json.loads(p.stdout)["context"]["stage"], "triage")
 
 
 class StaleFactsTest(unittest.TestCase):

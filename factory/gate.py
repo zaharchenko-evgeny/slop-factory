@@ -195,12 +195,12 @@ def outcome_of(h):
     return h.get("status")
 
 
-def fix_tier(facts):
-    """The fix tier of the ticket's `complexity:*` label (mid without one)."""
+def fix_tier(facts, default="mid"):
+    """The tier of the ticket's `complexity:*` label (`default` without one)."""
     for label in facts.get("attrs", []):
         if label.startswith("complexity:"):
-            return COMPLEXITY_TIER.get(label[11:], "mid")
-    return "mid"
+            return COMPLEXITY_TIER.get(label[11:], default)
+    return default
 
 
 def branch_of(facts, config):
@@ -461,7 +461,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     return GO, {"applied": True, "written": [e["kind"] for e in effects + after if tracker.apply(e)]}
 
 
-SWEEP_STAGES = ("approved", "split", "in-review", "needs-answers")
+SWEEP_STAGES = ("ready", "approved", "split", "in-review", "needs-answers")
 COMMANDS = ("factory:implement-", "factory:fix-", "factory:update-")
 
 
@@ -563,9 +563,21 @@ def merge_decision(facts, auto_merge):
     return ("updated" if facts.get("behind") else "merged"), {}
 
 
-def sweep_plan(facts, auto_merge=None):
+def retro_payload(facts):
+    """The `finish` retro comment of a merged ticket, from its facts."""
+    agent = [r for r in facts["reviews"] if r["agent"]]
+    pr = f"PR #{facts['pr']} {facts['pr_state']}" if facts["pr"] else "no PR found"
+    text = (f"Retro: {pr}; fix rounds {facts['fix_rounds']}; "
+            f"reviews {len(agent)} ({sum(r['verdict'] == 'approve' for r in agent)} approve, "
+            f"{sum(r['verdict'] == 'changes' for r in agent)} changes)")
+    return {"retro": text, "run_id": "finish:retro"}
+
+
+def sweep_plan(facts, auto_merge=None, default_tier="mid"):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
+    if stage == "ready" and not facts.get("blockers_open") and facts.get("issue_state", "open") == "open":
+        return "start", "started", {"tier": fix_tier(facts, default_tier)}
     if stage == "needs-answers" and facts.get("answered"):
         return "finish", "answered", {}
     if stage == "approved" and facts.get("pr_state") == "merged":
@@ -593,7 +605,7 @@ def sweep_plan(facts, auto_merge=None):
     return None
 
 
-def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, progress=None):
+def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, default_tier="mid", progress=None):
     """Move every listed ticket through each step its facts allow (a merged PR goes approved to done in one
     step). A ticket that reaches done or blocked also lets its split parent finish. Returns (results, failed)."""
     results, failed, done_tickets = [], False, []
@@ -603,7 +615,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, pr
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
             try:
                 facts = tracker.facts(n)
-                plan = sweep_plan(facts, auto_merge)
+                plan = sweep_plan(facts, auto_merge, default_tier)
                 if plan is None or (n, facts["stage"]) in seen:
                     if progress:
                         progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
@@ -663,7 +675,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, pr
                             progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
                         continue
                     woken.add(n)
-                    results.append({"ticket": n, "stage": "ready", "node": "intake", "outcome": "unblocked"})
+                    results.append({"ticket": n, "stage": "ready", "node": "start", "outcome": "unblocked"})
                     if progress:
                         progress(results[-1])
                     if dry_run:
@@ -682,7 +694,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, pr
     return results, failed
 
 
-STALE_STAGES = ("ready", "in-dev", "in-review", "changes-requested", "approved")
+STALE_STAGES = ("triage", "ready", "in-dev", "in-review", "changes-requested", "approved")
 RECOVER = "[factory] recover:"
 
 
@@ -706,8 +718,10 @@ def stale_plan(facts, now, hours, command_minutes=30):
     if stage == "changes-requested" and facts.get("conflict") and cmd and cmd.startswith("factory:update-") \
             and cmd_at and cmd_at < since:
         return "refire", cmd, "pr", "conflicting PR has an update label with no later run"
+    if stage == "triage":
+        return "refire", "factory:triage", "issue", "no intake outcome"
     if stage == "ready" and not facts.get("blockers_open"):
-        return "refire", "factory:ready", "issue", "no intake outcome"
+        return "refire", "factory:ready", "issue", "no start outcome"
     if stage == "in-dev" and cmd and (not facts.get("pr") or commit_at < cmd_at):
         return "refire", cmd, "issue", "no PR or commit since the command label"
     if stage == "in-review" and facts.get("pr"):
@@ -845,7 +859,8 @@ def main(argv):
                     print(f"warning: ignoring invalid sweep event; running full sweep: {e}", file=sys.stderr)
             progress = lambda item: print(json.dumps(item), file=sys.stderr, flush=True)
             results, failed = sweep(tracker, nodes, a.dry_run, closed_ticket,
-                                    config["gates"].get("auto_merge"), progress)
+                                    config["gates"].get("auto_merge"),
+                                    config.get("defaults", {}).get("tier", "mid"), progress)
             out = {"dry_run": a.dry_run, "sweep": results}
             if a.stale:
                 out["stale"], stale_failed = sweep_stale(tracker, nodes, config["limits"].get("stale_hours", 2),
