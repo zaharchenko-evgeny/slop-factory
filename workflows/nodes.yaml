@@ -114,14 +114,14 @@ nodes:
     pilot: true
     focuses: [full, behaviour, structure-security, knowledge]
     # CI labels the PR when it finishes (.github/workflows/quality-gates.yml): reviewers only read green code.
-    triggers: ["pull_request.labeled factory:ci-green", "pull_request.labeled factory:rereview-<focus>"]
+    triggers: ["pull_request.labeled factory:review-<focus>", "pull_request.labeled factory:rereview-<focus>"]
     when: { stage: in-review, focus: required-by-risk, ci: [green] }
     role: reviewer
     output: read-only
     outcomes:
       # The posted review starts the join (pull_request_review.submitted); only the join chooses the fix tier.
-      approve: { effects: [{ review: approve-at-head }] }
-      changes: { effects: [{ review: request-changes-at-head }] }
+      approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-<focus>", "on": pr }] }
+      changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-<focus>", "on": pr }] }
   join:
     env: read
     pilot: true

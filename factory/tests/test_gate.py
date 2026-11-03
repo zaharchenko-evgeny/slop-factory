@@ -42,6 +42,19 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_low_risk_wakes_full_only(self):
+        facts = {"stage": "in-review", "ci": "green", "focus_missing": ["full"]}
+        self.assertEqual(gate.review_wake_labels(facts), ["factory:review-full"])
+
+    def test_high_risk_wakes_two_focuses(self):
+        facts = {"stage": "in-review", "ci": "green", "focus_missing": ["behaviour", "structure-security"]}
+        self.assertEqual(gate.review_wake_labels(facts),
+                         ["factory:review-behaviour", "factory:review-structure-security"])
+
+    def test_reviewed_focus_not_woken_again(self):
+        facts = {"stage": "in-review", "ci": "green", "focus_missing": ["structure-security"]}
+        self.assertEqual(gate.review_wake_labels(facts), ["factory:review-structure-security"])
+
     def test_writer_answer_resumes_needs_answers(self):
         self.assertEqual(gate.sweep_plan({"stage": "needs-answers", "answered": True}), ("finish", "answered", {}))
 
@@ -138,8 +151,8 @@ def tests_for(cls, tid):
             tr = self.tr(focus_missing=["full"])
             tr.set_stage(tr.tickets[tid], "in-review")
             pl = {"ticket": tid, "event": "r1", "head": "abc"}
-            self.assertEqual(gate.apply("review", "approve", pl, tr, NODES)[0], 0)
-            code, out = gate.apply("review", "approve", pl, tr, NODES)
+            self.assertEqual(gate.apply("review", "approve", pl, tr, NODES, focus="full")[0], 0)
+            code, out = gate.apply("review", "approve", pl, tr, NODES, focus="full")
             self.assertEqual((code, out["reason"]), (10, "duplicate event"))
             self.assertEqual(gate.check("review", {"id": "r1", "ticket": tid}, tr, NODES, CONFIG)[0], 10)
 
@@ -812,9 +825,9 @@ class StaleSweepTest(unittest.TestCase):
         self.assertNotIn("log", tr.tickets[1])
 
     def test_in_review_with_ci_green_and_no_review_refires_ci_green(self):
-        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": "green", "reviews": []}})
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": "green", "reviews": [], "focus_missing": ["behaviour"]}})
         self.assertEqual([(r["recover"], r["stage"]) for r in res], [("refire", "in-review")])
-        self.assertIn(["label", '"factory:ci-green"'], tr.tickets[3]["log"])
+        self.assertIn(["label", '"factory:review-behaviour"'], tr.tickets[3]["log"])
 
     def test_in_review_without_ci_label_only_comments(self):
         tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": None}})
@@ -824,7 +837,7 @@ class StaleSweepTest(unittest.TestCase):
     def test_comment_only_note_does_not_use_the_retry(self):
         tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": None}})
         self.assertEqual([r["recover"] for r in res], ["comment"])
-        tr.tickets[3].update(ci_label="green", reviews=[])  # CI finished, the reviewer run then died
+        tr.tickets[3].update(ci_label="green", reviews=[], focus_missing=["behaviour"])  # CI finished, the reviewer run then died
         res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
         self.assertEqual([r["recover"] for r in res], ["refire"])
         self.assertEqual(gate.sweep_stale(tr, NODES, 2, self.NOW)[0][0]["recover"], "blocked")
