@@ -19,6 +19,7 @@ import config
 from gate_port import fix_round_count
 from github_tracker import gh
 
+COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
 NOTE_FIELDS, NOTE_FOR, NOTE_MAX = ("for", "files", "repro", "hint", "context"), ("fixer", "reviewer", "developer", "any"), 2000
 NOTES_PARKED = "[factory] Agent notes for the PR description"  # ticket comment that holds them until the PR exists
 NOTES = re.compile(r"<!-- factory:agent-notes\s*(\{.*?\})\s*-->", re.S)
@@ -245,9 +246,10 @@ class GitHubGateTracker:
 
     def _pr_patch(self, base, sha):
         """The PR's patch at `sha` as {file: patch with hunk line numbers dropped}, like `git patch-id --stable`.
-        None when GitHub omits a patch (binary or huge diff), so the caller cannot compare."""
+        None when GitHub omits a patch (binary or huge diff) or the compare list may be cut at its 300-file limit,
+        so the caller cannot compare."""
         files = self._api(f"compare/{base}...{sha}")["files"]
-        if any(x.get("patch") is None for x in files):
+        if len(files) >= COMPARE_FILE_LIMIT or any(x.get("patch") is None for x in files):
             return None
         return {x["filename"]: re.sub(r"^@@ .*? @@", "@@", x["patch"], flags=re.M) for x in files}
 

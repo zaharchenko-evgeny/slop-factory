@@ -299,6 +299,21 @@ class CarriedApprovalTest(unittest.TestCase):
                 f = self.facts(**kw)
                 self.assertEqual((f["round_complete"], f["round_head"], f["focus_missing"]), (False, "h1", ["full"]))
 
+    def test_approval_lost_when_compare_file_list_is_at_its_limit(self):
+        # a 301-file PR: GitHub lists 300, so equal lists prove nothing about the omitted file
+        files = [{"filename": f"f{i}.py", "patch": "@@ -1 +1 @@\n-a\n+b"} for i in range(300)]
+
+        class Capped(BaseMergeGh):
+            def __call__(self, args, timeout=None):
+                a = next((x for x in args if x.startswith("repos/")), "")
+                if a.endswith(("/compare/main...h1", "/compare/main...h2")):
+                    return json.dumps({"files": files})
+                return super().__call__(args, timeout)
+        gh = Capped(reviews=[review(BOT, M, commit="h1")])
+        gh.head_sha = "h2"
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_complete"], f["focus_missing"]), (False, ["full"]))
+
 
 class EffectsTest(unittest.TestCase):
     def twice(self, gh, e):
