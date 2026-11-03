@@ -75,6 +75,26 @@ def recorded_pull(path, items):
     return json.dumps({**base, **items})
 
 
+ACTIONS = json.loads((Path(__file__).resolve().parent / "contracts/github-actions.json").read_text())["responses"]
+ACTION_KEYS = [(r"labels\?per_page=100", "labels?per_page=100"), (r"actions/runs\?head_sha=[^&]+&per_page=100", "actions/runs?head_sha={sha}&per_page=100"),
+               (r"actions/runs/\d+/jobs\?per_page=100", "actions/runs/{id}/jobs?per_page=100"), (r"actions/jobs/\d+/logs", "actions/jobs/{id}/logs")]
+
+
+def recorded_action(path, items):
+    """Like `recorded_pull` for the label list and the Actions runs, jobs and logs endpoints (contracts/github-actions.json).
+    A covered endpoint without a recording, or a field not in it, fails the test. List endpoints return one line per item;
+    the logs endpoint returns `items` (text) once the endpoint is recorded."""
+    path = re.sub(r"^repos/[^/]+/[^/]+/", "", path)
+    key = next((k for rx, k in ACTION_KEYS if re.fullmatch(rx, path)), None)
+    assert key in ACTIONS, f"no recorded response for GET {path}"
+    shape = ACTIONS[key]
+    if isinstance(shape, str):
+        return items
+    for item in items:
+        assert set(item) <= set(shape[0]), f"{key}: fields not in the recording: {sorted(set(item) - set(shape[0]))}"
+    return "\n".join(json.dumps({**shape[0], **i}) for i in items)
+
+
 class FakeGh:
     """The gh calls of the adapter over one ticket (7) with a PR on ez/7-x; records writes."""
 
@@ -102,17 +122,18 @@ class FakeGh:
             self.workflow_timeout = timeout
             if getattr(self, "workflow_error", False):
                 raise RuntimeError("workflow lookup failed")
-            return "\n".join(json.dumps({"workflow_id": k, "name": "quality-gates", "event": "pull_request", "run_number": 1,
-                                          "id": 100 + k, "status": "completed" if c else "in_progress", "conclusion": c})
-                             for k, c in enumerate(self.checks))
+            return recorded_action(a.split("&per_page=100")[0] + "&per_page=100", [
+                {"workflow_id": k, "name": "quality-gates", "event": "pull_request", "run_number": 1,
+                 "id": 100 + k, "status": "completed" if c else "in_progress", "conclusion": c}
+                for k, c in enumerate(self.checks)])
         if "/actions/runs/100/jobs?" in a:
             self.jobs_timeout = timeout
             if getattr(self, "jobs_error", False):
                 raise RuntimeError("jobs lookup failed")
-            return json.dumps({"id": 200, "name": "tests", "steps": [
+            return recorded_action(a, [{"id": 200, "name": "tests", "steps": [
                 {"name": "Run tests", "conclusion": "failure",
                  "started_at": "2026-11-02T10:00:00Z", "completed_at": "2026-11-02T10:00:00Z"},
-                {"name": "Upload artifacts", "conclusion": "success"}]})
+                {"name": "Upload artifacts", "conclusion": "success"}]}])
         if "/actions/jobs/200/logs" in a:
             self.log_calls += 1
             self.assert_timeout = timeout
@@ -120,9 +141,9 @@ class FakeGh:
                 raise RuntimeError("Forbidden\nredirected download")
             if getattr(self, "empty_log", False):
                 return ""
-            return "\n".join(["2026-11-02T10:00:00.1000000Z ##[group]Run tests",
-                                "2026-11-02T10:00:00.1000000Z ##[endgroup]"] +
-                               [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)])
+            return recorded_action(a, "\n".join(["2026-11-02T10:00:00.1000000Z ##[group]Run tests",
+                                                 "2026-11-02T10:00:00.1000000Z ##[endgroup]"] +
+                                                [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)]))
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
             return "" if getattr(self, "no_pr", False) else recorded_pull(a, [*(
@@ -224,6 +245,12 @@ class FakeGh:
 
 
 class RecordingsTest(unittest.TestCase):
+    def test_unrecorded_action_endpoint_or_field_fails(self):
+        with self.assertRaisesRegex(AssertionError, "no recorded response"):
+            recorded_action("repos/o/r/actions/runs/1/artifacts", [])
+        with self.assertRaisesRegex(AssertionError, "fields not in the recording"):
+            recorded_action("repos/o/r/labels?per_page=100", [{"bogus": 1}])
+
     def test_unrecorded_pull_endpoint_or_field_fails(self):
         with self.assertRaisesRegex(AssertionError, "no recorded response"):
             recorded_pull("repos/o/r/pulls/5/files", {})
@@ -654,7 +681,7 @@ class EffectsTest(unittest.TestCase):
             if path.endswith("commits/m1"):
                 return json.dumps({"parents": [{"sha": "p1"}]})
             if path.endswith("labels?per_page=100"):
-                return ""
+                return recorded_action(path, [{"name": "factory:old"}])
             if path.endswith("issues?state=open&per_page=100"):
                 return ""
             if args[:2] == ["issue", "create"]:

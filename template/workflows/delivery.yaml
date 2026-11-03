@@ -1,0 +1,512 @@
+format: 2
+adapters:
+  ticket: github-issues
+  pr: github
+schedules:
+  retro:
+    cron: 0 2 * * *
+  distill:
+    cron: 0 3 * * 1
+  reconcile:
+    cron: 17 * * * *
+  doctor:
+    cron: 0 5 * * *
+nodes:
+  human:
+    wakes_on:
+    - manual
+    when:
+      actor: human
+    role: human
+    outcomes:
+      triage:
+        from:
+        - draft
+        - ready
+        - in-dev
+        - in-review
+        - changes-requested
+        - approved
+        - blocked
+        - needs-answers
+        - split
+        - not-actionable
+        - investigating
+        effects:
+        - state: triage
+      ready:
+        from:
+        - draft
+        - triage
+        - in-dev
+        - in-review
+        - changes-requested
+        - approved
+        - blocked
+        - needs-answers
+        - split
+        - not-actionable
+        - investigating
+        effects:
+        - state: ready
+  intake:
+    env: read
+    pilot: true
+    wakes_on:
+    - state triage
+    when:
+      state: triage
+    role: router
+    tier: cheap
+    output: read-only
+    outcomes:
+      proceed:
+        effects:
+        - set-field: risk
+        - set-field: complexity
+        - state: ready
+      grill:
+        effects:
+        - comment: questions
+        - state: needs-answers
+      split:
+        effects:
+        - create-issues: children
+        - state: split
+      not-actionable:
+        effects:
+        - comment: reason
+        - state: not-actionable
+      bug:
+        enabled: false
+        ticket: 161
+        effects:
+        - state: investigating
+  start:
+    env: read
+    pilot: true
+    wakes_on:
+    - state ready
+    when:
+      state: ready
+      blockers: closed
+    role: script
+    tier: cheap
+    run: uv run factory/gate.py sweep
+    output: read-only
+    outcomes:
+      started:
+        from:
+        - ready
+        effects:
+        - command: implement-<tier>
+        - state: in-dev
+  investigate:
+    env: write
+    enabled: false
+    ticket: 161
+    wakes_on:
+    - state investigating
+    when:
+      state: investigating
+    role: developer
+    tier: mid
+    output: read-only
+    outcomes:
+      bug:
+        effects:
+        - comment: diagnosis
+        - state: in-dev
+      intended:
+        effects:
+        - comment: reason
+        - state: not-actionable
+      cannot-reproduce:
+        effects:
+        - comment: questions
+        - state: needs-answers
+  implement:
+    env: write
+    pilot: true
+    tiers:
+    - cheap
+    - mid
+    - strong
+    wakes_on:
+    - command implement-<tier>
+    when:
+      state: in-dev
+    role: developer
+    output: create-pr
+    outcomes:
+      done:
+        effects:
+        - uncommand: implement-*
+        - state: in-review
+      error:
+        effects:
+        - uncommand: implement-*
+        - command: implement-<next tier>
+        - state: in-dev
+      blocked:
+        effects:
+        - comment: reason
+        - state: blocked
+      failed:
+        effects:
+        - comment: reason
+        - state: blocked
+      env-broken:
+        effects:
+        - uncommand: implement-*
+        - park-behind-main-red: failing_check
+        - state: ready
+  adopt:
+    env: read
+    enabled: false
+    ticket: 160
+    ci-independent: true
+    wakes_on:
+    - command adopt
+    when:
+      state: none
+    role: router
+    tier: cheap
+    output: read-only
+    outcomes:
+      adopted:
+        from:
+        - none
+        effects:
+        - set-field: risk
+        - state: in-review
+  review:
+    env: read
+    pilot: true
+    focuses:
+    - full
+    - behaviour
+    - structure-security
+    - knowledge
+    wakes_on:
+    - command review-<focus>
+    - command rereview-<focus>
+    when:
+      state: in-review
+      focus: required-by-risk
+      ci:
+      - green
+    role: reviewer
+    output: read-only
+    outcomes:
+      approve:
+        effects:
+        - review: approve-at-head
+        - uncommand: review-<focus>
+      changes:
+        effects:
+        - review: request-changes-at-head
+        - uncommand: review-<focus>
+  join:
+    env: read
+    pilot: true
+    ci-independent: true
+    wakes_on:
+    - pr reviewed
+    - state ci-red
+    when:
+      state: in-review
+      ci:
+      - green
+      - red
+    role: script
+    output: read-only
+    outcomes:
+      changes:
+        effects:
+        - command: fix-<tier>
+        - state: changes-requested
+      approved:
+        ci:
+        - green
+        else: changes
+        effects:
+        - state: approved
+      waiting:
+        from:
+        - in-review
+        effects:
+        - join: all-approve
+  fix:
+    env: write
+    pilot: true
+    tiers:
+    - cheap
+    - mid
+    - strong
+    ci-independent: true
+    wakes_on:
+    - command fix-<tier>
+    when:
+      state: changes-requested
+      round: complete
+      fix-rounds: below-cap
+    role: developer
+    output: push-to-source
+    outcomes:
+      done:
+        effects:
+        - uncommand: fix-*
+        - request-reviewers: changes
+        - state: in-review
+      blocked:
+        from:
+        - changes-requested
+        effects:
+        - comment: reason
+        - state: blocked
+      env-broken:
+        from:
+        - changes-requested
+        effects:
+        - uncommand: fix-*
+        - park-behind-main-red: failing_check
+        - state: ready
+      nothing-to-fix:
+        from:
+        - changes-requested
+        effects:
+        - uncommand: fix-*
+        - join: all-approve
+        - state: in-review
+  update:
+    env: write
+    pilot: true
+    tiers:
+    - cheap
+    - mid
+    - strong
+    ci-independent: true
+    wakes_on:
+    - command update-<tier>
+    when:
+      state: changes-requested
+    role: developer
+    output: push-to-source
+    outcomes:
+      resolved:
+        effects:
+        - uncommand: update-*
+        - state: in-review
+      escalate:
+        effects:
+        - uncommand: update-*
+        - command: update-<next tier>
+        - state: changes-requested
+      unresolvable:
+        effects:
+        - uncommand: update-*
+        - comment: reason
+        - state: blocked
+  reopen:
+    env: read
+    pilot: true
+    ci-independent: true
+    wakes_on:
+    - pr pushed
+    - state ci-red
+    when:
+      state: approved
+    role: script
+    output: read-only
+    outcomes:
+      reopened:
+        from:
+        - approved
+        effects:
+        - state: in-review
+  merge:
+    env: read
+    pilot: true
+    wakes_on:
+    - state approved
+    - state ci-green
+    when:
+      state: approved
+      round: complete-at-head
+      ci: green
+    role: script
+    tier: cheap
+    run: uv run factory/gate.py sweep
+    output: read-only
+    outcomes:
+      merged:
+        from:
+        - approved
+        effects:
+        - merge: match-head
+      updated:
+        from:
+        - approved
+        effects:
+        - update-branch: match-head
+      waiting:
+        from:
+        - approved
+        effects:
+        - comment: reason
+          'on': pr
+  finish:
+    env: read
+    pilot: true
+    ci-independent: true
+    wakes_on:
+    - state pr-merged
+    - ticket closed
+    - state blocked
+    - ticket commented
+    when:
+      always: true
+    role: script
+    tier: cheap
+    run: uv run factory/gate.py sweep
+    output: read-only
+    outcomes:
+      answered:
+        from:
+        - needs-answers
+        effects:
+        - state: triage
+      children-done:
+        from:
+        - split
+        effects:
+        - state: done
+      child-blocked:
+        from:
+        - split
+        effects:
+        - comment: reason
+        - state: blocked
+      conflict:
+        from:
+        - approved
+        effects:
+        - command: update-cheap
+        - state: changes-requested
+      merged:
+        from:
+        - approved
+        effects:
+        - state: done
+  notify:
+    env: ops
+    pilot: true
+    wakes_on:
+    - state blocked
+    - state needs-answers
+    when:
+      state:
+      - blocked
+      - needs-answers
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py notify --issue <issue number from the trigger payload>
+    output: read-only
+    outcomes:
+      notified:
+        from:
+        - blocked
+        - needs-answers
+  recover:
+    env: read
+    runner: manual
+    routine: true
+    wakes_on:
+    - manual
+    when:
+      always: true
+    role: script
+    tier: cheap
+    run: uv run factory/gate.py sweep --stale
+    output: read-only
+    outcomes:
+      blocked:
+        effects:
+        - comment: reason
+        - state: blocked
+  reconcile:
+    env: ops
+    routine: true
+    wakes_on:
+    - schedule reconcile
+    ci-independent: true
+    when:
+      always: true
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py reconcile
+    output: read-only
+    outcomes:
+      reconciled: {}
+  doctor:
+    env: read
+    routine: true
+    wakes_on:
+    - schedule doctor
+    when:
+      always: true
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py doctor
+    output: read-only
+    outcomes:
+      probed: {}
+  doctor-write:
+    env: write
+    routine: true
+    wakes_on:
+    - schedule doctor
+    when:
+      always: true
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py doctor
+    output: read-only
+    outcomes:
+      probed: {}
+  doctor-ops:
+    env: ops
+    routine: true
+    wakes_on:
+    - schedule doctor
+    when:
+      always: true
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py doctor
+    output: read-only
+    outcomes:
+      probed: {}
+  retro:
+    env: ops
+    routine: true
+    wakes_on:
+    - schedule retro
+    when:
+      always: true
+    role: retro
+    output: as-instructed
+    outcomes:
+      recorded: {}
+  distill:
+    env: ops
+    routine: true
+    wakes_on:
+    - schedule distill
+    when:
+      always: true
+    role: distill
+    output: push-to-new-branch
+    outcomes:
+      proposed: {}

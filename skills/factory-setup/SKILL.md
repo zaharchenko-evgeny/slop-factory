@@ -87,6 +87,26 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | `MODEL_POLICY` | One line on which models may be used | `AGENTS.workflow.md` |
 | `ROLE`, `TOOLS` | Role name and the tools its `setup.sh` needs; filled once per role from `ROLES` | `roles/setup.sh.tmpl` |
 
+### A project from the engine template
+
+A new project keeps its settings in a repository of its own, started from the
+engine's `template/` (ADR-0016): `render.py --project ANSWERS.json OUT_DIR`
+writes `factory.project.yaml`, `workflows/delivery.yaml`, `knowledge/` and
+`README.md`. Roles and skills are not copied; the engine supplies them, and the
+project adds `roles/<name>/` or `skills/<name>/` only to replace one. Then run
+`factory validate --team OUT_DIR`. After an engine upgrade,
+`factory upgrade --diff --team OUT_DIR` shows what changed in the template.
+
+| Placeholder | Meaning | Used in |
+| --- | --- | --- |
+| `ENGINE_REF` | Engine version the project pins (a git tag or ref of the engine) | `factory.project.yaml` |
+| `PROJECT_NAME` | Project name | `factory.project.yaml`, `README.md` |
+| `TEAM_REPOSITORY_URL` | URL of the project's settings repository | `factory.project.yaml` |
+| `REPOSITORY_NAME`, `REPOSITORY_URL` | Name and URL of the primary code repository | `factory.project.yaml` |
+| `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.project.yaml` |
+| `GITHUB_USER` | GitHub login assigned to tickets that wait for a person | `factory.project.yaml` |
+| `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG`, `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Air model ids per tier | `factory.project.yaml` |
+
 ## 3. Plan and apply
 
 For each selected target, show a plan first:

@@ -13,6 +13,11 @@ values are removed.
   reviews, commits, compare, collaborators, git/ref); list endpoints keep their first item, `commits` and `compare`
   keep one file, and the committer email is removed. `FakeGh` in `test_gate_github.py` shapes its answers on them and
   fails on a covered endpoint or field without a recording.
+- `github-actions.json`: live GitHub REST responses for the label list and the Actions endpoints the adapter calls
+  (workflow runs of a head, jobs of a run, job log); list endpoints keep their first item and the log keeps its last
+  lines with terminal escapes removed. `FakeGh` in `test_gate_github.py` shapes its answers on them and fails on a
+  covered endpoint or field without a recording. To match a new adapter call, add it under its path template
+  (`{n}`, `{id}`, `{sha}`) to the file and to `ACTION_KEYS`.
 - `payloads/<eventType>.json`: real Air trigger payloads, as an Air run received them. Recorded:
   `issues.labeled` and `pull_request_review.submitted`.
 

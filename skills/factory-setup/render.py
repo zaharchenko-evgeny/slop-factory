@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fill the setup skill templates: render.py ANSWERS.json OUT_DIR.
+With --project, fill the engine's template/ instead: render.py --project ANSWERS.json OUT_DIR (ADR-0016).
 
 ANSWERS.json maps each `{{NAME}}` placeholder to a string (or a list of lines).
 Every template file is written to OUT_DIR at the same relative path;
@@ -12,6 +13,7 @@ import sys
 from pathlib import Path
 
 T = Path(__file__).resolve().parent / "templates"
+PROJECT_T = Path(__file__).resolve().parents[2] / "template"
 PH = re.compile(r"\{\{([A-Z_]+)\}\}")
 
 
@@ -35,9 +37,17 @@ def render(a):
     return out
 
 
+def render_project(a):
+    """Return {relative path: text} of a new project's factory repository, from the engine's template/."""
+    return {f.relative_to(PROJECT_T).as_posix(): fill(f.read_text(), a)
+            for f in sorted(p for p in PROJECT_T.rglob("*") if p.is_file())}
+
+
 if __name__ == "__main__":
-    answers = json.loads(Path(sys.argv[1]).read_text())
-    for rel, text in render(answers).items():
-        dest = Path(sys.argv[2]) / rel
+    args = sys.argv[1:]
+    project = args[:1] == ["--project"]
+    answers = json.loads(Path(args[project]).read_text())
+    for rel, text in (render_project if project else render)(answers).items():
+        dest = Path(args[project + 1]) / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text)
