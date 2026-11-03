@@ -360,6 +360,8 @@ def _items(res) -> list[dict]:
 def same(key: str, have, want) -> bool:
     if key == "repository" and isinstance(have, dict) and have.keys() == {"fullName"}:
         return have["fullName"] == want["fullName"]
+    if key == "domains":
+        return set(want or []) <= set(have or [])
     return have == want
 
 
@@ -372,6 +374,10 @@ def environment_detail(x: dict) -> dict:
         x["domains"] = x.pop("allowedDomains")
     if "instanceTypeKey" in x:
         x["vm"] = x.pop("instanceTypeKey") or "default"
+    if isinstance(x.get("variables"), list):
+        x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
+    if "personalSecrets" in x:
+        x["secrets"] = [s["name"] for s in x.pop("personalSecrets")]
     return x
 
 
@@ -387,7 +393,8 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
             p = {k: v for k, v in raw.items() if k != "spec"}
             x = have.pop(p["name"], None) or have.pop(new_to_old.get(p["name"]), None)
             want = {**p, "environmentConfigId": env_ids.get(p.get("environmentConfigId"), p.get("environmentConfigId"))}
-            changed = [k for k in p if x is not None and not same(k, x.get(k), want[k])]
+            changed = [k for k in p if x is not None and (kind != "environment" or k in x)
+                       and not same(k, x.get(k), want[k])]
             if x is None or changed:
                 out.append(("create" if x is None else "update", kind, p["name"], p, x, changed))
         out += [("delete", kind, n, None, x, []) for n, x in have.items()]
