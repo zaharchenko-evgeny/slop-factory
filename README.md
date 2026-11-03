@@ -38,6 +38,11 @@ The engine resolves `roles/`, `skills/`, and `workflows/` in the team repository
 first. A matching team file replaces the engine file at that path; unmatched
 files come from the engine.
 
+An environment can also define a `setup.sh` in the team's `environments`
+directory. It runs for every environment, followed by the `setup.sh` in the
+subdirectory named by `FACTORY_ENV` when that file exists. Both run with `bash`
+after the factory and skills are installed; a failing hook stops startup.
+
 ## This repository
 
 This repository is both the engine package and the `slop-factory` team

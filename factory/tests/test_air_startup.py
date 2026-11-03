@@ -94,6 +94,26 @@ class StartupTest(unittest.TestCase):
         self.assertIn("git fetch --depth 1 origin refs/tags/v0.1.0", log)
         self.assertIn(f'export FACTORY_TEAM="{team}"', (self.home / ".bashrc").read_text())
 
+    def test_environment_setup_hook_runs_common_then_env(self):
+        hooks = self.repo / "environments"
+        (hooks / "write").mkdir(parents=True)
+        (hooks / "setup.sh").write_text('echo common >> "$HOOK_LOG"\n')
+        (hooks / "write/setup.sh").write_text('echo write >> "$HOOK_LOG"\n')
+        self.env.update(FACTORY_ENV="write", HOOK_LOG=str(self.repo / "hooks.log"))
+
+        r = self.run_script()
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.repo / "hooks.log").read_text().splitlines(), ["common", "write"])
+
+    def test_missing_hook_is_skipped(self):
+        self.env["FACTORY_ENV"] = "write"
+
+        r = self.run_script()
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.repo / "hooks.log").exists())
+
     def test_non_v_engine_tag_is_used(self):
         self.env.update(FACTORY_TEAM_REPOSITORY="https://github.com/o/team", TEAM_ENGINE="release-2026.11")
         r = self.run_script()
