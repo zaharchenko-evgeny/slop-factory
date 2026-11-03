@@ -39,10 +39,10 @@ When `ci_failure` is present and there are no review findings, fix the failed
 CI step using its job, step and log tail. A red CI fix round without review
 findings is valid.
 
-List those answers in `findings_addressed`, one per finding, as
+List those answers with `--addressed`, one per finding, as
 `<finding id>: fixed in <sha>` or `<finding id>: disputed — <reason>`.
 When every finding is disputed, also list the affected reviewer focus names in
-`disputed_focuses` (for example `behaviour`). The gate posts these disputes and
+`--disputed-focuses` (for example `behaviour`). The gate posts these disputes and
 requests one review from each focus again at the same head.
 Before the handoff, run every acceptance check that can run locally, including
 checks relevant to the blocking findings. Record every check in `checks` using
@@ -68,34 +68,26 @@ Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
    `checks`.
 5. Hand off `outcome: resolved`. When the tier cannot resolve it, hand
    off `outcome: escalate`; when no tier can, hand off `outcome: unresolvable`
-   with `blocked_reason` listing the conflicting files.
+   with `--reason` listing the conflicting files.
 
 ## Rules
 
 - Stay on the given branch and worktree. Never push, open PRs or change labels.
-- Write the handoff JSON to the path printed by `factory begin`.
 - Stop and report `blocked` when the ticket is ambiguous or a check cannot run
   after two repair attempts that test different causes.
 
-## JSON handoff
+## Ending the run
 
-The field names are the keys of the handoff JSON below, lists are arrays. Write the handoff as JSON to the path printed by `factory begin`, then run `factory end <path>` to apply it. The platform pushes the branch after the run. Write it as the last thing you do.
+Run `factory end <outcome>` with the data the outcome needs; the gate already knows the ticket, PR, branch and head. Write it as the last thing you do.
 
 ```
-{
-  "handoff": "DEVELOPER",
-  "status": "done",
-  "branch": "ez/12-add-x",
-  "commits": [
-    "1a2b3c4 #12 Add x"
-  ],
-  "files": "factory/x.py",
-  "checks": [
-    { "text": "acceptance check text", "result": "pass" }
-  ],
-  "acceptance": [
-    "x works: test_x passes"
-  ],
-  "blocked_reason": "none"
-}
+factory end done --checks checks.json
+factory end error
+factory end blocked --reason "ambiguous acceptance"
+factory end failed --reason "the check cannot run"
 ```
+
+`checks.json` is an array of `{"text": "acceptance check text", "result": "pass"}` (`fail`, or `not-run` with a
+`"reason"`). `done` with a failed check is refused. A `fix` run passes `--addressed addressed.json` (an array of
+`"<finding id>: fixed in <sha>"` or `"<finding id>: disputed — <reason>"`) and, when every finding is
+disputed, `--disputed-focuses behaviour,structure-security`.

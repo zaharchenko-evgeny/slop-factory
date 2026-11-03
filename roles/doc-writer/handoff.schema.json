@@ -2,31 +2,14 @@
  "DOC-WRITER": {
   "type": "object",
   "required": [
-   "handoff",
    "status",
-   "commits",
-   "files",
    "blocked_reason"
   ],
   "properties": {
-   "handoff": {
-    "enum": [
-     "DOC-WRITER"
-    ]
-   },
    "status": {
     "enum": [
      "done",
      "blocked"
-    ]
-   },
-   "commits": {
-    "type": "array"
-   },
-   "files": {
-    "type": [
-     "string",
-     "array"
     ]
    },
    "blocked_reason": {
