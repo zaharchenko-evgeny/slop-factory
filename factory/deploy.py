@@ -248,8 +248,10 @@ def actions_files(nodes: dict, config: dict) -> dict:
     for name, n in nodes["nodes"].items():
         if n.get("runner") == "actions" and n.get("enabled") is not False:
             cron = next(scheds[str(t)[9:]]["cron"] for t in n["triggers"] if str(t).startswith("schedule "))
+            wake = "".join(f"  # jactionlint ignore=dangerous-triggers\n  workflow_run:\n    workflows: [{str(t)[13:]}]\n    types: [completed]\n"
+                           for t in n["triggers"] if str(t).startswith("workflow_run "))
             files[f".github/workflows/factory-{name}.yml"] = ACTIONS_WORKFLOW.format(
-                name=name, project=project_name(config), cron=cron, run=n["run"].replace("uv run factory/cli.py", "uv run --quiet factory/cli.py"))
+                name=name, project=project_name(config), cron=cron, wake=wake, run=n["run"].replace("uv run factory/cli.py", "uv run --quiet factory/cli.py"))
     return files
 
 
@@ -260,12 +262,13 @@ name: factory-{name}
 on:
   schedule:
     - cron: "{cron}"
-  workflow_dispatch:
+{wake}  workflow_dispatch:
 
 permissions: {{}}
 
 concurrency:
   group: factory-{name}
+  cancel-in-progress: false
 
 jobs:
   {name}:
