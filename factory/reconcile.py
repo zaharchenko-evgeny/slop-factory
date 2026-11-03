@@ -92,8 +92,14 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
             age = now - datetime.fromisoformat(since.replace("Z", "+00:00"))
             conflict = (stage == "in-review" and facts.get("conflict") and facts.get("pr")
                         and not facts.get("command") and facts.get("pr_state") in (None, "none", "open"))
+            conflicting_fix = (stage == "changes-requested" and facts.get("conflict")
+                               and (facts.get("command") or "").startswith("factory:fix-"))
             if conflict:
                 step = ("fix", None, "pr", "the unapproved PR conflicts with main")
+                if age <= timedelta(minutes=default):
+                    continue
+            elif conflicting_fix:
+                step = ("fix", facts["command"], "pr", "conflicting PR has a fix label with no later run")
                 if age <= timedelta(minutes=default):
                     continue
             else:
