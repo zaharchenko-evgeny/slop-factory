@@ -48,7 +48,7 @@ class BeginEndTest(unittest.TestCase):
             return cli.main(list(argv)), out.getvalue()
 
     def test_begin_exits_10_for_duplicate_event(self):
-        tracker = self.tracker(seen=["issues:T1"])
+        tracker = self.tracker(seen=["issues:7:labeled:None"])
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
         self.assertEqual((code, json.loads(out)["reason"]), (10, "duplicate event"))
 
