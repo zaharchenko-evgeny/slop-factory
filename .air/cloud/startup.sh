@@ -72,8 +72,9 @@ if [ "$TEAM" != . ]; then
 fi
 FACTORY_TEAM=$(cd "$TEAM" && pwd)
 export FACTORY_TEAM
-# The engine version is the settings descriptor's `engine`: a tag or `main`; a number or none means main.
-REF=$(sed -n 's/^engine: *"\{0,1\}\([^" #]*\).*/\1/p' "$TEAM/factory.descriptor.yaml" 2>/dev/null | head -n 1)
+# The engine version is the settings descriptor's `engine` (factory.project.yaml, else factory.descriptor.yaml):
+# a tag or `main`; a number or none means main.
+REF=$(sed -n 's/^engine: *"\{0,1\}\([^" #]*\).*/\1/p' "$TEAM/factory.project.yaml" "$TEAM/factory.descriptor.yaml" 2>/dev/null | head -n 1)
 case "$REF" in
   main|"") REF=main ;;
   *[!0-9]*)

@@ -24,6 +24,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
+import vocab  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 RED = "Main is red"  # title prefix of the owner ticket of a red base branch
@@ -45,8 +46,8 @@ def gh(args, timeout=None):
 
 
 class GitHubTracker:
-    def __init__(self, repo, stages, map_label="factory:map", run=gh, risk_labels=None, docs_label="docs-impact"):
-        self.repo, self.stages, self.map_label, self.run = repo, stages, map_label, run
+    def __init__(self, repo, stages, map_label=None, run=gh, risk_labels=None, docs_label="docs-impact"):
+        self.repo, self.stages, self.map_label, self.run = repo, stages, map_label or vocab.map_label(), run
         self.risk_labels = risk_labels or {"low": "risk:low", "high": "risk:high"}
         self.docs_label = docs_label
         self._login = None
@@ -62,7 +63,7 @@ class GitHubTracker:
     @classmethod
     def from_config(cls, path=None, run=gh):
         t = (yaml.safe_load(Path(path).read_text()) if path else config.load())["tracker"]
-        return cls(t["repository"], t["stages"], t.get("map_label", "factory:map"), run,
+        return cls(t["repository"], t["stages"], t.get("map_label") or vocab.map_label(), run,
                    t.get("risk_labels"), t.get("docs_impact_label", "docs-impact"))
 
     def _issue(self, n):

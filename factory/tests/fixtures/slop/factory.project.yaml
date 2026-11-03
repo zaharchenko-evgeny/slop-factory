@@ -1,0 +1,242 @@
+engine: 1
+project:
+  name: Slop factory
+team_repository: https://github.com/zaharchenko-evgeny/slop-eval-factory
+repositories:
+- name: slop-factory
+  url: https://github.com/zaharchenko-evgeny/slop-factory
+  default_branch: main
+  role: primary
+branch_pattern: ez/{ticket}-{slug}
+commit_prefix: '#{ticket} '
+tracker:
+  adapter: github-issues
+  repository: zaharchenko-evgeny/slop-factory
+notify:
+  github_user: zaharchenko-evgeny
+reviews:
+  trusted_bots: []
+targets:
+  air:
+    bot_login: jetbrains-air[bot]
+    models:
+      cheap: codex/gpt-6-luna
+      mid: claude/claude-sonnet-5-5[1m]
+      strong: claude/claude-sonnet-5-5[1m]
+      review: codex/gpt-6-luna
+      review_strong: codex/gpt-6.1-sol
+models:
+  cheap: anthropic/claude-haiku-5-5
+  mid: anthropic/claude-sonnet-5-5
+  strong: anthropic/claude-sonnet-5-5
+  review: anthropic/claude-haiku-5-5
+  review_strong: anthropic/claude-sonnet-5-5
+roles:
+  router:
+    tier: cheap
+  developer:
+    tier: mid
+    tier_high_risk: strong
+    fallback: mid
+  reviewer:
+    tools: read-only
+    modes:
+      full:
+        tier: review_strong
+        fallback: cheap
+      behaviour:
+        tier: review
+        fallback: cheap
+      structure-security:
+        tier: review_strong
+        fallback: cheap
+      knowledge:
+        tier: review_strong
+        fallback: cheap
+  doc-writer:
+    tier: mid
+  retro:
+    tier: cheap
+  distill:
+    tier: mid
+knowledge:
+  branch: knowledge-inbox
+  dir: knowledge
+  distill_branch: knowledge-distill
+  distill_every_days: 7
+  agents_md_lines: 150
+gates:
+  ticket_approval: human
+  auto_merge:
+    enabled: true
+    max_risk: high
+  confirm_external_writes: true
+  confirm_external_writes_scope: []
+limits:
+  concurrent_deliveries: 2
+  fix_rounds: 3
+  agent_runs_per_ticket: 8
+  stale_hours: 2
+  stale_command_minutes: 30
+  resume_cap: 3
+  runs_per_day: 20
+  environment_repair_attempts: 2
+checks:
+- name: doc-references
+  stage: pre-review
+  mode: blocking
+  run: uv run --quiet factory/check_refs.py
+- name: whitespace
+  stage: pre-review
+  mode: blocking
+  run: git diff --check "origin/${FACTORY_BASE:-main}...HEAD"
+- name: setup-scripts-parse
+  stage: pre-review
+  mode: blocking
+  run: for f in roles/*.sh roles/*/setup.sh; do bash -n "$f" || exit 1; done
+- name: shellcheck
+  stage: pre-review
+  mode: advisory
+  requires: uvx
+  run: uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck -x roles/*.sh roles/*/setup.sh
+- name: vendored-skills
+  stage: pre-review
+  mode: blocking
+  run: python3 scripts/vendor-skills.py --check
+- name: air-startup
+  stage: pre-review
+  mode: blocking
+  requires: uvx
+  run: bash -n .air/cloud/startup.sh && uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck .air/cloud/startup.sh
+- name: state-machine
+  stage: pre-review
+  mode: blocking
+  run: uv run --quiet factory/nodes.py validate && uv run --quiet factory/tests/test_nodes.py && uv run --quiet factory/tests/test_gate.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_gate_github.py && uv run --quiet factory/tests/test_vendor_skills.py && uv run --quiet factory/tests/test_air_startup.py && uv run --quiet factory/tests/test_deploy.py && uv run --quiet factory/tests/test_cli.py && uv run --quiet factory/tests/test_config.py && uv run --quiet factory/tests/test_knowledge.py && uv run --quiet factory/tests/test_retro.py && uv run --quiet factory/tests/test_doctor.py && uv run --quiet factory/cli.py validate && uv run --quiet skills/factory-setup/tests/test_templates.py
+environments:
+  read:
+    repositories:
+    - slop-factory
+    startup: .air/cloud/startup.sh
+    secrets: []
+    domains:
+    - github.com
+    - api.github.com
+    - objects.githubusercontent.com
+    - release-assets.githubusercontent.com
+    - '*.blob.core.windows.net'
+    - pypi.org
+    - files.pythonhosted.org
+    vm: default
+  write:
+    repositories:
+    - slop-factory
+    startup: .air/cloud/startup.sh
+    secrets: []
+    domains:
+    - github.com
+    - api.github.com
+    - objects.githubusercontent.com
+    - release-assets.githubusercontent.com
+    - '*.blob.core.windows.net'
+    - pypi.org
+    - files.pythonhosted.org
+    - registry.npmjs.org
+    vm: default
+  ops:
+    repositories:
+    - slop-factory
+    startup: .air/cloud/startup.sh
+    secrets: []
+    domains:
+    - github.com
+    - api.github.com
+    - objects.githubusercontent.com
+    - release-assets.githubusercontent.com
+    - pypi.org
+    - files.pythonhosted.org
+    vm: default
+workflow: workflows/delivery.yaml
+states:
+  draft:
+    kind: waiting
+    store:
+      label: factory:draft
+  triage:
+    kind: active
+    store:
+      label: factory:triage
+  ready:
+    kind: active
+    store:
+      label: factory:ready
+  in-dev:
+    kind: active
+    store:
+      label: factory:in-dev
+  in-review:
+    kind: active
+    store:
+      label: factory:in-review
+  changes-requested:
+    kind: active
+    store:
+      label: factory:changes-requested
+  approved:
+    kind: active
+    store:
+      label: factory:approved
+  done:
+    kind: final
+    store:
+      label: factory:done
+  blocked:
+    kind: waiting
+    store:
+      label: factory:blocked
+  needs-answers:
+    kind: waiting
+    store:
+      label: factory:needs-answers
+  split:
+    kind: active
+    store:
+      label: factory:split
+  not-actionable:
+    kind: final
+    store:
+      label: factory:not-actionable
+  investigating:
+    kind: waiting
+    store:
+      label: factory:investigating
+  ci-red:
+    kind: active
+    store:
+      pr: ci-red
+  ci-green:
+    kind: active
+    store:
+      pr: ci-green
+  pr-merged:
+    kind: final
+    store:
+      pr: merged
+commands:
+  implement-<tier>:
+    store:
+      label: factory:implement-<tier>
+  adopt:
+    store:
+      pr_label: factory:adopt
+  review-<focus>:
+    store:
+      pr_label: factory:review-<focus>
+  rereview-<focus>:
+    store:
+      pr_label: factory:rereview-<focus>
+  fix-<tier>:
+    store:
+      pr_label: factory:fix-<tier>
+  update-<tier>:
+    store:
+      pr_label: factory:update-<tier>

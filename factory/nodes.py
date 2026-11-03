@@ -16,6 +16,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
+import vocab  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red"}
@@ -25,6 +26,12 @@ NO_ROLE = {"script", "human"}
 
 
 def load(path=None):
+    """nodes.yaml, or the project's v2 workflow rendered into the same shape (ADR-0016)."""
+    if path is None and (config.team_root() / config.PROJECT_DESCRIPTOR).is_file():
+        import project
+        import workflow
+        descriptor = project.load(config.team_root())
+        return workflow.to_nodes(descriptor, workflow.load(config.team_root(), descriptor))
     return yaml.safe_load(Path(path or config.resolve("workflows/nodes.yaml")).read_text())
 
 
@@ -192,10 +199,11 @@ def chart(nodes):
                 edges_out.append((f"N_{_id(name)}", f"S_{_id(target)}", label, oplan))
             elif any("join" in e for e in o.get("effects") or []) and name != "join":
                 edges_out.append((f"N_{_id(name)}", "N_join", label, oplan))
-    if any("factory:ci-green" in t for n in nodes["nodes"].values() for t in n.get("triggers") or []):
-        lines.append('    CI["<b>CI</b> quality-gates (labels CI result)<br/>on: PR push<br/>writes +factory:ci-green or +factory:ci-red"]:::ext')
-        edges_out += [("S_in_review", "CI", "push", False), ("CI", "N_review", "+factory:ci-green", False),
-                      ("CI", "N_join", "+factory:ci-red", False)]
+    if any(vocab.ci("ci-green") in t for n in nodes["nodes"].values() for t in n.get("triggers") or []):
+        green, red = vocab.ci("ci-green"), vocab.ci("ci-red")
+        lines.append(f'    CI["<b>CI</b> quality-gates (labels CI result)<br/>on: PR push<br/>writes +{green} or +{red}"]:::ext')
+        edges_out += [("S_in_review", "CI", "push", False), ("CI", "N_review", f"+{green}", False),
+                      ("CI", "N_join", f"+{red}", False)]
     for st in sorted(stages - {"none"}):
         lines.append(f'    S_{_id(st)}(["{st}"]):::stage')
     if "none" in stages:

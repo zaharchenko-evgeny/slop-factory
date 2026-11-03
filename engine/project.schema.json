@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Factory project descriptor (factory.project.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["project", "tracker", "repositories", "workflow", "states", "commands"],
+  "properties": {
+    "engine": {"type": ["integer", "string"]},
+    "team_repository": {"type": "string"},
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {"name": {"type": "string"}}
+    },
+    "tracker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter"],
+      "oneOf": [
+        {"required": ["repository"]},
+        {"required": ["url", "project"]}
+      ],
+      "properties": {
+        "adapter": {"type": "string"},
+        "repository": {"type": "string"},
+        "url": {"type": "string"},
+        "project": {"type": "string"},
+        "map_label": {"type": "string"},
+        "review_trigger": {"type": "string"},
+        "risk_labels": {"type": "object"},
+        "docs_impact_label": {"type": "string"},
+        "bot_logins": {"type": "array", "items": {"type": "string"}},
+        "hold_label": {"type": "string"},
+        "pr_fact_labels": {"type": "object", "additionalProperties": {"type": "string"}},
+        "needs_human_label": {"type": "string"}
+      }
+    },
+    "repositories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "url", "default_branch"],
+        "properties": {
+          "name": {"type": "string"},
+          "url": {"type": "string"},
+          "default_branch": {"type": "string"},
+          "role": {"type": "string"},
+          "environment": {"type": "string"},
+          "domains": {"type": "array", "items": {"type": "string"}},
+          "secrets": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "environments": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "repositories": {"type": "array", "items": {"type": "string"}},
+          "domains": {"type": "array", "items": {"type": "string"}},
+          "secrets": {"type": "array", "items": {"type": "string"}},
+          "vm": {"type": "string"},
+          "startup": {"type": "string"}
+        }
+      }
+    },
+    "workflow": {"type": "string"},
+    "states": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "store"],
+        "properties": {
+          "kind": {"type": "string", "enum": ["active", "waiting", "final"]},
+          "store": {"$ref": "#/$defs/store"},
+          "waits_for": {"type": "array", "items": {"type": "string"}},
+          "remind_after_hours": {"type": "integer"}
+        }
+      }
+    },
+    "commands": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["store"],
+        "properties": {"store": {"$ref": "#/$defs/store"}}
+      }
+    },
+    "branch_pattern": {"type": "string"},
+    "commit_prefix": {"type": "string"},
+    "notify": {"type": "object"},
+    "reviews": {"type": "object"},
+    "targets": {"type": "object"},
+    "defaults": {"type": "object"},
+    "models": {"type": "object", "additionalProperties": {"type": "string"}},
+    "roles": {"type": ["string", "object"]},
+    "limits": {"type": "object"},
+    "gates": {"type": "object"},
+    "checks": {"type": "array", "items": {"type": "object"}},
+    "knowledge": {"type": "object"},
+    "ci": {"type": "object"}
+  },
+  "$defs": {
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {"required": ["label"]},
+        {"required": ["pr_label"]},
+        {"required": ["field"]},
+        {"required": ["tag"]},
+        {"required": ["pr"]}
+      ],
+      "properties": {
+        "label": {"type": "string"},
+        "pr_label": {"type": "string"},
+        "field": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "value"],
+          "properties": {"name": {"type": "string"}, "value": {"type": "string"}}
+        },
+        "tag": {"type": "string"},
+        "pr": {"type": "string", "enum": ["open", "approved", "merged", "ci-green", "ci-red", "conflicting"]}
+      }
+    }
+  }
+}

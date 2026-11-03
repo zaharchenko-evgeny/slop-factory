@@ -153,8 +153,14 @@ def end(argv, team=None):
 
 
 def validate():
+    project_mode = (config.team_root() / config.PROJECT_DESCRIPTOR).is_file()
     errs = config.validate()
-    if not errs:
+    if not errs and project_mode:
+        import project
+        import workflow
+        descriptor = project.load(config.team_root())
+        errs = workflow.validate(descriptor, workflow.load(config.team_root(), descriptor))
+    elif not errs:
         errs = nodes.validate(nodes.load(), config.load())
     print("\n".join(errs) or "factory: ok")
     return 1 if errs else 0
@@ -195,6 +201,9 @@ def main(argv=None):
         return contracts_main(rest)
     if cmd == "chart":
         return nodes.main(["chart", *rest])
+    if cmd == "migrate" and rest[:1] == ["workflow"]:
+        from workflow import main as workflow_main
+        return workflow_main(["migrate", *rest[1:]])
     if cmd == "validate" and not rest:
         return validate()
     if cmd == "doctor":

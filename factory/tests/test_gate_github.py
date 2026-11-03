@@ -20,7 +20,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
+import project_mode  # noqa: E402
+cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"))
 import gate  # noqa: E402
 import gate_github as M_GH  # noqa: E402
 import nodes  # noqa: E402
@@ -44,6 +45,28 @@ def recorded(path, items):
         key = "issues?state={s}&per_page=100"
     assert key in RECORDED, f"no recorded response for GET {key}"
     shape = RECORDED[key]
+    base = shape[0] if isinstance(shape, list) else shape
+    for item in items if isinstance(items, list) else [items]:
+        assert set(item) <= set(base), f"{key}: fields not in the recording: {sorted(set(item) - set(base))}"
+    if isinstance(shape, list):
+        return "\n".join(json.dumps({**base, **i}) for i in items)
+    return json.dumps({**base, **items})
+
+
+PULLS = json.loads((Path(__file__).resolve().parent / "contracts/github-pulls.json").read_text())["responses"]
+PULL_KEYS = [(r"pulls/\d+", "pulls/{n}"), (r"pulls/\d+/reviews.*", "pulls/{n}/reviews"), (r"commits/[^/?]+", "commits/{sha}"),
+             (r"compare/.+", "compare/{base}...{head}"), (r"collaborators/[^/]+/permission", "collaborators/{login}/permission"),
+             (r"git/ref/heads/.+", "git/ref/heads/{b}"), (r"pulls\?state=all.*", "pulls?state=all&per_page=100"),
+             (r"pulls\?state=closed.*", "pulls?state=closed&base={b}&sort=updated&direction=desc&per_page=5")]
+
+
+def recorded_pull(path, items):
+    """Like `recorded` for the pull request, review, commit, compare, collaborator and git ref endpoints (contracts/github-pulls.json).
+    A covered endpoint without a recording, or a field not in it, fails the test. List endpoints return one line per item."""
+    path = re.sub(r"^repos/[^/]+/[^/]+/", "", path)
+    key = next((k for rx, k in PULL_KEYS if re.fullmatch(rx, path)), None)
+    assert key in PULLS, f"no recorded response for GET {path}"
+    shape = PULLS[key]
     base = shape[0] if isinstance(shape, list) else shape
     for item in items if isinstance(items, list) else [items]:
         assert set(item) <= set(base), f"{key}: fields not in the recording: {sorted(set(item) - set(base))}"
@@ -102,33 +125,33 @@ class FakeGh:
                                [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)])
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
-            return "" if getattr(self, "no_pr", False) else "\n".join(json.dumps(p) for p in (
+            return "" if getattr(self, "no_pr", False) else recorded_pull(a, [*(
                 {"number": 5, "state": "closed" if self.merged else "open", "head": head("ez/7-x", REPO)},
                 {"number": 6, "state": "open", "head": head("ez/70-other", REPO)},
                 {"number": 8, "state": "open", "head": head("ez/7-fork", "evil/r")},
-                {"number": 9, "state": "open", "head": head("ez/7-gone", None)}, *self.extra_pulls))
+                {"number": 9, "state": "open", "head": head("ez/7-gone", None)}), *self.extra_pulls])
         if "issues?state=" in a and "labels=" in a:
             want = a.split("labels=")[1].split("&")[0]
             on = want in self.labels and (self.state == "open" or "state=all" in a)
             return json.dumps({"number": 7}) if on else ""
         if "/pulls/" in a and a.rsplit("/", 1)[-1].isdigit():
             number = int(a.rsplit("/", 1)[-1])
-            return json.dumps({"number": number, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
-                               "requested_reviewers": [{"login": u} for u in self.requested],
-                               "labels": [{"name": x} for x in self.labels]})
+            return recorded_pull(a, {"number": number, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "merge_commit_sha": None, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
+                                     "requested_reviewers": [{"login": u} for u in self.requested],
+                                     "labels": [{"name": x} for x in self.labels]})
         if a.endswith("/git/ref/heads/main"):
-            return json.dumps({"object": {"sha": "m1"}})
+            return recorded_pull(a, {"object": {"sha": "m1"}})
         if "pulls?state=closed" in a:
-            return json.dumps(getattr(self, "recent_pulls", []))
+            return json.dumps([json.loads(x) for x in recorded_pull(a, getattr(self, "recent_pulls", [])).splitlines()])
         if "/compare/" in a:
-            return json.dumps({"behind_by": getattr(self, "behind_by", 0)})
+            return recorded_pull(a, {"behind_by": getattr(self, "behind_by", 0)})
         if "/commits/" in a:
-            return json.dumps({"commit": {"committer": {"date": getattr(self, "head_date", "2026-01-02T00:00:00Z")}}})
+            return recorded_pull(a, {"commit": {"committer": {"date": getattr(self, "head_date", "2026-01-02T00:00:00Z")}}})
         if "/collaborators/" in a:
             who = a.split("/collaborators/")[1].split("/")[0]
             if who not in self.roles:
                 raise RuntimeError("404")
-            return json.dumps({"role_name": self.roles[who]})
+            return recorded_pull(a, {"role_name": self.roles[who]})
         if a.endswith("/parent"):
             if getattr(self, "parent_of", None) is None:
                 raise RuntimeError("HTTP 404: Not Found")
@@ -144,7 +167,7 @@ class FakeGh:
             return recorded("issues/5/events", [{"event": "labeled", "label": {"name": "factory:fix-mid"}, "created_at": t}
                                                 for t in getattr(self, "fix_events", [])])
         if a.endswith("/pulls/5/reviews"):
-            return "\n".join(json.dumps(r) for r in self.reviews)
+            return recorded_pull(a, self.reviews)
         if "PATCH" not in args and (re_issue := re.search(r"issues/(\d+)$", a)) \
                 and int(re_issue.group(1)) in (5, 7, 10):
             issue_number = int(re_issue.group(1))
@@ -201,6 +224,14 @@ class FakeGh:
                     if v in people:
                         people.remove(v)
         return json.dumps({"id": 999, "number": 999}) if a.endswith("/issues POST") else ""
+
+
+class RecordingsTest(unittest.TestCase):
+    def test_unrecorded_pull_endpoint_or_field_fails(self):
+        with self.assertRaisesRegex(AssertionError, "no recorded response"):
+            recorded_pull("repos/o/r/pulls/5/files", {})
+        with self.assertRaisesRegex(AssertionError, "fields not in the recording"):
+            recorded_pull("repos/o/r/pulls/5", {"bogus": 1})
 
 
 def review(author, body, commit="h1", state="COMMENTED", assoc="OWNER", at="2026-01-02T01:00:00Z"):
@@ -410,6 +441,24 @@ class EffectsTest(unittest.TestCase):
         gh = FakeGh()
         self.assertEqual(self.twice(gh, eff("label", "factory:fix-mid")), (True, 1, False, 1))
         self.assertEqual(self.twice(gh, eff("unlabel", "factory:fix-mid")), (True, 2, False, 2))
+
+    def test_descriptor_states_and_commands(self):
+        import project
+        gh = FakeGh()
+        t = GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh,
+                              project=project.load(Path(__file__).resolve().parent / "fixtures/project"))
+        self.assertTrue(t.set_state(7, "ready"))
+        self.assertEqual(sorted(gh.labels), ["factory:ready", "risk:low"])
+        self.assertTrue(t.add_command(7, "review"))
+        self.assertTrue(t.add_command(7, "pr-review"))
+        self.assertIn(["issue", "edit", "7", "-R", REPO, "--add-label", "factory:review"], gh.writes)
+        self.assertIn(["pr", "edit", "5", "-R", REPO, "--add-label", "factory:pr-review"], gh.writes)
+        self.assertTrue(t.remove_command(7, "pr-review"))
+        self.assertIn(["pr", "edit", "5", "-R", REPO, "--remove-label", "factory:pr-review"], gh.writes)
+        with self.assertRaisesRegex(ValueError, "no tag store"):
+            t.add_command(7, "close")
+        with self.assertRaisesRegex(ValueError, "no field store"):
+            t.set_state(7, "needs-review")
 
     def test_pr_label_and_assignee_use_the_pull_request(self):
         gh = FakeGh()
@@ -1413,6 +1462,28 @@ class StaleFactsTest(unittest.TestCase):
         t = tr(FakeGh(labels=("factory:in-review", "factory:ci-green", "risk:low")))
         t._ci = lambda sha: "none"  # the new head has no CI result yet, the label is left from the old head
         self.assertIsNone(t.stale_facts(7)["ci_label"])
+
+class SeparateCodeHostTest(unittest.TestCase):
+    def test_pull_request_calls_go_to_the_code_host_and_ticket_calls_to_the_tracker(self):
+        gh, seen = FakeGh(), []
+
+        def run(args, timeout=None):
+            seen.append(args)
+            out = gh([x.replace("repos/c/h/", f"repos/{REPO}/").replace("c/h", REPO) for x in args], timeout)
+            return out.replace(f'"full_name": "{REPO}"', '"full_name": "c/h"')  # the PR branch lives in the code host
+
+        t = GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=run, pr_repo="c/h")
+        t.facts(7)
+        t.apply(eff("label", "factory:needs-human", on="pr"))
+        t.apply(eff("stage", "approved"))
+        paths = [x for a in seen for x in a if x.startswith("repos/") or x == "c/h" or x == REPO]
+        self.assertTrue(any(p.startswith("repos/c/h/pulls") for p in paths))
+        self.assertFalse(any(p.startswith(f"repos/{REPO}/pulls") for p in paths))
+        self.assertTrue(any(p.startswith("repos/c/h/issues/5/comments") for p in paths))  # PR notes live in the code host
+        self.assertTrue(any(p.startswith(f"repos/{REPO}/issues/7") for p in paths))
+        self.assertIn(["pr", "edit", "5", "-R", "c/h", "--add-label", "factory:needs-human"], seen)
+        self.assertTrue(any(a[:2] == ["issue", "edit"] and a[a.index("-R") + 1] == REPO for a in seen))
+
 
 if __name__ == "__main__":
     unittest.main()

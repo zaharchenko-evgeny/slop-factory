@@ -36,8 +36,9 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
-from gate_github import GitHubGateTracker, clean_notes  # noqa: E402
-from gate_port import MemoryTracker  # noqa: E402
+from gate_github import GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
+from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
+import vocab  # noqa: E402
 
 ROOT = nodes_mod.ROOT
 GO, NO_GO, BAD, FAILED = 0, 10, 2, 1
@@ -114,7 +115,7 @@ class MissingNumber(Exception):
     pass
 
 
-def from_trigger(d, tracker=None):
+def from_trigger(d, code_host=None):
     """Extract the event kind and ticket number; tracker facts supply mutable metadata."""
     event_name = d.get("eventType") or d.get("event_name")
     if not any(isinstance(d.get(key), dict) for key in ("pull_request", "issue", "review")):
@@ -130,13 +131,10 @@ def from_trigger(d, tracker=None):
         raise MissingNumber("payload has no issue or PR number")
     name = "pull_request_review" if review and is_pr else "pull_request" if is_pr else "issues"
     if is_pr:
-        ref = ""
-        ticket = tracker.ticket_for_pr(number) if tracker and hasattr(tracker, "ticket_for_pr") else None
-        if ticket is None and not isinstance(tracker, GitHubGateTracker):
-            ref = ((pr or {}).get("head") or {}).get("ref") or ""
-            m = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
-            ticket = int(m[1]) if m else None
-        if not isinstance(ticket, int):
+        ticket = code_host.ticket_for_pr(number) if code_host else None
+        if ticket is None and not isinstance(code_host, GitHubCodeHost):  # a live lookup is the only source for GitHub
+            ticket = ticket_from_ref(((pr or {}).get("head") or {}).get("ref")) or ticket_from_ref((pr or {}).get("title"))
+        if ticket is None:
             raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
     else:
         ticket = number
@@ -144,13 +142,13 @@ def from_trigger(d, tracker=None):
     return {"id": f"{name}:{ticket}:{action}", "ticket": ticket, "event_name": name, "action": action}
 
 
-def read(path, what, raw=False, tracker=None):
+def read(path, what, raw=False, code_host=None):
     try:
         data = json.loads(Path(path).read_text())
     except (OSError, ValueError) as e:
         raise Bad(f"malformed {what}: {e}")
     if isinstance(data, dict) and raw and "ticket" not in data:
-        return from_trigger(data, tracker)
+        return from_trigger(data, code_host)
     if not isinstance(data, dict) or "ticket" not in data:
         raise Bad(f"malformed {what}: needs an object with `ticket`")
     return data
@@ -181,7 +179,7 @@ def intake_fields(h):
     n = int(size[0]) if size else 0
     proposed = h.get("proposed_checks")
     proposed = "\n".join(f"- {x}" for x in proposed) if isinstance(proposed, list) else str(proposed or "")
-    proposal = ("\n\nProposed acceptance checks (accept by editing the ticket, or by `factory:triage` with this pasted):\n"
+    proposal = (f"\n\nProposed acceptance checks (accept by editing the ticket, or by `{vocab.stage('triage')}` with this pasted):\n"
                 f"{proposed}" if proposed.strip() not in ("", "none") else "")
     return {"complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
             "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong",
@@ -216,7 +214,7 @@ def review_wake_labels(facts, completed_head=None):
     ci = "green" if completed_head and facts.get("head") == completed_head else facts.get("ci")
     if facts.get("stage") != "in-review" or ci != "green":
         return []
-    return [f"factory:review-{focus}" for focus in facts.get("focus_missing", [])]
+    return [vocab.cmd("review-<focus>", focus) for focus in facts.get("focus_missing", [])]
 
 
 def branch_of(facts, config):
@@ -254,8 +252,8 @@ def check(name, event, tracker, nodes, config):
         pending = facts.get("pending_rereviews", [])
         labels = facts.get("pr_labels", [])
         event["rereview"] = next(iter(pending), None) or next(
-            (x.removeprefix("factory:rereview-") for x in labels
-             if x.startswith("factory:rereview-")), None)
+            (x.removeprefix(vocab.prefix("rereview-<focus>")) for x in labels
+             if x.startswith(vocab.prefix("rereview-<focus>"))), None)
     if name == "fix" and facts.get("ci") == "red" and facts.get("head") and hasattr(tracker, "ci_failure"):
         failure = tracker.ci_failure(facts["head"])
         if failure:
@@ -411,16 +409,16 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                 effects = []
             else:
                 checklist = "\n".join(f"- [ ] {check}" for check in checks)
-                effects = [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
+                effects = [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
                            {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]},
                            {"kind": "comment", "ticket": ticket, "run_id": "finish:after-merge",
                             "value": f"[factory] After-merge operator checks:\n\n{checklist}\n\n{AFTER_MERGE_MARKER}"}]
     if name == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
             and not facts.get("focus_missing") and facts.get("ci") == "green" and facts.get("pr") and facts.get("head"):
         people = facts["waiting_reviewers"]
-        effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
+        effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
                     {"kind": "assign", "ticket": ticket, "value": people},
-                    {"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                    {"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                     {"kind": "assign", "ticket": ticket, "value": people, "on": "pr"},
                     {"kind": "comment", "ticket": ticket,
                      "value": f"[factory] Re-review PR #{facts['pr']}: your change request was addressed at {facts['head']}",
@@ -430,18 +428,18 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                          if not r.get("agent") and r.get("verdict") == "changes"
                          and r.get("commit_id") == facts["head"]]
         if human_changes:
-            effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+            effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                         {"kind": "assign", "ticket": ticket, "value": sorted(set(human_changes)), "on": "pr"}]
     if name == "reopen" and outcome == "reopened" and facts.get("ci") == "red" and facts.get("pr"):
-        effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+        effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                     {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"], "on": "pr"}]
     if name == "merge" and outcome == "waiting":
-        effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
+        effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
                     {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]},
-                    {"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                    {"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                     {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"], "on": "pr"}]
     if name == "join" and outcome == "changes" and facts.get("handed_to_fix") and has_dispute_rereview(facts):
-        effects.insert(0, {"kind": "unlabel", "ticket": ticket, "value": "factory:fix-*", "on": "pr"})
+        effects.insert(0, {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("fix-<tier>", "*"), "on": "pr"})
     if name in ("implement", "fix") and outcome == "done":
         estimate = size_estimate(facts.get("body", ""))
         if estimate is not None:
@@ -453,7 +451,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                 largest = ", ".join(f"{path} ({count})" for path, count in files[:5]) or "none"
                 reason = (f"[factory] Blocked: branch size is {size} lines against a {estimate}-line estimate "
                           f"(1.5× estimate: {estimate * 1.5:g}; max_diff_lines: {limit}). "
-                          f"Largest files: {largest}. Edit the ticket's size line or split it, then set factory:ready.")
+                          f"Largest files: {largest}. Edit the ticket's size line or split it, then set {vocab.stage('ready')}.")
                 effects = [{"kind": "comment", "ticket": ticket, "value": reason},
                            {"kind": "stage", "ticket": ticket, "value": "blocked"}]
     if name == "fix" and outcome == "done" and facts.get("handed_to_fix") and local_head() == facts.get("head"):
@@ -473,7 +471,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                 r.get("focus") in focuses and r.get("rereview") for r in facts.get("reviews", [])):
             disputes = "\n".join(str(x) for x in addressed)
             effects = [{"kind": "comment", "ticket": ticket, "value": f"[factory] Disputed findings:\n{disputes}", "on": "pr"}]
-            effects += [{"kind": "label", "ticket": ticket, "value": f"factory:rereview-{focus}", "on": "pr"}
+            effects += [{"kind": "label", "ticket": ticket, "value": vocab.cmd("rereview-<focus>", focus), "on": "pr"}
                         for focus in focuses]
             effects.append({"kind": "stage", "ticket": ticket, "value": "in-review"})
         else:
@@ -481,7 +479,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         # would ever start the next round. A person decides.
             effects = [{"kind": "comment", "ticket": ticket, "value": (
                            "[factory] Stopped: the fix round ended without a commit, so nothing starts the next "
-                           "review. A person decides, then sets factory:ready.")},
+                           f"review. A person decides, then sets {vocab.stage('ready')}.")},
                        {"kind": "stage", "ticket": ticket, "value": "blocked"}]
     if name == "merge":  # the plan may be seconds old
         decision = merge_decision(facts, auto_merge if auto_merge is not None else config_mod.load()["gates"].get("auto_merge"))
@@ -493,17 +491,17 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         # A resumed ticket implemented on its open PR with no new commit: no push, so no CI label would come.
         # Re-fire it, and run the join once the stage is in-review: reviews already at this head decide.
         effects = refire_ci(ticket, facts["ci"]) + effects
-        after = ([{"kind": "label", "ticket": ticket, "value": f"factory:review-{focus}", "on": "pr"}
+        after = ([{"kind": "label", "ticket": ticket, "value": vocab.cmd("review-<focus>", focus), "on": "pr"}
                   for focus in facts.get("focus_missing", [])] if facts["ci"] == "green" else [])
         after.append({"kind": "join", "ticket": ticket, "value": "all-approve", "tier": fix_tier(facts)})
     if name in ("implement", "fix") and outcome == "done" and not after and facts.get("pr") and facts.get("ci") == "green" \
             and any(e["kind"] == "stage" and e["value"] == "in-review" for e in effects):
         # CI may have finished while the ticket was not yet in-review, when its wake found no stage to act on:
         # whichever of the two comes last wakes the reviewers. A focus whose label is present is already woken.
-        after = [{"kind": "label", "ticket": ticket, "value": f"factory:review-{f}", "on": "pr"}
-                 for f in facts.get("focus_missing", []) if f"factory:review-{f}" not in facts.get("pr_labels", [])]
-    starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(COMMANDS)]
-    stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith("factory:fix-") for e in starts))
+        after = [{"kind": "label", "ticket": ticket, "value": vocab.cmd("review-<focus>", f), "on": "pr"}
+                 for f in facts.get("focus_missing", []) if vocab.cmd("review-<focus>", f) not in facts.get("pr_labels", [])]
+    starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(commands())]
+    stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith(vocab.prefix("fix-<tier>")) for e in starts))
     if stop:
         # The transition that would start a developer run it may not start blocks the ticket instead; a check
         # that refused later would stop it with no comment and no event to wake it.
@@ -519,18 +517,18 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         target = stage_effect["value"]
         human_effects = []
         human_state = target in ("blocked", "needs-answers")
-        if not human_state and "factory:needs-human" in facts.get("attrs", []):
-            human_effects += [{"kind": "unlabel", "ticket": ticket, "value": "factory:needs-human"},
+        if not human_state and vocab.needs_human() in facts.get("attrs", []):
+            human_effects += [{"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human()},
                               {"kind": "unassign", "ticket": ticket, "value": None}]
         if human_state:
             person = (facts.get("author") if target == "needs-answers" else
                       config_mod.load()["notify"]["github_user"])
-            human_effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
+            human_effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
                               {"kind": "assign", "ticket": ticket, "value": person},
-                              {"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                              {"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                               {"kind": "assign", "ticket": ticket, "value": person, "on": "pr"}]
-        elif "factory:needs-human" in facts.get("attrs", []) or target in ("ready", "triage", "approved", "done"):
-            human_effects += [{"kind": "unlabel", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+        elif vocab.needs_human() in facts.get("attrs", []) or target in ("ready", "triage", "approved", "done"):
+            human_effects += [{"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                               {"kind": "unassign", "ticket": ticket, "value": None, "on": "pr"}]
         effects[:0] = human_effects
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
@@ -555,33 +553,37 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
 
 
 SWEEP_STAGES = ("ready", "approved", "split", "in-review", "needs-answers")
-COMMANDS = ("factory:implement-", "factory:fix-", "factory:update-")
+
+
+def commands():
+    """Label prefixes of the developer commands: each starts a developer run."""
+    return tuple(vocab.prefix(c) for c in ("implement-<tier>", "fix-<tier>", "update-<tier>"))
 
 
 def clear_commands(ticket):
     """Effects that remove every command label. A stopped ticket keeps none, so the first command after a
     person's factory:ready is a new label and fires its node (re-adding a present label fires nothing)."""
-    return [{"kind": "unlabel", "ticket": ticket, "value": "factory:implement-*"},
-            {"kind": "unlabel", "ticket": ticket, "value": "factory:fix-*", "on": "pr"},
-            {"kind": "unlabel", "ticket": ticket, "value": "factory:update-*", "on": "pr"}]
+    return [{"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("implement-<tier>", "*")},
+            {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("fix-<tier>", "*"), "on": "pr"},
+            {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("update-<tier>", "*"), "on": "pr"}]
 
 
 def refire_ci(ticket, ci):
     """Effects that write the PR's CI label again (remove, then add), so its node starts for an unchanged head."""
-    return [{"kind": "unlabel", "ticket": ticket, "value": "factory:ci-green", "on": "pr"},
-            {"kind": "unlabel", "ticket": ticket, "value": "factory:ci-red", "on": "pr"},
-            {"kind": "label", "ticket": ticket, "value": f"factory:ci-{ci}", "on": "pr"}]
+    return [{"kind": "unlabel", "ticket": ticket, "value": vocab.ci("ci-green"), "on": "pr"},
+            {"kind": "unlabel", "ticket": ticket, "value": vocab.ci("ci-red"), "on": "pr"},
+            {"kind": "label", "ticket": ticket, "value": vocab.ci(f"ci-{ci}"), "on": "pr"}]
 
 
 def stop_reason(facts, fix=False):
     """Why no further developer run may start for this ticket, else None: the spend guard, and for a fix
     round the fix-round cap (`limits.fix_rounds`)."""
     if facts.get("agent_runs", 0) >= facts.get("run_cap", 8):
-        return (f"[factory] Stopped: {facts['agent_runs']} developer runs since the last factory:ready reached "
-                f"limits.agent_runs_per_ticket. A person decides, then sets factory:ready.")
+        return (f"[factory] Stopped: {facts['agent_runs']} developer runs since the last {vocab.stage('ready')} reached "
+                f"limits.agent_runs_per_ticket. A person decides, then sets {vocab.stage('ready')}.")
     if fix and facts.get("fix_rounds", 0) >= facts.get("fix_cap", 3):
         return (f"[factory] Stopped: {facts['fix_rounds']} fix rounds reached limits.fix_rounds and the review "
-                f"still requests changes. A person decides, then sets factory:ready.")
+                f"still requests changes. A person decides, then sets {vocab.stage('ready')}.")
     return None
 
 
@@ -706,7 +708,7 @@ def sweep_plan(facts, auto_merge=None, default_tier="mid"):
         if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
             what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)
             return "finish", "child-blocked", {"reason": f"[factory] Blocked: child tickets need a person: {what}. "
-                                                         "Fix them, then set factory:ready on this ticket."}
+                                                         f"Fix them, then set {vocab.stage('ready')} on this ticket."}
         if all(c["state"] == "closed" for c in kids):
             return "finish", "children-done", {}
     if stage == "in-review" and facts.get("waiting_reviewers") and (
@@ -809,8 +811,8 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                         continue
                     effects = ({"kind": "comment", "ticket": n, "run_id": "finish:re-triage",
                                 "value": f"[factory] Blocker #{source} was closed as not planned; re-triage this ticket"},
-                               {"kind": "stage", "ticket": n, "value": "triage"}) if not_planned else ({"kind": "unlabel", "ticket": n, "value": "factory:ready"},
-                                   {"kind": "label", "ticket": n, "value": "factory:ready"},
+                               {"kind": "stage", "ticket": n, "value": "triage"}) if not_planned else ({"kind": "unlabel", "ticket": n, "value": vocab.stage("ready")},
+                                   {"kind": "label", "ticket": n, "value": vocab.stage("ready")},
                                    {"kind": "comment", "ticket": n, "value": f"[factory] unblocked by #{source}",
                                     "run_id": "finish:unblocked"})
                     for effect in effects:
@@ -845,24 +847,24 @@ def stale_plan(facts, now, hours, command_minutes=30):
     if now - datetime.fromisoformat(since.replace("Z", "+00:00")) <= age:
         return None
     cmd, cmd_at, commit_at = facts.get("command"), facts.get("command_at") or "", facts.get("commit_at") or ""
-    if stage == "changes-requested" and facts.get("conflict") and cmd and cmd.startswith("factory:update-") \
+    if stage == "changes-requested" and facts.get("conflict") and cmd and cmd.startswith(vocab.prefix("update-<tier>")) \
             and cmd_at and cmd_at < since:
         return "refire", cmd, "pr", "conflicting PR has an update label with no later run"
     if stage == "triage":
-        return "refire", "factory:triage", "issue", "no intake outcome"
+        return "refire", vocab.stage("triage"), "issue", "no intake outcome"
     if stage == "ready" and not facts.get("blockers_open"):
-        return "refire", "factory:ready", "issue", "no start outcome"
+        return "refire", vocab.stage("ready"), "issue", "no start outcome"
     if stage == "in-dev" and cmd and (not facts.get("pr") or commit_at < cmd_at):
         return "refire", cmd, "issue", "no PR or commit since the command label"
     if stage == "in-review" and facts.get("pr"):
         head = facts.get("head")
-        if facts.get("ci_label") == "green" and cmd and cmd.startswith("factory:review-") \
-                and cmd.removeprefix("factory:review-") in facts.get("focus_missing", []):
+        if facts.get("ci_label") == "green" and cmd and cmd.startswith(vocab.prefix("review-<focus>")) \
+                and cmd.removeprefix(vocab.prefix("review-<focus>")) in facts.get("focus_missing", []):
             return "refire", cmd, "pr", "no review for this focus at the head"
         if facts.get("ci_label") == "green" and not any(r["agent"] and r["commit_id"] == head for r in facts.get("reviews", [])):
             missing = facts.get("focus_missing", [])
             if missing:
-                return "refire", f"factory:review-{missing[0]}", "pr", "no review for this focus at the head"
+                return "refire", vocab.cmd("review-<focus>", missing[0]), "pr", "no review for this focus at the head"
         if not facts.get("ci_label"):
             if facts.get("conflict"):
                 return "comment", None, None, f"no CI label at head {head}: the PR conflicts with main (GitHub starts no CI on a conflict); the update runs after the join"
@@ -911,20 +913,20 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
                                               "value": f"{RECOVER} stage={stage} {why}"})
             elif kind == "human":
-                if "factory:needs-human" in facts.get("attrs", []):
+                if vocab.needs_human() in facts.get("attrs", []):
                     if progress:
                         progress({**r, "recover": "skipped"})
                     continue  # preserve an existing human wait and its assignee
-                tracker.apply({"ticket": n, "kind": "label", "value": "factory:needs-human"})
+                tracker.apply({"ticket": n, "kind": "label", "value": vocab.needs_human()})
                 tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"]})
-                tracker.apply({"ticket": n, "kind": "label", "value": "factory:needs-human", "on": "pr"})
+                tracker.apply({"ticket": n, "kind": "label", "value": vocab.needs_human(), "on": "pr"})
                 tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"], "on": "pr"})
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
-                                              "value": f"{RECOVER} stage={stage}: {why}. A person decides, then sets factory:ready."})
+                                              "value": f"{RECOVER} stage={stage}: {why}. A person decides, then sets {vocab.stage('ready')}."})
             elif recovered(facts, stage):
                 r["recover"] = "blocked"
                 _, out = apply("recover", "blocked", {"ticket": n, "run_id": run,
-                                                          "reason": f"[factory] Stopped: the node did not respond twice in {stage}. A person decides, then sets factory:ready."},
+                                                          "reason": f"[factory] Stopped: the node did not respond twice in {stage}. A person decides, then sets {vocab.stage('ready')}."},
                                tracker, nodes)
                 r["applied"] = out["applied"]
             else:  # the comment last: for `ready` the re-added stage label starts the stage, and the comment must follow it
@@ -968,10 +970,11 @@ def main(argv):
     try:
         kind, _, path = (a.tracker or "github").partition(":")
         if kind == "github" and not path:
-            tracker = GitHubGateTracker.from_config()
+            tracker, code_host = GitHubGateTracker.from_config(), GitHubCodeHost.from_config()
         elif kind == "memory" and path:
             try:
                 tracker = MemoryTracker(dict(json.loads(Path(path).read_text())))
+                code_host = tracker  # the memory tracker also maps a PR number to its ticket
             except (OSError, ValueError, TypeError) as e:
                 raise Bad(f"malformed --tracker file: {e}")
         else:
@@ -1008,11 +1011,11 @@ def main(argv):
                             closed_ticket = issue
                     else:
                         pr_number = (pr_payload or raw).get("number")
-                        ref_ticket = tracker.ticket_for_pr(pr_number) if hasattr(tracker, "ticket_for_pr") else None
+                        ref_ticket = code_host.ticket_for_pr(pr_number) if code_host else None
                         if ref_ticket is None:
                             raise ValueError("PR head ref does not identify an ez/<ticket> branch")
                         issue = ref_ticket
-                    if not isinstance(issue, int) or issue < 1:
+                    if not issue or (isinstance(issue, int) and issue < 1):
                         raise ValueError("event does not identify a ticket number")
                 except (OSError, ValueError, TypeError) as e:
                     raise Bad(f"invalid sweep event: {e}")
@@ -1045,7 +1048,7 @@ def main(argv):
                 raise Bad("malformed handoff: needs an object")
             code, out = apply_routine(a.node, a.outcome or h.get("outcome") or h.get("status") or "", nodes)
         elif a.cmd == "check":
-            event = read(a.event or "", "event", raw=True, tracker=tracker)
+            event = read(a.event or "", "event", raw=True, code_host=code_host)
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
             code, out = check(a.node, event, tracker, nodes, config)
             if a.node == "implement" and code == GO:
@@ -1058,7 +1061,7 @@ def main(argv):
                     raise Bad(f"malformed handoff: {e}")
                 if not isinstance(h, dict):
                     raise Bad("malformed handoff: needs an object")
-                ev = read(a.event, "event", raw=True, tracker=tracker) if a.event else {}
+                ev = read(a.event, "event", raw=True, code_host=code_host) if a.event else {}
                 if "ticket" not in {**h, **ev}:
                     raise Bad("apply --handoff needs `ticket` in the handoff or --event")
                 payload = {**intake_fields(h), **h, **{k: v for k, v in ev.items() if v is not None and k != "id"},
