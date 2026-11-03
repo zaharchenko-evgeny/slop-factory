@@ -131,9 +131,8 @@ def from_trigger(d, tracker=None):
     name = "pull_request_review" if review and is_pr else "pull_request" if is_pr else "issues"
     if is_pr:
         ref = ""
-        if tracker and hasattr(tracker, "ticket_for_pr"):
-            ticket = tracker.ticket_for_pr(number)
-        else:
+        ticket = tracker.ticket_for_pr(number) if tracker and hasattr(tracker, "ticket_for_pr") else None
+        if ticket is None and not isinstance(tracker, GitHubGateTracker):
             ref = ((pr or {}).get("head") or {}).get("ref") or ""
             m = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
             ticket = int(m[1]) if m else None
