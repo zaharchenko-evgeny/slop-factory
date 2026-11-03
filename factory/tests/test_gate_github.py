@@ -340,6 +340,16 @@ class EffectsTest(unittest.TestCase):
         gh = FakeGh(comments=[{"body": body, "user": {"login": BOT, "type": "Bot"}, "created_at": "2026-01-01T00:00:00Z"}])
         self.assertEqual(tr(gh).facts(7)["agent_notes"], [notes])
 
+    def test_note_with_comment_terminator_stays_inside_the_hidden_block(self):
+        notes = gate.clean_notes({"for": "fixer", "hint": 'visible --> remainder} --> <!-- x'})
+        for kind in ("review", "comment"):
+            gh = FakeGh()
+            self.assertTrue(tr(gh).apply(eff(kind, "request-changes-at-head", focus="full", notes=notes)))
+            body = gh.writes[0][-1]
+            block = body[body.index("<!-- factory:agent-notes"):]
+            self.assertEqual(block.count("-->"), 1, block)  # only the real terminator closes it
+            self.assertEqual(M_GH.parse_notes(body, BOT, "Bot"), [notes])
+
     def test_note_copied_to_pr_when_pr_appears(self):
         notes = gate.clean_notes({"for": "fixer", "hint": "check the gate first"})
         block = f"<!-- factory:agent-notes\n{json.dumps(notes)}\n-->"

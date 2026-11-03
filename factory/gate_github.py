@@ -52,6 +52,12 @@ def clean_notes(raw):
     return notes
 
 
+def notes_block(notes):
+    """The hidden block of cleaned notes; `<` and `>` are JSON-escaped so no text can close the comment early."""
+    body = json.dumps(notes).replace("<", "\\u003c").replace(">", "\\u003e")
+    return f"<!-- factory:agent-notes\n{body}\n-->"
+
+
 def parse_notes(body, login="", kind="User"):
     """The valid notes blocks of `body`, only from a bot author: a person's text is no source of notes."""
     if kind != "Bot" and not login.endswith("[bot]"):
@@ -559,7 +565,7 @@ class GitHubGateTracker:
                                     (parked[-1].get("user") or {}).get("type", "")) if parked else []
                 if not found:
                     return False
-                value = f"<!-- factory:agent-notes\n{json.dumps(found[-1])}\n-->"
+                value = notes_block(found[-1])
             if value in (pr.get("body") or ""):
                 return False
             self.run(["pr", "edit", str(pr["number"]), "-R", self.repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
@@ -668,7 +674,7 @@ class GitHubGateTracker:
     @staticmethod
     def _block(e):
         """The hidden notes block an effect carries (`notes`: the gate's cleaned object), after the visible text."""
-        return f"\n\n<!-- factory:agent-notes\n{json.dumps(e['notes'])}\n-->" if e.get("notes") else ""
+        return f"\n\n{notes_block(e['notes'])}" if e.get("notes") else ""
 
     def _review(self, n, e):
         pr, focus = self._pr(n), e.get("focus")
