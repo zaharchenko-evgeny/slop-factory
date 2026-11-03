@@ -17,7 +17,8 @@ sys.exit(subprocess.run(["bash", "-c", check["run"]]).returncode)'
 
 echo "== read =="
 env FACTORY_ENV=read sh .air/cloud/startup.sh
-factory --help >/dev/null
+# main's `factory` (installed from origin/main, not this branch) is only checked for presence: its --help exit code is not this branch's.
+command -v factory >/dev/null
 for r in reviewer router; do
   while read -r skill; do
     [ -f "$HOME/.claude/skills/$skill/SKILL.md" ] || { echo "air-like: skill $skill of $r not installed" >&2; exit 1; }
