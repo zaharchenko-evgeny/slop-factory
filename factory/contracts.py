@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Air service contracts: the recordings in factory/tests/contracts/ and the tools built on them.
+
+`factory contracts refresh` (operator-only: it needs the operator's Air OAuth, never run it from an agent or CI)
+re-records the tool lists and the read-only responses of the two Air MCP servers into air-mcp.json, started from
+FACTORY_MCP_AIR_AUTOMATIONS and FACTORY_MCP_AIR_CLOUD as `factory deploy` does. Tokens, emails and secret-like ids are
+stripped. Responses of write tools and per-run tools stay as recorded.
+`contracts.py serve RECORDING SERVER` is a fake MCP server over stdio answering only what was recorded.
+"""
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+DIR = Path(__file__).resolve().parent / "tests/contracts"
+SECRET = re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w+|sk-[A-Za-z0-9-]{20,}|eyJ[\w-]{20,}\.[\w-]{10,}"
+                    r"|Bearer\s+[\w.~+/=-]{8,}")
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+SECRET_KEY = re.compile(r"token|secret|password|apikey|api_key|credential", re.I)
+
+
+def redact(x):
+    """The value with tokens and emails replaced, and values under secret-named keys removed."""
+    if isinstance(x, str):
+        return EMAIL.sub("<email>", SECRET.sub("<token>", x))
+    if isinstance(x, list):
+        return [redact(v) for v in x]
+    if isinstance(x, dict):
+        return {k: "<redacted>" if SECRET_KEY.search(k) and isinstance(v, str) else redact(v) for k, v in x.items()}
+    return x
+
+
+def find(responses, tool, args):
+    """The recorded response of `tool`: one key per tool, or `tool:<variant>` keys told apart by the arguments."""
+    keys = [k for k in responses if k == tool or k.startswith(tool + ":")]
+    if len(keys) > 1:
+        keys = [k for k in keys if all(str(v) in json.dumps(responses[k]) for v in args.values())]
+    return responses[keys[0]] if keys else None
+
+
+def reply(server, tools, responses, method, params):
+    """The JSON-RPC result of one request; raises ValueError for a tool or argument the recordings do not allow."""
+    if method != "tools/call":
+        return {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "fake", "version": "0"}}
+    name, args = params["name"], params.get("arguments") or {}
+    schema = next((t["inputSchema"] for t in tools if t["name"] == name), None)
+    if schema is None:
+        raise ValueError(f"unrecorded {server} tool: {name}")
+    props = schema.get("properties", {})
+    if missing := [k for k in schema.get("required", []) if k not in args]:
+        raise ValueError(f"{name}: missing {missing}")
+    if unknown := [k for k in args if k not in props]:
+        raise ValueError(f"{name}: unknown arguments {unknown}")
+    res = find(responses, name, args)
+    if res is None:
+        raise ValueError(f"no recorded response for {server} tool: {name}")
+    return res
+
+
+def serve(recording, server):
+    rec = json.loads(Path(recording).read_text())["servers"][server]
+    for line in sys.stdin:
+        m = json.loads(line)
+        if "id" not in m:
+            continue
+        try:
+            out = {"result": reply(server, rec["tools"], rec["responses"], m["method"], m.get("params", {}))}
+        except ValueError as e:
+            out = {"error": {"code": -32602, "message": str(e)}}
+        print(json.dumps({"jsonrpc": "2.0", "id": m["id"], **out}), flush=True)
+
+
+def refresh(path=DIR / "air-mcp.json"):
+    import deploy
+    rec = json.loads(Path(path).read_text())
+    clients = {"air-automations": deploy.Mcp(os.environ["FACTORY_MCP_AIR_AUTOMATIONS"]),
+               "air-cloud": deploy.Mcp(os.environ["FACTORY_MCP_AIR_CLOUD"])}
+    try:
+        for name, client in clients.items():
+            rec["servers"][name]["tools"] = redact(client.rpc("tools/list", {})["tools"])
+        raw = lambda c, tool, args: c.rpc("tools/call", {"name": tool, "arguments": args})  # noqa: E731
+        auto, cloud = clients["air-automations"], clients["air-cloud"]
+        auto_r, cloud_r = rec["servers"]["air-automations"]["responses"], rec["servers"]["air-cloud"]["responses"]
+        auto_r["list_automations"] = redact(raw(auto, "list_automations", {"privacy": "private"}))
+        repo = "https://github.com/" + os.environ.get("FACTORY_REPOSITORY", "zaharchenko-evgeny/slop-factory")
+        cloud_r["list_environments"] = redact(raw(cloud, "list_environments", {"repositoryUrl": repo}))
+        for item in json.loads(cloud_r["list_environments"]["content"][0]["text"])["items"]:
+            key = "get_environment:" + item["name"].rsplit(" ", 1)[-1]
+            if key in cloud_r:
+                cloud_r[key] = redact(raw(cloud, "get_environment", {"id": item["id"]}))
+    finally:
+        for c in clients.values():
+            c.close()
+    Path(path).write_text(json.dumps(rec, indent=1) + "\n")
+    return 0
+
+
+def main(argv):
+    if argv[:1] == ["refresh"]:
+        return refresh()
+    if argv[:1] == ["serve"] and len(argv) == 3:
+        return serve(*argv[1:]) or 0
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
