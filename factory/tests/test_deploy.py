@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 import deploy
+import gate_github
 import nodes
 
 FIX = HERE / "fixtures/deploy"
@@ -252,6 +253,15 @@ class ApplyTest(unittest.TestCase):
         plan = {"prefix": "[F] ", "environments": [], "automations": [], "files": {}}
         servers = [mock.Mock(), mock.Mock()]
         changed = [("update", "automation", "a", None, None, [])]
+        writes = []
+
+        def run(args):
+            writes.append(args)
+            if args[:2] == ["api", "--paginate"]:
+                return json.dumps({"number": 42, "title": "Deploy needed"})
+            return "{}"
+
+        tracker = gate_github.GitHubGateTracker("o/r", {}, "bot", run=run)
         with (mock.patch.dict(os.environ, {"FACTORY_MCP_AIR_AUTOMATIONS": "automation",
                                           "FACTORY_MCP_AIR_CLOUD": "cloud"}),
               mock.patch.object(deploy.config_mod, "pop_team", side_effect=lambda argv: argv),
@@ -261,10 +271,11 @@ class ApplyTest(unittest.TestCase):
               mock.patch.object(deploy, "diff", side_effect=[changed, []]),
               mock.patch.object(deploy, "apply_diff") as apply,
               mock.patch.object(deploy, "write_files", return_value=0),
-              mock.patch("gate_github.GitHubGateTracker.from_config") as tracker):
+              mock.patch("gate_github.GitHubGateTracker.from_config", return_value=tracker)):
             self.assertEqual(deploy.main(["--apply"]), 0)
         apply.assert_called_once()
-        tracker.return_value.deploy_applied.assert_called_once_with({**plan, "renames": {}})
+        self.assertTrue(any(x[:2] == ["issue", "close"] and "42" in x for x in writes))
+        self.assertTrue(any(x[:2] == ["issue", "comment"] and "factory:deploy-applied" in " ".join(x) for x in writes))
 
 
 class PlanTest(unittest.TestCase):
