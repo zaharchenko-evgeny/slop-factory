@@ -152,6 +152,7 @@ jobs:
           chmod 666 "/tmp/air-like-denied.log"
           # The proxy runs as `nobody`; the container user (uid 1500, not the runner's own uid) may reach only loopback, so direct downloads fail.
           sudo iptables -I OUTPUT 1 -m owner --uid-owner 1500 ! -o lo -j REJECT
+          sudo ip6tables -I OUTPUT 1 -m owner --uid-owner 1500 ! -o lo -j REJECT
           sudo cp -a "$PWD" "/tmp/air-like-repo"
           sudo chown -R 1500 "/tmp/air-like-repo"
           # shellcheck disable=SC2086
@@ -177,10 +178,12 @@ jobs:
         if: always()
         run: |
           # A direct (non-proxy) download as the container's uid must be rejected.
-          if sudo -u '#1500' curl -sS --max-time 10 -o /dev/null https://example.com 2>/dev/null; then
-            echo "::error::direct egress is not blocked"
-            exit 1
-          fi
+          for family in -4 -6; do
+            if sudo -u '#1500' curl "$family" -sS --max-time 10 -o /dev/null https://example.com 2>/dev/null; then
+              echo "::error::direct IPv${family#-} egress is not blocked"
+              exit 1
+            fi
+          done
           if [ -s "/tmp/air-like-denied.log" ]; then
             echo "::error::downloads from hosts outside the environment plan: $(sort -u "/tmp/air-like-denied.log" | tr '\n' ' ')"
             exit 1
