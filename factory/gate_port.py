@@ -32,16 +32,103 @@ def fix_round_count(reviews, since=""):
                 and any(str(i).startswith("B") for i in r.get("findings", []))})
 
 
+class UnsupportedStore(ValueError):
+    """A descriptor store this tracker cannot read or write (a `field` or `tag` store before YouTrack, #163)."""
+
+
+# The facts a PR-fact state store (`store: {pr: <fact>}`) holds on.
+PR_FACTS = {"open": lambda f: f.get("pr_state") == "open", "merged": lambda f: f.get("pr_state") == "merged",
+            "ci-green": lambda f: f.get("ci") == "green", "ci-red": lambda f: f.get("ci") == "red",
+            "conflicting": lambda f: bool(f.get("conflict")),
+            "approved": lambda f: bool(f.get("round_complete")) and f.get("round_verdict") == "approve"}
+
+
+class DescriptorPort:
+    """States and commands by name, through the `store` each has in factory.project.yaml (ADR-0016). A tracker
+    mixes it in and sets `project`; reads go through its `facts`, writes through its `apply`."""
+    project = None
+
+    def _entries(self, section):
+        if not isinstance(self.project, dict):
+            raise ValueError("no project descriptor: the tracker reads states and commands from factory.project.yaml")
+        return self.project.get(section) or {}
+
+    def _state_store(self, name):
+        import project as project_mod
+        states = self._entries("states")
+        if name not in states:
+            raise KeyError(f"unknown state: {name}")
+        store = states[name]["store"]
+        return project_mod.store_kind(store), store
+
+    def _command(self, name):
+        import workflow
+        _, kind, value = workflow.resolve(self._entries("commands"), name)
+        if kind not in ("label", "pr_label"):
+            raise UnsupportedStore(f"command {name}: this tracker has no {kind} store")
+        return kind, value
+
+    def state(self, ticket):
+        """The ticket's state held in a label store, else `none`."""
+        stage = self.facts(ticket)["stage"]
+        states = self._entries("states")
+        return stage if stage in states and "label" in (states[stage].get("store") or {}) else "none"
+
+    def pr_states(self, ticket):
+        """The PR-fact states (`store: {pr: ...}`) that hold for the ticket's PR."""
+        facts = self.facts(ticket)
+        return [name for name, entry in self._entries("states").items()
+                if "pr" in (entry.get("store") or {}) and PR_FACTS[entry["store"]["pr"]](facts)]
+
+    def set_state(self, ticket, name, event=None):
+        kind, store = self._state_store(name)
+        if kind == "pr":
+            raise ValueError(f"state {name} is a PR fact ({store['pr']}): the code host sets it, not the gate")
+        if kind != "label":
+            raise UnsupportedStore(f"state {name}: this tracker has no {kind} store")
+        return self.apply({"ticket": ticket, "kind": "stage", "value": name,
+                           **({"event": event} if event is not None else {})})
+
+    def commands(self, ticket):
+        """Command references present on the ticket (label stores) and its PR (pr_label stores), such as
+        `implement-mid` for the template `implement-<tier>`."""
+        import workflow
+        facts, found = self.facts(ticket), []
+        held = {"label": facts.get("attrs") or [], "pr_label": facts.get("pr_labels") or []}
+        for name, entry in self._entries("commands").items():
+            store = entry.get("store") or {}
+            kind = next(iter(store), None)
+            if kind not in held:
+                continue
+            parts = workflow._template(name)
+            for label in held[kind]:
+                if not parts and label == store[kind]:
+                    found.append(name)
+                elif parts:
+                    prefix, _, suffix = store[kind].partition(parts[0])
+                    if len(label) > len(prefix) + len(suffix) and label.startswith(prefix) and label.endswith(suffix):
+                        found.append(name.replace(parts[0], label[len(prefix):len(label) - len(suffix)]))
+        return found
+
+    def add_command(self, ticket, name):
+        kind, value = self._command(name)
+        return self.apply({"ticket": ticket, "kind": "label", "value": value, **({"on": "pr"} if kind == "pr_label" else {})})
+
+    def remove_command(self, ticket, name):
+        kind, value = self._command(name)
+        return self.apply({"ticket": ticket, "kind": "unlabel", "value": value, **({"on": "pr"} if kind == "pr_label" else {})})
+
+
 class CodeHost(Protocol):
     """Where the pull requests live; a tracker's tickets need not be on the same host."""
     def ticket_for_pr(self, number): ...
 
 
-class MemoryTracker:
+class MemoryTracker(DescriptorPort):
     """Integer ids, stage in its own field. `fail_on` makes the effect kind raise."""
 
-    def __init__(self, tickets=None, fail_on=None):
-        self.tickets, self.fail_on = tickets or {}, fail_on
+    def __init__(self, tickets=None, fail_on=None, project=None):
+        self.tickets, self.fail_on, self.project = tickets or {}, fail_on, project
 
     def _t(self, ticket):
         return self.tickets[ticket] if ticket in self.tickets else self.tickets[str(ticket)]  # JSON files key by string
@@ -140,6 +227,8 @@ class MemoryTracker:
         log.append(entry)
         if kind == "label" and value not in t.setdefault("attrs", []):
             t["attrs"].append(value)
+        if kind == "label" and effect.get("on") == "pr" and value not in t.setdefault("pr_labels", []):
+            t["pr_labels"].append(value)
         return True
 
     def _drop(self, t, value):
@@ -150,12 +239,16 @@ class MemoryTracker:
             for x in gone:
                 log.remove(x)
             t["attrs"] = [x for x in attrs if not x.startswith(value[:-1])]
+            if "pr_labels" in t:
+                t["pr_labels"] = [x for x in t["pr_labels"] if not x.startswith(value[:-1])]
             return bool(gone) or len(t["attrs"]) != len(attrs)
         entry = ["label", json.dumps(value, sort_keys=True)]
         present = entry in log
         if present:
             log.remove(entry)
         t["attrs"] = [x for x in attrs if x != value]
+        if "pr_labels" in t:
+            t["pr_labels"] = [x for x in t["pr_labels"] if x != value]
         return present or len(t["attrs"]) != len(attrs)
 
 
