@@ -333,7 +333,7 @@ class PlanTest(unittest.TestCase):
                           for x in reopen["triggers"]],
                          [("pull_request.synchronize", None, "jetbrains-air[bot]"),
                           ("pull_request.labeled", "factory:ci-red", "jetbrains-air[bot]")])
-        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] recover", "[Slop factory] retro", "[Slop factory] distill") for x in a["triggers"]), "no polling"  # recover is the one safety net
+        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] recover", "[Slop factory] retro", "[Slop factory] distill", "[Slop factory] doctor", "[Slop factory] doctor-write", "[Slop factory] doctor-ops") for x in a["triggers"]), "no polling"  # recover is the one safety net
 
     def test_one_triggervcs_entry_per_trigger_and_a_spec_per_automation(self):
         for a in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
@@ -378,10 +378,21 @@ class PlanTest(unittest.TestCase):
 
     def test_pull_request_scripts_run_from_main(self):
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
-        self.assertIn("`factory sweep --main`", a["[Slop factory] join"])
-        self.assertIn("`factory sweep --main --issue <issue number from the trigger payload>`", a["[Slop factory] finish"])
-        self.assertIn("`factory sweep --main`", a["[Slop factory] reopen"])
+        self.assertIn("`factory sweep --main --event`", a["[Slop factory] join"])
+        self.assertIn("`factory sweep --main --event`", a["[Slop factory] finish"])
+        self.assertIn("`factory sweep --main --event`", a["[Slop factory] reopen"])
         self.assertNotIn("--main", a["[Slop factory] recover"])
+
+    def test_event_script_nodes_scope_to_one_ticket(self):
+        scripts = {"join", "start", "finish", "reopen", "merge"}
+        for automation in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
+            name = automation["name"].removeprefix("[Slop factory] ")
+            if name in scripts:
+                self.assertIn("factory sweep --main --event", automation["prompt"], name)
+            elif name == "recover":
+                self.assertIn("factory sweep --stale", automation["prompt"])
+            elif "factory sweep" in automation["prompt"]:
+                self.assertTrue("--issue" in automation["prompt"] or "--event" in automation["prompt"], name)
 
     def test_real_plan_is_prefixed_and_covers_pilot(self):
         config = cfg.load()
@@ -391,7 +402,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["prefix"], "[Slop factory] ")
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
-            "intake", "start", "join", "finish", "recover", "reopen", "merge", "notify", "retro", "distill",
+            "intake", "start", "join", "finish", "recover", "reopen", "merge", "notify", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}
         self.assertEqual(names, pilot)

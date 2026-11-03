@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, chart, validate.
+"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, chart, validate, doctor.
 
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> [payload file]   (payload on stdin by default; exit 10: the node must not act)
@@ -183,6 +183,9 @@ def main(argv=None):
         return nodes.main(["chart", *rest])
     if cmd == "validate" and not rest:
         return validate()
+    if cmd == "doctor":
+        from doctor import main as doctor_main
+        return doctor_main(rest)
     if cmd == "notify":
         from notify import main as notify_main
         return notify_main(rest)

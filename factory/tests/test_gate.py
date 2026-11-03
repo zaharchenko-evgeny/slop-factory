@@ -6,7 +6,7 @@
 """Tests for factory/gate.py on both fakes. Run: uv run factory/tests/test_gate.py"""
 import copy
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 import json
 import os
@@ -458,9 +458,8 @@ class TriggerTest(unittest.TestCase):
         f.write_text('{"action":')
         try:
             code, out, warning = self.run_sweep(["--event", str(f)], tracker)
-            self.assertEqual(code, gate.GO)
-            self.assertEqual((out["sweep"][0]["ticket"], out["sweep"][0]["outcome"]), (1, "approved"))
-            self.assertIn("running full sweep", warning)
+            self.assertEqual(code, gate.BAD)
+            self.assertIn("invalid sweep event", out["error"])
         finally:
             f.unlink(missing_ok=True)
 
@@ -470,14 +469,36 @@ class TriggerTest(unittest.TestCase):
         tracker.sweep_tickets = lambda stages: []
         f = self.file({"action": "closed"})
         code, out, warning = self.run_sweep(["--event", str(f)], tracker)
-        self.assertEqual((code, out["sweep"]), (gate.GO, []))
-        self.assertIn("running full sweep", warning)
+        self.assertEqual(code, gate.BAD)
+        self.assertIn("invalid sweep event", out["error"])
+
+    def test_sweep_event_resolves_ticket_from_pr_title(self):
+        from gate_port import MemoryTracker
+        cases = (("#335 API rate limit fix", ""),
+                 ("Factory change", "Closes #335"),
+                 ("Factory change\n\nCloses #335", ""))
+        for title, body in cases:
+            with self.subTest(title=title, body=body):
+                tracker = MemoryTracker({335: {"stage": "ready"}, 336: {"stage": "ready"}})
+                tracker.sweep_tickets = lambda stages: self.fail("event sweep must not list all tickets")
+                f = self.file({"action": "labeled", "pull_request": {"title": title, "body": body}})
+                code, out, _ = self.run_sweep(["--event", str(f), "--dry-run"], tracker)
+                self.assertEqual(code, gate.GO)
+                self.assertEqual([x["ticket"] for x in out["sweep"]], [335])
+
+    def test_sweep_without_scope_is_rejected_except_stale(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({})
+        tracker.sweep_tickets = lambda stages: self.fail("unscoped sweep must be rejected")
+        code, out, _ = self.run_sweep([], tracker)
+        self.assertEqual(code, gate.BAD)
+        self.assertIn("needs --issue or --event", out["error"])
 
     def test_sweep_reports_skipped_ticket_as_progress_without_changing_result(self):
         from gate_port import MemoryTracker
         tracker = MemoryTracker({1: {"stage": "ready", "blockers_open": 1}})
         tracker.sweep_tickets = lambda stages: [1]
-        code, out, progress = self.run_sweep([], tracker)
+        code, out, progress = self.run_sweep(["--issue", "1"], tracker)
         self.assertEqual((code, out["sweep"]), (gate.GO, []))
         self.assertEqual(json.loads(progress), {"ticket": 1, "stage": "ready", "outcome": "skipped"})
 
@@ -487,7 +508,7 @@ class TriggerTest(unittest.TestCase):
         tracker.sweep_tickets = lambda stages: []
         code, out, progress = self.run_sweep(["--issue", "10"], tracker)
         self.assertEqual((code, out["sweep"]), (gate.GO, []))
-        self.assertEqual(json.loads(progress), {"ticket": 11, "stage": "in-dev", "outcome": "skipped"})
+        self.assertEqual(json.loads(progress.splitlines()[-1]), {"ticket": 11, "stage": "in-dev", "outcome": "skipped"})
 
     def test_sweep_issue_refires_ready_dependent_of_closed_blocker(self):
         from gate_port import MemoryTracker
@@ -1255,6 +1276,31 @@ class UnblockedSweepTest(unittest.TestCase):
 
         self.assertFalse(failed)
         self.assertEqual(results, [{"ticket": 10, "error": "RuntimeError: tracker unavailable"}])
+
+    def test_wake_skips_closed_dependent(self):
+        tr, (results, failed) = self.sweep({
+            10: {"blocking": [11], "state_reason": "not_planned"},
+            11: {"stage": "ready", "blockers_open": 0, "issue_state": "closed"},
+        })
+        self.assertFalse(failed)
+        self.assertEqual(results, [])
+        self.assertNotIn("log", tr.tickets[11])
+        self.assertEqual(tr.tickets[11]["stage"], "ready")
+
+    def test_wake_refires_once_per_event(self):
+        tr = MemoryTracker({11: {"stage": "ready", "blockers_open": 0}})
+        tr.sweep_tickets = lambda stages: []
+        tr.blocking = lambda ticket: [11]
+        self.assertEqual([r["outcome"] for r in gate.sweep(tr, NODES, closed_ticket=10)[0]], ["unblocked"])
+        tr.tickets[11]["stage_at"] = datetime.now(timezone.utc).isoformat()  # the re-fire label just landed
+        tr.tickets[11]["log"].clear()
+        self.assertEqual(gate.sweep(tr, NODES, closed_ticket=10), ([], False))
+        self.assertEqual(tr.tickets[11]["log"], [])
+        tr.tickets[11]["stage_at"] = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+        self.assertEqual([r["outcome"] for r in gate.sweep(tr, NODES, closed_ticket=10)[0]], ["unblocked"])
+        tr.tickets[11]["log"].clear()
+        tr.tickets[11]["since"] = datetime.now(timezone.utc).isoformat()  # unrelated recent activity, not a re-fire
+        self.assertEqual([r["outcome"] for r in gate.sweep(tr, NODES, closed_ticket=10)[0]], ["unblocked"])
 
     def test_dependent_is_refired_once_when_listed_more_than_once(self):
         tr = MemoryTracker({11: {"stage": "ready", "blockers_open": 0}})
