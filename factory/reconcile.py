@@ -21,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
 import nodes as nodes_mod
 
-WAITING = {"draft", "needs-answers", "blocked", "split", "investigating", "not-actionable", "done"}
 PREFIX = "[factory] reconcile:"
 RUN = "reconcile"
 
@@ -58,14 +57,36 @@ def wakes(nodes, facts):
                 yield name, label, on, f"no {name} outcome"
 
 
-def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=None):
+def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=None, stage_kinds=None):
     """Returns (results, failed). One re-fire per ticket and stage; the second miss blocks the ticket."""
     now, results, failed = now or datetime.now(timezone.utc), [], False
     default = limits.get("run_timeout_minutes", 30)
-    for n in tracker.sweep_tickets([s for s in stages if s not in WAITING]):
+    stage_kinds = stage_kinds or {}
+    for n in tracker.sweep_tickets(stages):
         try:
             facts, stage = tracker.stale_facts(n), None
             stage, since = facts["stage"], facts.get("since")
+            if stage_kinds.get(stage) == "waiting":
+                stage_since = facts.get("stage_at") or since
+                if (facts.get("issue_state", "open") != "open" or not stage_since
+                        or "factory:needs-human" in facts.get("attrs", [])
+                        or not facts.get("assignees")):
+                    continue
+                age = now - datetime.fromisoformat(stage_since.replace("Z", "+00:00"))
+                marker = f"{PREFIX} stage={stage} entry={stage_since} waiting-reminder"
+                if (age >= timedelta(hours=limits.get("remind_after_hours", 24))
+                        and not any(c.startswith(marker) for c in facts.get("recover_comments", []))):
+                    people = " ".join(f"@{person}" for person in facts["assignees"])
+                    r = {"ticket": n, "stage": stage, "reconcile": "remind", "why": "waiting for a person"}
+                    results.append(r)
+                    if not dry_run:
+                        tracker.apply({"ticket": n, "run_id": RUN, "kind": "comment",
+                                       "value": f"{marker}: {people}, this ticket is still waiting for you."})
+                    if progress:
+                        progress(r)
+                continue
+            if stage_kinds.get(stage) == "final":
+                continue
             if (facts.get("issue_state", "open") != "open" or not since
                     or "factory:needs-human" in facts.get("attrs", [])):
                 continue
@@ -136,6 +157,7 @@ def main(argv):
         tracker = GitHubGateTracker.from_config()
     config = config_mod.load()
     results, failed = reconcile(tracker, nodes_mod.load(), list(config["tracker"]["stages"]), config["limits"],
+                                stage_kinds=config["tracker"].get("stage_kinds", {}),
                                 dry_run=dry_run, progress=lambda r: print(json.dumps(r), file=sys.stderr, flush=True))
     print(json.dumps({"dry_run": dry_run, "reconcile": results}))
     return 1 if failed else 0

@@ -57,7 +57,7 @@ class MemoryTracker:
                 "round_verdict": None, "round_head": None, "attrs": [], "agent_runs": 0, "run_cap": 8, "handed_to_fix": False,
                 "pending_rereviews": [], "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False, "conflict": False,
                 "pr_state": "none", "risk": "high", "behind": False, "answered": False, "updated_at": None,
-                "review_labels": []}
+                "review_labels": [], "assignees": []}
         t = {**t, "fix_rounds": fix_round_count(t["reviews"])} if "reviews" in t and "fix_rounds" not in t else t
         return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr", "ci_failure", "author", "waiting_reviewers", "agent_notes")}, "stage": self.get_stage(t),
                 "seen": list(t.get("seen", []))}

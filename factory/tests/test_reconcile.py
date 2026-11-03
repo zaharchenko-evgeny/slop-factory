@@ -27,7 +27,9 @@ OLD, FRESH = "2026-11-03T11:00:00Z", "2026-11-03T11:50:00Z"
 
 def run(ticket, nodes=NODES, **kw):
     tracker = MemoryTracker({1: ticket})
-    results, failed = reconcile.reconcile(tracker, nodes, STAGES, LIMITS, now=NOW, **kw)
+    stage_kinds = kw.pop("stage_kinds", CONFIG["tracker"].get("stage_kinds", {}))
+    results, failed = reconcile.reconcile(tracker, nodes, STAGES, LIMITS,
+                                          stage_kinds=stage_kinds, now=NOW, **kw)
     return tracker, results, failed
 
 
@@ -81,10 +83,26 @@ class ReconcileTest(unittest.TestCase):
                              "focus_missing": ["behaviour"], "log": refired})
         self.assertEqual((results[0]["reconcile"], t.tickets[1]["stage"]), ("refire", "in-review"))
 
-    def test_waiting_stage_not_refired(self):
-        for stage in ("needs-answers", "blocked", "split"):
-            _, results, _ = run({"stage": stage, "since": OLD, "command": "factory:implement-mid"})
-            self.assertEqual(results, [], stage)
+    def test_waiting_stage_reminded_not_refired(self):
+        ticket = {"stage": "blocked", "since": "2026-11-02T11:00:00Z", "stage_at": "2026-11-02T11:00:00Z",
+                  "assignees": ["alice"], "command": "factory:implement-mid"}
+        t, results, _ = run(ticket)
+        self.assertEqual([r["reconcile"] for r in results], ["remind"])
+        self.assertEqual(logged(t, "comment")[0],
+                         '"[factory] reconcile: stage=blocked entry=2026-11-02T11:00:00Z waiting-reminder: @alice, this ticket is still waiting for you."')
+        _, results, _ = run({**ticket, "log": [["comment", logged(t, "comment")[0]]]})
+        self.assertEqual(results, [])
+        _, results, _ = run({**ticket, "stage": "needs-answers", "assignees": []})
+        self.assertEqual(results, [])
+
+    def test_custom_stage_kind_from_config(self):
+        kinds = {**CONFIG["tracker"]["stage_kinds"], "investigating": "active"}
+        nodes = copy.deepcopy(NODES)
+        nodes["nodes"]["custom"] = {"role": "script", "triggers": ["issues.labeled factory:custom"],
+                                    "when": {"stage": "investigating"}, "outcomes": {"x": {}}, "timeout_minutes": 5}
+        t, results, _ = run({"stage": "investigating", "since": OLD}, nodes, stage_kinds=kinds)
+        self.assertEqual(results[0]["node"], "custom")
+        self.assertIn('"factory:custom"', logged(t, "label"))
 
     def test_fresh_step_waits_for_the_timeout(self):
         _, results, _ = run({"stage": "in-dev", "since": FRESH, "command": "factory:implement-mid"})
