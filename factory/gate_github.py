@@ -243,31 +243,37 @@ class GitHubGateTracker:
             out[-1]["findings"] = re.findall(r"^\*\*([A-Z]\d+)\*\*", r.get("body") or "", re.M)
         return out
 
-    @staticmethod
-    def _github_merge(c):
-        return (c.get("committer") or {}).get("login") == "web-flow" and ((c.get("commit") or {}).get("verification") or {}).get("verified") is True
+    def _pr_patch(self, base, sha):
+        """The PR's patch at `sha` as {file: patch with hunk line numbers dropped}, like `git patch-id --stable`.
+        None when GitHub omits a patch (binary or huge diff), so the caller cannot compare."""
+        files = self._api(f"compare/{base}...{sha}")["files"]
+        if any(x.get("patch") is None for x in files):
+            return None
+        return {x["filename"]: re.sub(r"^@@ .*? @@", "@@", x["patch"], flags=re.M) for x in files}
 
-    def _clean_base_advance(self, old, head, pr, own):
-        """True when every commit from `old` to `head` merges the base branch (second parent already on the base) and
-        the files the PR changes are the same at both commits, so a merge needed no conflict resolution. Each merge must be
-        committed by GitHub itself (`web-flow`) with a verified signature, which only the update-branch API produces and
-        which refuses conflicts; author metadata is user-controlled, so any other merge needs a review."""
+    def _clean_base_advance(self, old, head, pr):
+        """True when every commit from `old` to `head` is a merge whose first parent is the previous commit and whose
+        other parent is already on the base branch, and the PR's patch is identical at both. Who made the merge does
+        not matter; what it contains does."""
+        base = pr["base"]["ref"]
         try:
-            span = self._api(f"compare/{old}...{head}")
-            return bool(span["commits"]) and not own & {x["filename"] for x in span["files"]} and all(
-                len(c["parents"]) == 2 and self._github_merge(c) and self._api(f"compare/{pr['base']['ref']}...{c['parents'][1]['sha']}")["ahead_by"] == 0
-                for c in span["commits"])
+            prev = old
+            for c in self._api(f"compare/{old}...{head}")["commits"]:
+                parents = [x["sha"] for x in c["parents"]]
+                if len(parents) != 2 or parents[0] != prev or self._api(f"compare/{base}...{parents[1]}")["ahead_by"] != 0:
+                    return False
+                prev = c["sha"]
+            patch = self._pr_patch(base, old)
+            return prev != old and patch is not None and patch == self._pr_patch(base, head)
         except Exception:  # unknown means the new head needs a review
             return False
 
     def _carry_approvals(self, reviews, pr):
         """An agent approval of an earlier commit counts at `head` after a clean merge of the base (marked `carried`)."""
-        head, own, clean = pr["head"]["sha"], None, {}
+        head, clean = pr["head"]["sha"], {}
         for r in reviews:
             if r["agent"] and r["verdict"] == "approve" and r["commit_id"] != head:
-                if own is None:
-                    own = {x["filename"] for x in self._list(f"pulls/{pr['number']}/files")}
-                if clean.setdefault(r["commit_id"], self._clean_base_advance(r["commit_id"], head, pr, own)):
+                if clean.setdefault(r["commit_id"], self._clean_base_advance(r["commit_id"], head, pr)):
                     r.update(commit_id=head, carried=True)
         return reviews
 

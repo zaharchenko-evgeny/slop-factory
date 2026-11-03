@@ -263,22 +263,19 @@ class FactsTest(unittest.TestCase):
 
 class BaseMergeGh(FakeGh):
     """Head h2 follows the approved commit h1; `merge_parents` are the parents of the commit between them."""
-    files = ["a.py"]
     merge_parents = ["h1", "m0"]
-    merge_committer = "web-flow"
-    merge_verified = True
+    head_patch = "@@ -1 +1 @@\n-a\n+b"
+    old_patch = "@@ -1 +1 @@\n-a\n+b"
 
     def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), "")
         if a.endswith("/compare/h1...h2"):
-            return json.dumps({"commits": [{"sha": "h2", "parents": [{"sha": p} for p in self.merge_parents],
-                                          "committer": {"login": self.merge_committer},
-                                          "commit": {"verification": {"verified": self.merge_verified}}}],
-                               "files": [{"filename": x} for x in self.files]})
+            return json.dumps({"commits": [{"sha": "h2", "parents": [{"sha": p} for p in self.merge_parents]}]})
         if a.endswith("/compare/main...m0"):
             return json.dumps({"ahead_by": 0})
-        if a.endswith("/pulls/5/files"):
-            return "\n".join(json.dumps({"filename": x}) for x in ("a.py", "b.py"))
+        for sha, patch in (("h1", self.old_patch), ("h2", self.head_patch)):
+            if a.endswith(f"/compare/main...{sha}"):
+                return json.dumps({"files": [{"filename": "a.py", "patch": patch}]})
         return super().__call__(args, timeout)
 
 
@@ -290,14 +287,14 @@ class CarriedApprovalTest(unittest.TestCase):
         return tr(gh).facts(7)
 
     def test_approval_survives_clean_base_merge(self):
-        f = self.facts(files=["c.py"])  # the merge only brings in base changes to other files
+        # same patch; the merge only moved its line numbers
+        f = self.facts(head_patch="@@ -9 +9 @@\n-a\n+b")
         self.assertEqual((f["round_complete"], f["round_verdict"], f["round_head"], f["focus_missing"]), (True, "approve", "h2", []))
 
     def test_approval_lost_after_conflict_resolution(self):
-        for kw in ({"files": ["a.py"]},  # the merge touched a file the PR changes
-                   {"files": ["c.py"], "merge_parents": ["h1"]},  # a developer commit, not a merge
-                   {"files": ["c.py"], "merge_committer": "someone"},  # a merge not made by GitHub
-                   {"files": ["c.py"], "merge_verified": False}):  # forged metadata without GitHub's signature
+        for kw in ({"head_patch": "@@ -1 +1 @@\n-a\n+c"},  # the PR's patch changed
+                   {"merge_parents": ["h1"]},  # a developer commit, not a merge
+                   {"merge_parents": ["m0", "h1"]}):  # first parent is not the previous head
             with self.subTest(kw=kw):
                 f = self.facts(**kw)
                 self.assertEqual((f["round_complete"], f["round_head"], f["focus_missing"]), (False, "h1", ["full"]))
