@@ -5,8 +5,12 @@ description: "Deploy the factory nodes to Air Cloud: render the plan with deploy
 
 # Factory deploy (Air target)
 
-Read first: `factory.descriptor.yaml` (`targets.air`), `workflows/nodes.yaml`, `docs/targets.md`.
-Run from the factory root. Whoever runs this applies the plan and changes no code.
+Read first: the team repository's `factory.descriptor.yaml` (`targets.air`),
+`workflows/nodes.yaml`, and `docs/targets.md`. Set `FACTORY_TEAM` to the team
+repository checkout, or pass it as `--team <team-repo>` to each `factory`
+command. Run from the engine checkout; for local validation in this repository,
+use `factory/tests/fixtures/team` as the team directory. Whoever runs this
+applies the plan and changes no code.
 
 ## Rules
 
@@ -17,7 +21,7 @@ Run from the factory root. Whoever runs this applies the plan and changes no cod
 ## Steps
 
 0. Precondition: `factory/gate.py` must exist on the default branch (the thin prompt runs it). If not, stop and report; do not apply.
-1. Check nodes: `uv run --quiet factory/nodes.py validate`.
+1. Check nodes: `factory --team <team-repo> validate` (or set `FACTORY_TEAM` and run `uv run --quiet factory/nodes.py validate`).
 2. Set the MCP server commands from `~/.pi/agent/mcp-adapter.json` (the `command` and `args` under `mcpServers`):
 
    ```sh
@@ -25,10 +29,10 @@ Run from the factory root. Whoever runs this applies the plan and changes no cod
    export FACTORY_MCP_AIR_CLOUD="$(python3 -c 'import json, shlex, sys; s=json.load(open(sys.argv[1]))["mcpServers"]["air-cloud"]; print(shlex.join([s["command"], *s.get("args", [])]))' ~/.pi/agent/mcp-adapter.json)"
    ```
 
-   Dry run: `factory deploy --dry-run`. It renders the plan, lists automations and environments through the Air MCP servers over stdio, reads details for factory-prefixed records, diffs by name and prints `create|update|delete <kind> <name>` with the changed fields. The MCP commands inherit the local OAuth environment. Show the plan and review it.
-3. Apply after the user approves the dry run: `factory deploy --apply` (add `--allow-delete` only when the dry run lists deletes the user approved). It writes environments before automations on create and update, updates in place with `name`, then re-lists and fails if anything still differs. After verification, it creates a `factory:canary` ticket and waits up to 45 minutes for it to reach `done`; a blocked ticket, node error or timeout makes deploy fail and opens a `Canary failed after deploy <id>` ticket. A new deploy closes any older open canary. To rename an automation or environment, pass `--rename 'OLD NAME=NEW NAME'` (repeatable) to both the dry run and the apply: the item keeps its id instead of becoming a create plus a delete.
+   Dry run: `factory --team <team-repo> deploy --dry-run`. It renders the plan, lists automations and environments through the Air MCP servers over stdio, reads details for factory-prefixed records, diffs by name and prints `create|update|delete <kind> <name>` with the changed fields. The MCP commands inherit the local OAuth environment. Show the plan and review it.
+3. Apply after the user approves the dry run: `factory --team <team-repo> deploy --apply` (add `--allow-delete` only when the dry run lists deletes the user approved). It writes environments before automations on create and update, updates in place with `name`, then re-lists and fails if anything still differs. After verification, it creates a `factory:canary` ticket and waits up to 45 minutes for it to reach `done`; a blocked ticket, node error (including an Air run lost past its time-out) or timeout makes deploy fail and opens a `Canary failed after deploy <id>` ticket. A new deploy closes any older open canary. To rename an automation or environment, pass `--rename 'OLD NAME=NEW NAME'` (repeatable) to both the dry run and the apply: the item keeps its id instead of becoming a create plus a delete.
 4. Create missing labels from the plan's `labels[]` (`gh label create <name>`); a missing label fails every handoff that adds it.
-5. Run `factory deploy --dry-run` again: it must print `unchanged`.
+5. Run `factory --team <team-repo> deploy --dry-run` again: it must print `unchanged`.
 6. Run each `[Slop factory] doctor*` automation once (air-automations MCP) and report its probe lines. A failed probe has opened or updated its `Doctor: <probe> fails` ticket.
 
 The one-time rename of legacy `[factory:<node>]` items is not automated: apply it with `update_automation` or `edit_environment` (recorded ID, planned name) before step 3.

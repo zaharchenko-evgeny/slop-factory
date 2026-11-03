@@ -107,6 +107,11 @@ echo "startup: installed skills: $(skill_names)"
 for t in $TOOLS; do
   uv tool install --quiet "$t" || { echo "startup: tool install failed: $t" >&2; exit 1; }
 done
+for setup in "$FACTORY_TEAM/environments/setup.sh" "$FACTORY_TEAM/environments/${FACTORY_ENV:-default}/setup.sh"; do
+  if [ -f "$setup" ]; then
+    bash "$setup" || { echo "startup: environment setup failed: $setup" >&2; exit 1; }
+  fi
+done
 for r in $ROLES; do
   bash "$(resolve "roles/$r/setup.sh")" >&2 || echo "startup: tools of role $r are missing" >&2
 done

@@ -33,9 +33,9 @@ FIX = HERE / "fixtures/deploy"
 
 
 def this_repository():
-    """(project descriptor, v2 workflow) migrated from this repository's nodes.yaml and descriptor."""
+    """(project descriptor, v2 workflow) migrated from this repository's nodes.yaml and team fixture."""
     return workflow.migrate(yaml.safe_load((ROOT / "workflows/nodes.yaml").read_text()),
-                            yaml.safe_load((ROOT / "factory.descriptor.yaml").read_text()))
+                            yaml.safe_load((HERE / "fixtures/team/factory.descriptor.yaml").read_text()))
 
 
 def project_plan(project, wf):
@@ -401,7 +401,7 @@ class ApplyTest(unittest.TestCase):
 class ProjectPlanTest(unittest.TestCase):
     def test_migrated_plan_equals_current(self):
         before = cfg.team_root()
-        cfg.set_team(ROOT)
+        cfg.set_team(HERE / "fixtures/team")
         try:
             current = deploy.plan_air(nodes.load(), cfg.load())
         finally:
@@ -415,7 +415,7 @@ class ProjectPlanTest(unittest.TestCase):
         slop = HERE / "fixtures/slop"
         before = cfg.team_root()
         try:
-            cfg.set_team(ROOT)
+            cfg.set_team(HERE / "fixtures/team")
             current = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository":
                                                      yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())["team_repository"]})
             cfg.set_team(slop)
