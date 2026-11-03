@@ -119,6 +119,9 @@ SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>",
 def script_prompt(name: str) -> str:
     if name.startswith("doctor"):
         return "Run `factory doctor` once and report its JSON lines. It changes no ticket itself."
+    if name == "reconcile":
+        return ("This step runs one command and judges nothing: it changes no file, label, comment or review itself. "
+                "Run `factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
     if name == "notify":
         return ("Run `factory notify --issue <the issue number>` in the foreground with no "
                 "time limit, wait until it exits, and report its output.")
