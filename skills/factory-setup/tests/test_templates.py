@@ -28,8 +28,8 @@ class Templates(unittest.TestCase):
             if rel == "AGENTS.workflow.md":
                 cur = (ROOT / "AGENTS.md").read_text()
                 want = cur[cur.index("## Development workflow"):cur.index("## Tracker and git")]
-            elif rel == "workflows/delivery.sm.yaml":
-                continue  # this setup template still serves projects that retain the local engine
+            elif rel in {"workflows/delivery.sm.yaml", "factory.descriptor.yaml"}:
+                continue  # the engine has no local team descriptor; validate the team fixture separately
             else:
                 want = (ROOT / rel).read_text()
             self.assertEqual(text.rstrip("\n"), want.rstrip("\n"), rel)

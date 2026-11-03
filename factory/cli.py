@@ -17,6 +17,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -51,11 +52,11 @@ def from_main():
     return root
 
 
-def run_gate(engine, argv):
+def run_gate(engine, argv, team=None):
     """The gate, as main's own executable when `engine` is a main worktree, so a pull request cannot replace it."""
     if not engine:
         return gate.main(argv)
-    done = subprocess.run([sys.executable, str(Path(engine) / "factory/gate.py"), "--team", engine, *argv],
+    done = subprocess.run([sys.executable, str(Path(engine) / "factory/gate.py"), "--team", team or engine, *argv],
                           stdout=subprocess.PIPE, text=True)
     print(done.stdout, end="")  # through sys.stdout, so callers can capture it
     return done.returncode
@@ -78,7 +79,7 @@ def begin(argv, team=None):
     engine = from_main() if a.main or a.automation.split("-")[0] in PR_NODES else None
     load_engine(Path(engine) / "factory" if engine else HERE)
     if engine or team:
-        config.set_team(engine or team)
+        config.set_team(team or os.environ.get("FACTORY_TEAM") or engine)
     try:
         compiled = deploy.compile_automation(a.automation, nodes.load(), config.load())
     except KeyError as e:
@@ -101,7 +102,8 @@ def begin(argv, team=None):
              "engine": engine}
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        code = run_gate(engine, ["check", "--node", state["node"], "--event", state["event"], *gate_args(state)])
+        code = run_gate(engine, ["check", "--node", state["node"], "--event", state["event"], *gate_args(state)],
+                        str(config.team_root()))
     print(out.getvalue(), end="")
     if code == 0:
         state["handoff_path"] = json.loads(out.getvalue())["handoff_path"]
@@ -149,7 +151,7 @@ def end(argv, team=None):
     handoff.write_text(json.dumps(data))
     config.set_team(state["team"])
     return run_gate(state["engine"], ["apply", "--node", state["node"], "--event", state["event"], "--handoff",
-                                      str(handoff), *gate_args(state)])
+                                      str(handoff), *gate_args(state)], state["team"])
 
 
 def validate():

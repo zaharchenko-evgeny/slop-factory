@@ -1,8 +1,7 @@
 """The one config loader (ADR-0015): engine defaults overridden by the team descriptor.
 
 ENGINE_ROOT holds the engine (code, roles, skills, workflows, defaults); TEAM_ROOT holds the team's
-`factory.descriptor.yaml` and any file that replaces an engine one. Until the engine has its own
-repository both are this repository.
+`factory.descriptor.yaml` and any file that replaces an engine one.
 """
 import json
 import os

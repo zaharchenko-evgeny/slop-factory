@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The factory's blocking checks (factory.descriptor.yaml `checks`), one list for CI and the driver.
+  # The factory's blocking checks (the team descriptor `checks`), one list for CI and the driver.
   factory-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -28,6 +28,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      FACTORY_TEAM: factory/tests/fixtures/team
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { fetch-depth: 0, persist-credentials: false }

@@ -31,6 +31,9 @@ PAYLOAD = {"action": "labeled", "issue": {"number": 7, "title": "Add x", "update
 class BeginEndTest(unittest.TestCase):
     def setUp(self):
         cfg.set_team(ROOT / "factory/tests/fixtures/team")
+        env_patch = mock.patch.dict(os.environ, {"FACTORY_TEAM": str(ROOT / "factory/tests/fixtures/team")})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
         self.old = os.getcwd()
         self.tmp = tempfile.TemporaryDirectory()
         os.chdir(self.tmp.name)
@@ -161,7 +164,6 @@ class BeginEndTest(unittest.TestCase):
     def test_begin_main_uses_existing_main_worktree(self):
         main = Path("main")
         main.mkdir()
-        shutil.copy2(ROOT / "factory/tests/fixtures/team/factory.descriptor.yaml", main / "factory.descriptor.yaml")
         (main / "factory").mkdir()
         (main / "factory/gate.py").write_text(
             'import json, sys\nprint(json.dumps({"gate": "main", "handoff_path": "h.json"}))\n')
@@ -172,7 +174,7 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual((code, json.loads(out)["gate"]), (0, "main"), out)
         state = json.loads(cli.STATE.read_text())
         self.assertEqual(state["engine"], str(main.resolve()))
-        self.assertEqual(state["team"], str(main.resolve()))
+        self.assertEqual(state["team"], str((ROOT / "factory/tests/fixtures/team").resolve()))
 
     def test_pr_nodes_match_deploy(self):
         self.assertEqual(cli.PR_NODES, cli.deploy.PR_TRIGGERED_NODES)
