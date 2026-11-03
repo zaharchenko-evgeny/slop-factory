@@ -265,11 +265,13 @@ class BaseMergeGh(FakeGh):
     """Head h2 follows the approved commit h1; `merge_parents` are the parents of the commit between them."""
     files = ["a.py"]
     merge_parents = ["h1", "m0"]
+    merge_author = BOT
 
     def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), "")
         if a.endswith("/compare/h1...h2"):
-            return json.dumps({"commits": [{"sha": "h2", "parents": [{"sha": p} for p in self.merge_parents]}],
+            return json.dumps({"commits": [{"sha": "h2", "parents": [{"sha": p} for p in self.merge_parents],
+                                          "author": {"login": self.merge_author}}],
                                "files": [{"filename": x} for x in self.files]})
         if a.endswith("/compare/main...m0"):
             return json.dumps({"ahead_by": 0})
@@ -291,7 +293,8 @@ class CarriedApprovalTest(unittest.TestCase):
 
     def test_approval_lost_after_conflict_resolution(self):
         for kw in ({"files": ["a.py"]},  # the merge touched a file the PR changes
-                   {"files": ["c.py"], "merge_parents": ["h1"]}):  # a developer commit, not a merge
+                   {"files": ["c.py"], "merge_parents": ["h1"]},  # a developer commit, not a merge
+                   {"files": ["c.py"], "merge_author": "someone"}):  # a merge by a person, not the factory
             with self.subTest(kw=kw):
                 f = self.facts(**kw)
                 self.assertEqual((f["round_complete"], f["round_head"], f["focus_missing"]), (False, "h1", ["full"]))
