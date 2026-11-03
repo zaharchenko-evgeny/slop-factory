@@ -126,6 +126,11 @@ checks:
     mode: blocking
     requires: uvx
     run: bash -n .air/cloud/startup.sh && uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck .air/cloud/startup.sh
+  # The full check is the air-like job of .github/workflows/quality-gates.yml (container, needs docker); this is its local part.
+  - name: air-like
+    stage: pre-review
+    mode: blocking
+    run: bash -n scripts/air-like.sh && python3 -c "import ast; ast.parse(open('scripts/allowlist_proxy.py').read())"
   - name: state-machine
     stage: pre-review
     mode: blocking
