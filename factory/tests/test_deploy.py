@@ -379,6 +379,11 @@ class PlanTest(unittest.TestCase):
         self.assertIn("group: factory-reconcile\n  cancel-in-progress: false\n\njobs:", text)
         self.assertNotIn("cancel-in-progress: true", text)
 
+    def test_reconcile_wakes_on_label_and_review_events(self):
+        text = deploy.plan_air(nodes.load(), cfg.load())["files"][".github/workflows/factory-reconcile.yml"]
+        self.assertIn("  issues:\n    types: [labeled, unlabeled, closed]\n", text)
+        self.assertIn("  pull_request_review:\n    types: [submitted]\n", text)
+
     def test_deploy_writes_no_file_outside_the_factory_repository(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(deploy.config_mod, "team_root", return_value=Path(d)):
             with contextlib.redirect_stdout(io.StringIO()):
