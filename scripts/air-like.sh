@@ -18,7 +18,9 @@ sys.exit(subprocess.run(["bash", "-c", check["run"]]).returncode)'
 echo "== read =="
 env FACTORY_ENV=read sh .air/cloud/startup.sh
 # main's `factory` (installed from origin/main, not this branch) prints its usage for --help but exits 2: check the entry point runs and prints it.
-factory --help 2>&1 | grep -q '^The `factory` command'
+help=$(factory --help 2>&1 || true)
+# shellcheck disable=SC2016
+grep -q '^The `factory` command' <<<"$help"
 for r in reviewer router; do
   while read -r skill; do
     [ -f "$HOME/.claude/skills/$skill/SKILL.md" ] || { echo "air-like: skill $skill of $r not installed" >&2; exit 1; }
