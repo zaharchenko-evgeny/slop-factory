@@ -60,7 +60,7 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
         spec["else_tier"] = nodes["nodes"]["fix"]["tiers"][0]  # the fix tier a red CI hands the ticket to
     if top and n["role"] == "script":  # a sweep applies the other script nodes (join, finish) too
         spec["runs"] = {k: node_spec(k, v, config, None, None, nodes, False) for k, v in nodes["nodes"].items()
-                        if v["role"] == "script" and k != name and v.get("enabled") is not False}
+                        if v["role"] == "script" and k != name and v.get("enabled") is not False and not v.get("routine")}
     return spec
 
 
@@ -108,10 +108,13 @@ SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no f
 SCRIPT_ARGS = {"join": " --main --event", "start": " --main --event", "finish": " --main --event",
                "reopen": " --main --event", "merge": " --main --event",
                "recover": " --stale",
+               "doctor": " doctor", "doctor-write": " doctor", "doctor-ops": " doctor",
                "notify": " notify --issue <issue number from the trigger payload>"}
 
 
 def script_prompt(name: str) -> str:
+    if name.startswith("doctor"):
+        return "Run `factory doctor` once and report its JSON lines. It changes no ticket itself."
     if name == "notify":
         return ("Run `factory notify --issue <issue number from the trigger payload>` in the foreground with no "
                 "time limit, wait until it exits, and report its output.")
