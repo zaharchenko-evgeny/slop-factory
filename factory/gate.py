@@ -211,6 +211,14 @@ def fix_tier(facts, default="mid"):
     return default
 
 
+def review_wake_labels(facts, completed_head=None):
+    """The per-focus reviewer commands needed for this green PR head."""
+    ci = "green" if completed_head and facts.get("head") == completed_head else facts.get("ci")
+    if facts.get("stage") != "in-review" or ci != "green":
+        return []
+    return [f"factory:review-{focus}" for focus in facts.get("focus_missing", [])]
+
+
 def branch_of(facts, config):
     """The ticket's branch: the PR's head, else `branch_pattern` from the issue title."""
     if facts.get("branch"):
@@ -471,7 +479,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         # A resumed ticket implemented on its open PR with no new commit: no push, so no CI label would come.
         # Re-fire it, and run the join once the stage is in-review: reviews already at this head decide.
         effects = refire_ci(ticket, facts["ci"]) + effects
-        after = [{"kind": "join", "ticket": ticket, "value": "all-approve", "tier": fix_tier(facts)}]
+        after = ([{"kind": "label", "ticket": ticket, "value": f"factory:review-{focus}", "on": "pr"}
+                  for focus in facts.get("focus_missing", [])] if facts["ci"] == "green" else [])
+        after.append({"kind": "join", "ticket": ticket, "value": "all-approve", "tier": fix_tier(facts)})
     starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(COMMANDS)]
     stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith("factory:fix-") for e in starts))
     if stop:
@@ -802,8 +812,13 @@ def stale_plan(facts, now, hours, command_minutes=30):
         return "refire", cmd, "issue", "no PR or commit since the command label"
     if stage == "in-review" and facts.get("pr"):
         head = facts.get("head")
+        if facts.get("ci_label") == "green" and cmd and cmd.startswith("factory:review-") \
+                and cmd.removeprefix("factory:review-") in facts.get("focus_missing", []):
+            return "refire", cmd, "pr", "no review for this focus at the head"
         if facts.get("ci_label") == "green" and not any(r["agent"] and r["commit_id"] == head for r in facts.get("reviews", [])):
-            return "refire", "factory:ci-green", "pr", "no agent review at the head"
+            missing = facts.get("focus_missing", [])
+            if missing:
+                return "refire", f"factory:review-{missing[0]}", "pr", "no review for this focus at the head"
         if not facts.get("ci_label"):
             if facts.get("conflict"):
                 return "comment", None, None, f"no CI label at head {head}: the PR conflicts with main (GitHub starts no CI on a conflict); the update runs after the join"
@@ -886,7 +901,7 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
 
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply", "sweep"])
+    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers"])
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
@@ -900,6 +915,7 @@ def main(argv):
     p.add_argument("--spec")
     p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
     p.add_argument("--tier")
+    p.add_argument("--completed-head")  # CI's terminal label step runs before Actions marks its workflow completed
     try:
         a = p.parse_args(config_mod.pop_team(argv))
     except SystemExit:
@@ -918,6 +934,15 @@ def main(argv):
             raise Bad("--tracker is github or memory:FILE")
         nodes = spec_nodes(a.spec) if a.spec else nodes_mod.load(a.nodes)
         config = config_mod.load()
+        if a.cmd == "wake-reviewers":
+            if not a.issue:
+                raise Bad("wake-reviewers needs --issue TICKET")
+            facts = tracker.facts(a.issue)
+            labels = review_wake_labels(facts, a.completed_head)
+            for label in labels:
+                tracker.apply({"ticket": a.issue, "kind": "label", "value": label, "on": "pr"})
+            print(json.dumps({"ticket": a.issue, "labels": labels}))
+            return GO
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):
                 raise Bad("sweep needs --tracker github")

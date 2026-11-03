@@ -22,6 +22,10 @@ case "$1 $2" in
 esac
 """
 
+UV_STUB = """#!/usr/bin/env bash
+echo "$*" >> "$(dirname "$0")/uv-calls"
+"""
+
 
 class CiLabelTest(unittest.TestCase):
     def run_script(self, fails):
@@ -29,19 +33,24 @@ class CiLabelTest(unittest.TestCase):
             gh = Path(tmp, "gh")
             gh.write_text(STUB)
             gh.chmod(0o755)
+            uv = Path(tmp, "uv")
+            uv.write_text(UV_STUB)
+            uv.chmod(0o755)
             env = {**os.environ, "PATH": f"{tmp}:{os.environ['PATH']}", "FAILS": str(fails),
                    "CI_LABEL_WAITS": "0 0", "GH_REPO": "o/r", "BRANCH": "ez/1-x",
                    "SHA": "abc", "CONCLUSION": "success"}
             result = subprocess.run([str(SCRIPT)], env=env, capture_output=True, text=True)
-            return result, Path(tmp, "calls").read_text().splitlines()
+            return (result, Path(tmp, "calls").read_text().splitlines(),
+                    Path(tmp, "uv-calls").read_text().splitlines() if Path(tmp, "uv-calls").exists() else [])
 
     def test_label_retried_after_transient_error(self):
-        result, calls = self.run_script(fails=1)
+        result, calls, uv_calls = self.run_script(fails=1)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("pr edit 7 --add-label factory:ci-green", calls)
+        self.assertIn("run --quiet factory/gate.py wake-reviewers --issue 1 --completed-head abc", uv_calls)
 
     def test_fails_after_third_attempt(self):
-        result, calls = self.run_script(fails=99)
+        result, calls, _ = self.run_script(fails=99)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(calls), 3)
         self.assertIn("::error title=ci-state-label::", result.stderr)
