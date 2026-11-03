@@ -134,11 +134,12 @@ class GitHubGateTracker:
     def _labels(self, n):
         return [x["name"] for x in self._api(f"issues/{n}")["labels"]]
 
-    def sweep_tickets(self, stages):
-        """Issue numbers (open or closed) whose stage label is one of `stages`; ready, in-review, changes-requested and in-dev only when open."""
+    def sweep_tickets(self, stages, open_only=False):
+        """Issue numbers (open or closed) whose stage label is one of `stages`; ready, in-review, changes-requested and in-dev
+        (every stage with `open_only`) only when open."""
         found = set()
         for st in stages:
-            state = "open" if st in ("triage", "ready", "in-review", "changes-requested", "in-dev") else "all"
+            state = "open" if open_only or st in ("triage", "ready", "in-review", "changes-requested", "in-dev") else "all"
             found |= {i["number"] for i in self._list(f"issues?state={state}&labels={self.stages[st]}&per_page=100")
                       if "pull_request" not in i}
         return sorted(found)

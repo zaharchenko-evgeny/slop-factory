@@ -33,7 +33,7 @@ adapters:
 schedules:
   retro: { cron: "0 2 * * *" }
   distill: { cron: "0 3 * * 1" }
-  reconcile: { cron: "7,37 * * * *" }  # off-peak: GitHub delays or drops schedule runs at :00 and :30
+  reconcile: { cron: "17 * * * *" }  # hourly, an Air schedule: GitHub's own schedule never fired in the factory repository
   doctor: { cron: "0 5 * * *" }
 nodes:
   human:
@@ -223,7 +223,7 @@ nodes:
       notified: { from: [blocked, needs-answers] }
   recover:
     env: read
-    # No automation: the reconciler replaced the Air schedule. Only `gate.py sweep --stale`, run by a person, still applies this outcome.
+    # No automation: the hourly reconciler replaced it. Only `gate.py sweep --stale`, run by a person, still applies this outcome.
     runner: manual
     routine: true
     triggers: ["manual"]
@@ -236,18 +236,16 @@ nodes:
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
   reconcile:
     env: ops
-    # Not an Air automation: `factory deploy` renders .github/workflows/factory-reconcile.yml in the factory repository from this node.
-    # A state-driven safety net for a lost wake: `factory reconcile` re-fires the waking label of a step with no outcome after
+    # The hourly stuck-node finder: `factory reconcile` re-fires the waking label of a step with no outcome after
     # `limits.run_timeout_minutes` (`timeout_minutes` on a node overrides it), then blocks the ticket on a second miss.
-    runner: actions
+    # A schedule only: one pass reads every active ticket, so waking it on each label change or review exhausted the
+    # GitHub API budget during label bursts (#387). Events stay the fast path; this pass only catches a lost wake.
     routine: true
-    # `workflow_run <workflow>` also wakes it after each completed run of that workflow (a pass reads state; it acts on no PR head).
-    # GitHub has never fired the schedule here, so a label change or a submitted review wakes it too; a pass acts only past a timeout,
-    # and labels set with `github.token` start no workflow, so it cannot wake itself.
-    triggers: ["schedule reconcile", "workflow_run quality-gates", "issues.labeled", "issues.unlabeled", "issues.closed", "pull_request_review.submitted"]
+    triggers: ["schedule reconcile"]
     ci-independent: true
     when: { always: true }
     role: script
+    tier: cheap   # Air automation model; it does no work: the automation runs `factory reconcile`
     run: uv run factory/cli.py reconcile
     output: read-only
     outcomes:
