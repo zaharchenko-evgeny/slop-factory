@@ -113,7 +113,7 @@ nodes:
     env: read
     pilot: true
     focuses: [full, behaviour, structure-security, knowledge]
-    # CI labels the PR when it finishes (.github/workflows/ci-state.yml): reviewers only read green code.
+    # CI labels the PR when it finishes (.github/workflows/quality-gates.yml): reviewers only read green code.
     triggers: ["pull_request.labeled factory:ci-green", "pull_request.labeled factory:rereview-<focus>"]
     when: { stage: in-review, focus: required-by-risk, ci: [green] }
     role: reviewer
