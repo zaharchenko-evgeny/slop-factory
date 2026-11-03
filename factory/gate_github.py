@@ -309,20 +309,21 @@ class GitHubGateTracker:
         return {x["filename"]: re.sub(r"^@@ .*? @@", "@@", x["patch"], flags=re.M) for x in files}
 
     def _clean_base_advance(self, old, head, pr):
-        """True when every commit from `old` to `head` is a merge whose first parent is the previous commit and whose
+        """True when walking first parents from `head` reaches `old` within 20 steps, every step is a merge whose
         other parent is already on the base branch, and the PR's patch is identical at both. Who made the merge does
-        not matter; what it contains does."""
+        not matter; what it contains does. (`compare` also lists the base commits a merge brought in, so it is no guide.)"""
         base = pr["base"]["ref"]
         try:
-            prev = old
-            for c in self._api(f"compare/{old}...{head}")["commits"]:
-                parents = [x["sha"] for x in c["parents"]]
-                if len(parents) != 2 or parents[0] != prev or self._api(f"compare/{base}...{parents[1]}")["ahead_by"] != 0:
+            cur = head
+            for _ in range(20):
+                if cur == old:
+                    break
+                parents = [x["sha"] for x in self._api(f"commits/{cur}")["parents"]]
+                if len(parents) != 2 or self._api(f"compare/{base}...{parents[1]}")["ahead_by"] != 0:
                     return False
-                prev = c["sha"]
+                cur = parents[0]
             patch = self._pr_patch(base, old)
-            # a truncated compare list stops short of the head: the omitted commits are unchecked
-            return prev == head != old and patch is not None and patch == self._pr_patch(base, head)
+            return cur == old != head and patch is not None and patch == self._pr_patch(base, head)
         except Exception:  # unknown means the new head needs a review
             return False
 
