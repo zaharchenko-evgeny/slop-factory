@@ -153,8 +153,9 @@ def end(argv, team=None):
 
 
 def validate():
+    project_mode = (config.team_root() / config.PROJECT_DESCRIPTOR).is_file()
     errs = config.validate()
-    if not errs:
+    if not errs and not project_mode:
         errs = nodes.validate(nodes.load(), config.load())
     print("\n".join(errs) or "factory: ok")
     return 1 if errs else 0
