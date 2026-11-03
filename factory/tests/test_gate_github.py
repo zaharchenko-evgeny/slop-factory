@@ -300,6 +300,22 @@ class CarriedApprovalTest(unittest.TestCase):
                 f = self.facts(**kw)
                 self.assertEqual((f["round_complete"], f["round_head"], f["focus_missing"]), (False, "h1", ["full"]))
 
+    def test_approval_lost_when_compare_commit_list_stops_short_of_head(self):
+        # GitHub truncated the list: the commit that made h2 the head is not in it
+        class Truncated(BaseMergeGh):
+            def __call__(self, args, timeout=None):
+                a = next((x for x in args if x.startswith("repos/")), "")
+                if a.endswith("/compare/h1...h3"):
+                    return json.dumps({"commits": [{"sha": "h2", "parents": [{"sha": "h1"}, {"sha": "m0"}]}], "total_commits": 2})
+                if a.endswith("/compare/main...h3"):
+                    return super().__call__([x.replace("main...h3", "main...h2") for x in args], timeout)
+                return super().__call__(args, timeout)
+
+        gh = Truncated(reviews=[review(BOT, M, commit="h1")])
+        gh.head_sha = "h3"
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_complete"], f["round_head"], f["focus_missing"]), (False, "h1", ["full"]))
+
     def test_approval_lost_when_compare_file_list_is_at_its_limit(self):
         # a 301-file PR: GitHub lists 300, so equal lists prove nothing about the omitted file
         files = [{"filename": f"f{i}.py", "patch": "@@ -1 +1 @@\n-a\n+b"} for i in range(300)]

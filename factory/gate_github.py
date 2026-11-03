@@ -321,7 +321,8 @@ class GitHubGateTracker:
                     return False
                 prev = c["sha"]
             patch = self._pr_patch(base, old)
-            return prev != old and patch is not None and patch == self._pr_patch(base, head)
+            # a truncated compare list stops short of the head: the omitted commits are unchecked
+            return prev == head != old and patch is not None and patch == self._pr_patch(base, head)
         except Exception:  # unknown means the new head needs a review
             return False
 
