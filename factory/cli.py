@@ -204,6 +204,9 @@ def main(argv=None):
     if cmd == "migrate" and rest[:1] == ["workflow"]:
         from workflow import main as workflow_main
         return workflow_main(["migrate", *rest[1:]])
+    if cmd == "upgrade":
+        from upgrade import main as upgrade_main
+        return upgrade_main(rest)
     if cmd == "validate" and not rest:
         return validate()
     if cmd == "doctor":
