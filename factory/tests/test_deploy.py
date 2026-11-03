@@ -258,16 +258,18 @@ class PlanTest(unittest.TestCase):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
 
-    def test_every_environment_checks_out_team_repository(self):
+    def test_environments_render_team_repository(self):
         url = "https://github.com/o/team"
         plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": url})
         self.assertTrue(plan["environments"])
         for e in plan["environments"]:
             self.assertEqual(e["variables"], {"FACTORY_ENV": e["variables"]["FACTORY_ENV"], "FACTORY_TEAM_REPOSITORY": url})
-        self.assertTrue(all(a["additionalRepositories"][0]["cloneUrl"] == url + ".git" for a in plan["automations"]))
         plain = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": ""})
-        self.assertTrue(all("additionalRepositories" not in a for a in plain["automations"]))
         self.assertTrue(all("FACTORY_TEAM_REPOSITORY" not in e["variables"] for e in plain["environments"]))
+
+    def test_automations_have_no_additional_repositories(self):
+        plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
+        self.assertTrue(all("additionalRepositories" not in a for a in plan["automations"]))
 
     def test_nodes_get_environment_by_env(self):
         plan = deploy.plan_air(nodes.load(), cfg.load())
