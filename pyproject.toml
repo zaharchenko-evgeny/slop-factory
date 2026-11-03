@@ -14,4 +14,4 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = { "" = "factory" }
-py-modules = ["cli", "config", "contracts", "deploy", "doctor", "gate", "gate_github", "gate_port", "github_tracker", "nodes", "notify", "project", "reconcile", "workflow"]
+py-modules = ["cli", "config", "contracts", "deploy", "doctor", "gate", "gate_github", "gate_port", "github_tracker", "nodes", "notify", "project", "reconcile", "vocab", "workflow"]
