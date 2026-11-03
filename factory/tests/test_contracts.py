@@ -51,6 +51,14 @@ class ContractsTest(unittest.TestCase):
         self.assertIn("invalid value", short["error"]["message"])
         self.assertIn("result", ok)
 
+    def test_fake_mcp_accepts_any_type_of_a_type_list(self):
+        args = {"name": "abc", "prompt": "", "repository": {}, "agentAndModel": {}, "triggers": []}
+        null, text, num = (ask("air-automations", ("create_automation", {**args, "environmentConfigId": v}))[0]
+                           for v in (None, "x", 1))
+        self.assertIn("result", null)
+        self.assertIn("result", text)
+        self.assertIn("invalid value", num["error"]["message"])
+
     def test_every_called_tool_is_recorded(self):
         rec = json.loads(REC.read_text())["servers"]
         for server, tool in [("air-automations", t) for t in ("list_automations", "get_automation", "create_automation",

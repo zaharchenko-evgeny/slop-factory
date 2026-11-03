@@ -38,9 +38,9 @@ def redact(x):
 
 def check_value(name, value, schema):
     """Raise ValueError when `value` breaks the type, enum, minLength, pattern, minimum or maximum of its recorded schema."""
-    types = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "array": list, "object": dict}
-    want = schema.get("type")
-    ok = want not in types or (isinstance(value, types[want]) and not (want != "boolean" and isinstance(value, bool)))
+    types = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "array": list, "object": dict, "null": type(None)}
+    wants = [w for w in ([schema["type"]] if isinstance(schema.get("type"), str) else schema.get("type", [])) if w in types]
+    ok = not wants or any(isinstance(value, types[w]) and not (w not in ("boolean", "null") and isinstance(value, bool)) for w in wants)
     if ok and "enum" in schema:
         ok = value in schema["enum"]
     if ok and isinstance(value, str):
