@@ -7,7 +7,7 @@
 
 Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py apply --node N --outcome O --payload FILE [--tracker github|memory:FILE]
-       gate.py apply --node N --handoff FILE [--event FILE]   (outcome and payload derived from the role's handoff)
+       gate.py apply --node N --handoff FILE [--event FILE]   (outcome and payload derived from the handoff)
        --spec FILE (check, apply, sweep): the node spec of the automation (deploy plan); no workflows/nodes.yaml is read
        gate.py sweep [--tracker github] [--dry-run] [--stale] [--event FILE | --issue N] (no agent: lists the tickets itself,
                                                                  one stage per ticket;
@@ -163,22 +163,20 @@ def slices(split):
 
 def intake_fields(h):
     """Payload fields the outcomes need and the handoff names otherwise.
-    ROUTER-INTAKE: complexity and tier from the size, `questions` from `missing`, `children` from `split`.
-    A blocked or failed handoff: `reason` from `blocked_reason`."""
-    out = {"reason": h["blocked_reason"]} if h.get("blocked_reason") not in (None, "", "none") else {}
-    if h.get("handoff") != "ROUTER-INTAKE":
-        return out
-    size = re.search(r"\d+", str(h.get("size_estimate", "")))
+    With a `size_estimate` (the router's intake): complexity and tier from the size, `questions` from `reason`,
+    `children` from `slices`."""
+    if "size_estimate" not in h:
+        return {}
+    size = re.search(r"\d+", str(h["size_estimate"]))
     n = int(size[0]) if size else 0
-    missing = ", ".join(h["missing"]) if isinstance(h.get("missing"), list) else str(h.get("missing", ""))
-    return {**out, "complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
+    return {"complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
             "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong",
-            "questions": f"[factory] Needs answers before work starts: {missing}",
-            "children": slices(h.get("split")) if h.get("split") not in (None, "none") else []}
+            "questions": f"[factory] Needs answers before work starts: {h.get('reason', '')}",
+            "children": slices(h.get("slices"))}
 
 
 def outcome_of(h):
-    """The node outcome a handoff names: `outcome`, a reviewer `verdict`, a router intake, else `status`."""
+    """The node outcome a handoff names: `outcome`, else a reviewer `verdict`."""
     if h.get("outcome"):
         return h["outcome"]
     if "verdict" in h:
@@ -188,10 +186,6 @@ def outcome_of(h):
         if not isinstance(verdict, str) or verdict not in verdicts:
             raise Bad(f"unknown reviewer verdict: {verdict!r}")
         return verdicts[verdict]
-    if h.get("handoff") == "ROUTER-INTAKE":
-        # shortcut: a ready bug proceeds until the bug path (#161) is enabled: `reproduce` is disabled
-        return "proceed" if h.get("ready") == "yes" and h.get("split") in (None, "none") else (
-            "split" if h.get("split") not in (None, "none") else "grill")
     return h.get("status")
 
 
@@ -332,6 +326,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             raise Bad("review verdict approve cannot include a blocking finding")
         if outcome == "changes" and not blocking:
             raise Bad("review verdict changes requires a blocking finding")
+    if outcome == "done" and any(c.get("result") == "fail" for c in payload.get("checks", [])):
+        raise Bad("done with a failed check is refused")
     out = node["outcomes"][outcome]
     if out.get("enabled") is False:
         raise Bad(f"disabled outcome: {outcome}")
@@ -350,6 +346,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
         if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
             payload = {**payload, "tier": node.get("else_tier") or nodes["nodes"]["fix"]["tiers"][0]}
+    if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
+        payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     facts = tracker.facts(ticket)
     if name == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
@@ -605,11 +603,12 @@ def sweep_plan(facts, auto_merge=None, default_tier="mid"):
     return None
 
 
-def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, default_tier="mid", progress=None):
+def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, default_tier="mid", progress=None,
+          issue=None):
     """Move every listed ticket through each step its facts allow (a merged PR goes approved to done in one
     step). A ticket that reaches done or blocked also lets its split parent finish. Returns (results, failed)."""
     results, failed, done_tickets = [], False, []
-    queue, seen, merged = list(tracker.sweep_tickets(SWEEP_STAGES)), set(), False
+    queue, seen, merged = ([issue] if issue is not None else list(tracker.sweep_tickets(SWEEP_STAGES))), set(), False
     while queue:
         n = queue.pop(0)
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
@@ -674,6 +673,13 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                     if facts["stage"] != "ready" or facts["blockers_open"]:
                         if progress:
                             progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
+                        continue
+                    facts = tracker.stale_facts(n)
+                    since = facts.get("stage_at")  # when this ticket last got its stage label, i.e. the re-fire
+                    recent = since and datetime.now(timezone.utc) - datetime.fromisoformat(since.replace("Z", "+00:00")) <= timedelta(minutes=5)
+                    if facts.get("issue_state", "open") != "open" or recent:  # closed, or this event's re-fire already landed
+                        if progress:
+                            progress({"ticket": n, "outcome": "skipped", "why": "closed" if facts.get("issue_state", "open") != "open" else "re-fired within 5 minutes"})
                         continue
                     woken.add(n)
                     outcome = "re-triage" if not_planned else "unblocked"
@@ -817,7 +823,7 @@ def main(argv):
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
-    p.add_argument("--event")
+    p.add_argument("--event", nargs="?", const="-")
     p.add_argument("--issue", type=int)
     p.add_argument("--outcome")
     p.add_argument("--payload")
@@ -848,24 +854,40 @@ def main(argv):
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):
                 raise Bad("sweep needs --tracker github")
-            closed_ticket = a.issue
-            if a.event and a.issue is None:
+            issue, closed_ticket = a.issue, a.issue
+            if a.event and issue is None:
                 try:
-                    raw = json.loads(Path(a.event).read_text())
+                    raw = json.loads(sys.stdin.read() if a.event == "-" else Path(a.event).read_text())
                     if not isinstance(raw, dict):
                         raise ValueError("expected an event object")
                     raw = raw.get("data", raw)
                     if (not isinstance(raw, dict) or not isinstance(raw.get("action"), str)
                             or not any(isinstance(raw.get(key), dict) for key in ("issue", "pull_request"))):
                         raise ValueError("expected an event with an action and issue or pull request")
-                    if raw["action"] == "closed" and isinstance(raw.get("issue"), dict):
-                        closed_ticket = raw["issue"].get("number")
-                except (OSError, ValueError) as e:
-                    print(f"warning: ignoring invalid sweep event; running full sweep: {e}", file=sys.stderr)
+                    issue_payload, pr_payload = raw.get("issue"), raw.get("pull_request")
+                    if issue_payload:
+                        issue = issue_payload.get("number")
+                        if raw["action"] == "closed":
+                            closed_ticket = issue
+                    else:
+                        title = pr_payload.get("title") or ""
+                        body = pr_payload.get("body") or ""
+                        match = re.match(r"\s*#(\d+)\b", title) or re.search(
+                            r"(?im)^\s*closes\s+#(\d+)\b", f"{title}\n{body}"
+                        )
+                        if not match:
+                            raise ValueError("PR title must start with #<ticket> or contain Closes #<ticket>")
+                        issue = int(match[1])
+                    if not isinstance(issue, int) or issue < 1:
+                        raise ValueError("event does not identify a ticket number")
+                except (OSError, ValueError, TypeError) as e:
+                    raise Bad(f"invalid sweep event: {e}")
+            if issue is None and not a.stale:
+                raise Bad("sweep needs --issue or --event; only stale recovery may be unscoped")
             progress = lambda item: print(json.dumps(item), file=sys.stderr, flush=True)
-            results, failed = sweep(tracker, nodes, a.dry_run, closed_ticket,
-                                    config["gates"].get("auto_merge"),
-                                    config.get("defaults", {}).get("tier", "mid"), progress)
+            results, failed = ([], False) if a.stale and issue is None else sweep(
+                tracker, nodes, a.dry_run, closed_ticket, config["gates"].get("auto_merge"),
+                config.get("defaults", {}).get("tier", "mid"), progress, issue)
             out = {"dry_run": a.dry_run, "sweep": results}
             if a.stale:
                 out["stale"], stale_failed = sweep_stale(tracker, nodes, config["limits"].get("stale_hours", 2),

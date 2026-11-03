@@ -88,9 +88,13 @@ for line in sys.stdin:
         res = {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "fake", "version": "0"}}
     else:
         tool, a = m["params"]["name"], m["params"]["arguments"]
-        if tool == "get_environment":  # not recorded: answer with the listed item
-            items = json.loads(rec["air-cloud.list_environments"]["content"][0]["text"])["items"]
-            res = {"content": [{"type": "text", "text": json.dumps(next(i for i in items if i["id"] == a["id"]))}]}
+        if tool == "get_environment":
+            recorded = rec.get("air-cloud.get_environment", {}).get(a["id"])
+            if recorded:
+                res = recorded
+            else:  # Older recordings only contain the list response.
+                items = json.loads(rec["air-cloud.list_environments"]["content"][0]["text"])["items"]
+                res = {"content": [{"type": "text", "text": json.dumps(next(i for i in items if i["id"] == a["id"]))}]}
         else:
             res = rec[f"{server}.{tool}"]
             if os.environ.get("WRAP_STRUCTURED"):  # a server that also wraps the text in structuredContent
@@ -108,6 +112,20 @@ class RecordedTest(unittest.TestCase):
     def test_read_state_ignores_wrapped_structured_content(self):
         with mock.patch.dict(os.environ, {"WRAP_STRUCTURED": "1"}):
             self.read_recorded()
+
+    def test_unchanged_environment_is_unchanged(self):
+        recorded = json.loads((FIX / "mcp-recorded.json").read_text())
+        get_environment = recorded["air-cloud.get_environment"]["7462a87c-fbe2-40d6-9b28-f3f5c4fc1ca9"]
+        have = deploy.environment_detail(json.loads(get_environment["content"][0]["text"]))
+        plan = {"prefix": "[Slop factory] ", "automations": [], "environments": [{
+            "name": "[Slop factory] read",
+            "repository": "https://github.com/zaharchenko-evgeny/offline-eval-factory",
+            "startup": ".air/cloud/startup.sh", "variables": {"FACTORY_ENV": "read"}, "secrets": [],
+            "domains": ["github.com", "api.github.com", "objects.githubusercontent.com",
+                        "release-assets.githubusercontent.com", "*.blob.core.windows.net",
+                        "pypi.org", "files.pythonhosted.org"], "vm": "default",
+        }]}
+        self.assertEqual(deploy.diff(plan, [], [have]), [])
 
     def read_recorded(self):
         tmp = Path(tempfile.mkdtemp())
@@ -370,7 +388,7 @@ class PlanTest(unittest.TestCase):
                           for x in reopen["triggers"]],
                          [("pull_request.synchronize", None, "jetbrains-air[bot]"),
                           ("pull_request.labeled", "factory:ci-red", "jetbrains-air[bot]")])
-        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] recover", "[Slop factory] retro", "[Slop factory] distill") for x in a["triggers"]), "no polling"  # recover is the one safety net
+        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] recover", "[Slop factory] retro", "[Slop factory] distill", "[Slop factory] doctor", "[Slop factory] doctor-write", "[Slop factory] doctor-ops") for x in a["triggers"]), "no polling"  # recover is the one safety net
 
     def test_one_triggervcs_entry_per_trigger_and_a_spec_per_automation(self):
         for a in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
@@ -415,10 +433,21 @@ class PlanTest(unittest.TestCase):
 
     def test_pull_request_scripts_run_from_main(self):
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
-        self.assertIn("`factory sweep --main`", a["[Slop factory] join"])
-        self.assertIn("`factory sweep --main --issue <issue number from the trigger payload>`", a["[Slop factory] finish"])
-        self.assertIn("`factory sweep --main`", a["[Slop factory] reopen"])
+        self.assertIn("`factory sweep --main --event`", a["[Slop factory] join"])
+        self.assertIn("`factory sweep --main --event`", a["[Slop factory] finish"])
+        self.assertIn("`factory sweep --main --event`", a["[Slop factory] reopen"])
         self.assertNotIn("--main", a["[Slop factory] recover"])
+
+    def test_event_script_nodes_scope_to_one_ticket(self):
+        scripts = {"join", "start", "finish", "reopen", "merge"}
+        for automation in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
+            name = automation["name"].removeprefix("[Slop factory] ")
+            if name in scripts:
+                self.assertIn("factory sweep --main --event", automation["prompt"], name)
+            elif name == "recover":
+                self.assertIn("factory sweep --stale", automation["prompt"])
+            elif "factory sweep" in automation["prompt"]:
+                self.assertTrue("--issue" in automation["prompt"] or "--event" in automation["prompt"], name)
 
     def test_real_plan_is_prefixed_and_covers_pilot(self):
         config = cfg.load()
@@ -428,7 +457,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["prefix"], "[Slop factory] ")
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
-            "intake", "start", "join", "finish", "recover", "reopen", "merge", "notify", "retro", "distill",
+            "intake", "start", "join", "finish", "recover", "reopen", "merge", "notify", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}
         self.assertEqual(names, pilot)

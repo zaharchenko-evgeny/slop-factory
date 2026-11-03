@@ -2,16 +2,10 @@
  "RETRO": {
   "type": "object",
   "required": [
-   "handoff",
    "manual_steps",
    "lessons"
   ],
   "properties": {
-   "handoff": {
-    "enum": [
-     "RETRO"
-    ]
-   },
    "manual_steps": {
     "type": [
      "string",
