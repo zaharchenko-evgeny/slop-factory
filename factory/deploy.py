@@ -119,7 +119,10 @@ def script_prompt(name: str) -> str:
                 "time limit, wait until it exits, and report its output.")
     args = SCRIPT_ARGS.get(name, "")
     event_input = " and pass the trigger payload on stdin" if "--event" in args else ""
-    return SCRIPT_PROMPT.format(args=args, event_input=event_input)
+    prompt = SCRIPT_PROMPT.format(args=args, event_input=event_input)
+    if event_input:
+        prompt += " Pass the trigger payload exactly as received; never shorten or retype it."
+    return prompt
 
 
 def skill_lines(role: str) -> str:
@@ -148,6 +151,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     return (f"{who}\n\n{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}` with the trigger payload (the <trigger_event> JSON) on stdin, as a heredoc. "
+            "Pass the payload exactly as received; never shorten or retype it. "
             "It prints the ticket, the facts, the branch or PR head and the handoff path. "
             "If it exits 10 the node must not act: report the reason and stop.\n"
             "2. Do the role's work, write the handoff to the handoff path, then run `factory end <handoff_path>`.")

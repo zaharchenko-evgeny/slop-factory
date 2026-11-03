@@ -293,6 +293,15 @@ class PlanTest(unittest.TestCase):
                                                    "[Slop factory] notify")):
                     self.assertIn("wait until it exits", automation["prompt"])
 
+    def test_payload_consumers_preserve_the_trigger_payload(self):
+        plans = (deploy.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
+        for plan in plans:
+            prompts = {x["name"]: x["prompt"] for x in plan["automations"]}
+            self.assertIn("Pass the payload exactly as received; never shorten or retype it.",
+                          prompts["[Slop factory] implement-mid"])
+        self.assertIn("Pass the trigger payload exactly as received; never shorten or retype it.",
+                      deploy.script_prompt("join"))
+
     def test_review_automations_trigger_on_focus_rerequest_labels(self):
         for a in json.loads((FIX / "air-plan.json").read_text())["automations"]:
             if a["name"].startswith("[Slop factory] review-"):
@@ -351,7 +360,7 @@ class PlanTest(unittest.TestCase):
         a = {x["name"]: x for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
         spec = a["[Slop factory] implement-mid"]["spec"]
         self.assertEqual((spec["node"], spec["tier"], spec["engine"]), ("implement", "mid", cfg.load()["engine"]))
-        self.assertEqual(set(spec["outcomes"]), {"done", "error", "blocked", "failed"})
+        self.assertEqual(set(spec["outcomes"]), {"done", "error", "blocked", "failed", "env-broken"})
         self.assertIn("- `error`: the work needs the next tier", a["[Slop factory] implement-mid"]["prompt"])
         self.assertEqual(set(a["[Slop factory] join"]["spec"]["runs"]), {"finish", "reopen", "merge", "start", "notify"})
         notify = a["[Slop factory] notify"]
