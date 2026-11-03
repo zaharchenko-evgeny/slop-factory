@@ -200,8 +200,9 @@ class GitHubTracker:
         if not maps:
             raise RuntimeError(f"no open factory map labelled {self.map_label}")
         map_ticket = min(i["number"] for i in maps)
+        issue_id = self.run(["api", f"repos/{self.repo}/issues/{ticket}", "--jq", ".id"]).strip()
         self.run(["api", "--method", "POST", f"repos/{self.repo}/issues/{map_ticket}/sub_issues",
-                  "-f", f"sub_issue_id={ticket}"])
+                  "-F", f"sub_issue_id={issue_id}"])
 
     def canary_tickets(self):
         found = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
