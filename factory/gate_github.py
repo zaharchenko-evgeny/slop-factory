@@ -108,6 +108,14 @@ class GitHubGateTracker:
             pr = self._api(f"pulls/{prs[-1]['number']}")
         return pr
 
+    def _prs(self, n, open_only=False):
+        """The ticket's PRs from its branch; cleanup also includes closed PRs."""
+        prs = [p for p in self._list("pulls?state=all&per_page=100")
+               if p["head"]["ref"].startswith(f"ez/{n}-")
+               and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.repo.lower()
+               and (not open_only or p["state"] == "open")]
+        return sorted(prs, key=lambda p: p["number"])
+
     def _ci(self, sha):
         """CI at `sha` from the Actions workflow runs (the Air GitHub App has Actions: read, not Checks: read, so
         check-runs answers 403 in a run). Per workflow the latest run counts, so a rerun replaces a failure."""
@@ -398,12 +406,25 @@ class GitHubGateTracker:
         if kind in ("label", "unlabel"):
             on, target = e.get("on") or "issue", n
             if on == "pr":
-                pr = self._pr(n)
-                if pr is None:
+                attention = value == "factory:needs-human"
+                if attention:
+                    prs = self._prs(n, open_only=kind == "label")
+                else:
+                    pr = self._pr(n)
+                    prs = [pr] if pr else []
+                if not prs:
                     return False  # ticket-level waits also apply before a PR exists
-                if kind == "label" and value == "factory:needs-human" and pr.get("state") != "open":
-                    return False
-                target = pr["number"]
+                changed = False
+                for pr in prs:
+                    labels = self._labels(pr["number"])
+                    if kind == "label":
+                        if value not in labels:
+                            changed |= self._edit(pr["number"], [value], on=on)
+                    else:
+                        gone = [x for x in labels if x.startswith(value[:-1])] if value.endswith("*") else [value] if value in labels else []
+                        if gone:
+                            changed |= self._edit(pr["number"], remove=gone, on=on)
+                return changed
             elif on != "issue":
                 raise ValueError(f"{kind}: bad target: {on}")
             labels = self._labels(target)
@@ -420,12 +441,19 @@ class GitHubGateTracker:
         if kind in ("assign", "unassign"):
             on, target = e.get("on") or "issue", n
             if on == "pr":
-                pr = self._pr(n)
-                if pr is None:
+                prs = self._prs(n, open_only=kind == "assign")
+                if not prs:
                     return False
-                if kind == "assign" and pr.get("state") != "open":
-                    return False
-                target = pr["number"]
+                changed = False
+                for pr in prs:
+                    current = {a["login"] for a in self._api(f"issues/{pr['number']}").get("assignees", [])}
+                    desired = set((value if isinstance(value, list) else [value])) if kind == "assign" else set()
+                    if current != desired:
+                        flags = [x for a in sorted(desired - current) for x in ("--add-assignee", a)]
+                        flags += [x for a in sorted(current - desired) for x in ("--remove-assignee", a)]
+                        self.run(["issue", "edit", str(pr["number"]), "-R", self.repo, *flags])
+                        changed = True
+                return changed
             elif on != "issue":
                 raise ValueError(f"{kind}: bad target: {on}")
             current = {a["login"] for a in self._api(f"issues/{target}").get("assignees", [])}
