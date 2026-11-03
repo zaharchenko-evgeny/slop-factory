@@ -206,7 +206,7 @@ def main(argv=None):
         from notify import main as notify_main
         return notify_main(rest)
     print(__doc__)
-    return 2
+    return 0 if cmd in ("-h", "--help") else 2
 
 
 if __name__ == "__main__":
