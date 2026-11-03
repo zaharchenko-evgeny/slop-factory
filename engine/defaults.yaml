@@ -41,6 +41,8 @@ tracker:
   docs_impact_label: docs-impact
   bot_logins: []
   hold_label: factory:hold
+  # PR facts the GitHub adapter reads from a PR label (CI labels the PR when it finishes).
+  pr_fact_labels: { ci-green: factory:ci-green, ci-red: factory:ci-red }
 # The tier `start` gives a ticket without a `complexity:<size>` label.
 defaults: { tier: mid }
 gates:
