@@ -46,5 +46,5 @@ echo "PR #$pr at $SHA: $want"
 if [ "$want" = factory:ci-green ]; then
   ticket=${BRANCH#ez/}
   ticket=${ticket%%-*}
-  uv run --quiet factory/gate.py wake-reviewers --issue "$ticket"
+  uv run --quiet factory/gate.py wake-reviewers --issue "$ticket" --completed-head "$SHA"
 fi

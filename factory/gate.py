@@ -211,9 +211,10 @@ def fix_tier(facts, default="mid"):
     return default
 
 
-def review_wake_labels(facts):
+def review_wake_labels(facts, completed_head=None):
     """The per-focus reviewer commands needed for this green PR head."""
-    if facts.get("stage") != "in-review" or facts.get("ci") != "green":
+    ci = "green" if completed_head and facts.get("head") == completed_head else facts.get("ci")
+    if facts.get("stage") != "in-review" or ci != "green":
         return []
     return [f"factory:review-{focus}" for focus in facts.get("focus_missing", [])]
 
@@ -899,6 +900,7 @@ def main(argv):
     p.add_argument("--spec")
     p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
     p.add_argument("--tier")
+    p.add_argument("--completed-head")  # CI's terminal label step runs before Actions marks its workflow completed
     try:
         a = p.parse_args(config_mod.pop_team(argv))
     except SystemExit:
@@ -921,7 +923,7 @@ def main(argv):
             if not a.issue:
                 raise Bad("wake-reviewers needs --issue TICKET")
             facts = tracker.facts(a.issue)
-            labels = review_wake_labels(facts)
+            labels = review_wake_labels(facts, a.completed_head)
             for label in labels:
                 tracker.apply({"ticket": a.issue, "kind": "label", "value": label, "on": "pr"})
             print(json.dumps({"ticket": a.issue, "labels": labels}))

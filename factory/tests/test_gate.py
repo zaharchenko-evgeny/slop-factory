@@ -46,6 +46,22 @@ class GateTest(unittest.TestCase):
         facts = {"stage": "in-review", "ci": "green", "focus_missing": ["full"]}
         self.assertEqual(gate.review_wake_labels(facts), ["factory:review-full"])
 
+    def test_ci_completion_wakes_matching_head_while_workflow_is_still_running(self):
+        with tempfile.TemporaryDirectory() as d:
+            tracker = Path(d, "tickets.json")
+            tracker.write_text(json.dumps({"7": {"stage": "in-review", "ci": "pending", "head": "abc",
+                                                   "focus_missing": ["full"]}}))
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(gate.main(["wake-reviewers", "--issue", "7", "--completed-head", "abc",
+                                            "--tracker", f"memory:{tracker}"]), 0)
+            self.assertEqual(json.loads(out.getvalue())["labels"], ["factory:review-full"])
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(gate.main(["wake-reviewers", "--issue", "7", "--completed-head", "stale",
+                                            "--tracker", f"memory:{tracker}"]), 0)
+            self.assertEqual(json.loads(out.getvalue())["labels"], [])
+
     def test_high_risk_wakes_two_focuses(self):
         facts = {"stage": "in-review", "ci": "green", "focus_missing": ["behaviour", "structure-security"]}
         self.assertEqual(gate.review_wake_labels(facts),
