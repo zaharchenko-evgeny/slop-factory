@@ -78,6 +78,7 @@ limits:
   agent_runs_per_ticket: 8
   stale_hours: 2
   stale_command_minutes: 30
+  run_timeout_minutes: 30
   resume_cap: 3
   runs_per_day: 20
   environment_repair_attempts: 2
@@ -108,10 +109,14 @@ checks:
   mode: blocking
   requires: uvx
   run: bash -n .air/cloud/startup.sh && uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck .air/cloud/startup.sh
+- name: air-like
+  stage: pre-review
+  mode: blocking
+  run: bash -n scripts/air-like.sh && python3 -c "import ast; ast.parse(open('scripts/allowlist_proxy.py').read())"
 - name: state-machine
   stage: pre-review
   mode: blocking
-  run: uv run --quiet factory/nodes.py validate && uv run --quiet factory/tests/test_nodes.py && uv run --quiet factory/tests/test_gate.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_gate_github.py && uv run --quiet factory/tests/test_vendor_skills.py && uv run --quiet factory/tests/test_air_startup.py && uv run --quiet factory/tests/test_deploy.py && uv run --quiet factory/tests/test_cli.py && uv run --quiet factory/tests/test_config.py && uv run --quiet factory/tests/test_knowledge.py && uv run --quiet factory/tests/test_retro.py && uv run --quiet factory/tests/test_doctor.py && uv run --quiet factory/cli.py validate && uv run --quiet skills/factory-setup/tests/test_templates.py
+  run: uv run --quiet factory/nodes.py validate && uv run --quiet factory/tests/test_nodes.py && uv run --quiet factory/tests/test_gate.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_gate_github.py && uv run --quiet factory/tests/test_vendor_skills.py && uv run --quiet factory/tests/test_air_startup.py && uv run --quiet factory/tests/test_deploy.py && uv run --quiet factory/tests/test_cli.py && uv run --quiet factory/tests/test_config.py && uv run --quiet factory/tests/test_knowledge.py && uv run --quiet factory/tests/test_retro.py && uv run --quiet factory/tests/test_doctor.py && uv run --quiet factory/cli.py validate && uv run --quiet factory/tests/test_project.py && uv run --quiet factory/tests/test_workflow.py && uv run --quiet factory/tests/test_project_ports.py && FACTORY_TEAM=factory/tests/fixtures/slop uv run --quiet factory/cli.py validate && FACTORY_TEST_PROJECT=1 uv run --quiet factory/tests/test_gate.py && FACTORY_TEST_PROJECT=1 uv run --quiet factory/tests/test_gate_github.py && FACTORY_TEST_PROJECT=1 uv run --quiet factory/tests/test_reconcile.py && uv run --quiet factory/tests/test_upgrade.py && FACTORY_TEAM=template uv run --quiet factory/cli.py validate && uv run --quiet skills/factory-setup/tests/test_templates.py
 environments:
   read:
     repositories:

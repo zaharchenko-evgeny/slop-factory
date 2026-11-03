@@ -41,7 +41,7 @@
   ],
   "DESIGN_REF": "(design \u00a75, \u00a76)",
   "MAP_ISSUE_LINK": "[#21](https://github.com/zaharchenko-evgeny/slop-factory/issues/21)",
-  "MODEL_POLICY": "Models: Air tiers come from `targets.air.models` in `factory.descriptor.yaml`.",
+  "MODEL_POLICY": "Models: Air tiers come from `targets.air.models` in the team repository’s `factory.descriptor.yaml`.",
   "ROLES": {
     "router": "git gh pi",
     "developer": "git pi",

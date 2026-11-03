@@ -26,7 +26,7 @@ FIXTURE = ROOT / "tests/fixtures/project"
 
 def this_repository():
     nodes = yaml.safe_load((REPO / "workflows/nodes.yaml").read_text())
-    descriptor = yaml.safe_load((REPO / "factory.descriptor.yaml").read_text())
+    descriptor = yaml.safe_load((ROOT / "tests/fixtures/team/factory.descriptor.yaml").read_text())
     return nodes, descriptor
 
 
@@ -85,7 +85,7 @@ class WorkflowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with contextlib.redirect_stdout(io.StringIO()):
                 code = workflow.main(["migrate", str(REPO / "workflows/nodes.yaml"),
-                                      str(REPO / "factory.descriptor.yaml"), "--out", tmp])
+                                      str(ROOT / "tests/fixtures/team/factory.descriptor.yaml"), "--out", tmp])
             self.assertEqual(code, 0)
             proj = yaml.safe_load((Path(tmp) / config.PROJECT_DESCRIPTOR).read_text())
             self.assertEqual(proj["workflow"], workflow.WORKFLOW_PATH)
