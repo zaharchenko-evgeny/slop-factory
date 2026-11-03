@@ -6,7 +6,7 @@
 """The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, chart, validate, doctor.
 
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
-       factory begin <automation> [payload file]   (payload on stdin by default; exit 10: the node must not act)
+       factory begin <automation> --issue N | --pr N | [payload file]   (payload on stdin by default; exit 10: the node must not act)
        factory end <outcome> [--findings F.json] [--slices S.json] [--checks C.json] [--reason TEXT]
                    [--summary TEXT] [--size-estimate N] [--addressed A.json] [--disputed-focuses a,b]
                    (the outcome and the data its effects use)
@@ -69,6 +69,8 @@ def begin(argv, team=None):
     p = argparse.ArgumentParser(prog="factory begin")
     p.add_argument("automation")
     p.add_argument("payload", nargs="?")
+    p.add_argument("--issue", type=int)
+    p.add_argument("--pr", type=int)
     p.add_argument("--main", action="store_true")
     p.add_argument("--tracker")  # tests: a memory tracker
     a = p.parse_args(argv)
@@ -85,7 +87,13 @@ def begin(argv, team=None):
     (base / "event").mkdir(parents=True, exist_ok=True)
     (base / "spec").mkdir(exist_ok=True)
     event, spec = base / "event" / f"{a.automation}.json", base / "spec" / f"{a.automation}.json"
-    event.write_text(Path(a.payload).read_text() if a.payload else sys.stdin.read())
+    if a.issue or a.pr:  # a number is all the gate needs: it reads every fact from the tracker
+        name, _, action = str(nodes.load()["nodes"][compiled["node"]]["triggers"][0]).split(" ")[0].partition(".")
+        number = {"pull_request" if a.pr else "issue": {"number": a.pr or a.issue}}
+        text = json.dumps({"eventType": f"{name}.{action}", "action": action, **number})
+    else:
+        text = Path(a.payload).read_text() if a.payload else sys.stdin.read()
+    event.write_text(text)
     spec.write_text(json.dumps(compiled["spec"], sort_keys=True))
     state = {**{k: compiled[k] for k in ("node", "focus", "tier")}, "spec": str(spec), "event": str(event),
              "tracker": ["--tracker", a.tracker] if a.tracker else [], "team": str(config.team_root()),

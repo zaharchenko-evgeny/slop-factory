@@ -65,6 +65,18 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(out)["ticket"], 299)
 
+    def test_begin_with_issue_number_only(self):
+        self.tracker()
+        Path("event.json").unlink()
+        code, out = self.run_cli("begin", "implement-mid", "--issue", "7", "--tracker", "memory:tickets.json")
+        self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
+
+    def test_begin_with_pr_number_only(self):
+        self.tracker(stage="changes-requested", pr=300, pr_state="open", round_complete=True)
+        with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
+            code, out = self.run_cli("begin", "fix-cheap", "--pr", "300", "--tracker", "memory:tickets.json")
+        self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
+
     def test_end_applies_handoff_for_begun_node(self):
         tracker = self.tracker()
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
