@@ -390,6 +390,13 @@ class PlanTest(unittest.TestCase):
         self.assertIn("- `grill`:", intake)
         self.assertNotIn("- `bug`:", intake)
 
+    def test_scheduled_routine_prompts_take_no_number(self):
+        a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
+        for name in ("retro", "distill"):
+            prompt = a[f"[Slop factory] {name}"]
+            self.assertIn(f"`factory begin {name}`", prompt)
+            self.assertNotIn("<the issue number>", prompt)
+
     def test_pull_request_scripts_run_from_main(self):
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
         self.assertIn("`factory sweep --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>`", a["[Slop factory] join"])

@@ -147,7 +147,10 @@ def this_step(node: dict, focus: str | None) -> str:
     return f"Woken by: {flow_triggers(node)}.\n\nOutcomes:\n{outcomes}"
 
 
-def begin_arg(node: str) -> str:
+def begin_arg(node: str, n: dict) -> str:
+    """The number a node begins with; a scheduled routine has no ticket or PR, so it takes none."""
+    if all(str(t).startswith("schedule ") for t in n["triggers"]):
+        return ""
     return "--pr <the pull request number>" if node in PR_TRIGGERED_NODES else "--issue <the issue number>"
 
 
@@ -155,9 +158,11 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     role = n["role"]
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
     text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
+    arg = begin_arg(name, n)
+    arg = f" {arg}" if arg else ""
     return (f"{who}\n\n{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
-            f"1. Run `factory begin {aname} {begin_arg(name)}`. Copy only that one number; never write the payload or any JSON. "
+            f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts, the branch or PR head and the handoff path. "
             "If it exits 10 the node must not act: report the reason and stop.\n"
             "2. Do the role's work, write the handoff to the handoff path, then run `factory end <handoff_path>`.")
