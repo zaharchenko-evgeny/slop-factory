@@ -29,7 +29,7 @@ SCRIPT = ROOT / ".air/cloud/startup.sh"
 STUBS = {
     "curl": 'echo curl >> "$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\ncat "$STUB_TAR" > "$out"\n',
     "gh": "",
-    "git": 'echo git "$@" >> "$LOG"\ncase "$*" in\n  "fetch --depth 1 origin "*) [ "${GIT_FAIL:-}" != fetch ] ;;\n  "clone --depth 1 "*) mkdir -p "$5"; echo "engine: ${TEAM_ENGINE:-v0.1.0}" > "$5/factory.descriptor.yaml" ;;\n  "worktree add --detach "*) [ "${GIT_FAIL:-}" != worktree-add ] ;;\n  *) exit 0 ;;\nesac\n',
+    "git": 'echo git "$@" >> "$LOG"\ncase "$*" in\n  "fetch --depth 1 origin "*) [ "${GIT_FAIL:-}" != fetch ] ;;\n  "clone --depth 1 "*) mkdir -p "$5"; echo "engine: ${TEAM_ENGINE:-v0.1.0}" > "$5/${TEAM_FILE:-factory.descriptor.yaml}" ;;\n  "worktree add --detach "*) [ "${GIT_FAIL:-}" != worktree-add ] ;;\n  *) exit 0 ;;\nesac\n',
     "uv": 'echo uv "$@" >> "$LOG"\nprintf "#!/bin/sh\\n" > "$HOME/.local/bin/decide"; chmod +x "$HOME/.local/bin/decide"\n',
 }
 
@@ -99,6 +99,13 @@ class StartupTest(unittest.TestCase):
         r = self.run_script()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("git fetch --depth 1 origin refs/tags/release-2026.11", self.log.read_text())
+
+    def test_project_descriptor_names_the_engine_version(self):
+        self.env.update(FACTORY_TEAM_REPOSITORY="https://github.com/o/team", TEAM_ENGINE="v0.2.0",
+                        TEAM_FILE="factory.project.yaml")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("git fetch --depth 1 origin refs/tags/v0.2.0", self.log.read_text())
 
     def test_additional_team_repository_is_used_without_clone(self):
         self.env["FACTORY_TEAM_REPOSITORY"] = "https://github.com/o/team"

@@ -315,6 +315,29 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(json.dumps(project_plan(*this_repository()), indent=2, sort_keys=True),
                          json.dumps(current, indent=2, sort_keys=True))
 
+    def test_slop_plan_unchanged(self):
+        """Slop factory's settings (fixtures/slop, `factory migrate` of slop-eval-factory) render today's plan: this
+        repository's nodes.yaml and descriptor with the settings repository as `team_repository`."""
+        slop = HERE / "fixtures/slop"
+        before = cfg.team_root()
+        try:
+            cfg.set_team(ROOT)
+            current = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository":
+                                                     yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())["team_repository"]})
+            cfg.set_team(slop)
+            migrated = deploy.plan_air(nodes.load(), cfg.load())
+        finally:
+            cfg.set_team(before)
+        self.assertEqual(json.dumps(migrated, indent=2, sort_keys=True), json.dumps(current, indent=2, sort_keys=True))
+
+    def test_slop_fixture_renders_this_repository_nodes(self):
+        """The generator check of the generated fixture: it validates and renders back to workflows/nodes.yaml."""
+        slop = HERE / "fixtures/slop"
+        project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
+        wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
+        self.assertEqual(workflow.validate(project, wf), [])
+        self.assertEqual(workflow.to_nodes(project, wf), yaml.safe_load((ROOT / "workflows/nodes.yaml").read_text()))
+
     def test_triggers_from_command_store(self):
         project, wf = this_repository()
         project["commands"]["implement-<tier>"] = {"store": {"label": "work:implement-<tier>"}}
