@@ -248,6 +248,24 @@ class ApplyTest(unittest.TestCase):
         (self.tmp / "server.py").write_text(FAKE_SERVER.replace('{**i, **{k: v for k, v in a.items() if k != key}}', '{**i}'))
         self.assertEqual(self.run_deploy("--apply"), 1)
 
+    def test_main_closes_reminder_after_successful_changed_apply(self):
+        plan = {"prefix": "[F] ", "environments": [], "automations": [], "files": {}}
+        servers = [mock.Mock(), mock.Mock()]
+        changed = [("update", "automation", "a", None, None, [])]
+        with (mock.patch.dict(os.environ, {"FACTORY_MCP_AIR_AUTOMATIONS": "automation",
+                                          "FACTORY_MCP_AIR_CLOUD": "cloud"}),
+              mock.patch.object(deploy.config_mod, "pop_team", side_effect=lambda argv: argv),
+              mock.patch.object(deploy, "plan_air", return_value=plan),
+              mock.patch.object(deploy, "Mcp", side_effect=servers),
+              mock.patch.object(deploy, "read_state", return_value=([], [])),
+              mock.patch.object(deploy, "diff", side_effect=[changed, []]),
+              mock.patch.object(deploy, "apply_diff") as apply,
+              mock.patch.object(deploy, "write_files", return_value=0),
+              mock.patch("gate_github.GitHubGateTracker.from_config") as tracker):
+            self.assertEqual(deploy.main(["--apply"]), 0)
+        apply.assert_called_once()
+        tracker.return_value.deploy_applied.assert_called_once_with({**plan, "renames": {}})
+
 
 class PlanTest(unittest.TestCase):
     def test_air_matches_fixture(self):

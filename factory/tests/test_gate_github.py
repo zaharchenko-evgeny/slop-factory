@@ -466,7 +466,7 @@ class EffectsTest(unittest.TestCase):
             if path.endswith("pulls/300"):
                 return json.dumps({"merge_commit_sha": "m1"})
             if path.endswith("commits/m1"):
-                return json.dumps({"commit": {"parents": [{"sha": "p1"}]}})
+                return json.dumps({"parents": [{"sha": "p1"}]})
             raise AssertionError(args)
         with patch("gate_github.deploy_plan_at", return_value={"automations": [], "environments": [], "labels": [], "files": {}}):
             GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
@@ -480,7 +480,7 @@ class EffectsTest(unittest.TestCase):
             if path.endswith("pulls/300"):
                 return json.dumps({"merge_commit_sha": "m1"})
             if path.endswith("commits/m1"):
-                return json.dumps({"commit": {"parents": [{"sha": "p1"}]}})
+                return json.dumps({"parents": [{"sha": "p1"}]})
             if path.endswith("labels?per_page=100"):
                 return ""
             if path.endswith("issues?state=open&per_page=100"):
@@ -494,6 +494,10 @@ class EffectsTest(unittest.TestCase):
             GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
         self.assertTrue(any("repos/o/r/labels" in c and "name=factory:new" in c for c in calls))
         self.assertTrue(any(c[:2] == ["issue", "create"] and "Deploy needed" in c for c in calls))
+        create = next(c for c in calls if c[:2] == ["issue", "create"])
+        body = create[create.index("--body") + 1]
+        self.assertTrue(body.startswith("[factory] "))
+        self.assertTrue(body.endswith("Factory-Run: finish:300"))
 
     def test_nodes_yaml_on_pr_reaches_the_effect(self):
         n = nodes.load()["nodes"]["join"]["outcomes"]["changes"]["effects"][0]

@@ -476,11 +476,9 @@ def main(argv: list[str]) -> int:
         servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
         try:
             plan = {**plan_air(nodes_mod.load(), config_mod.load()), "renames": renames}
-            unchanged = not diff(plan, *read_state(servers[0], servers[1], plan["prefix"],
-                                                   plan["environments"][0]["repository"] if plan["environments"] else ""))
             code = deploy(argv[0], "--allow-delete" in argv, plan, *servers)
             code = code or write_files(plan["files"], argv[0] == "--apply")
-            if code == 0 and argv[0] == "--apply" and unchanged:
+            if code == 0 and argv[0] == "--apply":
                 from gate_github import GitHubGateTracker
                 GitHubGateTracker.from_config().deploy_applied(plan)
             return code

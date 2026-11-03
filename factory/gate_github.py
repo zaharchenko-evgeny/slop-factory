@@ -149,7 +149,7 @@ class GitHubGateTracker:
         merge_sha = pull.get("merge_commit_sha")
         if not merge_sha:
             return
-        commit = self._api(f"commits/{merge_sha}")["commit"]
+        commit = self._api(f"commits/{merge_sha}")
         parents = commit.get("parents") or []
         if not parents:
             return
@@ -177,7 +177,8 @@ class GitHubGateTracker:
             else:
                 old, new = old, new
             items.extend(f"- {key}: {name}" for name in sorted(old.keys() | new.keys()) if old.get(name) != new.get(name))
-        body = "The merged commit changes the Air deploy plan. Run `factory deploy --apply` locally.\n\n" + "\n".join(items)
+        body = ("[factory] The merged commit changes the Air deploy plan. Run `factory deploy --apply` locally.\n\n"
+                + "\n".join(items) + f"\n\nFactory-Run: finish:{pr}")
         if existing:
             self.run(["issue", "edit", str(existing["number"]), "-R", self.repo, "--body", body,
                       "--add-label", "factory:needs-human", "--add-assignee", config.load()["notify"]["github_user"]])
