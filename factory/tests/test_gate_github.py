@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import yaml
@@ -511,43 +512,46 @@ class EffectsTest(unittest.TestCase):
         tr(gh).apply(eff("label", "factory:fix-mid"))
         self.assertEqual(gh.writes[0][:3], ["issue", "edit", "7"])
 
-    def test_config_change_merge_labels_only_open_factory_prs(self):
+    def test_config_change_merge_ignores_equal_deploy_plan(self):
         calls = []
         def run(args):
             calls.append(args)
-            if args[:2] in (["pr", "edit"], ["issue", "edit"]):
-                return ""
             path = next((x for x in args if x.startswith("repos/")), "")
-            if path.endswith("pulls/300/files?per_page=100"):
-                return json.dumps({"filename": "workflows/nodes.yaml"})
-            if path.endswith("pulls?state=open&per_page=100"):
-                return "\n".join(json.dumps(p) for p in [
-                    {"number": 301, "head": {"ref": "ez/299-x", "repo": {"full_name": REPO}}},
-                    {"number": 302, "head": {"ref": "feature/x", "repo": {"full_name": REPO}}},
-                    {"number": 303, "head": {"ref": "ez/302-y", "repo": {"full_name": "fork/r"}}},
-                ])
-            if path.endswith(("issues/299", "issues/301")):
-                return json.dumps({"labels": []})
+            if path.endswith("pulls/300"):
+                return json.dumps({"merge_commit_sha": "m1"})
+            if path.endswith("commits/m1"):
+                return json.dumps({"parents": [{"sha": "p1"}]})
             raise AssertionError(args)
+        with patch("gate_github.deploy_plan_at", return_value={"automations": [], "environments": [], "labels": [], "files": {}}):
+            GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
+        self.assertEqual(len(calls), 2)
 
-        GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
-        edits = [c for c in calls if c[:2] == ["pr", "edit"]]
-        self.assertEqual(len(edits), 1)
-        self.assertEqual(edits[0][2:4], ["301", "-R"])
-        self.assertIn("factory:update-cheap", edits[0])
-        stage_edit = next(c for c in calls if c[:3] == ["issue", "edit", "299"])
-        self.assertIn("--add-label", stage_edit)
-        self.assertIn(STAGES["changes-requested"], stage_edit)
-        self.assertLess(calls.index(stage_edit), calls.index(edits[0]))
-
-    def test_config_change_merge_ignores_other_files(self):
+    def test_new_labels_created_at_merge(self):
+        calls = []
         def run(args):
+            calls.append(args)
             path = next((x for x in args if x.startswith("repos/")), "")
-            if path.endswith("pulls/300/files?per_page=100"):
-                return json.dumps({"filename": "factory/tests/test_gate.py"})
-            raise AssertionError(args)
-
-        GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
+            if path.endswith("pulls/300"):
+                return json.dumps({"merge_commit_sha": "m1"})
+            if path.endswith("commits/m1"):
+                return json.dumps({"parents": [{"sha": "p1"}]})
+            if path.endswith("labels?per_page=100"):
+                return ""
+            if path.endswith("issues?state=open&per_page=100"):
+                return ""
+            if args[:2] == ["issue", "create"]:
+                return "https://github.com/o/r/issues/99"
+            return "{}"
+        before = {"automations": [], "environments": [], "labels": [], "files": {}}
+        after = {"automations": [{"name": "new"}], "environments": [], "labels": ["factory:new"], "files": {}}
+        with patch("gate_github.deploy_plan_at", side_effect=[before, after]):
+            GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
+        self.assertTrue(any("repos/o/r/labels" in c and "name=factory:new" in c for c in calls))
+        self.assertTrue(any(c[:2] == ["issue", "create"] and "Deploy needed" in c for c in calls))
+        create = next(c for c in calls if c[:2] == ["issue", "create"])
+        body = create[create.index("--body") + 1]
+        self.assertTrue(body.startswith("[factory] "))
+        self.assertTrue(body.endswith("Factory-Run: finish:300"))
 
     def test_nodes_yaml_on_pr_reaches_the_effect(self):
         n = nodes.load()["nodes"]["join"]["outcomes"]["changes"]["effects"][0]

@@ -8,7 +8,9 @@ A marker `<!-- factory:review focus=<f> round=<n> verdict=approve|changes -->` c
 """
 import json
 import re
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -82,6 +84,20 @@ def gate_stop(f):
     from gate import stop_reason
     return stop_reason(f, fix=True)
 
+
+def deploy_plan_at(revision):
+    """Render the plan with the code and config at `revision`, not today's generator."""
+    with tempfile.TemporaryDirectory(prefix="factory-plan-") as path:
+        subprocess.run(["git", "worktree", "add", "--detach", "--quiet", path, revision], check=True,
+                       capture_output=True, text=True)
+        try:
+            output = subprocess.run(["uv", "run", "--quiet", "factory/deploy.py", "plan", "--target", "air"],
+                                    cwd=path, check=True, capture_output=True, text=True).stdout
+            return json.loads(output)
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", path], check=True,
+                           capture_output=True, text=True)
+
 MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))?(?: rereview=(1))? -->")
 FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
@@ -126,25 +142,64 @@ class GitHubGateTracker:
         return sorted(found)
 
     def config_change_merged(self, pr):
-        """Ask open factory PRs to merge main when this merge changes engine configuration."""
+        """Create a deployment reminder when this merge changes the rendered Air plan."""
         if not pr:
             return
-        files = self._list(f"pulls/{pr}/files?per_page=100")
-        if not any(f["filename"] == "factory.descriptor.yaml" or f["filename"].startswith(("engine/", "workflows/"))
-                   for f in files):
+        import config
+        pull = self._api(f"pulls/{pr}")
+        merge_sha = pull.get("merge_commit_sha")
+        if not merge_sha:
             return
-        for other in self._list("pulls?state=open&per_page=100"):
-            head = other.get("head") or {}
-            match = re.match(r"ez/(\d+)-", head.get("ref") or "")
-            if not match or \
-                    ((head.get("repo") or {}).get("full_name") or "").lower() != self.repo.lower():
-                continue
-            # The update node only starts from changes-requested. Move the ticket
-            # before adding its PR command label so the label event can pass check.
-            self.apply({"ticket": int(match[1]), "kind": "stage", "value": "changes-requested"})
-            labels = [x["name"] for x in self._api(f"issues/{other['number']}")["labels"]]
-            if "factory:update-cheap" not in labels:
-                self._edit(other["number"], ["factory:update-cheap"], on="pr")
+        commit = self._api(f"commits/{merge_sha}")
+        parents = commit.get("parents") or []
+        if not parents:
+            return
+
+        before, after = deploy_plan_at(parents[0]["sha"]), deploy_plan_at(merge_sha)
+        if before == after:
+            return
+        # Ensure labels exist before the new plan can wake CI or an automation.
+        known = {x["name"] for x in self._list("labels?per_page=100")}
+        for label in after["labels"]:
+            if label not in known:
+                self.run(["api", f"repos/{self.repo}/labels", "-f", f"name={label}", "-f", "color=ededed"])
+        title = "Deploy needed"
+        existing = next((i for i in self._list("issues?state=open&per_page=100")
+                         if "pull_request" not in i and i.get("title") == title), None)
+        items = []
+        for key in ("automations", "environments", "labels", "files"):
+            old, new = ((before.get(key) or {}, after.get(key) or {}) if key == "files"
+                        else (before.get(key) or [], after.get(key) or []))
+            if key in ("automations", "environments"):
+                old = {x["name"]: x for x in old}
+                new = {x["name"]: x for x in new}
+            elif key == "labels":
+                old, new = {x: x for x in old}, {x: x for x in new}
+            else:
+                old, new = old, new
+            items.extend(f"- {key}: {name}" for name in sorted(old.keys() | new.keys()) if old.get(name) != new.get(name))
+        body = ("[factory] The merged commit changes the Air deploy plan. Run `factory deploy --apply` locally.\n\n"
+                + "\n".join(items) + f"\n\nFactory-Run: finish:{pr}")
+        if existing:
+            self.run(["issue", "edit", str(existing["number"]), "-R", self.repo, "--body", body,
+                      "--add-label", "factory:needs-human", "--add-assignee", config.load()["notify"]["github_user"]])
+            self.run(["issue", "comment", str(existing["number"]), "-R", self.repo, "--body",
+                      f"[factory] Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}"])
+        else:
+            url = self.run(["issue", "create", "-R", self.repo, "--title", title, "--body", body,
+                            "--label", "factory:needs-human", "--assignee", config.load()["notify"]["github_user"]]).strip()
+            self.run(["issue", "comment", url.rsplit("/", 1)[-1], "-R", self.repo, "--body",
+                      f"[factory] Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}"])
+
+    def deploy_applied(self, plan):
+        """Close the reminder after an operator confirms the deployed plan is unchanged."""
+        issue = next((i for i in self._list("issues?state=open&per_page=100")
+                      if "pull_request" not in i and i.get("title") == "Deploy needed"), None)
+        if not issue:
+            return
+        self.run(["issue", "comment", str(issue["number"]), "-R", self.repo, "--body",
+                  "[factory] `factory deploy --apply` confirmed the current plan is applied. <!-- factory:deploy-applied -->\n\nFactory-Run: deploy:apply"])
+        self.run(["issue", "close", str(issue["number"]), "-R", self.repo])
 
     def _pr(self, n):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""
