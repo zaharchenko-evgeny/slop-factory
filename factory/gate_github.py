@@ -16,7 +16,7 @@ from pathlib import Path
 import yaml
 
 import config
-from gate_port import fix_round_count
+from gate_port import fix_round_count, ticket_from_ref
 from github_tracker import gh
 
 
@@ -83,13 +83,13 @@ class GitHubGateTracker:
             return
         for other in self._list("pulls?state=open&per_page=100"):
             head = other.get("head") or {}
-            match = re.match(r"ez/(\d+)-", head.get("ref") or "")
-            if not match or \
+            ticket = ticket_from_ref(head.get("ref"))
+            if ticket is None or \
                     ((head.get("repo") or {}).get("full_name") or "").lower() != self.repo.lower():
                 continue
             # The update node only starts from changes-requested. Move the ticket
             # before adding its PR command label so the label event can pass check.
-            self.apply({"ticket": int(match[1]), "kind": "stage", "value": "changes-requested"})
+            self.apply({"ticket": ticket, "kind": "stage", "value": "changes-requested"})
             labels = [x["name"] for x in self._api(f"issues/{other['number']}")["labels"]]
             if "factory:update-cheap" not in labels:
                 self._edit(other["number"], ["factory:update-cheap"], on="pr")
@@ -113,8 +113,7 @@ class GitHubGateTracker:
         """Resolve a PR number to its ticket from the live head ref."""
         pr = self._api(f"pulls/{number}")
         ref = ((pr.get("head") or {}).get("ref") or "")
-        match = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
-        return int(match[1]) if match else None
+        return ticket_from_ref(ref)
 
     def _prs(self, n, open_only=False):
         """The ticket's PRs from its branch; cleanup also includes closed PRs."""

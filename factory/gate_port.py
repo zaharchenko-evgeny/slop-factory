@@ -7,7 +7,15 @@ state differs; it returns True when it wrote. The stage effect also records `eve
 outcome without a stage effect.
 """
 import json
+import re
 from typing import Protocol
+
+
+def ticket_from_ref(ref):
+    """The ticket id of a branch `ez/<ticket>-<slug>` or a PR title starting `<ticket> `: digits give an int
+    (GitHub issue), an opaque id such as `INFRA-123` stays a string. None when `ref` names no ticket."""
+    m = re.match(r"(?:refs/heads/)?ez/([A-Za-z][A-Za-z0-9]*-\d+|\d+)-", ref or "") or re.match(r"#?([A-Za-z][A-Za-z0-9]*-\d+|\d+)(?=[ :])", ref or "")
+    return None if not m else int(m[1]) if m[1].isdigit() else m[1]
 
 
 class Tracker(Protocol):
@@ -22,6 +30,11 @@ def fix_round_count(reviews, since=""):
     return len({(r["commit_id"], r.get("rereview")) for r in reviews
                 if r.get("agent") and r.get("verdict") == "changes" and (r.get("submitted_at") or "") >= since
                 and any(str(i).startswith("B") for i in r.get("findings", []))})
+
+
+class CodeHost(Protocol):
+    """Where the pull requests live; a tracker's tickets need not be on the same host."""
+    def ticket_for_pr(self, number): ...
 
 
 class MemoryTracker:

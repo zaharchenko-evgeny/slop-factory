@@ -203,6 +203,21 @@ GateTag = tests_for(TagTracker, "PROJ-7")
 
 
 class CliAndValidate(unittest.TestCase):
+    def test_opaque_ticket_id_in_branch_and_title(self):
+        class Host:  # the code host knows PRs, the tracker knows tickets
+            def ticket_for_pr(self, number):
+                return gate.ticket_from_ref("ez/INFRA-123-add-thing")
+
+        tracker = TagTracker({"INFRA-123": {"tags": ["stage:in-dev"], "title": "Add the thing"}})
+        branch = gate.branch_of({"ticket": "INFRA-123", "title": "Add the thing"}, CONFIG)
+        self.assertEqual(branch, "ez/INFRA-123-add-thing")
+        self.assertEqual(gate.ticket_from_ref(branch), "INFRA-123")
+        self.assertEqual(gate.ticket_from_ref("INFRA-123: Add the thing"), "INFRA-123")
+        self.assertEqual((gate.ticket_from_ref("ez/7-x"), gate.ticket_from_ref("42-fix"), gate.ticket_from_ref("main")), (7, None, None))
+        ev = gate.from_trigger({"eventType": "pull_request.opened", "data": {"action": "opened", "pull_request": {"number": 9}}}, Host())
+        self.assertEqual(ev["ticket"], "INFRA-123")
+        self.assertEqual(tracker.facts("INFRA-123")["stage"], "in-dev")
+
     def test_implement_done_blocks_branch_past_estimate_and_diff_limit(self):
         tr = MemoryTracker({"7": {"stage": "in-dev", "body": "Size: about 250 lines with tests."}})
         with patch.object(gate, "branch_size", return_value=(500, [("factory/gate.py", 300), ("factory/tests/test_gate.py", 200)])):

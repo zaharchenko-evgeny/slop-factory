@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 from gate_github import GitHubGateTracker  # noqa: E402
-from gate_port import MemoryTracker  # noqa: E402
+from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
 
 ROOT = nodes_mod.ROOT
 GO, NO_GO, BAD, FAILED = 0, 10, 2, 1
@@ -135,9 +135,8 @@ def from_trigger(d, tracker=None):
             ticket = tracker.ticket_for_pr(number)
         else:
             ref = ((pr or {}).get("head") or {}).get("ref") or ""
-            m = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
-            ticket = int(m[1]) if m else None
-        if not isinstance(ticket, int):
+            ticket = ticket_from_ref(ref)
+        if ticket is None:
             raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
     else:
         ticket = number
@@ -928,7 +927,7 @@ def main(argv):
                         if ref_ticket is None:
                             raise ValueError("PR head ref does not identify an ez/<ticket> branch")
                         issue = ref_ticket
-                    if not isinstance(issue, int) or issue < 1:
+                    if not issue or (isinstance(issue, int) and issue < 1):
                         raise ValueError("event does not identify a ticket number")
                 except (OSError, ValueError, TypeError) as e:
                     raise Bad(f"invalid sweep event: {e}")
