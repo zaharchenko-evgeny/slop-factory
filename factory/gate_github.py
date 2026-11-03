@@ -16,6 +16,7 @@ from pathlib import Path
 import yaml
 
 import config
+from gate_port import fix_round_count
 from github_tracker import gh
 
 
@@ -347,9 +348,7 @@ class GitHubGateTracker:
                      pending_rereviews=pending_rereviews, pr_labels=sorted(pr_labels),
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                     fix_rounds=len({(r["commit_id"], r["rereview"]) for r in reviews
-                                     if r["agent"] and r["verdict"] == "changes"
-                                     and (r.get("submitted_at") or "") >= since}))  # same-head dispute rereviews count as a new round
+                     fix_rounds=fix_round_count(reviews, since))  # same-head dispute rereviews count as a new round
         return f
 
     def stale_facts(self, n):
@@ -482,6 +481,8 @@ class GitHubGateTracker:
             return self._rerequest(n)
         if kind == "create-issues":
             return self._create(n, value)
+        if kind == "park-behind-main-red":
+            return self._park(n, value)
         if kind == "merge":
             pr = self._pr(n)
             if pr is None:
@@ -674,6 +675,20 @@ class GitHubGateTracker:
             prev = new["id"]
             prev_number = new["number"]
         return wrote
+
+    def _park(self, n, check):
+        """Open or reuse the one `Main is red in Air: <check>` ticket, then block ticket `n` by it."""
+        title = f"Main is red in Air: {check}"
+        red = next((i for i in self._list("issues?state=open&per_page=100") if "pull_request" not in i and i["title"] == title), None)
+        if red is None:
+            body = (f"[factory] The required check `{check}` fails identically on unchanged `main` in Air (found while working on #{n}). "
+                    "Fix main; the tickets blocked by this one restart when it closes.")
+            red = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={title}", "-f", f"body={body}",
+                                       "-f", f"labels[]={self.stages['triage']}"]))
+        if red["id"] in {b["id"] for b in self._list(f"issues/{n}/dependencies/blocked_by")}:
+            return False
+        self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={red['id']}"])
+        return True
 
     @staticmethod
     def _blocked_body(body, number):

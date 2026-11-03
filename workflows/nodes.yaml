@@ -97,6 +97,8 @@ nodes:
       error: { effects: [{ unlabel: "factory:implement-*" }, { label: "factory:implement-<next tier>" }, { stage: in-dev }] }
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
       failed: { effects: [{ comment: reason }, { stage: blocked }] }   # one stop stage: the reason is the comment
+      # A required check fails identically on unchanged `main` in Air: not the ticket's fault. It waits behind a `Main is red in Air` ticket.
+      env-broken: { effects: [{ unlabel: "factory:implement-*" }, { park-behind-main-red: failing_check }, { stage: ready }] }
   adopt:
     env: read
     enabled: false
@@ -150,6 +152,9 @@ nodes:
       # People who requested changes are asked again, after the push, so round 2 waits for them.
       done: { effects: [{ unlabel: "factory:fix-*", "on": pr }, { request-reviewers: changes }, { stage: in-review }] }
       blocked: { from: [changes-requested], effects: [{ comment: reason }, { stage: blocked }] }
+      env-broken: { from: [changes-requested], effects: [{ unlabel: "factory:fix-*", "on": pr }, { park-behind-main-red: failing_check }, { stage: ready }] }
+      # A stale or duplicate fix label: no blocking finding, red CI or conflict for the head. The join reruns.
+      nothing-to-fix: { from: [changes-requested], effects: [{ unlabel: "factory:fix-*", "on": pr }, { join: all-approve }, { stage: in-review }] }
   update:
     env: write
     pilot: true

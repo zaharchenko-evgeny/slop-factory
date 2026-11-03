@@ -952,7 +952,7 @@ class SpecTest(unittest.TestCase):
             d = Path(d)
             self.spec(d)
             code, out = self.run_gate(d, "check", "--node", "implement", "--event", str(d / "ev.json"), "--tier", "mid")
-            self.assertEqual((code, json.loads(out)["outcomes"]), (0, ["done", "error", "blocked", "failed"]))
+            self.assertEqual((code, json.loads(out)["outcomes"]), (0, ["done", "error", "blocked", "failed", "env-broken"]))
             (d / "p.json").write_text(json.dumps({"ticket": "7", "event": "e", "tier": "mid"}))
             code, _ = self.run_gate(d, "apply", "--node", "implement", "--outcome", "done", "--payload", str(d / "p.json"))
             self.assertEqual(code, 0)
@@ -1360,6 +1360,50 @@ class UnblockedSweepTest(unittest.TestCase):
 
         self.assertFalse(failed)
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(11, "unblocked")])
+
+
+class RecalibratedBlocksTest(unittest.TestCase):
+    def test_env_broken_parks_ticket_behind_main_red_ticket(self):
+        tr = MemoryTracker({"7": {"stage": "in-dev", "attrs": ["factory:implement-mid"]},
+                            "8": {"stage": "in-dev", "attrs": ["factory:implement-mid"]}})
+        for n in ("7", "8"):
+            code, out = gate.apply("implement", "env-broken", {"ticket": n, "failing_check": "shellcheck"}, tr, NODES)
+            self.assertEqual(code, gate.GO)
+        red = [k for k, t in tr.tickets.items() if t.get("title") == "Main is red in Air: shellcheck"]
+        self.assertEqual(len(red), 1)  # reused, not duplicated
+        for n in ("7", "8"):
+            t = tr.tickets[n]
+            self.assertEqual((t["stage"], t["blockers_open"], t["blocked_by"]), ("ready", 1, red))
+            self.assertNotIn("factory:implement-mid", t["attrs"])
+
+    def test_nothing_to_fix_reruns_join_not_block(self):
+        tr = MemoryTracker({"7": {"stage": "changes-requested", "pr": 3, "round_complete": True,
+                                   "attrs": ["factory:fix-mid"]}})
+        code, _ = gate.apply("fix", "nothing-to-fix", {"ticket": "7"}, tr, NODES)
+        self.assertEqual(code, gate.GO)
+        t = tr.tickets["7"]
+        self.assertEqual(t["stage"], "in-review")
+        self.assertNotIn("factory:fix-mid", t["attrs"])
+        self.assertIn(["join", '"all-approve"'], t["log"])
+        self.assertNotIn(["label", '"factory:needs-human"'], t["log"])
+
+    def test_finding_free_round_not_counted(self):
+        def review(head, findings):
+            return {"agent": True, "verdict": "changes", "commit_id": head, "rereview": False, "findings": findings}
+        tr = MemoryTracker({"7": {"stage": "in-review", "reviews": [
+            review("a", []), review("b", ["M1"]), review("c", ["B1", "M1"])]}})
+        self.assertEqual(tr.facts("7")["fix_rounds"], 1)
+
+    def test_grill_includes_proposed_checks(self):
+        fields = gate.intake_fields({
+            "handoff": "ROUTER-INTAKE", "ready": "no", "missing": ["a check says 'clean'"], "split": "none",
+            "size_estimate": "~40",
+            "proposed_checks": ["`uv run factory/tests/test_gate.py` passes", "no match: `rg TODO factory/`"]})
+        self.assertIn("- `uv run factory/tests/test_gate.py` passes", fields["questions"])
+        self.assertIn("- no match: `rg TODO factory/`", fields["questions"])
+        tr = MemoryTracker({"7": {"stage": "triage"}})
+        gate.apply("intake", "grill", {"ticket": "7", **fields}, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "needs-answers")
 
 
 if __name__ == "__main__":

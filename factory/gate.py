@@ -169,9 +169,13 @@ def intake_fields(h):
         return {}
     size = re.search(r"\d+", str(h["size_estimate"]))
     n = int(size[0]) if size else 0
+    proposed = h.get("proposed_checks")
+    proposed = "\n".join(f"- {x}" for x in proposed) if isinstance(proposed, list) else str(proposed or "")
+    proposal = ("\n\nProposed acceptance checks (accept by editing the ticket, or by `factory:triage` with this pasted):\n"
+                f"{proposed}" if proposed.strip() not in ("", "none") else "")
     return {"complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
             "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong",
-            "questions": f"[factory] Needs answers before work starts: {h.get('reason', '')}",
+            "questions": f"[factory] Needs answers before work starts: {h.get('reason', '')}{proposal}",
             "children": slices(h.get("slices"))}
 
 
@@ -314,6 +318,8 @@ def resolve(effect, payload, ticket):
     if kind in ("comment", "create-issues"):
         out = {"kind": kind, "ticket": ticket, "value": field(arg)}
         return {**out, "on": on} if on else out
+    if kind == "park-behind-main-red":
+        return {"kind": kind, "ticket": ticket, "value": field(arg)}
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
@@ -442,6 +448,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     if any(e["kind"] == "stage" and e["value"] == "blocked" for e in effects):
         effects = clear_commands(ticket) + effects
     stage_effect = next((e for e in effects if e["kind"] == "stage"), None)
+    if stage_effect and not after:  # the join reads the new stage (nothing-to-fix: in-review)
+        after = [{**e, "tier": payload.get("tier") or fix_tier(facts)} for e in effects if e["kind"] == "join"]
+        effects = [e for e in effects if e["kind"] != "join"]
     if stage_effect:
         target = stage_effect["value"]
         human_effects = []
