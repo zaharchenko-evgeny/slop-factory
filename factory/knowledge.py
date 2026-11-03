@@ -36,6 +36,14 @@ def retro_entries(tracker, tickets, inbox):
     return written
 
 
+def inbox_pr_action(open_prs, branch):
+    """One inbox PR a night, from `<branch>-pr` to `branch`: push the night's entries to the source and update
+    its open PR; open one only when none is."""
+    source = f"{branch}-pr"
+    mine = sorted(p["number"] for p in open_prs if p["head"]["ref"] == source and p["base"]["ref"] == branch)
+    return {"branch": branch, "source": source, "action": "update" if mine else "create", "pr": mine[0] if mine else None}
+
+
 def lessons(text):
     return [(m[1], m[2], m[3]) for m in map(LESSON.match, text.splitlines()) if m and m[1] in KINDS]
 
