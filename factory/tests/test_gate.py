@@ -637,6 +637,55 @@ class TriggerTest(unittest.TestCase):
         self.assertNotIn("factory:needs-human", tr.tickets["7"]["attrs"])
         self.assertEqual(tr.tickets["7"]["assignees"], [])
 
+    def test_blocked_ticket_marks_its_pr(self):
+        effects = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "in-dev", "pr": 42}})
+        gate.apply("implement", "blocked", {"ticket": "7", "reason": "[factory] blocked"}, tr, NODES)
+        self.assertIn({"kind": "label", "ticket": "7", "value": "factory:needs-human", "on": "pr"}, effects)
+        self.assertIn({"kind": "assign", "ticket": "7", "value": CONFIG["notify"]["github_user"], "on": "pr"}, effects)
+
+    def test_resume_clears_pr_mark(self):
+        effects = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "blocked", "attrs": ["factory:needs-human"], "pr": 42}})
+        gate.apply("human", "ready", {"ticket": "7", "actor": "human"}, tr, NODES)
+        self.assertIn({"kind": "unlabel", "ticket": "7", "value": "factory:needs-human", "on": "pr"}, effects)
+        self.assertIn({"kind": "unassign", "ticket": "7", "value": None, "on": "pr"}, effects)
+
+    def test_human_changes_request_marks_pr(self):
+        effects = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "in-review", "head": "abc", "pr": 42, "ci": "green",
+                             "round_complete": True, "round_verdict": "changes",
+                             "reviews": [{"author": "reviewer", "agent": False, "verdict": "changes", "commit_id": "abc"}]}})
+        gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        self.assertIn({"kind": "label", "ticket": "7", "value": "factory:needs-human", "on": "pr"}, effects)
+        self.assertIn({"kind": "assign", "ticket": "7", "value": ["reviewer"], "on": "pr"}, effects)
+
+    def test_held_approved_marks_pr(self):
+        effects = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "approved", "head": "abc", "pr": 42, "pr_state": "open",
+                             "ci": "green", "risk": "low", "round_complete": True,
+                             "round_verdict": "approve", "round_head": "abc"}})
+        gate.apply("merge", "waiting", {"ticket": "7", "reason": "[factory] merge"}, tr, NODES,
+                   auto_merge={"enabled": False, "max_risk": "high"})
+        self.assertIn({"kind": "label", "ticket": "7", "value": "factory:needs-human", "on": "pr"}, effects)
+        self.assertIn({"kind": "assign", "ticket": "7", "value": CONFIG["notify"]["github_user"], "on": "pr"}, effects)
+
     def test_a_stop_clears_every_command_label(self):
         # review of PR #198: a label left on the ticket makes the command after factory:ready a no-op
         seen = []
