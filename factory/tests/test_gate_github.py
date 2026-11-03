@@ -77,7 +77,7 @@ class FakeGh:
                                [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)])
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
-            return "\n".join(json.dumps(p) for p in (
+            return "" if getattr(self, "no_pr", False) else "\n".join(json.dumps(p) for p in (
                 {"number": 5, "state": "closed" if self.merged else "open", "head": head("ez/7-x", REPO)},
                 {"number": 6, "state": "open", "head": head("ez/70-other", REPO)},
                 {"number": 8, "state": "open", "head": head("ez/7-fork", "evil/r")},
@@ -135,6 +135,8 @@ class FakeGh:
             return "\n".join(json.dumps(b) for b in self.blocked)
         if a.endswith("issues/12"):
             return json.dumps({"number": 12, "state": getattr(self, "blocker_state", "open"), "labels": []})
+        if a.endswith("issues/5/comments"):
+            return ""
         if a.endswith("issues/7/comments"):
             return "\n".join(json.dumps(c if isinstance(c, dict) else {"body": c}) for c in self.comments)
         if a.endswith("issues?state=open&per_page=100"):
@@ -325,6 +327,90 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(tr(gh).apply(eff("review", "request-changes-at-head", focus="full")))
         self.assertIn("event=COMMENT", gh.writes[0])
         self.assertIn("verdict=changes", gh.writes[0][-1])
+
+    def test_agent_notes_appended_as_hidden_block(self):
+        gh = FakeGh()
+        notes = gate.clean_notes({"for": "fixer", "files": ["a.py:3"], "hint": "map both", "junk": 1})
+        self.assertTrue(tr(gh).apply(eff("review", "request-changes-at-head", focus="full", notes=notes)))
+        body = gh.writes[0][-1]
+        self.assertTrue(body.endswith('\n-->'), body)
+        self.assertIn('<!-- factory:agent-notes\n{"for": "fixer", "files": ["a.py:3"], "hint": "map both"}\n-->', body)
+        self.assertEqual(M_GH.parse_notes(body, BOT, "Bot"), [notes])
+        self.assertEqual(M_GH.parse_notes(body, "mallory"), [])  # a person's notes are refused
+        gh = FakeGh(comments=[{"body": body, "user": {"login": BOT, "type": "Bot"}, "created_at": "2026-01-01T00:00:00Z"}])
+        self.assertEqual(tr(gh).facts(7)["agent_notes"], [notes])
+
+    def test_note_with_comment_terminator_stays_inside_the_hidden_block(self):
+        notes = gate.clean_notes({"for": "fixer", "hint": 'visible --> remainder} --> <!-- x'})
+        for kind in ("review", "comment"):
+            gh = FakeGh()
+            self.assertTrue(tr(gh).apply(eff(kind, "request-changes-at-head", focus="full", notes=notes)))
+            body = gh.writes[0][-1]
+            block = body[body.index("<!-- factory:agent-notes"):]
+            self.assertEqual(block.count("-->"), 1, block)  # only the real terminator closes it
+            self.assertEqual(M_GH.parse_notes(body, BOT, "Bot"), [notes])
+
+    def test_note_copied_to_pr_when_pr_appears(self):
+        notes = gate.clean_notes({"for": "fixer", "hint": "check the gate first"})
+        block = f"<!-- factory:agent-notes\n{json.dumps(notes)}\n-->"
+        gh = FakeGh()
+        gh.no_pr = True
+        self.assertTrue(tr(gh).apply(eff("pr-notes", block, run_id="run-9")))  # no PR yet: parked on the ticket
+        self.assertEqual(gh.writes[0][:3], ["issue", "comment", "7"])
+        parked = gh.writes[0][-1]
+        self.assertIn(block, parked)
+        self.assertTrue(parked.endswith("Factory-Run: run-9"), parked)
+        gh = FakeGh(comments=[{"body": parked, "user": {"login": BOT, "type": "Bot"}}])
+        self.assertTrue(tr(gh).apply(eff("pr-notes-sync", "")))  # the PR exists now
+        self.assertEqual(gh.writes[0][:4], ["pr", "edit", "5", "-R"])
+        self.assertIn(block, gh.writes[0][-1])
+        gh = FakeGh(comments=[{"body": parked, "user": {"login": "mallory", "type": "User"}}])
+        self.assertFalse(tr(gh).apply(eff("pr-notes-sync", "")))  # a person's comment is no source
+        self.assertEqual(gh.writes, [])
+
+    def test_pr_description_notes_edited_after_ready_are_read(self):
+        notes = gate.clean_notes({"for": "fixer", "hint": "check the gate first"})
+        body = f"text\n\n<!-- factory:agent-notes\n{json.dumps(notes)}\n-->"
+
+        class G(FakeGh):
+            def __call__(self, args):
+                out = FakeGh.__call__(self, args)
+                if any(x.endswith("issues/7/events") for x in args):
+                    return json.dumps({"event": "labeled", "label": {"name": "factory:ready"}, "created_at": "2026-01-02T00:00:00Z"})
+                if any(x.endswith("/pulls/5") for x in args):
+                    return json.dumps({**json.loads(out), "body": body, "user": {"login": BOT, "type": "Bot"},
+                                       "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-03T00:00:00Z"})
+                return out
+        self.assertEqual(GitHubGateTracker(REPO, STAGES, BOT, run=G()).facts(7)["agent_notes"], [notes])
+
+    def test_agent_notes_secret_is_stripped(self):
+        key = "ghp_" + "a1B2" * 6
+        notes = gate.clean_notes({"for": "any", "hint": f"use {key}", "context": "password: hunter2"})
+        self.assertNotIn(key, json.dumps(notes))
+        self.assertNotIn("hunter2", json.dumps(notes))
+
+    def test_agent_notes_pem_quotes_and_google_key_stripped(self):
+        pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----"
+        google = "AIza" + "a1B2" * 8 + "xyz"
+        notes = gate.clean_notes({"for": "any", "hint": f"{pem} {google}", "context": 'password: "hun\\ter2" say "hi"'})
+        out = json.dumps(notes)
+        for leaked in ("MIIEvQIBADANBg", "END PRIVATE", google, "hun"):
+            self.assertNotIn(leaked, out)
+
+    def test_agent_notes_size_counted_after_redaction(self):
+        secret = "ghp_" + "a" * 2000
+        self.assertEqual(gate.clean_notes({"for": "any", "hint": secret})["hint"], "[redacted]")
+
+    def test_agent_notes_oversize_rejected(self):
+        with self.assertRaises(ValueError):
+            gate.clean_notes({"for": "any", "context": "x" * 2000})
+        with self.assertRaises(ValueError):
+            gate.clean_notes({"for": "boss"})
+        tracker = gate.MemoryTracker({"7": {"stage": "in-dev"}})
+        with self.assertRaises(gate.Bad):
+            gate.apply("implement", "done", {"ticket": 7, "agent_notes": {"for": "any", "hint": "x" * 2000}},
+                       tracker, nodes.load())
+        self.assertNotIn("log", tracker.tickets["7"])
 
     def test_dispute_rereview_is_allowed_once_at_the_same_head(self):
         old = "<!-- factory:review focus=behaviour round=1 verdict=changes -->"
