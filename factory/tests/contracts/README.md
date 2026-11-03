@@ -9,6 +9,10 @@ values are removed.
 - `github-issues.json`: live GitHub REST responses for the issue endpoints the adapter calls (lookup, listing,
   comments, events, parent, sub-issues, dependencies); list endpoints keep their first item. `FakeGh` in
   `test_gate_github.py` shapes its answers on them and fails on an issue endpoint or field without a recording.
+- `github-pulls.json`: live GitHub REST responses for the pull request endpoints the adapter calls (lookup, listing,
+  reviews, commits, compare, collaborators, git/ref); list endpoints keep their first item, `commits` and `compare`
+  keep one file, and the committer email is removed. `FakeGh` in `test_gate_github.py` shapes its answers on them and
+  fails on a covered endpoint or field without a recording.
 - `payloads/<eventType>.json`: real Air trigger payloads, as an Air run received them. Recorded:
   `issues.labeled` and `pull_request_review.submitted`.
 
