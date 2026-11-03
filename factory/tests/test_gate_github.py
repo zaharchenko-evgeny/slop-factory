@@ -457,6 +457,24 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(self.twice(gh, eff("label", "factory:fix-mid")), (True, 1, False, 1))
         self.assertEqual(self.twice(gh, eff("unlabel", "factory:fix-mid")), (True, 2, False, 2))
 
+    def test_descriptor_states_and_commands(self):
+        import project
+        gh = FakeGh()
+        t = GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh,
+                              project=project.load(Path(__file__).resolve().parent / "fixtures/project"))
+        self.assertTrue(t.set_state(7, "ready"))
+        self.assertEqual(sorted(gh.labels), ["factory:ready", "risk:low"])
+        self.assertTrue(t.add_command(7, "review"))
+        self.assertTrue(t.add_command(7, "pr-review"))
+        self.assertIn(["issue", "edit", "7", "-R", REPO, "--add-label", "factory:review"], gh.writes)
+        self.assertIn(["pr", "edit", "5", "-R", REPO, "--add-label", "factory:pr-review"], gh.writes)
+        self.assertTrue(t.remove_command(7, "pr-review"))
+        self.assertIn(["pr", "edit", "5", "-R", REPO, "--remove-label", "factory:pr-review"], gh.writes)
+        with self.assertRaisesRegex(ValueError, "no tag store"):
+            t.add_command(7, "close")
+        with self.assertRaisesRegex(ValueError, "no field store"):
+            t.set_state(7, "needs-review")
+
     def test_pr_label_and_assignee_use_the_pull_request(self):
         gh = FakeGh()
         self.assertTrue(tr(gh).apply(eff("label", "factory:needs-human", on="pr")))

@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 
 import config
-from gate_port import fix_round_count, ticket_from_ref
+from gate_port import DescriptorPort, fix_round_count, ticket_from_ref
 from github_tracker import gh
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
@@ -122,10 +122,11 @@ class GitHubCodeHost:
         return ticket_from_ref((pr.get("head") or {}).get("ref")) or ticket_from_ref(pr.get("title"))
 
 
-class GitHubGateTracker:
+class GitHubGateTracker(DescriptorPort):
     def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8,
-                 ci_workflows=("quality-gates",), pr_repo=None):
+                 ci_workflows=("quality-gates",), pr_repo=None, project=None):
         self.trusted, self.run_cap, self.ci_workflows = set(trusted_bots), run_cap, set(ci_workflows)
+        self.project = project  # factory.project.yaml: the stores of states and commands (DescriptorPort)
         self.pr_repo = pr_repo or repo  # the code host: pull requests, CI, commits, merges
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, run
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
@@ -140,7 +141,8 @@ class GitHubGateTracker:
         return cls(t["repository"], t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run,
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
                    (c.get("ci") or {}).get("workflows") or ["quality-gates"],
-                   (c.get("code_host") or {}).get("repository"))
+                   (c.get("code_host") or {}).get("repository"),
+                   {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None)
 
     # --- reads
     def _api(self, path, *flags, repo=None):
