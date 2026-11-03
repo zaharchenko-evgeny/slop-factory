@@ -79,7 +79,7 @@ class FakeGh:
             self.workflow_timeout = timeout
             if getattr(self, "workflow_error", False):
                 raise RuntimeError("workflow lookup failed")
-            return "\n".join(json.dumps({"workflow_id": k, "event": "pull_request", "run_number": 1,
+            return "\n".join(json.dumps({"workflow_id": k, "name": "quality-gates", "event": "pull_request", "run_number": 1,
                                           "id": 100 + k, "status": "completed" if c else "in_progress", "conclusion": c})
                              for k, c in enumerate(self.checks))
         if "/actions/runs/100/jobs?" in a:
@@ -236,11 +236,32 @@ class FactsTest(unittest.TestCase):
         self.assertEqual(tr(FakeGh(checks=["success", None])).facts(7)["ci"], "pending")
         self.assertEqual(tr(FakeGh(checks=[])).facts(7)["ci"], "none")
 
+    def _with_runs(self, *runs):
+        class Runs(FakeGh):
+            def __call__(self, args, timeout=None):
+                if any("actions/runs?head_sha=" in x for x in args):
+                    return "\n".join(json.dumps({"event": "pull_request", "run_number": 1, "status": "completed",
+                                                 **r}) for r in runs)
+                return FakeGh.__call__(self, args, timeout)
+        return Runs()
+
+    def test_cancelled_reconcile_run_is_not_ci(self):
+        gh = self._with_runs({"workflow_id": 1, "name": "quality-gates", "conclusion": "success"},
+                             {"workflow_id": 2, "name": "factory-reconcile", "conclusion": "cancelled"})
+        self.assertEqual(tr(gh).facts(7)["ci"], "green")
+
+    def test_ci_counts_configured_workflows_only(self):
+        gh = self._with_runs({"workflow_id": 1, "name": "quality-gates", "conclusion": "success"},
+                             {"workflow_id": 3, "name": "extra-ci", "conclusion": "failure"})
+        self.assertEqual(tr(gh).facts(7)["ci"], "green")
+        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, ci_workflows=["quality-gates", "extra-ci"])
+        self.assertEqual(t.facts(7)["ci"], "red")
+
     def test_ci_rerun_replaces_a_failure(self):
         class Rerun(FakeGh):
             def __call__(self, args):
                 if any("actions/runs?head_sha=" in x for x in args):
-                    return "\n".join(json.dumps({"workflow_id": 1, "event": "pull_request", "run_number": 1,
+                    return "\n".join(json.dumps({"workflow_id": 1, "name": "quality-gates", "event": "pull_request", "run_number": 1,
                                                   "run_attempt": n, "status": "completed", "conclusion": c})
                                       for n, c in ((1, "failure"), (2, "success")))
                 return FakeGh.__call__(self, args)
