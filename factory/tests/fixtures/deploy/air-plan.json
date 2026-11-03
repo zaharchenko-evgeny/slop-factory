@@ -1047,6 +1047,7 @@
           "probed": {}
         },
         "role": "script",
+        "routine": true,
         "runs": {
           "merge": {
             "engine": null,
@@ -1179,6 +1180,7 @@
           "probed": {}
         },
         "role": "script",
+        "routine": true,
         "runs": {
           "merge": {
             "engine": null,
@@ -1311,6 +1313,7 @@
           "probed": {}
         },
         "role": "script",
+        "routine": true,
         "runs": {
           "merge": {
             "engine": null,

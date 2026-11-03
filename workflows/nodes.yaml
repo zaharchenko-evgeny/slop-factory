@@ -276,7 +276,7 @@ nodes:
     triggers: ["schedule retro"]
     when: { always: true }
     role: retro
-    output: push-to-new-branch
+    output: as-instructed  # the role pushes to the reusable source branch and keeps one open PR into `knowledge.branch` (knowledge.inbox_pr_action)
     outcomes:
       recorded: {}
   distill:
