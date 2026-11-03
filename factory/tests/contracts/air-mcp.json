@@ -1,0 +1,1630 @@
+{
+ "recorded": "2026-11-03",
+ "servers": {
+  "air-automations": {
+   "tools": [
+    {
+     "name": "list_automations",
+     "description": "List Air Automations visible to you \u2014 personal ones first, then project ones. Returns id, name, repository, projectId and a webUrl that opens it in the Air web UI, so linking needs no second call. Start here: the ids, projectId and repository shapes other tools need all come from this.",
+     "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {}
+     }
+    },
+    {
+     "name": "get_automation",
+     "description": "Fetch one automation in full: prompt, triggers, triggerVcs, environmentConfigId, agentAndModel, projectId, plus webUrl to open it in the Air web UI. Use this to copy environmentConfigId and agentAndModel into a new automation, and always before update_automation.",
+     "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+       "automationId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+       }
+      },
+      "required": [
+       "automationId"
+      ]
+     }
+    },
+    {
+     "name": "create_automation",
+     "description": "Create a new Air Automation. Provide the complete spec. environmentConfigId is required \u2014 an automation without it has no secrets and no domain allowlist. Take repository, agentAndModel and projectId from an existing automation (list_automations, then get_automation). environmentConfigId comes from the same place, or from air-cloud's list_environments / create_environment when the repo has no automation yet.",
+     "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+       "name": {
+        "type": "string",
+        "minLength": 3
+       },
+       "prompt": {
+        "type": "string",
+        "description": "The instruction the agent follows. Keeping it as a pointer to a file in the repo (\"Read AUTOMATION_PROMPT.md and follow it\") lets you version the real prompt in git."
+       },
+       "repository": {
+        "type": "object",
+        "properties": {
+         "fullName": {
+          "type": "string",
+          "description": "owner/repo, e.g. \"jetbrains/my-repo\""
+         },
+         "cloneUrl": {
+          "type": "string",
+          "description": "https clone URL"
+         },
+         "browseUrl": {
+          "type": "string",
+          "description": "web URL"
+         },
+         "provider": {
+          "type": "string",
+          "description": "VCS provider host key, usually \"github\""
+         },
+         "host": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "fullName",
+         "cloneUrl",
+         "browseUrl",
+         "provider"
+        ],
+        "description": "The repository the automation runs against. Copy it from an existing automation on the same repo via get_automation."
+       },
+       "branch": {
+        "description": "defaults to \"main\"",
+        "type": "string"
+       },
+       "projectId": {
+        "description": "Omit for a personal (PRIVATE) automation; set it to share with a project. Get it from list_automations. Re-sharing works: an automation can be moved from one project to another any number of times. Going back to personal cannot be expressed at all \u2014 an empty string is a 400, null makes the backend's project permission check fail with a misleading 503, and omitting the key keeps the current project rather than clearing it. To make a shared automation personal again, delete it and create a new one without projectId.",
+        "type": "string"
+       },
+       "agentAndModel": {
+        "type": "object",
+        "properties": {
+         "id": {
+          "type": "string",
+          "description": "model id, e.g. \"claude-opus-5[1m]\""
+         },
+         "name": {
+          "type": "string",
+          "description": "display name, e.g. \"Opus 5\""
+         },
+         "isDefault": {
+          "type": "boolean"
+         },
+         "agentId": {
+          "description": "e.g. \"claude\"",
+          "type": "string"
+         }
+        },
+        "required": [
+         "id",
+         "name",
+         "isDefault"
+        ],
+        "description": "Cloud agent + model. Copy from an existing automation via get_automation \u2014 the catalog is not exposed here."
+       },
+       "triggers": {
+        "minItems": 1,
+        "type": "array",
+        "items": {
+         "anyOf": [
+          {
+           "type": "object",
+           "properties": {
+            "triggerType": {
+             "type": "string",
+             "const": "SCHEDULED"
+            },
+            "cronExpression": {
+             "type": "string",
+             "description": "5-field cron, e.g. \"0 9 * * 4\" for Thursdays at 09:00"
+            },
+            "timezone": {
+             "default": "UTC",
+             "description": "IANA zone, e.g. \"Europe/Berlin\"",
+             "type": "string"
+            }
+           },
+           "required": [
+            "triggerType",
+            "cronExpression"
+           ]
+          },
+          {
+           "type": "object",
+           "properties": {
+            "triggerType": {
+             "type": "string",
+             "const": "WEBHOOK"
+            }
+           },
+           "required": [
+            "triggerType"
+           ],
+           "description": "Fires only when something POSTs to the automation"
+          },
+          {
+           "type": "object",
+           "properties": {
+            "triggerType": {
+             "type": "string",
+             "const": "EVENT"
+            },
+            "source": {
+             "type": "string",
+             "enum": [
+              "youtrack",
+              "github",
+              "jira"
+             ]
+            },
+            "eventType": {
+             "type": "string",
+             "description": "e.g. \"issue_created\", \"pull_request.opened\""
+            },
+            "filters": {
+             "description": "ANDed exact/substring matches. No globs, ranges, OR or NOT.",
+             "type": "object",
+             "propertyNames": {
+              "type": "string"
+             },
+             "additionalProperties": {
+              "type": "string"
+             }
+            }
+           },
+           "required": [
+            "triggerType",
+            "source",
+            "eventType"
+           ]
+          }
+         ],
+         "description": "EVENT triggers cannot use push-to-new-branch \u2014 only create-pr/read-only (youtrack, jira, non-PR github) or push-to-source/read-only (github pull_request.*). Use SCHEDULED or WEBHOOK if you need an enforced branch destination."
+        }
+       },
+       "triggerVcs": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "sourceBranch": {
+           "description": "usually \"main\"",
+           "type": "string"
+          },
+          "outputBehaviour": {
+           "description": "Where the agent may write. Not all values are available on every trigger type \u2014 see the triggers field.",
+           "type": "string",
+           "enum": [
+            "read-only",
+            "push-to-source",
+            "push-to-new-branch",
+            "create-pr",
+            "as-instructed"
+           ]
+          }
+         },
+         "description": "Omit to accept the trigger type's default (push-to-new-branch for SCHEDULED, read-only for WEBHOOK)."
+        }
+       },
+       "environmentConfigId": {
+        "description": "Required as a field, but may be null \u2014 you must choose, not omit. An id attaches an environment configuration: secrets, allowlisted domains, VM size, startup script. This server cannot create or look up environments \u2014 air-cloud does: list_environments (filter by repositoryUrl) resolves a name to this id, create_environment makes one with variables, secrets and allowlist and returns it. Both see personal environments only; a project-owned one comes from get_automation on an automation that already uses it. Pass null only when the automation genuinely needs none of that (a read-only run on a public repo). A null here is the difference between a working automation and one that fails at run time with no credentials.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "outputDescription": {
+        "type": "string"
+       },
+       "mcpConnectors": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "outboundWebhooks": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "url": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "url"
+         ]
+        }
+       }
+      },
+      "required": [
+       "name",
+       "prompt",
+       "repository",
+       "agentAndModel",
+       "triggers",
+       "environmentConfigId"
+      ]
+     }
+    },
+    {
+     "name": "update_automation",
+     "description": "Change an existing automation. The backend replaces the whole spec, so this tool reads the current one first and merges your fields over it \u2014 that keeps environmentConfigId and triggerVcs from being reset. triggers and triggerVcs pair by position, so pass both together or neither \u2014 changing one alone would move each destination onto a different trigger, and this tool refuses it. Only the automation's creator may update it. Saved as a new snapshot version.",
+     "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+       "automationId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+       },
+       "name": {
+        "type": "string",
+        "minLength": 3
+       },
+       "prompt": {
+        "type": "string",
+        "description": "The instruction the agent follows. Keeping it as a pointer to a file in the repo (\"Read AUTOMATION_PROMPT.md and follow it\") lets you version the real prompt in git."
+       },
+       "repository": {
+        "type": "object",
+        "properties": {
+         "fullName": {
+          "type": "string",
+          "description": "owner/repo, e.g. \"jetbrains/my-repo\""
+         },
+         "cloneUrl": {
+          "type": "string",
+          "description": "https clone URL"
+         },
+         "browseUrl": {
+          "type": "string",
+          "description": "web URL"
+         },
+         "provider": {
+          "type": "string",
+          "description": "VCS provider host key, usually \"github\""
+         },
+         "host": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "fullName",
+         "cloneUrl",
+         "browseUrl",
+         "provider"
+        ],
+        "description": "The repository the automation runs against. Copy it from an existing automation on the same repo via get_automation."
+       },
+       "branch": {
+        "description": "defaults to \"main\"",
+        "type": "string"
+       },
+       "projectId": {
+        "description": "Omit for a personal (PRIVATE) automation; set it to share with a project. Get it from list_automations. Re-sharing works: an automation can be moved from one project to another any number of times. Going back to personal cannot be expressed at all \u2014 an empty string is a 400, null makes the backend's project permission check fail with a misleading 503, and omitting the key keeps the current project rather than clearing it. To make a shared automation personal again, delete it and create a new one without projectId.",
+        "type": "string"
+       },
+       "agentAndModel": {
+        "type": "object",
+        "properties": {
+         "id": {
+          "type": "string",
+          "description": "model id, e.g. \"claude-opus-5[1m]\""
+         },
+         "name": {
+          "type": "string",
+          "description": "display name, e.g. \"Opus 5\""
+         },
+         "isDefault": {
+          "type": "boolean"
+         },
+         "agentId": {
+          "description": "e.g. \"claude\"",
+          "type": "string"
+         }
+        },
+        "required": [
+         "id",
+         "name",
+         "isDefault"
+        ],
+        "description": "Cloud agent + model. Copy from an existing automation via get_automation \u2014 the catalog is not exposed here."
+       },
+       "triggers": {
+        "minItems": 1,
+        "type": "array",
+        "items": {
+         "anyOf": [
+          {
+           "type": "object",
+           "properties": {
+            "triggerType": {
+             "type": "string",
+             "const": "SCHEDULED"
+            },
+            "cronExpression": {
+             "type": "string",
+             "description": "5-field cron, e.g. \"0 9 * * 4\" for Thursdays at 09:00"
+            },
+            "timezone": {
+             "default": "UTC",
+             "description": "IANA zone, e.g. \"Europe/Berlin\"",
+             "type": "string"
+            }
+           },
+           "required": [
+            "triggerType",
+            "cronExpression"
+           ]
+          },
+          {
+           "type": "object",
+           "properties": {
+            "triggerType": {
+             "type": "string",
+             "const": "WEBHOOK"
+            }
+           },
+           "required": [
+            "triggerType"
+           ],
+           "description": "Fires only when something POSTs to the automation"
+          },
+          {
+           "type": "object",
+           "properties": {
+            "triggerType": {
+             "type": "string",
+             "const": "EVENT"
+            },
+            "source": {
+             "type": "string",
+             "enum": [
+              "youtrack",
+              "github",
+              "jira"
+             ]
+            },
+            "eventType": {
+             "type": "string",
+             "description": "e.g. \"issue_created\", \"pull_request.opened\""
+            },
+            "filters": {
+             "description": "ANDed exact/substring matches. No globs, ranges, OR or NOT.",
+             "type": "object",
+             "propertyNames": {
+              "type": "string"
+             },
+             "additionalProperties": {
+              "type": "string"
+             }
+            }
+           },
+           "required": [
+            "triggerType",
+            "source",
+            "eventType"
+           ]
+          }
+         ],
+         "description": "EVENT triggers cannot use push-to-new-branch \u2014 only create-pr/read-only (youtrack, jira, non-PR github) or push-to-source/read-only (github pull_request.*). Use SCHEDULED or WEBHOOK if you need an enforced branch destination."
+        }
+       },
+       "triggerVcs": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "sourceBranch": {
+           "description": "usually \"main\"",
+           "type": "string"
+          },
+          "outputBehaviour": {
+           "description": "Where the agent may write. Not all values are available on every trigger type \u2014 see the triggers field.",
+           "type": "string",
+           "enum": [
+            "read-only",
+            "push-to-source",
+            "push-to-new-branch",
+            "create-pr",
+            "as-instructed"
+           ]
+          }
+         },
+         "description": "Omit to accept the trigger type's default (push-to-new-branch for SCHEDULED, read-only for WEBHOOK)."
+        }
+       },
+       "environmentConfigId": {
+        "description": "Required as a field, but may be null \u2014 you must choose, not omit. An id attaches an environment configuration: secrets, allowlisted domains, VM size, startup script. This server cannot create or look up environments \u2014 air-cloud does: list_environments (filter by repositoryUrl) resolves a name to this id, create_environment makes one with variables, secrets and allowlist and returns it. Both see personal environments only; a project-owned one comes from get_automation on an automation that already uses it. Pass null only when the automation genuinely needs none of that (a read-only run on a public repo). A null here is the difference between a working automation and one that fails at run time with no credentials.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "outputDescription": {
+        "type": "string"
+       },
+       "mcpConnectors": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "outboundWebhooks": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "url": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "url"
+         ]
+        }
+       }
+      },
+      "required": [
+       "automationId"
+      ]
+     }
+    },
+    {
+     "name": "delete_automation",
+     "description": "Delete an automation permanently. confirmName must equal the automation's current name \u2014 fetch it with get_automation first. Only the creator may delete.",
+     "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+       "automationId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+       },
+       "confirmName": {
+        "type": "string",
+        "description": "The exact current name, as a guard against deleting the wrong one"
+       }
+      },
+      "required": [
+       "automationId",
+       "confirmName"
+      ]
+     }
+    },
+    {
+     "name": "run_automation",
+     "description": "Start a run of an automation now, whatever its trigger type \u2014 the same as \"Run now\" in the Air web UI. Returns runId and statusUrl (the run page in the Air web UI). outputBehaviour is required because a manual run does NOT inherit the automation's triggerVcs: left to the platform it pushes to a new branch. Use \"read-only\" for a smoke test. Runs even when the automation is paused.",
+     "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+       "automationId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+       },
+       "outputBehaviour": {
+        "type": "string",
+        "enum": [
+         "read-only",
+         "push-to-source",
+         "push-to-new-branch",
+         "create-pr",
+         "as-instructed"
+        ],
+        "description": "Where this run may write. \"read-only\" to verify an automation without touching the repo."
+       },
+       "sourceBranch": {
+        "description": "Branch to check out for this run; defaults to the automation's branch",
+        "type": "string"
+       },
+       "payload": {
+        "description": "Extra JSON handed to the run as its trigger context, like a webhook body",
+        "type": "object",
+        "propertyNames": {
+         "type": "string"
+        },
+        "additionalProperties": {}
+       }
+      },
+      "required": [
+       "automationId",
+       "outputBehaviour"
+      ]
+     }
+    },
+    {
+     "name": "list_runs",
+     "description": "Run history of an automation, newest first: runId, status, triggerSource, createdAt, errorMessage. status is lifecycle only \u2014 FINISHED means the agent stopped, not that the work succeeded. Read the outcome with get_run.",
+     "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+       "automationId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+       },
+       "limit": {
+        "default": 10,
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100
+       }
+      },
+      "required": [
+       "automationId"
+      ]
+     }
+    },
+    {
+     "name": "get_run",
+     "description": "One run in full, with what the agent reported: result.summary is the agent's closing message (markdown) and result.links what it linked to \u2014 this, not status, says whether the work succeeded. Empty while the run is going. For the step-by-step transcript (commands, exit codes, where it failed), pass sessionId to air-cloud's get_task_transcript.",
+     "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+       "runId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+       }
+      },
+      "required": [
+       "runId"
+      ]
+     }
+    },
+    {
+     "name": "stop_run",
+     "description": "Stop an active automation run by runId \u2014 the one run_automation returned. Same as Stop in the Air web UI; the run ends as CANCELLED.",
+     "inputSchema": {
+      "type": "object",
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+       "runId": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+       }
+      },
+      "required": [
+       "runId"
+      ]
+     }
+    }
+   ],
+   "responses": {
+    "list_automations": {
+     "content": [
+      {
+       "type": "text",
+       "text": "{\"personal\": [{\"automationId\": \"470d2563-adc2-4c23-a4f3-219b00f94ef4\", \"name\": \"[Slop factory] doctor-ops\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/470d2563-adc2-4c23-a4f3-219b00f94ef4\"}, {\"automationId\": \"c2986b62-edb8-4cb7-8871-d1d9d0cc38d9\", \"name\": \"[Slop factory] doctor-write\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/c2986b62-edb8-4cb7-8871-d1d9d0cc38d9\"}, {\"automationId\": \"fc09ef08-65f1-42bc-b92b-85b82d0516e8\", \"name\": \"[Slop factory] doctor\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/fc09ef08-65f1-42bc-b92b-85b82d0516e8\"}, {\"automationId\": \"38b90e67-a158-497b-8289-a9ae9c54e9c2\", \"name\": \"[Slop factory] start\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/38b90e67-a158-497b-8289-a9ae9c54e9c2\"}, {\"automationId\": \"8acbd18d-9544-4aab-82b0-44e03c026d19\", \"name\": \"[Slop factory] distill\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/8acbd18d-9544-4aab-82b0-44e03c026d19\"}, {\"automationId\": \"88731f23-b270-45be-9cb9-e1f8dee654cc\", \"name\": \"[Slop factory] retro\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/88731f23-b270-45be-9cb9-e1f8dee654cc\"}, {\"automationId\": \"6f5df1e3-2bcb-470c-9607-0aee5e8e40a1\", \"name\": \"[Slop factory] notify\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/6f5df1e3-2bcb-470c-9607-0aee5e8e40a1\"}, {\"automationId\": \"a32d7c03-411a-433b-8db8-35a52a5f18bb\", \"name\": \"[Slop factory] review-knowledge\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/a32d7c03-411a-433b-8db8-35a52a5f18bb\"}, {\"automationId\": \"5d20f345-bb69-4455-b5de-cf135f8d4d05\", \"name\": \"[Slop factory] merge\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/5d20f345-bb69-4455-b5de-cf135f8d4d05\"}, {\"automationId\": \"810b9399-2adf-4924-bf82-c9bad8de686a\", \"name\": \"[Slop factory] reopen\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/810b9399-2adf-4924-bf82-c9bad8de686a\"}, {\"automationId\": \"e7e51c0d-4d53-425f-a5b2-6d0f03edc779\", \"name\": \"[Slop factory] update-strong\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e7e51c0d-4d53-425f-a5b2-6d0f03edc779\"}, {\"automationId\": \"a17d57f4-aeca-4d3d-bf5b-d8e52b100d08\", \"name\": \"[Slop factory] update-mid\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/a17d57f4-aeca-4d3d-bf5b-d8e52b100d08\"}, {\"automationId\": \"3b630d24-8bd8-4683-b6c7-5fc6d0e5253a\", \"name\": \"[Slop factory] update-cheap\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/3b630d24-8bd8-4683-b6c7-5fc6d0e5253a\"}, {\"automationId\": \"b007905e-dad5-4ce9-b5aa-f8788b0dc100\", \"name\": \"[Slop factory] recover\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/b007905e-dad5-4ce9-b5aa-f8788b0dc100\"}, {\"automationId\": \"6f241f3a-b04c-4f3d-b944-4685897ff9ae\", \"name\": \"[Slop factory] finish\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/6f241f3a-b04c-4f3d-b944-4685897ff9ae\"}, {\"automationId\": \"21657140-e7b0-4372-9de9-9d66c9ef4581\", \"name\": \"[Slop factory] review-behaviour\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/21657140-e7b0-4372-9de9-9d66c9ef4581\"}, {\"automationId\": \"1fe00a38-bcb4-498f-930f-0e2f91ace771\", \"name\": \"[Slop factory] join\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/1fe00a38-bcb4-498f-930f-0e2f91ace771\"}, {\"automationId\": \"6a2de124-b3dc-4e0e-a184-27a02fad44ba\", \"name\": \"[Slop factory] fix-mid\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/6a2de124-b3dc-4e0e-a184-27a02fad44ba\"}, {\"automationId\": \"48e79f5c-ae08-43ce-8a93-34e6aa8b289e\", \"name\": \"[Slop factory] implement-strong\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/48e79f5c-ae08-43ce-8a93-34e6aa8b289e\"}, {\"automationId\": \"e68839bd-51b0-4e42-a306-52c93ffe32c3\", \"name\": \"[Slop factory] fix-strong\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e68839bd-51b0-4e42-a306-52c93ffe32c3\"}, {\"automationId\": \"e539f449-950c-4af9-a550-11ca8d65ed19\", \"name\": \"[Slop factory] implement-mid\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e539f449-950c-4af9-a550-11ca8d65ed19\"}, {\"automationId\": \"df336d25-0631-4ab6-ab91-7b270ac84d29\", \"name\": \"[Slop factory] review-structure-security\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/df336d25-0631-4ab6-ab91-7b270ac84d29\"}, {\"automationId\": \"060be9e4-1c40-43a2-af00-9588792a07eb\", \"name\": \"[Slop factory] fix-cheap\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/060be9e4-1c40-43a2-af00-9588792a07eb\"}, {\"automationId\": \"4ed12e56-a315-442b-9095-3322314c854d\", \"name\": \"[Slop factory] review-full\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/4ed12e56-a315-442b-9095-3322314c854d\"}, {\"automationId\": \"b139b87b-8ac7-483a-9ee2-10d8d5252a39\", \"name\": \"[Slop factory] implement-cheap\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/b139b87b-8ac7-483a-9ee2-10d8d5252a39\"}, {\"automationId\": \"f90c395a-fab5-41b6-90a8-6135c0e8d143\", \"name\": \"[Slop factory] intake\", \"repository\": \"zaharchenko-evgeny/slop-factory\", \"projectId\": null, \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/f90c395a-fab5-41b6-90a8-6135c0e8d143\"}], \"project\": [{\"automationId\": \"c264bebc-af65-4db6-818b-aa5436a51e65\", \"name\": \"PyCharm: test automation\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/c264bebc-af65-4db6-818b-aa5436a51e65\"}, {\"automationId\": \"0d88bd28-4206-4fcf-b690-b11271acbfd8\", \"name\": \"JBEval CLI and bundled skills change summary\", \"repository\": \"jetbrains/jbeval\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/0d88bd28-4206-4fcf-b690-b11271acbfd8\"}, {\"automationId\": \"d7c9db54-84a4-4aa3-9d49-75cb5c91c706\", \"name\": \"[factory] spike: environment probe\", \"repository\": \"zaharchenko-evgeny/offline-eval-factory\", \"projectId\": \"a38ceec8-a27f-4d16-b8f9-6e2d628451a0\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/d7c9db54-84a4-4aa3-9d49-75cb5c91c706\"}, {\"automationId\": \"97c685fd-0c1d-4cc7-abd0-0b800f44cf41\", \"name\": \"Docs writer \\u2014 PR #96 review proposals\", \"repository\": \"jetbrains/ai-offline-evaluation-docs\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/97c685fd-0c1d-4cc7-abd0-0b800f44cf41\"}, {\"automationId\": \"8e8a5b21-fa0d-4058-9489-4d06b1b609fa\", \"name\": \"Code Review JBEVAL\", \"repository\": \"jetbrains/jbeval\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/8e8a5b21-fa0d-4058-9489-4d06b1b609fa\"}, {\"automationId\": \"9e443e17-f4eb-45b7-8272-6d8dcb0595db\", \"name\": \"Infra Healthchecker\", \"repository\": \"jetbrains/harbor-infra\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/9e443e17-f4eb-45b7-8272-6d8dcb0595db\"}, {\"automationId\": \"de2d0ce3-47e1-4997-9f4e-1d48624dbeb5\", \"name\": \"Docs publisher\", \"repository\": \"jetbrains/ai-offline-evaluation-docs\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/de2d0ce3-47e1-4997-9f4e-1d48624dbeb5\"}, {\"automationId\": \"eae53614-c2aa-4b9d-8ac4-4fa3bcad472f\", \"name\": \"Docs writer (from issue)\", \"repository\": \"jetbrains/ai-offline-evaluation-docs\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/eae53614-c2aa-4b9d-8ac4-4fa3bcad472f\"}, {\"automationId\": \"e280e7ad-0f15-4c5c-8c1b-817903518f77\", \"name\": \"Docs update triage\", \"repository\": \"jetbrains/ai-offline-evaluation-docs\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e280e7ad-0f15-4c5c-8c1b-817903518f77\"}, {\"automationId\": \"e2d6c896-b3ad-4315-be9c-7d89b6fe8f01\", \"name\": \"Docs review\", \"repository\": \"jetbrains/ai-offline-evaluation-docs\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e2d6c896-b3ad-4315-be9c-7d89b6fe8f01\"}, {\"automationId\": \"f79b46b2-14ec-46e8-815a-ae7cac347bfa\", \"name\": \"Triage test failure\", \"repository\": \"jetbrains/ultimate\", \"projectId\": \"0cf48ed4-9e5a-4fc3-947f-cf55a6b0148d\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/f79b46b2-14ec-46e8-815a-ae7cac347bfa\"}, {\"automationId\": \"65eabd7c-317f-46c9-9009-87043ba2fa6f\", \"name\": \"SWE-tasks-corpus PR Review\", \"repository\": \"jetbrains/swe-tasks-corpus\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/65eabd7c-317f-46c9-9009-87043ba2fa6f\"}, {\"automationId\": \"6dbc1e4e-62a8-4191-b24f-7b4c9b501424\", \"name\": \"9. [TEST] Grammar/BNF regeneration\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/6dbc1e4e-62a8-4191-b24f-7b4c9b501424\"}, {\"automationId\": \"09f1e5e2-ee42-414b-961f-63e7a3b359bf\", \"name\": \"1.3 [SYSTEM, OWNER] Mono repo: commits history ingest\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/09f1e5e2-ee42-414b-961f-63e7a3b359bf\"}, {\"automationId\": \"5687ea4d-22b7-4cb6-82b1-0021b10f2ff6\", \"name\": \"Code Review AIA-PIPELINES\", \"repository\": \"JetBrains/ai-assistant-pipelines\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/5687ea4d-22b7-4cb6-82b1-0021b10f2ff6\"}, {\"automationId\": \"a686922c-f596-4b74-8acb-ba238ecb0561\", \"name\": \"In depth investigation - harbor-infra\", \"repository\": \"jetbrains/harbor-infra\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/a686922c-f596-4b74-8acb-ba238ecb0561\"}, {\"automationId\": \"c6a83346-16bd-4651-ade7-e4bf32a84197\", \"name\": \"Eval analytics: \\ud83e\\uddd1\\u200d\\ud83d\\udcbb FTE\", \"repository\": \"JetBrains/ai-assistant-pipelines\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/c6a83346-16bd-4651-ade7-e4bf32a84197\"}, {\"automationId\": \"55c1a45a-6be6-4b02-8fb2-1c911e1f9747\", \"name\": \"Harbor-infra: \\ud83e\\uddd1\\u200d\\ud83d\\udcbb FTE\", \"repository\": \"jetbrains/harbor-infra\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/55c1a45a-6be6-4b02-8fb2-1c911e1f9747\"}, {\"automationId\": \"6ccc56e4-5d48-45e1-bcd7-d040c46af1a8\", \"name\": \"In depth investigation - analytics\", \"repository\": \"JetBrains/ai-assistant-pipelines\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/6ccc56e4-5d48-45e1-bcd7-d040c46af1a8\"}, {\"automationId\": \"dd4b2a62-2cfb-413b-9947-60104c1d1c04\", \"name\": \"[PM] Mine framework features for Intellij Ultimate\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/dd4b2a62-2cfb-413b-9947-60104c1d1c04\"}, {\"automationId\": \"32d5621e-eb84-4301-882f-c6f8d27327ee\", \"name\": \"9. [TEST]  intellij-fix commits/pushes\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/32d5621e-eb84-4301-882f-c6f8d27327ee\"}, {\"automationId\": \"1d0227c1-e917-496a-af0d-74950b4382a6\", \"name\": \"Socrat: muted-test\", \"repository\": \"JetBrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/1d0227c1-e917-496a-af0d-74950b4382a6\"}, {\"automationId\": \"925276f9-d59c-455d-b08f-379615013dfe\", \"name\": \"Fix PR after review\", \"repository\": \"jetbrains/harbor-infra\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": true, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/925276f9-d59c-455d-b08f-379615013dfe\"}, {\"automationId\": \"e7b870a6-f603-4ff1-a932-6ed28505d65c\", \"name\": \"7.5 Check MR QA Readiness\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e7b870a6-f603-4ff1-a932-6ed28505d65c\"}, {\"automationId\": \"adfb3d77-abe7-437c-84a4-1d9049fda426\", \"name\": \"7.4 Track MR QA Readiness\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/adfb3d77-abe7-437c-84a4-1d9049fda426\"}, {\"automationId\": \"c39ae3b3-829f-48bb-b76a-3355a3f8b6fb\", \"name\": \"2.5 [DEV] Fix MR's comments from reviewers and QAs\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/c39ae3b3-829f-48bb-b76a-3355a3f8b6fb\"}, {\"automationId\": \"aaa7a495-f444-48f2-a9f4-a933fe93d953\", \"name\": \"Code Review HARBOR-INFRA\", \"repository\": \"jetbrains/harbor-infra\", \"projectId\": \"d109e13c-acfb-4b92-ad84-5201f66a5dda\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/aaa7a495-f444-48f2-a9f4-a933fe93d953\"}, {\"automationId\": \"b9c6346b-c28a-423a-8bb5-fb7d3884200c\", \"name\": \"4.3 Analyse Dry Run Failure\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/b9c6346b-c28a-423a-8bb5-fb7d3884200c\"}, {\"automationId\": \"eaa632da-c04f-4c39-a281-56ba9f5af0bf\", \"name\": \"7.2 Find Test Projects\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/eaa632da-c04f-4c39-a281-56ba9f5af0bf\"}, {\"automationId\": \"874d7dcf-2d75-48a4-a3e1-869cafb18052\", \"name\": \"7.7 Check QA Review\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/874d7dcf-2d75-48a4-a3e1-869cafb18052\"}, {\"automationId\": \"30f3db90-a3e6-4e23-81ae-0914744a6b45\", \"name\": \"7.6 Ask QA for Review\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/30f3db90-a3e6-4e23-81ae-0914744a6b45\"}, {\"automationId\": \"8da50982-c824-43db-a97a-1dd16491f9e2\", \"name\": \"7.3 Build Installers\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/8da50982-c824-43db-a97a-1dd16491f9e2\"}, {\"automationId\": \"9ce2234c-23ce-49b1-9b26-e4ae0297dd83\", \"name\": \"6.2 Check Owner Review\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/9ce2234c-23ce-49b1-9b26-e4ae0297dd83\"}, {\"automationId\": \"7d457b16-bbc2-425c-a7b3-488b926933fc\", \"name\": \"6.1 Ask Owner for Review\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/7d457b16-bbc2-425c-a7b3-488b926933fc\"}, {\"automationId\": \"eef34bd5-500b-4112-acf2-035f086502eb\", \"name\": \"2.4 [DEV]  Fix MR's issues/comments reviewed by 'review-agent's\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/eef34bd5-500b-4112-acf2-035f086502eb\"}, {\"automationId\": \"1cdc0ffb-c5c6-48a1-90ce-c72460c6f742\", \"name\": \"4.2 Report Dry Run Status\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/1cdc0ffb-c5c6-48a1-90ce-c72460c6f742\"}, {\"automationId\": \"1c8bcd56-5798-4ed3-955e-768899dcdf45\", \"name\": \"2.3 [MR]  start Agent review\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/1c8bcd56-5798-4ed3-955e-768899dcdf45\"}, {\"automationId\": \"024e97a5-b6a8-4316-a520-ee0ff6003be8\", \"name\": \"9.[Obsolete] MR Assign Reviewers: Devs and QAs\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/024e97a5-b6a8-4316-a520-ee0ff6003be8\"}, {\"automationId\": \"fbb7da15-8f40-4c9c-b7f6-f9c45a199087\", \"name\": \"1.2 [YT] Grooming: YT subsystem\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/fbb7da15-8f40-4c9c-b7f6-f9c45a199087\"}, {\"automationId\": \"94d73218-7b81-4330-bd77-30d9ea52d324\", \"name\": \"2.2 [MR] create new merge request\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/94d73218-7b81-4330-bd77-30d9ea52d324\"}, {\"automationId\": \"612de140-1e01-4842-958d-8e1b04a424a2\", \"name\": \"4.1 Run Dry Run\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/612de140-1e01-4842-958d-8e1b04a424a2\"}, {\"automationId\": \"49fa7b6a-c278-4e71-97e3-542f9c246c5b\", \"name\": \"7.1 Prepare Changes Summary\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/49fa7b6a-c278-4e71-97e3-542f9c246c5b\"}, {\"automationId\": \"8e08f1e3-494d-4064-8fd2-7ed228e8af49\", \"name\": \"2.1 [DEV] intellij-fix-meta-issues\", \"repository\": \"IJ/ultimate\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/8e08f1e3-494d-4064-8fd2-7ed228e8af49\"}, {\"automationId\": \"1d5f525a-6629-4ac1-adea-5bdb06d29e60\", \"name\": \"TestOps Launch Analysis\", \"repository\": \"jetbrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/1d5f525a-6629-4ac1-adea-5bdb06d29e60\"}, {\"automationId\": \"e05e034b-b11b-4381-ac84-a8e2bb97ba1f\", \"name\": \"\\ud83d\\udc8e Ruby Mine - What was done\", \"repository\": \"jetbrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": true, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e05e034b-b11b-4381-ac84-a8e2bb97ba1f\"}, {\"automationId\": \"f4c3ea0b-0a01-4eed-b189-6276ede2df20\", \"name\": \"\\ud83d\\udca8 IJ Air Plugin release branch preparation\", \"repository\": \"JetBrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/f4c3ea0b-0a01-4eed-b189-6276ede2df20\"}, {\"automationId\": \"24685bad-e803-49f4-b4ee-380d7fd96db0\", \"name\": \"\\ud83e\\uddad CLion AI Factory pt.4 Slop Reverter\", \"repository\": \"JetBrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/24685bad-e803-49f4-b4ee-380d7fd96db0\"}, {\"automationId\": \"164d339b-5348-4b66-a0da-19cd08e6cb02\", \"name\": \"1.1 [YT] Grooming: Meta issues\", \"projectId\": \"78f2b385-bfdc-4e8e-a65d-2a668165a69b\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/164d339b-5348-4b66-a0da-19cd08e6cb02\"}, {\"automationId\": \"9733de4c-102d-4060-a328-5626059c6dd9\", \"name\": \"\\ud83d\\udc8e Ruby Mine - Space AI Review\", \"repository\": \"jetbrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": true, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/9733de4c-102d-4060-a328-5626059c6dd9\"}, {\"automationId\": \"b177c527-5c51-420b-a9ac-e9be7fc99152\", \"name\": \"QA check-list\", \"repository\": \"JetBrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/b177c527-5c51-420b-a9ac-e9be7fc99152\"}, {\"automationId\": \"b3e1da49-fff6-4ad8-990e-edc8e3871e30\", \"name\": \"TestOps tests\", \"repository\": \"JetBrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/b3e1da49-fff6-4ad8-990e-edc8e3871e30\"}, {\"automationId\": \"44ce7490-4d6e-4b45-8da0-c288778d5152\", \"name\": \"\\ud83d\\udc8e Ruby Mine - 1 - Plan the task\", \"repository\": \"JetBrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": true, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/44ce7490-4d6e-4b45-8da0-c288778d5152\"}, {\"automationId\": \"399a54c4-7ddf-4009-aaee-c336f6105c42\", \"name\": \"\\ud83d\\udc8e Ruby Mine - 2 - Solve the task\", \"repository\": \"JetBrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": true, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/399a54c4-7ddf-4009-aaee-c336f6105c42\"}, {\"automationId\": \"87c4776f-0642-4b3b-b898-c50f7d2b8e06\", \"name\": \"\\ud83e\\uddad CLion AI Factory pt.3 Review Fixer\", \"repository\": \"JetBrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/87c4776f-0642-4b3b-b898-c50f7d2b8e06\"}, {\"automationId\": \"c62304be-5696-44fc-b9fd-720e79da5411\", \"name\": \"YT Root Cause Analysis\", \"repository\": \"JetBrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/c62304be-5696-44fc-b9fd-720e79da5411\"}, {\"automationId\": \"5ff5840d-945f-4869-8364-7f2192de3411\", \"name\": \"\\ud83e\\uddad CLion AI Factory pt.2 Implementor\", \"repository\": \"JetBrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/5ff5840d-945f-4869-8364-7f2192de3411\"}, {\"automationId\": \"40580a9f-3b08-48fe-80d5-1f5dd71e25e6\", \"name\": \"\\ud83e\\uddad CLion AI Factory pt.1 YT Issue Triager\", \"repository\": \"JetBrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/40580a9f-3b08-48fe-80d5-1f5dd71e25e6\"}, {\"automationId\": \"8d1c4338-28f7-42d1-bdc8-38be994c9384\", \"name\": \"Ultimate Code Review\", \"repository\": \"jetbrains/ultimate\", \"projectId\": \"54036a04-99fc-4f92-8d9f-0faa793d71cd\", \"paused\": false, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/8d1c4338-28f7-42d1-bdc8-38be994c9384\"}], \"personalListUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations?privacy=private\", \"projectListUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations?privacy=public\"}"
+      }
+     ]
+    },
+    "get_automation": {
+     "content": [
+      {
+       "type": "text",
+       "text": "{\"automationId\": \"fc09ef08-65f1-42bc-b92b-85b82d0516e8\", \"automationSnapshotId\": \"9dda73e3-a713-42a9-8ff3-e62fdc0744c4\", \"name\": \"[Slop factory] doctor\", \"createdAt\": \"2026-11-03T00:12:47.864Z\", \"updatedAt\": \"2026-11-03T00:12:47.866Z\", \"latestSnapshotVersion\": 1, \"repository\": {\"fullName\": \"zaharchenko-evgeny/slop-factory\", \"cloneUrl\": \"https://github.com/zaharchenko-evgeny/slop-factory.git\", \"browseUrl\": \"https://github.com/zaharchenko-evgeny/slop-factory\", \"provider\": \"github\"}, \"branch\": \"main\", \"additionalRepositories\": [], \"prompt\": \"Run `factory doctor` once and report its JSON lines. It changes no ticket itself.\", \"agentAndModel\": {\"id\": \"gpt-6-luna\", \"name\": \"gpt-6-luna\", \"isDefault\": false, \"agentId\": \"codex\"}, \"outputDescription\": null, \"triggers\": [{\"triggerType\": \"SCHEDULED\", \"triggerId\": \"ff21b3eb-a96f-43da-836e-dbfb0b592187\", \"isEnabled\": true, \"automationSnapshotId\": \"9dda73e3-a713-42a9-8ff3-e62fdc0744c4\", \"cronExpression\": \"0 5 * * *\", \"timezone\": \"UTC\"}], \"triggerVcs\": [{\"outputBehaviour\": \"read-only\"}], \"outboundWebhooks\": [], \"paused\": false, \"pauseReason\": null, \"mcpConnectors\": [], \"environmentConfigId\": \"e3e98009-b711-432c-81a3-40774dee331b\", \"kind\": \"REGULAR\", \"executor\": \"AGENT\", \"botDevSettings\": null, \"orgId\": \"05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d\", \"workspaceId\": \"1ffa1b4e-bc4f-7b45-f4a7-7c892cd43153\", \"projectId\": null, \"userId\": \"cf9b34b0-71c7-af73-7504-564866975a54\", \"stats\": {\"lastRunAt\": \"2026-11-03T10:08:15.827Z\", \"lastRunStatus\": \"FINISHED\", \"totalRuns\": 2, \"totalRunsPerDay\": {\"0\": 2, \"1\": 0, \"2\": 0, \"3\": 0, \"4\": 0, \"5\": 0, \"6\": 0}}, \"webUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/fc09ef08-65f1-42bc-b92b-85b82d0516e8\"}"
+      }
+     ]
+    },
+    "list_runs": {
+     "content": [
+      {
+       "type": "text",
+       "text": "[{\"runId\": \"b498d874-3acb-4203-b6f3-d8364e84c2d9\", \"status\": \"FINISHED\", \"triggerSource\": \"MANUAL\", \"createdAt\": \"2026-11-03T10:08:15.827Z\", \"errorMessage\": \"\"}, {\"runId\": \"0e0fc46c-9988-440e-877c-90f2eabac20e\", \"status\": \"FINISHED\", \"triggerSource\": \"SCHEDULED\", \"createdAt\": \"2026-11-03T05:00:03.345Z\", \"errorMessage\": \"\"}]"
+      }
+     ]
+    },
+    "get_run": {
+     "content": [
+      {
+       "type": "text",
+       "text": "{\"runId\": \"b498d874-3acb-4203-b6f3-d8364e84c2d9\", \"status\": \"FINISHED\", \"triggerSource\": \"MANUAL\", \"createdAt\": \"2026-11-03T10:08:15.827Z\", \"finishedAt\": \"2026-11-03T10:09:21.063Z\", \"errorMessage\": \"\", \"cancelledAt\": null, \"branch\": \"main\", \"outboundWebhookDeliveries\": [], \"sessionId\": \"58ebbc01-09a5-4f95-a79d-5230292d910d\", \"result\": {\"summary\": null, \"links\": []}}"
+      }
+     ]
+    },
+    "update_automation": {
+     "content": [
+      {
+       "type": "text",
+       "text": "{\"automationId\": \"fc09ef08-65f1-42bc-b92b-85b82d0516e8\", \"name\": \"[Slop factory] doctor\", \"version\": 2}"
+      }
+     ]
+    },
+    "create_automation": {
+     "content": [
+      {
+       "type": "text",
+       "text": "{\"automationId\": \"dd469d66-2d67-47bc-961f-f8314aeca92f\", \"name\": \"[Slop factory] probe-team\", \"version\": 1, \"environmentConfigId\": \"e3e98009-b711-432c-81a3-40774dee331b\"}"
+      }
+     ]
+    },
+    "run_automation": {
+     "content": [
+      {
+       "type": "text",
+       "text": "{\"runId\": \"68f526c2-aee9-4e7e-a7f8-8232b2023d31\", \"automationId\": \"dd469d66-2d67-47bc-961f-f8314aeca92f\", \"outputBehaviour\": \"read-only\", \"statusUrl\": \"https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/dd469d66-2d67-47bc-961f-f8314aeca92f?run=68f526c2-aee9-4e7e-a7f8-8232b2023d31\"}"
+      }
+     ]
+    },
+    "delete_automation": {
+     "content": [
+      {
+       "type": "text",
+       "text": "deleted \"[Slop factory] probe-team\" (dd469d66-2d67-47bc-961f-f8314aeca92f)"
+      }
+     ]
+    }
+   }
+  },
+  "air-cloud": {
+   "tools": [
+    {
+     "name": "launch_task",
+     "description": "Launches a new AIR Cloud task: clones the given repository at the given ref and runs a coding agent there with the given prompt. Returns the new task's id and status.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "repositoryUrl": {
+        "type": "string",
+        "description": "The Git clone URL of the repository to launch the task in."
+       },
+       "ref": {
+        "type": "string",
+        "description": "The branch or commit ref to check out."
+       },
+       "agentId": {
+        "type": "string",
+        "description": "The coding agent to run, e.g. \"claude\"."
+       },
+       "prompt": {
+        "type": "string",
+        "description": "The instructions for the agent to carry out."
+       },
+       "modelId": {
+        "type": "string",
+        "description": "Deprecated. Use sessionConfigOptions.model instead."
+       },
+       "sessionConfigOptions": {
+        "type": "object",
+        "properties": {
+         "model": {
+          "type": "string",
+          "description": "Optional model name to use with the agent."
+         },
+         "mode": {
+          "type": "string",
+          "description": "Optional permission mode id to use from launch."
+         },
+         "reasoning_effort": {
+          "type": "string",
+          "description": "Optional reasoning effort id, e.g. low, medium, or high."
+         },
+         "fast-mode": {
+          "type": "boolean",
+          "description": "Whether to enable the agent's fast mode. Optional."
+         }
+        },
+        "required": [],
+        "additionalProperties": false
+       },
+       "envConfigId": {
+        "type": "string",
+        "description": "Optional id of the environment configuration to launch with; its repository must match repositoryUrl. When omitted, the caller's own configuration for the repository is used (the first by name), or the default one if there is none."
+       }
+      },
+      "required": [
+       "repositoryUrl",
+       "ref",
+       "agentId",
+       "prompt"
+      ]
+     }
+    },
+    {
+     "name": "list_tasks",
+     "description": "Lists AIR Cloud tasks visible to the caller, optionally filtered by repository.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "repositoryUrl": {
+        "type": "string",
+        "description": "Optional repository clone URL to filter tasks by."
+       },
+       "offset": {
+        "type": "integer",
+        "description": "Number of items to skip (0-based). Defaults to 0."
+       },
+       "limit": {
+        "type": "integer",
+        "description": "Maximum number of items to return. Defaults to 50."
+       }
+      }
+     }
+    },
+    {
+     "name": "get_task",
+     "description": "Gets a single AIR Cloud task by id.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "taskId": {
+        "type": "string",
+        "description": "The unique id of the task to fetch."
+       }
+      },
+      "required": [
+       "taskId"
+      ]
+     }
+    },
+    {
+     "name": "get_task_transcript",
+     "description": "Fetches up to maxMessages newest ACP transcript messages for an AIR Cloud task or session, returned oldest first. Messages are parsed from JSON when possible.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "taskId": {
+        "type": "string",
+        "description": "AIR Cloud task id. Provide this or sessionId."
+       },
+       "sessionId": {
+        "type": "string",
+        "description": "Agent Spawner session id. Provide this or taskId."
+       },
+       "maxMessages": {
+        "type": "integer",
+        "description": "Maximum number of newest transcript messages to fetch. Defaults to 1000 and is capped at 5000."
+       }
+      }
+     }
+    },
+    {
+     "name": "resume_task",
+     "description": "Resumes a suspended AIR Cloud task/session. Optionally queues a follow-up prompt through the Spawner resume API.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "taskId": {
+        "type": "string",
+        "description": "AIR Cloud task id. Provide this or sessionId."
+       },
+       "sessionId": {
+        "type": "string",
+        "description": "Agent Spawner session id. Provide this or taskId."
+       },
+       "prompt": {
+        "type": "string",
+        "description": "Optional follow-up prompt to queue after the suspended session resumes."
+       },
+       "modelId": {
+        "type": "string",
+        "description": "Deprecated. Use sessionConfigOptions.model instead."
+       },
+       "sessionConfigOptions": {
+        "type": "object",
+        "properties": {
+         "model": {
+          "type": "string",
+          "description": "Optional model name to use with the agent."
+         },
+         "mode": {
+          "type": "string",
+          "description": "Optional permission mode id to use from launch."
+         },
+         "reasoning_effort": {
+          "type": "string",
+          "description": "Optional reasoning effort id, e.g. low, medium, or high."
+         },
+         "fast-mode": {
+          "type": "boolean",
+          "description": "Whether to enable the agent's fast mode. Optional."
+         }
+        },
+        "required": [],
+        "additionalProperties": false
+       }
+      }
+     }
+    },
+    {
+     "name": "archive_task",
+     "description": "Archives an AIR Cloud task and all of its sessions, retaining its history but preventing further use. An archived task cannot be resumed. Archiving an already archived task succeeds without changes.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "taskId": {
+        "type": "string",
+        "description": "The unique id of the task to archive."
+       }
+      },
+      "required": [
+       "taskId"
+      ]
+     }
+    },
+    {
+     "name": "delete_task",
+     "description": "Permanently deletes an AIR Cloud task and terminates all of its sessions. This cannot be undone.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "taskId": {
+        "type": "string",
+        "description": "The unique id of the task to permanently delete."
+       }
+      },
+      "required": [
+       "taskId"
+      ]
+     }
+    },
+    {
+     "name": "create_environment",
+     "description": "Creates a personal AIR Cloud environment configuration: a repository plus environment variables, instance type and network policy that tasks can launch with. The response also lists the caller's own personal secrets on the configuration by name, with masked values (a freshly created configuration has none yet).",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "repositoryUrl": {
+        "type": "string",
+        "description": "The Git clone URL of the repository this environment is for."
+       },
+       "provider": {
+        "type": "string",
+        "description": "Optional VCS provider of the repository: one of github, gitlab, space, bitbucket, github-enterprise, gitlab-self-managed. Stored so consumers need not infer it from the host; required to disambiguate self-hosted instances."
+       },
+       "name": {
+        "type": "string",
+        "description": "Optional environment name. Defaults to the repository name; if that name is already taken, a \"-2\", \"-3\", etc. suffix is appended."
+       },
+       "variables": {
+        "type": "array",
+        "description": "Environment variables to add or update. Existing variables not listed here are left as-is.",
+        "items": {
+         "type": "object",
+         "properties": {
+          "key": {
+           "type": "string",
+           "description": "Variable name."
+          },
+          "value": "<redacted>",
+          "isSecret": {
+           "type": "boolean",
+           "description": "Whether to store this value as a secret. Defaults to false."
+          },
+          "description": {
+           "type": "string",
+           "description": "Optional human-readable description."
+          }
+         },
+         "required": [
+          "key",
+          "value"
+         ]
+        }
+       },
+       "instanceTypeKey": {
+        "type": "string",
+        "description": "Optional instance type key to launch this environment on."
+       },
+       "networkAccess": {
+        "type": "string",
+        "description": "Network access mode: one of [UNRESTRICTED, RESTRICTED, DISABLED]. Defaults to RESTRICTED."
+       },
+       "predefinedDomainLists": {
+        "type": "array",
+        "description": "Predefined domain lists to allow when networkAccess is RESTRICTED: one or more of [WELL_KNOWN]. Defaults to [WELL_KNOWN].",
+        "items": {
+         "type": "string",
+         "description": ""
+        }
+       },
+       "allowedDomains": {
+        "type": "array",
+        "description": "Additional domains to allow when networkAccess is RESTRICTED.",
+        "items": {
+         "type": "string",
+         "description": ""
+        }
+       },
+       "exposedPorts": {
+        "type": "array",
+        "description": "Workspace ports to expose, as integers. Omit, set to null, or pass an empty list to expose none.",
+        "items": {
+         "type": "integer",
+         "description": ""
+        }
+       }
+      },
+      "required": [
+       "repositoryUrl"
+      ]
+     }
+    },
+    {
+     "name": "list_environments",
+     "description": "Lists AIR Cloud environment configurations visible to the caller (owned or shared), optionally filtered by repository.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "repositoryUrl": {
+        "type": "string",
+        "description": "Optional repository clone URL to filter environments by."
+       },
+       "includeDrafts": {
+        "type": "boolean",
+        "description": "Whether to include in-progress draft environments. Defaults to false."
+       }
+      }
+     }
+    },
+    {
+     "name": "get_environment",
+     "description": "Gets a single AIR Cloud environment configuration by id, including its shared variables and the caller's own personal secrets on it, listed by name in `personalSecrets` (secret values are masked in both).",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "string",
+        "description": "The unique id of the environment configuration to fetch."
+       }
+      },
+      "required": [
+       "id"
+      ]
+     }
+    },
+    {
+     "name": "edit_environment",
+     "description": "Partially updates an AIR Cloud environment configuration: only the fields provided in the call are changed, everything else is left as-is. The response also lists the caller's own personal secrets on the configuration by name, with masked values.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "string",
+        "description": "The unique id of the environment configuration to edit."
+       },
+       "name": {
+        "type": "string",
+        "description": "New environment name."
+       },
+       "variables": {
+        "type": "array",
+        "description": "Environment variables to add or update. Existing variables not listed here are left as-is.",
+        "items": {
+         "type": "object",
+         "properties": {
+          "key": {
+           "type": "string",
+           "description": "Variable name."
+          },
+          "value": "<redacted>",
+          "isSecret": {
+           "type": "boolean",
+           "description": "Whether to store this value as a secret. Defaults to false."
+          },
+          "description": {
+           "type": "string",
+           "description": "Optional human-readable description."
+          }
+         },
+         "required": [
+          "key",
+          "value"
+         ]
+        }
+       },
+       "instanceTypeKey": {
+        "type": "string",
+        "description": "Optional instance type key to launch this environment on."
+       },
+       "networkAccess": {
+        "type": "string",
+        "description": "Network access mode: one of [UNRESTRICTED, RESTRICTED, DISABLED]. Defaults to RESTRICTED."
+       },
+       "predefinedDomainLists": {
+        "type": "array",
+        "description": "Predefined domain lists to allow when networkAccess is RESTRICTED: one or more of [WELL_KNOWN]. Defaults to [WELL_KNOWN].",
+        "items": {
+         "type": "string",
+         "description": ""
+        }
+       },
+       "allowedDomains": {
+        "type": "array",
+        "description": "Additional domains to allow when networkAccess is RESTRICTED.",
+        "items": {
+         "type": "string",
+         "description": ""
+        }
+       },
+       "exposedPorts": {
+        "type": "array",
+        "description": "Workspace ports to expose, as integers. Omit, set to null, or pass an empty list to expose none.",
+        "items": {
+         "type": "integer",
+         "description": ""
+        }
+       },
+       "renames": {
+        "type": "array",
+        "description": "Variables to rename, applied before any variables update.",
+        "items": {
+         "type": "object",
+         "properties": {
+          "oldKey": {
+           "type": "string",
+           "description": "Existing variable name."
+          },
+          "newKey": {
+           "type": "string",
+           "description": "New variable name."
+          }
+         },
+         "required": [
+          "oldKey",
+          "newKey"
+         ]
+        }
+       }
+      },
+      "required": [
+       "id"
+      ]
+     }
+    },
+    {
+     "name": "list_workflow_node_types",
+     "description": "Lists the built-in workflow node types (start, end, agentTask, humanTask, gateway, assign) and the JSON Schema of each one's config.",
+     "inputSchema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "list_workflow_templates",
+     "description": "Lists the built-in workflow templates (e.g. \"review\") that create_workflow can start a new workflow from.",
+     "inputSchema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "list_workflows",
+     "description": "Lists workflow definitions in the caller's organization.",
+     "inputSchema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "get_workflow",
+     "description": "Gets a single workflow definition by id, including its full graph. The returned definition's 'problems' field lists executability issues; it must be empty before start_workflow.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "workflowId": {
+        "type": "string",
+        "description": "The workflow definition id."
+       }
+      },
+      "required": [
+       "workflowId"
+      ]
+     }
+    },
+    {
+     "name": "create_workflow",
+     "description": "Creates a new workflow definition, either from a built-in template, from a full graph, or (with neither) as a minimal start-to-end graph ready for authoring. The returned definition's 'problems' field lists executability issues; it must be empty before start_workflow.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "name": {
+        "type": "string",
+        "description": "Name for the new workflow."
+       },
+       "description": {
+        "type": "string",
+        "description": "Optional description."
+       },
+       "templateId": {
+        "type": "string",
+        "description": "Id of a built-in template to create the workflow from (see list_workflow_templates). Provide this or 'graph', not both."
+       },
+       "graph": {
+        "type": "object",
+        "description": "A full workflow graph ({agents, nodes, edges, inputSchema}) to create the workflow from. Provide this or 'templateId', not both. If neither is given, a minimal graph with only a start and end node is created."
+       }
+      },
+      "required": [
+       "name"
+      ]
+     }
+    },
+    {
+     "name": "delete_workflow",
+     "description": "Deletes a workflow definition while preserving its completed instance history. Fails if it still has running instances.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "workflowId": {
+        "type": "string",
+        "description": "The workflow definition id."
+       }
+      },
+      "required": [
+       "workflowId"
+      ]
+     }
+    },
+    {
+     "name": "set_workflow_agents",
+     "description": "Replaces the full list of agents declared on a workflow.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "workflowId": {
+        "type": "string",
+        "description": "The workflow definition id."
+       },
+       "agents": {
+        "type": "array",
+        "description": "Full replacement list of the workflow's declared agents.",
+        "items": {
+         "type": "object",
+         "description": "A workflow agent: {id, name, agentId, modelId?, reasoningEffort?, envConfigId?, systemPrompt?, pushesResults?}. modelId is an exact catalog model id; reasoningEffort is a separate bare effort such as high or xhigh. pushesResults defaults to true and says whether this agent's work belongs on the instance's results branch; set it false for agents that only read the work, such as reviewers or steering agents."
+        }
+       }
+      },
+      "required": [
+       "workflowId",
+       "agents"
+      ]
+     }
+    },
+    {
+     "name": "set_workflow_input_schema",
+     "description": "Sets or clears (with null) the JSON Schema a workflow's instance input must satisfy.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "workflowId": {
+        "type": "string",
+        "description": "The workflow definition id."
+       },
+       "inputSchema": {
+        "type": "object",
+        "description": "JSON Schema the instance's input must satisfy, or null to clear it."
+       }
+      },
+      "required": [
+       "workflowId",
+       "inputSchema"
+      ]
+     }
+    },
+    {
+     "name": "add_workflow_step",
+     "description": "Adds a node to a workflow's graph, or replaces an existing node with the same id. The returned definition's 'problems' field lists executability issues; it must be empty before start_workflow.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "workflowId": {
+        "type": "string",
+        "description": "The workflow definition id."
+       },
+       "step": {
+        "type": "object",
+        "description": "A workflow node: {id, type, config?, ui?}. Replaces any existing node with the same id."
+       }
+      },
+      "required": [
+       "workflowId",
+       "step"
+      ]
+     }
+    },
+    {
+     "name": "update_workflow_step",
+     "description": "Replaces an existing node in a workflow's graph, matched by id.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "workflowId": {
+        "type": "string",
+        "description": "The workflow definition id."
+       },
+       "step": {
+        "type": "object",
+        "description": "A workflow node: {id, type, config?, ui?}. Replaces any existing node with the same id."
+       }
+      },
+      "required": [
+       "workflowId",
+       "step"
+      ]
+     }
+    },
+    {
+     "name": "remove_workflow_step",
+     "description": "Removes a node and any edges touching it from a workflow's graph.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "workflowId": {
+        "type": "string",
+        "description": "The workflow definition id."
+       },
+       "stepId": {
+        "type": "string",
+        "description": "Id of the node to remove, along with its edges."
+       }
+      },
+      "required": [
+       "workflowId",
+       "stepId"
+      ]
+     }
+    },
+    {
+     "name": "connect_workflow_steps",
+     "description": "Adds an edge between two nodes, or replaces an existing edge between the same pair. The returned definition's 'problems' field lists executability issues; it must be empty before start_workflow.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "workflowId": {
+        "type": "string",
+        "description": "The workflow definition id."
+       },
+       "from": {
+        "type": "string",
+        "description": "Source node id."
+       },
+       "to": {
+        "type": "string",
+        "description": "Target node id."
+       },
+       "condition": {
+        "type": "string",
+        "description": "Optional JSONata condition; an edge without one is the default."
+       }
+      },
+      "required": [
+       "workflowId",
+       "from",
+       "to"
+      ]
+     }
+    },
+    {
+     "name": "disconnect_workflow_steps",
+     "description": "Removes the edge between two nodes, if one exists.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "workflowId": {
+        "type": "string",
+        "description": "The workflow definition id."
+       },
+       "from": {
+        "type": "string",
+        "description": "Source node id."
+       },
+       "to": {
+        "type": "string",
+        "description": "Target node id."
+       }
+      },
+      "required": [
+       "workflowId",
+       "from",
+       "to"
+      ]
+     }
+    },
+    {
+     "name": "start_workflow",
+     "description": "Starts a new instance of a workflow definition against a repository checked out from the given environment configuration and ref.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "workflowId": {
+        "type": "string",
+        "description": "The workflow definition id to start an instance of."
+       },
+       "input": {
+        "type": "object",
+        "description": "Instance input, validated against the workflow's inputSchema."
+       },
+       "envConfigId": {
+        "type": "string",
+        "description": "Id of the environment configuration whose repository the instance runs against."
+       },
+       "ref": {
+        "type": "string",
+        "description": "Branch or commit ref to check out."
+       }
+      },
+      "required": [
+       "workflowId",
+       "input",
+       "envConfigId",
+       "ref"
+      ]
+     }
+    },
+    {
+     "name": "list_workflow_instances",
+     "description": "Lists the workflow instances the caller started, optionally filtered by the workflow definition they were started from.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "workflowId": {
+        "type": "string",
+        "description": "Optional workflow definition id to filter instances by."
+       }
+      }
+     }
+    },
+    {
+     "name": "get_workflow_instance",
+     "description": "Advances a workflow instance (ticks any pass-through nodes and launches pending steps) and returns its current state.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "instanceId": {
+        "type": "string",
+        "description": "The workflow instance id."
+       }
+      },
+      "required": [
+       "instanceId"
+      ]
+     }
+    },
+    {
+     "name": "cancel_workflow_instance",
+     "description": "Cancels a running workflow instance and any of its in-flight step runs.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "instanceId": {
+        "type": "string",
+        "description": "The workflow instance id."
+       }
+      },
+      "required": [
+       "instanceId"
+      ]
+     }
+    },
+    {
+     "name": "complete_workflow_step",
+     "description": "Completes a human-task step run that is waiting, with optional structured output.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "instanceId": {
+        "type": "string",
+        "description": "The workflow instance id."
+       },
+       "stepRunId": {
+        "type": "string",
+        "description": "The waiting step run id to complete."
+       },
+       "output": {
+        "type": "object",
+        "description": "Optional structured output for the step. Every field the node's outputSchema lists as required must be present."
+       }
+      },
+      "required": [
+       "instanceId",
+       "stepRunId"
+      ]
+     }
+    },
+    {
+     "name": "retry_workflow_step",
+     "description": "Retries a failed step run as a new iteration of the same node.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "instanceId": {
+        "type": "string",
+        "description": "The workflow instance id."
+       },
+       "stepRunId": {
+        "type": "string",
+        "description": "The failed step run id to retry."
+       }
+      },
+      "required": [
+       "instanceId",
+       "stepRunId"
+      ]
+     }
+    },
+    {
+     "name": "connect_task_agent",
+     "description": "Opens a live ACP connection to the coding agent of an AIR Cloud task so you can stream its updates and send follow-up messages. Provide either a taskId (resolved to its Agent Spawner session) or a sessionId directly. Idempotent: reconnecting an already-connected session is a no-op. Requires write permission.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "taskId": {
+        "type": "string",
+        "description": "AIR Cloud task id. Provide this or sessionId."
+       },
+       "sessionId": {
+        "type": "string",
+        "description": "Agent Spawner session id. Provide this or taskId."
+       }
+      },
+      "additionalProperties": false
+     },
+     "annotations": {
+      "title": "Connect to a task agent",
+      "readOnlyHint": false,
+      "openWorldHint": true
+     }
+    },
+    {
+     "name": "send_task_message",
+     "description": "Sends one prompt turn to a connected task agent and waits for the turn to end, returning the final ACP stop reason. Streamed updates during the turn are buffered \u2014 read them with read_task_events using the returned cursor. Only one prompt may be in flight per session. Requires write permission.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "sessionId": {
+        "type": "string",
+        "description": "Agent Spawner session id returned by connect_task_agent."
+       },
+       "prompt": {
+        "type": "string",
+        "description": "The message to send to the agent."
+       }
+      },
+      "required": [
+       "sessionId",
+       "prompt"
+      ],
+      "additionalProperties": false
+     },
+     "annotations": {
+      "title": "Send a message to a task agent",
+      "readOnlyHint": false,
+      "openWorldHint": true
+     }
+    },
+    {
+     "name": "read_task_events",
+     "description": "Reads buffered live events (streamed updates and lifecycle transitions) for a session, newest after the given cursor. Pass the returned cursor back to page forward; `dropped` signals the buffer evicted events you never read. Read-only.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "sessionId": {
+        "type": "string",
+        "description": "Agent Spawner session id returned by connect_task_agent."
+       },
+       "cursor": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Return events with index greater than this. Omit or 0 to read from the start."
+       },
+       "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 500,
+        "description": "Maximum events to return (default 100, max 500)."
+       }
+      },
+      "required": [
+       "sessionId"
+      ],
+      "additionalProperties": false
+     },
+     "annotations": {
+      "title": "Read live task events",
+      "readOnlyHint": true,
+      "openWorldHint": false
+     }
+    },
+    {
+     "name": "cancel_task_message",
+     "description": "Cancels the in-flight prompt turn for a session, if any. Returns whether a turn was cancelled. Requires write permission.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "sessionId": {
+        "type": "string",
+        "description": "Agent Spawner session id returned by connect_task_agent."
+       }
+      },
+      "required": [
+       "sessionId"
+      ],
+      "additionalProperties": false
+     },
+     "annotations": {
+      "title": "Cancel the current task message",
+      "readOnlyHint": false,
+      "idempotentHint": true
+     }
+    },
+    {
+     "name": "disconnect_task_agent",
+     "description": "Closes the live ACP connection for a session, aborting any in-flight prompt and dropping its buffered events. Safe to call for an unknown session. Requires write permission.",
+     "inputSchema": {
+      "type": "object",
+      "properties": {
+       "sessionId": {
+        "type": "string",
+        "description": "Agent Spawner session id returned by connect_task_agent."
+       }
+      },
+      "required": [
+       "sessionId"
+      ],
+      "additionalProperties": false
+     },
+     "annotations": {
+      "title": "Disconnect from a task agent",
+      "readOnlyHint": false,
+      "idempotentHint": true
+     }
+    }
+   ],
+   "responses": {
+    "list_environments": {
+     "content": [
+      {
+       "type": "text",
+       "text": "{\"items\": [{\"id\": \"47c5eb78-b8d8-4068-b1f4-cdb908b2301d\", \"name\": \"[Slop factory] write\", \"serviceHost\": \"github.com\", \"organization\": \"zaharchenko-evgeny\", \"repositoryName\": \"slop-factory\", \"instanceTypeKey\": null, \"networkAccess\": \"RESTRICTED\", \"predefinedDomainLists\": [\"WELL_KNOWN\"], \"allowedDomains\": [\"github.com\", \"api.github.com\", \"objects.githubusercontent.com\", \"release-assets.githubusercontent.com\", \"pypi.org\", \"files.pythonhosted.org\", \"registry.npmjs.org\", \"*.blob.core.windows.net\"], \"exposedPorts\": null, \"isDraft\": false, \"accessLevel\": \"MANAGE\", \"shared\": false, \"lastUsedAt\": \"2026-11-03T15:38:33.435141Z\"}, {\"id\": \"e3e98009-b711-432c-81a3-40774dee331b\", \"name\": \"[Slop factory] read\", \"serviceHost\": \"github.com\", \"organization\": \"zaharchenko-evgeny\", \"repositoryName\": \"slop-factory\", \"instanceTypeKey\": null, \"networkAccess\": \"RESTRICTED\", \"predefinedDomainLists\": [\"WELL_KNOWN\"], \"allowedDomains\": [\"github.com\", \"api.github.com\", \"objects.githubusercontent.com\", \"release-assets.githubusercontent.com\", \"pypi.org\", \"files.pythonhosted.org\", \"*.blob.core.windows.net\"], \"exposedPorts\": null, \"isDraft\": false, \"accessLevel\": \"MANAGE\", \"shared\": false, \"lastUsedAt\": \"2026-11-03T15:41:20.480727Z\"}, {\"id\": \"2849d91b-d9e1-4991-a70a-1f992906c700\", \"name\": \"[Slop factory] ops\", \"serviceHost\": \"github.com\", \"organization\": \"zaharchenko-evgeny\", \"repositoryName\": \"slop-factory\", \"instanceTypeKey\": null, \"networkAccess\": \"RESTRICTED\", \"predefinedDomainLists\": [\"WELL_KNOWN\"], \"allowedDomains\": [\"github.com\", \"api.github.com\", \"objects.githubusercontent.com\", \"release-assets.githubusercontent.com\", \"pypi.org\", \"files.pythonhosted.org\", \"*.blob.core.windows.net\"], \"exposedPorts\": null, \"isDraft\": false, \"accessLevel\": \"MANAGE\", \"shared\": false, \"lastUsedAt\": \"2026-11-03T15:27:13.703017Z\"}], \"total\": 3}"
+      }
+     ],
+     "isError": false
+    },
+    "get_environment:read": {
+     "content": [
+      {
+       "type": "text",
+       "text": "{\"id\": \"e3e98009-b711-432c-81a3-40774dee331b\", \"name\": \"[Slop factory] read\", \"serviceHost\": \"github.com\", \"organization\": \"zaharchenko-evgeny\", \"repositoryName\": \"slop-factory\", \"instanceTypeKey\": null, \"networkAccess\": \"RESTRICTED\", \"predefinedDomainLists\": [\"WELL_KNOWN\"], \"allowedDomains\": [\"github.com\", \"api.github.com\", \"objects.githubusercontent.com\", \"release-assets.githubusercontent.com\", \"pypi.org\", \"files.pythonhosted.org\", \"*.blob.core.windows.net\"], \"exposedPorts\": null, \"isDraft\": false, \"accessLevel\": \"MANAGE\", \"shared\": false, \"lastUsedAt\": \"2026-11-03T15:41:20.480727Z\", \"variables\": [{\"key\": \"FACTORY_ENV\", \"value\": \"read\", \"isSecret\": false, \"description\": null}, {\"key\": \"FACTORY_TEAM_REPOSITORY\", \"value\": \"https://github.com/zaharchenko-evgeny/slop-eval-factory\", \"isSecret\": false, \"description\": null}], \"personalSecrets\": []}"
+      }
+     ],
+     "isError": false
+    },
+    "get_environment:write": {
+     "content": [
+      {
+       "type": "text",
+       "text": "{\"id\": \"47c5eb78-b8d8-4068-b1f4-cdb908b2301d\", \"name\": \"[Slop factory] write\", \"serviceHost\": \"github.com\", \"organization\": \"zaharchenko-evgeny\", \"repositoryName\": \"slop-factory\", \"instanceTypeKey\": null, \"networkAccess\": \"RESTRICTED\", \"predefinedDomainLists\": [\"WELL_KNOWN\"], \"allowedDomains\": [\"github.com\", \"api.github.com\", \"objects.githubusercontent.com\", \"release-assets.githubusercontent.com\", \"pypi.org\", \"files.pythonhosted.org\", \"registry.npmjs.org\", \"*.blob.core.windows.net\"], \"exposedPorts\": null, \"isDraft\": false, \"accessLevel\": \"MANAGE\", \"shared\": false, \"lastUsedAt\": \"2026-11-03T15:38:33.435141Z\", \"variables\": [{\"key\": \"FACTORY_TEAM_REPOSITORY\", \"value\": \"https://github.com/zaharchenko-evgeny/slop-eval-factory\", \"isSecret\": false, \"description\": null}, {\"key\": \"FACTORY_ENV\", \"value\": \"write\", \"isSecret\": false, \"description\": null}], \"personalSecrets\": []}"
+      }
+     ],
+     "isError": false
+    },
+    "get_environment:ops": {
+     "content": [
+      {
+       "type": "text",
+       "text": "{\"id\": \"2849d91b-d9e1-4991-a70a-1f992906c700\", \"name\": \"[Slop factory] ops\", \"serviceHost\": \"github.com\", \"organization\": \"zaharchenko-evgeny\", \"repositoryName\": \"slop-factory\", \"instanceTypeKey\": null, \"networkAccess\": \"RESTRICTED\", \"predefinedDomainLists\": [\"WELL_KNOWN\"], \"allowedDomains\": [\"github.com\", \"api.github.com\", \"objects.githubusercontent.com\", \"release-assets.githubusercontent.com\", \"pypi.org\", \"files.pythonhosted.org\", \"*.blob.core.windows.net\"], \"exposedPorts\": null, \"isDraft\": false, \"accessLevel\": \"MANAGE\", \"shared\": false, \"lastUsedAt\": \"2026-11-03T15:27:13.703017Z\", \"variables\": [{\"key\": \"FACTORY_ENV\", \"value\": \"ops\", \"isSecret\": false, \"description\": null}, {\"key\": \"FACTORY_TEAM_REPOSITORY\", \"value\": \"https://github.com/zaharchenko-evgeny/slop-eval-factory\", \"isSecret\": false, \"description\": null}], \"personalSecrets\": []}"
+      }
+     ],
+     "isError": false
+    },
+    "edit_environment": {
+     "content": [
+      {
+       "type": "text",
+       "text": "{\"id\": \"e3e98009-b711-432c-81a3-40774dee331b\", \"name\": \"[Slop factory] read\", \"serviceHost\": \"github.com\", \"organization\": \"zaharchenko-evgeny\", \"repositoryName\": \"slop-factory\", \"instanceTypeKey\": null, \"networkAccess\": \"RESTRICTED\", \"predefinedDomainLists\": [\"WELL_KNOWN\"], \"allowedDomains\": [\"github.com\", \"api.github.com\", \"objects.githubusercontent.com\", \"release-assets.githubusercontent.com\", \"pypi.org\", \"files.pythonhosted.org\", \"*.blob.core.windows.net\"], \"exposedPorts\": null, \"isDraft\": false, \"accessLevel\": \"MANAGE\", \"shared\": false, \"lastUsedAt\": \"2026-11-03T15:41:20.480727Z\", \"variables\": [{\"key\": \"FACTORY_ENV\", \"value\": \"read\", \"isSecret\": false, \"description\": null}, {\"key\": \"FACTORY_TEAM_REPOSITORY\", \"value\": \"https://github.com/zaharchenko-evgeny/slop-eval-factory\", \"isSecret\": false, \"description\": null}], \"personalSecrets\": []}"
+      }
+     ],
+     "isError": false
+    }
+   }
+  }
+ }
+}
