@@ -197,6 +197,9 @@ def main(argv=None):
     if cmd == "doctor":
         from doctor import main as doctor_main
         return doctor_main(rest)
+    if cmd == "reconcile":
+        from reconcile import main as reconcile_main
+        return reconcile_main(rest)
     if cmd == "notify":
         from notify import main as notify_main
         return notify_main(rest)

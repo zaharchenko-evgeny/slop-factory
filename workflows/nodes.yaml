@@ -33,7 +33,7 @@ adapters:
 schedules:
   retro: { cron: "0 2 * * *" }
   distill: { cron: "0 3 * * 1" }
-  recover: { cron: "0 6,18 * * *" }
+  reconcile: { cron: "*/30 * * * *" }
   doctor: { cron: "0 5 * * *" }
 nodes:
   human:
@@ -223,17 +223,31 @@ nodes:
       notified: { from: [blocked, needs-answers] }
   recover:
     env: read
-    pilot: true
-    # Safety net for an Air run that died silently: re-fires the label that woke it (limits.stale_hours).
-    triggers: ["schedule recover"]
+    # No automation: the reconciler replaced the Air schedule. Only `gate.py sweep --stale`, run by a person, still applies this outcome.
+    runner: manual
+    routine: true
+    triggers: ["manual"]
     when: { always: true }
     role: script
     tier: cheap
     run: uv run factory/gate.py sweep --stale
     output: read-only
     outcomes:
-      # The sweep writes these itself: one re-fire per ticket and stage, then blocked.
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
+  reconcile:
+    env: ops
+    # Not an Air automation: `factory deploy` renders .github/workflows/factory-reconcile.yml in the factory repository from this node.
+    # A state-driven safety net for a lost wake: `factory reconcile` re-fires the waking label of a step with no outcome after
+    # `limits.run_timeout_minutes` (`timeout_minutes` on a node overrides it), then blocks the ticket on a second miss.
+    runner: actions
+    routine: true
+    triggers: ["schedule reconcile"]
+    when: { always: true }
+    role: script
+    run: uv run factory/cli.py reconcile
+    output: read-only
+    outcomes:
+      reconciled: {}
   # `factory doctor` probes permissions and tools of the environment it runs in; one node per environment (read, write, ops)
   # because an automation belongs to one environment. It changes no ticket: probe failures open `Doctor:` tickets itself.
   doctor:
