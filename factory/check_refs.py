@@ -23,7 +23,7 @@ ALLOW = {
     ".factory/handoff/<node>.json", "<dir>/<repo>/lessons.md", "<dir>/_shared/lessons.md",
     "workflows/*.md", "Design: docs/<file>.md#<section>", "drive.py", "sm.py", "delivery.sm.yaml",
     "git/refs", "github/", "claude/skills/", "agents/skills/", "ez/", "ez/152-probes", "ez/152-probe-p5",
-    "checks.json", "addressed.json", "findings.json",
+    "checks.json", "addressed.json", "findings.json", "notes.json",
     "AGENTS.md:ez/<issue>-*", "AGENTS.md:roles/*/setup.sh",
     "docs/design.md:roles/<role>/", "docs/plan.md:roles/{router,developer,reviewer}/",
     "docs/recipes/auto-approve.md:conftest test --policy policies summary.json",
