@@ -177,6 +177,11 @@ def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
     raise KeyError(f"unknown automation: {automation}")
 
 
+def on_actions(n: dict) -> bool:
+    """A node with `runner: actions` runs in .github/workflows/factory-nodes.yml: no Air automation."""
+    return n.get("runner") == "actions"
+
+
 def plan_air(nodes: dict, config: dict) -> dict:
     air, roles = config["targets"]["air"]["models"], config["roles"]
     repos = {r["name"]: r for r in config["repositories"]}
@@ -186,9 +191,9 @@ def plan_air(nodes: dict, config: dict) -> dict:
     bot = config["targets"]["air"]["bot_login"]
     prefix = f"[{project_name(config)}] "
     automations = []
-    used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human"))
+    used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not on_actions(n)))
     for name, n in nodes["nodes"].items():
-        if n.get("enabled") is False or n["role"] == "human":
+        if n.get("enabled") is False or n["role"] == "human" or on_actions(n):
             continue
         env = n["env"]
         for aname, tier_arg, tier, focus in variants(name, n, roles):

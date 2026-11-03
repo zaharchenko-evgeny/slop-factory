@@ -52,6 +52,10 @@ class NodesTest(unittest.TestCase):
                 errs = broken(mutate)
                 self.assertTrue(any(e.startswith(name) for e in errs), errs)
 
+    def test_actions_runner_is_for_script_nodes_only(self):
+        self.assertTrue(any(e.startswith("bad-runner: intake") for e in broken(lambda n: n["intake"].update(runner="actions"))))
+        self.assertTrue(any(e.startswith("bad-runner: join") for e in broken(lambda n: n["join"].update(runner="cloud"))))
+
     def test_unused_stage_fails_validation(self):
         config = copy.deepcopy(CONFIG)
         config["tracker"]["stages"]["orphan"] = "factory:orphan"

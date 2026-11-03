@@ -261,7 +261,7 @@ class PlanTest(unittest.TestCase):
     def test_nodes_get_environment_by_env(self):
         plan = deploy.plan_air(nodes.load(), cfg.load())
         env = {x["name"]: x["environmentConfigId"] for x in plan["automations"]}
-        for name, want in (("intake", "read"), ("join", "read"), ("finish", "read"), ("review-full", "read"),
+        for name, want in (("intake", "read"), ("review-full", "read"),
                            ("implement-mid", "write"), ("fix-cheap", "write"), ("update-strong", "write")):
             self.assertEqual(env[f"[Slop factory] {name}"], f"[Slop factory] {want}")
         self.assertEqual({e["name"]: e["variables"] for e in plan["environments"]},
@@ -301,8 +301,7 @@ class PlanTest(unittest.TestCase):
                                            "pr_author": "jetbrains-air[bot]"}}, a["triggers"])
 
     def test_recover_runs_twice_daily_as_a_backstop_on_the_cheap_tier(self):
-        for plan in (json.loads((FIX / "air-plan.json").read_text()),
-                     deploy.plan_air(nodes.load(), cfg.load())):
+        for plan in (json.loads((FIX / "air-plan.json").read_text()),):  # the real plan runs recover in Actions
             a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] recover")
             self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "0 6,18 * * *", "timezone": "UTC"}])
             self.assertIn("Run `factory sweep --stale` in the foreground", a["prompt"])
@@ -323,16 +322,6 @@ class PlanTest(unittest.TestCase):
             self.assertNotIn("GITHUB_TOKEN", e["secrets"])
             if e["name"] in ("[Slop factory] read", "[Slop factory] write"):
                 self.assertIn("*.blob.core.windows.net", e["domains"])
-        join = next(x for x in deploy.plan_air(nodes.load(), cfg.load())
-                    ["automations"] if x["name"] == "[Slop factory] join")
-        self.assertEqual([(x["eventType"], x["filters"].get("label")) for x in join["triggers"]],
-                         [("pull_request_review.submitted", None), ("pull_request.labeled", "factory:ci-red")])
-        reopen = next(x for x in deploy.plan_air(nodes.load(), cfg.load())
-                       ["automations"] if x["name"] == "[Slop factory] reopen")
-        self.assertEqual([(x["eventType"], x["filters"].get("label"), x["filters"].get("pr_author"))
-                          for x in reopen["triggers"]],
-                         [("pull_request.synchronize", None, "jetbrains-air[bot]"),
-                          ("pull_request.labeled", "factory:ci-red", "jetbrains-air[bot]")])
         assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] recover", "[Slop factory] retro", "[Slop factory] distill", "[Slop factory] doctor", "[Slop factory] doctor-write", "[Slop factory] doctor-ops") for x in a["triggers"]), "no polling"  # recover is the one safety net
 
     def test_one_triggervcs_entry_per_trigger_and_a_spec_per_automation(self):
@@ -344,7 +333,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual((spec["node"], spec["tier"], spec["engine"]), ("implement", "mid", cfg.load()["engine"]))
         self.assertEqual(set(spec["outcomes"]), {"done", "error", "blocked", "failed"})
         self.assertIn("- `error`: the work needs the next tier", a["[Slop factory] implement-mid"]["prompt"])
-        self.assertEqual(set(a["[Slop factory] join"]["spec"]["runs"]), {"finish", "recover", "reopen", "merge", "start", "notify"})
+        self.assertEqual(set(a["[Slop factory] notify"]["spec"]["runs"]), {"finish", "recover", "reopen", "merge", "start", "join"})
         notify = a["[Slop factory] notify"]
         self.assertEqual({t["filters"]["label"] for t in notify["triggers"]}, {"factory:blocked", "factory:needs-answers"})
         self.assertIn("factory notify --issue", notify["prompt"])
@@ -376,23 +365,17 @@ class PlanTest(unittest.TestCase):
         self.assertIn("- `grill`:", intake)
         self.assertNotIn("- `bug`:", intake)
 
-    def test_pull_request_scripts_run_from_main(self):
-        a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
-        self.assertIn("`factory sweep --main --event`", a["[Slop factory] join"])
-        self.assertIn("`factory sweep --main --event`", a["[Slop factory] finish"])
-        self.assertIn("`factory sweep --main --event`", a["[Slop factory] reopen"])
-        self.assertNotIn("--main", a["[Slop factory] recover"])
+    def test_no_air_automation_for_a_node_that_runs_in_actions(self):
+        n = nodes.load()
+        actions = {k for k, v in n["nodes"].items() if v.get("runner") == "actions"}
+        self.assertEqual(actions, {"start", "join", "merge", "finish", "reopen", "recover"})
+        names = {a["name"].removeprefix("[Slop factory] ") for a in deploy.plan_air(n, cfg.load())["automations"]}
+        self.assertFalse(actions & names)
 
-    def test_event_script_nodes_scope_to_one_ticket(self):
-        scripts = {"join", "start", "finish", "reopen", "merge"}
-        for automation in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
-            name = automation["name"].removeprefix("[Slop factory] ")
-            if name in scripts:
-                self.assertIn("factory sweep --main --event", automation["prompt"], name)
-            elif name == "recover":
-                self.assertIn("factory sweep --stale", automation["prompt"])
-            elif "factory sweep" in automation["prompt"]:
-                self.assertTrue("--issue" in automation["prompt"] or "--event" in automation["prompt"], name)
+    def test_actions_workflow_sweeps_one_ticket_from_main(self):
+        text = (ROOT / ".github/workflows/factory-nodes.yml").read_text()
+        for want in ("sweep --main --event \"$GITHUB_EVENT_PATH\"", "sweep --main --stale", "secrets.FACTORY_TOKEN"):
+            self.assertIn(want, text)
 
     def test_real_plan_is_prefixed_and_covers_pilot(self):
         config = cfg.load()
@@ -402,7 +385,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["prefix"], "[Slop factory] ")
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
-            "intake", "start", "join", "finish", "recover", "reopen", "merge", "notify", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
+            "intake", "notify", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}
         self.assertEqual(names, pilot)

@@ -1,0 +1,67 @@
+name: factory-nodes
+
+# The scripted nodes (`runner: actions` in workflows/nodes.yaml: start, join, merge, finish, reopen, recover) judge
+# nothing: each runs one `factory sweep` for the ticket of the event. Actions minutes are free in a public
+# repository; an Air automation per wake costs a VM, a model session and quota (#339).
+# The sweep checks main's graph and engine out (`--main`), never the PR's. A job whose node has no work exits in seconds.
+on:
+  issues:
+    types: [labeled, closed]
+  # A comment only names the ticket; the sweep reads facts and runs main's code.
+  issue_comment: # jactionlint ignore=dangerous-triggers
+    types: [created]
+  pull_request_target: # jactionlint ignore=dangerous-triggers
+    types: [labeled, synchronize, closed]
+  pull_request_review:
+    types: [submitted]
+  schedule:
+    - cron: "0 6,18 * * *"  # recover: the same schedule as the `recover` node
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Ticket number to sweep
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: factory-nodes-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    # Only the factory's own branches and tickets: a fork's PR gains nothing.
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      || (github.event.pull_request
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && startsWith(github.event.pull_request.head.ref, 'ez/'))
+      || (github.event.issue && !github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+    env:
+      # A GitHub App token or fine-grained PAT (secret FACTORY_TOKEN, name only): labels set with GITHUB_TOKEN
+      # start no workflow, and the Air nodes are woken by the webhook of the label (probe on #339).
+      GH_TOKEN: ${{ secrets.FACTORY_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      EVENT_NAME: ${{ github.event_name }}
+      DISPATCH_ISSUE: ${{ github.event.inputs.issue }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - run: pipx install uv
+      - name: Sweep the ticket of the event
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            schedule) uv run --quiet factory/cli.py sweep --main --stale ;;
+            workflow_dispatch) uv run --quiet factory/cli.py sweep --main --issue "$DISPATCH_ISSUE" ;;
+            *) uv run --quiet factory/cli.py sweep --main --event "$GITHUB_EVENT_PATH" ;;
+          esac
