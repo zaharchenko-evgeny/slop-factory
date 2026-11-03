@@ -239,9 +239,11 @@ def check(name, event, tracker, nodes, config):
         event["id"] = f"{event['event_name']}:{event['ticket']}:{event['action']}:{facts.get('updated_at', '')}"
         event["head"] = facts.get("head")
         event["actor"] = facts.get("event_actor")
-        attrs = facts.get("attrs", [])
-        event["rereview"] = next((x.removeprefix("factory:rereview-") for x in attrs
-                                  if x.startswith("factory:rereview-")), None)
+        pending = facts.get("pending_rereviews", [])
+        labels = facts.get("pr_labels", [])
+        event["rereview"] = next(iter(pending), None) or next(
+            (x.removeprefix("factory:rereview-") for x in labels
+             if x.startswith("factory:rereview-")), None)
     if name == "fix" and facts.get("ci") == "red" and facts.get("head") and hasattr(tracker, "ci_failure"):
         failure = tracker.ci_failure(facts["head"])
         if failure:

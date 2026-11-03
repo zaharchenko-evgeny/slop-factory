@@ -42,6 +42,19 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_review_check_reads_rereview_focus_from_tracker_facts(self):
+        tracker = MemoryTracker({"7": {
+            "stage": "in-review", "head": "abc", "ci": "green",
+            "focus_missing": [], "pending_rereviews": ["behaviour"],
+        }})
+        event = {"id": "pull_request:7:labeled", "ticket": 7,
+                 "event_name": "pull_request", "action": "labeled", "focus": "behaviour"}
+
+        code, result = gate.check("review", event, tracker, NODES, CONFIG)
+
+        self.assertEqual(code, gate.GO)
+        self.assertTrue(result["go"])
+
     def test_writer_answer_resumes_needs_answers(self):
         self.assertEqual(gate.sweep_plan({"stage": "needs-answers", "answered": True}), ("finish", "answered", {}))
 
