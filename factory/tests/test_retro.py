@@ -79,5 +79,14 @@ class InboxTest(unittest.TestCase):
                          {"branch": "knowledge-inbox", "source": "knowledge-inbox-pr", "action": "update", "pr": 4})
 
 
+class ChangedLinesTest(unittest.TestCase):
+    def test_whole_file_deletion_counts_once_and_generated_paths_are_skipped(self):
+        files = [{"filename": "a.py", "status": "modified", "additions": 5, "deletions": 3},
+                 {"filename": "old.py", "status": "removed", "additions": 0, "deletions": 400},
+                 {"filename": "gen.json", "status": "modified", "additions": 90, "deletions": 90},
+                 {"filename": "skills/vendor/x/SKILL.md", "status": "added", "additions": 50, "deletions": 0}]
+        self.assertEqual(retro.changed_lines(files, ["gen.json"]), 9)
+
+
 if __name__ == "__main__":
     unittest.main()

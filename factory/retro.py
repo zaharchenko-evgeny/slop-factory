@@ -8,12 +8,15 @@
 Usage: uv run factory/retro.py facts --since <ISO time>   (JSON: one object per ticket that reached `done` since)
 `ticket_facts` is pure: it takes the ticket's and PR's events, reviews and comments as the GitHub API returns them.
 """
+import fnmatch
 import json
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import config as cfg  # noqa: E402
 
 QUIET = ("triage", "ready")  # stage labels a person sets in the normal flow: not an intervention
 MARKER = re.compile(r"<!-- factory:review focus=(\S+) .*?verdict=(\w+)")
@@ -67,6 +70,18 @@ def ticket_facts(number, issue_events, pr_events, reviews, comments, bots=(), bo
     }
 
 
+def changed_lines(files, generated_paths=()):
+    """The repository's sizing rule over a PR's files: generated and vendored paths are excluded, a whole deleted
+    file counts as one line, removed lines of a remaining file count as modified."""
+    total = 0
+    for f in files:
+        name = f["filename"]
+        if name.startswith("skills/vendor/") or any(fnmatch.fnmatchcase(name, g) for g in generated_paths):
+            continue
+        total += 1 if f.get("status") == "removed" else f.get("additions", 0) + f.get("deletions", 0)
+    return total
+
+
 def _t(iso):
     from datetime import datetime
     return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
@@ -87,8 +102,8 @@ def facts(tracker, since):
         pr_events = tracker._list(f"issues/{pr['number']}/events") if pr else []
         reviews = tracker._list(f"pulls/{pr['number']}/reviews") if pr else []
         comments = tracker._list(f"issues/{n}/comments")
-        full = tracker._api(f"pulls/{pr['number']}") if pr else {}
-        lines = full.get("additions", 0) + full.get("deletions", 0) if pr else None
+        lines = changed_lines(tracker._list(f"pulls/{pr['number']}/files?per_page=100"),
+                              cfg.load().get("limits", {}).get("generated_paths", [])) if pr else None
         out.append(ticket_facts(n, events, pr_events, reviews, comments, {tracker.bot, *tracker.trusted},
                                 i.get("body") or "", lines))
     return out
