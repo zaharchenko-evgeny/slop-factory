@@ -22,7 +22,7 @@ import gate  # noqa: E402
 import nodes  # noqa: E402
 from gate_port import MemoryTracker  # noqa: E402
 
-DESCRIPTOR = yaml.safe_load((ROOT / config.DESCRIPTOR).read_text())
+DESCRIPTOR = yaml.safe_load((ROOT / "factory/tests/fixtures/team" / config.DESCRIPTOR).read_text())
 
 
 def team(tmp, descriptor=None, files=None):
@@ -55,6 +55,19 @@ class TeamRootTest(unittest.TestCase):
                     mock.patch.dict(config.os.environ, {"FACTORY_ENGINE": ""}):
                 self.assertEqual(config._find_engine(), Path(tmp) / "share/factory-engine")
 
+    def test_factory_team_env_sets_team_root(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(config.os.environ, {"FACTORY_TEAM": tmp}):
+                self.assertEqual(config.team_root(), Path(tmp).resolve())
+
+    def test_team_role_overrides_engine_role(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = team(tmp, files={"roles/developer/role.md": "# mine\n"})
+            config.set_team(root)
+            self.assertEqual(config.resolve("roles/developer/role.md"), root / "roles/developer/role.md")
+            self.assertEqual(config.resolve("roles/router/role.md"), ROOT / "roles/router/role.md")
+
     def test_missing_key_comes_from_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = {k: v for k, v in DESCRIPTOR.items() if k != "branch_pattern"}
@@ -80,7 +93,7 @@ class TeamRootTest(unittest.TestCase):
                 self.assertIn("unknown-key", out.getvalue())
 
     def test_validate_passes_for_this_repository(self):
-        config.set_team(ROOT)
+        config.set_team(ROOT / "factory/tests/fixtures/team")
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["validate"]), 0)
         self.assertIn("factory: ok", out.getvalue())
