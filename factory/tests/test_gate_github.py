@@ -1218,9 +1218,10 @@ class GateTest(unittest.TestCase):
         gh, nd = FakeGh(labels=["factory:in-dev"]), nodes.load()
         payload = {"ticket": 7, "event": "e1"}
         self.assertEqual(gate.apply("implement", "done", payload, tr(gh), nd)[0], gate.GO)
+        writes = len(gh.writes)  # the stage change and, with CI green, the reviewer wake labels
         code, out = gate.apply("implement", "done", payload, tr(gh), nd)
         self.assertEqual((code, out["applied"]), (gate.NO_GO, False))
-        self.assertEqual(len(gh.writes), 1)
+        self.assertEqual(len(gh.writes), writes)
 
     def test_bad_values_and_bad_tracker(self):
         facts = {"fix_rounds": 3, "fix_cap": 3, "ci": "green"}
