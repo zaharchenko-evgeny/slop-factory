@@ -62,7 +62,7 @@
       "path": "skills/engineering/to-tickets",
       "license": "MIT",
       "override": "Step 5 publishes tickets to the tracker; the router skips it and hands the tickets to the workflow (roles/router/role.md).",
-      "sha256": "6eccfac132d92b949821d154679adc7f597bfc3e8c929f3c03786b92f91b961f"
+      "sha256": "293c186d02cec4a4f502c4ffdc07a5c4c7e89745cd7f9fb90a7258cdf845fb9f"
     },
     "unslop": {
       "source": "cursor/plugins",

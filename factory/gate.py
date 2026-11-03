@@ -401,6 +401,17 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     if name in ("review", "join"):
         effects.append({"kind": "pr-notes-sync", "ticket": ticket, "value": ""})  # notes parked before the PR existed
     facts = tracker.facts(ticket)
+    if name == "finish" and outcome == "merged":
+        checks = after_merge_checks(facts.get("body"))
+        if checks and not after_merge_complete(facts.get("comments", [])):
+            if after_merge_comment(facts.get("comments", [])):
+                effects = []
+            else:
+                checklist = "\n".join(f"- [ ] {check}" for check in checks)
+                effects = [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
+                           {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]},
+                           {"kind": "comment", "ticket": ticket, "run_id": "finish:after-merge",
+                            "value": f"[factory] After-merge operator checks:\n\n{checklist}\n\n{AFTER_MERGE_MARKER}"}]
     if name == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
             and not facts.get("focus_missing") and facts.get("ci") == "green" and facts.get("pr") and facts.get("head"):
         people = facts["waiting_reviewers"]
@@ -646,6 +657,23 @@ def retro_payload(facts):
     return {"retro": text, "run_id": "finish:retro"}
 
 
+AFTER_MERGE_CHECK = re.compile(r"(?im)^\s*[-*] \[ \] Operator check after the merge \(not part of the PR\):\s*(.+?)\s*$")
+AFTER_MERGE_MARKER = "<!-- factory:after-merge-checks -->"
+
+
+def after_merge_checks(body):
+    return AFTER_MERGE_CHECK.findall(body or "")
+
+
+def after_merge_comment(comments):
+    return next((c.get("body", "") for c in comments if AFTER_MERGE_MARKER in c.get("body", "")), "")
+
+
+def after_merge_complete(comments):
+    checks = re.findall(r"(?m)^- \[([ xX])\] .+$", after_merge_comment(comments))
+    return bool(checks) and all(x.lower() == "x" for x in checks)
+
+
 def sweep_plan(facts, auto_merge=None, default_tier="mid"):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
@@ -654,7 +682,8 @@ def sweep_plan(facts, auto_merge=None, default_tier="mid"):
     if stage == "needs-answers" and facts.get("answered"):
         return "finish", "answered", {}
     if stage == "approved" and facts.get("pr_state") == "merged":
-        return "finish", "merged", {}
+        return ("finish", "merged", {}) if not after_merge_checks(facts.get("body")) \
+            or after_merge_complete(facts.get("comments", [])) else None
     if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
         return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
     if stage == "approved" and facts.get("pr_state") == "open" \
