@@ -70,15 +70,24 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                     or "factory:needs-human" in facts.get("attrs", [])):
                 continue
             age = now - datetime.fromisoformat(since.replace("Z", "+00:00"))
-            conflict = (stage in ("in-review", "changes-requested") and facts.get("conflict") and facts.get("pr")
+            conflict = (stage == "in-review" and facts.get("conflict") and facts.get("pr")
                         and not facts.get("command") and facts.get("pr_state") in (None, "none", "open"))
             if conflict:
-                step = ("finish", None, "pr", "the unapproved PR conflicts with main")
+                step = ("fix", None, "pr", "the unapproved PR conflicts with main")
                 if age <= timedelta(minutes=default):
                     continue
             else:
                 step = next((w for w in wakes(nodes, facts)
                              if age > timedelta(minutes=nodes["nodes"][w[0]].get("timeout_minutes", default))), None)
+                stale_reviews = [label for label, at in facts.get("review_labels", [])
+                                 if label.startswith(("factory:review-", "factory:rereview-"))
+                                 and now - datetime.fromisoformat(at.replace("Z", "+00:00")) > timedelta(minutes=default)]
+                stale_focuses = {label.removeprefix("factory:review-").removeprefix("factory:rereview-")
+                                 for label in stale_reviews}
+                stale_step = next((w for w in wakes(nodes, facts)
+                                   if w[0] == "review" and w[1].removeprefix("factory:review-") in stale_focuses), None)
+                if stale_step:
+                    step = stale_step
                 if step is None:
                     continue
             node, label, on, why = step
@@ -102,10 +111,9 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
 def send(tracker, n, nodes, stage, head, kind, label, on, why):
     def apply(**e):
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
-    if kind == "conflict":  # the effects the graph gives a conflicting approved PR: an update label, then the stage
-        for e in nodes["nodes"]["finish"]["outcomes"]["conflict"]["effects"]:
-            k, v = next((k, v) for k, v in e.items() if k != "on")
-            apply(kind=k, value=v, **({"on": e["on"]} if "on" in e else {}))
+    if kind == "conflict":
+        apply(kind="label", value="factory:fix-cheap", on="pr")
+        apply(kind="stage", value="changes-requested")
     elif kind == "blocked":
         apply(kind="label", value="factory:needs-human")
         apply(kind="comment", value=f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets factory:ready.")

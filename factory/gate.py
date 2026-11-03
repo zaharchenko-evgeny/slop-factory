@@ -261,6 +261,9 @@ def check(name, event, tracker, nodes, config):
         if failure:
             facts["ci_failure"] = failure
     why = matches(node, facts, event)
+    if name == "fix" and facts.get("stage") == "changes-requested" and facts.get("conflict"):
+        # Reconciliation can route an unapproved conflict before its review round completes.
+        why = matches({**node, "when": {k: v for k, v in node["when"].items() if k != "round"}}, facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     notes = facts.get("agent_notes", [])
     facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
