@@ -70,6 +70,13 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual((results[0]["node"], results[0]["reconcile"]), ("fix", "refire"))
         self.assertIn('"factory:fix-cheap"', logged(t, "label"))
 
+    def test_conflicting_pr_without_command_does_not_fail(self):
+        t, results, failed = run({"stage": "changes-requested", "pr": 5, "conflict": True,
+                                  "since": OLD, "command": None})
+        self.assertFalse(failed)
+        self.assertEqual(results, [])
+        self.assertEqual(t.tickets[1]["stage"], "changes-requested")
+
     def test_second_miss_blocks_and_needs_human(self):
         refired = [["comment", '"[factory] reconcile: stage=in-dev head=aaa re-fired factory:implement-mid (x)"']]
         t, results, _ = run({"stage": "in-dev", "since": OLD, "head": "aaa", "command": "factory:implement-mid", "log": refired})
