@@ -368,10 +368,11 @@ class GitHubGateTracker:
              "event_actor": ((actor_events[-1].get("actor") or {}).get("login") if actor_events else None),
              "title": issue.get("title", ""), "body": body, "author": (issue.get("user") or {}).get("login"), "branch": None}
         since = getattr(self, "_since", "")  # a person's factory:ready starts fresh
-        got = self._notes(self._list(f"issues/{n}/comments"), "created_at", since)
+        comments = self._list(f"issues/{n}/comments")
+        f["comments"] = comments
+        got = self._notes(comments, "created_at", since)
         if stage == "needs-answers":
             waiting = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["needs-answers"]]
-            comments = self._list(f"issues/{n}/comments")
             if waiting and comments:
                 started = waiting[-1].get("created_at", "")
                 ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") in (self.stages["triage"], self.stages["ready"])]
