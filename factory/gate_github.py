@@ -20,6 +20,7 @@ import yaml
 import config
 from gate_port import DescriptorPort, fix_round_count, ticket_from_ref
 from github_tracker import gh
+import vocab
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
 NOTE_FIELDS, NOTE_FOR, NOTE_MAX = ("for", "files", "repro", "hint", "context"), ("fixer", "reviewer", "developer", "any"), 2000
@@ -204,12 +205,12 @@ class GitHubGateTracker(DescriptorPort):
                 + "\n".join(items) + f"\n\nFactory-Run: finish:{pr}")
         if existing:
             self.run(["issue", "edit", str(existing["number"]), "-R", self.repo, "--body", body,
-                      "--add-label", "factory:needs-human", "--add-assignee", config.load()["notify"]["github_user"]])
+                      "--add-label", vocab.needs_human(), "--add-assignee", config.load()["notify"]["github_user"]])
             self.run(["issue", "comment", str(existing["number"]), "-R", self.repo, "--body",
                       f"[factory] Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}"])
         else:
             url = self.run(["issue", "create", "-R", self.repo, "--title", title, "--body", body,
-                            "--label", "factory:needs-human", "--assignee", config.load()["notify"]["github_user"]]).strip()
+                            "--label", vocab.needs_human(), "--assignee", config.load()["notify"]["github_user"]]).strip()
             self.run(["issue", "comment", url.rsplit("/", 1)[-1], "-R", self.repo, "--body",
                       f"[factory] Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}"])
 
@@ -227,8 +228,8 @@ class GitHubGateTracker(DescriptorPort):
             # before adding its PR command label so the label event can pass check.
             self.apply({"ticket": ticket, "kind": "stage", "value": "changes-requested"})
             labels = [x["name"] for x in self._api(f"issues/{other['number']}", repo=self.pr_repo)["labels"]]
-            if "factory:update-cheap" not in labels:
-                self._edit(other["number"], ["factory:update-cheap"], on="pr")
+            if vocab.cmd("update-<tier>", "cheap") not in labels:
+                self._edit(other["number"], [vocab.cmd("update-<tier>", "cheap")], on="pr")
 
     def deploy_applied(self, plan):
         """Close the reminder after an operator confirms the deployed plan is unchanged."""
@@ -381,7 +382,7 @@ class GitHubGateTracker(DescriptorPort):
         """Developer runs started for ticket `n` since a person last set `factory:ready`: each `labeled` event
         of a command label (`factory:implement-*`, `fix-*`, `update-*`) on the issue or its PR after it. A
         person's `ready` starts a fresh budget. Reviews follow pushes, so this bounds them too."""
-        cmds = ("factory:implement-", "factory:fix-", "factory:update-")
+        cmds = (vocab.prefix("implement-<tier>"), vocab.prefix("fix-<tier>"), vocab.prefix("update-<tier>"))
         events = {t: issue_events if t == n and issue_events is not None
                   else self._list(f"issues/{t}/events", repo=self.pr_repo if t != n else None)
                   for t in [n] + ([pr] if pr else [])}
@@ -419,7 +420,7 @@ class GitHubGateTracker(DescriptorPort):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
         the label when it finishes, so every round adds it again)."""
         return [e["created_at"] for e in self._list(f"issues/{pr}/events", repo=self.pr_repo)
-                if e.get("event") == "labeled" and (e.get("label") or {}).get("name", "").startswith("factory:fix-")]
+                if e.get("event") == "labeled" and (e.get("label") or {}).get("name", "").startswith(vocab.prefix("fix-<tier>"))]
 
     def _earlier(self, r, head, fix_writes):
         """True when change request `r` was counted by an earlier round: it names an older commit and a join
@@ -518,7 +519,7 @@ class GitHubGateTracker(DescriptorPort):
         if pr:
             head, reviews = pr["head"]["sha"], self._carry_approvals(self._reviews(pr), pr)
             pr_labels = {x["name"] for x in pr.get("labels", [])}
-            pending_rereviews = [focus for focus in required if f"factory:rereview-{focus}" in pr_labels]
+            pending_rereviews = [focus for focus in required if vocab.cmd("rereview-<focus>", focus) in pr_labels]
             latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
             heads = {latest[x]["commit_id"] for x in required if x in latest}
             requested = [u["login"] for u in pr.get("requested_reviewers") or []]
@@ -563,13 +564,13 @@ class GitHubGateTracker(DescriptorPort):
                     labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
         pr_labels = f.get("pr_labels", [])
         review_labels = [(x, labeled.get((pr, x), "")) for x in pr_labels
-                         if x.startswith(("factory:review-", "factory:rereview-")) and labeled.get((pr, x))]
+                         if x.startswith((vocab.prefix("review-<focus>"), vocab.prefix("rereview-<focus>"))) and labeled.get((pr, x))]
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
-        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-", "factory:update-", "factory:review-"))), None)
-        command_labels = ("factory:ready", "factory:triage", "factory:implement-", "factory:fix-",
-                          "factory:update-", "factory:ci-green")
-        active_commands = {(t, x) for t, x in have if x == "factory:ready" or x == "factory:triage"
-                           or x == "factory:ci-green" or x.startswith(command_labels[2:5]) or x.startswith("factory:review-")}
+        cmd = next(((t, x) for t, x in have if x.startswith((vocab.prefix("implement-<tier>"), vocab.prefix("fix-<tier>"), vocab.prefix("update-<tier>"), vocab.prefix("review-<focus>")))), None)
+        command_labels = (vocab.stage("ready"), vocab.stage("triage"), vocab.prefix("implement-<tier>"), vocab.prefix("fix-<tier>"),
+                          vocab.prefix("update-<tier>"), vocab.ci("ci-green"))
+        active_commands = {(t, x) for t, x in have if x == vocab.stage("ready") or x == vocab.stage("triage")
+                           or x == vocab.ci("ci-green") or x.startswith(command_labels[2:5]) or x.startswith(vocab.prefix("review-<focus>"))}
         command_events = [e for t, e in events if e.get("event") == "labeled"
                           and (t, e.get("label", {}).get("name")) in active_commands]
         commit_at = self._api(f"commits/{f['head']}", repo=self.pr_repo)["commit"]["committer"]["date"] if f["head"] else None
@@ -582,8 +583,8 @@ class GitHubGateTracker(DescriptorPort):
                 "command_pending": bool(latest_command and latest_command == latest_event),
                 "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
                 "review_labels": review_labels,
-                "ci_label": next((x[11:] for x in pr_labels if x in ("factory:ci-green", "factory:ci-red")
-                                 and x[11:] == f.get("ci")), None)}  # a label left over from an earlier head is not this head's CI
+                "ci_label": next((ci for ci in ("green", "red") if vocab.ci(f"ci-{ci}") in pr_labels
+                                 and ci == f.get("ci")), None)}  # a label left over from an earlier head is not this head's CI
 
     # --- effects: read the target first, write only when it differs
     def _edit(self, n, add=(), remove=(), on="issue"):
@@ -607,7 +608,7 @@ class GitHubGateTracker(DescriptorPort):
         if kind in ("label", "unlabel"):
             on, target = e.get("on") or "issue", n
             if on == "pr":
-                attention = value == "factory:needs-human"
+                attention = value == vocab.needs_human()
                 if attention:
                     prs = self._prs(n, open_only=kind == "label")
                 else:
@@ -780,8 +781,8 @@ class GitHubGateTracker(DescriptorPort):
                 self.apply(e)
             return self.apply({"ticket": n, "kind": "stage", "value": "blocked"})
         if rereviewed:
-            self.apply({"ticket": n, "kind": "unlabel", "value": "factory:fix-*", "on": "pr"})
-        wrote = self.apply({"ticket": n, "kind": "label", "value": f"factory:fix-{tier}", "on": "pr"})
+            self.apply({"ticket": n, "kind": "unlabel", "value": vocab.cmd("fix-<tier>", "*"), "on": "pr"})
+        wrote = self.apply({"ticket": n, "kind": "label", "value": vocab.cmd("fix-<tier>", tier), "on": "pr"})
         return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote
 
     def _rerequest(self, n, only=None):
@@ -815,7 +816,7 @@ class GitHubGateTracker(DescriptorPort):
         head = pr["head"]["sha"]
         existing = [r for r in self._reviews(pr) if r["agent"] and r["focus"] == focus and r["commit_id"] == head]
         labels = self._labels(pr["number"], repo=self.pr_repo)
-        rereview = f"factory:rereview-{focus}" in labels
+        rereview = vocab.cmd("rereview-<focus>", focus) in labels
         if existing and (not rereview or any(r["rereview"] for r in existing)):
             return False
         facts = self.facts(n)
@@ -836,7 +837,7 @@ class GitHubGateTracker(DescriptorPort):
         self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
                   "-f", "event=COMMENT", "-f", f"body={body}{self._block(e)}"])
         if rereview:
-            self._edit(pr["number"], remove=[f"factory:rereview-{focus}"], on="pr")
+            self._edit(pr["number"], remove=[vocab.cmd("rereview-<focus>", focus)], on="pr")
         return True
 
     def _create(self, n, children):

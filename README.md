@@ -32,6 +32,16 @@ these top-level keys, defined by `engine/descriptor.schema.json`:
 `team_repository`, `tracker`, `code_host`, `notify`, `targets`, `models`, `roles`,
 `limits`, `gates`, `ci`, `knowledge`, `nodes`, `reviews`, and `checks`.
 
+### Project descriptor
+
+A project can keep its settings in `factory.project.yaml` and the workflow file
+it links with `workflow:` instead (ADR-0016, defined by `engine/project.schema.json`
+and `engine/workflow.schema.json`). States and commands name their tracker
+store; the workflow names only states and commands. When the team root has
+`factory.project.yaml`, the engine reads only that file and its workflow.
+`factory migrate workflow <nodes.yaml> <factory.descriptor.yaml> --out DIR`
+converts the old pair.
+
 ### Team overrides
 
 The engine resolves `roles/`, `skills/`, and `workflows/` in the team repository
@@ -43,6 +53,11 @@ files come from the engine.
 This repository is both the engine package and the `slop-factory` team
 configuration. The engine is installed with the command above; this
 repository's descriptor and overrides configure its own factory.
+
+Slop factory's settings live in
+[slop-eval-factory](https://github.com/zaharchenko-evgeny/slop-eval-factory):
+a change to its workflow, states, roles or skills goes there. CI checks the
+migrated copy in `factory/tests/fixtures/slop/` (`test_slop_plan_unchanged`).
 
 See [factory setup](skills/factory-setup/SKILL.md), [design](docs/design.md),
 and the [delivery workflow](workflows/delivery.md) for more detail.

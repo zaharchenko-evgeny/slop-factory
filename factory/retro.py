@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import config as cfg  # noqa: E402
+import vocab  # noqa: E402
 
 QUIET = ("triage", "ready")  # stage labels a person sets in the normal flow: not an intervention
 MARKER = re.compile(r"<!-- factory:review focus=(\S+) .*?verdict=(\w+)")
@@ -59,8 +60,8 @@ def ticket_facts(number, issue_events, pr_events, reviews, comments, bots=(), bo
     estimate = SIZE.search(body or "")
     return {
         "ticket": number,
-        "fix_rounds": len(labeled(pr_events, "factory:fix-")),
-        "update_rounds": len(labeled(pr_events, "factory:update-")),
+        "fix_rounds": len(labeled(pr_events, vocab.prefix("fix-<tier>"))),
+        "update_rounds": len(labeled(pr_events, vocab.prefix("update-<tier>"))),
         "reviews": by_focus,
         "stops": [{"stage": e["label"]["name"], "at": e["created_at"], "reason": reason(e["created_at"])} for e in stops],
         "operator_interventions": operator,
