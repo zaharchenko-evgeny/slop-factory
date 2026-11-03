@@ -2,20 +2,12 @@
  "REVIEWER": {
   "type": "object",
   "required": [
-   "handoff",
    "verdict",
    "summary",
-   "risk",
-   "docs_impact",
    "findings"
   ],
   "x-verdict-from": "findings",
   "properties": {
-   "handoff": {
-    "enum": [
-     "REVIEWER"
-    ]
-   },
    "verdict": {
     "enum": [
      "approve",
@@ -24,21 +16,6 @@
    },
    "summary": {
     "type": "string"
-   },
-   "reviewed_sha": {
-    "type": "string"
-   },
-   "risk": {
-    "enum": [
-     "low",
-     "high"
-    ]
-   },
-   "docs_impact": {
-    "enum": [
-     "yes",
-     "no"
-    ]
    },
    "findings": {
     "type": "array",
