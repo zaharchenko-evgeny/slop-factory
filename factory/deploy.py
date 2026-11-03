@@ -209,6 +209,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{prefix}{env}",
+                **({"additionalRepositories": [repository({"url": config["team_repository"]})]}
+                   if config.get("team_repository") else {}),
                 "prompt": script_prompt(name) if n["role"] == "script" else agent_prompt(name, n, config, aname, focus),
             })
     envs = []

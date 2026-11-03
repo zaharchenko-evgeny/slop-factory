@@ -57,10 +57,16 @@ if ! command -v gh >/dev/null 2>&1; then
   tar -xzf "$TMP/pkg.tgz" -C "$TMP"
   cp "$TMP"/gh_*/bin/gh "$BIN/gh"
 fi
-# The settings repository is public and read-only: cloned without a token, replaced on every launch.
+# The settings repository is an additional repository of the automation (checked out beside this one); when the
+# launch has none, it is public and read-only: cloned without a token, replaced on every launch.
 if [ "$TEAM" != . ]; then
+  SIBLING="../$(basename "${FACTORY_TEAM_REPOSITORY%/}" .git)"
   rm -rf "$TEAM"
-  git clone --depth 1 "$FACTORY_TEAM_REPOSITORY" "$TEAM" || { echo "startup: team clone failed" >&2; exit 1; }
+  if [ -d "$SIBLING/.git" ]; then
+    ln -s "$(cd "$SIBLING" && pwd)" "$TEAM"
+  else
+    git clone --depth 1 "$FACTORY_TEAM_REPOSITORY" "$TEAM" || { echo "startup: team clone failed" >&2; exit 1; }
+  fi
   sed -i '/^export FACTORY_TEAM=/d' "$HOME/.bashrc" 2>/dev/null || true
   echo "export FACTORY_TEAM=\"$TEAM\"" >> "$HOME/.bashrc"
 fi
@@ -82,7 +88,7 @@ for s in $(skill_names); do
   case "$s" in
     ""|.|..|*/*) echo "startup: invalid skill name: $s" >&2; exit 1 ;;
   esac
-  src="./skills/$s"
+  src="$TEAM/skills/$s"
   [ -d "$src" ] || src="$ENGINE/skills/vendor/$s"
   for d in "$HOME/.agents/skills" "$HOME/.claude/skills"; do
     mkdir -p "$d"

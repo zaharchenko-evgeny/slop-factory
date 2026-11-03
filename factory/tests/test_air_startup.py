@@ -94,6 +94,14 @@ class StartupTest(unittest.TestCase):
         self.assertIn("git fetch --depth 1 origin v0.1.0", log)
         self.assertIn(f'export FACTORY_TEAM="{team}"', (self.home / ".bashrc").read_text())
 
+    def test_additional_team_repository_is_used_without_clone(self):
+        self.env["FACTORY_TEAM_REPOSITORY"] = "https://github.com/o/team"
+        (self.repo.parent / "team/.git").mkdir(parents=True)
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("git clone", self.log.read_text())
+        self.assertEqual((self.home / "factory-team").resolve(), (self.repo.parent / "team").resolve())
+
     def test_factory_install_failure_is_reported(self):
         uv = Path(self.env["PATH"].split(":", 1)[0]) / "uv"
         uv.write_text("#!/bin/sh\nexit 1\n")
