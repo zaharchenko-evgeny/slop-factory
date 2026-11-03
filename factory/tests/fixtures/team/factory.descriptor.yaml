@@ -1,0 +1,132 @@
+# Slop team descriptor (ADR-0015). Roles and workflows read every
+# repository, tracker, model name from here; engine/defaults.yaml holds what teams share.
+engine: 1
+
+project: { name: "Slop factory" }
+
+repositories:
+  - name: slop-factory
+    url: https://github.com/zaharchenko-evgeny/slop-factory
+    default_branch: main
+    role: primary
+
+branch_pattern: "ez/{ticket}-{slug}"
+commit_prefix: "#{ticket} "
+
+tracker:
+  adapter: github-issues
+  repository: zaharchenko-evgeny/slop-factory
+
+notify:
+  github_user: zaharchenko-evgeny
+
+# Bots other than targets.air.bot_login whose APPROVED / CHANGES_REQUESTED reviews count in a round.
+reviews:
+  trusted_bots: []
+
+targets:
+  # Air model ids per tier. Only the Air target reads `targets.air.models`.
+  # Air ids differ from the `models` ones below: `[1m]` suffix, no Haiku 5.5.
+  air:
+    # Author of the agents' reviews; a factory:review marker counts only on its reviews (never `gh api user`: 403 in a run).
+    bot_login: jetbrains-air[bot]
+    models:
+      cheap: codex/gpt-6-luna
+      mid: claude/claude-sonnet-5-5[1m]
+      strong: claude/claude-sonnet-5-5[1m]
+      # Review tiers use another model family than the developer (claude).
+      review: codex/gpt-6-luna
+      review_strong: codex/gpt-6.1-sol
+
+# Model tiers (design §10a). Escalate one tier only after a failure.
+models:
+  cheap: anthropic/claude-haiku-5-5
+  mid: anthropic/claude-sonnet-5-5
+  strong: anthropic/claude-sonnet-5-5
+  # Reviewers run on a different model family from the developer when one is available.
+  review: anthropic/claude-haiku-5-5
+  # Only Haiku 5.5 and Sonnet 5.5 are used (retro of 29 October); `strong` is Sonnet too.
+  review_strong: anthropic/claude-sonnet-5-5
+
+roles:
+  router: { tier: cheap }
+  # `fallback` reruns the developer once, in its resumed session, after a malformed handoff.
+  developer: { tier: mid, tier_high_risk: strong, fallback: mid }
+  # One entry per reviewer focus (an action mode in the node workflow).
+  # `fallback` reruns the same focus once when the reviewer's output has no valid handoff.
+  reviewer:
+    tools: read-only
+    modes:
+      full: { tier: review_strong, fallback: cheap }             # risk low: one reviewer, covers every focus
+      behaviour: { tier: review, fallback: cheap }               # risk high
+      structure-security: { tier: review_strong, fallback: cheap }  # risk high
+      knowledge: { tier: review_strong, fallback: cheap }          # distill PRs only (never required by risk)
+  # Runs when a reviewer reports docs_impact.
+  doc-writer: { tier: mid }
+  # Records the run on the knowledge branch after the merge.
+  retro: { tier: cheap }
+  # Weekly, outside any ticket: merges the knowledge inbox into `knowledge/` as one PR.
+  distill: { tier: mid }
+
+# Retro entries (design §11, ADR-0007): pushed to `branch` under `<dir>/<repo>/`,
+# never to a default branch. The distill runs every
+# `distill_every_days`) opens one PR from `<distill_branch>-<date>` to the default branch with the
+# entries merged into `<dir>/` and listed in `<dir>/distilled.txt`.
+knowledge: { branch: knowledge-inbox, dir: knowledge, distill_branch: knowledge-distill, distill_every_days: 7, agents_md_lines: 150 }
+
+gates:
+  ticket_approval: human
+  # The `merge` node merges an approved PR at risk <= `max_risk`; `enabled: false` restores human merging.
+  auto_merge: { enabled: true, max_risk: high }
+  # Until the factory gates are live, the listed external writes are shown to
+  # the user and wait for approval. Issue and PR text, comments and label
+  # changes are auto-approved; merges follow `auto_merge`.
+  confirm_external_writes: true
+  confirm_external_writes_scope: []
+
+limits:
+  concurrent_deliveries: 2
+  fix_rounds: 3
+  # Air spend guard (gate.check refuses, the sweep blocks): implement, fix and update runs per ticket.
+  agent_runs_per_ticket: 8
+  stale_hours: 2   # recover node: hours in an active stage before a missing waking event counts as a lost run
+  stale_command_minutes: 30   # recover command labels with no later outcome
+  resume_cap: 3   # comment resumes of a waiting ticket before it stays for a person
+  runs_per_day: 20
+  environment_repair_attempts: 2
+
+# Pre-review checks, run from the ticket worktree. Non-zero exit = failure.
+# `requires: <command>`: when the command is missing the check reports `skipped`.
+# shortcut: ShellCheck runs only when installed and Betterleaks is not run
+# locally yet; #5 adds both as blocking CI gates.
+checks:
+  - name: doc-references
+    stage: pre-review
+    mode: blocking
+    run: uv run --quiet factory/check_refs.py
+  - name: whitespace
+    stage: pre-review
+    mode: blocking
+    run: git diff --check "origin/${FACTORY_BASE:-main}...HEAD"
+  - name: setup-scripts-parse
+    stage: pre-review
+    mode: blocking
+    run: for f in roles/*.sh roles/*/setup.sh; do bash -n "$f" || exit 1; done
+  - name: shellcheck
+    stage: pre-review
+    mode: advisory
+    requires: uvx
+    run: uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck -x roles/*.sh roles/*/setup.sh
+  - name: vendored-skills
+    stage: pre-review
+    mode: blocking
+    run: python3 scripts/vendor-skills.py --check
+  - name: air-startup
+    stage: pre-review
+    mode: blocking
+    requires: uvx
+    run: bash -n .air/cloud/startup.sh && uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck .air/cloud/startup.sh
+  - name: state-machine
+    stage: pre-review
+    mode: blocking
+    run: uv run --quiet factory/nodes.py validate && uv run --quiet factory/tests/test_nodes.py && uv run --quiet factory/tests/test_gate.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_gate_github.py && uv run --quiet factory/tests/test_vendor_skills.py && uv run --quiet factory/tests/test_air_startup.py && uv run --quiet factory/tests/test_deploy.py && uv run --quiet factory/tests/test_cli.py && uv run --quiet factory/tests/test_config.py && uv run --quiet factory/tests/test_knowledge.py && uv run --quiet factory/tests/test_doctor.py && uv run --quiet factory/cli.py validate && uv run --quiet skills/factory-setup/tests/test_templates.py

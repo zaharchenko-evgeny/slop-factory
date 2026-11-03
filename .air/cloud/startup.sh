@@ -11,10 +11,13 @@ case "${FACTORY_ENV:-default}" in
   write) ROLES="developer"; TOOLS="shellcheck-py==0.10.0.1 jactionlint==2.3.0" ;;  # tools of the pre-review and CI checks
   ops) ROLES="distill retro" ;;
 esac
-# resolve <path>: the team's file in the checkout replaces the engine's file at the same path.
+# resolve <path>: the team's file replaces the engine's file at the same path. The team root is the settings
+# repository's checkout when `factory deploy` rendered FACTORY_TEAM_REPOSITORY, else the repository root.
 ENGINE="$HOME/factory-main"
 [ -n "${FACTORY_DRY:-}" ] && ENGINE=.
-resolve() { if [ -e "./$1" ]; then echo "./$1"; else echo "$ENGINE/$1"; fi; }
+TEAM=.
+[ -n "${FACTORY_TEAM_REPOSITORY:-}" ] && [ -z "${FACTORY_DRY:-}" ] && TEAM="$HOME/factory-team"
+resolve() { if [ -e "$TEAM/$1" ]; then echo "$TEAM/$1"; else echo "$ENGINE/$1"; fi; }
 # skill_names / role_tools: the skills (skills.txt) and the `need_tools` of every role of the environment.
 skill_names() { for r in $ROLES; do cat "$(resolve "roles/$r/skills.txt")"; done | sort -u | tr '\n' ' '; }
 role_tools() { for r in $ROLES; do sed -n 's/^need_tools //p' "$(resolve "roles/$r/setup.sh")"; done | tr ' ' '\n' | sort -u | tr '\n' ' '; }
@@ -54,9 +57,33 @@ if ! command -v gh >/dev/null 2>&1; then
   tar -xzf "$TMP/pkg.tgz" -C "$TMP"
   cp "$TMP"/gh_*/bin/gh "$BIN/gh"
 fi
+# The settings repository is an additional repository of the automation (checked out beside this one); when the
+# launch has none, it is public and read-only: cloned without a token, replaced on every launch.
+if [ "$TEAM" != . ]; then
+  SIBLING="../$(basename "${FACTORY_TEAM_REPOSITORY%/}" .git)"
+  rm -rf "$TEAM"
+  if [ -d "$SIBLING/.git" ]; then
+    ln -s "$(cd "$SIBLING" && pwd)" "$TEAM"
+  else
+    git clone --depth 1 "$FACTORY_TEAM_REPOSITORY" "$TEAM" || { echo "startup: team clone failed" >&2; exit 1; }
+  fi
+  sed -i '/^export FACTORY_TEAM=/d' "$HOME/.bashrc" 2>/dev/null || true
+  echo "export FACTORY_TEAM=\"$TEAM\"" >> "$HOME/.bashrc"
+fi
+FACTORY_TEAM=$(cd "$TEAM" && pwd)
+export FACTORY_TEAM
+# The engine version is the settings descriptor's `engine`: a tag or `main`; a number or none means main.
+REF=$(sed -n 's/^engine: *"\{0,1\}\([^" #]*\).*/\1/p' "$TEAM/factory.descriptor.yaml" 2>/dev/null | head -n 1)
+case "$REF" in
+  main|"") REF=main ;;
+  *[!0-9]*)
+    if git check-ref-format "refs/tags/$REF"; then REF="refs/tags/$REF"; else REF=main; fi
+    ;;
+  *) REF=main ;;
+esac
 if ! { git worktree remove --force "$HOME/factory-main" 2>/dev/null || rm -rf "$HOME/factory-main"; } ||
-  ! git fetch --depth 1 origin main ||
-  ! git worktree add --detach "$HOME/factory-main" origin/main ||
+  ! git fetch --depth 1 origin "$REF" ||
+  ! git worktree add --detach "$HOME/factory-main" FETCH_HEAD ||
   ! uv tool install --force "$HOME/factory-main"; then
   echo "startup: factory install failed" >&2
   exit 1
@@ -67,7 +94,7 @@ for s in $(skill_names); do
   case "$s" in
     ""|.|..|*/*) echo "startup: invalid skill name: $s" >&2; exit 1 ;;
   esac
-  src="./skills/$s"
+  src="$TEAM/skills/$s"
   [ -d "$src" ] || src="$ENGINE/skills/vendor/$s"
   for d in "$HOME/.agents/skills" "$HOME/.claude/skills"; do
     mkdir -p "$d"

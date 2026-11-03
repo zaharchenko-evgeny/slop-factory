@@ -54,6 +54,8 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
     """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
     spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
             "when": n.get("when"), "outcomes": n["outcomes"]}
+    if n.get("routine"):
+        spec["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
     if n.get("tiers"):
         spec["tiers"] = n["tiers"]  # the ordered tiers the gate escalates through
     if any((o or {}).get("else") for o in n["outcomes"].values()):
@@ -213,6 +215,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{prefix}{env}",
+                **({"additionalRepositories": [repository({"url": config["team_repository"]})]}
+                   if config.get("team_repository") else {}),
                 "prompt": script_prompt(name) if n["role"] == "script" else agent_prompt(name, n, config, aname, focus),
             })
     envs = []
@@ -223,7 +227,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "name": f"{prefix}{env}",
             "repository": repo["url"],
             "startup": d["startup"],
-            "variables": {"FACTORY_ENV": env},
+            "variables": {"FACTORY_ENV": env, **({"FACTORY_TEAM_REPOSITORY": config["team_repository"]}
+                                                 if config.get("team_repository") else {})},
             "secrets": d.get("secrets", []),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
