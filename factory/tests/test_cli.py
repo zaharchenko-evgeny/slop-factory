@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-cfg.set_team(ROOT)
+cfg.set_team(ROOT / "factory/tests/fixtures/team")
 import cli  # noqa: E402
 
 cli.load_engine(cli.HERE)
@@ -30,7 +30,7 @@ PAYLOAD = {"action": "labeled", "issue": {"number": 7, "title": "Add x", "update
 
 class BeginEndTest(unittest.TestCase):
     def setUp(self):
-        cfg.set_team(ROOT)
+        cfg.set_team(ROOT / "factory/tests/fixtures/team")
         self.old = os.getcwd()
         self.tmp = tempfile.TemporaryDirectory()
         os.chdir(self.tmp.name)
@@ -149,7 +149,7 @@ class BeginEndTest(unittest.TestCase):
     def test_begin_main_uses_existing_main_worktree(self):
         main = Path("main")
         main.mkdir()
-        shutil.copy2(ROOT / "factory.descriptor.yaml", main / "factory.descriptor.yaml")
+        shutil.copy2(ROOT / "factory/tests/fixtures/team/factory.descriptor.yaml", main / "factory.descriptor.yaml")
         (main / "factory").mkdir()
         (main / "factory/gate.py").write_text(
             'import json, sys\nprint(json.dumps({"gate": "main", "handoff_path": "h.json"}))\n')
