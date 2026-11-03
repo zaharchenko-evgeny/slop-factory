@@ -135,6 +135,9 @@ class MemoryTracker:
                                 "labels": [f"risk:{risk}", f"factory:{stage}"], "state": "open"}
         return number
 
+    def add_to_map(self, ticket):
+        self._t(ticket)["parent"] = "map"
+
     def canary_status(self, ticket):
         t = self._t(ticket)
         return {"stage": t.get("stage", "none"), "summary": t.get("last_summary", ""),

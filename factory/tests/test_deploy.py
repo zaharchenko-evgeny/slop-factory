@@ -165,6 +165,7 @@ class ApplyTest(unittest.TestCase):
         ticket = tracker.tickets[1]
         self.assertEqual(ticket["title"], "Canary after deploy d-123")
         self.assertEqual(ticket["stage"], "done")
+        self.assertEqual(ticket["parent"], "map")
         self.assertCountEqual(ticket["labels"], ["risk:low", "factory:triage", "factory:canary"])
         self.assertIn("grep -q d-123 docs/canary.md", ticket["body"])
         self.assertEqual([x[0] for x in self.calls("environment")], ["create_environment"])
@@ -178,6 +179,7 @@ class ApplyTest(unittest.TestCase):
                                                 clock=lambda: now[0], timeout=45, interval=15), 1)
         self.assertEqual(tracker.tickets[8]["title"], "Canary failed after deploy d-7")
         self.assertIn("timed out", tracker.tickets[8]["body"])
+        self.assertEqual(tracker.tickets[8]["parent"], "map")
 
     def test_blocked_canary_reports_stage_and_last_summary(self):
         tracker = MemoryTracker({7: {"stage": "blocked", "last_summary": "check failed"}})

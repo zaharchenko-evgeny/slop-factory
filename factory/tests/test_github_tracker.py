@@ -75,6 +75,10 @@ class FakeGh:
             return "\n".join(json.dumps(x) for x in items)
         if args[0] == "api":  # comment create or PATCH
             self.writes.append(args)
+            if "--method" in args and args[args.index("--method") + 1] == "POST":
+                m = re.fullmatch(rf"repos/{REPO}/issues/(\d+)/sub_issues", args[args.index("--method") + 2])
+                self.subs.setdefault(int(m[1]), []).append(int(args[args.index("-f") + 1].split("=")[1]))
+                return ""
             body = args[-1].removeprefix("body=")
             if m := re.fullmatch(rf"repos/{REPO}/issues/(\d+)/comments", args[1]):
                 self.next_id += 1
@@ -94,6 +98,11 @@ def tracker(fake):
 
 
 class GitHub(unittest.TestCase):
+
+    def test_add_to_configured_map(self):
+        fake = FakeGh({21: {"labels": ["factory:map"]}, 22: {"labels": ["factory:map"]}})
+        tracker(fake).add_to_map(30)
+        self.assertEqual(fake.subs, {21: [30]})
 
     def test_canary_issue_operations(self):
         fake = FakeGh({23: {"title": "Canary", "labels": ["factory:canary", "factory:in-dev"],

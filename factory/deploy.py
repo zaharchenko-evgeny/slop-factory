@@ -378,9 +378,10 @@ def wait_for_canary(tracker, ticket, deploy_id, *, sleep=time.sleep, clock=time.
         reason = "node error" if status["error"] or stage in ("blocked", "failed", "error") else None
         if reason or clock() >= deadline:
             reason = reason or "timed out after 45 minutes"
-            tracker.create_issue(f"Canary failed after deploy {deploy_id}",
-                                 failure_body(deploy_id, stage, status["summary"], reason),
-                                 risk="low", stage="triage")
+            failure = tracker.create_issue(f"Canary failed after deploy {deploy_id}",
+                                           failure_body(deploy_id, stage, status["summary"], reason),
+                                           risk="low", stage="triage")
+            tracker.add_to_map(failure)
             print(f"canary failed: stage={stage}; last run summary={status['summary'] or 'none'}; {reason}",
                   file=sys.stderr)
             return 1
@@ -391,6 +392,7 @@ def create_canary(tracker, deploy_id, *, sleep=time.sleep, clock=time.monotonic)
     for old in tracker.canary_tickets():
         tracker.close_issue(old, f"[factory] Superseded by deploy {deploy_id}.\n\nFactory-Run: deploy:{deploy_id}")
     ticket = tracker.create_issue(f"Canary after deploy {deploy_id}", canary_body(deploy_id), risk="low", stage="triage")
+    tracker.add_to_map(ticket)
     tracker.add_label(ticket, "factory:canary")
     return wait_for_canary(tracker, ticket, deploy_id, sleep=sleep, clock=clock)
 

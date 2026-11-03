@@ -193,6 +193,16 @@ class GitHubTracker:
                         "--label", self.risk_labels[risk], "--label", self.stages[stage]]).strip()
         return int(url.rsplit("/", 1)[1])
 
+    def add_to_map(self, ticket):
+        """Attach a generated issue to the configured factory map."""
+        maps = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
+                                   self.map_label, "--json", "number", "--limit", "100"]))
+        if not maps:
+            raise RuntimeError(f"no open factory map labelled {self.map_label}")
+        map_ticket = min(i["number"] for i in maps)
+        self.run(["api", "--method", "POST", f"repos/{self.repo}/issues/{map_ticket}/sub_issues",
+                  "-f", f"sub_issue_id={ticket}"])
+
     def canary_tickets(self):
         found = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
                                      "factory:canary", "--json", "number", "--limit", "1000"]))
