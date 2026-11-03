@@ -74,6 +74,15 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-review")
 
+    def test_begin_lists_notes_for_role(self):
+        mine, theirs = {"for": "developer", "hint": "see a.py"}, {"for": "reviewer", "hint": "skip"}
+        tracker = self.tracker(agent_notes=[theirs, mine, {"for": "any", "hint": "all"}])
+        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        got = json.loads(out)
+        self.assertEqual([n["hint"] for n in got["agent_notes"]], ["see a.py", "all"])
+        self.assertNotIn("agent_notes", got["context"])
+
     def test_end_without_begin_is_an_error(self):
         self.assertEqual(self.run_cli("end", "done")[0], 2)
 
@@ -108,7 +117,7 @@ class BeginEndTest(unittest.TestCase):
     def test_end_carries_dispute_data(self):
         Path("a.json").write_text(json.dumps(["B1: disputed — intended"]))
         a = argparse.Namespace(outcome="done", findings=None, slices=None, checks=None, reason=None, summary=None,
-                               size_estimate=None, addressed="a.json", disputed_focuses="behaviour,full")
+                               size_estimate=None, addressed="a.json", disputed_focuses="behaviour,full", notes=None)
         data = cli.handoff_of(a)
         self.assertEqual(data["findings_addressed"], ["B1: disputed — intended"])
         self.assertEqual(data["disputed_focuses"], ["behaviour", "full"])

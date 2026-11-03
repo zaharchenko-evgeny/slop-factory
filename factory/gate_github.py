@@ -18,6 +18,38 @@ import yaml
 import config
 from github_tracker import gh
 
+NOTE_FIELDS, NOTE_FOR, NOTE_MAX = ("for", "files", "repro", "hint", "context"), ("fixer", "reviewer", "developer", "any"), 2000
+NOTES = re.compile(r"<!-- factory:agent-notes\s*(\{.*?\})\s*-->", re.S)
+SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}"
+                    r"|\bgithub_pat_\w{20,}|\bxox[abprs]-[\w-]{10,}|\bsk-[A-Za-z0-9_-]{20,}"
+                    r'|(?i:\b(?:api[_-]?key|secret|token|passw(?:or)?d)\b\s*[:=]\s*[^\s",]+)')
+
+
+def clean_notes(raw):
+    """The notes object of one block: known fields only, secret-looking text redacted; ValueError when it is no
+    object, `for` is unknown or it serialises past NOTE_MAX characters."""
+    if not isinstance(raw, dict):
+        raise ValueError("agent notes: needs an object")
+    notes = {k: raw[k] for k in NOTE_FIELDS if k in raw}
+    if notes.get("for") not in NOTE_FOR:
+        raise ValueError(f"agent notes: `for` is one of {', '.join(NOTE_FOR)}")
+    if len(json.dumps(notes)) > NOTE_MAX:
+        raise ValueError(f"agent notes: over {NOTE_MAX} characters")
+    return json.loads(SECRET.sub("[redacted]", json.dumps(notes)))
+
+
+def parse_notes(body, login="", kind="User"):
+    """The valid notes blocks of `body`, only from a bot author: a person's text is no source of notes."""
+    if kind != "Bot" and not login.endswith("[bot]"):
+        return []
+    out = []
+    for m in NOTES.finditer(body or ""):
+        try:
+            out.append(clean_notes(json.loads(m[1])))
+        except ValueError:
+            pass
+    return out
+
 
 def gate_clear(n):
     from gate import clear_commands
@@ -298,6 +330,8 @@ class GitHubGateTracker:
              "handed_to_fix": False, "risk": risk, "behind": False,
              "issue_state": issue.get("state", "open"),
              "title": issue.get("title", ""), "body": body, "author": (issue.get("user") or {}).get("login"), "branch": None}
+        since = getattr(self, "_since", "")  # a person's factory:ready starts fresh
+        got = self._notes(self._list(f"issues/{n}/comments"), "created_at", since)
         if stage == "needs-answers":
             waiting = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["needs-answers"]]
             comments = self._list(f"issues/{n}/comments")
@@ -331,6 +365,9 @@ class GitHubGateTracker:
             f["handed_to_fix"] = bool(writes) and max(writes) > max(latest_review, commit_date)
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
+            got += (self._notes(self._list(f"issues/{pr['number']}/comments"), "created_at", since)
+                    + self._notes(self._list(f"pulls/{pr['number']}/reviews"), "submitted_at", since)
+                    + self._notes([pr], "created_at", since))
             if stage == "approved" and pr.get("state") == "open":  # only the merge gates read it
                 f["behind"] = self._api(f"compare/{pr['base']['ref']}...{head}")["behind_by"] > 0
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
@@ -342,7 +379,13 @@ class GitHubGateTracker:
                      fix_rounds=len({(r["commit_id"], r["rereview"]) for r in reviews
                                      if r["agent"] and r["verdict"] == "changes"
                                      and (r.get("submitted_at") or "") >= since}))  # same-head dispute rereviews count as a new round
+        f["agent_notes"] = [n for _, n in sorted(got, key=lambda t: t[0], reverse=True)]
         return f
+
+    def _notes(self, items, stamp, since):
+        """(time, notes) of the bot-written items (comments, reviews, a PR) from `since` on."""
+        return [(x.get(stamp) or "", n) for x in items if (x.get(stamp) or "") >= since
+                for n in parse_notes(x.get("body"), (x.get("user") or {}).get("login", ""), (x.get("user") or {}).get("type", ""))]
 
     def stale_facts(self, n):
         """facts plus what the stale sweep needs: `since` (last label or commit event, ISO), the command label
@@ -436,7 +479,14 @@ class GitHubGateTracker:
                 raise RuntimeError(f"comment: no PR for ticket {n}")
             if any(c["body"] == body for c in self._list(f"issues/{pr['number'] if pr else n}/comments")):
                 return False
+            body += self._block(e)
             self.run(["issue", "comment", str(pr["number"] if pr else n), "-R", self.repo, "--body", body])
+            return True
+        if kind == "pr-notes":  # the PR description of a developer's `done`; no PR yet: the platform opens it later
+            pr = self._pr(n)
+            if pr is None or value in (pr.get("body") or ""):
+                return False
+            self.run(["pr", "edit", str(pr["number"]), "-R", self.repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
             return True
         if kind == "review":
             return self._review(n, e)
@@ -537,6 +587,11 @@ class GitHubGateTracker:
                   *[x for a in who for x in ("-f", f"reviewers[]={a}")]])
         return True
 
+    @staticmethod
+    def _block(e):
+        """The hidden notes block an effect carries (`notes`: the gate's cleaned object), after the visible text."""
+        return f"\n\n<!-- factory:agent-notes\n{json.dumps(e['notes'])}\n-->" if e.get("notes") else ""
+
     def _review(self, n, e):
         pr, focus = self._pr(n), e.get("focus")
         if pr is None or not focus:
@@ -563,7 +618,7 @@ class GitHubGateTracker:
         if e.get("run_id"):
             body += f"\n\nFactory-Run: {e['run_id']}"
         self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
-                  "-f", "event=COMMENT", "-f", f"body={body}"])
+                  "-f", "event=COMMENT", "-f", f"body={body}{self._block(e)}"])
         if rereview:
             self._edit(pr["number"], remove=[f"factory:rereview-{focus}"], on="pr")
         return True
