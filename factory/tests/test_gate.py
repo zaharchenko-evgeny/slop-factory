@@ -55,6 +55,19 @@ class GateTest(unittest.TestCase):
         facts = {"stage": "in-review", "ci": "green", "focus_missing": ["structure-security"]}
         self.assertEqual(gate.review_wake_labels(facts), ["factory:review-structure-security"])
 
+    def test_review_check_reads_rereview_focus_from_tracker_facts(self):
+        tracker = MemoryTracker({"7": {
+            "stage": "in-review", "head": "abc", "ci": "green",
+            "focus_missing": [], "pending_rereviews": ["behaviour"],
+        }})
+        event = {"id": "pull_request:7:labeled", "ticket": 7,
+                 "event_name": "pull_request", "action": "labeled", "focus": "behaviour"}
+
+        code, result = gate.check("review", event, tracker, NODES, CONFIG)
+
+        self.assertEqual(code, gate.GO)
+        self.assertTrue(result["go"])
+
     def test_writer_answer_resumes_needs_answers(self):
         self.assertEqual(gate.sweep_plan({"stage": "needs-answers", "answered": True}), ("finish", "answered", {}))
 
@@ -430,11 +443,31 @@ class TriggerTest(unittest.TestCase):
         return code, json.loads(out.getvalue())
 
     def test_check_resolves_ticket_and_head_from_raw_payloads(self):
-        want = {"issues": (None, "issues:2026-10-31T09:00:00Z"), "pull_request": ("abc", "pull_request:2026-10-31T10:00:00Z"),
-                "pull_request_review": ("abc", "pull_request_review:2026-10-31T11:00:00Z")}
+        want = {"issues": 7, "pull_request": 7, "pull_request_review": 7}
         for name, payload in TRIGGERS.items():
             ev = gate.read(self.file(payload), "event", raw=True)
-            self.assertEqual((ev["ticket"], ev["head"], ev["id"]), (7, *want[name]), name)
+            self.assertEqual(ev["ticket"], want[name], name)
+            self.assertNotIn("head", ev)
+
+    def test_begin_reads_head_from_port_not_payload(self):
+        tracker = MemoryTracker({7: {"stage": "in-review", "head": "trusted", "risk": "low", "ci": "green",
+                                     "pr": 9, "pr_state": "open", "focus_missing": ["full"]}})
+        payload = {"eventType": "pull_request.labeled", "data": {"action": "labeled", "number": 9,
+                                                                      "head": {"sha": "untrusted"}}}
+        path = self.file(payload)
+        with patch.object(tracker, "ticket_for_pr", return_value=7, create=True), \
+                patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker):
+            code, out = self.run_main(["check", "--node", "review", "--event", str(path)])
+        self.assertEqual(code, gate.GO)
+        self.assertTrue(out["go"])
+        self.assertEqual(out["context"]["head"], "trusted")
+
+    def test_begin_without_number_exits_11(self):
+        path = self.file({"eventType": "issues.labeled", "data": {"action": "labeled"}})
+        code, out = self.run_main(["check", "--node", "review", "--event", str(path),
+                                   "--tracker", "memory:" + str(self.file({}))])
+        self.assertEqual(code, 11)
+        self.assertEqual(out, {"go": False, "why": "payload has no issue or PR number"})
 
     def test_check_names_a_truncated_event_as_malformed(self):
         fd, name = tempfile.mkstemp()
@@ -485,19 +518,16 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual(code, gate.BAD)
         self.assertIn("invalid sweep event", out["error"])
 
-    def test_sweep_event_resolves_ticket_from_pr_title(self):
+    def test_sweep_event_resolves_ticket_from_tracker_pr_head(self):
         from gate_port import MemoryTracker
-        cases = (("#335 API rate limit fix", ""),
-                 ("Factory change", "Closes #335"),
-                 ("Factory change\n\nCloses #335", ""))
-        for title, body in cases:
-            with self.subTest(title=title, body=body):
-                tracker = MemoryTracker({335: {"stage": "ready"}, 336: {"stage": "ready"}})
-                tracker.sweep_tickets = lambda stages: self.fail("event sweep must not list all tickets")
-                f = self.file({"action": "labeled", "pull_request": {"title": title, "body": body}})
-                code, out, _ = self.run_sweep(["--event", str(f), "--dry-run"], tracker)
-                self.assertEqual(code, gate.GO)
-                self.assertEqual([x["ticket"] for x in out["sweep"]], [335])
+        tracker = MemoryTracker({335: {"stage": "ready"}})
+        tracker.sweep_tickets = lambda stages: self.fail("event sweep must not list all tickets")
+        tracker.ticket_for_pr = lambda number: 335
+        f = self.file({"eventType": "pull_request.labeled", "data": {"action": "labeled", "number": 44,
+                                                                         "title": "untrusted"}})
+        code, out, _ = self.run_sweep(["--event", str(f), "--dry-run"], tracker)
+        self.assertEqual(code, gate.GO)
+        self.assertEqual([x["ticket"] for x in out["sweep"]], [335])
 
     def test_sweep_without_scope_is_rejected_except_stale(self):
         from gate_port import MemoryTracker

@@ -110,38 +110,48 @@ class NoTicket(Exception):
     pass
 
 
-def from_trigger(d):
-    """{id, ticket, head, actor} of a raw webhook payload (issues, pull_request, pull_request_review)."""
+class MissingNumber(Exception):
+    pass
+
+
+def from_trigger(d, tracker=None):
+    """Extract the event kind and ticket number; tracker facts supply mutable metadata."""
+    event_name = d.get("eventType") or d.get("event_name")
     if not any(isinstance(d.get(key), dict) for key in ("pull_request", "issue", "review")):
         if isinstance(d.get("data"), dict):
+            wrapper = d
             d = d["data"]
+            event_name = event_name or wrapper.get("eventType") or wrapper.get("event_name")
     pr, issue, review = d.get("pull_request"), d.get("issue"), d.get("review")
-    if not isinstance(pr, dict) and not isinstance(issue, dict):
-        raise Bad("malformed event: needs `ticket` or a trigger payload")
-    name = "pull_request_review" if review and pr else "pull_request" if pr else "issues"
-    src = pr or issue
-    if pr:
-        ref = (pr.get("head") or {}).get("ref") or ""
-        m = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
-        if not m:
-            raise NoTicket(f"PR #{pr.get('number')} is not on an ez/<n>- branch")
-        ticket = int(m[1])
+    is_pr = isinstance(pr, dict) or str(event_name or "").startswith("pull_request")
+    src = pr or issue or d
+    number = src.get("number") if isinstance(src, dict) else None
+    if not isinstance(number, int) or number < 1:
+        raise MissingNumber("payload has no issue or PR number")
+    name = "pull_request_review" if review and is_pr else "pull_request" if is_pr else "issues"
+    if is_pr:
+        ref = ""
+        if tracker and hasattr(tracker, "ticket_for_pr"):
+            ticket = tracker.ticket_for_pr(number)
+        else:
+            ref = ((pr or {}).get("head") or {}).get("ref") or ""
+            m = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
+            ticket = int(m[1]) if m else None
+        if not isinstance(ticket, int):
+            raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
     else:
-        ticket = issue.get("number")
-    when = d.get("delivery") or d.get("delivery_id") or (review or {}).get("submitted_at") or src.get("updated_at")
-    label = (d.get("label") or {}).get("name", "")
-    rereview = label.removeprefix("factory:rereview-") if label.startswith("factory:rereview-") else None
-    return {"id": f"{name}:{when}", "ticket": ticket, "head": ((pr or {}).get("head") or {}).get("sha"),
-            "actor": (d.get("sender") or {}).get("login"), "rereview": rereview}
+        ticket = number
+    action = d.get("action") or "event"
+    return {"id": f"{name}:{ticket}:{action}", "ticket": ticket, "event_name": name, "action": action}
 
 
-def read(path, what, raw=False):
+def read(path, what, raw=False, tracker=None):
     try:
         data = json.loads(Path(path).read_text())
     except (OSError, ValueError) as e:
         raise Bad(f"malformed {what}: {e}")
     if isinstance(data, dict) and raw and "ticket" not in data:
-        return from_trigger(data)
+        return from_trigger(data, tracker)
     if not isinstance(data, dict) or "ticket" not in data:
         raise Bad(f"malformed {what}: needs an object with `ticket`")
     return data
@@ -236,6 +246,15 @@ def check(name, event, tracker, nodes, config):
     if "id" not in event:
         raise Bad("malformed event: needs `id`")
     facts = tracker.facts(event["ticket"])
+    if "event_name" in event:
+        event["id"] = f"{event['event_name']}:{event['ticket']}:{event['action']}:{facts.get('updated_at', '')}"
+        event["head"] = facts.get("head")
+        event["actor"] = facts.get("event_actor")
+        pending = facts.get("pending_rereviews", [])
+        labels = facts.get("pr_labels", [])
+        event["rereview"] = next(iter(pending), None) or next(
+            (x.removeprefix("factory:rereview-") for x in labels
+             if x.startswith("factory:rereview-")), None)
     if name == "fix" and facts.get("ci") == "red" and facts.get("head") and hasattr(tracker, "ci_failure"):
         failure = tracker.ci_failure(facts["head"])
         if failure:
@@ -916,24 +935,22 @@ def main(argv):
                     raw = json.loads(sys.stdin.read() if a.event == "-" else Path(a.event).read_text())
                     if not isinstance(raw, dict):
                         raise ValueError("expected an event object")
+                    event_name = raw.get("eventType") or raw.get("event_name")
                     raw = raw.get("data", raw)
-                    if (not isinstance(raw, dict) or not isinstance(raw.get("action"), str)
-                            or not any(isinstance(raw.get(key), dict) for key in ("issue", "pull_request"))):
-                        raise ValueError("expected an event with an action and issue or pull request")
+                    if not isinstance(raw, dict) or not (event_name or isinstance(raw.get("action"), str)):
+                        raise ValueError("expected an event name and issue or PR number")
                     issue_payload, pr_payload = raw.get("issue"), raw.get("pull_request")
-                    if issue_payload:
-                        issue = issue_payload.get("number")
-                        if raw["action"] == "closed":
+                    is_pr = bool(pr_payload) or str(event_name or "").startswith("pull_request")
+                    if not is_pr:
+                        issue = (issue_payload or raw).get("number")
+                        if raw.get("action") == "closed":
                             closed_ticket = issue
                     else:
-                        title = pr_payload.get("title") or ""
-                        body = pr_payload.get("body") or ""
-                        match = re.match(r"\s*#(\d+)\b", title) or re.search(
-                            r"(?im)^\s*closes\s+#(\d+)\b", f"{title}\n{body}"
-                        )
-                        if not match:
-                            raise ValueError("PR title must start with #<ticket> or contain Closes #<ticket>")
-                        issue = int(match[1])
+                        pr_number = (pr_payload or raw).get("number")
+                        ref_ticket = tracker.ticket_for_pr(pr_number) if hasattr(tracker, "ticket_for_pr") else None
+                        if ref_ticket is None:
+                            raise ValueError("PR head ref does not identify an ez/<ticket> branch")
+                        issue = ref_ticket
                     if not isinstance(issue, int) or issue < 1:
                         raise ValueError("event does not identify a ticket number")
                 except (OSError, ValueError, TypeError) as e:
@@ -967,7 +984,7 @@ def main(argv):
                 raise Bad("malformed handoff: needs an object")
             code, out = apply_routine(a.node, a.outcome or h.get("outcome") or h.get("status") or "", nodes)
         elif a.cmd == "check":
-            event = read(a.event or "", "event", raw=True)
+            event = read(a.event or "", "event", raw=True, tracker=tracker)
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
             code, out = check(a.node, event, tracker, nodes, config)
             if a.node == "implement" and code == GO:
@@ -980,7 +997,7 @@ def main(argv):
                     raise Bad(f"malformed handoff: {e}")
                 if not isinstance(h, dict):
                     raise Bad("malformed handoff: needs an object")
-                ev = read(a.event, "event", raw=True) if a.event else {}
+                ev = read(a.event, "event", raw=True, tracker=tracker) if a.event else {}
                 if "ticket" not in {**h, **ev}:
                     raise Bad("apply --handoff needs `ticket` in the handoff or --event")
                 payload = {**intake_fields(h), **h, **{k: v for k, v in ev.items() if v is not None and k != "id"},
@@ -994,6 +1011,9 @@ def main(argv):
     except NoTicket as e:
         print(json.dumps({"go": False, "reason": str(e)}))
         return NO_GO
+    except MissingNumber as e:
+        print(json.dumps({"go": False, "why": str(e)}))
+        return 11
     except Bad as e:
         print(json.dumps({"error": str(e)}))
         return BAD
