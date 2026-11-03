@@ -43,3 +43,8 @@ fi
 gh pr edit "$pr" --add-label "$want"
 gh api "repos/$GH_REPO/statuses/$SHA" -f state=success -f context=factory-ci-label -f description="$want" >/dev/null
 echo "PR #$pr at $SHA: $want"
+if [ "$want" = factory:ci-green ]; then
+  ticket=${BRANCH#ez/}
+  ticket=${ticket%%-*}
+  uv run --quiet factory/gate.py wake-reviewers --issue "$ticket" --completed-head "$SHA"
+fi

@@ -405,6 +405,14 @@ class PlanTest(unittest.TestCase):
         self.assertIn("`factory sweep --main --event`", a["[Slop factory] reopen"])
         self.assertNotIn("--main", a["[Slop factory] recover"])
 
+    def test_no_review_automation_triggers_on_ci_green(self):
+        automations = deploy.plan_air(nodes.load(), cfg.load())["automations"]
+        reviews = [a for a in automations if a["name"].startswith("[Slop factory] review-")]
+        self.assertTrue(reviews)
+        self.assertTrue(all("factory:ci-green" not in json.dumps(a["triggers"]) for a in reviews))
+        self.assertTrue(all(any(t["filters"].get("label", "").startswith("factory:review-")
+                               for t in a["triggers"]) for a in reviews))
+
     def test_event_script_nodes_scope_to_one_ticket(self):
         scripts = {"join", "start", "finish", "reopen", "merge"}
         for automation in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
