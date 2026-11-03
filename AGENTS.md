@@ -97,3 +97,7 @@ Models: Air tiers come from `targets.air.models` in the team repository’s `fac
 - Keep `roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
   ShellCheck.
 - Run artefacts live in `.factory/` (git-ignored). Never commit them.
+- Slop factory's workflow, states, roles and skills live in `slop-eval-factory`
+  (its `factory.project.yaml` and delivery workflow); change them there. The
+  engine's `factory/tests/fixtures/slop/` is its `factory migrate` copy for CI:
+  regenerate it, never edit it by hand.

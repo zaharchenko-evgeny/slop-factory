@@ -43,6 +43,15 @@ tracker:
   hold_label: factory:hold
   # PR facts the GitHub adapter reads from a PR label (CI labels the PR when it finishes).
   pr_fact_labels: { ci-green: factory:ci-green, ci-red: factory:ci-red }
+  # Command labels the engine writes (factory/vocab.py); a factory.project.yaml declares its own `commands`.
+  commands:
+    implement-<tier>: { label: factory:implement-<tier> }
+    fix-<tier>: { pr_label: factory:fix-<tier> }
+    update-<tier>: { pr_label: factory:update-<tier> }
+    review-<focus>: { pr_label: factory:review-<focus> }
+    rereview-<focus>: { pr_label: factory:rereview-<focus> }
+  # Set while a ticket or PR waits for a person.
+  needs_human_label: factory:needs-human
 # The tier `start` gives a ticket without a `complexity:<size>` label.
 defaults: { tier: mid }
 gates:
@@ -56,3 +65,4 @@ limits:
     - docs/statechart.md
     - docs/statechart-proposed.md
     - skills/factory-setup/templates/**
+    - factory/tests/fixtures/slop/**

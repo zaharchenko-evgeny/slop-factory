@@ -139,10 +139,29 @@ def _render_outcome(outcome, project):
     return out
 
 
+def _primary(project):
+    return next((r["name"] for r in project.get("repositories") or [] if r.get("role") == "primary"), None)
+
+
+def render_environments(project):
+    """The descriptor's environments in the nodes.yaml shape: one `repository`, `primary` for the primary one."""
+    primary, out = _primary(project), {}
+    for name, env in (project.get("environments") or {}).items():
+        out[name] = {}
+        for key, value in env.items():
+            if key == "repositories":
+                out[name]["repository"] = "primary" if value and value[0] == primary else (value or [None])[0]
+            else:
+                out[name][key] = copy.deepcopy(value)
+    return out
+
+
 def to_nodes(project, wf):
-    """The nodes.yaml shape (triggers, `when.stage`, label effects) of a v2 workflow under a project."""
+    """The nodes.yaml shape (triggers, `when.stage`, label effects, environments) of a v2 workflow under a project."""
     project = config.merge(_defaults(), project)
     out = {k: copy.deepcopy(v) for k, v in wf.items() if k not in ("format", "nodes")}
+    if "environments" not in out and project.get("environments"):
+        out = {"environments": render_environments(project), **out}
     out["nodes"] = {}
     for name, n in (wf.get("nodes") or {}).items():
         node = {}
@@ -299,9 +318,16 @@ def migrate(nodes, descriptor):
             else:
                 node[key] = copy.deepcopy(value)
         wf_nodes[name] = node
-    wf = {"format": FORMAT, **{k: copy.deepcopy(v) for k, v in nodes.items() if k != "nodes"}, "nodes": wf_nodes}
+    wf = {"format": FORMAT, **{k: copy.deepcopy(v) for k, v in nodes.items() if k not in ("nodes", "environments")},
+          "nodes": wf_nodes}
     project = {k: copy.deepcopy(v) for k, v in descriptor.items() if k != "nodes"}
     project["tracker"] = {k: v for k, v in (project.get("tracker") or {}).items() if k not in ("stages", "stage_kinds")}
+    primary = _primary(descriptor)
+    environments = {name: {("repositories" if k == "repository" else k):
+                           ([primary if v == "primary" else v] if k == "repository" else copy.deepcopy(v))
+                           for k, v in env.items()} for name, env in (nodes.get("environments") or {}).items()}
+    if environments:
+        project["environments"] = environments
     project.update({"workflow": WORKFLOW_PATH, "states": states, "commands": commands})
     return project, wf
 
