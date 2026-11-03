@@ -60,7 +60,7 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
         spec["else_tier"] = nodes["nodes"]["fix"]["tiers"][0]  # the fix tier a red CI hands the ticket to
     if top and n["role"] == "script":  # a sweep applies the other script nodes (join, finish) too
         spec["runs"] = {k: node_spec(k, v, config, None, None, nodes, False) for k, v in nodes["nodes"].items()
-                        if v["role"] == "script" and k != name and v.get("enabled") is not False}
+                        if v["role"] == "script" and k != name and v.get("enabled") is not False and not v.get("routine")}
     return spec
 
 
@@ -102,19 +102,25 @@ def repository(r: dict) -> dict:
 # A script node runs one command and judges nothing: the gate's sweep decides every scripted step (join, waiting
 # reviewers, merged to done) from facts. `--main` runs it from main's graph (a PR-triggered node never trusts the PR).
 SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no file, label, comment or review "
-                 "itself. Run `factory sweep{args}` in the foreground with no time limit, wait until it exits, "
+                 "itself. Run `factory sweep{args}` in the foreground with no time limit{event_input}; "
+                 "wait until it exits, "
                  "and report its JSON output.")
-SCRIPT_ARGS = {"join": " --main", "start": " --main", "finish": " --main --issue <issue number from the trigger payload>",
-               "reopen": " --main", "merge": " --main",
+SCRIPT_ARGS = {"join": " --main --event", "start": " --main --event", "finish": " --main --event",
+               "reopen": " --main --event", "merge": " --main --event",
                "recover": " --stale",
+               "doctor": " doctor", "doctor-write": " doctor", "doctor-ops": " doctor",
                "notify": " notify --issue <issue number from the trigger payload>"}
 
 
 def script_prompt(name: str) -> str:
+    if name.startswith("doctor"):
+        return "Run `factory doctor` once and report its JSON lines. It changes no ticket itself."
     if name == "notify":
         return ("Run `factory notify --issue <issue number from the trigger payload>` in the foreground with no "
                 "time limit, wait until it exits, and report its output.")
-    return SCRIPT_PROMPT.format(args=SCRIPT_ARGS.get(name, ""))
+    args = SCRIPT_ARGS.get(name, "")
+    event_input = " and pass the trigger payload on stdin" if "--event" in args else ""
+    return SCRIPT_PROMPT.format(args=args, event_input=event_input)
 
 
 def skill_lines(role: str) -> str:
@@ -294,6 +300,18 @@ def same(key: str, have, want) -> bool:
     return have == want
 
 
+def environment_detail(x: dict) -> dict:
+    """Normalize get_environment's cloud fields to the deploy plan's environment shape."""
+    x = dict(x)
+    if {"serviceHost", "organization", "repositoryName"} <= x.keys():
+        x["repository"] = f"https://{x.pop('serviceHost')}/{x.pop('organization')}/{x.pop('repositoryName')}"
+    if "allowedDomains" in x:
+        x["domains"] = x.pop("allowedDomains")
+    if "instanceTypeKey" in x:
+        x["vm"] = x.pop("instanceTypeKey") or "default"
+    return x
+
+
 def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
     """(action, kind, name, planned item, existing item, changed fields) per create, update, delete; by name, prefix only.
     `plan["renames"]` ({old name: new name}) matches an existing item under its old name, so the update keeps its id."""
@@ -329,7 +347,7 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url: str) -
     automation_items = [automation_detail(automations.call("get_automation", {"automationId": x["automationId"]}))
                         for x in automation_items if x["name"].startswith(prefix)]
     env_items = _items(cloud.call("list_environments", {"repositoryUrl": repository_url}))
-    env_items = [cloud.call("get_environment", {"id": x["id"]})
+    env_items = [environment_detail(cloud.call("get_environment", {"id": x["id"]}))
                  for x in env_items if x["name"].startswith(prefix)]
     return automation_items, env_items
 

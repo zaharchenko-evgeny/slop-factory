@@ -3,12 +3,15 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, chart, validate.
+"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, chart, validate, doctor.
 
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> [payload file]   (payload on stdin by default; exit 10: the node must not act)
        factory end <handoff_path>
        factory recover [--dry-run]                 (re-fires runs still marked running; no model, run from CI)
+       factory end <outcome> [--findings F.json] [--slices S.json] [--checks C.json] [--reason TEXT]
+                   [--summary TEXT] [--size-estimate N] [--addressed A.json] [--disputed-focuses a,b]
+                   (the outcome and the data its effects use)
        factory sweep --main ...                    (the gate's sweep from main's graph)
 """
 import argparse
@@ -99,18 +102,45 @@ def begin(argv, team=None):
     return code
 
 
+def handoff_of(a):
+    """The handoff the options name: the outcome, plus the data file or text each option carries."""
+    data = {"outcome": a.outcome}
+    for key, path in (("findings", a.findings), ("slices", a.slices), ("checks", a.checks)):
+        if path:
+            data[key] = json.loads(Path(path).read_text())
+    data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate)) if v})
+    if a.addressed:
+        data["findings_addressed"] = json.loads(Path(a.addressed).read_text())
+    if a.disputed_focuses:
+        data["disputed_focuses"] = a.disputed_focuses.split(",")
+    return data
+
+
 def end(argv, team=None):
-    if len(argv) != 1 or not STATE.exists():
-        print(json.dumps({"error": "end needs <handoff_path> and a prior `factory begin`"}))
+    p = argparse.ArgumentParser(prog="factory end")
+    p.add_argument("outcome")
+    for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "addressed", "disputed-focuses"):
+        p.add_argument(f"--{opt}")
+    try:
+        a = p.parse_args(argv)
+    except SystemExit:
+        return 2
+    if not STATE.exists():
+        print(json.dumps({"error": "end needs a prior `factory begin`"}))
         return 2
     state = json.loads(STATE.read_text())
     load_engine(Path(state["engine"]) / "factory" if state["engine"] else HERE)
-    if argv[0] != state["handoff_path"]:
-        print(json.dumps({"error": f"handoff path must be {state['handoff_path']}"}))
+    handoff = Path(state["handoff_path"])
+    try:
+        data = handoff_of(a)
+    except (OSError, ValueError) as e:
+        print(json.dumps({"error": f"malformed option file: {e}"}))
         return 2
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    handoff.write_text(json.dumps(data))
     config.set_team(state["team"])
-    return run_gate(state["engine"], ["apply", "--node", state["node"], "--event", state["event"], "--handoff", argv[0],
-                      *gate_args(state)])
+    return run_gate(state["engine"], ["apply", "--node", state["node"], "--event", state["event"], "--handoff",
+                                      str(handoff), *gate_args(state)])
 
 
 def validate():
@@ -155,6 +185,9 @@ def main(argv=None):
         return nodes.main(["chart", *rest])
     if cmd == "validate" and not rest:
         return validate()
+    if cmd == "doctor":
+        from doctor import main as doctor_main
+        return doctor_main(rest)
     if cmd == "notify":
         from notify import main as notify_main
         return notify_main(rest)

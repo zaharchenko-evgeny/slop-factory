@@ -34,6 +34,7 @@ schedules:
   retro: { cron: "0 2 * * *" }
   distill: { cron: "0 3 * * 1" }
   recover: { cron: "0 6,18 * * *" }
+  doctor: { cron: "0 5 * * *" }
 nodes:
   human:
     triggers: ["manual"]
@@ -229,6 +230,41 @@ nodes:
     outcomes:
       # The sweep writes these itself: one re-fire per ticket and stage, then blocked.
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
+  # `factory doctor` probes permissions and tools of the environment it runs in; one node per environment (read, write, ops)
+  # because an automation belongs to one environment. It changes no ticket: probe failures open `Doctor:` tickets itself.
+  doctor:
+    env: read
+    routine: true  # outside any ticket, and not a sweep step
+    triggers: ["schedule doctor"]
+    when: { always: true }
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py doctor
+    output: read-only
+    outcomes:
+      probed: {}
+  doctor-write:
+    env: write
+    routine: true
+    triggers: ["schedule doctor"]
+    when: { always: true }
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py doctor
+    output: read-only
+    outcomes:
+      probed: {}
+  doctor-ops:
+    env: ops
+    routine: true
+    triggers: ["schedule doctor"]
+    when: { always: true }
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py doctor
+    output: read-only
+    outcomes:
+      probed: {}
   # Routines (ADR-0015): outside any ticket. `factory/knowledge.py` holds the entry and PR plans the roles follow.
   retro:
     env: ops
