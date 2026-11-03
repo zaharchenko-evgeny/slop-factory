@@ -1,0 +1,2 @@
+# Synthetic test value in an earlier #330 commit; the current file builds it at runtime.
+dfd160c9326d01ca070913c86655b7361db7dad5:factory/tests/test_contracts.py:generic-password:75
