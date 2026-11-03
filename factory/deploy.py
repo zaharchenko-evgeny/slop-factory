@@ -309,10 +309,15 @@ def labels(nodes: dict, config: dict) -> list[str]:
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
-    found = []
-    for n in nodes["nodes"].values():
+    found, namespace = [], ((t.get("stages") or {}).get("ready") or vocab.stage("ready")).partition(":")[0] + ":"
+    if "states" in config:  # factory.project.yaml: the labels its state and command stores name (ADR-0016)
+        facts = t.get("pr_fact_labels") or {}
+        found += [s["store"].get("label") or facts.get(s["store"].get("pr")) for s in config["states"].values()]
+        found += [c["store"].get("label") or c["store"].get("pr_label") for c in (config.get("commands") or {}).values()]
+        found = [x for x in found if x]
+    for n in nodes["nodes"].values() if "states" not in config else []:
         found += [t.split(" ", 1)[1] for t in n.get("triggers") or [] if t.endswith(">") or t.count(" ") == 1
-                  and t.split(" ", 1)[1].startswith("factory:")]
+                  and t.split(" ", 1)[1].startswith(namespace)]
         found += [v for o in (n.get("outcomes") or {}).values() for e in (o or {}).get("effects") or []
                   for k, v in e.items() if k == "label"]
     for x in found:
