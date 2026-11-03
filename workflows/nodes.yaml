@@ -242,7 +242,9 @@ nodes:
     runner: actions
     routine: true
     # `workflow_run <workflow>` also wakes it after each completed run of that workflow (a pass reads state; it acts on no PR head).
-    triggers: ["schedule reconcile", "workflow_run quality-gates"]
+    # GitHub has never fired the schedule here, so a label change or a submitted review wakes it too; a pass acts only past a timeout,
+    # and labels set with `github.token` start no workflow, so it cannot wake itself.
+    triggers: ["schedule reconcile", "workflow_run quality-gates", "issues.labeled", "issues.unlabeled", "issues.closed", "pull_request_review.submitted"]
     ci-independent: true
     when: { always: true }
     role: script

@@ -250,6 +250,12 @@ def actions_files(nodes: dict, config: dict) -> dict:
             cron = next(scheds[str(t)[9:]]["cron"] for t in n["triggers"] if str(t).startswith("schedule "))
             wake = "".join(f"  # jactionlint ignore=dangerous-triggers\n  workflow_run:\n    workflows: [{str(t)[13:]}]\n    types: [completed]\n"
                            for t in n["triggers"] if str(t).startswith("workflow_run "))
+            events = {}
+            for t in n["triggers"]:
+                if str(t).startswith(("issues.", "pull_request_review.")):
+                    event, _, kind = str(t).partition(".")
+                    events.setdefault(event, []).append(kind)
+            wake = "".join(f"  {e}:\n    types: [{', '.join(k)}]\n" for e, k in events.items()) + wake
             files[f".github/workflows/factory-{name}.yml"] = ACTIONS_WORKFLOW.format(
                 name=name, project=project_name(config), cron=cron, wake=wake, run=n["run"].replace("uv run factory/cli.py", "uv run --quiet factory/cli.py"))
     return files
