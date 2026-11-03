@@ -38,15 +38,16 @@ def redact(v):
 
 def clean_notes(raw):
     """The notes object of one block: known fields only, secret-looking text redacted; ValueError when it is no
-    object, `for` is unknown or it serialises past NOTE_MAX characters."""
+    object, `for` is unknown or it serialises past NOTE_MAX characters after redaction."""
     if not isinstance(raw, dict):
         raise ValueError("agent notes: needs an object")
     notes = {k: raw[k] for k in NOTE_FIELDS if k in raw}
     if notes.get("for") not in NOTE_FOR:
         raise ValueError(f"agent notes: `for` is one of {', '.join(NOTE_FOR)}")
+    notes = {k: redact(v) for k, v in notes.items()}
     if len(json.dumps(notes)) > NOTE_MAX:
         raise ValueError(f"agent notes: over {NOTE_MAX} characters")
-    return {k: redact(v) for k, v in notes.items()}
+    return notes
 
 
 def parse_notes(body, login="", kind="User"):

@@ -311,6 +311,10 @@ class EffectsTest(unittest.TestCase):
         for leaked in ("MIIEvQIBADANBg", "END PRIVATE", google, "hun"):
             self.assertNotIn(leaked, out)
 
+    def test_agent_notes_size_counted_after_redaction(self):
+        secret = "ghp_" + "a" * 2000
+        self.assertEqual(gate.clean_notes({"for": "any", "hint": secret})["hint"], "[redacted]")
+
     def test_agent_notes_oversize_rejected(self):
         with self.assertRaises(ValueError):
             gate.clean_notes({"for": "any", "context": "x" * 2000})
