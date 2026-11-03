@@ -95,6 +95,14 @@ class ReconcileTest(unittest.TestCase):
         _, results, _ = run({**ticket, "stage": "needs-answers", "assignees": []})
         self.assertEqual(results, [])
 
+    def test_waiting_stage_reminds_assignee_marked_needs_human(self):
+        ticket = {"stage": "blocked", "since": "2026-11-02T11:00:00Z",
+                  "stage_at": "2026-11-02T11:00:00Z", "assignees": ["alice"],
+                  "attrs": ["factory:needs-human"]}
+        t, results, _ = run(ticket)
+        self.assertEqual([r["reconcile"] for r in results], ["remind"])
+        self.assertIn("@alice, this ticket is still waiting for you.", logged(t, "comment")[0])
+
     def test_custom_stage_kind_from_config(self):
         kinds = {**CONFIG["tracker"]["stage_kinds"], "investigating": "active"}
         nodes = copy.deepcopy(NODES)

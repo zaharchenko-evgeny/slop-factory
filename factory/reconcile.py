@@ -69,7 +69,6 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
             if stage_kinds.get(stage) == "waiting":
                 stage_since = facts.get("stage_at") or since
                 if (facts.get("issue_state", "open") != "open" or not stage_since
-                        or "factory:needs-human" in facts.get("attrs", [])
                         or not facts.get("assignees")):
                     continue
                 age = now - datetime.fromisoformat(stage_since.replace("Z", "+00:00"))
