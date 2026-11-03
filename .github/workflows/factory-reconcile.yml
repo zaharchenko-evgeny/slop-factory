@@ -4,6 +4,10 @@ name: factory-reconcile
 on:
   schedule:
     - cron: "7,37 * * * *"
+  issues:
+    types: [labeled, unlabeled, closed]
+  pull_request_review:
+    types: [submitted]
   # jactionlint ignore=dangerous-triggers
   workflow_run:
     workflows: [quality-gates]
