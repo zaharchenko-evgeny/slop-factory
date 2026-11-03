@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from unittest import mock
 from pathlib import Path
 
@@ -231,6 +232,35 @@ class ApplyTest(unittest.TestCase):
         failure = tracker.tickets[8]
         self.assertIn("node error", failure["body"])
         self.assertIn("node reported an execution error", failure["body"])
+
+    def test_lost_air_run_opens_failure_ticket_before_timeout(self):
+        """An Air agent that exits after its command label without an outcome raises nothing in a sweep; the
+        reconcile dry run on the canary finds the step past its time-out and the poller reports a node error."""
+        tracker = MemoryTracker({7: {"stage": "in-dev", "labels": ["factory:canary"],
+                                     "since": "2026-11-03T11:00:00Z", "command": "factory:implement-mid"}})
+        now = [0]
+        def sleep(seconds):
+            now[0] += seconds
+        probe = lambda t: deploy.canary_lost_run(tracker, t, now=datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(deploy.wait_for_canary(tracker, 7, "d-7", sleep=sleep, clock=lambda: now[0],
+                                                lost_run=probe), 1)
+        self.assertEqual(now[0], 0)
+        self.assertIn("Reason: node error: no outcome after the command label", tracker.tickets[8]["body"])
+        self.assertEqual(tracker.tickets[7].get("log", []), [])  # the probe is a dry run
+
+    def test_fresh_step_is_not_a_lost_run_and_probe_is_throttled(self):
+        tracker = MemoryTracker({7: {"stage": "in-dev", "since": "2026-11-03T11:50:00Z",
+                                     "command": "factory:implement-mid"}})
+        now, probes = [0], []
+        def sleep(seconds):
+            now[0] += seconds
+        def probe(t):
+            probes.append(now[0])
+            return deploy.canary_lost_run(tracker, t, now=datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(deploy.wait_for_canary(tracker, 7, "d-7", sleep=sleep, clock=lambda: now[0], timeout=600,
+                                                interval=30, lost_run=probe, lost_every=300), 1)
+        self.assertEqual(probes, [0, 300, 600])
+        self.assertIn("timed out", tracker.tickets[8]["body"])
 
     def test_new_deploy_closes_old_canary(self):
         tracker = MemoryTracker({1: {"title": "Canary after deploy old", "labels": ["factory:canary"],

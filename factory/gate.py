@@ -765,7 +765,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                 failed = True
                 r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
                 results.append(r)
-                if hasattr(tracker, "record_node_error"):
+                if not dry_run and hasattr(tracker, "record_node_error"):  # a simulation writes no live signal
                     try:
                         tracker.record_node_error(n)
                     except Exception:

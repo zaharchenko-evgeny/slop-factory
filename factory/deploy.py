@@ -472,15 +472,31 @@ def failure_body(deploy_id: str, stage: str, summary: str, reason: str) -> str:
             f"Factory-Run: deploy:{deploy_id}")
 
 
+def canary_lost_run(gate_tracker, ticket, now=None):
+    """Why the canary's current step lost its run, from the reconcile dry run on that ticket alone: an Air agent that
+    exited after its waking label without an outcome leaves no sweep exception, only a step past its time-out."""
+    import reconcile
+    config = config_mod.load()
+    results, _ = reconcile.reconcile(gate_tracker, nodes_mod.load(), list(config["tracker"]["stages"]),
+                                     config["limits"], now=now, dry_run=True, tickets=[ticket],
+                                     stage_kinds=config["tracker"].get("stage_kinds", {}))
+    return next((r["why"] for r in results if r.get("reconcile") in ("refire", "blocked")), None)
+
+
 def wait_for_canary(tracker, ticket, deploy_id, *, sleep=time.sleep, clock=time.monotonic,
-                    timeout=45 * 60, interval=30):
+                    timeout=45 * 60, interval=30, lost_run=None, lost_every=5 * 60):
     deadline = clock() + timeout
+    next_lost = clock()
     while True:
         status = tracker.canary_status(ticket)
         stage = status["stage"]
         if stage == "done":
             return 0
         reason = "node error" if status["error"] or stage in ("blocked", "failed", "error") else None
+        if not reason and lost_run and clock() >= next_lost:  # a dozen reads per probe: not on every poll
+            next_lost = clock() + lost_every
+            why = lost_run(ticket)
+            reason = why and f"node error: {why}"
         if reason or clock() >= deadline:
             reason = reason or "timed out after 45 minutes"
             failure = tracker.create_issue(f"Canary failed after deploy {deploy_id}",
@@ -493,13 +509,13 @@ def wait_for_canary(tracker, ticket, deploy_id, *, sleep=time.sleep, clock=time.
         sleep(min(interval, deadline - clock()))
 
 
-def create_canary(tracker, deploy_id, *, sleep=time.sleep, clock=time.monotonic):
+def create_canary(tracker, deploy_id, *, sleep=time.sleep, clock=time.monotonic, lost_run=None):
     for old in tracker.canary_tickets():
         tracker.close_issue(old, f"[factory] Superseded by deploy {deploy_id}.\n\nFactory-Run: deploy:{deploy_id}")
     ticket = tracker.create_issue(f"Canary after deploy {deploy_id}", canary_body(deploy_id), risk="low", stage="triage")
     tracker.add_to_map(ticket)
     tracker.add_label(ticket, vocab.issue_label("canary"))
-    return wait_for_canary(tracker, ticket, deploy_id, sleep=sleep, clock=clock)
+    return wait_for_canary(tracker, ticket, deploy_id, sleep=sleep, clock=clock, lost_run=lost_run)
 
 
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, tracker=None,
@@ -563,9 +579,10 @@ def main(argv: list[str]) -> int:
                 from github_tracker import GitHubTracker
                 tracker = GitHubTracker.from_config()
                 from gate_github import GitHubGateTracker
-                GitHubGateTracker.from_config().deploy_applied(plan)
+                gate_tracker = GitHubGateTracker.from_config()
+                gate_tracker.deploy_applied(plan)
                 deploy_id = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-                code = create_canary(tracker, deploy_id)
+                code = create_canary(tracker, deploy_id, lost_run=lambda t: canary_lost_run(gate_tracker, t))
             return code
         finally:
             for server in servers:

@@ -652,6 +652,15 @@ class TriggerTest(unittest.TestCase):
         self.assertIn("node broke", out["sweep"][0]["error"])
         self.assertTrue(tracker.canary_status(1)["error"])
 
+    def test_dry_run_sweep_leaves_no_node_error_signal(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({1: {"stage": "in-review", "labels": ["factory:canary"]}})
+        tracker.facts = lambda ticket: (_ for _ in ()).throw(RuntimeError("read broke"))
+        results, failed = gate.sweep(tracker, {}, dry_run=True, issue=1)
+        self.assertTrue(failed)
+        self.assertIn("read broke", results[0]["error"])
+        self.assertFalse(tracker.canary_status(1)["error"])
+
     def test_sweep_reports_ineligible_dependent_as_progress(self):
         from gate_port import MemoryTracker
         tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "in-dev"}})
