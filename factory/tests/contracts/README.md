@@ -14,3 +14,11 @@ fields of that event (for example `label`, `pr_author`, `review_state`, `existin
 GitHub's webhook payload unchanged. The other trigger events (`pull_request.labeled`, `pull_request.merged`,
 `issues.closed`) could not be recorded: an agent can't copy a large payload byte for byte, so fixtures for them
 are derived from this wrapper and GitHub's documented webhook payloads, and say so.
+
+`pull_request.labeled`, `pull_request.merged` and `issues.closed` are derived (built from the recorded `issues.labeled`
+and `pull_request_review.submitted` wrappers). `uv run --quiet factory/tests/test_contracts.py` checks them, and that the fake MCP
+server (`factory/contracts.py serve`) rejects any tool or argument absent from `air-mcp.json`.
+
+`factory contracts refresh` is **operator-only**: it needs your Air OAuth (`FACTORY_MCP_AIR_AUTOMATIONS`,
+`FACTORY_MCP_AIR_CLOUD`), never run it from an agent or CI. It re-records the tool lists and the read-only responses into
+`air-mcp.json`, strips tokens, emails and secret-like values, and leaves the other recorded responses as they are.
