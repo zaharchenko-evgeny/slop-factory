@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 import deploy
+import gate_github
 import nodes
 
 FIX = HERE / "fixtures/deploy"
@@ -113,18 +114,14 @@ class RecordedTest(unittest.TestCase):
             self.read_recorded()
 
     def test_unchanged_environment_is_unchanged(self):
-        recorded = json.loads((FIX / "mcp-recorded.json").read_text())
-        get_environment = recorded["air-cloud.get_environment"]["7462a87c-fbe2-40d6-9b28-f3f5c4fc1ca9"]
-        have = deploy.environment_detail(json.loads(get_environment["content"][0]["text"]))
-        plan = {"prefix": "[Slop factory] ", "automations": [], "environments": [{
-            "name": "[Slop factory] read",
-            "repository": "https://github.com/zaharchenko-evgeny/offline-eval-factory",
-            "startup": ".air/cloud/startup.sh", "variables": {"FACTORY_ENV": "read"}, "secrets": [],
-            "domains": ["github.com", "api.github.com", "objects.githubusercontent.com",
-                        "release-assets.githubusercontent.com", "*.blob.core.windows.net",
-                        "pypi.org", "files.pythonhosted.org"], "vm": "default",
-        }]}
-        self.assertEqual(deploy.diff(plan, [], [have]), [])
+        contract = json.loads((HERE / "contracts/air-mcp.json").read_text())
+        responses = contract["servers"]["air-cloud"]["responses"]
+        plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository":
+                                              "https://github.com/zaharchenko-evgeny/slop-eval-factory"})
+        plan = {"prefix": plan["prefix"], "environments": plan["environments"], "automations": []}
+        envs = [deploy.environment_detail(json.loads(responses[f"get_environment:{name}"]["content"][0]["text"]))
+                for name in ("read", "write", "ops")]
+        self.assertEqual(deploy.diff(plan, [], envs), [])
 
     def read_recorded(self):
         tmp = Path(tempfile.mkdtemp())
@@ -192,7 +189,7 @@ class ApplyTest(unittest.TestCase):
                   [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}])
         self.assertEqual(self.run_deploy("--apply"), 0)
         self.assertEqual(self.calls("automation"), [["update_automation", {
-            "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "automationId": "a1"}]])
+            "prompt": "new", "automationId": "a1"}]])
         self.assertNotIn("spec", self.calls("automation")[0][1])
         self.assertEqual(self.calls("environment"), [])
 
@@ -203,14 +200,23 @@ class ApplyTest(unittest.TestCase):
                   [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}])
         self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
         self.assertEqual(self.calls("automation"), [["update_automation", {
-            "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "automationId": "a1"}]])
+            "name": "[F] a", "automationId": "a1"}]])
 
     def test_apply_edits_environment(self):
         self.seed([{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1"}],
                   [{"id": "e1", "name": "[F] read", "startup": "old", "repository": "https://github.com/o/r"}])
         self.assertEqual(self.run_deploy("--apply"), 0)
-        self.assertEqual(self.calls("environment"), [["edit_environment", {
-            "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r", "id": "e1"}]])
+        self.assertEqual(self.calls("environment"), [["edit_environment", {"startup": "x", "id": "e1"}]])
+
+    def test_environment_update_preserves_unplanned_live_domains(self):
+        self.plan["environments"][0]["vm"] = "new"
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x",
+                        "repository": "https://github.com/o/r", "vm": "old",
+                        "domains": ["github.com", "*.blob.core.windows.net"]}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual(self.calls("environment"), [["edit_environment", {"vm": "new", "id": "e1"}]])
+        live = json.loads(self.state["environment"].read_text())["items"][0]
+        self.assertEqual(live["domains"], ["github.com", "*.blob.core.windows.net"])
 
     def test_main_rename_flag_updates_in_place(self):
         self.seed([{"id": "a1", "name": "[Slop factory] old-intake"}], [])
@@ -247,6 +253,34 @@ class ApplyTest(unittest.TestCase):
                   [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}])
         (self.tmp / "server.py").write_text(FAKE_SERVER.replace('{**i, **{k: v for k, v in a.items() if k != key}}', '{**i}'))
         self.assertEqual(self.run_deploy("--apply"), 1)
+
+    def test_main_closes_reminder_after_successful_changed_apply(self):
+        plan = {"prefix": "[F] ", "environments": [], "automations": [], "files": {}}
+        servers = [mock.Mock(), mock.Mock()]
+        changed = [("update", "automation", "a", None, None, [])]
+        writes = []
+
+        def run(args):
+            writes.append(args)
+            if args[:2] == ["api", "--paginate"]:
+                return json.dumps({"number": 42, "title": "Deploy needed"})
+            return "{}"
+
+        tracker = gate_github.GitHubGateTracker("o/r", {}, "bot", run=run)
+        with (mock.patch.dict(os.environ, {"FACTORY_MCP_AIR_AUTOMATIONS": "automation",
+                                          "FACTORY_MCP_AIR_CLOUD": "cloud"}),
+              mock.patch.object(deploy.config_mod, "pop_team", side_effect=lambda argv: argv),
+              mock.patch.object(deploy, "plan_air", return_value=plan),
+              mock.patch.object(deploy, "Mcp", side_effect=servers),
+              mock.patch.object(deploy, "read_state", return_value=([], [])),
+              mock.patch.object(deploy, "diff", side_effect=[changed, []]),
+              mock.patch.object(deploy, "apply_diff") as apply,
+              mock.patch.object(deploy, "write_files", return_value=0),
+              mock.patch("gate_github.GitHubGateTracker.from_config", return_value=tracker)):
+            self.assertEqual(deploy.main(["--apply"]), 0)
+        apply.assert_called_once()
+        self.assertTrue(any(x[:2] == ["issue", "close"] and "42" in x for x in writes))
+        self.assertTrue(any(x[:2] == ["issue", "comment"] and "factory:deploy-applied" in " ".join(x) for x in writes))
 
 
 class PlanTest(unittest.TestCase):
