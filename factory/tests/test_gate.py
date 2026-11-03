@@ -217,6 +217,20 @@ class CliAndValidate(unittest.TestCase):
         ev = gate.from_trigger({"eventType": "pull_request.opened", "data": {"action": "opened", "pull_request": {"number": 9}}}, Host())
         self.assertEqual(ev["ticket"], "INFRA-123")
         self.assertEqual(tracker.facts("INFRA-123")["stage"], "in-dev")
+        code, out = gate.check("implement", ev, tracker, NODES, CONFIG)  # the gate runs on both ports
+        self.assertEqual(code, gate.GO)
+        self.assertEqual(out["ticket"], "INFRA-123")
+
+    def test_github_code_host_resolves_ticket_from_head_ref_then_title(self):
+        calls = []
+
+        def run(args):
+            calls.append(args)
+            return json.dumps({"head": {"ref": "feature/x"}, "title": "INFRA-9 Add thing"})
+
+        host = gate.GitHubCodeHost("org/code", run)
+        self.assertEqual(host.ticket_for_pr(4), "INFRA-9")
+        self.assertEqual(calls, [["api", "repos/org/code/pulls/4"]])
 
     def test_implement_done_blocks_branch_past_estimate_and_diff_limit(self):
         tr = MemoryTracker({"7": {"stage": "in-dev", "body": "Size: about 250 lines with tests."}})
@@ -457,7 +471,8 @@ class TriggerTest(unittest.TestCase):
         payload = {"eventType": "pull_request.labeled", "data": {"action": "labeled", "number": 9,
                                                                       "head": {"sha": "untrusted"}}}
         path = self.file(payload)
-        with patch.object(tracker, "ticket_for_pr", return_value=7, create=True), \
+        host = type("Host", (), {"ticket_for_pr": lambda self, number: 7})()
+        with patch.object(gate.GitHubCodeHost, "from_config", return_value=host), \
                 patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker):
             code, out = self.run_main(["check", "--node", "review", "--event", str(path)])
         self.assertEqual(code, gate.GO)
@@ -483,13 +498,14 @@ class TriggerTest(unittest.TestCase):
         finally:
             f.unlink(missing_ok=True)
 
-    def run_sweep(self, args, tracker, stderr=None):
+    def run_sweep(self, args, tracker, stderr=None, host=None):
         import contextlib
         import io
         from unittest.mock import patch
         stdout = io.StringIO()
         stderr = stderr or io.StringIO()
         with patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), \
+                patch.object(gate.GitHubCodeHost, "from_config", return_value=host), \
                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = gate.main(["sweep", *args])
         return code, json.loads(stdout.getvalue()), stderr.getvalue()
@@ -524,10 +540,10 @@ class TriggerTest(unittest.TestCase):
         from gate_port import MemoryTracker
         tracker = MemoryTracker({335: {"stage": "ready"}})
         tracker.sweep_tickets = lambda stages: self.fail("event sweep must not list all tickets")
-        tracker.ticket_for_pr = lambda number: 335
+        host = type("Host", (), {"ticket_for_pr": lambda self, number: 335})()
         f = self.file({"eventType": "pull_request.labeled", "data": {"action": "labeled", "number": 44,
                                                                          "title": "untrusted"}})
-        code, out, _ = self.run_sweep(["--event", str(f), "--dry-run"], tracker)
+        code, out, _ = self.run_sweep(["--event", str(f), "--dry-run"], tracker, host=host)
         self.assertEqual(code, gate.GO)
         self.assertEqual([x["ticket"] for x in out["sweep"]], [335])
 

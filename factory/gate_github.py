@@ -37,6 +37,23 @@ GOOD_CI = {"success", "neutral", "skipped"}
 WRITE = {"admin", "maintain", "write"}  # repository roles with write access
 
 
+class GitHubCodeHost:
+    """The GitHub repository that hosts the pull requests; `code_host.repository`, else the tracker's."""
+
+    def __init__(self, repo, run=gh):
+        self.repo, self.run = repo, run
+
+    @classmethod
+    def from_config(cls, path=None, run=gh):
+        c = yaml.safe_load(Path(path).read_text()) if path else config.load()
+        return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"], run)
+
+    def ticket_for_pr(self, number):
+        """Resolve a PR number to its ticket from the live head ref, else the live title."""
+        pr = json.loads(self.run(["api", f"repos/{self.repo}/pulls/{number}"]))
+        return ticket_from_ref((pr.get("head") or {}).get("ref")) or ticket_from_ref(pr.get("title"))
+
+
 class GitHubGateTracker:
     def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8):
         self.trusted, self.run_cap = set(trusted_bots), run_cap
@@ -108,12 +125,6 @@ class GitHubGateTracker:
             time.sleep(2)
             pr = self._api(f"pulls/{prs[-1]['number']}")
         return pr
-
-    def ticket_for_pr(self, number):
-        """Resolve a PR number to its ticket from the live head ref."""
-        pr = self._api(f"pulls/{number}")
-        ref = ((pr.get("head") or {}).get("ref") or "")
-        return ticket_from_ref(ref)
 
     def _prs(self, n, open_only=False):
         """The ticket's PRs from its branch; cleanup also includes closed PRs."""
