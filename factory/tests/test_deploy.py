@@ -361,28 +361,18 @@ class PlanTest(unittest.TestCase):
                                "filters": {"label": f"factory:rereview-{a['name'].rsplit('-', 1)[1]}",
                                            "pr_author": "jetbrains-air[bot]"}}, a["triggers"])
 
-    def test_reconcile_is_a_workflow_in_the_factory_repository_not_an_air_automation(self):
+    def test_reconcile_is_an_hourly_air_schedule_only(self):
         plan = deploy.plan_air(nodes.load(), cfg.load())
         self.assertNotIn("[Slop factory] recover", {x["name"] for x in plan["automations"]})
-        self.assertFalse([x for x in plan["automations"] if "reconcile" in x["name"]])
-        self.assertEqual(list(plan["files"]), [".github/workflows/factory-reconcile.yml"])
-        text = plan["files"][".github/workflows/factory-reconcile.yml"]
-        self.assertIn('cron: "7,37 * * * *"', text)
-        self.assertIn("workflow_dispatch:", text)
-        self.assertIn("uv run --quiet factory/cli.py reconcile", text)
-        self.assertEqual(text, (ROOT / ".github/workflows/factory-reconcile.yml").read_text())  # generated: rerun `factory deploy --apply`
-
-    def test_reconcile_renders_off_peak_schedule_and_ci_wake(self):
-        text = deploy.plan_air(nodes.load(), cfg.load())["files"][".github/workflows/factory-reconcile.yml"]
-        self.assertIn('cron: "7,37 * * * *"', text)
-        self.assertIn("workflow_run:\n    workflows: [quality-gates]\n    types: [completed]", text)
-        self.assertIn("group: factory-reconcile\n  cancel-in-progress: false\n\njobs:", text)
-        self.assertNotIn("cancel-in-progress: true", text)
-
-    def test_reconcile_wakes_on_label_and_review_events(self):
-        text = deploy.plan_air(nodes.load(), cfg.load())["files"][".github/workflows/factory-reconcile.yml"]
-        self.assertIn("  issues:\n    types: [labeled, unlabeled, closed]\n", text)
-        self.assertIn("  pull_request_review:\n    types: [submitted]\n", text)
+        a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] reconcile")
+        # no event wake: one pass reads every active ticket, so label bursts must not start it
+        self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "17 * * * *", "timezone": "UTC"}])
+        self.assertEqual(a["triggerVcs"], [{"outputBehaviour": "read-only"}])
+        self.assertEqual(a["environmentConfigId"], "[Slop factory] ops")
+        self.assertIn("Run `factory reconcile` in the foreground", a["prompt"])
+        self.assertIn("wait until it exits", a["prompt"])
+        self.assertEqual(plan["files"], {})
+        self.assertFalse((ROOT / ".github/workflows/factory-reconcile.yml").exists())
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(deploy.config_mod, "team_root", return_value=Path(d)):
@@ -415,7 +405,7 @@ class PlanTest(unittest.TestCase):
                           for x in reopen["triggers"]],
                          [("pull_request.synchronize", None, "jetbrains-air[bot]"),
                           ("pull_request.labeled", "factory:ci-red", "jetbrains-air[bot]")])
-        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] retro", "[Slop factory] distill", "[Slop factory] doctor", "[Slop factory] doctor-write", "[Slop factory] doctor-ops") for x in a["triggers"]), "no polling"
+        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] retro", "[Slop factory] distill", "[Slop factory] doctor", "[Slop factory] doctor-write", "[Slop factory] doctor-ops", "[Slop factory] reconcile") for x in a["triggers"]), "no polling"
 
     def test_one_triggervcs_entry_per_trigger_and_a_spec_per_automation(self):
         for a in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
@@ -497,6 +487,7 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
             "intake", "start", "join", "finish", "reopen", "merge", "notify", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
+            "reconcile",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}
         self.assertEqual(names, pilot)

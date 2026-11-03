@@ -106,8 +106,9 @@ WRITE = {"admin", "maintain", "write"}  # repository roles with write access
 
 
 class GitHubGateTracker:
-    def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8):
-        self.trusted, self.run_cap = set(trusted_bots), run_cap
+    def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8,
+                 ci_workflows=("quality-gates",)):
+        self.trusted, self.run_cap, self.ci_workflows = set(trusted_bots), run_cap, set(ci_workflows)
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, run
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
@@ -119,7 +120,8 @@ class GitHubGateTracker:
             raise ValueError("descriptor: targets.air.bot_login is not set")
         t = c["tracker"]
         return cls(t["repository"], t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run,
-                   (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8))
+                   (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
+                   (c.get("ci") or {}).get("workflows") or ["quality-gates"])
 
     # --- reads
     def _api(self, path, *flags):
@@ -132,11 +134,12 @@ class GitHubGateTracker:
     def _labels(self, n):
         return [x["name"] for x in self._api(f"issues/{n}")["labels"]]
 
-    def sweep_tickets(self, stages):
-        """Issue numbers (open or closed) whose stage label is one of `stages`; ready, in-review, changes-requested and in-dev only when open."""
+    def sweep_tickets(self, stages, open_only=False):
+        """Issue numbers (open or closed) whose stage label is one of `stages`; ready, in-review, changes-requested and in-dev
+        (every stage with `open_only`) only when open."""
         found = set()
         for st in stages:
-            state = "open" if st in ("triage", "ready", "in-review", "changes-requested", "in-dev") else "all"
+            state = "open" if open_only or st in ("triage", "ready", "in-review", "changes-requested", "in-dev") else "all"
             found |= {i["number"] for i in self._list(f"issues?state={state}&labels={self.stages[st]}&per_page=100")
                       if "pull_request" not in i}
         return sorted(found)
@@ -247,7 +250,7 @@ class GitHubGateTracker:
                         "--jq", ".workflow_runs[]"], **({"timeout": timeout} if timeout is not None else {}))
         latest = {}
         for r in (json.loads(x) for x in out.splitlines() if x.strip()):
-            if r.get("event") == "workflow_run":  # ci-state.yml reports CI; it is not CI
+            if r.get("name") not in self.ci_workflows:  # factory service workflows (reconcile, ci-state) are not CI
                 continue
             key = (r.get("workflow_id"), r.get("event"))
             if key not in latest or (r.get("run_number"), r.get("run_attempt", 1)) > (
@@ -309,20 +312,21 @@ class GitHubGateTracker:
         return {x["filename"]: re.sub(r"^@@ .*? @@", "@@", x["patch"], flags=re.M) for x in files}
 
     def _clean_base_advance(self, old, head, pr):
-        """True when every commit from `old` to `head` is a merge whose first parent is the previous commit and whose
+        """True when walking first parents from `head` reaches `old` within 20 steps, every step is a merge whose
         other parent is already on the base branch, and the PR's patch is identical at both. Who made the merge does
-        not matter; what it contains does."""
+        not matter; what it contains does. (`compare` also lists the base commits a merge brought in, so it is no guide.)"""
         base = pr["base"]["ref"]
         try:
-            prev = old
-            for c in self._api(f"compare/{old}...{head}")["commits"]:
-                parents = [x["sha"] for x in c["parents"]]
-                if len(parents) != 2 or parents[0] != prev or self._api(f"compare/{base}...{parents[1]}")["ahead_by"] != 0:
+            cur = head
+            for _ in range(20):
+                if cur == old:
+                    break
+                parents = [x["sha"] for x in self._api(f"commits/{cur}")["parents"]]
+                if len(parents) != 2 or self._api(f"compare/{base}...{parents[1]}")["ahead_by"] != 0:
                     return False
-                prev = c["sha"]
+                cur = parents[0]
             patch = self._pr_patch(base, old)
-            # a truncated compare list stops short of the head: the omitted commits are unchecked
-            return prev == head != old and patch is not None and patch == self._pr_patch(base, head)
+            return cur == old != head and patch is not None and patch == self._pr_patch(base, head)
         except Exception:  # unknown means the new head needs a review
             return False
 

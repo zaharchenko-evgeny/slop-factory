@@ -65,6 +65,20 @@ class ReconcileTest(unittest.TestCase):
         code, result = gate.check("fix", {"id": "recovered-conflict", "ticket": 1}, t, NODES, CONFIG)
         self.assertEqual((code, result["merge_main"]), (gate.GO, True))
 
+    def test_stale_fix_label_on_conflicting_pr_refired(self):
+        t, results, _ = run({"stage": "changes-requested", "pr": 5, "conflict": True, "since": OLD,
+                             "round_complete": False, "command": "factory:fix-cheap",
+                             "command_at": FRESH, "commit_at": OLD, "attrs": ["factory:fix-cheap"]})
+        self.assertEqual((results[0]["node"], results[0]["reconcile"]), ("fix", "refire"))
+        self.assertIn('"factory:fix-cheap"', logged(t, "label"))
+
+    def test_conflicting_pr_without_command_does_not_fail(self):
+        t, results, failed = run({"stage": "changes-requested", "pr": 5, "conflict": True,
+                                  "since": OLD, "command": None})
+        self.assertFalse(failed)
+        self.assertEqual(results, [])
+        self.assertEqual(t.tickets[1]["stage"], "changes-requested")
+
     def test_second_miss_blocks_and_needs_human(self):
         refired = [["comment", '"[factory] reconcile: stage=in-dev head=aaa re-fired factory:implement-mid (x)"']]
         t, results, _ = run({"stage": "in-dev", "since": OLD, "head": "aaa", "command": "factory:implement-mid", "log": refired})
@@ -111,6 +125,27 @@ class ReconcileTest(unittest.TestCase):
         t, results, _ = run({"stage": "investigating", "since": OLD}, nodes, stage_kinds=kinds)
         self.assertEqual(results[0]["node"], "custom")
         self.assertIn('"factory:custom"', logged(t, "label"))
+
+    def test_lists_only_open_tickets_in_non_final_stages(self):
+        asked = []
+
+        class Counting(MemoryTracker):
+            def sweep_tickets(self, stages, open_only=False):
+                asked.append((sorted(stages), open_only))
+                return super().sweep_tickets(stages, open_only)
+
+            def stale_facts(self, ticket):
+                read.append(ticket)
+                return super().stale_facts(ticket)
+
+        read = []
+        tracker = Counting({1: {"stage": "in-dev", "since": OLD, "command": "factory:implement-mid"},
+                            2: {"stage": "done", "since": OLD},
+                            3: {"stage": "blocked", "since": OLD, "issue_state": "closed"}})
+        reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
+        finals = {s for s, k in CONFIG["tracker"]["stage_kinds"].items() if k == "final"}
+        self.assertEqual(asked, [(sorted(s for s in STAGES if s not in finals), True)])
+        self.assertEqual(read, [1])  # no facts reads for a done or closed ticket
 
     def test_fresh_step_waits_for_the_timeout(self):
         _, results, _ = run({"stage": "in-dev", "since": FRESH, "command": "factory:implement-mid"})

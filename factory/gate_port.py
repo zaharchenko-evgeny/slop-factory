@@ -42,8 +42,9 @@ class MemoryTracker:
     def set_stage(self, t, stage):
         t["stage"] = stage
 
-    def sweep_tickets(self, stages):
-        return sorted(k for k, t in self.tickets.items() if self.get_stage(t) in stages)
+    def sweep_tickets(self, stages, open_only=False):
+        return sorted(k for k, t in self.tickets.items() if self.get_stage(t) in stages
+                      and not (open_only and t.get("issue_state", "open") != "open"))
 
     def blocking(self, ticket):
         return self._t(ticket).get("blocking", [])
