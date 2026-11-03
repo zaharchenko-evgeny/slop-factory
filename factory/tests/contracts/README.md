@@ -6,6 +6,9 @@ values are removed.
 - `air-mcp.json`: the tool lists with input schemas of the `air-automations` and `air-cloud` MCP servers, and one
   real response for every tool the factory calls (`get_environment` for each of the three environments).
   `create_automation`, `run_automation` and `delete_automation` responses come from a throwaway probe automation.
+- `github-issues.json`: live GitHub REST responses for the issue endpoints the adapter calls (lookup, listing,
+  comments, events, parent, sub-issues, dependencies); list endpoints keep their first item. `FakeGh` in
+  `test_gate_github.py` shapes its answers on them and fails on an issue endpoint or field without a recording.
 - `payloads/<eventType>.json`: real Air trigger payloads, as an Air run received them. Recorded:
   `issues.labeled` and `pull_request_review.submitted`.
 
