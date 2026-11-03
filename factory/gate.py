@@ -36,7 +36,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
-from gate_github import GitHubGateTracker  # noqa: E402
+from gate_github import GitHubGateTracker, clean_notes  # noqa: E402
 from gate_port import MemoryTracker  # noqa: E402
 
 ROOT = nodes_mod.ROOT
@@ -156,6 +156,7 @@ def read(path, what, raw=False, tracker=None):
     return data
 
 
+NOTE_AUDIENCE = {"developer": ("developer",), "reviewer": ("reviewer",)}  # the `for` values a role reads, besides `any`
 COMPLEXITY_TIER = {"small": "cheap", "medium": "mid", "large": "strong"}
 FIX_TIERS = ("cheap", "mid", "strong")
 
@@ -253,7 +254,8 @@ def check(name, event, tracker, nodes, config):
             facts["ci_failure"] = failure
     why = matches(node, facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
-    facts = {k: v for k, v in facts.items() if k != "body"}
+    notes = facts.get("agent_notes", [])
+    facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
     if node.get("focuses"):  # one review tier per focus (roles.<role>.modes.<focus>.tier)
@@ -266,6 +268,7 @@ def check(name, event, tracker, nodes, config):
         "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
+        "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if name in ("fix", "update") else ()))],
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and name in ("fix", "update")),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
     }
@@ -376,6 +379,19 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
         payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
+    if payload.get("agent_notes"):  # hidden notes for later agents ride on the review, the comments or the PR text
+        try:
+            notes = clean_notes(payload["agent_notes"])
+        except ValueError as err:
+            raise Bad(str(err))
+        for e in effects:
+            if e["kind"] in ("review", "comment"):
+                e["notes"] = notes
+        if name == "implement" and outcome == "done":
+            effects.append({"kind": "pr-notes", "ticket": ticket, "run_id": payload.get("run_id"), "value":
+                            f"<!-- factory:agent-notes\n{json.dumps(notes)}\n-->"})
+    if name in ("review", "join"):
+        effects.append({"kind": "pr-notes-sync", "ticket": ticket, "value": ""})  # notes parked before the PR existed
     facts = tracker.facts(ticket)
     if name == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
             and not facts.get("focus_missing") and facts.get("ci") == "green" and facts.get("pr") and facts.get("head"):
