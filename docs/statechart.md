@@ -363,6 +363,7 @@ flowchart LR
     N_implement -- "error +factory:implement-{next}" --> S_in_dev
     N_implement -- "blocked" --> S_blocked
     N_implement -- "failed" --> S_blocked
+    N_implement -- "env-broken" --> S_ready
     S_none -.-> N_adopt
     N_adopt -. "adopted" -.-> S_in_review
     S_in_review --> N_review
@@ -372,6 +373,8 @@ flowchart LR
     S_changes_requested --> N_fix
     N_fix -- "done" --> S_in_review
     N_fix -- "blocked" --> S_blocked
+    N_fix -- "env-broken" --> S_ready
+    N_fix -- "nothing-to-fix join" --> S_in_review
     S_changes_requested --> N_update
     N_update -- "resolved" --> S_in_review
     N_update -- "escalate +factory:update-{next}" --> S_changes_requested
@@ -409,11 +412,11 @@ flowchart LR
 | `intake` | `issue +factory:triage` | proceed: → ready<br>grill: → needs-answers<br>split: → split<br>not-actionable: → not-actionable<br>bug: → investigating (planned #161) | router · cheap | built |
 | `start` | `issue +factory:ready` | started: +factory:implement-{tier} → in-dev | script | built |
 | `investigate` | `issue +factory:investigating` | bug: → in-dev<br>intended: → not-actionable<br>cannot-reproduce: → needs-answers | developer · mid | planned #161 |
-| `implement` | `issue +factory:implement-{cheap|mid|strong}` | done: → in-review<br>error: +factory:implement-{next} → in-dev<br>blocked: → blocked<br>failed: → blocked | developer · cheap/mid/strong | built |
+| `implement` | `issue +factory:implement-{cheap|mid|strong}` | done: → in-review<br>error: +factory:implement-{next} → in-dev<br>blocked: → blocked<br>failed: → blocked<br>env-broken: → ready | developer · cheap/mid/strong | built |
 | `adopt` | `PR +factory:adopt` | adopted: → in-review | router · cheap | planned #160 |
 | `review` | `PR +factory:ci-green`<br>`PR +factory:rereview-<focus>` | approve: —<br>changes: — | reviewer · per focus | built |
 | `join` | `PR review submitted`<br>`PR +factory:ci-red` | changes: +factory:fix-{tier} → changes-requested<br>approved: → approved<br>waiting: join | script | built |
-| `fix` | `PR +factory:fix-{cheap|mid|strong}` | done: → in-review<br>blocked: → blocked | developer · cheap/mid/strong | built |
+| `fix` | `PR +factory:fix-{cheap|mid|strong}` | done: → in-review<br>blocked: → blocked<br>env-broken: → ready<br>nothing-to-fix: join → in-review | developer · cheap/mid/strong | built |
 | `update` | `PR +factory:update-{cheap|mid|strong}` | resolved: → in-review<br>escalate: +factory:update-{next} → changes-requested<br>unresolvable: → blocked | developer · cheap/mid/strong | built |
 | `reopen` | `PR push`<br>`PR +factory:ci-red` | reopened: → in-review | script | built |
 | `merge` | `issue +factory:approved`<br>`PR +factory:ci-green` | merged: —<br>updated: —<br>waiting: — | script | built |

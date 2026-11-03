@@ -91,7 +91,7 @@ def spec_nodes(path):
         spec = json.loads(Path(path).read_text())
         out = {}
         for s in [spec, *(spec.get("runs") or {}).values()]:
-            node = {k: s[k] for k in ("role", "when", "outcomes", "else_tier", "tiers") if k in s}
+            node = {k: s[k] for k in ("role", "when", "outcomes", "else_tier", "tiers", "routine") if k in s}
             node.update({"tier": s["tier"]} if s.get("tier") else {}, **({"focuses": [s["focus"]]} if s.get("focus") else {}))
             out[s["node"]] = node
     except (OSError, ValueError, KeyError, AttributeError, TypeError) as e:
@@ -110,38 +110,48 @@ class NoTicket(Exception):
     pass
 
 
-def from_trigger(d):
-    """{id, ticket, head, actor} of a raw webhook payload (issues, pull_request, pull_request_review)."""
+class MissingNumber(Exception):
+    pass
+
+
+def from_trigger(d, tracker=None):
+    """Extract the event kind and ticket number; tracker facts supply mutable metadata."""
+    event_name = d.get("eventType") or d.get("event_name")
     if not any(isinstance(d.get(key), dict) for key in ("pull_request", "issue", "review")):
         if isinstance(d.get("data"), dict):
+            wrapper = d
             d = d["data"]
+            event_name = event_name or wrapper.get("eventType") or wrapper.get("event_name")
     pr, issue, review = d.get("pull_request"), d.get("issue"), d.get("review")
-    if not isinstance(pr, dict) and not isinstance(issue, dict):
-        raise Bad("malformed event: needs `ticket` or a trigger payload")
-    name = "pull_request_review" if review and pr else "pull_request" if pr else "issues"
-    src = pr or issue
-    if pr:
-        ref = (pr.get("head") or {}).get("ref") or ""
-        m = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
-        if not m:
-            raise NoTicket(f"PR #{pr.get('number')} is not on an ez/<n>- branch")
-        ticket = int(m[1])
+    is_pr = isinstance(pr, dict) or str(event_name or "").startswith("pull_request")
+    src = pr or issue or d
+    number = src.get("number") if isinstance(src, dict) else None
+    if not isinstance(number, int) or number < 1:
+        raise MissingNumber("payload has no issue or PR number")
+    name = "pull_request_review" if review and is_pr else "pull_request" if is_pr else "issues"
+    if is_pr:
+        ref = ""
+        if tracker and hasattr(tracker, "ticket_for_pr"):
+            ticket = tracker.ticket_for_pr(number)
+        else:
+            ref = ((pr or {}).get("head") or {}).get("ref") or ""
+            m = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
+            ticket = int(m[1]) if m else None
+        if not isinstance(ticket, int):
+            raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
     else:
-        ticket = issue.get("number")
-    when = d.get("delivery") or d.get("delivery_id") or (review or {}).get("submitted_at") or src.get("updated_at")
-    label = (d.get("label") or {}).get("name", "")
-    rereview = label.removeprefix("factory:rereview-") if label.startswith("factory:rereview-") else None
-    return {"id": f"{name}:{when}", "ticket": ticket, "head": ((pr or {}).get("head") or {}).get("sha"),
-            "actor": (d.get("sender") or {}).get("login"), "rereview": rereview}
+        ticket = number
+    action = d.get("action") or "event"
+    return {"id": f"{name}:{ticket}:{action}", "ticket": ticket, "event_name": name, "action": action}
 
 
-def read(path, what, raw=False):
+def read(path, what, raw=False, tracker=None):
     try:
         data = json.loads(Path(path).read_text())
     except (OSError, ValueError) as e:
         raise Bad(f"malformed {what}: {e}")
     if isinstance(data, dict) and raw and "ticket" not in data:
-        return from_trigger(data)
+        return from_trigger(data, tracker)
     if not isinstance(data, dict) or "ticket" not in data:
         raise Bad(f"malformed {what}: needs an object with `ticket`")
     return data
@@ -169,9 +179,13 @@ def intake_fields(h):
         return {}
     size = re.search(r"\d+", str(h["size_estimate"]))
     n = int(size[0]) if size else 0
+    proposed = h.get("proposed_checks")
+    proposed = "\n".join(f"- {x}" for x in proposed) if isinstance(proposed, list) else str(proposed or "")
+    proposal = ("\n\nProposed acceptance checks (accept by editing the ticket, or by `factory:triage` with this pasted):\n"
+                f"{proposed}" if proposed.strip() not in ("", "none") else "")
     return {"complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
             "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong",
-            "questions": f"[factory] Needs answers before work starts: {h.get('reason', '')}",
+            "questions": f"[factory] Needs answers before work starts: {h.get('reason', '')}{proposal}",
             "children": slices(h.get("slices"))}
 
 
@@ -225,6 +239,15 @@ def check(name, event, tracker, nodes, config):
     if "id" not in event:
         raise Bad("malformed event: needs `id`")
     facts = tracker.facts(event["ticket"])
+    if "event_name" in event:
+        event["id"] = f"{event['event_name']}:{event['ticket']}:{event['action']}:{facts.get('updated_at', '')}"
+        event["head"] = facts.get("head")
+        event["actor"] = facts.get("event_actor")
+        pending = facts.get("pending_rereviews", [])
+        labels = facts.get("pr_labels", [])
+        event["rereview"] = next(iter(pending), None) or next(
+            (x.removeprefix("factory:rereview-") for x in labels
+             if x.startswith("factory:rereview-")), None)
     if name == "fix" and facts.get("ci") == "red" and facts.get("head") and hasattr(tracker, "ci_failure"):
         failure = tracker.ci_failure(facts["head"])
         if failure:
@@ -308,9 +331,14 @@ def resolve(effect, payload, ticket):
     if kind in ("label", "unlabel"):
         out = {"kind": kind, "ticket": ticket, "value": re.sub(r"<([^>]+)>", lambda m: str(field(m[1])), arg)}
         return {**out, "on": on} if on else out
+    if kind in ("assign", "unassign"):
+        out = {"kind": kind, "ticket": ticket, "value": arg}
+        return {**out, "on": on} if on else out
     if kind in ("comment", "create-issues"):
         out = {"kind": kind, "ticket": ticket, "value": field(arg)}
         return {**out, "on": on} if on else out
+    if kind == "park-behind-main-red":
+        return {"kind": kind, "ticket": ticket, "value": field(arg)}
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
@@ -355,12 +383,26 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         people = facts["waiting_reviewers"]
         effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
                     {"kind": "assign", "ticket": ticket, "value": people},
+                    {"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                    {"kind": "assign", "ticket": ticket, "value": people, "on": "pr"},
                     {"kind": "comment", "ticket": ticket,
                      "value": f"[factory] Re-review PR #{facts['pr']}: your change request was addressed at {facts['head']}",
                      "on": "pr"}]
+    if name == "join" and outcome == "changes" and facts.get("pr") and facts.get("head"):
+        human_changes = [r["author"] for r in facts.get("reviews", [])
+                         if not r.get("agent") and r.get("verdict") == "changes"
+                         and r.get("commit_id") == facts["head"]]
+        if human_changes:
+            effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                        {"kind": "assign", "ticket": ticket, "value": sorted(set(human_changes)), "on": "pr"}]
+    if name == "reopen" and outcome == "reopened" and facts.get("ci") == "red" and facts.get("pr"):
+        effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"], "on": "pr"}]
     if name == "merge" and outcome == "waiting":
         effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
-                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]}]
+                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]},
+                    {"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"], "on": "pr"}]
     if name == "join" and outcome == "changes" and facts.get("handed_to_fix") and has_dispute_rereview(facts):
         effects.insert(0, {"kind": "unlabel", "ticket": ticket, "value": "factory:fix-*", "on": "pr"})
     if name in ("implement", "fix") and outcome == "done":
@@ -425,6 +467,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     if any(e["kind"] == "stage" and e["value"] == "blocked" for e in effects):
         effects = clear_commands(ticket) + effects
     stage_effect = next((e for e in effects if e["kind"] == "stage"), None)
+    if stage_effect and not after:  # the join reads the new stage (nothing-to-fix: in-review)
+        after = [{**e, "tier": payload.get("tier") or fix_tier(facts)} for e in effects if e["kind"] == "join"]
+        effects = [e for e in effects if e["kind"] != "join"]
     if stage_effect:
         target = stage_effect["value"]
         human_effects = []
@@ -436,7 +481,12 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             person = (facts.get("author") if target == "needs-answers" else
                       config_mod.load()["notify"]["github_user"])
             human_effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
-                              {"kind": "assign", "ticket": ticket, "value": person}]
+                              {"kind": "assign", "ticket": ticket, "value": person},
+                              {"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                              {"kind": "assign", "ticket": ticket, "value": person, "on": "pr"}]
+        elif "factory:needs-human" in facts.get("attrs", []) or target in ("ready", "triage", "approved", "done"):
+            human_effects += [{"kind": "unlabel", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                              {"kind": "unassign", "ticket": ticket, "value": None, "on": "pr"}]
         effects[:0] = human_effects
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
@@ -793,6 +843,8 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                     continue  # preserve an existing human wait and its assignee
                 tracker.apply({"ticket": n, "kind": "label", "value": "factory:needs-human"})
                 tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"]})
+                tracker.apply({"ticket": n, "kind": "label", "value": "factory:needs-human", "on": "pr"})
+                tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"], "on": "pr"})
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
                                               "value": f"{RECOVER} stage={stage}: {why}. A person decides, then sets factory:ready."})
             elif recovered(facts, stage):
@@ -860,24 +912,22 @@ def main(argv):
                     raw = json.loads(sys.stdin.read() if a.event == "-" else Path(a.event).read_text())
                     if not isinstance(raw, dict):
                         raise ValueError("expected an event object")
+                    event_name = raw.get("eventType") or raw.get("event_name")
                     raw = raw.get("data", raw)
-                    if (not isinstance(raw, dict) or not isinstance(raw.get("action"), str)
-                            or not any(isinstance(raw.get(key), dict) for key in ("issue", "pull_request"))):
-                        raise ValueError("expected an event with an action and issue or pull request")
+                    if not isinstance(raw, dict) or not (event_name or isinstance(raw.get("action"), str)):
+                        raise ValueError("expected an event name and issue or PR number")
                     issue_payload, pr_payload = raw.get("issue"), raw.get("pull_request")
-                    if issue_payload:
-                        issue = issue_payload.get("number")
-                        if raw["action"] == "closed":
+                    is_pr = bool(pr_payload) or str(event_name or "").startswith("pull_request")
+                    if not is_pr:
+                        issue = (issue_payload or raw).get("number")
+                        if raw.get("action") == "closed":
                             closed_ticket = issue
                     else:
-                        title = pr_payload.get("title") or ""
-                        body = pr_payload.get("body") or ""
-                        match = re.match(r"\s*#(\d+)\b", title) or re.search(
-                            r"(?im)^\s*closes\s+#(\d+)\b", f"{title}\n{body}"
-                        )
-                        if not match:
-                            raise ValueError("PR title must start with #<ticket> or contain Closes #<ticket>")
-                        issue = int(match[1])
+                        pr_number = (pr_payload or raw).get("number")
+                        ref_ticket = tracker.ticket_for_pr(pr_number) if hasattr(tracker, "ticket_for_pr") else None
+                        if ref_ticket is None:
+                            raise ValueError("PR head ref does not identify an ez/<ticket> branch")
+                        issue = ref_ticket
                     if not isinstance(issue, int) or issue < 1:
                         raise ValueError("event does not identify a ticket number")
                 except (OSError, ValueError, TypeError) as e:
@@ -911,7 +961,7 @@ def main(argv):
                 raise Bad("malformed handoff: needs an object")
             code, out = apply_routine(a.node, a.outcome or h.get("outcome") or h.get("status") or "", nodes)
         elif a.cmd == "check":
-            event = read(a.event or "", "event", raw=True)
+            event = read(a.event or "", "event", raw=True, tracker=tracker)
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
             code, out = check(a.node, event, tracker, nodes, config)
             if a.node == "implement" and code == GO:
@@ -924,7 +974,7 @@ def main(argv):
                     raise Bad(f"malformed handoff: {e}")
                 if not isinstance(h, dict):
                     raise Bad("malformed handoff: needs an object")
-                ev = read(a.event, "event", raw=True) if a.event else {}
+                ev = read(a.event, "event", raw=True, tracker=tracker) if a.event else {}
                 if "ticket" not in {**h, **ev}:
                     raise Bad("apply --handoff needs `ticket` in the handoff or --event")
                 payload = {**intake_fields(h), **h, **{k: v for k, v in ev.items() if v is not None and k != "id"},
@@ -938,6 +988,9 @@ def main(argv):
     except NoTicket as e:
         print(json.dumps({"go": False, "reason": str(e)}))
         return NO_GO
+    except MissingNumber as e:
+        print(json.dumps({"go": False, "why": str(e)}))
+        return 11
     except Bad as e:
         print(json.dumps({"error": str(e)}))
         return BAD

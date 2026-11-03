@@ -15,6 +15,15 @@ class Tracker(Protocol):
     def apply(self, effect: dict) -> bool: ...
 
 
+def fix_round_count(reviews, since=""):
+    """Rounds a fix answers: an agent change request, per head and dispute rereview, since the person's last
+    `factory:ready`, with at least one blocking finding (id `B<n>`). A round with none (a verdict bug,
+    environment noise) is not counted against `limits.fix_rounds`."""
+    return len({(r["commit_id"], r.get("rereview")) for r in reviews
+                if r.get("agent") and r.get("verdict") == "changes" and (r.get("submitted_at") or "") >= since
+                and any(str(i).startswith("B") for i in r.get("findings", []))})
+
+
 class MemoryTracker:
     """Integer ids, stage in its own field. `fail_on` makes the effect kind raise."""
 
@@ -41,7 +50,8 @@ class MemoryTracker:
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
                 "round_verdict": None, "round_head": None, "attrs": [], "agent_runs": 0, "run_cap": 8, "handed_to_fix": False,
                 "pending_rereviews": [], "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False, "conflict": False,
-                "pr_state": "none", "risk": "high", "behind": False, "answered": False}
+                "pr_state": "none", "risk": "high", "behind": False, "answered": False, "updated_at": None}
+        t = {**t, "fix_rounds": fix_round_count(t["reviews"])} if "reviews" in t and "fix_rounds" not in t else t
         return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr", "ci_failure", "author", "waiting_reviewers")}, "stage": self.get_stage(t),
                 "seen": list(t.get("seen", []))}
 
@@ -65,6 +75,18 @@ class MemoryTracker:
             ev = effect.get("event") if kind == "stage" else value
             if ev is not None and ev not in seen:
                 seen.append(ev)
+                wrote = True
+            return wrote
+        if kind == "park-behind-main-red":  # open or reuse `Main is red in Air: <check>`, block this ticket by it, wait in ready
+            title = f"Main is red in Air: {value}"
+            red = next((i for i, x in self.tickets.items() if x.get("title") == title and x.get("state", "open") == "open"), None)
+            wrote = red is None
+            if wrote:
+                red = f"red-{value}"
+                self.tickets[red] = {"title": title, "stage": "triage", "state": "open"}
+            if red not in t.setdefault("blocked_by", []):
+                t["blocked_by"].append(red)
+                t["blockers_open"] = t.get("blockers_open", 0) + 1
                 wrote = True
             return wrote
         if kind == "set-field":

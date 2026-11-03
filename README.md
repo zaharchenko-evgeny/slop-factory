@@ -45,3 +45,8 @@ repository's descriptor and overrides configure its own factory.
 
 See [factory setup](skills/factory-setup/SKILL.md), [design](docs/design.md),
 and the [delivery workflow](workflows/delivery.md) for more detail.
+
+## Attention
+
+Find every open ticket or pull request waiting for a person with
+`is:open label:factory:needs-human`.
