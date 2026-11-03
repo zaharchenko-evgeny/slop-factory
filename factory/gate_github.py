@@ -19,6 +19,7 @@ import config
 from github_tracker import gh
 
 NOTE_FIELDS, NOTE_FOR, NOTE_MAX = ("for", "files", "repro", "hint", "context"), ("fixer", "reviewer", "developer", "any"), 2000
+NOTES_PARKED = "[factory] Agent notes for the PR description"  # ticket comment that holds them until the PR exists
 NOTES = re.compile(r"<!-- factory:agent-notes\s*(\{.*?\})\s*-->", re.S)
 SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)|\bAIza[\w-]{35}\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}"
                     r"|\bgithub_pat_\w{20,}|\bxox[abprs]-[\w-]{10,}|\bsk-[A-Za-z0-9_-]{20,}"
@@ -494,9 +495,24 @@ class GitHubGateTracker:
             body += self._block(e)
             self.run(["issue", "comment", str(pr["number"] if pr else n), "-R", self.repo, "--body", body])
             return True
-        if kind == "pr-notes":  # the PR description of a developer's `done`; no PR yet: the platform opens it later
+        if kind in ("pr-notes", "pr-notes-sync"):  # a developer's `done` notes for the PR description
             pr = self._pr(n)
-            if pr is None or value in (pr.get("body") or ""):
+            if kind == "pr-notes" and pr is None:  # Air opens the PR after the run: park the notes on the ticket
+                body = f"{NOTES_PARKED}\n\n{value}"
+                if any(c["body"] == body for c in self._list(f"issues/{n}/comments")):
+                    return False
+                self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
+                return True
+            if pr is None:
+                return False
+            if kind == "pr-notes-sync":  # the first gate step that sees the PR copies the parked notes
+                parked = [c for c in self._list(f"issues/{n}/comments") if (c.get("body") or "").startswith(NOTES_PARKED)]
+                found = parse_notes(parked[-1]["body"], (parked[-1].get("user") or {}).get("login", ""),
+                                    (parked[-1].get("user") or {}).get("type", "")) if parked else []
+                if not found:
+                    return False
+                value = f"<!-- factory:agent-notes\n{json.dumps(found[-1])}\n-->"
+            if value in (pr.get("body") or ""):
                 return False
             self.run(["pr", "edit", str(pr["number"]), "-R", self.repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
             return True

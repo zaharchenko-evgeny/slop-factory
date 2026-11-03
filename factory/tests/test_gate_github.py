@@ -75,7 +75,7 @@ class FakeGh:
                                [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)])
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
-            return "\n".join(json.dumps(p) for p in (
+            return "" if getattr(self, "no_pr", False) else "\n".join(json.dumps(p) for p in (
                 {"number": 5, "state": "open", "head": head("ez/7-x", REPO)},
                 {"number": 6, "state": "open", "head": head("ez/70-other", REPO)},
                 {"number": 8, "state": "open", "head": head("ez/7-fork", "evil/r")},
@@ -296,6 +296,23 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(M_GH.parse_notes(body, "mallory"), [])  # a person's notes are refused
         gh = FakeGh(comments=[{"body": body, "user": {"login": BOT, "type": "Bot"}, "created_at": "2026-01-01T00:00:00Z"}])
         self.assertEqual(tr(gh).facts(7)["agent_notes"], [notes])
+
+    def test_note_copied_to_pr_when_pr_appears(self):
+        notes = gate.clean_notes({"for": "fixer", "hint": "check the gate first"})
+        block = f"<!-- factory:agent-notes\n{json.dumps(notes)}\n-->"
+        gh = FakeGh()
+        gh.no_pr = True
+        self.assertTrue(tr(gh).apply(eff("pr-notes", block)))  # no PR yet: parked on the ticket
+        self.assertEqual(gh.writes[0][:3], ["issue", "comment", "7"])
+        parked = gh.writes[0][-1]
+        self.assertIn(block, parked)
+        gh = FakeGh(comments=[{"body": parked, "user": {"login": BOT, "type": "Bot"}}])
+        self.assertTrue(tr(gh).apply(eff("pr-notes-sync", "")))  # the PR exists now
+        self.assertEqual(gh.writes[0][:4], ["pr", "edit", "5", "-R"])
+        self.assertIn(block, gh.writes[0][-1])
+        gh = FakeGh(comments=[{"body": parked, "user": {"login": "mallory", "type": "User"}}])
+        self.assertFalse(tr(gh).apply(eff("pr-notes-sync", "")))  # a person's comment is no source
+        self.assertEqual(gh.writes, [])
 
     def test_agent_notes_secret_is_stripped(self):
         key = "ghp_" + "a1B2" * 6

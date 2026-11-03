@@ -363,6 +363,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         if name == "implement" and outcome == "done":
             effects.append({"kind": "pr-notes", "ticket": ticket, "value":
                             f"<!-- factory:agent-notes\n{json.dumps(notes)}\n-->"})
+    if name in ("review", "join"):
+        effects.append({"kind": "pr-notes-sync", "ticket": ticket, "value": ""})  # notes parked before the PR existed
     facts = tracker.facts(ticket)
     if name == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
             and not facts.get("focus_missing") and facts.get("ci") == "green" and facts.get("pr") and facts.get("head"):
