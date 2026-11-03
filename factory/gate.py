@@ -179,9 +179,13 @@ def intake_fields(h):
         return {}
     size = re.search(r"\d+", str(h["size_estimate"]))
     n = int(size[0]) if size else 0
+    proposed = h.get("proposed_checks")
+    proposed = "\n".join(f"- {x}" for x in proposed) if isinstance(proposed, list) else str(proposed or "")
+    proposal = ("\n\nProposed acceptance checks (accept by editing the ticket, or by `factory:triage` with this pasted):\n"
+                f"{proposed}" if proposed.strip() not in ("", "none") else "")
     return {"complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
             "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong",
-            "questions": f"[factory] Needs answers before work starts: {h.get('reason', '')}",
+            "questions": f"[factory] Needs answers before work starts: {h.get('reason', '')}{proposal}",
             "children": slices(h.get("slices"))}
 
 
@@ -327,9 +331,14 @@ def resolve(effect, payload, ticket):
     if kind in ("label", "unlabel"):
         out = {"kind": kind, "ticket": ticket, "value": re.sub(r"<([^>]+)>", lambda m: str(field(m[1])), arg)}
         return {**out, "on": on} if on else out
+    if kind in ("assign", "unassign"):
+        out = {"kind": kind, "ticket": ticket, "value": arg}
+        return {**out, "on": on} if on else out
     if kind in ("comment", "create-issues"):
         out = {"kind": kind, "ticket": ticket, "value": field(arg)}
         return {**out, "on": on} if on else out
+    if kind == "park-behind-main-red":
+        return {"kind": kind, "ticket": ticket, "value": field(arg)}
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
@@ -374,12 +383,26 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         people = facts["waiting_reviewers"]
         effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
                     {"kind": "assign", "ticket": ticket, "value": people},
+                    {"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                    {"kind": "assign", "ticket": ticket, "value": people, "on": "pr"},
                     {"kind": "comment", "ticket": ticket,
                      "value": f"[factory] Re-review PR #{facts['pr']}: your change request was addressed at {facts['head']}",
                      "on": "pr"}]
+    if name == "join" and outcome == "changes" and facts.get("pr") and facts.get("head"):
+        human_changes = [r["author"] for r in facts.get("reviews", [])
+                         if not r.get("agent") and r.get("verdict") == "changes"
+                         and r.get("commit_id") == facts["head"]]
+        if human_changes:
+            effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                        {"kind": "assign", "ticket": ticket, "value": sorted(set(human_changes)), "on": "pr"}]
+    if name == "reopen" and outcome == "reopened" and facts.get("ci") == "red" and facts.get("pr"):
+        effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"], "on": "pr"}]
     if name == "merge" and outcome == "waiting":
         effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
-                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]}]
+                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]},
+                    {"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"], "on": "pr"}]
     if name == "join" and outcome == "changes" and facts.get("handed_to_fix") and has_dispute_rereview(facts):
         effects.insert(0, {"kind": "unlabel", "ticket": ticket, "value": "factory:fix-*", "on": "pr"})
     if name in ("implement", "fix") and outcome == "done":
@@ -444,6 +467,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     if any(e["kind"] == "stage" and e["value"] == "blocked" for e in effects):
         effects = clear_commands(ticket) + effects
     stage_effect = next((e for e in effects if e["kind"] == "stage"), None)
+    if stage_effect and not after:  # the join reads the new stage (nothing-to-fix: in-review)
+        after = [{**e, "tier": payload.get("tier") or fix_tier(facts)} for e in effects if e["kind"] == "join"]
+        effects = [e for e in effects if e["kind"] != "join"]
     if stage_effect:
         target = stage_effect["value"]
         human_effects = []
@@ -455,7 +481,12 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             person = (facts.get("author") if target == "needs-answers" else
                       config_mod.load()["notify"]["github_user"])
             human_effects += [{"kind": "label", "ticket": ticket, "value": "factory:needs-human"},
-                              {"kind": "assign", "ticket": ticket, "value": person}]
+                              {"kind": "assign", "ticket": ticket, "value": person},
+                              {"kind": "label", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                              {"kind": "assign", "ticket": ticket, "value": person, "on": "pr"}]
+        elif "factory:needs-human" in facts.get("attrs", []) or target in ("ready", "triage", "approved", "done"):
+            human_effects += [{"kind": "unlabel", "ticket": ticket, "value": "factory:needs-human", "on": "pr"},
+                              {"kind": "unassign", "ticket": ticket, "value": None, "on": "pr"}]
         effects[:0] = human_effects
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
@@ -812,6 +843,8 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                     continue  # preserve an existing human wait and its assignee
                 tracker.apply({"ticket": n, "kind": "label", "value": "factory:needs-human"})
                 tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"]})
+                tracker.apply({"ticket": n, "kind": "label", "value": "factory:needs-human", "on": "pr"})
+                tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"], "on": "pr"})
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
                                               "value": f"{RECOVER} stage={stage}: {why}. A person decides, then sets factory:ready."})
             elif recovered(facts, stage):

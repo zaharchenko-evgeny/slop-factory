@@ -70,6 +70,18 @@ Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
    off `outcome: escalate`; when no tier can, hand off `outcome: unresolvable`
    with `--reason` listing the conflicting files.
 
+## Environment failures and nothing to fix
+
+- When a required check fails and fails identically on `origin/main` in Air
+  (reproduce it there), hand off `outcome: env-broken` with `failing_check`
+  naming the check. The gate opens or reuses `Main is red in Air: <check>`,
+  blocks the ticket behind it and moves it to `ready`. Use it in `implement`
+  and `fix` mode only for a failure you reproduced on `origin/main`.
+- In `fix` mode, when there is no blocking finding, no red CI and no conflict
+  for the head (a stale or duplicate fix label), hand off
+  `outcome: nothing-to-fix` with no commit. The gate removes the label and
+  reruns the join.
+
 ## Rules
 
 - Stay on the given branch and worktree. Never push, open PRs or change labels.

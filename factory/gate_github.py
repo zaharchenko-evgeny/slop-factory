@@ -16,6 +16,7 @@ from pathlib import Path
 import yaml
 
 import config
+from gate_port import fix_round_count
 from github_tracker import gh
 
 
@@ -114,6 +115,14 @@ class GitHubGateTracker:
         ref = ((pr.get("head") or {}).get("ref") or "")
         match = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
         return int(match[1]) if match else None
+
+    def _prs(self, n, open_only=False):
+        """The ticket's PRs from its branch; cleanup also includes closed PRs."""
+        prs = [p for p in self._list("pulls?state=all&per_page=100")
+               if p["head"]["ref"].startswith(f"ez/{n}-")
+               and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.repo.lower()
+               and (not open_only or p["state"] == "open")]
+        return sorted(prs, key=lambda p: p["number"])
 
     def _ci(self, sha):
         """CI at `sha` from the Actions workflow runs (the Air GitHub App has Actions: read, not Checks: read, so
@@ -348,9 +357,7 @@ class GitHubGateTracker:
                      pending_rereviews=pending_rereviews, pr_labels=sorted(pr_labels),
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                     fix_rounds=len({(r["commit_id"], r["rereview"]) for r in reviews
-                                     if r["agent"] and r["verdict"] == "changes"
-                                     and (r.get("submitted_at") or "") >= since}))  # same-head dispute rereviews count as a new round
+                     fix_rounds=fix_round_count(reviews, since))  # same-head dispute rereviews count as a new round
         return f
 
     def stale_facts(self, n):
@@ -407,12 +414,25 @@ class GitHubGateTracker:
         if kind in ("label", "unlabel"):
             on, target = e.get("on") or "issue", n
             if on == "pr":
-                pr = self._pr(n)
-                if pr is None:
-                    if kind == "unlabel":
-                        return False  # nothing to remove from a PR that does not exist
-                    raise RuntimeError(f"{kind}: no PR for ticket {n}")
-                target = pr["number"]
+                attention = value == "factory:needs-human"
+                if attention:
+                    prs = self._prs(n, open_only=kind == "label")
+                else:
+                    pr = self._pr(n)
+                    prs = [pr] if pr else []
+                if not prs:
+                    return False  # ticket-level waits also apply before a PR exists
+                changed = False
+                for pr in prs:
+                    labels = self._labels(pr["number"])
+                    if kind == "label":
+                        if value not in labels:
+                            changed |= self._edit(pr["number"], [value], on=on)
+                    else:
+                        gone = [x for x in labels if x.startswith(value[:-1])] if value.endswith("*") else [value] if value in labels else []
+                        if gone:
+                            changed |= self._edit(pr["number"], remove=gone, on=on)
+                return changed
             elif on != "issue":
                 raise ValueError(f"{kind}: bad target: {on}")
             labels = self._labels(target)
@@ -427,13 +447,30 @@ class GitHubGateTracker:
             return have != [f"{k}:{v}"] and self._edit(n, [f"{k}:{v}"] if f"{k}:{v}" not in have else [],
                                                        [x for x in have if x != f"{k}:{v}"])
         if kind in ("assign", "unassign"):
-            current = {a["login"] for a in self._api(f"issues/{n}").get("assignees", [])}
+            on, target = e.get("on") or "issue", n
+            if on == "pr":
+                prs = self._prs(n, open_only=kind == "assign")
+                if not prs:
+                    return False
+                changed = False
+                for pr in prs:
+                    current = {a["login"] for a in self._api(f"issues/{pr['number']}").get("assignees", [])}
+                    desired = set((value if isinstance(value, list) else [value])) if kind == "assign" else set()
+                    if current != desired:
+                        flags = [x for a in sorted(desired - current) for x in ("--add-assignee", a)]
+                        flags += [x for a in sorted(current - desired) for x in ("--remove-assignee", a)]
+                        self.run(["issue", "edit", str(pr["number"]), "-R", self.repo, *flags])
+                        changed = True
+                return changed
+            elif on != "issue":
+                raise ValueError(f"{kind}: bad target: {on}")
+            current = {a["login"] for a in self._api(f"issues/{target}").get("assignees", [])}
             desired = set((value if isinstance(value, list) else [value])) if kind == "assign" else set()
             if current == desired:
                 return False
             flags = [x for a in sorted(desired - current) for x in ("--add-assignee", a)]
             flags += [x for a in sorted(current - desired) for x in ("--remove-assignee", a)]
-            self.run(["issue", "edit", str(n), "-R", self.repo, *flags])
+            self.run(["issue", "edit", str(target), "-R", self.repo, *flags])
             return True
         if kind == "comment":
             body = value if value.startswith("[factory]") else f"[factory] {value}"
@@ -453,6 +490,8 @@ class GitHubGateTracker:
             return self._rerequest(n)
         if kind == "create-issues":
             return self._create(n, value)
+        if kind == "park-behind-main-red":
+            return self._park(n, value)
         if kind == "merge":
             pr = self._pr(n)
             if pr is None:
@@ -645,6 +684,20 @@ class GitHubGateTracker:
             prev = new["id"]
             prev_number = new["number"]
         return wrote
+
+    def _park(self, n, check):
+        """Open or reuse the one `Main is red in Air: <check>` ticket, then block ticket `n` by it."""
+        title = f"Main is red in Air: {check}"
+        red = next((i for i in self._list("issues?state=open&per_page=100") if "pull_request" not in i and i["title"] == title), None)
+        if red is None:
+            body = (f"[factory] The required check `{check}` fails identically on unchanged `main` in Air (found while working on #{n}). "
+                    "Fix main; the tickets blocked by this one restart when it closes.")
+            red = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={title}", "-f", f"body={body}",
+                                       "-f", f"labels[]={self.stages['triage']}"]))
+        if red["id"] in {b["id"] for b in self._list(f"issues/{n}/dependencies/blocked_by")}:
+            return False
+        self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={red['id']}"])
+        return True
 
     @staticmethod
     def _blocked_body(body, number):

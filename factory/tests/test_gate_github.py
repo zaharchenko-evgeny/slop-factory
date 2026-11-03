@@ -6,6 +6,7 @@
 """Tests for factory/gate_github.py with a stubbed gh. Run: uv run factory/tests/test_gate_github.py"""
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -43,6 +44,7 @@ class FakeGh:
         self.blocked = [{"state": "open", "id": 1}, {"state": "closed", "id": 2}]
         self.fail_blocked_by = False
         self.open_issues, self.state, self.sub_state = [], "open", ["open"] * 9
+        self.extra_pulls, self.pr_labels, self.pr_assignees = [], {}, {}
 
     def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
@@ -76,16 +78,17 @@ class FakeGh:
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
             return "\n".join(json.dumps(p) for p in (
-                {"number": 5, "state": "open", "head": head("ez/7-x", REPO)},
+                {"number": 5, "state": "closed" if self.merged else "open", "head": head("ez/7-x", REPO)},
                 {"number": 6, "state": "open", "head": head("ez/70-other", REPO)},
                 {"number": 8, "state": "open", "head": head("ez/7-fork", "evil/r")},
-                {"number": 9, "state": "open", "head": head("ez/7-gone", None)}))
+                {"number": 9, "state": "open", "head": head("ez/7-gone", None)}, *self.extra_pulls))
         if "issues?state=" in a and "labels=" in a:
             want = a.split("labels=")[1].split("&")[0]
             on = want in self.labels and (self.state == "open" or "state=all" in a)
             return json.dumps({"number": 7}) if on else ""
-        if a.endswith("/pulls/5"):
-            return json.dumps({"number": 5, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
+        if "/pulls/" in a and a.rsplit("/", 1)[-1].isdigit():
+            number = int(a.rsplit("/", 1)[-1])
+            return json.dumps({"number": number, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
                                "requested_reviewers": [{"login": u} for u in self.requested],
                                "labels": [{"name": x} for x in self.labels]})
         if a.endswith("/git/ref/heads/main"):
@@ -117,10 +120,14 @@ class FakeGh:
                              for t in getattr(self, "fix_events", []))
         if a.endswith("/pulls/5/reviews"):
             return "\n".join(json.dumps(r) for r in self.reviews)
-        if a.endswith(("issues/7", "issues/5")) and "PATCH" not in args:
-            return json.dumps({"labels": [{"name": x} for x in self.labels], "state": self.state,
+        if "PATCH" not in args and (re_issue := re.search(r"issues/(\d+)$", a)) \
+                and int(re_issue.group(1)) in (5, 7, 10):
+            issue_number = int(re_issue.group(1))
+            labels = self.labels if issue_number == 5 else self.pr_labels.get(issue_number, self.labels)
+            assignees = self.assignees if issue_number == 5 else self.pr_assignees.get(issue_number, self.assignees)
+            return json.dumps({"labels": [{"name": x} for x in labels], "state": self.state,
                                "body": getattr(self, "issue_body", ""),
-                               "assignees": [{"login": x} for x in self.assignees],
+                               "assignees": [{"login": x} for x in assignees],
                                "user": {"login": "author"}})
         if a.endswith("issues/7/dependencies/blocking"):
             return "\n".join(json.dumps(i) for i in getattr(self, "blocking_issues", []))
@@ -146,13 +153,23 @@ class FakeGh:
             it = iter(args[5:])
             for flag, v in zip(it, it):
                 if flag == "--add-label":
-                    self.labels.append(v)
-                elif flag == "--remove-label" and v in self.labels:
-                    self.labels.remove(v)
+                    number = int(args[2])
+                    labels = (self.labels if number == 5 else self.pr_labels.setdefault(number, list(self.labels))) if args[0] == "pr" else self.labels
+                    labels.append(v)
+                elif flag == "--remove-label":
+                    number = int(args[2])
+                    labels = (self.labels if number == 5 else self.pr_labels.setdefault(number, list(self.labels))) if args[0] == "pr" else self.labels
+                    if v in labels:
+                        labels.remove(v)
                 elif flag == "--add-assignee":
-                    self.assignees.append(v)
-                elif flag == "--remove-assignee" and v in self.assignees:
-                    self.assignees.remove(v)
+                    number = int(args[2])
+                    people = self.assignees if number in (5, 7) else self.pr_assignees.setdefault(number, list(self.assignees))
+                    people.append(v)
+                elif flag == "--remove-assignee":
+                    number = int(args[2])
+                    people = self.assignees if number in (5, 7) else self.pr_assignees.setdefault(number, list(self.assignees))
+                    if v in people:
+                        people.remove(v)
         return json.dumps({"id": 999, "number": 999}) if a.endswith("/issues POST") else ""
 
 
@@ -256,6 +273,32 @@ class EffectsTest(unittest.TestCase):
         gh = FakeGh()
         self.assertEqual(self.twice(gh, eff("label", "factory:fix-mid")), (True, 1, False, 1))
         self.assertEqual(self.twice(gh, eff("unlabel", "factory:fix-mid")), (True, 2, False, 2))
+
+    def test_pr_label_and_assignee_use_the_pull_request(self):
+        gh = FakeGh()
+        self.assertTrue(tr(gh).apply(eff("label", "factory:needs-human", on="pr")))
+        self.assertTrue(tr(gh).apply(eff("assign", "operator", on="pr")))
+        self.assertTrue(any(w[:3] == ["pr", "edit", "5"] and "--add-label" in w for w in gh.writes))
+        self.assertTrue(any("issue edit 5" in " ".join(w) and "--add-assignee" in w for w in gh.writes))
+
+    def test_pr_attention_effects_apply_to_every_open_ticket_pr(self):
+        gh = FakeGh()
+        gh.extra_pulls = [{"number": 10, "state": "open",
+                           "head": {"ref": "ez/7-followup", "repo": {"full_name": REPO}}}]
+        gh.pr_labels[10] = []
+        gh.pr_assignees[10] = []
+        tracker = tr(gh)
+        self.assertTrue(tracker.apply(eff("label", "factory:needs-human", on="pr")))
+        self.assertTrue(tracker.apply(eff("assign", "operator", on="pr")))
+        for number in (5, 10):
+            self.assertTrue(any(w[:3] == ["pr", "edit", str(number)] and "--add-label" in w for w in gh.writes))
+            self.assertTrue(any(w[:3] == ["issue", "edit", str(number)] and "--add-assignee" in w for w in gh.writes))
+
+    def test_needs_human_is_not_added_to_a_closed_pr(self):
+        gh = FakeGh()
+        gh.merged = True
+        self.assertFalse(tr(gh).apply(eff("label", "factory:needs-human", on="pr")))
+        self.assertEqual(gh.writes, [])
 
     def test_set_field(self):
         gh = FakeGh()
@@ -410,6 +453,14 @@ class EffectsTest(unittest.TestCase):
         self.assertIn("body=Blocked by: #999", " ".join(patch))
         self.assertFalse(any("PATCH" in w and "issues/999" in " ".join(w) for w in gh.writes))
 
+    def test_park_without_native_link_fails_instead_of_reporting_success(self):
+        gh = FakeGh(labels=("factory:in-dev", "risk:low"))
+        gh.blocked, gh.fail_blocked_by = [], True
+        gh.open_issues = [{"id": 50, "number": 50, "title": "Main is red in Air: gate"}]
+        with self.assertRaisesRegex(RuntimeError, "403"):
+            tr(gh).apply(eff("park-behind-main-red", "gate"))
+        self.assertFalse(any("PATCH" in w for w in gh.writes))
+
     def test_blocked_by_line_counts_as_open_blocker(self):
         gh = FakeGh(labels=("factory:ready", "risk:low"))
         gh.blocked, gh.issue_body = [], "Blocked by: #12\n\nChild"
@@ -483,11 +534,12 @@ class EffectsTest(unittest.TestCase):
         self.assertNotIn("labels[]=factory:ready", gh.writes[0])  # ready comes after the links
 
     def test_fix_rounds_grow_per_reviewed_head(self):
-        C = M.replace("approve", "changes")
+        C = "**B1** x.py:1 — bug\n\n" + M.replace("approve", "changes")
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, C), review(BOT, C)])).facts(7)["fix_rounds"], 1)  # one head
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, C, commit="h0"), review(BOT, C)])).facts(7)["fix_rounds"], 2)
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)["fix_rounds"], 0)
         self.assertEqual(tr(FakeGh(reviews=[review(BOT, C, commit="old")])).facts(7)["fix_rounds"], 1)
+        self.assertEqual(tr(FakeGh(reviews=[review(BOT, M.replace("approve", "changes"))])).facts(7)["fix_rounds"], 0)  # no blocking finding
         gh = FakeGh(reviews=[review(BOT, C, commit="old")])
         tr(gh).apply(eff("review", "approve-at-head", focus="full"))
         self.assertIn("round=2", gh.writes[0][-1])
@@ -563,7 +615,7 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(gh.writes, [])
 
 
-C = M.replace("approve", "changes")
+C = "**B1** x.py:1 — bug\n\n" + M.replace("approve", "changes")
 HUMAN = [None, "APPROVED", "CHANGES_REQUESTED"]
 
 
@@ -732,7 +784,7 @@ class JoinTest(unittest.TestCase):
         self.assertEqual(gate.check("fix", {"id": "e", "ticket": 7}, tr(gh), nodes.load(), CONFIG)[0], gate.GO)
 
     def test_dispute_rereview_joins_after_fix_handoff(self):
-        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
+        old = review(BOT, "**B1** x.py:1 — bug\n\n<!-- factory:review focus=full round=1 verdict=changes -->")
         gh = FakeGh(labels=["factory:in-review", "risk:low", "factory:fix-mid"], reviews=[old])
         gh.fix_events = ["2026-01-02T05:00:00Z"]
         rereview = review(BOT, "<!-- factory:review focus=full round=1 verdict=approve rereview=1 -->",
@@ -744,8 +796,8 @@ class JoinTest(unittest.TestCase):
         self.assertIn("factory:approved", gh.labels)
 
     def test_disputed_finding_starts_a_counted_fix_round_and_rearms_label(self):
-        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
-        latest = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes rereview=1 -->",
+        old = review(BOT, "**B1** x.py:1 — bug\n\n<!-- factory:review focus=full round=1 verdict=changes -->")
+        latest = review(BOT, "**B1** x.py:1 — bug\n\n<!-- factory:review focus=full round=1 verdict=changes rereview=1 -->",
                        at="2026-01-02T06:00:00Z")
         gh = FakeGh(labels=["factory:in-review", "risk:low", "factory:fix-mid"], reviews=[old, latest])
         gh.fix_events = ["2026-01-02T05:00:00Z"]
@@ -757,7 +809,7 @@ class JoinTest(unittest.TestCase):
         self.assertTrue(any("--remove-label" in call and "factory:fix-mid" in call for call in gh.writes))
 
     def test_unauthenticated_rereview_marker_does_not_reopen_join(self):
-        old = review(BOT, "<!-- factory:review focus=full round=1 verdict=changes -->")
+        old = review(BOT, "**B1** x.py:1 — bug\n\n<!-- factory:review focus=full round=1 verdict=changes -->")
         forged = review("mallory", "<!-- factory:review focus=full round=1 verdict=approve rereview=1 -->")
         gh = FakeGh(labels=["factory:in-review", "risk:low"], reviews=[old, forged])
         gh.fix_events = ["2026-01-02T05:00:00Z"]

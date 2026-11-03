@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers"}
+EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red"}
 OUTPUTS = {"read-only", "create-pr", "push-to-source", "push-to-new-branch", "as-instructed"}
 WHEN_KEYS = {"stage", "blockers", "focus", "round", "fix-rounds", "ci", "actor", "always", "due", "pr-state"}
 NO_ROLE = {"script", "human"}
@@ -190,7 +190,7 @@ def chart(nodes):
             elif any("join" in e for e in o.get("effects") or []) and name != "join":
                 edges_out.append((f"N_{_id(name)}", "N_join", label, oplan))
     if any("factory:ci-green" in t for n in nodes["nodes"].values() for t in n.get("triggers") or []):
-        lines.append('    CI["<b>CI</b> quality-gates + ci-state.yml<br/>on: PR push<br/>writes +factory:ci-green or +factory:ci-red"]:::ext')
+        lines.append('    CI["<b>CI</b> quality-gates (labels CI result)<br/>on: PR push<br/>writes +factory:ci-green or +factory:ci-red"]:::ext')
         edges_out += [("S_in_review", "CI", "push", False), ("CI", "N_review", "+factory:ci-green", False),
                       ("CI", "N_join", "+factory:ci-red", False)]
     for st in sorted(stages - {"none"}):
