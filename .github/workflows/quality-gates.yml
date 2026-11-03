@@ -61,20 +61,26 @@ jobs:
                   print(result.stdout + result.stderr, file=sys.stderr)
                   sys.exit(1)
           PY
-      - name: agnix
+      - id: agnix
+        name: agnix
         run: npx --yes agnix@0.59.3 .
-      - name: shellcheck
+      - id: shellcheck
+        name: shellcheck
         run: find . -name setup.sh -not -path './.factory/*' -exec shellcheck -x {} +
-      - name: jactionlint
+      - id: jactionlint
+        name: jactionlint
         run: pipx run jactionlint==2.3.0 --shellcheck=
-      - name: Betterleaks download
+      - id: betterleaks_download
+        name: Betterleaks download
         shell: bash
         env:
           BETTERLEAKS_VERSION: 1.9.0
         run: curl -sSfL "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz" | tar xz betterleaks
-      - name: Betterleaks repository
+      - id: betterleaks_repository
+        name: Betterleaks repository
         run: ./betterleaks dir . --no-banner
-      - name: Betterleaks PR diff
+      - id: betterleaks_diff
+        name: Betterleaks PR diff
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -114,3 +120,20 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
           CONCLUSION: ${{ job.status }}
         run: scripts/ci-state-label.sh
+      - name: Summarize quality checks
+        if: always()
+        env:
+          AGNIX: ${{ steps.agnix.outcome }}
+          SHELLCHECK: ${{ steps.shellcheck.outcome }}
+          JACTIONLINT: ${{ steps.jactionlint.outcome }}
+          BETTERLEAKS_DOWNLOAD: ${{ steps.betterleaks_download.outcome }}
+          BETTERLEAKS_REPOSITORY: ${{ steps.betterleaks_repository.outcome }}
+          BETTERLEAKS_DIFF: ${{ steps.betterleaks_diff.outcome }}
+        run: |
+          {
+            echo '## Quality checks'
+            echo "- agnix: ${AGNIX:-not run}"
+            echo "- shellcheck: ${SHELLCHECK:-not run}"
+            echo "- jactionlint: ${JACTIONLINT:-not run}"
+            echo "- betterleaks: download ${BETTERLEAKS_DOWNLOAD:-not run}, repository ${BETTERLEAKS_REPOSITORY:-not run}, PR diff ${BETTERLEAKS_DIFF:-not run}"
+          } >> "$GITHUB_STEP_SUMMARY"
