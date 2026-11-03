@@ -1,6 +1,12 @@
 # Implementation plan
 
-## Current: the engine package (ADR-0015)
+## Current: project descriptor and workflow (ADR-0016)
+
+[ADR-0016](adr/0016-project-descriptor-and-workflow.md) defines the project
+descriptor and workflow contract. Tickets #408–#414 implement that decision;
+each ticket's body is its spec and GitHub dependencies define the build order.
+
+## History: the engine package (ADR-0015)
 
 The build order of [ADR-0015](adr/0015-engine-package-and-descriptor.md). Each ticket's body is its spec. Blockers are GitHub issue dependencies.
 
