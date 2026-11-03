@@ -143,6 +143,12 @@ class MemoryTracker:
         return {"stage": t.get("stage", "none"), "summary": t.get("last_summary", ""),
                 "error": bool(t.get("node_error"))}
 
+    def record_node_error(self, ticket):
+        t = self._t(ticket)
+        if "factory:canary" in t.get("labels", []):
+            t["node_error"] = True
+            t["last_summary"] = "[factory] A factory node reported an execution error."
+
 
 class TagTracker(MemoryTracker):
     """String ids (PROJ-1), stage held as a `stage:<name>` tag among the other tags, as in YouTrack."""

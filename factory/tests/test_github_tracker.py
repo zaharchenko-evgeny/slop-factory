@@ -124,6 +124,15 @@ class GitHub(unittest.TestCase):
         self.assertEqual(fake.issues[23]["state"], "CLOSED")
         self.assertIn("risk:low", fake.issues[23]["labels"])
 
+    def test_canary_status_detects_a_sweep_node_error(self):
+        fake = FakeGh({23: {"labels": ["factory:canary", "factory:in-dev"]}})
+        tr = tracker(fake)
+        tr.record_node_error(23)
+        status = tr.canary_status(23)
+        self.assertTrue(status["error"])
+        self.assertIn("node reported an execution error", status["summary"])
+        self.assertIn("<!-- factory-node-error -->", fake.issues[23]["comments"][0]["body"])
+
     def test_done_closes_the_issue_once(self):
         fake = FakeGh({23: {"labels": ["factory:merged"]}})
         t = tracker(fake)

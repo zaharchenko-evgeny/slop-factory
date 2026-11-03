@@ -220,7 +220,16 @@ class GitHubTracker:
         comments = self.comments(n)
         summary = next((c["body"] for c in reversed(comments) if c["body"].startswith("[factory]")), "")
         return {"stage": self.get_state(n) or "none", "summary": summary,
-                "error": "factory:failed" in issue["labels"]}
+                "error": "factory:failed" in issue["labels"] or any(
+                    "<!-- factory-node-error -->" in c["body"] for c in comments)}
+
+    def record_node_error(self, n):
+        """Leave a durable canary signal when a sweep catches a node exception."""
+        if "factory:canary" not in self.issue(n)["labels"]:
+            return
+        self.run(["api", f"repos/{self.repo}/issues/{n}/comments", "-f",
+                  "body=[factory] A factory node reported an execution error.\n\n"
+                       "<!-- factory-node-error -->\n\nFactory-Run: sweep:node-error"])
 
     def add_blocker(self, n, blocker):
         """Native dependency: issue `n` is blocked by `blocker`."""

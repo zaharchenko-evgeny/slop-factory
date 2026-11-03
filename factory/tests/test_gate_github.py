@@ -129,6 +129,9 @@ class FakeGh:
         if a.endswith("issues/12"):
             return json.dumps({"number": 12, "state": getattr(self, "blocker_state", "open"), "labels": []})
         if a.endswith("issues/7/comments"):
+            if "-f" in args:
+                self.writes.append(args)
+                self.comments.append(args[-1].removeprefix("body="))
             return "\n".join(json.dumps(c if isinstance(c, dict) else {"body": c}) for c in self.comments)
         if a.endswith("issues?state=open&per_page=100"):
             return "\n".join(json.dumps(i) for i in self.open_issues)
@@ -170,6 +173,14 @@ def eff(kind, value, **kw):
 
 
 class FactsTest(unittest.TestCase):
+    def test_node_error_signal_is_written_only_for_canary(self):
+        gh = FakeGh(labels=["factory:in-review", "factory:canary"])
+        tr(gh).record_node_error(7)
+        self.assertIn("<!-- factory-node-error -->", " ".join(gh.writes[-1]))
+        gh = FakeGh()
+        tr(gh).record_node_error(7)
+        self.assertEqual(gh.writes, [])
+
     def test_facts(self):
         gh = FakeGh(reviews=[review(BOT, M)], requested=["alice"])
         f = tr(gh).facts(7)

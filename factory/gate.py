@@ -649,6 +649,11 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                 failed = True
                 r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
                 results.append(r)
+                if hasattr(tracker, "record_node_error"):
+                    try:
+                        tracker.record_node_error(n)
+                    except Exception:
+                        pass  # preserve the original sweep error; the log still reports it
                 if progress:
                     progress(r)
                 break

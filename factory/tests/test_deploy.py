@@ -206,6 +206,14 @@ class ApplyTest(unittest.TestCase):
         self.assertIn("Stage: blocked", failure["body"])
         self.assertIn("Last run summary: check failed", failure["body"])
 
+    def test_node_error_canary_opens_failure_ticket_immediately(self):
+        tracker = MemoryTracker({7: {"stage": "in-dev", "labels": ["factory:canary"]}})
+        tracker.record_node_error(7)
+        self.assertEqual(deploy.wait_for_canary(tracker, 7, "d-7", clock=lambda: 0), 1)
+        failure = tracker.tickets[8]
+        self.assertIn("node error", failure["body"])
+        self.assertIn("node reported an execution error", failure["body"])
+
     def test_new_deploy_closes_old_canary(self):
         tracker = MemoryTracker({1: {"title": "Canary after deploy old", "labels": ["factory:canary"],
                                      "stage": "in-dev", "state": "open"}})
