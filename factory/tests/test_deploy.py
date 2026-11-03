@@ -189,7 +189,7 @@ class ApplyTest(unittest.TestCase):
                   [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}])
         self.assertEqual(self.run_deploy("--apply"), 0)
         self.assertEqual(self.calls("automation"), [["update_automation", {
-            "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "automationId": "a1"}]])
+            "prompt": "new", "automationId": "a1"}]])
         self.assertNotIn("spec", self.calls("automation")[0][1])
         self.assertEqual(self.calls("environment"), [])
 
@@ -200,14 +200,23 @@ class ApplyTest(unittest.TestCase):
                   [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}])
         self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
         self.assertEqual(self.calls("automation"), [["update_automation", {
-            "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "automationId": "a1"}]])
+            "name": "[F] a", "automationId": "a1"}]])
 
     def test_apply_edits_environment(self):
         self.seed([{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1"}],
                   [{"id": "e1", "name": "[F] read", "startup": "old", "repository": "https://github.com/o/r"}])
         self.assertEqual(self.run_deploy("--apply"), 0)
-        self.assertEqual(self.calls("environment"), [["edit_environment", {
-            "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r", "id": "e1"}]])
+        self.assertEqual(self.calls("environment"), [["edit_environment", {"startup": "x", "id": "e1"}]])
+
+    def test_environment_update_preserves_unplanned_live_domains(self):
+        self.plan["environments"][0]["vm"] = "new"
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x",
+                        "repository": "https://github.com/o/r", "vm": "old",
+                        "domains": ["github.com", "*.blob.core.windows.net"]}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual(self.calls("environment"), [["edit_environment", {"vm": "new", "id": "e1"}]])
+        live = json.loads(self.state["environment"].read_text())["items"][0]
+        self.assertEqual(live["domains"], ["github.com", "*.blob.core.windows.net"])
 
     def test_main_rename_flag_updates_in_place(self):
         self.seed([{"id": "a1", "name": "[Slop factory] old-intake"}], [])
