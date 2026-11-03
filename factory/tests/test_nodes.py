@@ -57,6 +57,11 @@ class NodesTest(unittest.TestCase):
         config["tracker"]["stages"]["orphan"] = "factory:orphan"
         self.assertIn("unused-stage: orphan", nodes.validate(nodes.load(), config))
 
+    def test_stage_without_kind_rejected(self):
+        config = copy.deepcopy(CONFIG)
+        config["tracker"]["stages"]["orphan"] = "factory:orphan"
+        self.assertIn("stage-without-kind: orphan", nodes.validate(nodes.load(), config))
+
     def test_chart_is_current(self):
         want = nodes.block(nodes.load())
         for doc in ("docs/statechart.md", "docs/statechart-proposed.md"):

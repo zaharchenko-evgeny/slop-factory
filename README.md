@@ -17,19 +17,20 @@ pushes the tag; the tag is not created by this change.
 ## Use
 
 `factory --help` lists the available commands. The subcommands are `begin`,
-`end`, `check`, `apply`, `sweep`, `deploy`, `chart`, `validate`, and `doctor`.
+`end`, `check`, `apply`, `sweep`, `deploy`, `contracts`, `chart`, `validate`, and `doctor`.
 `begin` starts a node and prints its handoff path; `end` applies the completed
 handoff. `check` and `apply` operate the gate, while `sweep` runs its event
 processing. `deploy` creates Air automations, `chart` renders the workflow,
 `validate` checks configuration, and `doctor` diagnoses the local setup.
+`contracts refresh` re-records the Air service contracts and is operator-only.
 
 ## Team configuration
 
 Each team keeps settings in `factory.descriptor.yaml`. The descriptor supports
 these top-level keys, defined by `engine/descriptor.schema.json`:
 `engine`, `project`, `repositories`, `branch_pattern`, `commit_prefix`,
-`tracker`, `code_host`, `notify`, `targets`, `models`, `roles`, `limits`, `gates`,
-`knowledge`, `nodes`, `reviews`, and `checks`.
+`team_repository`, `tracker`, `code_host`, `notify`, `targets`, `models`, `roles`,
+`limits`, `gates`, `ci`, `knowledge`, `nodes`, `reviews`, and `checks`.
 
 ### Team overrides
 

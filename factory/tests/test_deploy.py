@@ -114,18 +114,14 @@ class RecordedTest(unittest.TestCase):
             self.read_recorded()
 
     def test_unchanged_environment_is_unchanged(self):
-        recorded = json.loads((FIX / "mcp-recorded.json").read_text())
-        get_environment = recorded["air-cloud.get_environment"]["7462a87c-fbe2-40d6-9b28-f3f5c4fc1ca9"]
-        have = deploy.environment_detail(json.loads(get_environment["content"][0]["text"]))
-        plan = {"prefix": "[Slop factory] ", "automations": [], "environments": [{
-            "name": "[Slop factory] read",
-            "repository": "https://github.com/zaharchenko-evgeny/offline-eval-factory",
-            "startup": ".air/cloud/startup.sh", "variables": {"FACTORY_ENV": "read"}, "secrets": [],
-            "domains": ["github.com", "api.github.com", "objects.githubusercontent.com",
-                        "release-assets.githubusercontent.com", "*.blob.core.windows.net",
-                        "pypi.org", "files.pythonhosted.org"], "vm": "default",
-        }]}
-        self.assertEqual(deploy.diff(plan, [], [have]), [])
+        contract = json.loads((HERE / "contracts/air-mcp.json").read_text())
+        responses = contract["servers"]["air-cloud"]["responses"]
+        plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository":
+                                              "https://github.com/zaharchenko-evgeny/slop-eval-factory"})
+        plan = {"prefix": plan["prefix"], "environments": plan["environments"], "automations": []}
+        envs = [deploy.environment_detail(json.loads(responses[f"get_environment:{name}"]["content"][0]["text"]))
+                for name in ("read", "write", "ops")]
+        self.assertEqual(deploy.diff(plan, [], envs), [])
 
     def read_recorded(self):
         tmp = Path(tempfile.mkdtemp())
@@ -193,7 +189,7 @@ class ApplyTest(unittest.TestCase):
                   [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}])
         self.assertEqual(self.run_deploy("--apply"), 0)
         self.assertEqual(self.calls("automation"), [["update_automation", {
-            "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "automationId": "a1"}]])
+            "prompt": "new", "automationId": "a1"}]])
         self.assertNotIn("spec", self.calls("automation")[0][1])
         self.assertEqual(self.calls("environment"), [])
 
@@ -204,14 +200,23 @@ class ApplyTest(unittest.TestCase):
                   [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}])
         self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
         self.assertEqual(self.calls("automation"), [["update_automation", {
-            "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "automationId": "a1"}]])
+            "name": "[F] a", "automationId": "a1"}]])
 
     def test_apply_edits_environment(self):
         self.seed([{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1"}],
                   [{"id": "e1", "name": "[F] read", "startup": "old", "repository": "https://github.com/o/r"}])
         self.assertEqual(self.run_deploy("--apply"), 0)
-        self.assertEqual(self.calls("environment"), [["edit_environment", {
-            "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r", "id": "e1"}]])
+        self.assertEqual(self.calls("environment"), [["edit_environment", {"startup": "x", "id": "e1"}]])
+
+    def test_environment_update_preserves_unplanned_live_domains(self):
+        self.plan["environments"][0]["vm"] = "new"
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x",
+                        "repository": "https://github.com/o/r", "vm": "old",
+                        "domains": ["github.com", "*.blob.core.windows.net"]}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual(self.calls("environment"), [["edit_environment", {"vm": "new", "id": "e1"}]])
+        live = json.loads(self.state["environment"].read_text())["items"][0]
+        self.assertEqual(live["domains"], ["github.com", "*.blob.core.windows.net"])
 
     def test_main_rename_flag_updates_in_place(self):
         self.seed([{"id": "a1", "name": "[Slop factory] old-intake"}], [])
@@ -356,23 +361,18 @@ class PlanTest(unittest.TestCase):
                                "filters": {"label": f"factory:rereview-{a['name'].rsplit('-', 1)[1]}",
                                            "pr_author": "jetbrains-air[bot]"}}, a["triggers"])
 
-    def test_reconcile_is_a_workflow_in_the_factory_repository_not_an_air_automation(self):
+    def test_reconcile_is_an_hourly_air_schedule_only(self):
         plan = deploy.plan_air(nodes.load(), cfg.load())
         self.assertNotIn("[Slop factory] recover", {x["name"] for x in plan["automations"]})
-        self.assertFalse([x for x in plan["automations"] if "reconcile" in x["name"]])
-        self.assertEqual(list(plan["files"]), [".github/workflows/factory-reconcile.yml"])
-        text = plan["files"][".github/workflows/factory-reconcile.yml"]
-        self.assertIn('cron: "7,37 * * * *"', text)
-        self.assertIn("workflow_dispatch:", text)
-        self.assertIn("uv run --quiet factory/cli.py reconcile", text)
-        self.assertEqual(text, (ROOT / ".github/workflows/factory-reconcile.yml").read_text())  # generated: rerun `factory deploy --apply`
-
-    def test_reconcile_renders_off_peak_schedule_and_ci_wake(self):
-        text = deploy.plan_air(nodes.load(), cfg.load())["files"][".github/workflows/factory-reconcile.yml"]
-        self.assertIn('cron: "7,37 * * * *"', text)
-        self.assertIn("workflow_run:\n    workflows: [quality-gates]\n    types: [completed]", text)
-        self.assertIn("group: factory-reconcile\n  cancel-in-progress: false\n\njobs:", text)
-        self.assertNotIn("cancel-in-progress: true", text)
+        a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] reconcile")
+        # no event wake: one pass reads every active ticket, so label bursts must not start it
+        self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "17 * * * *", "timezone": "UTC"}])
+        self.assertEqual(a["triggerVcs"], [{"outputBehaviour": "read-only"}])
+        self.assertEqual(a["environmentConfigId"], "[Slop factory] ops")
+        self.assertIn("Run `factory reconcile` in the foreground", a["prompt"])
+        self.assertIn("wait until it exits", a["prompt"])
+        self.assertEqual(plan["files"], {})
+        self.assertFalse((ROOT / ".github/workflows/factory-reconcile.yml").exists())
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(deploy.config_mod, "team_root", return_value=Path(d)):
@@ -405,7 +405,7 @@ class PlanTest(unittest.TestCase):
                           for x in reopen["triggers"]],
                          [("pull_request.synchronize", None, "jetbrains-air[bot]"),
                           ("pull_request.labeled", "factory:ci-red", "jetbrains-air[bot]")])
-        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] retro", "[Slop factory] distill", "[Slop factory] doctor", "[Slop factory] doctor-write", "[Slop factory] doctor-ops") for x in a["triggers"]), "no polling"
+        assert not any(x["triggerType"] == "SCHEDULED" for a in deploy.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] retro", "[Slop factory] distill", "[Slop factory] doctor", "[Slop factory] doctor-write", "[Slop factory] doctor-ops", "[Slop factory] reconcile") for x in a["triggers"]), "no polling"
 
     def test_one_triggervcs_entry_per_trigger_and_a_spec_per_automation(self):
         for a in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
@@ -487,6 +487,7 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
             "intake", "start", "join", "finish", "reopen", "merge", "notify", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
+            "reconcile",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}
         self.assertEqual(names, pilot)

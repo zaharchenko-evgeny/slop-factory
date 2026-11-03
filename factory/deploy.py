@@ -117,6 +117,9 @@ SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>",
 def script_prompt(name: str) -> str:
     if name.startswith("doctor"):
         return "Run `factory doctor` once and report its JSON lines. It changes no ticket itself."
+    if name == "reconcile":
+        return ("This step runs one command and judges nothing: it changes no file, label, comment or review itself. "
+                "Run `factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
     if name == "notify":
         return ("Run `factory notify --issue <the issue number>` in the foreground with no "
                 "time limit, wait until it exits, and report its output.")
@@ -250,6 +253,12 @@ def actions_files(nodes: dict, config: dict) -> dict:
             cron = next(scheds[str(t)[9:]]["cron"] for t in n["triggers"] if str(t).startswith("schedule "))
             wake = "".join(f"  # jactionlint ignore=dangerous-triggers\n  workflow_run:\n    workflows: [{str(t)[13:]}]\n    types: [completed]\n"
                            for t in n["triggers"] if str(t).startswith("workflow_run "))
+            events = {}
+            for t in n["triggers"]:
+                if str(t).startswith(("issues.", "pull_request_review.")):
+                    event, _, kind = str(t).partition(".")
+                    events.setdefault(event, []).append(kind)
+            wake = "".join(f"  {e}:\n    types: [{', '.join(k)}]\n" for e, k in events.items()) + wake
             files[f".github/workflows/factory-{name}.yml"] = ACTIONS_WORKFLOW.format(
                 name=name, project=project_name(config), cron=cron, wake=wake, run=n["run"].replace("uv run factory/cli.py", "uv run --quiet factory/cli.py"))
     return files
@@ -360,6 +369,8 @@ def _items(res) -> list[dict]:
 def same(key: str, have, want) -> bool:
     if key == "repository" and isinstance(have, dict) and have.keys() == {"fullName"}:
         return have["fullName"] == want["fullName"]
+    if key == "domains":
+        return set(want or []) <= set(have or [])
     return have == want
 
 
@@ -372,6 +383,10 @@ def environment_detail(x: dict) -> dict:
         x["domains"] = x.pop("allowedDomains")
     if "instanceTypeKey" in x:
         x["vm"] = x.pop("instanceTypeKey") or "default"
+    if isinstance(x.get("variables"), list):
+        x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
+    if "personalSecrets" in x:
+        x["secrets"] = [s["name"] for s in x.pop("personalSecrets")]
     return x
 
 
@@ -387,7 +402,8 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
             p = {k: v for k, v in raw.items() if k != "spec"}
             x = have.pop(p["name"], None) or have.pop(new_to_old.get(p["name"]), None)
             want = {**p, "environmentConfigId": env_ids.get(p.get("environmentConfigId"), p.get("environmentConfigId"))}
-            changed = [k for k in p if x is not None and not same(k, x.get(k), want[k])]
+            changed = [k for k in p if x is not None and (kind != "environment" or k in x)
+                       and not same(k, x.get(k), want[k])]
             if x is None or changed:
                 out.append(("create" if x is None else "update", kind, p["name"], p, x, changed))
         out += [("delete", kind, n, None, x, []) for n, x in have.items()]
@@ -419,12 +435,14 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url: str
     """Environments before automations on create and update, after them on delete."""
     order = {"create": 0, "update": 0, "delete": 1}
     env_ids = None
-    for action, kind, name, p, x, _ in sorted(changes, key=lambda c: (order[c[0]], (c[1] == "automation") == (c[0] != "delete"))):
+    for action, kind, name, p, x, changed in sorted(changes, key=lambda c: (order[c[0]], (c[1] == "automation") == (c[0] != "delete"))):
         client, noun = (cloud, "environment") if kind == "environment" else (automations, "automation")
         if p and kind == "automation":  # the environment id exists only after its create
             env_ids = env_ids or {e["name"]: e["id"] for e in _items(cloud.call("list_environments", {"repositoryUrl": repo_url}))}
             p = {**p, "environmentConfigId": env_ids[p["environmentConfigId"]]}
         p = {k: v for k, v in (p or {}).items() if k != "spec"}
+        if action == "update":
+            p = {k: v for k, v in p.items() if k in changed}
         tool_action = ("edit" if kind == "environment" else "update") if action == "update" else action
         id_key = "automationId" if kind == "automation" else "id"
         args = {**p, id_key: x["id"]} if action == "update" else p if p else {id_key: x["id"]}

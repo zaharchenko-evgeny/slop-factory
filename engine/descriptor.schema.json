@@ -68,6 +68,10 @@
         "stages": {
           "type": "object"
         },
+        "stage_kinds": {
+          "type": "object",
+          "additionalProperties": { "enum": ["active", "waiting", "final"] }
+        },
         "map_label": {
           "type": "string"
         },
@@ -196,6 +200,9 @@
         "run_timeout_minutes": {
           "type": "integer"
         },
+        "remind_after_hours": {
+          "type": "integer"
+        },
         "resume_cap": {
           "type": "integer"
         },
@@ -263,6 +270,16 @@
       "type": "object",
       "additionalProperties": {
         "type": "boolean"
+      }
+    },
+    "ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workflows": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
       }
     },
     "reviews": {

@@ -53,6 +53,9 @@ def validate(nodes, config):
     if not isinstance(project, dict) or not isinstance(project.get("name"), str) or not project["name"].strip():
         errs.append("project-name: project.name must be a non-empty string")
     stages, tiers = config["tracker"]["stages"], config["models"]
+    kinds = config["tracker"].get("stage_kinds", {})
+    errs += [f"stage-without-kind: {s}" for s in sorted(set(stages) - set(kinds))]
+    errs += [f"bad-stage-kind: {s}: {k}" for s, k in kinds.items() if k not in ("active", "waiting", "final")]
     roles = config["roles"]
     envs, scheds = nodes.get("environments") or {}, nodes.get("schedules") or {}
 
@@ -136,7 +139,7 @@ def trigger_text(t, n, schedules):
     tiers = "|".join(n.get("tiers") or ["tier"])
     t = t.replace("<tier>", "{" + tiers + "}")
     event, _, label = t.partition(" ")
-    names = {"issues.labeled": "issue +", "pull_request.labeled": "PR +", "pull_request.merged": "PR merged", "issues.closed": "issue closed",
+    names = {"issues.labeled": "issue +", "pull_request.labeled": "PR +", "pull_request.merged": "PR merged", "issues.closed": "issue closed", "issues.unlabeled": "issue label removed",
              "pull_request.synchronize": "PR push", "pull_request.opened": "PR opened",
              "pull_request_review.submitted": "PR review submitted", "workflow_run": "run of ", "manual": "a person"}
     if event == "schedule":
