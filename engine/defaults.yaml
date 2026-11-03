@@ -43,6 +43,8 @@ tracker:
   hold_label: factory:hold
   # PR facts the GitHub adapter reads from a PR label (CI labels the PR when it finishes).
   pr_fact_labels: { ci-green: factory:ci-green, ci-red: factory:ci-red }
+  # Issue markers used by the deploy canary flow.
+  issue_labels: { canary: factory:canary, failed: factory:failed }
   # Command labels the engine writes (factory/vocab.py); a factory.project.yaml declares its own `commands`.
   commands:
     implement-<tier>: { label: factory:implement-<tier> }

@@ -207,7 +207,7 @@ class GitHubTracker:
 
     def canary_tickets(self):
         found = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
-                                     "factory:canary", "--json", "number", "--limit", "1000"]))
+                                     vocab.issue_label("canary"), "--json", "number", "--limit", "1000"]))
         return [i["number"] for i in found]
 
     def close_issue(self, n, reason):
@@ -221,12 +221,12 @@ class GitHubTracker:
         comments = self.comments(n)
         summary = next((c["body"] for c in reversed(comments) if c["body"].startswith("[factory]")), "")
         return {"stage": self.get_state(n) or "none", "summary": summary,
-                "error": "factory:failed" in issue["labels"] or any(
+                "error": vocab.issue_label("failed") in issue["labels"] or any(
                     "<!-- factory-node-error -->" in c["body"] for c in comments)}
 
     def record_node_error(self, n):
         """Leave a durable canary signal when a sweep catches a node exception."""
-        if "factory:canary" not in self.issue(n)["labels"]:
+        if vocab.issue_label("canary") not in self.issue(n)["labels"]:
             return
         self.run(["api", f"repos/{self.repo}/issues/{n}/comments", "-f",
                   "body=[factory] A factory node reported an execution error.\n\n"

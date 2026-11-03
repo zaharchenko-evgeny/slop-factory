@@ -254,8 +254,9 @@ class MemoryTracker(DescriptorPort):
     # Small issue operations used by deploy's end-to-end canary. They keep the
     # deploy tests on the same in-memory ticket records as the gate tests.
     def canary_tickets(self):
+        import vocab
         return [n for n, t in self.tickets.items()
-                if "factory:canary" in t.get("labels", []) and t.get("state", "open") != "closed"]
+                if vocab.issue_label("canary") in t.get("labels", []) and t.get("state", "open") != "closed"]
 
     def close_issue(self, ticket, reason):
         self._t(ticket)["state"] = "closed"
@@ -280,8 +281,9 @@ class MemoryTracker(DescriptorPort):
                 "error": bool(t.get("node_error"))}
 
     def record_node_error(self, ticket):
+        import vocab
         t = self._t(ticket)
-        if "factory:canary" in t.get("labels", []):
+        if vocab.issue_label("canary") in t.get("labels", []):
             t["node_error"] = True
             t["last_summary"] = "[factory] A factory node reported an execution error."
 

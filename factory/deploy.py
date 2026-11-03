@@ -329,7 +329,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
             out |= {x.replace("<focus>", f) for f in focuses}
         elif "<" not in x:
             out.add(x)
-    out.add("factory:canary")
+    out |= set((t.get("issue_labels") or {}).values())
     return sorted(out)
 
 
@@ -498,7 +498,7 @@ def create_canary(tracker, deploy_id, *, sleep=time.sleep, clock=time.monotonic)
         tracker.close_issue(old, f"[factory] Superseded by deploy {deploy_id}.\n\nFactory-Run: deploy:{deploy_id}")
     ticket = tracker.create_issue(f"Canary after deploy {deploy_id}", canary_body(deploy_id), risk="low", stage="triage")
     tracker.add_to_map(ticket)
-    tracker.add_label(ticket, "factory:canary")
+    tracker.add_label(ticket, vocab.issue_label("canary"))
     return wait_for_canary(tracker, ticket, deploy_id, sleep=sleep, clock=clock)
 
 

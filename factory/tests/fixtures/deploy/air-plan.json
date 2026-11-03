@@ -1477,7 +1477,6 @@
     "complexity:small",
     "factory:approved",
     "factory:blocked",
-    "factory:canary",
     "factory:ci-green",
     "factory:implement-cheap",
     "factory:implement-mid",

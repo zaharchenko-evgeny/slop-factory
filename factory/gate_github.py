@@ -158,7 +158,8 @@ class GitHubGateTracker(DescriptorPort):
 
     def record_node_error(self, n):
         """Leave a durable canary signal when a sweep catches a node exception."""
-        if "factory:canary" in self._labels(n):
+        import vocab
+        if vocab.issue_label("canary") in self._labels(n):
             self.run(["api", f"repos/{self.repo}/issues/{n}/comments", "-f",
                       "body=[factory] A factory node reported an execution error.\n\n"
                            "<!-- factory-node-error -->\n\nFactory-Run: sweep:node-error"])
