@@ -30,11 +30,10 @@ records become the calibration set of the judgment.
 
 ## JSON handoff
 
-Write the handoff as JSON to the path printed by `factory begin`, then run `factory end <path>` to apply it. Write it as the last thing you do.
+Write the data as JSON to a file, then run `factory end <outcome>` to apply it. Write it as the last thing you do.
 
 ```
 {
-  "handoff": "APPROVER",
   "verdict": "needs-human",
   "reasons": [
     "the diff touches a dependency manifest"

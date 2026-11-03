@@ -24,8 +24,7 @@ Input: a request (free text or a tracker issue).
    replacement checks in the handoff's `proposed_checks` (a list: named tests,
    paths and commands), so a person accepts by editing the ticket or by
    `factory:triage` with the proposal pasted.
-3. Choose the risk path: `low` when the issue carries the low-risk label from
-   `factory.descriptor.yaml`, otherwise `high`.
+3. The gate derives the risk path from the issue's risk label; do not state it.
 4. Estimate the size as the lines a reviewer must read: added lines plus
    modified lines, counting tests and fixtures, not only production code.
    Exclude paths listed in `engine/defaults.yaml` under `limits.generated_paths`;
@@ -37,13 +36,12 @@ Input: a request (free text or a tracker issue).
    lines, propose slices in `split:`, each
    one a ticket that delivers on its own. For example, deleting 12 files
    (2,000 lines) and editing 40 lines is about 52 lines, so do not split.
-5. Write your handoff as JSON to the path printed by `factory begin`, then run
-   `factory end <path>` to apply it.
+5. Run `factory end <outcome>` (see the end of this file) to apply it.
 
 
 ### Slices
 
-In the JSON handoff `split` is an array of `{"title", "body"}` objects, in delivery order. The workflow creates each
+`--slices` names a JSON file with an array of `{"title", "body"}` objects, in delivery order. The workflow creates each
 as a sub-issue with that body, the parent's `risk:` label, and a blocked-by link on the slice before it. The body
 is a whole ticket (it must pass intake by itself): its part of the scope, acceptance checks, affected repositories
 and `Size: about N lines with tests`. A bare line `<title> — <scope> (~<lines>)` stays accepted but gives a
@@ -51,19 +49,13 @@ one-line ticket that fails intake.
 
 
 
-## JSON handoff
+## Ending the run
 
-Write the handoff as JSON to the path printed by `factory begin`, then run `factory end <path>` to apply it.
+Run `factory end <outcome>` with the data the outcome needs; the gate already knows the ticket, PR, branch and head. Write it as the last thing you do.
 
 ```
-{
-  "handoff": "ROUTER-INTAKE",
-  "kind": "feature",
-  "ready": "yes",
-  "missing": "none",
-  "risk": "low",
-  "size_estimate": "~120",
-  "split": "none",
-  "next": "delivery"
-}
+factory end proceed --size-estimate "~120"
+factory end grill --size-estimate "~120" --reason "acceptance check 2"
+factory end split --size-estimate "~900" --slices slices.json
+factory end not-actionable --reason "duplicate of #12"
 ```
