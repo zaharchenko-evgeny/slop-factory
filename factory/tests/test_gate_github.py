@@ -303,6 +303,14 @@ class EffectsTest(unittest.TestCase):
         self.assertNotIn(key, json.dumps(notes))
         self.assertNotIn("hunter2", json.dumps(notes))
 
+    def test_agent_notes_pem_quotes_and_google_key_stripped(self):
+        pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\n-----END PRIVATE KEY-----"
+        google = "AIza" + "a1B2" * 8 + "xyz"
+        notes = gate.clean_notes({"for": "any", "hint": f"{pem} {google}", "context": 'password: "hun\\ter2" say "hi"'})
+        out = json.dumps(notes)
+        for leaked in ("MIIEvQIBADANBg", "END PRIVATE", google, "hun"):
+            self.assertNotIn(leaked, out)
+
     def test_agent_notes_oversize_rejected(self):
         with self.assertRaises(ValueError):
             gate.clean_notes({"for": "any", "context": "x" * 2000})

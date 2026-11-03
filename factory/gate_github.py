@@ -20,9 +20,20 @@ from github_tracker import gh
 
 NOTE_FIELDS, NOTE_FOR, NOTE_MAX = ("for", "files", "repro", "hint", "context"), ("fixer", "reviewer", "developer", "any"), 2000
 NOTES = re.compile(r"<!-- factory:agent-notes\s*(\{.*?\})\s*-->", re.S)
-SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}"
+SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)|\bAIza[\w-]{35}\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}"
                     r"|\bgithub_pat_\w{20,}|\bxox[abprs]-[\w-]{10,}|\bsk-[A-Za-z0-9_-]{20,}"
-                    r'|(?i:\b(?:api[_-]?key|secret|token|passw(?:or)?d)\b\s*[:=]\s*[^\s",]+)')
+                    r'|(?i:\b(?:api[_-]?key|secret|token|passw(?:or)?d)\b\s*[:=]\s*(?:"[^"]*"|[^\s",]+))', re.S)
+
+
+def redact(v):
+    """`v` with secret-looking text redacted in every string, before any serialisation."""
+    if isinstance(v, str):
+        return SECRET.sub("[redacted]", v)
+    if isinstance(v, list):
+        return [redact(x) for x in v]
+    if isinstance(v, dict):
+        return {k: redact(x) for k, x in v.items()}
+    return v
 
 
 def clean_notes(raw):
@@ -35,7 +46,7 @@ def clean_notes(raw):
         raise ValueError(f"agent notes: `for` is one of {', '.join(NOTE_FOR)}")
     if len(json.dumps(notes)) > NOTE_MAX:
         raise ValueError(f"agent notes: over {NOTE_MAX} characters")
-    return json.loads(SECRET.sub("[redacted]", json.dumps(notes)))
+    return {k: redact(v) for k, v in notes.items()}
 
 
 def parse_notes(body, login="", kind="User"):
