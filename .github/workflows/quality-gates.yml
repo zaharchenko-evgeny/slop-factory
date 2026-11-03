@@ -111,8 +111,11 @@ jobs:
         run: |
           domains=$(uv run --quiet --with pyyaml python -c "import yaml; print(*{d for e in yaml.safe_load(open('workflows/nodes.yaml'))['environments'].values() for d in e.get('domains', [])})")
           touch "$RUNNER_TEMP/denied.log"
+          chmod 666 "$RUNNER_TEMP/denied.log"
+          # The proxy runs as `nobody`; the container user (the runner's uid) may reach only loopback, so direct downloads fail.
+          sudo iptables -I OUTPUT 1 -m owner --uid-owner "$(id -u)" ! -o lo -j REJECT
           # shellcheck disable=SC2086
-          nohup python3 scripts/allowlist_proxy.py 8888 "$RUNNER_TEMP/denied.log" $domains > "$RUNNER_TEMP/proxy.log" 2>&1 &
+          nohup sudo -u nobody python3 scripts/allowlist_proxy.py 8888 "$RUNNER_TEMP/denied.log" $domains > "$RUNNER_TEMP/proxy.log" 2>&1 &
       - name: Build the image
         run: |
           docker build -t air-like --build-arg "UID=$(id -u)" - <<'EOF'
@@ -129,6 +132,11 @@ jobs:
       - name: Check for downloads from other hosts
         if: always()
         run: |
+          # A direct (non-proxy) download as the container's uid must be rejected.
+          if curl -sS --max-time 10 -o /dev/null http://example.com 2>/dev/null; then
+            echo "::error::direct egress is not blocked"
+            exit 1
+          fi
           if [ -s "$RUNNER_TEMP/denied.log" ]; then
             echo "::error::downloads from hosts outside the environment plan: $(sort -u "$RUNNER_TEMP/denied.log" | tr '\n' ' ')"
             exit 1
