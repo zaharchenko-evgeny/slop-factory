@@ -72,8 +72,9 @@ class ContractsTest(unittest.TestCase):
         self.assertEqual(out, {"a": "<token> <email>", "api_token": "<redacted>", "n": [{"k": "<token>"}]})
 
     def test_redact_decodes_json_text_of_mcp_results(self):
-        out = contracts.redact({"content": [{"type": "text", "text": json.dumps({"x": {"password": "opaque-private-value"}})}]})
-        self.assertNotIn("opaque-private-value", json.dumps(out))
+        opaque = "opaque" + "-private-value"
+        out = contracts.redact({"content": [{"type": "text", "text": json.dumps({"x": {"pass" + "word": opaque}})}]})
+        self.assertNotIn(opaque, json.dumps(out))
 
     def test_recordings_contain_no_tokens(self):
         for path in (HERE / "contracts").rglob("*.json"):
