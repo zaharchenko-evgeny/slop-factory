@@ -60,7 +60,7 @@ class MemoryTracker:
         the recover comments come from the log."""
         t = self._t(ticket)
         sent = [json.loads(v) for k, v in t.get("log", []) if k == "comment"]
-        return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "command", "command_at", "commit_at", "ci_label", "command_pending", "pr_state", "issue_state") if k in t},
+        return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "stage_at", "command", "command_at", "commit_at", "ci_label", "command_pending", "pr_state", "issue_state") if k in t},
                 "recover_comments": [c for c in sent if c.startswith("[factory] recover:")]}
 
     def apply(self, effect):

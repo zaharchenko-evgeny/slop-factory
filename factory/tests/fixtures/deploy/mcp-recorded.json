@@ -24,4 +24,6 @@
   ],
   "isError": false
  }
+,
+ "air-cloud.get_environment": {"7462a87c-fbe2-40d6-9b28-f3f5c4fc1ca9":{"content":[{"type":"text","text":"{\"id\": \"7462a87c-fbe2-40d6-9b28-f3f5c4fc1ca9\", \"name\": \"[Slop factory] read\", \"serviceHost\": \"github.com\", \"organization\": \"zaharchenko-evgeny\", \"repositoryName\": \"offline-eval-factory\", \"instanceTypeKey\": null, \"networkAccess\": \"RESTRICTED\", \"predefinedDomainLists\": [\"WELL_KNOWN\"], \"allowedDomains\": [\"github.com\", \"api.github.com\", \"objects.githubusercontent.com\", \"release-assets.githubusercontent.com\", \"*.blob.core.windows.net\", \"pypi.org\", \"files.pythonhosted.org\"], \"exposedPorts\": null, \"isDraft\": false, \"accessLevel\": \"MANAGE\", \"shared\": false, \"lastUsedAt\": \"2026-11-02T11:46:06.280630Z\", \"startup\": \".air/cloud/startup.sh\", \"variables\": {\"FACTORY_ENV\": \"read\"}, \"secrets\": []}"}]}}
 }
