@@ -36,8 +36,8 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
-from gate_github import GitHubGateTracker, clean_notes  # noqa: E402
-from gate_port import MemoryTracker  # noqa: E402
+from gate_github import GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
+from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
 
 ROOT = nodes_mod.ROOT
 GO, NO_GO, BAD, FAILED = 0, 10, 2, 1
@@ -114,7 +114,7 @@ class MissingNumber(Exception):
     pass
 
 
-def from_trigger(d, tracker=None):
+def from_trigger(d, code_host=None):
     """Extract the event kind and ticket number; tracker facts supply mutable metadata."""
     event_name = d.get("eventType") or d.get("event_name")
     if not any(isinstance(d.get(key), dict) for key in ("pull_request", "issue", "review")):
@@ -130,13 +130,10 @@ def from_trigger(d, tracker=None):
         raise MissingNumber("payload has no issue or PR number")
     name = "pull_request_review" if review and is_pr else "pull_request" if is_pr else "issues"
     if is_pr:
-        ref = ""
-        ticket = tracker.ticket_for_pr(number) if tracker and hasattr(tracker, "ticket_for_pr") else None
-        if ticket is None and not isinstance(tracker, GitHubGateTracker):
-            ref = ((pr or {}).get("head") or {}).get("ref") or ""
-            m = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
-            ticket = int(m[1]) if m else None
-        if not isinstance(ticket, int):
+        ticket = code_host.ticket_for_pr(number) if code_host else None
+        if ticket is None and not isinstance(code_host, GitHubCodeHost):  # a live lookup is the only source for GitHub
+            ticket = ticket_from_ref(((pr or {}).get("head") or {}).get("ref")) or ticket_from_ref((pr or {}).get("title"))
+        if ticket is None:
             raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
     else:
         ticket = number
@@ -144,13 +141,13 @@ def from_trigger(d, tracker=None):
     return {"id": f"{name}:{ticket}:{action}", "ticket": ticket, "event_name": name, "action": action}
 
 
-def read(path, what, raw=False, tracker=None):
+def read(path, what, raw=False, code_host=None):
     try:
         data = json.loads(Path(path).read_text())
     except (OSError, ValueError) as e:
         raise Bad(f"malformed {what}: {e}")
     if isinstance(data, dict) and raw and "ticket" not in data:
-        return from_trigger(data, tracker)
+        return from_trigger(data, code_host)
     if not isinstance(data, dict) or "ticket" not in data:
         raise Bad(f"malformed {what}: needs an object with `ticket`")
     return data
@@ -963,10 +960,11 @@ def main(argv):
     try:
         kind, _, path = (a.tracker or "github").partition(":")
         if kind == "github" and not path:
-            tracker = GitHubGateTracker.from_config()
+            tracker, code_host = GitHubGateTracker.from_config(), GitHubCodeHost.from_config()
         elif kind == "memory" and path:
             try:
                 tracker = MemoryTracker(dict(json.loads(Path(path).read_text())))
+                code_host = tracker  # the memory tracker also maps a PR number to its ticket
             except (OSError, ValueError, TypeError) as e:
                 raise Bad(f"malformed --tracker file: {e}")
         else:
@@ -1003,11 +1001,11 @@ def main(argv):
                             closed_ticket = issue
                     else:
                         pr_number = (pr_payload or raw).get("number")
-                        ref_ticket = tracker.ticket_for_pr(pr_number) if hasattr(tracker, "ticket_for_pr") else None
+                        ref_ticket = code_host.ticket_for_pr(pr_number) if code_host else None
                         if ref_ticket is None:
                             raise ValueError("PR head ref does not identify an ez/<ticket> branch")
                         issue = ref_ticket
-                    if not isinstance(issue, int) or issue < 1:
+                    if not issue or (isinstance(issue, int) and issue < 1):
                         raise ValueError("event does not identify a ticket number")
                 except (OSError, ValueError, TypeError) as e:
                     raise Bad(f"invalid sweep event: {e}")
@@ -1040,7 +1038,7 @@ def main(argv):
                 raise Bad("malformed handoff: needs an object")
             code, out = apply_routine(a.node, a.outcome or h.get("outcome") or h.get("status") or "", nodes)
         elif a.cmd == "check":
-            event = read(a.event or "", "event", raw=True, tracker=tracker)
+            event = read(a.event or "", "event", raw=True, code_host=code_host)
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
             code, out = check(a.node, event, tracker, nodes, config)
             if a.node == "implement" and code == GO:
@@ -1053,7 +1051,7 @@ def main(argv):
                     raise Bad(f"malformed handoff: {e}")
                 if not isinstance(h, dict):
                     raise Bad("malformed handoff: needs an object")
-                ev = read(a.event, "event", raw=True, tracker=tracker) if a.event else {}
+                ev = read(a.event, "event", raw=True, code_host=code_host) if a.event else {}
                 if "ticket" not in {**h, **ev}:
                     raise Bad("apply --handoff needs `ticket` in the handoff or --event")
                 payload = {**intake_fields(h), **h, **{k: v for k, v in ev.items() if v is not None and k != "id"},

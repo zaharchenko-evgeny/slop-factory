@@ -1403,5 +1403,27 @@ class StaleFactsTest(unittest.TestCase):
         t._ci = lambda sha: "none"  # the new head has no CI result yet, the label is left from the old head
         self.assertIsNone(t.stale_facts(7)["ci_label"])
 
+class SeparateCodeHostTest(unittest.TestCase):
+    def test_pull_request_calls_go_to_the_code_host_and_ticket_calls_to_the_tracker(self):
+        gh, seen = FakeGh(), []
+
+        def run(args, timeout=None):
+            seen.append(args)
+            out = gh([x.replace("repos/c/h/", f"repos/{REPO}/").replace("c/h", REPO) for x in args], timeout)
+            return out.replace(f'"full_name": "{REPO}"', '"full_name": "c/h"')  # the PR branch lives in the code host
+
+        t = GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=run, pr_repo="c/h")
+        t.facts(7)
+        t.apply(eff("label", "factory:needs-human", on="pr"))
+        t.apply(eff("stage", "approved"))
+        paths = [x for a in seen for x in a if x.startswith("repos/") or x == "c/h" or x == REPO]
+        self.assertTrue(any(p.startswith("repos/c/h/pulls") for p in paths))
+        self.assertFalse(any(p.startswith(f"repos/{REPO}/pulls") for p in paths))
+        self.assertTrue(any(p.startswith("repos/c/h/issues/5/comments") for p in paths))  # PR notes live in the code host
+        self.assertTrue(any(p.startswith(f"repos/{REPO}/issues/7") for p in paths))
+        self.assertIn(["pr", "edit", "5", "-R", "c/h", "--add-label", "factory:needs-human"], seen)
+        self.assertTrue(any(a[:2] == ["issue", "edit"] and a[a.index("-R") + 1] == REPO for a in seen))
+
+
 if __name__ == "__main__":
     unittest.main()

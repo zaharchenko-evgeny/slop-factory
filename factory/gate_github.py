@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 
 import config
-from gate_port import fix_round_count
+from gate_port import fix_round_count, ticket_from_ref
 from github_tracker import gh
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
@@ -105,10 +105,28 @@ GOOD_CI = {"success", "neutral", "skipped"}
 WRITE = {"admin", "maintain", "write"}  # repository roles with write access
 
 
+class GitHubCodeHost:
+    """The GitHub repository that hosts the pull requests; `code_host.repository`, else the tracker's."""
+
+    def __init__(self, repo, run=gh):
+        self.repo, self.run = repo, run
+
+    @classmethod
+    def from_config(cls, path=None, run=gh):
+        c = yaml.safe_load(Path(path).read_text()) if path else config.load()
+        return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"], run)
+
+    def ticket_for_pr(self, number):
+        """Resolve a PR number to its ticket from the live head ref, else the live title."""
+        pr = json.loads(self.run(["api", f"repos/{self.repo}/pulls/{number}"]))
+        return ticket_from_ref((pr.get("head") or {}).get("ref")) or ticket_from_ref(pr.get("title"))
+
+
 class GitHubGateTracker:
     def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8,
-                 ci_workflows=("quality-gates",)):
+                 ci_workflows=("quality-gates",), pr_repo=None):
         self.trusted, self.run_cap, self.ci_workflows = set(trusted_bots), run_cap, set(ci_workflows)
+        self.pr_repo = pr_repo or repo  # the code host: pull requests, CI, commits, merges
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, run
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
@@ -121,18 +139,19 @@ class GitHubGateTracker:
         t = c["tracker"]
         return cls(t["repository"], t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run,
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
-                   (c.get("ci") or {}).get("workflows") or ["quality-gates"])
+                   (c.get("ci") or {}).get("workflows") or ["quality-gates"],
+                   (c.get("code_host") or {}).get("repository"))
 
     # --- reads
-    def _api(self, path, *flags):
-        return json.loads(self.run(["api", f"repos/{self.repo}/{path}", *flags]))
+    def _api(self, path, *flags, repo=None):
+        return json.loads(self.run(["api", f"repos/{repo or self.repo}/{path}", *flags]))
 
-    def _list(self, path):
-        out = self.run(["api", "--paginate", f"repos/{self.repo}/{path}", "--jq", ".[]"])
+    def _list(self, path, repo=None):
+        out = self.run(["api", "--paginate", f"repos/{repo or self.repo}/{path}", "--jq", ".[]"])
         return [json.loads(x) for x in out.splitlines() if x.strip()]
 
-    def _labels(self, n):
-        return [x["name"] for x in self._api(f"issues/{n}")["labels"]]
+    def _labels(self, n, repo=None):
+        return [x["name"] for x in self._api(f"issues/{n}", repo=repo)["labels"]]
 
     def sweep_tickets(self, stages, open_only=False):
         """Issue numbers (open or closed) whose stage label is one of `stages`; ready, in-review, changes-requested and in-dev
@@ -178,8 +197,6 @@ class GitHubGateTracker:
                 new = {x["name"]: x for x in new}
             elif key == "labels":
                 old, new = {x: x for x in old}, {x: x for x in new}
-            else:
-                old, new = old, new
             items.extend(f"- {key}: {name}" for name in sorted(old.keys() | new.keys()) if old.get(name) != new.get(name))
         body = ("[factory] The merged commit changes the Air deploy plan. Run `factory deploy --apply` locally.\n\n"
                 + "\n".join(items) + f"\n\nFactory-Run: finish:{pr}")
@@ -194,6 +211,23 @@ class GitHubGateTracker:
             self.run(["issue", "comment", url.rsplit("/", 1)[-1], "-R", self.repo, "--body",
                       f"[factory] Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}"])
 
+        files = self._list(f"pulls/{pr}/files?per_page=100", repo=self.pr_repo)
+        if not any(f.get("filename") == "factory.descriptor.yaml" or
+                   f.get("filename", "").startswith(("engine/", "workflows/")) for f in files):
+            return
+        for other in self._list("pulls?state=open&per_page=100", repo=self.pr_repo):
+            head = other.get("head") or {}
+            ticket = ticket_from_ref(head.get("ref"))
+            if ticket is None or \
+                    ((head.get("repo") or {}).get("full_name") or "").lower() != self.pr_repo.lower():
+                continue
+            # The update node only starts from changes-requested. Move the ticket
+            # before adding its PR command label so the label event can pass check.
+            self.apply({"ticket": ticket, "kind": "stage", "value": "changes-requested"})
+            labels = [x["name"] for x in self._api(f"issues/{other['number']}", repo=self.pr_repo)["labels"]]
+            if "factory:update-cheap" not in labels:
+                self._edit(other["number"], ["factory:update-cheap"], on="pr")
+
     def deploy_applied(self, plan):
         """Close the reminder after an operator confirms the deployed plan is unchanged."""
         issue = next((i for i in self._list("issues?state=open&per_page=100")
@@ -206,31 +240,24 @@ class GitHubGateTracker:
 
     def _pr(self, n):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""
-        prs = [p for p in self._list("pulls?state=all&per_page=100") if p["head"]["ref"].startswith(f"ez/{n}-")
-               and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.repo.lower()]  # never a fork's PR
+        prs = [p for p in self._list("pulls?state=all&per_page=100", repo=self.pr_repo) if p["head"]["ref"].startswith(f"ez/{n}-")
+               and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.pr_repo.lower()]  # never a fork's PR
         prs.sort(key=lambda p: (p["state"] == "open", p["number"]))
         if not prs:
             return None
-        pr = self._api(f"pulls/{prs[-1]['number']}")
+        pr = self._api(f"pulls/{prs[-1]['number']}", repo=self.pr_repo)
         for _ in range(3):  # GitHub computes `mergeable` lazily: null means UNKNOWN, read again
             if pr.get("state") != "open" or pr.get("mergeable") is not None:
                 break
             time.sleep(2)
-            pr = self._api(f"pulls/{prs[-1]['number']}")
+            pr = self._api(f"pulls/{prs[-1]['number']}", repo=self.pr_repo)
         return pr
-
-    def ticket_for_pr(self, number):
-        """Resolve a PR number to its ticket from the live head ref."""
-        pr = self._api(f"pulls/{number}")
-        ref = ((pr.get("head") or {}).get("ref") or "")
-        match = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
-        return int(match[1]) if match else None
 
     def _prs(self, n, open_only=False):
         """The ticket's PRs from its branch; cleanup also includes closed PRs."""
-        prs = [p for p in self._list("pulls?state=all&per_page=100")
+        prs = [p for p in self._list("pulls?state=all&per_page=100", repo=self.pr_repo)
                if p["head"]["ref"].startswith(f"ez/{n}-")
-               and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.repo.lower()
+               and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.pr_repo.lower()
                and (not open_only or p["state"] == "open")]
         return sorted(prs, key=lambda p: p["number"])
 
@@ -246,7 +273,7 @@ class GitHubGateTracker:
         return "green" if all(c in GOOD_CI for c in done) else "pending"
 
     def _workflow_runs(self, sha, timeout=None):
-        out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs?head_sha={sha}&per_page=100",
+        out = self.run(["api", "--paginate", f"repos/{self.pr_repo}/actions/runs?head_sha={sha}&per_page=100",
                         "--jq", ".workflow_runs[]"], **({"timeout": timeout} if timeout is not None else {}))
         latest = {}
         for r in (json.loads(x) for x in out.splitlines() if x.strip()):
@@ -264,7 +291,7 @@ class GitHubGateTracker:
             for run in self._workflow_runs(sha, timeout=10).values():
                 if run.get("conclusion") not in BAD_CI:
                     continue
-                out = self.run(["api", "--paginate", f"repos/{self.repo}/actions/runs/{run['id']}/jobs?per_page=100",
+                out = self.run(["api", "--paginate", f"repos/{self.pr_repo}/actions/runs/{run['id']}/jobs?per_page=100",
                                 "--jq", ".jobs[]"], timeout=10)
                 for line in out.splitlines():
                     if not line.strip():
@@ -276,7 +303,7 @@ class GitHubGateTracker:
                     for step in steps:
                         failure = {"job": job["name"], "step": step["name"], "log": None}
                         try:
-                            logs = self.run(["api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs"], timeout=10)
+                            logs = self.run(["api", f"repos/{self.pr_repo}/actions/jobs/{job['id']}/logs"], timeout=10)
                             if not logs.strip():
                                 raise RuntimeError("empty log response")
                             failure["log"] = "\n".join(logs.splitlines()[-60:])
@@ -290,7 +317,7 @@ class GitHubGateTracker:
 
     def _reviews(self, pr):
         out = []
-        for r in self._list(f"pulls/{pr['number']}/reviews"):
+        for r in self._list(f"pulls/{pr['number']}/reviews", repo=self.pr_repo):
             m = next(iter(list(MARKER.finditer(r.get("body") or ""))[-1:]), None)  # the footer marker is last; prose cannot follow it
             agent = bool(m) and r["user"]["login"] == self.bot
             verdict = (m[3] if agent else {"APPROVED": "approve", "CHANGES_REQUESTED": "changes"}.get(r["state"]))
@@ -342,7 +369,7 @@ class GitHubGateTracker:
     def _can_write(self, login):
         """Write access from the collaborator permission API (author_association says nothing about the role)."""
         try:
-            return self._api(f"collaborators/{login}/permission").get("role_name") in WRITE
+            return self._api(f"collaborators/{login}/permission", repo=self.pr_repo).get("role_name") in WRITE
         except Exception as e:
             if "404" in str(e):  # a stranger is no collaborator
                 return False
@@ -353,7 +380,8 @@ class GitHubGateTracker:
         of a command label (`factory:implement-*`, `fix-*`, `update-*`) on the issue or its PR after it. A
         person's `ready` starts a fresh budget. Reviews follow pushes, so this bounds them too."""
         cmds = ("factory:implement-", "factory:fix-", "factory:update-")
-        events = {t: issue_events if t == n and issue_events is not None else self._list(f"issues/{t}/events")
+        events = {t: issue_events if t == n and issue_events is not None
+                  else self._list(f"issues/{t}/events", repo=self.pr_repo if t != n else None)
                   for t in [n] + ([pr] if pr else [])}
         name = lambda e: (e.get("label") or {}).get("name", "") if e.get("event") == "labeled" else ""
         since = self._since = max((e.get("created_at") or "" for e in events[n] if name(e) == self.stages.get("ready")),
@@ -388,7 +416,7 @@ class GitHubGateTracker:
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
         the label when it finishes, so every round adds it again)."""
-        return [e["created_at"] for e in self._list(f"issues/{pr}/events")
+        return [e["created_at"] for e in self._list(f"issues/{pr}/events", repo=self.pr_repo)
                 if e.get("event") == "labeled" and (e.get("label") or {}).get("name", "").startswith("factory:fix-")]
 
     def _earlier(self, r, head, fix_writes):
@@ -401,7 +429,7 @@ class GitHubGateTracker:
         at = r["submitted_at"] or ""
         if fix_writes:
             return any(t >= at for t in fix_writes)
-        return at <= self._api(f"commits/{head}")["commit"]["committer"]["date"]
+        return at <= self._api(f"commits/{head}", repo=self.pr_repo)["commit"]["committer"]["date"]
 
     def _round(self, reviews, required, head, requested, ci, pr=None):
         """(complete, verdict, ignored, waiting) of the round at `head`. `waiting`: people whose change request a
@@ -496,15 +524,15 @@ class GitHubGateTracker:
             since = getattr(self, "_since", "")  # a person's factory:ready starts a fresh round count
             writes = [t for t in self._fix_writes(pr["number"]) if t >= since]
             latest_review = max((r.get("submitted_at") or "" for r in reviews if r["commit_id"] == head), default="")
-            commit_date = self._api(f"commits/{head}")["commit"]["committer"]["date"]
+            commit_date = self._api(f"commits/{head}", repo=self.pr_repo)["commit"]["committer"]["date"]
             f["handed_to_fix"] = bool(writes) and max(writes) > max(latest_review, commit_date)
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
-            got += (self._notes(self._list(f"issues/{pr['number']}/comments"), "created_at", since)
-                    + self._notes(self._list(f"pulls/{pr['number']}/reviews"), "submitted_at", since)
+            got += (self._notes(self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo), "created_at", since)
+                    + self._notes(self._list(f"pulls/{pr['number']}/reviews", repo=self.pr_repo), "submitted_at", since)
                     + self._notes([pr], "updated_at", since))  # the PR body is edited after creation
             if stage == "approved" and pr.get("state") == "open":  # only the merge gates read it
-                f["behind"] = self._api(f"compare/{pr['base']['ref']}...{head}")["behind_by"] > 0
+                f["behind"] = self._api(f"compare/{pr['base']['ref']}...{head}", repo=self.pr_repo)["behind_by"] > 0
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
             f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), conflict=pr.get("mergeable") is False, ci=ci, reviews=reviews,
                      requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
@@ -527,7 +555,7 @@ class GitHubGateTracker:
         f, labeled, events = self.facts(n), {}, []
         pr = f["pr"]
         for t in [n] + ([pr] if pr else []):
-            for e in self._list(f"issues/{t}/events"):
+            for e in self._list(f"issues/{t}/events", repo=self.pr_repo if t != n else None):
                 events.append((t, e))
                 if e.get("event") == "labeled":
                     labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
@@ -542,7 +570,7 @@ class GitHubGateTracker:
                            or x == "factory:ci-green" or x.startswith(command_labels[2:5]) or x.startswith("factory:review-")}
         command_events = [e for t, e in events if e.get("event") == "labeled"
                           and (t, e.get("label", {}).get("name")) in active_commands]
-        commit_at = self._api(f"commits/{f['head']}")["commit"]["committer"]["date"] if f["head"] else None
+        commit_at = self._api(f"commits/{f['head']}", repo=self.pr_repo)["commit"]["committer"]["date"] if f["head"] else None
         latest_event = max([e.get("created_at", "") for _, e in events] + [commit_at or ""])
         latest_command = max((e["created_at"] for e in command_events), default="")
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
@@ -558,7 +586,7 @@ class GitHubGateTracker:
     # --- effects: read the target first, write only when it differs
     def _edit(self, n, add=(), remove=(), on="issue"):
         flags = [x for a in add for x in ("--add-label", a)] + [x for r in remove for x in ("--remove-label", r)]
-        self.run([on, "edit", str(n), "-R", self.repo, *flags])
+        self.run([on, "edit", str(n), "-R", self.pr_repo if on == "pr" else self.repo, *flags])
         return True
 
     def apply(self, e):
@@ -587,7 +615,7 @@ class GitHubGateTracker:
                     return False  # ticket-level waits also apply before a PR exists
                 changed = False
                 for pr in prs:
-                    labels = self._labels(pr["number"])
+                    labels = self._labels(pr["number"], repo=self.pr_repo)
                     if kind == "label":
                         if value not in labels:
                             changed |= self._edit(pr["number"], [value], on=on)
@@ -617,12 +645,12 @@ class GitHubGateTracker:
                     return False
                 changed = False
                 for pr in prs:
-                    current = {a["login"] for a in self._api(f"issues/{pr['number']}").get("assignees", [])}
+                    current = {a["login"] for a in self._api(f"issues/{pr['number']}", repo=self.pr_repo).get("assignees", [])}
                     desired = set((value if isinstance(value, list) else [value])) if kind == "assign" else set()
                     if current != desired:
                         flags = [x for a in sorted(desired - current) for x in ("--add-assignee", a)]
                         flags += [x for a in sorted(current - desired) for x in ("--remove-assignee", a)]
-                        self.run(["issue", "edit", str(pr["number"]), "-R", self.repo, *flags])
+                        self.run(["issue", "edit", str(pr["number"]), "-R", self.pr_repo, *flags])
                         changed = True
                 return changed
             elif on != "issue":
@@ -643,10 +671,11 @@ class GitHubGateTracker:
             pr = self._pr(n) if target == "pr" else None
             if target == "pr" and pr is None:
                 raise RuntimeError(f"comment: no PR for ticket {n}")
-            if any(c["body"] == body for c in self._list(f"issues/{pr['number'] if pr else n}/comments")):
+            repo = self.pr_repo if pr else self.repo
+            if any(c["body"] == body for c in self._list(f"issues/{pr['number'] if pr else n}/comments", repo=repo)):
                 return False
             body += self._block(e)
-            self.run(["issue", "comment", str(pr["number"] if pr else n), "-R", self.repo, "--body", body])
+            self.run(["issue", "comment", str(pr["number"] if pr else n), "-R", repo, "--body", body])
             return True
         if kind in ("pr-notes", "pr-notes-sync"):  # a developer's `done` notes for the PR description
             pr = self._pr(n)
@@ -669,7 +698,7 @@ class GitHubGateTracker:
                 value = notes_block(found[-1])
             if value in (pr.get("body") or ""):
                 return False
-            self.run(["pr", "edit", str(pr["number"]), "-R", self.repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
+            self.run(["pr", "edit", str(pr["number"]), "-R", self.pr_repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
             return True
         if kind == "review":
             return self._review(n, e)
@@ -695,7 +724,7 @@ class GitHubGateTracker:
         raise ValueError(f"unknown effect: {kind}")
 
     def _update_branch(self, pr, head):
-        self.run(["api", "-X", "PUT", f"repos/{self.repo}/pulls/{pr['number']}/update-branch",
+        self.run(["api", "-X", "PUT", f"repos/{self.pr_repo}/pulls/{pr['number']}/update-branch",
                   "-f", f"expected_head_sha={head}"])
 
     MERGE_LOCK, RECENT_MERGE_SECONDS = "factory-merge-lock", 60
@@ -707,24 +736,24 @@ class GitHubGateTracker:
         A crashed run leaves the branch; a person deletes it."""
         base = pr["base"]["ref"]
         try:
-            self.run(["api", "-X", "POST", f"repos/{self.repo}/git/refs", "-f", f"ref=refs/heads/{self.MERGE_LOCK}",
-                      "-f", f"sha={self._api(f'git/ref/heads/{base}')['object']['sha']}"])
+            self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/git/refs", "-f", f"ref=refs/heads/{self.MERGE_LOCK}",
+                      "-f", f"sha={self._api(f'git/ref/heads/{base}', repo=self.pr_repo)['object']['sha']}"])
         except RuntimeError:
             return False  # another run holds the lock
         try:
             now = datetime.now(timezone.utc)
             wait = max((self.RECENT_MERGE_SECONDS - (now - datetime.fromisoformat(o["merged_at"].replace("Z", "+00:00"))).total_seconds()
-                        for o in self._api(f"pulls?state=closed&base={base}&sort=updated&direction=desc&per_page=5")
+                        for o in self._api(f"pulls?state=closed&base={base}&sort=updated&direction=desc&per_page=5", repo=self.pr_repo)
                         if o["number"] != pr["number"] and o.get("merged_at")), default=0)
             if wait > 0:
                 time.sleep(wait)  # no event wakes `merge` again after the window, so wait it out under the lock
-            if self._api(f"compare/{base}...{head}")["behind_by"] > 0:
+            if self._api(f"compare/{base}...{head}", repo=self.pr_repo)["behind_by"] > 0:
                 self._update_branch(pr, head)  # the merge that just landed moved the base: CI reruns, ci-green wakes `merge`
                 return False
-            self.run(["pr", "merge", str(pr["number"]), "-R", self.repo, "--merge", "--match-head-commit", head])
+            self.run(["pr", "merge", str(pr["number"]), "-R", self.pr_repo, "--merge", "--match-head-commit", head])
             return True
         finally:
-            self.run(["api", "-X", "DELETE", f"repos/{self.repo}/git/refs/heads/{self.MERGE_LOCK}"])
+            self.run(["api", "-X", "DELETE", f"repos/{self.pr_repo}/git/refs/heads/{self.MERGE_LOCK}"])
 
     def _join(self, n, tier):
         """Nothing while the round is open; else changes -> PR label fix-<tier> + stage changes-requested, approve -> approved."""
@@ -768,7 +797,7 @@ class GitHubGateTracker:
                and self._can_write(a)]
         if not who:
             return False
-        self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/requested_reviewers",
+        self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/pulls/{pr['number']}/requested_reviewers",
                   *[x for a in who for x in ("-f", f"reviewers[]={a}")]])
         return True
 
@@ -783,7 +812,7 @@ class GitHubGateTracker:
             raise RuntimeError("review: needs a PR and a payload `focus`")
         head = pr["head"]["sha"]
         existing = [r for r in self._reviews(pr) if r["agent"] and r["focus"] == focus and r["commit_id"] == head]
-        labels = self._labels(pr["number"])
+        labels = self._labels(pr["number"], repo=self.pr_repo)
         rereview = f"factory:rereview-{focus}" in labels
         if existing and (not rereview or any(r["rereview"] for r in existing)):
             return False
@@ -802,7 +831,7 @@ class GitHubGateTracker:
         body = "\n\n".join(x for x in (summary, "\n".join(lines), marker) if x)
         if e.get("run_id"):
             body += f"\n\nFactory-Run: {e['run_id']}"
-        self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
+        self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
                   "-f", "event=COMMENT", "-f", f"body={body}{self._block(e)}"])
         if rereview:
             self._edit(pr["number"], remove=[f"factory:rereview-{focus}"], on="pr")

@@ -46,6 +46,15 @@
     "commit_prefix": {
       "type": "string"
     },
+    "code_host": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string"
+        }
+      }
+    },
     "tracker": {
       "type": "object",
       "additionalProperties": false,
