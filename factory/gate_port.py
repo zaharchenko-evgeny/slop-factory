@@ -46,6 +46,9 @@ class MemoryTracker:
     def _t(self, ticket):
         return self.tickets[ticket] if ticket in self.tickets else self.tickets[str(ticket)]  # JSON files key by string
 
+    def ticket_for_pr(self, number):
+        return next((int(k) for k, t in self.tickets.items() if t.get("pr") == number), None)
+
     def get_stage(self, t):
         return t.get("stage", "none")
 
