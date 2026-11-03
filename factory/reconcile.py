@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
 import nodes as nodes_mod
+import vocab
 
 PREFIX = "[factory] reconcile:"
 RUN = "reconcile"
@@ -53,7 +54,7 @@ def wakes(nodes, facts):
                 cmd = facts.get("command")
                 if cmd and re.fullmatch(label.replace("<tier>", "[a-z]+"), cmd):
                     yield name, cmd, on, "no outcome after the command label"
-            elif not label.startswith("factory:ci-") or label == f"factory:ci-{facts.get('ci')}":
+            elif label not in (vocab.ci("ci-green"), vocab.ci("ci-red")) or label == vocab.ci(f"ci-{facts.get('ci')}"):
                 yield name, label, on, f"no {name} outcome"
 
 
@@ -89,13 +90,13 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
             if stage_kinds.get(stage) == "final":
                 continue
             if (facts.get("issue_state", "open") != "open" or not since
-                    or "factory:needs-human" in facts.get("attrs", [])):
+                    or vocab.needs_human() in facts.get("attrs", [])):
                 continue
             age = now - datetime.fromisoformat(since.replace("Z", "+00:00"))
             conflict = (stage == "in-review" and facts.get("conflict") and facts.get("pr")
                         and not facts.get("command") and facts.get("pr_state") in (None, "none", "open"))
             conflicting_fix = (stage == "changes-requested" and facts.get("conflict")
-                               and (facts.get("command") or "").startswith("factory:fix-"))
+                               and (facts.get("command") or "").startswith(vocab.prefix("fix-<tier>")))
             if conflict:
                 step = ("fix", None, "pr", "the unapproved PR conflicts with main")
                 if age <= timedelta(minutes=default):
@@ -108,12 +109,12 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 step = next((w for w in wakes(nodes, facts)
                              if age > timedelta(minutes=nodes["nodes"][w[0]].get("timeout_minutes", default))), None)
                 stale_reviews = [label for label, at in facts.get("review_labels", [])
-                                 if label.startswith(("factory:review-", "factory:rereview-"))
+                                 if label.startswith((vocab.prefix("review-<focus>"), vocab.prefix("rereview-<focus>")))
                                  and now - datetime.fromisoformat(at.replace("Z", "+00:00")) > timedelta(minutes=default)]
-                stale_focuses = {label.removeprefix("factory:review-").removeprefix("factory:rereview-")
+                stale_focuses = {label.removeprefix(vocab.prefix("review-<focus>")).removeprefix(vocab.prefix("rereview-<focus>"))
                                  for label in stale_reviews}
                 stale_step = next((w for w in wakes(nodes, facts)
-                                   if w[0] == "review" and w[1].removeprefix("factory:review-") in stale_focuses), None)
+                                   if w[0] == "review" and w[1].removeprefix(vocab.prefix("review-<focus>")) in stale_focuses), None)
                 if stale_step:
                     step = stale_step
                 if step is None:
@@ -140,11 +141,11 @@ def send(tracker, n, nodes, stage, head, kind, label, on, why):
     def apply(**e):
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
     if kind == "conflict":
-        apply(kind="label", value="factory:fix-cheap", on="pr")
+        apply(kind="label", value=vocab.cmd("fix-<tier>", "cheap"), on="pr")
         apply(kind="stage", value="changes-requested")
     elif kind == "blocked":
-        apply(kind="label", value="factory:needs-human")
-        apply(kind="comment", value=f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets factory:ready.")
+        apply(kind="label", value=vocab.needs_human())
+        apply(kind="comment", value=f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets {vocab.stage('ready')}.")
         apply(kind="stage", value="blocked")
     else:  # the comment last: the counter for the second miss
         apply(kind="unlabel", value=label, on=on)

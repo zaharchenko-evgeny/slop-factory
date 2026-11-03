@@ -27,6 +27,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
 import nodes as nodes_mod
+import vocab
 
 ROOT = Path(__file__).resolve().parents[1]
 PR_TRIGGERED_NODES = {"review", "join", "fix", "update", "finish", "reopen"}
@@ -304,7 +305,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     `gh issue edit --add-label` fail, so the deploy creates them first)."""
     t = config.get("tracker") or {}
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
-    out.add("factory:needs-human")
+    out.add(vocab.needs_human())
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})

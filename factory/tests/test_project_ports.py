@@ -5,6 +5,8 @@
 # ///
 """Tests for the descriptor-backed tracker port (factory/gate_port.py DescriptorPort) against the fixture project.
 Run: uv run factory/tests/test_project_ports.py"""
+import ast
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -63,6 +65,21 @@ class ProjectPortsTest(unittest.TestCase):
         self.assertEqual(t.commands(7), ["implement-mid"])
         self.assertTrue(t.remove_command(7, "implement-*"))
         self.assertEqual(t.commands(7), [])
+
+    def test_no_hardcoded_factory_labels_in_engine(self):
+        """Engine code names labels through factory/vocab.py; only review and note markers (`<!-- factory:...`) and
+        docstrings may spell one."""
+        label = re.compile(r"(?<!<!-- )factory:[a-z]")
+        found = []
+        for path in sorted(ROOT.glob("*.py")):
+            tree = ast.parse(path.read_text())
+            docs = {id(n.body[0].value) for n in ast.walk(tree)
+                    if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                    and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+            found += [f"{path.name}:{n.lineno}: {n.value!r}" for n in ast.walk(tree)
+                      if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs
+                      and label.search(n.value)]
+        self.assertEqual(found, [])
 
     def test_no_project_is_a_clear_error(self):
         with self.assertRaisesRegex(ValueError, "no project descriptor"):

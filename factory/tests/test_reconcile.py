@@ -13,7 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-cfg.set_team(ROOT)
+import project_mode  # noqa: E402
+cfg.set_team(project_mode.team(ROOT))
 import nodes as nodes_mod  # noqa: E402
 import reconcile  # noqa: E402
 import gate  # noqa: E402

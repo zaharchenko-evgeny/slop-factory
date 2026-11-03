@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import config
+import vocab
 
 
 def gh(args):
@@ -24,7 +25,7 @@ def notify(issue_number, run=gh):
     settings = config.load()
     repo = settings["tracker"]["repository"]
     issue = json.loads(run(["api", f"repos/{repo}/issues/{issue_number}"]))
-    if "factory:needs-human" in [label["name"] for label in issue.get("labels", [])]:
+    if vocab.needs_human() in [label["name"] for label in issue.get("labels", [])]:
         return False  # the gate already assigned and notified this human-wait state
     stages = settings["tracker"]["stages"]
     stage = next((name for name in ("blocked", "needs-answers")

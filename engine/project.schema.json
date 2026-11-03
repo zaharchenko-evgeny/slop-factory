@@ -32,7 +32,8 @@
         "docs_impact_label": {"type": "string"},
         "bot_logins": {"type": "array", "items": {"type": "string"}},
         "hold_label": {"type": "string"},
-        "pr_fact_labels": {"type": "object", "additionalProperties": {"type": "string"}}
+        "pr_fact_labels": {"type": "object", "additionalProperties": {"type": "string"}},
+        "needs_human_label": {"type": "string"}
       }
     },
     "repositories": {
