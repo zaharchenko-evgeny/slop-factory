@@ -1482,6 +1482,7 @@
     "factory:implement-mid",
     "factory:implement-strong",
     "factory:needs-answers",
+    "factory:needs-human",
     "factory:ready",
     "factory:rereview-behaviour",
     "factory:rereview-full",

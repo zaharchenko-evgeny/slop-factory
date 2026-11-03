@@ -292,6 +292,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     `gh issue edit --add-label` fail, so the deploy creates them first)."""
     t = config.get("tracker") or {}
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
+    out.add("factory:needs-human")
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
@@ -475,8 +476,14 @@ def main(argv: list[str]) -> int:
         servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
         try:
             plan = {**plan_air(nodes_mod.load(), config_mod.load()), "renames": renames}
+            unchanged = not diff(plan, *read_state(servers[0], servers[1], plan["prefix"],
+                                                   plan["environments"][0]["repository"] if plan["environments"] else ""))
             code = deploy(argv[0], "--allow-delete" in argv, plan, *servers)
-            return code or write_files(plan["files"], argv[0] == "--apply")
+            code = code or write_files(plan["files"], argv[0] == "--apply")
+            if code == 0 and argv[0] == "--apply" and unchanged:
+                from gate_github import GitHubGateTracker
+                GitHubGateTracker.from_config().deploy_applied(plan)
+            return code
         finally:
             for server in servers:
                 server.close()
