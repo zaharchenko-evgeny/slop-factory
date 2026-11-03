@@ -243,14 +243,19 @@ class GitHubGateTracker:
             out[-1]["findings"] = re.findall(r"^\*\*([A-Z]\d+)\*\*", r.get("body") or "", re.M)
         return out
 
+    @staticmethod
+    def _github_merge(c):
+        return (c.get("committer") or {}).get("login") == "web-flow" and ((c.get("commit") or {}).get("verification") or {}).get("verified") is True
+
     def _clean_base_advance(self, old, head, pr, own):
         """True when every commit from `old` to `head` merges the base branch (second parent already on the base) and
         the files the PR changes are the same at both commits, so a merge needed no conflict resolution. Each merge must be
-        authored by the factory bot (what `update-branch` writes); a person's merge needs a review."""
+        committed by GitHub itself (`web-flow`) with a verified signature, which only the update-branch API produces and
+        which refuses conflicts; author metadata is user-controlled, so any other merge needs a review."""
         try:
             span = self._api(f"compare/{old}...{head}")
             return bool(span["commits"]) and not own & {x["filename"] for x in span["files"]} and all(
-                len(c["parents"]) == 2 and (c.get("author") or {}).get("login") == self.bot and self._api(f"compare/{pr['base']['ref']}...{c['parents'][1]['sha']}")["ahead_by"] == 0
+                len(c["parents"]) == 2 and self._github_merge(c) and self._api(f"compare/{pr['base']['ref']}...{c['parents'][1]['sha']}")["ahead_by"] == 0
                 for c in span["commits"])
         except Exception:  # unknown means the new head needs a review
             return False
