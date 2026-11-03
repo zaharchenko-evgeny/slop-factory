@@ -435,6 +435,8 @@ class GitHubGateTracker:
                 if e.get("event") == "labeled":
                     labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
         pr_labels = f.get("pr_labels", [])
+        review_labels = [(x, labeled.get((pr, x), "")) for x in pr_labels
+                         if x.startswith(("factory:review-", "factory:rereview-")) and labeled.get((pr, x))]
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
         cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-", "factory:update-", "factory:review-"))), None)
         command_labels = ("factory:ready", "factory:triage", "factory:implement-", "factory:fix-",
@@ -452,6 +454,7 @@ class GitHubGateTracker:
         return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
                 "command_pending": bool(latest_command and latest_command == latest_event),
                 "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
+                "review_labels": review_labels,
                 "ci_label": next((x[11:] for x in pr_labels if x in ("factory:ci-green", "factory:ci-red")
                                  and x[11:] == f.get("ci")), None)}  # a label left over from an earlier head is not this head's CI
 
