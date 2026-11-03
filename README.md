@@ -29,7 +29,7 @@ processing. `deploy` creates Air automations, `chart` renders the workflow,
 Each team keeps settings in `factory.descriptor.yaml`. The descriptor supports
 these top-level keys, defined by `engine/descriptor.schema.json`:
 `engine`, `project`, `repositories`, `branch_pattern`, `commit_prefix`,
-`team_repository`, `tracker`, `notify`, `targets`, `models`, `roles`,
+`team_repository`, `tracker`, `code_host`, `notify`, `targets`, `models`, `roles`,
 `limits`, `gates`, `ci`, `knowledge`, `nodes`, `reviews`, and `checks`.
 
 ### Team overrides
