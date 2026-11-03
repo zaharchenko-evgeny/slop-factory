@@ -1285,6 +1285,7 @@ class SeparateCodeHostTest(unittest.TestCase):
         paths = [x for a in seen for x in a if x.startswith("repos/") or x == "c/h" or x == REPO]
         self.assertTrue(any(p.startswith("repos/c/h/pulls") for p in paths))
         self.assertFalse(any(p.startswith(f"repos/{REPO}/pulls") for p in paths))
+        self.assertTrue(any(p.startswith("repos/c/h/issues/5/comments") for p in paths))  # PR notes live in the code host
         self.assertTrue(any(p.startswith(f"repos/{REPO}/issues/7") for p in paths))
         self.assertIn(["pr", "edit", "5", "-R", "c/h", "--add-label", "factory:needs-human"], seen)
         self.assertTrue(any(a[:2] == ["issue", "edit"] and a[a.index("-R") + 1] == REPO for a in seen))

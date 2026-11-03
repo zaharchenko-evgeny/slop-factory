@@ -415,7 +415,7 @@ class GitHubGateTracker:
             f["handed_to_fix"] = bool(writes) and max(writes) > max(latest_review, commit_date)
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
-            got += (self._notes(self._list(f"issues/{pr['number']}/comments"), "created_at", since)
+            got += (self._notes(self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo), "created_at", since)
                     + self._notes(self._list(f"pulls/{pr['number']}/reviews", repo=self.pr_repo), "submitted_at", since)
                     + self._notes([pr], "updated_at", since))  # the PR body is edited after creation
             if stage == "approved" and pr.get("state") == "open":  # only the merge gates read it
