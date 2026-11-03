@@ -176,6 +176,25 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(state["engine"], str(main.resolve()))
         self.assertEqual(state["team"], str((ROOT / "factory/tests/fixtures/team").resolve()))
 
+    def test_sweep_main_uses_team_config(self):
+        team = str((ROOT / "factory/tests/fixtures/team").resolve())
+        with mock.patch.object(cli, "from_main", return_value=str(ROOT)), \
+                mock.patch.object(cli, "load_engine"), \
+                mock.patch.object(cli, "run_gate", return_value=0) as run_gate:
+            code, _ = self.run_cli("--team", team, "sweep", "--main", "--issue", "7")
+        self.assertEqual(code, 0)
+        run_gate.assert_called_once_with(str(ROOT), ["sweep", "--issue", "7"], team)
+
+    def test_sweep_main_uses_factory_team_environment(self):
+        team = str((ROOT / "factory/tests/fixtures/team").resolve())
+        with mock.patch.dict(os.environ, {"FACTORY_TEAM": team}), \
+                mock.patch.object(cli, "from_main", return_value=str(ROOT)), \
+                mock.patch.object(cli, "load_engine"), \
+                mock.patch.object(cli, "run_gate", return_value=0) as run_gate:
+            code, _ = self.run_cli("sweep", "--main", "--issue", "7")
+        self.assertEqual(code, 0)
+        run_gate.assert_called_once_with(str(ROOT), ["sweep", "--issue", "7"], team)
+
     def test_pr_nodes_match_deploy(self):
         self.assertEqual(cli.PR_NODES, cli.deploy.PR_TRIGGERED_NODES)
 

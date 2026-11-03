@@ -179,8 +179,9 @@ def main(argv=None):
     if cmd == "sweep" and "--main" in rest:
         engine = from_main()
         load_engine(Path(engine) / "factory")
-        config.set_team(engine)
-        return run_gate(engine, ["sweep", *[x for x in rest if x != "--main"]])
+        config.set_team(team or os.environ.get("FACTORY_TEAM") or engine)
+        return run_gate(engine, ["sweep", *[x for x in rest if x != "--main"]],
+                        str(config.team_root()))
     if cmd == "end":
         return end(rest, team)
     if cmd == "begin":
