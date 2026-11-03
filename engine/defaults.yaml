@@ -31,6 +31,8 @@ tracker:
 defaults: { tier: mid }
 gates:
   auto_merge: { enabled: true, max_risk: high }
+# Workflows (by name) whose runs at a head count as CI.
+ci: { workflows: [quality-gates] }
 limits:
   generated_paths:
     - factory/tests/fixtures/deploy/air-plan.json
