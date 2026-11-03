@@ -82,7 +82,7 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 if step is None:
                     continue
             node, label, on, why = step
-            missed = sum(f"stage={stage} re-fired" in c for c in facts.get("recover_comments", []))
+            missed = sum(f"stage={stage} re-fired {label} (" in c for c in facts.get("recover_comments", []))
             kind = "conflict" if conflict else "blocked" if missed else "refire"
             r = {"ticket": n, "stage": stage, "node": node, "reconcile": kind, "why": why}
             results.append(r)

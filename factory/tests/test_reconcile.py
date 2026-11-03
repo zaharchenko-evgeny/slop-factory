@@ -58,6 +58,12 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual((results[0]["reconcile"], t.tickets[1]["stage"]), ("blocked", "blocked"))
         self.assertIn('"factory:needs-human"', logged(t, "label"))
 
+    def test_second_miss_counts_per_step(self):
+        refired = [["comment", '"[factory] reconcile: stage=in-review re-fired factory:rereview-behaviour (x)"']]
+        t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD,
+                             "focus_missing": ["structure-security"], "log": refired})
+        self.assertEqual((results[0]["reconcile"], t.tickets[1]["stage"]), ("refire", "in-review"))
+
     def test_waiting_stage_not_refired(self):
         for stage in ("needs-answers", "blocked", "split"):
             _, results, _ = run({"stage": stage, "since": OLD, "command": "factory:implement-mid"})
