@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Factory workflow, format v2 (workflows/<name>.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["nodes"],
+  "properties": {
+    "format": {"type": "integer"},
+    "environments": {"type": "object"},
+    "adapters": {"type": "object"},
+    "schedules": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["cron"],
+        "properties": {"cron": {"type": "string"}}
+      }
+    },
+    "nodes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["wakes_on", "when", "role", "outcomes"],
+        "properties": {
+          "wakes_on": {"type": "array", "items": {"type": "string"}},
+          "when": {"type": "object"},
+          "role": {"type": "string"},
+          "env": {"type": "string"},
+          "tier": {"type": "string"},
+          "tiers": {"type": "array", "items": {"type": "string"}},
+          "focuses": {"type": "array", "items": {"type": "string"}},
+          "output": {"type": "string"},
+          "run": {"type": "string"},
+          "outcomes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "from": {"type": "array", "items": {"type": "string"}},
+                "effects": {"type": "array", "items": {"type": "object"}},
+                "else": {"type": "string"},
+                "enabled": {"type": "boolean"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
