@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Factory workflow v2 (names states and commands only, ADR-0016)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "nodes"],
+  "properties": {
+    "version": {"type": "integer", "enum": [2]},
+    "environments": {"type": "object"},
+    "adapters": {"type": "object"},
+    "schedules": {"type": "object"},
+    "nodes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type", "wakes_on", "outcomes"],
+        "properties": {
+          "type": {"type": "string", "enum": ["agent", "script", "human", "actions"]},
+          "role": {"type": "string"},
+          "env": {"type": "string"},
+          "wakes_on": {"type": "array", "items": {"type": "string"}},
+          "when": {"type": "object"},
+          "tiers": {"type": "array", "items": {"type": "string"}},
+          "focuses": {"type": "array", "items": {"type": "string"}},
+          "outcomes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "from": {"type": "array", "items": {"type": "string"}},
+                "effects": {"type": "array", "items": {"type": "object"}}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -11,6 +11,7 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
                    [--summary TEXT] [--size-estimate N] [--addressed A.json] [--disputed-focuses a,b]
                    [--notes notes.json]
                    (the outcome and the data its effects use)
+       factory migrate workflow <nodes.yaml> <descriptor> [out dir]   (legacy nodes.yaml to workflow v2 plus states and commands)
        factory sweep --main ...                    (the gate's sweep from main's graph)
 """
 import argparse
@@ -204,6 +205,9 @@ def main(argv=None):
     if cmd == "reconcile":
         from reconcile import main as reconcile_main
         return reconcile_main(rest)
+    if cmd == "migrate" and rest[:1] == ["workflow"]:
+        from workflow import main as workflow_main
+        return workflow_main(["migrate", *rest[1:]])
     if cmd == "notify":
         from notify import main as notify_main
         return notify_main(rest)
