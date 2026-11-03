@@ -1,40 +1,52 @@
 # Slop factory
 
-A software factory that delivers GitHub Issues as reviewed pull requests, plus
-the skill that generates it.
+Slop factory is a reusable engine for delivering GitHub Issues as reviewed pull
+requests. This repository contains the engine and its own team configuration.
 
-## What is here
+## Install
 
-- `skills/factory-setup/`: the reusable skill that sets up a factory.
-- `factory.descriptor.yaml`: repositories, tracker stages, models, gates, limits, checks.
-- `roles/`: router, developer and reviewer role files, each with a `setup.sh`.
-- `workflows/delivery.md`: the delivery workflow.
-- `.agents/skills/factory-delivery/`: runs that workflow locally with `pi`.
-- `docs/design.md`, `docs/plan.md`, `docs/adr/`: design, plan, decisions.
+Install the engine as a `uv` tool:
 
-Project rules are in `AGENTS.md`.
+```sh
+uv tool install git+https://github.com/zaharchenko-evgeny/slop-factory@v0.1.0
+```
 
-## Run the factory
+After this change merges, the operator tags the merge commit `v0.1.0` and
+pushes the tag; the tag is not created by this change.
 
-The factory runs through Air automations. See the
-[factory delivery skill](.agents/skills/factory-delivery/SKILL.md) for the
-local delivery workflow and [factory deployment skill](.agents/skills/factory-deploy/SKILL.md)
-for deploying the nodes to Air Cloud.
+## Use
 
-## Approval gate
+`factory --help` lists the available commands. The subcommands are `begin`,
+`end`, `check`, `apply`, `sweep`, `deploy`, `chart`, `validate`, and `doctor`.
+`begin` starts a node and prints its handoff path; `end` applies the completed
+handoff. `check` and `apply` operate the gate, while `sweep` runs its event
+processing. `deploy` creates Air automations, `chart` renders the workflow,
+`validate` checks configuration, and `doctor` diagnoses the local setup.
 
-`gates.confirm_external_writes` is `true` in `factory.descriptor.yaml`. Every write kind in
-`gates.confirm_external_writes_scope` (today: none) is shown to you and waits
-for your approval. Pushing the ticket's own branch, issue and PR text, comments
-and label changes are auto-approved, so a run can go unattended. Merging stays
-with you.
+## Team configuration
 
-## More
+Each team keeps settings in `factory.descriptor.yaml`. The descriptor supports
+these top-level keys, defined by `engine/descriptor.schema.json`:
+`engine`, `project`, `repositories`, `branch_pattern`, `commit_prefix`,
+`tracker`, `notify`, `targets`, `models`, `roles`, `limits`, `gates`,
+`knowledge`, `nodes`, `reviews`, and `checks`.
 
-- [Targets: Air Cloud](docs/targets.md)
-- [Delivery state chart](docs/statechart.md) and the [proposed whole-factory chart](docs/statechart-proposed.md)
-- [Recipe: auto-approve and auto-merge](docs/recipes/auto-approve.md)
+### Team overrides
 
-- [Design](docs/design.md)
-- [Plan](docs/plan.md)
-- [Delivery workflow](workflows/delivery.md)
+The engine resolves `roles/`, `skills/`, and `workflows/` in the team repository
+first. A matching team file replaces the engine file at that path; unmatched
+files come from the engine.
+
+## This repository
+
+This repository is both the engine package and the `slop-factory` team
+configuration. The engine is installed with the command above; this
+repository's descriptor and overrides configure its own factory.
+
+See [factory setup](skills/factory-setup/SKILL.md), [design](docs/design.md),
+and the [delivery workflow](workflows/delivery.md) for more detail.
+
+## Attention
+
+Find every open ticket or pull request waiting for a person with
+`is:open label:factory:needs-human`.
