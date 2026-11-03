@@ -362,10 +362,17 @@ class PlanTest(unittest.TestCase):
         self.assertFalse([x for x in plan["automations"] if "reconcile" in x["name"]])
         self.assertEqual(list(plan["files"]), [".github/workflows/factory-reconcile.yml"])
         text = plan["files"][".github/workflows/factory-reconcile.yml"]
-        self.assertIn('cron: "*/30 * * * *"', text)
+        self.assertIn('cron: "7,37 * * * *"', text)
         self.assertIn("workflow_dispatch:", text)
         self.assertIn("uv run --quiet factory/cli.py reconcile", text)
         self.assertEqual(text, (ROOT / ".github/workflows/factory-reconcile.yml").read_text())  # generated: rerun `factory deploy --apply`
+
+    def test_reconcile_renders_off_peak_schedule_and_ci_wake(self):
+        text = deploy.plan_air(nodes.load(), cfg.load())["files"][".github/workflows/factory-reconcile.yml"]
+        self.assertIn('cron: "7,37 * * * *"', text)
+        self.assertIn("workflow_run:\n    workflows: [quality-gates]\n    types: [completed]", text)
+        self.assertIn("group: factory-reconcile\n  cancel-in-progress: false\n\njobs:", text)
+        self.assertNotIn("cancel-in-progress: true", text)
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(deploy.config_mod, "team_root", return_value=Path(d)):

@@ -16,6 +16,7 @@ import config as cfg  # noqa: E402
 cfg.set_team(ROOT)
 import nodes as nodes_mod  # noqa: E402
 import reconcile  # noqa: E402
+import gate  # noqa: E402
 from gate_port import MemoryTracker  # noqa: E402
 
 NODES, CONFIG = nodes_mod.load(), cfg.load()
@@ -40,17 +41,27 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(results[0]["node"], "review")
         self.assertIn('"factory:review-behaviour"', logged(t, "label"))
 
+    def test_stale_review_label_without_review_refired(self):
+        t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": FRESH,
+                             "focus_missing": ["behaviour"],
+                             "review_labels": [("factory:rereview-behaviour", OLD)]})
+        self.assertEqual(results[0]["node"], "review")
+        self.assertIn('"factory:review-behaviour"', logged(t, "label"))
+
     def test_command_label_without_outcome_refired(self):
         t, results, _ = run({"stage": "in-dev", "since": OLD, "command": "factory:implement-mid"})
         self.assertEqual(results[0]["reconcile"], "refire")
         self.assertIn('"factory:implement-mid"', logged(t, "label"))
         self.assertTrue(logged(t, "comment")[0].startswith(f'"{reconcile.PREFIX} stage=in-dev head= re-fired'))
 
-    def test_conflicting_unapproved_pr_gets_fix(self):
-        t, results, _ = run({"stage": "in-review", "pr": 5, "conflict": True, "since": OLD})
+    def test_conflicting_unapproved_pr_goes_to_fix(self):
+        t, results, _ = run({"stage": "in-review", "pr": 5, "conflict": True, "since": OLD,
+                             "round_complete": False})
         self.assertEqual(results[0]["reconcile"], "conflict")
         self.assertEqual(t.tickets[1]["stage"], "changes-requested")
-        self.assertIn('"factory:update-cheap"', logged(t, "label"))
+        self.assertIn('"factory:fix-cheap"', logged(t, "label"))
+        code, result = gate.check("fix", {"id": "recovered-conflict", "ticket": 1}, t, NODES, CONFIG)
+        self.assertEqual((code, result["merge_main"]), (gate.GO, True))
 
     def test_second_miss_blocks_and_needs_human(self):
         refired = [["comment", '"[factory] reconcile: stage=in-dev head=aaa re-fired factory:implement-mid (x)"']]
