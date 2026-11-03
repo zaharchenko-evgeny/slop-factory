@@ -3,6 +3,7 @@
 engine: 1
 
 project: { name: "Slop factory" }
+team_repository: "https://github.com/zaharchenko-evgeny/slop-eval-factory"
 
 repositories:
   - name: slop-factory

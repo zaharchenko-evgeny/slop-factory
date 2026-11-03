@@ -1,5 +1,6 @@
 {
   "PROJECT_NAME": "Slop",
+  "TEAM_REPOSITORY": "https://github.com/zaharchenko-evgeny/slop-eval-factory",
   "REPOSITORIES": [
     "  - name: slop-factory",
     "    url: https://github.com/zaharchenko-evgeny/slop-factory",

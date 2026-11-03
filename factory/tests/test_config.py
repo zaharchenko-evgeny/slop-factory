@@ -22,7 +22,7 @@ import gate  # noqa: E402
 import nodes  # noqa: E402
 from gate_port import MemoryTracker  # noqa: E402
 
-DESCRIPTOR = yaml.safe_load((ROOT / config.DESCRIPTOR).read_text())
+DESCRIPTOR = yaml.safe_load((ROOT / "factory/tests/fixtures/team" / config.DESCRIPTOR).read_text())
 
 
 def team(tmp, descriptor=None, files=None):
@@ -80,10 +80,16 @@ class TeamRootTest(unittest.TestCase):
                 self.assertIn("unknown-key", out.getvalue())
 
     def test_validate_passes_for_this_repository(self):
-        config.set_team(ROOT)
+        config.set_team(ROOT / "factory/tests/fixtures/team")
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["validate"]), 0)
         self.assertIn("factory: ok", out.getvalue())
+
+    def test_factory_team_env_sets_team_root(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(config.os.environ, {"FACTORY_TEAM": tmp}):
+            config.set_team(None)
+            self.assertEqual(config.team_root(), Path(tmp).resolve())
 
     def test_team_option_and_env(self):
         with tempfile.TemporaryDirectory() as tmp:

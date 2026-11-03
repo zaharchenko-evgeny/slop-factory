@@ -61,6 +61,21 @@ if ! { git worktree remove --force "$HOME/factory-main" 2>/dev/null || rm -rf "$
   echo "startup: factory install failed" >&2
   exit 1
 fi
+# A team descriptor may live in a separate public repository. Keep its root
+# available to all later agent commands, including after a resumed session.
+TEAM_REPOSITORY=$(sed -n 's/^team_repository:[[:space:]]*//p' "$(resolve factory.descriptor.yaml)" | tr -d '"')
+if [ -n "$TEAM_REPOSITORY" ]; then
+  if [ ! -d "$HOME/factory-team/.git" ] &&
+    ! git -C "$HOME" clone --depth 1 --branch main "$TEAM_REPOSITORY" "$HOME/factory-team"; then
+    echo "startup: team checkout failed" >&2
+    exit 1
+  fi
+  export FACTORY_TEAM="$HOME/factory-team"
+  for profile in "$HOME/.profile" "$HOME/.bashrc"; do
+    # shellcheck disable=SC2016
+    grep -q 'FACTORY_TEAM=' "$profile" 2>/dev/null || echo 'export FACTORY_TEAM="$HOME/factory-team"' >> "$profile"
+  done
+fi
 # Skills go to the user-level directories the harnesses scan at session start (Codex, Claude). HOME is not kept
 # across a resume, so this runs on every launch. The team's skills/<name> replaces the engine's skills/vendor/<name>.
 for s in $(skill_names); do

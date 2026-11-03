@@ -72,6 +72,7 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | Placeholder | Meaning | Used in |
 | --- | --- | --- |
 | `PROJECT_NAME` | Project name in the header comment | `factory.descriptor.yaml` |
+| `TEAM_REPOSITORY` | Public settings repository URL, or empty when settings live with the engine | `factory.descriptor.yaml` |
 | `REPOSITORIES` | `repositories:` entries (name, url, default_branch, role), indented two spaces | `factory.descriptor.yaml` |
 | `BRANCH_PREFIX` | Branch prefix before `/{ticket}-{slug}` | `factory.descriptor.yaml`, developer `role.md` |
 | `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.descriptor.yaml` |

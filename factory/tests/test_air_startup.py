@@ -21,7 +21,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config as cfg  # noqa: E402
-cfg.set_team(Path(__file__).resolve().parents[2])
+cfg.set_team(Path(__file__).resolve().parents[2] / "factory/tests/fixtures/team")
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / ".air/cloud/startup.sh"
@@ -43,6 +43,9 @@ class StartupTest(unittest.TestCase):
         for d in (self.home, self.repo, stubs):
             d.mkdir()
         self.log.touch()
+        (self.repo / "factory.descriptor.yaml").write_text(
+            "team_repository: https://github.com/example/team\n"
+        )
         for name, body in STUBS.items():
             p = stubs / name
             p.write_text("#!/bin/sh\n" + body)
@@ -83,6 +86,12 @@ class StartupTest(unittest.TestCase):
         self.assertIn('git fetch --depth 1 origin main', log)
         self.assertIn('git worktree add --detach ' + str(self.home / "factory-main") + ' origin/main', log)
         self.assertIn('uv tool install --force ' + str(self.home / "factory-main"), log)
+
+    def test_clones_configured_team_and_exports_its_root(self):
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('clone --depth 1 --branch main https://github.com/example/team ' + str(self.home / "factory-team"), self.log.read_text())
+        self.assertIn('export FACTORY_TEAM="$HOME/factory-team"', (self.home / ".profile").read_text())
 
     def test_factory_install_failure_is_reported(self):
         uv = Path(self.env["PATH"].split(":", 1)[0]) / "uv"

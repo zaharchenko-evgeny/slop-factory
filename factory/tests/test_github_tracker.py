@@ -15,7 +15,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import config as cfg  # noqa: E402
-cfg.set_team(Path(__file__).resolve().parents[2])
+cfg.set_team(Path(__file__).resolve().parents[2] / "factory/tests/fixtures/team")
 from github_tracker import ClaimError, GitHubTracker  # noqa: E402
 
 STAGES = cfg.load()["tracker"]["stages"]

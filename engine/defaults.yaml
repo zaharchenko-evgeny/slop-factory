@@ -1,4 +1,5 @@
 # What every team shares (ADR-0015). A team descriptor overrides it key by key, one level deep.
+team_repository: ""
 branch_pattern: "ez/{ticket}-{slug}"
 commit_prefix: "#{ticket} "
 

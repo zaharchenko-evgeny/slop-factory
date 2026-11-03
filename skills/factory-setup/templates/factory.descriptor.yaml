@@ -3,6 +3,7 @@
 engine: 1
 
 project: { name: "{{PROJECT_NAME}} factory" }
+team_repository: "{{TEAM_REPOSITORY}}"
 
 repositories:
 {{REPOSITORIES}}

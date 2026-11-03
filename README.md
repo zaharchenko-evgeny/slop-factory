@@ -27,7 +27,7 @@ processing. `deploy` creates Air automations, `chart` renders the workflow,
 
 Each team keeps settings in `factory.descriptor.yaml`. The descriptor supports
 these top-level keys, defined by `engine/descriptor.schema.json`:
-`engine`, `project`, `repositories`, `branch_pattern`, `commit_prefix`,
+`engine`, `team_repository`, `project`, `repositories`, `branch_pattern`, `commit_prefix`,
 `tracker`, `notify`, `targets`, `models`, `roles`, `limits`, `gates`,
 `knowledge`, `nodes`, `reviews`, and `checks`.
 
@@ -40,8 +40,10 @@ files come from the engine.
 ## This repository
 
 This repository is both the engine package and the `slop-factory` team
-configuration. The engine is installed with the command above; this
-repository's descriptor and overrides configure its own factory.
+configuration. Its `team_repository` points to the public
+`slop-eval-factory` settings repository. The engine is installed with the
+command above; this repository's descriptor and overrides configure its own
+factory.
 
 See [factory setup](skills/factory-setup/SKILL.md), [design](docs/design.md),
 and the [delivery workflow](workflows/delivery.md) for more detail.

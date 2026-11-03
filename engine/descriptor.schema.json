@@ -7,6 +7,9 @@
     "engine": {
       "type": "integer"
     },
+    "team_repository": {
+      "type": "string"
+    },
     "project": {
       "type": "object",
       "additionalProperties": false,

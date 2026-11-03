@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config
-config.set_team(ROOT)
+config.set_team(ROOT / "factory/tests/fixtures/team")
 from notify import notify
 
 
