@@ -342,7 +342,7 @@ class PlanTest(unittest.TestCase):
         a = {x["name"]: x for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
         spec = a["[Slop factory] implement-mid"]["spec"]
         self.assertEqual((spec["node"], spec["tier"], spec["engine"]), ("implement", "mid", cfg.load()["engine"]))
-        self.assertEqual(set(spec["outcomes"]), {"done", "error", "blocked", "failed"})
+        self.assertEqual(set(spec["outcomes"]), {"done", "error", "blocked", "failed", "env-broken"})
         self.assertIn("- `error`: the work needs the next tier", a["[Slop factory] implement-mid"]["prompt"])
         self.assertEqual(set(a["[Slop factory] join"]["spec"]["runs"]), {"finish", "recover", "reopen", "merge", "start", "notify"})
         notify = a["[Slop factory] notify"]
