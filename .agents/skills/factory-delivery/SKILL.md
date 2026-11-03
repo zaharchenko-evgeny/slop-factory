@@ -10,7 +10,10 @@ On Air each node is a `[factory:<node>]` automation (`workflows/nodes.yaml`,
 steps yourself, for one node and one ticket. The gate alone changes labels,
 posts reviews and comments, and moves the stage; you never do.
 
-Read first: `factory.descriptor.yaml`, `workflows/delivery.md`, `AGENTS.md`.
+Read first: the team's `factory.descriptor.yaml`, `workflows/delivery.md`, and
+`AGENTS.md`. Set `FACTORY_TEAM` to the team repository checkout, or pass its
+directory with `factory --team <team-repo>`. For local validation in this
+engine checkout, use `factory/tests/fixtures/team` as the team directory.
 
 ## Run
 
@@ -23,7 +26,9 @@ imports, and `apply` runs with your GitHub credentials.
 1. Fetch the trusted copy: `git fetch origin main`, then
    `git worktree add --detach <tmp>/factory-main origin/main`. `<tmp>` is a
    fresh temp directory (`mktemp -d`). Use `<tmp>/factory-main` for `gate.py`,
-   the role file and the skills; use your checkout only for the code.
+   the role file and the skills; use your checkout only for the code. Point
+   `FACTORY_TEAM` at the team repository checkout (or pass `--team <team-repo>`
+   to `factory` commands) so the gate loads that checkout's descriptor.
 2. Save the trigger as JSON in a file, for example `<tmp>/event.json`: the
    GitHub event payload that would start the node (`gh api repos/<repo>/issues/<N>`
    wrapped as `{"eventType": "issues.labeled", "label": "<label>", "data": {"issue": ...}}`,
