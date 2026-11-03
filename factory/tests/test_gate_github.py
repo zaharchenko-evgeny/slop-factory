@@ -286,6 +286,76 @@ class FactsTest(unittest.TestCase):
         self.assertEqual(tr(FakeGh(labels=["x"])).facts(7)["stage"], "none")
 
 
+class BaseMergeGh(FakeGh):
+    """Head h2 follows the approved commit h1; `merge_parents` are the parents of the commit between them."""
+    merge_parents = ["h1", "m0"]
+    head_patch = "@@ -1 +1 @@\n-a\n+b"
+    old_patch = "@@ -1 +1 @@\n-a\n+b"
+
+    def __call__(self, args, timeout=None):
+        a = next((x for x in args if x.startswith("repos/")), "")
+        if a.endswith("/compare/h1...h2"):
+            return json.dumps({"commits": [{"sha": "h2", "parents": [{"sha": p} for p in self.merge_parents]}]})
+        if a.endswith("/compare/main...m0"):
+            return json.dumps({"ahead_by": 0})
+        for sha, patch in (("h1", self.old_patch), ("h2", self.head_patch)):
+            if a.endswith(f"/compare/main...{sha}"):
+                return json.dumps({"files": [{"filename": "a.py", "patch": patch}]})
+        return super().__call__(args, timeout)
+
+
+class CarriedApprovalTest(unittest.TestCase):
+    def facts(self, **kw):
+        gh = BaseMergeGh(reviews=[review(BOT, M, commit="h1")])
+        gh.head_sha = "h2"
+        gh.__dict__.update(kw)
+        return tr(gh).facts(7)
+
+    def test_approval_survives_clean_base_merge(self):
+        # same patch; the merge only moved its line numbers
+        f = self.facts(head_patch="@@ -9 +9 @@\n-a\n+b")
+        self.assertEqual((f["round_complete"], f["round_verdict"], f["round_head"], f["focus_missing"]), (True, "approve", "h2", []))
+
+    def test_approval_lost_after_conflict_resolution(self):
+        for kw in ({"head_patch": "@@ -1 +1 @@\n-a\n+c"},  # the PR's patch changed
+                   {"merge_parents": ["h1"]},  # a developer commit, not a merge
+                   {"merge_parents": ["m0", "h1"]}):  # first parent is not the previous head
+            with self.subTest(kw=kw):
+                f = self.facts(**kw)
+                self.assertEqual((f["round_complete"], f["round_head"], f["focus_missing"]), (False, "h1", ["full"]))
+
+    def test_approval_lost_when_compare_commit_list_stops_short_of_head(self):
+        # GitHub truncated the list: the commit that made h2 the head is not in it
+        class Truncated(BaseMergeGh):
+            def __call__(self, args, timeout=None):
+                a = next((x for x in args if x.startswith("repos/")), "")
+                if a.endswith("/compare/h1...h3"):
+                    return json.dumps({"commits": [{"sha": "h2", "parents": [{"sha": "h1"}, {"sha": "m0"}]}], "total_commits": 2})
+                if a.endswith("/compare/main...h3"):
+                    return super().__call__([x.replace("main...h3", "main...h2") for x in args], timeout)
+                return super().__call__(args, timeout)
+
+        gh = Truncated(reviews=[review(BOT, M, commit="h1")])
+        gh.head_sha = "h3"
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_complete"], f["round_head"], f["focus_missing"]), (False, "h1", ["full"]))
+
+    def test_approval_lost_when_compare_file_list_is_at_its_limit(self):
+        # a 301-file PR: GitHub lists 300, so equal lists prove nothing about the omitted file
+        files = [{"filename": f"f{i}.py", "patch": "@@ -1 +1 @@\n-a\n+b"} for i in range(300)]
+
+        class Capped(BaseMergeGh):
+            def __call__(self, args, timeout=None):
+                a = next((x for x in args if x.startswith("repos/")), "")
+                if a.endswith(("/compare/main...h1", "/compare/main...h2")):
+                    return json.dumps({"files": files})
+                return super().__call__(args, timeout)
+        gh = Capped(reviews=[review(BOT, M, commit="h1")])
+        gh.head_sha = "h2"
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_complete"], f["focus_missing"]), (False, ["full"]))
+
+
 class EffectsTest(unittest.TestCase):
     def twice(self, gh, e):
         t = tr(gh)
@@ -1218,9 +1288,10 @@ class GateTest(unittest.TestCase):
         gh, nd = FakeGh(labels=["factory:in-dev"]), nodes.load()
         payload = {"ticket": 7, "event": "e1"}
         self.assertEqual(gate.apply("implement", "done", payload, tr(gh), nd)[0], gate.GO)
+        writes = len(gh.writes)  # the stage change and, with CI green, the reviewer wake labels
         code, out = gate.apply("implement", "done", payload, tr(gh), nd)
         self.assertEqual((code, out["applied"]), (gate.NO_GO, False))
-        self.assertEqual(len(gh.writes), 1)
+        self.assertEqual(len(gh.writes), writes)
 
     def test_bad_values_and_bad_tracker(self):
         facts = {"fix_rounds": 3, "fix_cap": 3, "ci": "green"}

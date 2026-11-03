@@ -21,6 +21,7 @@ import config
 from gate_port import fix_round_count
 from github_tracker import gh
 
+COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
 NOTE_FIELDS, NOTE_FOR, NOTE_MAX = ("for", "files", "repro", "hint", "context"), ("fixer", "reviewer", "developer", "any"), 2000
 NOTES_PARKED = "[factory] Agent notes for the PR description"  # ticket comment that holds them until the PR exists
 NOTES = re.compile(r"<!-- factory:agent-notes\s*(\{.*?\})\s*-->", re.S)
@@ -298,6 +299,42 @@ class GitHubGateTracker:
             out[-1]["findings"] = re.findall(r"^\*\*([A-Z]\d+)\*\*", r.get("body") or "", re.M)
         return out
 
+    def _pr_patch(self, base, sha):
+        """The PR's patch at `sha` as {file: patch with hunk line numbers dropped}, like `git patch-id --stable`.
+        None when GitHub omits a patch (binary or huge diff) or the compare list may be cut at its 300-file limit,
+        so the caller cannot compare."""
+        files = self._api(f"compare/{base}...{sha}")["files"]
+        if len(files) >= COMPARE_FILE_LIMIT or any(x.get("patch") is None for x in files):
+            return None
+        return {x["filename"]: re.sub(r"^@@ .*? @@", "@@", x["patch"], flags=re.M) for x in files}
+
+    def _clean_base_advance(self, old, head, pr):
+        """True when every commit from `old` to `head` is a merge whose first parent is the previous commit and whose
+        other parent is already on the base branch, and the PR's patch is identical at both. Who made the merge does
+        not matter; what it contains does."""
+        base = pr["base"]["ref"]
+        try:
+            prev = old
+            for c in self._api(f"compare/{old}...{head}")["commits"]:
+                parents = [x["sha"] for x in c["parents"]]
+                if len(parents) != 2 or parents[0] != prev or self._api(f"compare/{base}...{parents[1]}")["ahead_by"] != 0:
+                    return False
+                prev = c["sha"]
+            patch = self._pr_patch(base, old)
+            # a truncated compare list stops short of the head: the omitted commits are unchecked
+            return prev == head != old and patch is not None and patch == self._pr_patch(base, head)
+        except Exception:  # unknown means the new head needs a review
+            return False
+
+    def _carry_approvals(self, reviews, pr):
+        """An agent approval of an earlier commit counts at `head` after a clean merge of the base (marked `carried`)."""
+        head, clean = pr["head"]["sha"], {}
+        for r in reviews:
+            if r["agent"] and r["verdict"] == "approve" and r["commit_id"] != head:
+                if clean.setdefault(r["commit_id"], self._clean_base_advance(r["commit_id"], head, pr)):
+                    r.update(commit_id=head, carried=True)
+        return reviews
+
     def _can_write(self, login):
         """Write access from the collaborator permission API (author_association says nothing about the role)."""
         try:
@@ -444,7 +481,7 @@ class GitHubGateTracker:
                                 "blocked": k.get("state") != "closed" and self.stages["blocked"] in [x["name"] for x in k.get("labels") or []]}
                                for k in kids])
         if pr:
-            head, reviews = pr["head"]["sha"], self._reviews(pr)
+            head, reviews = pr["head"]["sha"], self._carry_approvals(self._reviews(pr), pr)
             pr_labels = {x["name"] for x in pr.get("labels", [])}
             pending_rereviews = [focus for focus in required if f"factory:rereview-{focus}" in pr_labels]
             latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins

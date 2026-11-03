@@ -496,6 +496,12 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         after = ([{"kind": "label", "ticket": ticket, "value": f"factory:review-{focus}", "on": "pr"}
                   for focus in facts.get("focus_missing", [])] if facts["ci"] == "green" else [])
         after.append({"kind": "join", "ticket": ticket, "value": "all-approve", "tier": fix_tier(facts)})
+    if name in ("implement", "fix") and outcome == "done" and not after and facts.get("pr") and facts.get("ci") == "green" \
+            and any(e["kind"] == "stage" and e["value"] == "in-review" for e in effects):
+        # CI may have finished while the ticket was not yet in-review, when its wake found no stage to act on:
+        # whichever of the two comes last wakes the reviewers. A focus whose label is present is already woken.
+        after = [{"kind": "label", "ticket": ticket, "value": f"factory:review-{f}", "on": "pr"}
+                 for f in facts.get("focus_missing", []) if f"factory:review-{f}" not in facts.get("pr_labels", [])]
     starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(COMMANDS)]
     stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith("factory:fix-") for e in starts))
     if stop:

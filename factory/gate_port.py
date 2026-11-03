@@ -59,7 +59,7 @@ class MemoryTracker:
                 "pr_state": "none", "risk": "high", "behind": False, "answered": False, "updated_at": None,
                 "review_labels": []}
         t = {**t, "fix_rounds": fix_round_count(t["reviews"])} if "reviews" in t and "fix_rounds" not in t else t
-        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr", "ci_failure", "author", "waiting_reviewers", "agent_notes")}, "stage": self.get_stage(t),
+        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr", "ci_failure", "author", "waiting_reviewers", "agent_notes", "pr_labels")}, "stage": self.get_stage(t),
                 "seen": list(t.get("seen", [])), "comments": t.get("comments", [])}
 
     def stale_facts(self, ticket):
