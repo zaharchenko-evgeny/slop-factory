@@ -31,6 +31,27 @@ STAGES, BOT, REPO = CONFIG["tracker"]["stages"], CONFIG["targets"]["air"]["bot_l
 M = "<!-- factory:review focus=full round=1 verdict=approve -->"
 
 
+RECORDED = json.loads((Path(__file__).resolve().parent / "contracts/github-issues.json").read_text())["responses"]
+
+
+def recorded(path, items):
+    """The recorded GitHub issue response for `path`, shaped like the recording: each of `items` (a dict, or a list of
+    dicts for a list endpoint) overrides fields of the recorded item and may only set fields it has. An issue endpoint
+    without a recording fails the test."""
+    path = path[path.index("issues"):]
+    key = re.sub(r"issues/\d+", "issues/{n}", path.split("?")[0])
+    if path.startswith("issues?"):
+        key = "issues?state={s}&per_page=100"
+    assert key in RECORDED, f"no recorded response for GET {key}"
+    shape = RECORDED[key]
+    base = shape[0] if isinstance(shape, list) else shape
+    for item in items if isinstance(items, list) else [items]:
+        assert set(item) <= set(base), f"{key}: fields not in the recording: {sorted(set(item) - set(base))}"
+    if isinstance(shape, list):
+        return "\n".join(json.dumps({**base, **i}) for i in items)
+    return json.dumps({**base, **items})
+
+
 class FakeGh:
     """The gh calls of the adapter over one ticket (7) with a PR on ez/7-x; records writes."""
 
@@ -51,6 +72,9 @@ class FakeGh:
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
         a = a + " POST" if "POST" in args else a
         assert args[:2] != ["api", "user"], "gh api user must never be called"
+        if args[0] == "api" and "-X" not in args and "-f" not in args and "-F" not in args and re.search(r"/issues(/|\?|$)", a) \
+                and "comments/" not in a and "/labels" not in a:
+            recorded(a.split("/", 3)[-1], [] if a.endswith(("/events", "/comments", "/sub_issues", "blocked_by", "blocking")) else {})
         if "actions/runs?head_sha=" in a:  # one workflow per entry of `checks`; None = still running
             self.workflow_timeout = timeout
             if getattr(self, "workflow_error", False):
@@ -108,17 +132,17 @@ class FakeGh:
         if a.endswith("/parent"):
             if getattr(self, "parent_of", None) is None:
                 raise RuntimeError("HTTP 404: Not Found")
-            return json.dumps({"number": self.parent_of})
+            return recorded(a, {"number": self.parent_of})
         if a.endswith("issues/7/events"):
             if hasattr(self, "issue_events"):
-                return "\n".join(json.dumps(e) for e in self.issue_events)
-            return "\n".join([json.dumps({"event": "labeled", "label": {"name": n}, "created_at": t})
-                              for n, t in getattr(self, "label_events", [])] +
-                             [json.dumps({"event": "labeled", "label": {"name": "factory:implement-cheap"}})
-                              for _ in range(getattr(self, "impl_runs", 0))])
+                return recorded("issues/7/events", self.issue_events)
+            return recorded("issues/7/events", [{"event": "labeled", "label": {"name": n}, "created_at": t}
+                                                for n, t in getattr(self, "label_events", [])] +
+                            [{"event": "labeled", "label": {"name": "factory:implement-cheap"}}
+                             for _ in range(getattr(self, "impl_runs", 0))])
         if a.endswith("issues/5/events"):
-            return "\n".join(json.dumps({"event": "labeled", "label": {"name": "factory:fix-mid"}, "created_at": t})
-                             for t in getattr(self, "fix_events", []))
+            return recorded("issues/5/events", [{"event": "labeled", "label": {"name": "factory:fix-mid"}, "created_at": t}
+                                                for t in getattr(self, "fix_events", [])])
         if a.endswith("/pulls/5/reviews"):
             return "\n".join(json.dumps(r) for r in self.reviews)
         if "PATCH" not in args and (re_issue := re.search(r"issues/(\d+)$", a)) \
@@ -126,27 +150,27 @@ class FakeGh:
             issue_number = int(re_issue.group(1))
             labels = self.labels if issue_number == 5 else self.pr_labels.get(issue_number, self.labels)
             assignees = self.assignees if issue_number == 5 else self.pr_assignees.get(issue_number, self.assignees)
-            return json.dumps({"labels": [{"name": x} for x in labels], "state": self.state,
-                               "body": getattr(self, "issue_body", ""),
-                               "assignees": [{"login": x} for x in assignees],
-                               "user": {"login": "author"}})
+            return recorded(a, {"labels": [{"name": x} for x in labels], "state": self.state,
+                                "body": getattr(self, "issue_body", ""),
+                                "assignees": [{"login": x} for x in assignees],
+                                "user": {"login": "author"}})
         if a.endswith("issues/7/dependencies/blocking"):
-            return "\n".join(json.dumps(i) for i in getattr(self, "blocking_issues", []))
+            return recorded(a, getattr(self, "blocking_issues", []))
         if a.endswith("issues/7/dependencies/blocked_by") and "POST" not in a:
-            return "\n".join(json.dumps(b) for b in self.blocked)
+            return recorded(a, self.blocked)
         if a.endswith("issues/12"):
-            return json.dumps({"number": 12, "state": getattr(self, "blocker_state", "open"), "labels": []})
+            return recorded(a, {"number": 12, "state": getattr(self, "blocker_state", "open"), "labels": []})
         if a.endswith("issues/5/comments"):
             return ""
         if a.endswith("issues/7/comments"):
-            return "\n".join(json.dumps(c if isinstance(c, dict) else {"body": c}) for c in self.comments)
+            return recorded(a, [c if isinstance(c, dict) else {"body": c} for c in self.comments])
         if a.endswith("issues?state=open&per_page=100"):
-            return "\n".join(json.dumps(i) for i in self.open_issues)
+            return recorded(a, self.open_issues)
         if a.endswith("issues/7/sub_issues"):
             reasons, labels = getattr(self, "sub_reason", ["completed"] * 9), getattr(self, "sub_labels", [[]] * 9)
-            return "\n".join(json.dumps({"number": i + 1, "title": t, "state": st, "state_reason": r if st == "closed" else None,
-                                         "labels": [{"name": x} for x in ls]})
-                             for i, (t, st, r, ls) in enumerate(zip(self.sub, self.sub_state, reasons, labels)))
+            return recorded(a, [{"number": i + 1, "title": t, "state": st, "state_reason": r if st == "closed" else None,
+                                 "labels": [{"name": x} for x in ls]}
+                                for i, (t, st, r, ls) in enumerate(zip(self.sub, self.sub_state, reasons, labels))])
         self.writes.append(args)
         if self.fail_blocked_by and "/dependencies/blocked_by" in a:
             raise RuntimeError("HTTP 403: Resource not accessible by integration")
@@ -1171,15 +1195,21 @@ class SweepTest(unittest.TestCase):
         self.assertEqual([r["outcome"] for r in self.run_sweep(gh)[0]], ["children-done"])
         self.assertEqual(gh.labels, ["factory:done"])
 
+    def test_fake_rejects_unrecorded_issue_endpoint(self):
+        with self.assertRaisesRegex(AssertionError, "no recorded response"):
+            FakeGh()(["api", f"repos/{REPO}/issues/7/timeline"])
+        with self.assertRaisesRegex(AssertionError, "not in the recording"):
+            recorded("issues/7", {"bogus": 1})
+
     def test_blocking_lists_native_dependents(self):
         gh = FakeGh()
         gh.blocking_issues = [{"number": 12, "state": "open"}]
-        self.assertEqual(tr(gh).blocking(7), gh.blocking_issues)
+        self.assertEqual([(i["number"], i["state"]) for i in tr(gh).blocking(7)], [(12, "open")])
 
     def test_blocking_lists_body_fallback_dependents(self):
         gh = FakeGh()
         gh.open_issues = [{"number": 12, "state": "open", "body": "Blocked by: #7\n\nSecond slice"}]
-        self.assertEqual(tr(gh).blocking(7), gh.open_issues)
+        self.assertEqual([(i["number"], i["state"], i["body"]) for i in tr(gh).blocking(7)], [(12, "open", gh.open_issues[0]["body"])])
 
     def test_sweep_releases_body_linked_ticket_when_blocker_closes(self):
         gh = FakeGh(labels=(STAGES["ready"], "risk:low"))

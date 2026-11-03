@@ -33,7 +33,7 @@ flowchart LR
     N_finish["<b>finish</b><br/>on: PR merged<br/>on: issue closed<br/>on: issue +factory:blocked<br/>on: issues.comment<br/>script"]:::node
     N_notify["<b>notify</b><br/>on: issue +factory:blocked<br/>on: issue +factory:needs-answers<br/>script"]:::node
     N_recover["<b>recover</b><br/>on: a person<br/>script"]:::node
-    N_reconcile["<b>reconcile</b><br/>on: cron 7,37 * * * *<br/>on: run of quality-gates<br/>script"]:::node
+    N_reconcile["<b>reconcile</b><br/>on: cron 7,37 * * * *<br/>on: run of quality-gates<br/>on: issue +<br/>on: issue label removed<br/>on: issue closed<br/>on: PR review submitted<br/>script"]:::node
     N_doctor["<b>doctor</b><br/>on: cron 0 5 * * *<br/>script"]:::node
     N_doctor_write["<b>doctor-write</b><br/>on: cron 0 5 * * *<br/>script"]:::node
     N_doctor_ops["<b>doctor-ops</b><br/>on: cron 0 5 * * *<br/>script"]:::node
@@ -146,7 +146,7 @@ flowchart LR
 | `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked`<br>`issues.comment` | answered: → triage<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
 | `notify` | `issue +factory:blocked`<br>`issue +factory:needs-answers` | notified: — | script | built |
 | `recover` | `a person` | blocked: → blocked | script | built |
-| `reconcile` | `cron 7,37 * * * *`<br>`run of quality-gates` | reconciled: — | script | built |
+| `reconcile` | `cron 7,37 * * * *`<br>`run of quality-gates`<br>`issue +`<br>`issue label removed`<br>`issue closed`<br>`PR review submitted` | reconciled: — | script | built |
 | `doctor` | `cron 0 5 * * *` | probed: — | script | built |
 | `doctor-write` | `cron 0 5 * * *` | probed: — | script | built |
 | `doctor-ops` | `cron 0 5 * * *` | probed: — | script | built |
