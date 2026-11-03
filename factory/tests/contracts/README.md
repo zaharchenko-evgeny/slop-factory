@@ -22,3 +22,11 @@ server (`factory/contracts.py serve`) rejects any tool or argument absent from `
 `factory contracts refresh` is **operator-only**: it needs your Air OAuth (`FACTORY_MCP_AIR_AUTOMATIONS`,
 `FACTORY_MCP_AIR_CLOUD`), never run it from an agent or CI. It re-records the tool lists and the read-only responses into
 `air-mcp.json`, strips tokens, emails and secret-like values, and leaves the other recorded responses as they are.
+
+`github-api.json`: one real `gh api` response for every GitHub read the adapter makes (`factory/gate_github.py`), keyed by
+endpoint template. Recorded on 3 November 2026 from this repository with `gh api`; lists keep their first item, `*url`
+keys and `node_id` are dropped, and the same redaction as above applies. The job log (`actions/jobs/{id}/logs`) is
+derived: the integration token may not download logs. The fake `gh` in `test_gate_github.py` checks every read it answers
+with `contracts.github_read`: the endpoint (path template and query names) must be recorded and the fields it returns
+must exist in the recording, otherwise the test fails. Reads reshaped by a `--jq` other than `.[]` are checked for the
+endpoint only.

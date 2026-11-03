@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
+import contracts  # noqa: E402
 import gate  # noqa: E402
 import gate_github as M_GH  # noqa: E402
 import nodes  # noqa: E402
@@ -28,6 +29,7 @@ from gate_github import GitHubGateTracker  # noqa: E402
 
 CONFIG = cfg.load()
 STAGES, BOT, REPO = CONFIG["tracker"]["stages"], CONFIG["targets"]["air"]["bot_login"], "o/r"
+RECORDED = json.loads((Path(__file__).resolve().parent / "contracts/github-api.json").read_text())
 M = "<!-- factory:review focus=full round=1 verdict=approve -->"
 
 
@@ -48,6 +50,12 @@ class FakeGh:
         self.extra_pulls, self.pr_labels, self.pr_assignees = [], {}, {}
 
     def __call__(self, args, timeout=None):
+        out = self.answer(args, timeout)
+        if args[0] == "api" and not {"-X", "POST", "PATCH", "PUT", "DELETE"} & set(args):  # a read: only recorded ones
+            contracts.github_read(args, out, RECORDED)
+        return out
+
+    def answer(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
         a = a + " POST" if "POST" in args else a
         assert args[:2] != ["api", "user"], "gh api user must never be called"

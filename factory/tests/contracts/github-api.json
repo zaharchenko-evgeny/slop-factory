@@ -1,0 +1,1671 @@
+{
+ "recorded": "2026-11-03",
+ "endpoints": {
+  "issues/{n}": {
+   "id": 6169791032,
+   "number": 331,
+   "title": "Record GitHub API contracts and drive the gh stub from them",
+   "user": {
+    "login": "jetbrains-air[bot]",
+    "id": 274481315,
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+   },
+   "labels": [
+    {
+     "id": 12870044964,
+     "name": "factory:in-dev",
+     "color": "C5DEF5",
+     "default": false,
+     "description": "",
+     "archived_at": null,
+     "archived_by": null
+    },
+    {
+     "id": 12870046062,
+     "name": "risk:high",
+     "color": "BFD4F2",
+     "default": false,
+     "description": "",
+     "archived_at": null,
+     "archived_by": null
+    },
+    {
+     "id": 12909980661,
+     "name": "factory:implement-mid",
+     "color": "1d76db",
+     "default": false,
+     "description": "Command label: starts the factory:implement-mid node (workflows/nodes.yaml)",
+     "archived_at": null,
+     "archived_by": null
+    }
+   ],
+   "state": "open",
+   "locked": false,
+   "assignees": [],
+   "milestone": null,
+   "comments": 1,
+   "created_at": "2026-11-02T19:48:49Z",
+   "updated_at": "2026-11-03T17:14:50Z",
+   "closed_at": null,
+   "assignee": null,
+   "author_association": "CONTRIBUTOR",
+   "active_lock_reason": null,
+   "sub_issues_summary": {
+    "total": 0,
+    "completed": 0,
+    "percent_completed": 0
+   },
+   "issue_dependencies_summary": {
+    "blocked_by": 0,
+    "total_blocked_by": 1,
+    "blocking": 1,
+    "total_blocking": 1
+   },
+   "body": "## Parent\n\n#295 \u2014 Test fakes come from recordings of the real Air and GitHub services\n\n## What to build\n\nMake the stubbed `gh` adapter answer only from captured GitHub API responses, so adapter behavior is checked against recorded response shapes and unrecorded endpoints fail tests.\n\n## Acceptance criteria\n\n- [ ] Recorded responses under `factory/tests/contracts/` cover each `gh api` response consumed by the factory adapter.\n- [ ] The stubbed `gh` returns the recorded response for each covered endpoint and fails a test when asked for an endpoint without a recording.\n- [ ] `uv run --quiet factory/tests/test_deploy.py` and `uv run --quiet factory/tests/test_gate_github.py` pass using recorded fakes.\n- [ ] `uv run --quiet factory/tests/test_contracts.py` passes `test_recordings_contain_no_tokens` for GitHub recordings.\n- [ ] The `state-machine` check in `factory.descriptor.yaml` passes.\n\nAffected repositories: slop-factory. Size: about 150 changed lines including tests and GitHub recordings.\n\n## Blocked by\n\nRecord Air service contracts and drive Air fakes from them.\n\n<!-- factory:child of=295 -->",
+   "closed_by": null,
+   "reactions": {
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+   },
+   "performed_via_github_app": null,
+   "state_reason": null,
+   "pinned_comment": null
+  },
+  "issues?state={state}&labels={label}&per_page=100": [
+   {
+    "id": 6180705270,
+    "number": 365,
+    "title": "Record Air multi-repository trigger and write-capability probe results",
+    "user": {
+     "login": "jetbrains-air[bot]",
+     "id": 274481315,
+     "type": "Bot",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "labels": [
+     {
+      "id": 12870044861,
+      "name": "factory:ready",
+      "color": "FBCA04",
+      "default": false,
+      "description": "",
+      "archived_at": null,
+      "archived_by": null
+     },
+     {
+      "id": 12870046062,
+      "name": "risk:high",
+      "color": "BFD4F2",
+      "default": false,
+      "description": "",
+      "archived_at": null,
+      "archived_by": null
+     }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 0,
+    "created_at": "2026-11-03T10:27:28Z",
+    "updated_at": "2026-11-03T10:27:32Z",
+    "closed_at": null,
+    "assignee": null,
+    "author_association": "CONTRIBUTOR",
+    "active_lock_reason": null,
+    "sub_issues_summary": {
+     "total": 0,
+     "completed": 0,
+     "percent_completed": 0
+    },
+    "issue_dependencies_summary": {
+     "blocked_by": 1,
+     "total_blocked_by": 1,
+     "blocking": 1,
+     "total_blocking": 1
+    },
+    "body": "## Parent\n#327\n\n## What to build\nDocument the operator's Air capability probe results so deployment can choose a supported CI event trigger and write strategy. Probe `check_suite.completed` and `status` delivery for a project repository, platform push behavior to an additional repository, and whether an environment write token can `git push` and open a PR through `gh api`. Record observations and the chosen supported path on #327.\n\n## Acceptance criteria\n- [ ] The probe records whether Air delivered `check_suite.completed` or `status` for a project repository, with the observed event and run evidence linked on #327.\n- [ ] The probe records whether platform push can write to an additional repository and whether the named environment write token can push and create a PR there; no secret values are recorded.\n\nAffected repositories: slop-factory. Size: about 20 lines of recorded results.\n\n<!-- factory:child of=327 -->",
+    "closed_by": null,
+    "reactions": {
+     "total_count": 0,
+     "+1": 0,
+     "-1": 0,
+     "laugh": 0,
+     "hooray": 0,
+     "confused": 0,
+     "heart": 0,
+     "rocket": 0,
+     "eyes": 0
+    },
+    "performed_via_github_app": null,
+    "state_reason": null,
+    "pinned_comment": null
+   }
+  ],
+  "issues?state=open&per_page=100": [
+   {
+    "id": 6187606046,
+    "number": 388,
+    "title": "#387 Reconcile also after every factory label change",
+    "user": {
+     "login": "jetbrains-air[bot]",
+     "id": 274481315,
+     "type": "Bot",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "labels": [
+     {
+      "id": 12915490096,
+      "name": "factory:ci-green",
+      "color": "0e8a16",
+      "default": false,
+      "description": "Factory: CI passed at the PR head",
+      "archived_at": null,
+      "archived_by": null
+     },
+     {
+      "id": 12941920899,
+      "name": "factory:review-full",
+      "color": "0e8a16",
+      "default": false,
+      "description": "",
+      "archived_at": null,
+      "archived_by": null
+     }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 0,
+    "created_at": "2026-11-03T17:16:31Z",
+    "updated_at": "2026-11-03T17:17:20Z",
+    "closed_at": null,
+    "assignee": null,
+    "author_association": "CONTRIBUTOR",
+    "active_lock_reason": null,
+    "draft": false,
+    "pull_request": {
+     "merged_at": null
+    },
+    "body": "[factory] Adds `issues` (labeled, unlabeled, closed) and `pull_request_review` (submitted) triggers to the `reconcile` node; regenerated workflow and charts. Schedule kept.\n\nCloses #387\n\nProduced by Air Automations. Name: [Slop factory] implement-mid / Run: https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e539f449-950c-4af9-a550-11ca8d65ed19?run=303438d9-5e5f-4a56-bbfd-b1f8b79a5e70\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\nFactory-Run: https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e539f449-950c-4af9-a550-11ca8d65ed19?run=303438d9-5e5f-4a56-bbfd-b1f8b79a5e70",
+    "closed_by": null,
+    "reactions": {
+     "total_count": 0,
+     "+1": 0,
+     "-1": 0,
+     "laugh": 0,
+     "hooray": 0,
+     "confused": 0,
+     "heart": 0,
+     "rocket": 0,
+     "eyes": 0
+    },
+    "performed_via_github_app": null,
+    "state_reason": null
+   }
+  ],
+  "issues/{n}/comments": [
+   {
+    "id": 6610590637,
+    "user": {
+     "login": "jetbrains-air[bot]",
+     "id": 274481315,
+     "type": "Bot",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "created_at": "2026-11-03T17:13:36Z",
+    "updated_at": "2026-11-03T17:13:36Z",
+    "body": "[factory] unblocked by #330\n\nFactory-Run: finish:unblocked",
+    "author_association": "CONTRIBUTOR",
+    "pin": null,
+    "reactions": {
+     "total_count": 0,
+     "+1": 0,
+     "-1": 0,
+     "laugh": 0,
+     "hooray": 0,
+     "confused": 0,
+     "heart": 0,
+     "rocket": 0,
+     "eyes": 0
+    },
+    "performed_via_github_app": {
+     "id": 3314082,
+     "client_id": "Iv23li9CrB3WmeFUcz0u",
+     "slug": "jetbrains-air",
+     "owner": {
+      "login": "JetBrains",
+      "id": 878437,
+      "type": "Organization",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "name": "JetBrains Air",
+     "description": "Connect JetBrains Air to GitHub to let AI coding agents work in the cloud on your team\u2019s issues and pull requests, while keeping every change easy to review.\r\n\r\nThis GitHub App gives Air ([air.dev](http://air.dev/)) authenticated access to your organization\u2019s code repositories.",
+     "created_at": "2026-04-08T10:13:09Z",
+     "updated_at": "2026-10-30T10:20:18Z",
+     "permissions": {
+      "actions": "write",
+      "contents": "write",
+      "issues": "write",
+      "metadata": "read",
+      "pull_requests": "write",
+      "workflows": "write"
+     },
+     "events": [
+      "issues",
+      "pull_request",
+      "pull_request_review",
+      "workflow_job",
+      "workflow_run"
+     ]
+    },
+    "minimized": null
+   }
+  ],
+  "issues/{n}/events": [
+   {
+    "id": 34948928268,
+    "actor": {
+     "login": "jetbrains-air[bot]",
+     "id": 274481315,
+     "type": "Bot",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "event": "labeled",
+    "commit_id": null,
+    "created_at": "2026-11-02T19:48:50Z",
+    "label": {
+     "name": "risk:high",
+     "color": "BFD4F2"
+    },
+    "intent": null,
+    "performed_via_github_app": null
+   }
+  ],
+  "issues/{n}/parent": {
+   "id": 6160755466,
+   "number": 295,
+   "title": "Test fakes come from recordings of the real Air and GitHub services",
+   "user": {
+    "login": "zaharchenko-evgeny",
+    "id": 11453760,
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+   },
+   "labels": [
+    {
+     "id": 12870046062,
+     "name": "risk:high",
+     "color": "BFD4F2",
+     "default": false,
+     "description": "",
+     "archived_at": null,
+     "archived_by": null
+    },
+    {
+     "id": 12909981154,
+     "name": "factory:split",
+     "color": "c5def5",
+     "default": false,
+     "description": "Stage (factory.yaml tracker.stages)",
+     "archived_at": null,
+     "archived_by": null
+    }
+   ],
+   "state": "open",
+   "locked": false,
+   "assignees": [],
+   "milestone": null,
+   "comments": 5,
+   "created_at": "2026-11-02T10:28:50Z",
+   "updated_at": "2026-11-03T16:09:51Z",
+   "closed_at": null,
+   "assignee": null,
+   "author_association": "OWNER",
+   "active_lock_reason": null,
+   "sub_issues_summary": {
+    "total": 2,
+    "completed": 1,
+    "percent_completed": 50
+   },
+   "issue_dependencies_summary": {
+    "blocked_by": 1,
+    "total_blocked_by": 3,
+    "blocking": 0,
+    "total_blocking": 0
+   },
+   "repository": {
+    "id": 1437080046,
+    "name": "slop-factory",
+    "full_name": "zaharchenko-evgeny/slop-factory",
+    "private": false,
+    "owner": {
+     "login": "zaharchenko-evgeny",
+     "id": 11453760,
+     "type": "User",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "description": "Slop factory: an agent software factory on Air Cloud",
+    "fork": false,
+    "created_at": "2026-10-28T12:50:40Z",
+    "updated_at": "2026-11-03T17:12:18Z",
+    "pushed_at": "2026-11-03T17:16:28Z",
+    "homepage": null,
+    "size": 2303,
+    "stargazers_count": 1,
+    "watchers_count": 1,
+    "language": "Python",
+    "has_issues": true,
+    "has_projects": true,
+    "has_downloads": false,
+    "has_wiki": false,
+    "has_pages": false,
+    "has_discussions": false,
+    "forks_count": 0,
+    "archived": false,
+    "disabled": false,
+    "open_issues_count": 30,
+    "license": null,
+    "allow_forking": true,
+    "is_template": false,
+    "web_commit_signoff_required": false,
+    "has_pull_requests": true,
+    "pull_request_creation_policy": "all",
+    "topics": [],
+    "visibility": "public",
+    "forks": 0,
+    "open_issues": 30,
+    "watchers": 1,
+    "default_branch": "main",
+    "permissions": {
+     "admin": false,
+     "maintain": false,
+     "push": false,
+     "triage": false,
+     "pull": false
+    }
+   },
+   "body": "[factory] Test fakes are generated from recordings of the real services. Guessed fakes let real mismatches pass the tests: the Air payload wrapper (#228), the MCP tool names (#288), and `list_automations`'s result shape.\n\n## Scope\n\n- **`factory/tests/contracts/`** holds recorded, secret-free samples:\n  - the air-automations and air-cloud tool lists with their input schemas (from `~/.pi/agent/mcp-cache.json`);\n  - one real response per tool the factory calls;\n  - one real Air trigger payload per event type (`issues.labeled`, `pull_request.labeled`, `pull_request.merged`, `pull_request_review.submitted`, `issues.closed`);\n  - the `gh api` responses the adapter reads.\n- **The fake MCP server and the stubbed `gh`** answer only from these recordings, and a call to a tool or endpoint that isn't recorded fails the test.\n- **`factory contracts refresh`** re-records them from the live services (operator only), stripping tokens, emails and ids that look like secrets.\n\n## Acceptance checks\n\n- [ ] `uv run --quiet factory/tests/test_contracts.py` passes:\n  - `test_fake_mcp_rejects_unrecorded_tool`;\n  - `test_payload_fixtures_parse_for_every_trigger`;\n  - `test_recordings_contain_no_tokens`\n- [ ] `uv run --quiet factory/tests/test_deploy.py` and `test_gate_github.py` pass on the recorded fakes\n- [ ] The `state-machine` check from `factory.descriptor.yaml` passes\n\nAffected repositories: slop-factory. Size: about 250 lines with tests, plus recordings.\n\nFactory-Run: manual:pi-session-2026-10-31\n\n\nOperator answer (2 November): recorded fixtures count toward the size. Split this ticket at triage into independently deliverable slices (for example: the recorder and Air fakes first, then the GitHub fakes), each under about 400 lines.\n",
+   "reactions": {
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+   },
+   "performed_via_github_app": null,
+   "state_reason": null,
+   "pinned_comment": null
+  },
+  "issues/{n}/sub_issues": [
+   {
+    "id": 6169789787,
+    "number": 330,
+    "title": "Record Air service contracts and drive Air fakes from them",
+    "user": {
+     "login": "jetbrains-air[bot]",
+     "id": 274481315,
+     "type": "Bot",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "labels": [
+     {
+      "id": 12870046062,
+      "name": "risk:high",
+      "color": "BFD4F2",
+      "default": false,
+      "description": "",
+      "archived_at": null,
+      "archived_by": null
+     }
+    ],
+    "state": "closed",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 3,
+    "created_at": "2026-11-02T19:48:44Z",
+    "updated_at": "2026-11-03T17:12:14Z",
+    "closed_at": "2026-11-03T17:12:13Z",
+    "assignee": null,
+    "author_association": "CONTRIBUTOR",
+    "active_lock_reason": null,
+    "sub_issues_summary": {
+     "total": 0,
+     "completed": 0,
+     "percent_completed": 0
+    },
+    "issue_dependencies_summary": {
+     "blocked_by": 0,
+     "total_blocked_by": 0,
+     "blocking": 2,
+     "total_blocking": 2
+    },
+    "repository": {
+     "id": 1437080046,
+     "name": "slop-factory",
+     "full_name": "zaharchenko-evgeny/slop-factory",
+     "private": false,
+     "owner": {
+      "login": "zaharchenko-evgeny",
+      "id": 11453760,
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "description": "Slop factory: an agent software factory on Air Cloud",
+     "fork": false,
+     "created_at": "2026-10-28T12:50:40Z",
+     "updated_at": "2026-11-03T17:12:18Z",
+     "pushed_at": "2026-11-03T17:16:28Z",
+     "homepage": null,
+     "size": 2303,
+     "stargazers_count": 1,
+     "watchers_count": 1,
+     "language": "Python",
+     "has_issues": true,
+     "has_projects": true,
+     "has_downloads": false,
+     "has_wiki": false,
+     "has_pages": false,
+     "has_discussions": false,
+     "forks_count": 0,
+     "archived": false,
+     "disabled": false,
+     "open_issues_count": 30,
+     "license": null,
+     "allow_forking": true,
+     "is_template": false,
+     "web_commit_signoff_required": false,
+     "has_pull_requests": true,
+     "pull_request_creation_policy": "all",
+     "topics": [],
+     "visibility": "public",
+     "forks": 0,
+     "open_issues": 30,
+     "watchers": 1,
+     "default_branch": "main",
+     "permissions": {
+      "admin": false,
+      "maintain": false,
+      "push": false,
+      "triage": false,
+      "pull": false
+     }
+    },
+    "body": "## Parent\n\n#295 \u2014 Test fakes come from recordings of the real Air and GitHub services\n\n## What to build\n\nMake factory tests use recorded Air automation and Air cloud contracts so mismatched Air tool names, inputs, responses, and trigger payload wrappers fail against captured service data. Provide an operator-only refresh command for these Air recordings.\n\n## Acceptance criteria\n\n- [ ] `uv run --quiet factory/tests/test_contracts.py` passes `test_fake_mcp_rejects_unrecorded_tool` and `test_payload_fixtures_parse_for_every_trigger` using recordings under `factory/tests/contracts/` for the Air automation and Air cloud tool lists/input schemas, one response per factory-called Air tool, and the five named Air trigger events (`issues.labeled`, `pull_request.labeled`, `pull_request.merged`, `pull_request_review.submitted`, `issues.closed`).\n- [ ] The fake MCP server rejects a requested Air tool absent from the recordings.\n- [ ] `factory contracts refresh` refreshes the Air recordings from live services and strips tokens, emails, and secret-like ids; the command is documented as operator-only.\n- [ ] Recorded fixtures contain no tokens, verified by `test_recordings_contain_no_tokens` in `uv run --quiet factory/tests/test_contracts.py`.\n\nAffected repositories: slop-factory. Size: about 300 changed lines including tests and Air recordings.\n\n## Blocked by\n\nNone (can start immediately).\n\n<!-- factory:child of=295 -->",
+    "reactions": {
+     "total_count": 0,
+     "+1": 0,
+     "-1": 0,
+     "laugh": 0,
+     "hooray": 0,
+     "confused": 0,
+     "heart": 0,
+     "rocket": 0,
+     "eyes": 0
+    },
+    "performed_via_github_app": null,
+    "state_reason": "completed",
+    "pinned_comment": null
+   }
+  ],
+  "issues/{n}/dependencies/blocked_by": [
+   {
+    "id": 6169789787,
+    "number": 330,
+    "title": "Record Air service contracts and drive Air fakes from them",
+    "user": {
+     "login": "jetbrains-air[bot]",
+     "id": 274481315,
+     "type": "Bot",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "labels": [
+     {
+      "id": 12870046062,
+      "name": "risk:high",
+      "color": "BFD4F2",
+      "default": false,
+      "description": "",
+      "archived_at": null,
+      "archived_by": null
+     }
+    ],
+    "state": "closed",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 3,
+    "created_at": "2026-11-02T19:48:44Z",
+    "updated_at": "2026-11-03T17:12:14Z",
+    "closed_at": "2026-11-03T17:12:13Z",
+    "assignee": null,
+    "author_association": "CONTRIBUTOR",
+    "active_lock_reason": null,
+    "sub_issues_summary": {
+     "total": 0,
+     "completed": 0,
+     "percent_completed": 0
+    },
+    "issue_dependencies_summary": {
+     "blocked_by": 0,
+     "total_blocked_by": 0,
+     "blocking": 2,
+     "total_blocking": 2
+    },
+    "repository": {
+     "id": 1437080046,
+     "name": "slop-factory",
+     "full_name": "zaharchenko-evgeny/slop-factory",
+     "private": false,
+     "owner": {
+      "login": "zaharchenko-evgeny",
+      "id": 11453760,
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "description": "Slop factory: an agent software factory on Air Cloud",
+     "fork": false,
+     "created_at": "2026-10-28T12:50:40Z",
+     "updated_at": "2026-11-03T17:12:18Z",
+     "pushed_at": "2026-11-03T17:16:28Z",
+     "homepage": null,
+     "size": 2303,
+     "stargazers_count": 1,
+     "watchers_count": 1,
+     "language": "Python",
+     "has_issues": true,
+     "has_projects": true,
+     "has_downloads": false,
+     "has_wiki": false,
+     "has_pages": false,
+     "has_discussions": false,
+     "forks_count": 0,
+     "archived": false,
+     "disabled": false,
+     "open_issues_count": 30,
+     "license": null,
+     "allow_forking": true,
+     "is_template": false,
+     "web_commit_signoff_required": false,
+     "has_pull_requests": true,
+     "pull_request_creation_policy": "all",
+     "topics": [],
+     "visibility": "public",
+     "forks": 0,
+     "open_issues": 30,
+     "watchers": 1,
+     "default_branch": "main",
+     "permissions": {
+      "admin": false,
+      "maintain": false,
+      "push": false,
+      "triage": false,
+      "pull": false
+     }
+    },
+    "body": "## Parent\n\n#295 \u2014 Test fakes come from recordings of the real Air and GitHub services\n\n## What to build\n\nMake factory tests use recorded Air automation and Air cloud contracts so mismatched Air tool names, inputs, responses, and trigger payload wrappers fail against captured service data. Provide an operator-only refresh command for these Air recordings.\n\n## Acceptance criteria\n\n- [ ] `uv run --quiet factory/tests/test_contracts.py` passes `test_fake_mcp_rejects_unrecorded_tool` and `test_payload_fixtures_parse_for_every_trigger` using recordings under `factory/tests/contracts/` for the Air automation and Air cloud tool lists/input schemas, one response per factory-called Air tool, and the five named Air trigger events (`issues.labeled`, `pull_request.labeled`, `pull_request.merged`, `pull_request_review.submitted`, `issues.closed`).\n- [ ] The fake MCP server rejects a requested Air tool absent from the recordings.\n- [ ] `factory contracts refresh` refreshes the Air recordings from live services and strips tokens, emails, and secret-like ids; the command is documented as operator-only.\n- [ ] Recorded fixtures contain no tokens, verified by `test_recordings_contain_no_tokens` in `uv run --quiet factory/tests/test_contracts.py`.\n\nAffected repositories: slop-factory. Size: about 300 changed lines including tests and Air recordings.\n\n## Blocked by\n\nNone (can start immediately).\n\n<!-- factory:child of=295 -->",
+    "reactions": {
+     "total_count": 0,
+     "+1": 0,
+     "-1": 0,
+     "laugh": 0,
+     "hooray": 0,
+     "confused": 0,
+     "heart": 0,
+     "rocket": 0,
+     "eyes": 0
+    },
+    "performed_via_github_app": null,
+    "state_reason": "completed",
+    "pinned_comment": null
+   }
+  ],
+  "issues/{n}/dependencies/blocking": [
+   {
+    "id": 6160755466,
+    "number": 295,
+    "title": "Test fakes come from recordings of the real Air and GitHub services",
+    "user": {
+     "login": "zaharchenko-evgeny",
+     "id": 11453760,
+     "type": "User",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "labels": [
+     {
+      "id": 12870046062,
+      "name": "risk:high",
+      "color": "BFD4F2",
+      "default": false,
+      "description": "",
+      "archived_at": null,
+      "archived_by": null
+     },
+     {
+      "id": 12909981154,
+      "name": "factory:split",
+      "color": "c5def5",
+      "default": false,
+      "description": "Stage (factory.yaml tracker.stages)",
+      "archived_at": null,
+      "archived_by": null
+     }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 5,
+    "created_at": "2026-11-02T10:28:50Z",
+    "updated_at": "2026-11-03T16:09:51Z",
+    "closed_at": null,
+    "assignee": null,
+    "author_association": "OWNER",
+    "active_lock_reason": null,
+    "sub_issues_summary": {
+     "total": 2,
+     "completed": 1,
+     "percent_completed": 50
+    },
+    "issue_dependencies_summary": {
+     "blocked_by": 1,
+     "total_blocked_by": 3,
+     "blocking": 0,
+     "total_blocking": 0
+    },
+    "repository": {
+     "id": 1437080046,
+     "name": "slop-factory",
+     "full_name": "zaharchenko-evgeny/slop-factory",
+     "private": false,
+     "owner": {
+      "login": "zaharchenko-evgeny",
+      "id": 11453760,
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "description": "Slop factory: an agent software factory on Air Cloud",
+     "fork": false,
+     "created_at": "2026-10-28T12:50:40Z",
+     "updated_at": "2026-11-03T17:12:18Z",
+     "pushed_at": "2026-11-03T17:16:28Z",
+     "homepage": null,
+     "size": 2303,
+     "stargazers_count": 1,
+     "watchers_count": 1,
+     "language": "Python",
+     "has_issues": true,
+     "has_projects": true,
+     "has_downloads": false,
+     "has_wiki": false,
+     "has_pages": false,
+     "has_discussions": false,
+     "forks_count": 0,
+     "archived": false,
+     "disabled": false,
+     "open_issues_count": 30,
+     "license": null,
+     "allow_forking": true,
+     "is_template": false,
+     "web_commit_signoff_required": false,
+     "has_pull_requests": true,
+     "pull_request_creation_policy": "all",
+     "topics": [],
+     "visibility": "public",
+     "forks": 0,
+     "open_issues": 30,
+     "watchers": 1,
+     "default_branch": "main",
+     "permissions": {
+      "admin": false,
+      "maintain": false,
+      "push": false,
+      "triage": false,
+      "pull": false
+     }
+    },
+    "body": "[factory] Test fakes are generated from recordings of the real services. Guessed fakes let real mismatches pass the tests: the Air payload wrapper (#228), the MCP tool names (#288), and `list_automations`'s result shape.\n\n## Scope\n\n- **`factory/tests/contracts/`** holds recorded, secret-free samples:\n  - the air-automations and air-cloud tool lists with their input schemas (from `~/.pi/agent/mcp-cache.json`);\n  - one real response per tool the factory calls;\n  - one real Air trigger payload per event type (`issues.labeled`, `pull_request.labeled`, `pull_request.merged`, `pull_request_review.submitted`, `issues.closed`);\n  - the `gh api` responses the adapter reads.\n- **The fake MCP server and the stubbed `gh`** answer only from these recordings, and a call to a tool or endpoint that isn't recorded fails the test.\n- **`factory contracts refresh`** re-records them from the live services (operator only), stripping tokens, emails and ids that look like secrets.\n\n## Acceptance checks\n\n- [ ] `uv run --quiet factory/tests/test_contracts.py` passes:\n  - `test_fake_mcp_rejects_unrecorded_tool`;\n  - `test_payload_fixtures_parse_for_every_trigger`;\n  - `test_recordings_contain_no_tokens`\n- [ ] `uv run --quiet factory/tests/test_deploy.py` and `test_gate_github.py` pass on the recorded fakes\n- [ ] The `state-machine` check from `factory.descriptor.yaml` passes\n\nAffected repositories: slop-factory. Size: about 250 lines with tests, plus recordings.\n\nFactory-Run: manual:pi-session-2026-10-31\n\n\nOperator answer (2 November): recorded fixtures count toward the size. Split this ticket at triage into independently deliverable slices (for example: the recorder and Air fakes first, then the GitHub fakes), each under about 400 lines.\n",
+    "reactions": {
+     "total_count": 0,
+     "+1": 0,
+     "-1": 0,
+     "laugh": 0,
+     "hooray": 0,
+     "confused": 0,
+     "heart": 0,
+     "rocket": 0,
+     "eyes": 0
+    },
+    "performed_via_github_app": null,
+    "state_reason": null,
+    "pinned_comment": null
+   }
+  ],
+  "pulls?state=all&per_page=100": [
+   {
+    "id": 5141513807,
+    "number": 388,
+    "state": "open",
+    "locked": false,
+    "title": "#387 Reconcile also after every factory label change",
+    "user": {
+     "login": "jetbrains-air[bot]",
+     "id": 274481315,
+     "type": "Bot",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "body": "[factory] Adds `issues` (labeled, unlabeled, closed) and `pull_request_review` (submitted) triggers to the `reconcile` node; regenerated workflow and charts. Schedule kept.\n\nCloses #387\n\nProduced by Air Automations. Name: [Slop factory] implement-mid / Run: https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e539f449-950c-4af9-a550-11ca8d65ed19?run=303438d9-5e5f-4a56-bbfd-b1f8b79a5e70\n\n\ud83e\udd16 Generated with [Claude Code](https://claude.com/claude-code)\n\nFactory-Run: https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e539f449-950c-4af9-a550-11ca8d65ed19?run=303438d9-5e5f-4a56-bbfd-b1f8b79a5e70",
+    "created_at": "2026-11-03T17:16:31Z",
+    "updated_at": "2026-11-03T17:17:20Z",
+    "closed_at": null,
+    "merged_at": null,
+    "merge_commit_sha": "c9dba4dfb97d96dda3e71a24126d9cc6a9b38351",
+    "assignees": [],
+    "requested_reviewers": [],
+    "requested_teams": [],
+    "labels": [
+     {
+      "id": 12915490096,
+      "name": "factory:ci-green",
+      "color": "0e8a16",
+      "default": false,
+      "description": "Factory: CI passed at the PR head",
+      "archived_at": null,
+      "archived_by": null
+     },
+     {
+      "id": 12941920899,
+      "name": "factory:review-full",
+      "color": "0e8a16",
+      "default": false,
+      "description": "",
+      "archived_at": null,
+      "archived_by": null
+     }
+    ],
+    "milestone": null,
+    "draft": false,
+    "head": {
+     "label": "zaharchenko-evgeny:ez/387-reconcile-also-after-every",
+     "ref": "ez/387-reconcile-also-after-every",
+     "sha": "d6c39d0600f3d97db31da540f07df91f2ba5454b",
+     "user": {
+      "login": "zaharchenko-evgeny",
+      "id": 11453760,
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "repo": {
+      "id": 1437080046,
+      "name": "slop-factory",
+      "full_name": "zaharchenko-evgeny/slop-factory",
+      "private": false,
+      "owner": {
+       "login": "zaharchenko-evgeny",
+       "id": 11453760,
+       "type": "User",
+       "user_view_type": "public",
+       "site_admin": false
+      },
+      "description": "Slop factory: an agent software factory on Air Cloud",
+      "fork": false,
+      "created_at": "2026-10-28T12:50:40Z",
+      "updated_at": "2026-11-03T17:12:18Z",
+      "pushed_at": "2026-11-03T17:16:28Z",
+      "homepage": null,
+      "size": 2303,
+      "stargazers_count": 1,
+      "watchers_count": 1,
+      "language": "Python",
+      "has_issues": true,
+      "has_projects": true,
+      "has_downloads": false,
+      "has_wiki": false,
+      "has_pages": false,
+      "has_discussions": false,
+      "forks_count": 0,
+      "archived": false,
+      "disabled": false,
+      "open_issues_count": 30,
+      "license": null,
+      "allow_forking": true,
+      "is_template": false,
+      "web_commit_signoff_required": false,
+      "has_pull_requests": true,
+      "pull_request_creation_policy": "all",
+      "topics": [],
+      "visibility": "public",
+      "forks": 0,
+      "open_issues": 30,
+      "watchers": 1,
+      "default_branch": "main"
+     }
+    },
+    "base": {
+     "label": "zaharchenko-evgeny:main",
+     "ref": "main",
+     "sha": "670392d60b5d50386191864dd6d7d35762033cf0",
+     "user": {
+      "login": "zaharchenko-evgeny",
+      "id": 11453760,
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "repo": {
+      "id": 1437080046,
+      "name": "slop-factory",
+      "full_name": "zaharchenko-evgeny/slop-factory",
+      "private": false,
+      "owner": {
+       "login": "zaharchenko-evgeny",
+       "id": 11453760,
+       "type": "User",
+       "user_view_type": "public",
+       "site_admin": false
+      },
+      "description": "Slop factory: an agent software factory on Air Cloud",
+      "fork": false,
+      "created_at": "2026-10-28T12:50:40Z",
+      "updated_at": "2026-11-03T17:12:18Z",
+      "pushed_at": "2026-11-03T17:16:28Z",
+      "homepage": null,
+      "size": 2303,
+      "stargazers_count": 1,
+      "watchers_count": 1,
+      "language": "Python",
+      "has_issues": true,
+      "has_projects": true,
+      "has_downloads": false,
+      "has_wiki": false,
+      "has_pages": false,
+      "has_discussions": false,
+      "forks_count": 0,
+      "archived": false,
+      "disabled": false,
+      "open_issues_count": 30,
+      "license": null,
+      "allow_forking": true,
+      "is_template": false,
+      "web_commit_signoff_required": false,
+      "has_pull_requests": true,
+      "pull_request_creation_policy": "all",
+      "topics": [],
+      "visibility": "public",
+      "forks": 0,
+      "open_issues": 30,
+      "watchers": 1,
+      "default_branch": "main"
+     }
+    },
+    "author_association": "CONTRIBUTOR",
+    "auto_merge": null,
+    "assignee": null,
+    "active_lock_reason": null
+   }
+  ],
+  "pulls?state=closed&base={base}&sort=updated&direction=desc&per_page=5": [
+   {
+    "id": 5140672434,
+    "number": 385,
+    "state": "closed",
+    "locked": false,
+    "title": "#329 Compare deploy environments with Air response shape",
+    "user": {
+     "login": "jetbrains-air[bot]",
+     "id": 274481315,
+     "type": "Bot",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "body": "[factory] Fix environment diffing against the actual Air Cloud response shape. Normalize variables, secrets, domains, and VM fields, and compare the three recorded environments in a regression test. Fields omitted from get_environment are left unchanged; broader live domain allowlists are preserved.\n\nThe operator live dry-run is still required after merge; this run has no Air MCP credentials.\n\nRefs #329\n\nProduced by Air Automations. Name: [Slop factory] implement-cheap / Run: https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/b139b87b-8ac7-483a-9ee2-10d8d5252a39?run=d8faea9e-4208-472e-b4b0-0b15adbf59a9\nFactory-Run: https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/b139b87b-8ac7-483a-9ee2-10d8d5252a39?run=d8faea9e-4208-472e-b4b0-0b15adbf59a9",
+    "created_at": "2026-11-03T16:18:21Z",
+    "updated_at": "2026-11-03T16:34:20Z",
+    "closed_at": "2026-11-03T16:34:20Z",
+    "merged_at": "2026-11-03T16:34:20Z",
+    "merge_commit_sha": "fcd4daf0ae58b78c59d6968656a85fcde0db1de3",
+    "assignees": [],
+    "requested_reviewers": [],
+    "requested_teams": [],
+    "labels": [
+     {
+      "id": 12915490096,
+      "name": "factory:ci-green",
+      "color": "0e8a16",
+      "default": false,
+      "description": "Factory: CI passed at the PR head",
+      "archived_at": null,
+      "archived_by": null
+     }
+    ],
+    "milestone": null,
+    "draft": false,
+    "head": {
+     "label": "zaharchenko-evgeny:ez/329-factory-deploy-environment-diff-rerun",
+     "ref": "ez/329-factory-deploy-environment-diff-rerun",
+     "sha": "2790bc31930a5d60b0383efa4827adfbb0b689f1",
+     "user": {
+      "login": "zaharchenko-evgeny",
+      "id": 11453760,
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "repo": {
+      "id": 1437080046,
+      "name": "slop-factory",
+      "full_name": "zaharchenko-evgeny/slop-factory",
+      "private": false,
+      "owner": {
+       "login": "zaharchenko-evgeny",
+       "id": 11453760,
+       "type": "User",
+       "user_view_type": "public",
+       "site_admin": false
+      },
+      "description": "Slop factory: an agent software factory on Air Cloud",
+      "fork": false,
+      "created_at": "2026-10-28T12:50:40Z",
+      "updated_at": "2026-11-03T17:12:18Z",
+      "pushed_at": "2026-11-03T17:16:28Z",
+      "homepage": null,
+      "size": 2303,
+      "stargazers_count": 1,
+      "watchers_count": 1,
+      "language": "Python",
+      "has_issues": true,
+      "has_projects": true,
+      "has_downloads": false,
+      "has_wiki": false,
+      "has_pages": false,
+      "has_discussions": false,
+      "forks_count": 0,
+      "archived": false,
+      "disabled": false,
+      "open_issues_count": 30,
+      "license": null,
+      "allow_forking": true,
+      "is_template": false,
+      "web_commit_signoff_required": false,
+      "has_pull_requests": true,
+      "pull_request_creation_policy": "all",
+      "topics": [],
+      "visibility": "public",
+      "forks": 0,
+      "open_issues": 30,
+      "watchers": 1,
+      "default_branch": "main"
+     }
+    },
+    "base": {
+     "label": "zaharchenko-evgeny:main",
+     "ref": "main",
+     "sha": "f49886c080d31acb93f9439d31d256f5f0e7c4b8",
+     "user": {
+      "login": "zaharchenko-evgeny",
+      "id": 11453760,
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "repo": {
+      "id": 1437080046,
+      "name": "slop-factory",
+      "full_name": "zaharchenko-evgeny/slop-factory",
+      "private": false,
+      "owner": {
+       "login": "zaharchenko-evgeny",
+       "id": 11453760,
+       "type": "User",
+       "user_view_type": "public",
+       "site_admin": false
+      },
+      "description": "Slop factory: an agent software factory on Air Cloud",
+      "fork": false,
+      "created_at": "2026-10-28T12:50:40Z",
+      "updated_at": "2026-11-03T17:12:18Z",
+      "pushed_at": "2026-11-03T17:16:28Z",
+      "homepage": null,
+      "size": 2303,
+      "stargazers_count": 1,
+      "watchers_count": 1,
+      "language": "Python",
+      "has_issues": true,
+      "has_projects": true,
+      "has_downloads": false,
+      "has_wiki": false,
+      "has_pages": false,
+      "has_discussions": false,
+      "forks_count": 0,
+      "archived": false,
+      "disabled": false,
+      "open_issues_count": 30,
+      "license": null,
+      "allow_forking": true,
+      "is_template": false,
+      "web_commit_signoff_required": false,
+      "has_pull_requests": true,
+      "pull_request_creation_policy": "all",
+      "topics": [],
+      "visibility": "public",
+      "forks": 0,
+      "open_issues": 30,
+      "watchers": 1,
+      "default_branch": "main"
+     }
+    },
+    "author_association": "CONTRIBUTOR",
+    "auto_merge": null,
+    "assignee": null,
+    "active_lock_reason": null
+   }
+  ],
+  "pulls/{n}": {
+   "id": 5140605098,
+   "number": 384,
+   "state": "closed",
+   "locked": false,
+   "title": "#330 Drive Air fakes from recorded contracts",
+   "user": {
+    "login": "jetbrains-air[bot]",
+    "id": 274481315,
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+   },
+   "body": "Closes #330\n\nAdds `factory/contracts.py`: a fake MCP server driven by `factory/tests/contracts/air-mcp.json` that rejects unrecorded tools, missing or unknown arguments; `factory contracts refresh` (operator-only, redacts tokens/emails/secret keys); derived fixtures for `pull_request.labeled`, `pull_request.merged`, `issues.closed`; `factory/tests/test_contracts.py`.\n\nChecks: `uv run --quiet factory/tests/test_contracts.py` passes. `test_readme` still fails on `team_repository` as it does on main. Changed lines about 200 excluding the generated payload fixtures. `refresh` was not run (needs operator Air OAuth).\n\nProduced by Air Automations. Name: [Slop factory] implement-mid / Run: https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/e539f449-950c-4af9-a550-11ca8d65ed19?run=cd8550f5-85b5-43c7-a2f8-bf7aa219a234",
+   "labels": [
+    {
+     "id": 12915490096,
+     "name": "factory:ci-green",
+     "description": "Factory: CI passed at the PR head",
+     "color": "0e8a16",
+     "default": false,
+     "archived_at": null,
+     "archived_by": null
+    }
+   ],
+   "milestone": null,
+   "active_lock_reason": null,
+   "created_at": "2026-11-03T16:13:52Z",
+   "updated_at": "2026-11-03T17:12:17Z",
+   "closed_at": "2026-11-03T17:12:11Z",
+   "merged_at": "2026-11-03T17:12:11Z",
+   "merge_commit_sha": "670392d60b5d50386191864dd6d7d35762033cf0",
+   "assignee": {
+    "login": "zaharchenko-evgeny",
+    "id": 11453760,
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+   },
+   "assignees": [
+    {
+     "login": "zaharchenko-evgeny",
+     "id": 11453760,
+     "type": "User",
+     "user_view_type": "public",
+     "site_admin": false
+    }
+   ],
+   "requested_reviewers": [],
+   "requested_teams": [],
+   "head": {
+    "label": "zaharchenko-evgeny:ez/330-air-fakes",
+    "ref": "ez/330-air-fakes",
+    "repo": {
+     "id": 1437080046,
+     "name": "slop-factory",
+     "full_name": "zaharchenko-evgeny/slop-factory",
+     "owner": {
+      "login": "zaharchenko-evgeny",
+      "id": 11453760,
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "private": false,
+     "fork": false,
+     "archived": false,
+     "disabled": false,
+     "description": "Slop factory: an agent software factory on Air Cloud",
+     "homepage": null,
+     "language": "Python",
+     "visibility": "public",
+     "is_template": false,
+     "topics": [],
+     "forks_count": 0,
+     "forks": 0,
+     "stargazers_count": 1,
+     "watchers_count": 1,
+     "watchers": 1,
+     "open_issues_count": 30,
+     "open_issues": 30,
+     "size": 2303,
+     "default_branch": "main",
+     "has_issues": true,
+     "has_projects": true,
+     "has_wiki": false,
+     "has_pages": false,
+     "has_downloads": false,
+     "has_discussions": false,
+     "has_pull_requests": true,
+     "pushed_at": "2026-11-03T17:16:28Z",
+     "created_at": "2026-10-28T12:50:40Z",
+     "updated_at": "2026-11-03T17:12:18Z",
+     "allow_forking": true,
+     "web_commit_signoff_required": false,
+     "pull_request_creation_policy": "all",
+     "license": null
+    },
+    "sha": "6dfb0a18ffe33db6963b9391858b493294ed29e1",
+    "user": {
+     "login": "zaharchenko-evgeny",
+     "id": 11453760,
+     "type": "User",
+     "user_view_type": "public",
+     "site_admin": false
+    }
+   },
+   "base": {
+    "label": "zaharchenko-evgeny:main",
+    "ref": "main",
+    "repo": {
+     "id": 1437080046,
+     "name": "slop-factory",
+     "full_name": "zaharchenko-evgeny/slop-factory",
+     "owner": {
+      "login": "zaharchenko-evgeny",
+      "id": 11453760,
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "private": false,
+     "fork": false,
+     "archived": false,
+     "disabled": false,
+     "description": "Slop factory: an agent software factory on Air Cloud",
+     "homepage": null,
+     "language": "Python",
+     "visibility": "public",
+     "is_template": false,
+     "topics": [],
+     "forks_count": 0,
+     "forks": 0,
+     "stargazers_count": 1,
+     "watchers_count": 1,
+     "watchers": 1,
+     "open_issues_count": 30,
+     "open_issues": 30,
+     "size": 2303,
+     "default_branch": "main",
+     "has_issues": true,
+     "has_projects": true,
+     "has_wiki": false,
+     "has_pages": false,
+     "has_downloads": false,
+     "has_discussions": false,
+     "has_pull_requests": true,
+     "pushed_at": "2026-11-03T17:16:28Z",
+     "created_at": "2026-10-28T12:50:40Z",
+     "updated_at": "2026-11-03T17:12:18Z",
+     "allow_forking": true,
+     "web_commit_signoff_required": false,
+     "pull_request_creation_policy": "all",
+     "license": null
+    },
+    "sha": "fcd4daf0ae58b78c59d6968656a85fcde0db1de3",
+    "user": {
+     "login": "zaharchenko-evgeny",
+     "id": 11453760,
+     "type": "User",
+     "user_view_type": "public",
+     "site_admin": false
+    }
+   },
+   "author_association": "CONTRIBUTOR",
+   "auto_merge": null,
+   "draft": false,
+   "merged": true,
+   "mergeable": null,
+   "rebaseable": null,
+   "mergeable_state": "unknown",
+   "merged_by": {
+    "login": "zaharchenko-evgeny",
+    "id": 11453760,
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+   },
+   "comments": 0,
+   "review_comments": 0,
+   "maintainer_can_modify": false,
+   "commits": 7,
+   "additions": 1635,
+   "deletions": 3,
+   "changed_files": 10
+  },
+  "pulls/{n}/reviews": [
+   {
+    "id": 5755692919,
+    "user": {
+     "login": "jetbrains-air[bot]",
+     "id": 274481315,
+     "type": "Bot",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "body": "[factory] Adds recording-backed Air fakes and operator refresh. Five contract tests pass. B1: secrets survive inside JSON-encoded MCP text responses; verified with synthetic values. Risk high; docs impact none. Produced by Air Automations. Name: [Slop factory] review-structure-security / Run: https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/df336d25-0631-4ab6-ab91-7b270ac84d29?run=9eb3881f-c0dd-4f4f-89b7-4726fe099ad1\n\n**B1** factory/contracts.py:25 \u2014 The refresh redactor does not inspect JSON inside MCP content[].text. The ticket requires refresh to \"strip tokens, emails, and secret-like ids\". refresh passes raw tools/call results to redact; deploy.Mcp.call confirms their text contains JSON. A password or opaque token under a secret-named key in that JSON survives the string regex and is written into the recording, risking publication when the operator commits it. Decode JSON text blocks, redact their parsed contents, and re-encode; add a regression test with an opaque secret in a real MCP response wrapper.\n\n<!-- factory:review focus=structure-security round=1 verdict=changes -->\n\n<!-- factory:agent-notes\n{\"for\": \"fixer\", \"files\": [\"factory/contracts.py\", \"factory/tests/test_contracts.py\"], \"repro\": \"python -c 'import sys,json; sys.path.insert(0,\\\"factory\\\"); import contracts; x={\\\"content\\\":[{\\\"type\\\":\\\"text\\\",\\\"text\\\":json.dumps({\\\"api_token\\\":\\\"synthetic-private-value\\\"})}]}; assert \\\"synthetic-private-value\\\" not in json.dumps(contracts.redact(x))' \"}\n-->",
+    "state": "COMMENTED",
+    "author_association": "CONTRIBUTOR",
+    "is_copilot_code_review": false,
+    "copilot_code_review_effort": null,
+    "submitted_at": "2026-11-03T16:16:57Z",
+    "commit_id": "1254b98c62713a2f895df42deee91855b85bc26b"
+   }
+  ],
+  "commits/{sha}": {
+   "sha": "6dfb0a18ffe33db6963b9391858b493294ed29e1",
+   "commit": {
+    "author": {
+     "name": "jetbrains-air[bot]",
+     "email": "274481315+jetbrains-air[bot]@users.noreply.github.com",
+     "date": "2026-11-03T16:44:48Z"
+    },
+    "committer": {
+     "name": "GitHub",
+     "email": "<email>",
+     "date": "2026-11-03T16:44:48Z"
+    },
+    "message": "Merge branch 'main' into ez/330-air-fakes",
+    "tree": {
+     "sha": "513e2bd6396fc6d637e0d0a8968510d9ab359d2a"
+    },
+    "comment_count": 0,
+    "verification": {
+     "verified": true,
+     "reason": "valid",
+     "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq6g+ACRC1aQ7uu5UhlAAAB0EQABHjaqyWQdhQkCvR8mFdJubE\nDwogZqLiaWrbpEthTDdPLTTChLim5obEfZmLPYaE06IANVVVQYPq5XmdhgZFE1Is\nVnql+75Jf3gXpiZGExu+9KfLWrFr/J/iqF2vG4YUZtRvvgFGpYtfLMlgDE1+6Znj\nFMZMdjLhcVabHzH6D3Mkgp8XZq6K5BNYvhT+BE3bldKOFxmQA1ElNT00akeL/JAh\nzkezCRTI1J3wQeDQlxyzTj+AxjwlND1QguMIWEVt1RsODlHqXTwis8WMPy/brKeX\nH0NGTovrTZSwAkWSVvRK+wL1Txh5BvWD5Vsu4vh8mFNknrwgwXya354HbXoJnGHO\nW67BePV/1vmtQydXQV4C7DYqbWc+iELmE4U/4aNZiWnXTQQYj32E+tLPDwdzBdiV\n1+sfIFfB1iWtNyFJ+epd5vg4YluMwLR5S7DjSUvuD2L3Dv2NIR/rzlMNEaZm1dd8\nbZeS8050tRxJNEZgIvvVP/fNzRSC4OUBMWqM20NmIO5/U8sZ/QloBFLnhu4XRSqI\n9bFUUVpDJz3bmPT73ELICtdavZm6De3HJcFGGg8Rk6ZG3E5bjg+N7oHn69mAHDuX\n+XjRQoPFLZKCWs1eCLDRoTM983x1Z1oI1CWhJ/KNQ7Qvyfs7M6DUq+O8+biu+ikN\nRZIewbQ0pNVdvZ485ZOe\n=gj0X\n-----END PGP SIGNATURE-----\n",
+     "payload": "tree 513e2bd6396fc6d637e0d0a8968510d9ab359d2a\nparent 05ddd21b9b36b3e57007372130558f0ef260a0c7\nparent fcd4daf0ae58b78c59d6968656a85fcde0db1de3\nauthor jetbrains-air[bot] <274481315+jetbrains-air[bot]@users.noreply.github.com> 1793724288 +0000\ncommitter GitHub <<email>> 1793724288 +0000\n\nMerge branch 'main' into ez/330-air-fakes",
+     "verified_at": "2026-11-03T16:44:49Z"
+    }
+   },
+   "author": {
+    "login": "jetbrains-air[bot]",
+    "id": 274481315,
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+   },
+   "committer": {
+    "login": "web-flow",
+    "id": 19864447,
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+   },
+   "parents": [
+    {
+     "sha": "05ddd21b9b36b3e57007372130558f0ef260a0c7"
+    },
+    {
+     "sha": "fcd4daf0ae58b78c59d6968656a85fcde0db1de3"
+    }
+   ],
+   "stats": {
+    "total": 50,
+    "additions": 32,
+    "deletions": 18
+   },
+   "files": [
+    {
+     "sha": "a718ca4c0935508ba7c82a609edc8dfc73aa82ed",
+     "filename": "factory/deploy.py",
+     "status": "modified",
+     "additions": 11,
+     "deletions": 2,
+     "changes": 13,
+     "patch": "@@ -360,6 +360,8 @@ def _items(res) -> list[dict]:\n def same(key: str, have, want) -> bool:\n     if key == \"repository\" and isinstance(have, dict) and have.keys() == {\"fullName\"}:\n         return have[\"fullName\"] == want[\"fullName\"]\n+    if key == \"domains\":\n+        return set(want or []) <= set(have or [])\n     return have == want\n \n \n@@ -372,6 +374,10 @@ def environment_detail(x: dict) -> dict:\n         x[\"domains\"] = x.pop(\"allowedDomains\")\n     if \"instanceTypeKey\" in x:\n         x[\"vm\"] = x.pop(\"instanceTypeKey\") or \"default\"\n+    if isinstance(x.get(\"variables\"), list):\n+        x[\"variables\"] = {v[\"key\"]: v[\"value\"] for v in x[\"variables\"] if not v.get(\"isSecret\")}\n+    if \"personalSecrets\" in x:\n+        x[\"secrets\"] = [s[\"name\"] for s in x.pop(\"personalSecrets\")]\n     return x\n \n \n@@ -387,7 +393,8 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:\n             p = {k: v for k, v in raw.items() if k != \"spec\"}\n             x = have.pop(p[\"name\"], None) or have.pop(new_to_old.get(p[\"name\"]), None)\n             want = {**p, \"environmentConfigId\": env_ids.get(p.get(\"environmentConfigId\"), p.get(\"environmentConfigId\"))}\n-            changed = [k for k in p if x is not None and not same(k, x.get(k), want[k])]\n+            changed = [k for k in p if x is not None and (kind != \"environment\" or k in x)\n+                       and not same(k, x.get(k), want[k])]\n             if x is None or changed:\n                 out.append((\"create\" if x is None else \"update\", kind, p[\"name\"], p, x, changed))\n         out += [(\"delete\", kind, n, None, x, []) for n, x in have.items()]\n@@ -419,12 +426,14 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url: str\n     \"\"\"Environments before automations on create and update, after them on delete.\"\"\"\n     order = {\"create\": 0, \"update\": 0, \"delete\": 1}\n     env_ids = None\n-    for action, kind, name, p, x, _ in sorted(changes, key=lambda c: (order[c[0]], (c[1] == \"automation\") == (c[0] != \"delete\"))):\n+    for action, kind, name, p, x, changed in sorted(changes, key=lambda c: (order[c[0]], (c[1] == \"automation\") == (c[0] != \"delete\"))):\n         client, noun = (cloud, \"environment\") if kind == \"environment\" else (automations, \"automation\")\n         if p and kind == \"automation\":  # the environment id exists only after its create\n             env_ids = env_ids or {e[\"name\"]: e[\"id\"] for e in _items(cloud.call(\"list_environments\", {\"repositoryUrl\": repo_url}))}\n             p = {**p, \"environmentConfigId\": env_ids[p[\"environmentConfigId\"]]}\n         p = {k: v for k, v in (p or {}).items() if k != \"spec\"}\n+        if action == \"update\":\n+            p = {k: v for k, v in p.items() if k in changed}\n         tool_action = (\"edit\" if kind == \"environment\" else \"update\") if action == \"update\" else action\n         id_key = \"automationId\" if kind == \"automation\" else \"id\"\n         args = {**p, id_key: x[\"id\"]} if action == \"update\" else p if p else {id_key: x[\"id\"]}"
+    },
+    {
+     "sha": "dac8071e2f7be984c3e2e653ea4d4d69cbef562c",
+     "filename": "factory/tests/test_deploy.py",
+     "status": "modified",
+     "additions": 21,
+     "deletions": 16,
+     "changes": 37,
+     "patch": "@@ -114,18 +114,14 @@ def test_read_state_ignores_wrapped_structured_content(self):\n             self.read_recorded()\n \n     def test_unchanged_environment_is_unchanged(self):\n-        recorded = json.loads((FIX / \"mcp-recorded.json\").read_text())\n-        get_environment = recorded[\"air-cloud.get_environment\"][\"7462a87c-fbe2-40d6-9b28-f3f5c4fc1ca9\"]\n-        have = deploy.environment_detail(json.loads(get_environment[\"content\"][0][\"text\"]))\n-        plan = {\"prefix\": \"[Slop factory] \", \"automations\": [], \"environments\": [{\n-            \"name\": \"[Slop factory] read\",\n-            \"repository\": \"https://github.com/zaharchenko-evgeny/offline-eval-factory\",\n-            \"startup\": \".air/cloud/startup.sh\", \"variables\": {\"FACTORY_ENV\": \"read\"}, \"secrets\": [],\n-            \"domains\": [\"github.com\", \"api.github.com\", \"objects.githubusercontent.com\",\n-                        \"release-assets.githubusercontent.com\", \"*.blob.core.windows.net\",\n-                        \"pypi.org\", \"files.pythonhosted.org\"], \"vm\": \"default\",\n-        }]}\n-        self.assertEqual(deploy.diff(plan, [], [have]), [])\n+        contract = json.loads((HERE / \"contracts/air-mcp.json\").read_text())\n+        responses = contract[\"servers\"][\"air-cloud\"][\"responses\"]\n+        plan = deploy.plan_air(nodes.load(), {**cfg.load(), \"team_repository\":\n+                                              \"https://github.com/zaharchenko-evgeny/slop-eval-factory\"})\n+        plan = {\"prefix\": plan[\"prefix\"], \"environments\": plan[\"environments\"], \"automations\": []}\n+        envs = [deploy.environment_detail(json.loads(responses[f\"get_environment:{name}\"][\"content\"][0][\"text\"]))\n+                for name in (\"read\", \"write\", \"ops\")]\n+        self.assertEqual(deploy.diff(plan, [], envs), [])\n \n     def read_recorded(self):\n         tmp = Path(tempfile.mkdtemp())\n@@ -193,7 +189,7 @@ def test_apply_updates_in_place(self):\n                   [{\"id\": \"e1\", \"name\": \"[F] read\", \"startup\": \"x\", \"repository\": \"https://github.com/o/r\"}])\n         self.assertEqual(self.run_deploy(\"--apply\"), 0)\n         self.assertEqual(self.calls(\"automation\"), [[\"update_automation\", {\n-            \"name\": \"[F] a\", \"prompt\": \"new\", \"environmentConfigId\": \"e1\", \"automationId\": \"a1\"}]])\n+            \"prompt\": \"new\", \"automationId\": \"a1\"}]])\n         self.assertNotIn(\"spec\", self.calls(\"automation\")[0][1])\n         self.assertEqual(self.calls(\"environment\"), [])\n \n@@ -204,14 +200,23 @@ def test_apply_renames_in_place(self):\n                   [{\"id\": \"e1\", \"name\": \"[F] read\", \"startup\": \"x\", \"repository\": \"https://github.com/o/r\"}])\n         self.assertEqual(self.run_deploy(\"--apply\", allow_delete=True), 0)\n         self.assertEqual(self.calls(\"automation\"), [[\"update_automation\", {\n-            \"name\": \"[F] a\", \"prompt\": \"new\", \"environmentConfigId\": \"e1\", \"automationId\": \"a1\"}]])\n+            \"name\": \"[F] a\", \"automationId\": \"a1\"}]])\n \n     def test_apply_edits_environment(self):\n         self.seed([{\"id\": \"a1\", \"name\": \"[F] a\", \"prompt\": \"new\", \"environmentConfigId\": \"e1\"}],\n                   [{\"id\": \"e1\", \"name\": \"[F] read\", \"startup\": \"old\", \"repository\": \"https://github.com/o/r\"}])\n         self.assertEqual(self.run_deploy(\"--apply\"), 0)\n-        self.assertEqual(self.calls(\"environment\"), [[\"edit_environment\", {\n-            \"name\": \"[F] read\", \"startup\": \"x\", \"repository\": \"https://github.com/o/r\", \"id\": \"e1\"}]])\n+        self.assertEqual(self.calls(\"environment\"), [[\"edit_environment\", {\"startup\": \"x\", \"id\": \"e1\"}]])\n+\n+    def test_environment_update_preserves_unplanned_live_domains(self):\n+        self.plan[\"environments\"][0][\"vm\"] = \"new\"\n+        self.seed([], [{\"id\": \"e1\", \"name\": \"[F] read\", \"startup\": \"x\",\n+                        \"repository\": \"https://github.com/o/r\", \"vm\": \"old\",\n+                        \"domains\": [\"github.com\", \"*.blob.core.windows.net\"]}])\n+        self.assertEqual(self.run_deploy(\"--apply\"), 0)\n+        self.assertEqual(self.calls(\"environment\"), [[\"edit_environment\", {\"vm\": \"new\", \"id\": \"e1\"}]])\n+        live = json.loads(self.state[\"environment\"].read_text())[\"items\"][0]\n+        self.assertEqual(live[\"domains\"], [\"github.com\", \"*.blob.core.windows.net\"])\n \n     def test_main_rename_flag_updates_in_place(self):\n         self.seed([{\"id\": \"a1\", \"name\": \"[Slop factory] old-intake\"}], [])"
+    }
+   ]
+  },
+  "compare/{base}...{head}": {
+   "base_commit": {
+    "sha": "670392d60b5d50386191864dd6d7d35762033cf0",
+    "commit": {
+     "author": {
+      "name": "Evgeny Zakharchenko",
+      "email": "<email>",
+      "date": "2026-11-03T17:12:11Z"
+     },
+     "committer": {
+      "name": "GitHub",
+      "email": "<email>",
+      "date": "2026-11-03T17:12:11Z"
+     },
+     "message": "Merge pull request #384 from zaharchenko-evgeny/ez/330-air-fakes\n\n#330 Drive Air fakes from recorded contracts",
+     "tree": {
+      "sha": "513e2bd6396fc6d637e0d0a8968510d9ab359d2a"
+     },
+     "comment_count": 0,
+     "verification": {
+      "verified": true,
+      "reason": "valid",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq6hXrCRC1aQ7uu5UhlAAAOG4QAKZp6g5KnTNnx0n3dqb/R9rT\nqpinV/hvI8Hl14/8ZaitvOorgr/8DrVmxsrLt5XJzNP5YV6yYj8RsHg15xyoDuIT\nBKQRYAcYp5HN0KZsqefADaUiP3PV46ytuun2lgovgehe3tB32eeVpHcnc0ZfPzwe\ng2D27CHsBLhzFbmpM5dR0eySPNk9uff/O2jcEGFMm7t/DwgPLYf28e98IR5Wic0H\nOnaBYmI2Vz1jrHmgm1+rjx+nqoPwG0Rj+jDVlgiuWPRA21+24Zn0kSNdXJolzOAl\nC+6afcEp0wGc7SuiuCGdISYZEvn5GyQYcLd4FzZyarQQNpWLCpxDwkZM0/BcrIUa\nTY7leeZbzxAaLAoPd3dxa0O4373Q3crWMUVCnIpxS+OytaKFrvZfAtNjH+k2E4IY\nsSLOdeCRTuset3KpHZ9wLA7ngPC0XkbkZroI+N+vXVACFnMBZlTDH+ZdB/jSTCPl\nAxbKJK+J0xiAWIbZcX0Qt3/LkYkk3+fq6dZrd1fylh+oqfI/BhKYE0SJpMF2Kich\nwcgU2r6XijK5KXLpHYSJX9pDKl27YDzsxQex5k32LofNo4BntXmkN2ExR8SgG9TK\nSefmMfeaCQffFzy2Q3VkKR/iPbOfSUiaqpki1tUMp2HxmL9220X/+BcgLDGULKbP\nhFBOKZ61+J+BJx0T+cXb\n=uYyb\n-----END PGP SIGNATURE-----\n",
+      "payload": "tree 513e2bd6396fc6d637e0d0a8968510d9ab359d2a\nparent fcd4daf0ae58b78c59d6968656a85fcde0db1de3\nparent 6dfb0a18ffe33db6963b9391858b493294ed29e1\nauthor Evgeny Zakharchenko <<email>> 1793725931 +0100\ncommitter GitHub <<email>> 1793725931 +0100\n\nMerge pull request #384 from zaharchenko-evgeny/ez/330-air-fakes\n\n#330 Drive Air fakes from recorded contracts",
+      "verified_at": "2026-11-03T17:12:11Z"
+     }
+    },
+    "author": {
+     "login": "zaharchenko-evgeny",
+     "id": 11453760,
+     "type": "User",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "committer": {
+     "login": "web-flow",
+     "id": 19864447,
+     "type": "User",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "parents": [
+     {
+      "sha": "fcd4daf0ae58b78c59d6968656a85fcde0db1de3"
+     },
+     {
+      "sha": "6dfb0a18ffe33db6963b9391858b493294ed29e1"
+     }
+    ]
+   },
+   "merge_base_commit": {
+    "sha": "6dfb0a18ffe33db6963b9391858b493294ed29e1",
+    "commit": {
+     "author": {
+      "name": "jetbrains-air[bot]",
+      "email": "274481315+jetbrains-air[bot]@users.noreply.github.com",
+      "date": "2026-11-03T16:44:48Z"
+     },
+     "committer": {
+      "name": "GitHub",
+      "email": "<email>",
+      "date": "2026-11-03T16:44:48Z"
+     },
+     "message": "Merge branch 'main' into ez/330-air-fakes",
+     "tree": {
+      "sha": "513e2bd6396fc6d637e0d0a8968510d9ab359d2a"
+     },
+     "comment_count": 0,
+     "verification": {
+      "verified": true,
+      "reason": "valid",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq6g+ACRC1aQ7uu5UhlAAAB0EQABHjaqyWQdhQkCvR8mFdJubE\nDwogZqLiaWrbpEthTDdPLTTChLim5obEfZmLPYaE06IANVVVQYPq5XmdhgZFE1Is\nVnql+75Jf3gXpiZGExu+9KfLWrFr/J/iqF2vG4YUZtRvvgFGpYtfLMlgDE1+6Znj\nFMZMdjLhcVabHzH6D3Mkgp8XZq6K5BNYvhT+BE3bldKOFxmQA1ElNT00akeL/JAh\nzkezCRTI1J3wQeDQlxyzTj+AxjwlND1QguMIWEVt1RsODlHqXTwis8WMPy/brKeX\nH0NGTovrTZSwAkWSVvRK+wL1Txh5BvWD5Vsu4vh8mFNknrwgwXya354HbXoJnGHO\nW67BePV/1vmtQydXQV4C7DYqbWc+iELmE4U/4aNZiWnXTQQYj32E+tLPDwdzBdiV\n1+sfIFfB1iWtNyFJ+epd5vg4YluMwLR5S7DjSUvuD2L3Dv2NIR/rzlMNEaZm1dd8\nbZeS8050tRxJNEZgIvvVP/fNzRSC4OUBMWqM20NmIO5/U8sZ/QloBFLnhu4XRSqI\n9bFUUVpDJz3bmPT73ELICtdavZm6De3HJcFGGg8Rk6ZG3E5bjg+N7oHn69mAHDuX\n+XjRQoPFLZKCWs1eCLDRoTM983x1Z1oI1CWhJ/KNQ7Qvyfs7M6DUq+O8+biu+ikN\nRZIewbQ0pNVdvZ485ZOe\n=gj0X\n-----END PGP SIGNATURE-----\n",
+      "payload": "tree 513e2bd6396fc6d637e0d0a8968510d9ab359d2a\nparent 05ddd21b9b36b3e57007372130558f0ef260a0c7\nparent fcd4daf0ae58b78c59d6968656a85fcde0db1de3\nauthor jetbrains-air[bot] <274481315+jetbrains-air[bot]@users.noreply.github.com> 1793724288 +0000\ncommitter GitHub <<email>> 1793724288 +0000\n\nMerge branch 'main' into ez/330-air-fakes",
+      "verified_at": "2026-11-03T16:44:49Z"
+     }
+    },
+    "author": {
+     "login": "jetbrains-air[bot]",
+     "id": 274481315,
+     "type": "Bot",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "committer": {
+     "login": "web-flow",
+     "id": 19864447,
+     "type": "User",
+     "user_view_type": "public",
+     "site_admin": false
+    },
+    "parents": [
+     {
+      "sha": "05ddd21b9b36b3e57007372130558f0ef260a0c7"
+     },
+     {
+      "sha": "fcd4daf0ae58b78c59d6968656a85fcde0db1de3"
+     }
+    ]
+   },
+   "status": "behind",
+   "ahead_by": 0,
+   "behind_by": 1,
+   "total_commits": 0,
+   "commits": [],
+   "files": []
+  },
+  "collaborators/{login}/permission": {
+   "permission": "admin",
+   "user": {
+    "login": "zaharchenko-evgeny",
+    "id": 11453760,
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false,
+    "permissions": {
+     "admin": true,
+     "maintain": true,
+     "push": true,
+     "triage": true,
+     "pull": true
+    },
+    "role_name": "admin"
+   },
+   "role_name": "admin"
+  },
+  "git/ref/heads/{base}": {
+   "ref": "refs/heads/main",
+   "object": {
+    "sha": "670392d60b5d50386191864dd6d7d35762033cf0",
+    "type": "commit"
+   }
+  },
+  "labels?per_page=100": [
+   {
+    "id": 12869114704,
+    "name": "accessibility",
+    "color": "f143ab",
+    "default": true,
+    "description": "Barrier affecting people with disabilities",
+    "archived_at": null,
+    "archived_by": null
+   }
+  ],
+  "actions/runs?head_sha={sha}&per_page=100": {
+   "total_count": 1,
+   "workflow_runs": [
+    {
+     "id": 41677334755,
+     "name": "quality-gates",
+     "head_branch": "ez/330-air-fakes",
+     "head_sha": "6dfb0a18ffe33db6963b9391858b493294ed29e1",
+     "path": ".github/workflows/quality-gates.yml",
+     "display_title": "#330 Drive Air fakes from recorded contracts",
+     "run_number": 694,
+     "event": "pull_request",
+     "status": "completed",
+     "conclusion": "success",
+     "workflow_id": 399556388,
+     "check_suite_id": 112938883543,
+     "check_suite_node_id": "CS_kwDOVagZ7s8AAAAaS66Z1w",
+     "pull_requests": [],
+     "created_at": "2026-11-03T16:44:54Z",
+     "updated_at": "2026-11-03T16:45:52Z",
+     "actor": {
+      "login": "jetbrains-air[bot]",
+      "id": 274481315,
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "run_attempt": 1,
+     "referenced_workflows": [],
+     "run_started_at": "2026-11-03T16:44:54Z",
+     "triggering_actor": {
+      "login": "jetbrains-air[bot]",
+      "id": 274481315,
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+     },
+     "head_commit": {
+      "id": "6dfb0a18ffe33db6963b9391858b493294ed29e1",
+      "tree_id": "513e2bd6396fc6d637e0d0a8968510d9ab359d2a",
+      "message": "Merge branch 'main' into ez/330-air-fakes",
+      "timestamp": "2026-11-03T16:44:48Z",
+      "author": {
+       "name": "jetbrains-air[bot]",
+       "email": "274481315+jetbrains-air[bot]@users.noreply.github.com"
+      },
+      "committer": {
+       "name": "GitHub",
+       "email": "<email>"
+      }
+     },
+     "repository": {
+      "id": 1437080046,
+      "name": "slop-factory",
+      "full_name": "zaharchenko-evgeny/slop-factory",
+      "private": false,
+      "owner": {
+       "login": "zaharchenko-evgeny",
+       "id": 11453760,
+       "type": "User",
+       "user_view_type": "public",
+       "site_admin": false
+      },
+      "description": "Slop factory: an agent software factory on Air Cloud",
+      "fork": false
+     },
+     "head_repository": {
+      "id": 1437080046,
+      "name": "slop-factory",
+      "full_name": "zaharchenko-evgeny/slop-factory",
+      "private": false,
+      "owner": {
+       "login": "zaharchenko-evgeny",
+       "id": 11453760,
+       "type": "User",
+       "user_view_type": "public",
+       "site_admin": false
+      },
+      "description": "Slop factory: an agent software factory on Air Cloud",
+      "fork": false
+     }
+    }
+   ]
+  },
+  "actions/runs/{id}/jobs?per_page=100": {
+   "total_count": 3,
+   "jobs": [
+    {
+     "id": 126061381541,
+     "run_id": 41677334755,
+     "workflow_name": "quality-gates",
+     "head_branch": "ez/330-air-fakes",
+     "run_attempt": 1,
+     "head_sha": "6dfb0a18ffe33db6963b9391858b493294ed29e1",
+     "status": "completed",
+     "conclusion": "success",
+     "created_at": "2026-11-03T16:44:54Z",
+     "started_at": "2026-11-03T16:44:57Z",
+     "completed_at": "2026-11-03T16:45:16Z",
+     "name": "agnix",
+     "steps": [
+      {
+       "name": "Set up job",
+       "status": "completed",
+       "conclusion": "success",
+       "number": 1,
+       "started_at": "2026-11-03T16:44:58Z",
+       "completed_at": "2026-11-03T16:44:59Z"
+      },
+      {
+       "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+       "status": "completed",
+       "conclusion": "success",
+       "number": 2,
+       "started_at": "2026-11-03T16:44:59Z",
+       "completed_at": "2026-11-03T16:45:00Z"
+      },
+      {
+       "name": "Run npx --yes <email> .",
+       "status": "completed",
+       "conclusion": "success",
+       "number": 3,
+       "started_at": "2026-11-03T16:45:00Z",
+       "completed_at": "2026-11-03T16:45:13Z"
+      },
+      {
+       "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+       "status": "completed",
+       "conclusion": "success",
+       "number": 6,
+       "started_at": "2026-11-03T16:45:13Z",
+       "completed_at": "2026-11-03T16:45:14Z"
+      },
+      {
+       "name": "Complete job",
+       "status": "completed",
+       "conclusion": "success",
+       "number": 7,
+       "started_at": "2026-11-03T16:45:14Z",
+       "completed_at": "2026-11-03T16:45:14Z"
+      }
+     ],
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "runner_id": 1000003442,
+     "runner_name": "GitHub Actions 1000003442",
+     "runner_group_id": 0,
+     "runner_group_name": "GitHub Actions"
+    }
+   ]
+  },
+  "actions/jobs/{id}/logs": {
+   "text": "2026-11-02T10:00:00.1000000Z ##[group]Run tests\n2026-11-02T10:00:00.1000000Z ##[endgroup]\n2026-11-02T10:00:00.2000000Z line 0"
+  }
+ }
+}

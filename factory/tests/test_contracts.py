@@ -67,6 +67,16 @@ class ContractsTest(unittest.TestCase):
             self.assertIsNotNone(contracts.find(rec[server]["responses"], tool, {}), tool)
             self.assertIn(tool, [t["name"] for t in rec[server]["tools"]])
 
+    def test_fake_gh_rejects_unrecorded_endpoint_and_field(self):
+        rec = json.loads((HERE / "contracts/github-api.json").read_text())
+        read = lambda path, out: contracts.github_read(["api", f"repos/o/r/{path}"], json.dumps(out), rec)  # noqa: E731
+        read("issues/7", {"number": 7, "labels": [{"name": "x"}]})
+        read("issues?state=open&labels=x&per_page=100", {"number": 7})
+        with self.assertRaisesRegex(contracts.Unrecorded, "unrecorded GitHub endpoint: stargazers"):
+            read("stargazers", {})
+        with self.assertRaisesRegex(contracts.Unrecorded, "field bogus"):
+            read("issues/7", {"bogus": 1})
+
     def test_payload_fixtures_parse_for_every_trigger(self):
         for event in EVENTS:
             wrapper = json.loads((HERE / f"contracts/payloads/{event}.json").read_text())

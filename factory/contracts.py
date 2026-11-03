@@ -51,6 +51,44 @@ def check_value(name, value, schema):
         raise ValueError(f"{name}: invalid value {value!r} for schema {json.dumps(schema)[:120]}")
 
 
+class Unrecorded(BaseException):
+    """A fake gh read the recordings do not allow. A BaseException, so no adapter `except Exception` hides it."""
+
+
+def github_read(args, out, rec):
+    """Check a fake `gh api` read against github-api.json: its endpoint must be recorded and its fields must exist there."""
+    path, _, query = next(a for a in args if a.startswith("repos/")).split("/", 3)[3].partition("?")
+    names = sorted(q.split("=")[0] for q in query.split("&") if q)
+    for tpl, shape in rec["endpoints"].items():
+        t_path, _, t_query = tpl.partition("?")
+        if re.fullmatch(re.sub(r"\\\{\w+\\\}", "[^/]+", re.escape(t_path)), path) and \
+                names == sorted(q.split("=")[0] for q in t_query.split("&") if q):
+            break
+    else:
+        raise Unrecorded(f"unrecorded GitHub endpoint: {path}?{query}")
+
+    def fields(got, want, where):
+        if isinstance(want, list) and not isinstance(got, list):
+            want = want[0] if want else got
+        if isinstance(got, list):
+            for item in got:
+                fields(item, want[0] if want else item, where)
+        elif isinstance(got, dict) and isinstance(want, dict):
+            for k, v in got.items():
+                if k not in want:
+                    raise Unrecorded(f"{tpl}: field {where}{k} is not in the recording")
+                fields(v, want[k], f"{where}{k}.")
+
+    jq = args[args.index("--jq") + 1] if "--jq" in args else ".[]"
+    if "text" not in shape and out.strip() and jq == ".[]":  # any other jq reshapes the response
+        try:
+            docs = [json.loads(out)]
+        except ValueError:  # --paginate --jq .[] prints one document per line
+            docs = [json.loads(line) for line in out.splitlines() if line.strip()]
+        for doc in docs:
+            fields(doc, shape, "")
+
+
 def find(responses, tool, args):
     """The recorded response of `tool`: one key per tool, or `tool:<variant>` keys told apart by the arguments."""
     keys = [k for k in responses if k == tool or k.startswith(tool + ":")]
