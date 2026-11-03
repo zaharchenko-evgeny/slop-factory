@@ -58,6 +58,14 @@ class ProjectTest(unittest.TestCase):
         self.assertTrue(any(error.startswith("factory.project.yaml.tracker") for error in errors), errors)
 
     def test_defaults_merged(self):
+        loaded = project.load(FIXTURE)
+        self.assertEqual(loaded["branch_pattern"], "ez/{ticket}-{slug}")
+        self.assertIn("states", loaded)
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = self.descriptor()
+            bad["states"]["ready"]["kind"] = "paused"
+            with self.assertRaisesRegex(ValueError, "paused"):
+                project.load(write_project(tmp, bad))
         config.set_team(FIXTURE)
         try:
             legacy = config.load()

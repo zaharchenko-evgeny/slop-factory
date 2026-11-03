@@ -9,9 +9,17 @@ import config
 STORE_KINDS = ("label", "pr_label", "field", "tag", "pr")
 
 
-def load(team_root):
-    """Load a project's descriptor without applying engine defaults."""
+def _read(team_root):
     return yaml.safe_load((Path(team_root) / config.PROJECT_DESCRIPTOR).read_text()) or {}
+
+
+def load(team_root):
+    """Return the validated descriptor merged over engine/defaults.yaml; errors name the path and key."""
+    errors = validate(team_root)
+    if errors:
+        raise ValueError("; ".join(errors))
+    defaults = yaml.safe_load((config.engine_root() / "engine/defaults.yaml").read_text()) or {}
+    return config.merge(defaults, _read(team_root))
 
 
 def store_kind(store):
@@ -32,7 +40,7 @@ def validate(team_root):
     """Return errors for a project's factory.project.yaml descriptor."""
     root = Path(team_root)
     try:
-        descriptor = load(root)
+        descriptor = _read(root)
     except (OSError, yaml.YAMLError) as exc:
         return [f"{config.PROJECT_DESCRIPTOR}: {exc}"]
     schema = json.loads((config.engine_root() / "engine/project.schema.json").read_text())
@@ -56,7 +64,7 @@ def validate(team_root):
 
 def legacy_config(descriptor=None):
     """Render project states and commands into the config shape existing engine code reads."""
-    descriptor = load(config.team_root()) if descriptor is None else descriptor
+    descriptor = _read(config.team_root()) if descriptor is None else descriptor
     defaults = yaml.safe_load((config.engine_root() / "engine/defaults.yaml").read_text()) or {}
     result = config.merge(defaults, descriptor)
     tracker = dict(result.get("tracker") or {})
