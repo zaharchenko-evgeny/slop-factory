@@ -193,6 +193,9 @@
         "stale_command_minutes": {
           "type": "integer"
         },
+        "run_timeout_minutes": {
+          "type": "integer"
+        },
         "resume_cap": {
           "type": "integer"
         },

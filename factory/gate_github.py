@@ -459,7 +459,7 @@ class GitHubGateTracker:
         latest_event = max([e.get("created_at", "") for _, e in events] + [commit_at or ""])
         latest_command = max((e["created_at"] for e in command_events), default="")
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
-        comments = [c["body"] for c in self._list(f"issues/{n}/comments") if c["body"].startswith("[factory] recover:")
+        comments = [c["body"] for c in self._list(f"issues/{n}/comments") if c["body"].startswith(("[factory] recover:", "[factory] reconcile:"))
                     and c["created_at"] >= stage_at]
         return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
                 "command_pending": bool(latest_command and latest_command == latest_event),
