@@ -150,13 +150,15 @@ jobs:
           domains=$(uv run --quiet --with pyyaml python -c "import yaml; print(*{d for e in yaml.safe_load(open('workflows/nodes.yaml'))['environments'].values() for d in e.get('domains', [])})")
           touch "$RUNNER_TEMP/denied.log"
           chmod 666 "$RUNNER_TEMP/denied.log"
-          # The proxy runs as `nobody`; the container user (the runner's uid) may reach only loopback, so direct downloads fail.
-          sudo iptables -I OUTPUT 1 -m owner --uid-owner "$(id -u)" ! -o lo -j REJECT
+          # The proxy runs as `nobody`; the container user (uid 1500, not the runner's own uid) may reach only loopback, so direct downloads fail.
+          sudo iptables -I OUTPUT 1 -m owner --uid-owner 1500 ! -o lo -j REJECT
+          sudo cp -a "$PWD" "$RUNNER_TEMP/repo"
+          sudo chown -R 1500 "$RUNNER_TEMP/repo"
           # shellcheck disable=SC2086
           nohup sudo -u nobody python3 scripts/allowlist_proxy.py 8888 "$RUNNER_TEMP/denied.log" $domains > "$RUNNER_TEMP/proxy.log" 2>&1 &
       - name: Build the image
         run: |
-          docker build -t air-like --build-arg "UID=$(id -u)" - <<'EOF'
+          docker build -t air-like --build-arg UID=1500 - <<'EOF'
           FROM ubuntu:24.04
           ARG UID
           RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates python3 && rm -rf /var/lib/apt/lists/*
@@ -166,12 +168,12 @@ jobs:
         run: |
           docker run --rm --network host --user workspace -e HOME=/home/workspace -e REPO=/repo \
             -e HTTPS_PROXY=http://127.0.0.1:8888 -e NO_PROXY=localhost,127.0.0.1 \
-            -v "$PWD:/repo" air-like bash /repo/scripts/air-like.sh
+            -v "$RUNNER_TEMP/repo:/repo" air-like bash /repo/scripts/air-like.sh
       - name: Check for downloads from other hosts
         if: always()
         run: |
           # A direct (non-proxy) download as the container's uid must be rejected.
-          if curl -sS --max-time 10 -o /dev/null https://example.com 2>/dev/null; then
+          if sudo -u '#1500' curl -sS --max-time 10 -o /dev/null https://example.com 2>/dev/null; then
             echo "::error::direct egress is not blocked"
             exit 1
           fi
