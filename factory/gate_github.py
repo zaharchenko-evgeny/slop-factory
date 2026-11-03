@@ -109,6 +109,13 @@ class GitHubGateTracker:
             pr = self._api(f"pulls/{prs[-1]['number']}")
         return pr
 
+    def ticket_for_pr(self, number):
+        """Resolve a PR number to its ticket from the live head ref."""
+        pr = self._api(f"pulls/{number}")
+        ref = ((pr.get("head") or {}).get("ref") or "")
+        match = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
+        return int(match[1]) if match else None
+
     def _prs(self, n, open_only=False):
         """The ticket's PRs from its branch; cleanup also includes closed PRs."""
         prs = [p for p in self._list("pulls?state=all&per_page=100")
@@ -281,6 +288,7 @@ class GitHubGateTracker:
         labels = [x["name"] for x in issue["labels"]]
         by_label = {v: k for k, v in self.stages.items()}
         events = self._list(f"issues/{n}/events")
+        actor_events = [e for e in events if e.get("event") in ("labeled", "unlabeled", "closed", "reopened")]
         # The stage is the stage label added last (a person's factory:ready on a running ticket wins over the
         # label it replaces); `apply` of the stage effect removes the others.
         # Order by event position, not timestamp: the events list is chronological and timestamps can tie.
@@ -305,7 +313,8 @@ class GitHubGateTracker:
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none", "pending_rereviews": [],
              "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
              "handed_to_fix": False, "risk": risk, "behind": False,
-             "issue_state": issue.get("state", "open"),
+             "issue_state": issue.get("state", "open"), "updated_at": issue.get("updated_at"),
+             "event_actor": ((actor_events[-1].get("actor") or {}).get("login") if actor_events else None),
              "title": issue.get("title", ""), "body": body, "author": (issue.get("user") or {}).get("login"), "branch": None}
         if stage == "needs-answers":
             waiting = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["needs-answers"]]
