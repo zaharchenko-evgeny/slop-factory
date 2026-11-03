@@ -4,7 +4,7 @@
 `factory contracts refresh` (operator-only: it needs the operator's Air OAuth, never run it from an agent or CI)
 re-records the tool lists and the read-only responses of the two Air MCP servers into air-mcp.json, started from
 FACTORY_MCP_AIR_AUTOMATIONS and FACTORY_MCP_AIR_CLOUD as `factory deploy` does. Tokens, emails and secret-like ids are
-stripped. Responses of write tools and per-run tools stay as recorded.
+stripped. Responses of write tools stay as recorded.
 `contracts.py serve RECORDING SERVER` is a fake MCP server over stdio answering only what was recorded.
 """
 import json
@@ -23,12 +23,32 @@ SECRET_KEY = re.compile(r"token|secret|password|apikey|api_key|credential", re.I
 def redact(x):
     """The value with tokens and emails replaced, and values under secret-named keys removed."""
     if isinstance(x, str):
+        if x.lstrip()[:1] in "{[":  # MCP content[].text holds JSON
+            try:
+                return json.dumps(redact(json.loads(x)))
+            except ValueError:
+                pass
         return EMAIL.sub("<email>", SECRET.sub("<token>", x))
     if isinstance(x, list):
         return [redact(v) for v in x]
     if isinstance(x, dict):
         return {k: "<redacted>" if SECRET_KEY.search(k) and isinstance(v, str) else redact(v) for k, v in x.items()}
     return x
+
+
+def check_value(name, value, schema):
+    """Raise ValueError when `value` breaks the type, enum, minLength, pattern, minimum or maximum of its recorded schema."""
+    types = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "array": list, "object": dict}
+    want = schema.get("type")
+    ok = want not in types or (isinstance(value, types[want]) and not (want != "boolean" and isinstance(value, bool)))
+    if ok and "enum" in schema:
+        ok = value in schema["enum"]
+    if ok and isinstance(value, str):
+        ok = len(value) >= schema.get("minLength", 0) and re.search(schema.get("pattern", ""), value) is not None
+    if ok and isinstance(value, (int, float)) and not isinstance(value, bool):
+        ok = schema.get("minimum", value) <= value <= schema.get("maximum", value)
+    if not ok:
+        raise ValueError(f"{name}: invalid value {value!r} for schema {json.dumps(schema)[:120]}")
 
 
 def find(responses, tool, args):
@@ -52,6 +72,8 @@ def reply(server, tools, responses, method, params):
         raise ValueError(f"{name}: missing {missing}")
     if unknown := [k for k in args if k not in props]:
         raise ValueError(f"{name}: unknown arguments {unknown}")
+    for k, v in args.items():
+        check_value(f"{name}.{k}", v, props[k])
     res = find(responses, name, args)
     if res is None:
         raise ValueError(f"no recorded response for {server} tool: {name}")
@@ -85,6 +107,12 @@ def refresh(path=DIR / "air-mcp.json"):
         auto_r["list_automations"] = redact(raw(auto, "list_automations", {"privacy": "private"}))
         repo = "https://github.com/" + os.environ.get("FACTORY_REPOSITORY", "zaharchenko-evgeny/slop-factory")
         cloud_r["list_environments"] = redact(raw(cloud, "list_environments", {"repositoryUrl": repo}))
+        auto_id = json.loads(auto_r["get_automation"]["content"][0]["text"])["automationId"]
+        auto_r["get_automation"] = redact(raw(auto, "get_automation", {"automationId": auto_id}))
+        auto_r["list_runs"] = redact(raw(auto, "list_runs", {"automationId": auto_id}))
+        runs = json.loads(auto_r["list_runs"]["content"][0]["text"])
+        if runs:
+            auto_r["get_run"] = redact(raw(auto, "get_run", {"runId": runs[0]["runId"]}))
         for item in json.loads(cloud_r["list_environments"]["content"][0]["text"])["items"]:
             key = "get_environment:" + item["name"].rsplit(" ", 1)[-1]
             if key in cloud_r:

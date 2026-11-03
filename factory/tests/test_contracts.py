@@ -44,6 +44,13 @@ class ContractsTest(unittest.TestCase):
         # a tool of the other server is unrecorded here
         self.assertIn("error", ask("air-automations", ("list_environments", {"repositoryUrl": "x"}))[0])
 
+    def test_fake_mcp_rejects_values_breaking_the_schema(self):
+        bad, short, ok = ask("air-automations", ("get_automation", {"automationId": 1}),
+                             ("get_automation", {"automationId": "bad id!"}), ("get_automation", {"automationId": "x"}))
+        self.assertIn("invalid value", bad["error"]["message"])
+        self.assertIn("invalid value", short["error"]["message"])
+        self.assertIn("result", ok)
+
     def test_every_called_tool_is_recorded(self):
         rec = json.loads(REC.read_text())["servers"]
         for server, tool in [("air-automations", t) for t in ("list_automations", "get_automation", "create_automation",
@@ -63,6 +70,10 @@ class ContractsTest(unittest.TestCase):
     def test_redact_strips_tokens_emails_and_secret_keys(self):
         out = contracts.redact({"a": "ghp_" + "x" * 30 + " me@example.com", "api_token": "v", "n": [{"k": "Bearer abcdefgh12"}]})
         self.assertEqual(out, {"a": "<token> <email>", "api_token": "<redacted>", "n": [{"k": "<token>"}]})
+
+    def test_redact_decodes_json_text_of_mcp_results(self):
+        out = contracts.redact({"content": [{"type": "text", "text": json.dumps({"x": {"password": "opaque-private-value"}})}]})
+        self.assertNotIn("opaque-private-value", json.dumps(out))
 
     def test_recordings_contain_no_tokens(self):
         for path in (HERE / "contracts").rglob("*.json"):
