@@ -345,10 +345,11 @@ class EffectsTest(unittest.TestCase):
         block = f"<!-- factory:agent-notes\n{json.dumps(notes)}\n-->"
         gh = FakeGh()
         gh.no_pr = True
-        self.assertTrue(tr(gh).apply(eff("pr-notes", block)))  # no PR yet: parked on the ticket
+        self.assertTrue(tr(gh).apply(eff("pr-notes", block, run_id="run-9")))  # no PR yet: parked on the ticket
         self.assertEqual(gh.writes[0][:3], ["issue", "comment", "7"])
         parked = gh.writes[0][-1]
         self.assertIn(block, parked)
+        self.assertTrue(parked.endswith("Factory-Run: run-9"), parked)
         gh = FakeGh(comments=[{"body": parked, "user": {"login": BOT, "type": "Bot"}}])
         self.assertTrue(tr(gh).apply(eff("pr-notes-sync", "")))  # the PR exists now
         self.assertEqual(gh.writes[0][:4], ["pr", "edit", "5", "-R"])
@@ -356,6 +357,21 @@ class EffectsTest(unittest.TestCase):
         gh = FakeGh(comments=[{"body": parked, "user": {"login": "mallory", "type": "User"}}])
         self.assertFalse(tr(gh).apply(eff("pr-notes-sync", "")))  # a person's comment is no source
         self.assertEqual(gh.writes, [])
+
+    def test_pr_description_notes_edited_after_ready_are_read(self):
+        notes = gate.clean_notes({"for": "fixer", "hint": "check the gate first"})
+        body = f"text\n\n<!-- factory:agent-notes\n{json.dumps(notes)}\n-->"
+
+        class G(FakeGh):
+            def __call__(self, args):
+                out = FakeGh.__call__(self, args)
+                if any(x.endswith("issues/7/events") for x in args):
+                    return json.dumps({"event": "labeled", "label": {"name": "factory:ready"}, "created_at": "2026-01-02T00:00:00Z"})
+                if any(x.endswith("/pulls/5") for x in args):
+                    return json.dumps({**json.loads(out), "body": body, "user": {"login": BOT, "type": "Bot"},
+                                       "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-03T00:00:00Z"})
+                return out
+        self.assertEqual(GitHubGateTracker(REPO, STAGES, BOT, run=G()).facts(7)["agent_notes"], [notes])
 
     def test_agent_notes_secret_is_stripped(self):
         key = "ghp_" + "a1B2" * 6

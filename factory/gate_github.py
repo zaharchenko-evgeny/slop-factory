@@ -154,6 +154,13 @@ class GitHubGateTracker:
             pr = self._api(f"pulls/{prs[-1]['number']}")
         return pr
 
+    def ticket_for_pr(self, number):
+        """Resolve a PR number to its ticket from the live head ref."""
+        pr = self._api(f"pulls/{number}")
+        ref = ((pr.get("head") or {}).get("ref") or "")
+        match = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
+        return int(match[1]) if match else None
+
     def _prs(self, n, open_only=False):
         """The ticket's PRs from its branch; cleanup also includes closed PRs."""
         prs = [p for p in self._list("pulls?state=all&per_page=100")
@@ -326,6 +333,7 @@ class GitHubGateTracker:
         labels = [x["name"] for x in issue["labels"]]
         by_label = {v: k for k, v in self.stages.items()}
         events = self._list(f"issues/{n}/events")
+        actor_events = [e for e in events if e.get("event") in ("labeled", "unlabeled", "closed", "reopened")]
         # The stage is the stage label added last (a person's factory:ready on a running ticket wins over the
         # label it replaces); `apply` of the stage effect removes the others.
         # Order by event position, not timestamp: the events list is chronological and timestamps can tie.
@@ -350,7 +358,8 @@ class GitHubGateTracker:
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none", "pending_rereviews": [],
              "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
              "handed_to_fix": False, "risk": risk, "behind": False,
-             "issue_state": issue.get("state", "open"),
+             "issue_state": issue.get("state", "open"), "updated_at": issue.get("updated_at"),
+             "event_actor": ((actor_events[-1].get("actor") or {}).get("login") if actor_events else None),
              "title": issue.get("title", ""), "body": body, "author": (issue.get("user") or {}).get("login"), "branch": None}
         since = getattr(self, "_since", "")  # a person's factory:ready starts fresh
         got = self._notes(self._list(f"issues/{n}/comments"), "created_at", since)
@@ -389,7 +398,7 @@ class GitHubGateTracker:
             f.update(branch=pr["head"]["ref"])
             got += (self._notes(self._list(f"issues/{pr['number']}/comments"), "created_at", since)
                     + self._notes(self._list(f"pulls/{pr['number']}/reviews"), "submitted_at", since)
-                    + self._notes([pr], "created_at", since))
+                    + self._notes([pr], "updated_at", since))  # the PR body is edited after creation
             if stage == "approved" and pr.get("state") == "open":  # only the merge gates read it
                 f["behind"] = self._api(f"compare/{pr['base']['ref']}...{head}")["behind_by"] > 0
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
@@ -536,6 +545,8 @@ class GitHubGateTracker:
             pr = self._pr(n)
             if kind == "pr-notes" and pr is None:  # Air opens the PR after the run: park the notes on the ticket
                 body = f"{NOTES_PARKED}\n\n{value}"
+                if e.get("run_id"):
+                    body += f"\n\nFactory-Run: {e['run_id']}"
                 if any(c["body"] == body for c in self._list(f"issues/{n}/comments")):
                     return False
                 self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
