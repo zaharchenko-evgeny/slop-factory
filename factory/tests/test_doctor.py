@@ -12,7 +12,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import config as cfg  # noqa: E402
-cfg.set_team(HERE.parents[1])
+cfg.set_team(HERE / "fixtures/team")
 import doctor  # noqa: E402
 import nodes  # noqa: E402
 

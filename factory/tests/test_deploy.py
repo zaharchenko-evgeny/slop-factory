@@ -21,7 +21,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-cfg.set_team(Path(__file__).resolve().parents[2])
+cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 import deploy
 import nodes
 
@@ -257,6 +257,15 @@ class PlanTest(unittest.TestCase):
         if os.environ.get("UPDATE_FIXTURE"):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
+
+    def test_every_environment_checks_out_team_repository(self):
+        url = "https://github.com/o/team"
+        plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": url})
+        self.assertTrue(plan["environments"])
+        for e in plan["environments"]:
+            self.assertEqual(e["variables"], {"FACTORY_ENV": e["variables"]["FACTORY_ENV"], "FACTORY_TEAM_REPOSITORY": url})
+        plain = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": ""})
+        self.assertTrue(all("FACTORY_TEAM_REPOSITORY" not in e["variables"] for e in plain["environments"]))
 
     def test_nodes_get_environment_by_env(self):
         plan = deploy.plan_air(nodes.load(), cfg.load())
