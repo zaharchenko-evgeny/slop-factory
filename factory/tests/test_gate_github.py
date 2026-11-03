@@ -257,6 +257,19 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(self.twice(gh, eff("label", "factory:fix-mid")), (True, 1, False, 1))
         self.assertEqual(self.twice(gh, eff("unlabel", "factory:fix-mid")), (True, 2, False, 2))
 
+    def test_pr_label_and_assignee_use_the_pull_request(self):
+        gh = FakeGh()
+        self.assertTrue(tr(gh).apply(eff("label", "factory:needs-human", on="pr")))
+        self.assertTrue(tr(gh).apply(eff("assign", "operator", on="pr")))
+        self.assertTrue(any(w[:3] == ["pr", "edit", "5"] and "--add-label" in w for w in gh.writes))
+        self.assertTrue(any("issue edit 5" in " ".join(w) and "--add-assignee" in w for w in gh.writes))
+
+    def test_needs_human_is_not_added_to_a_closed_pr(self):
+        gh = FakeGh()
+        gh.merged = True
+        self.assertFalse(tr(gh).apply(eff("label", "factory:needs-human", on="pr")))
+        self.assertEqual(gh.writes, [])
+
     def test_set_field(self):
         gh = FakeGh()
         self.assertEqual(self.twice(gh, eff("set-field", {"risk": "high"})), (True, 1, False, 1))

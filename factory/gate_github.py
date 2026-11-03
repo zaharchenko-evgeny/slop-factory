@@ -400,9 +400,9 @@ class GitHubGateTracker:
             if on == "pr":
                 pr = self._pr(n)
                 if pr is None:
-                    if kind == "unlabel":
-                        return False  # nothing to remove from a PR that does not exist
-                    raise RuntimeError(f"{kind}: no PR for ticket {n}")
+                    return False  # ticket-level waits also apply before a PR exists
+                if kind == "label" and value == "factory:needs-human" and pr.get("state") != "open":
+                    return False
                 target = pr["number"]
             elif on != "issue":
                 raise ValueError(f"{kind}: bad target: {on}")
@@ -418,13 +418,23 @@ class GitHubGateTracker:
             return have != [f"{k}:{v}"] and self._edit(n, [f"{k}:{v}"] if f"{k}:{v}" not in have else [],
                                                        [x for x in have if x != f"{k}:{v}"])
         if kind in ("assign", "unassign"):
-            current = {a["login"] for a in self._api(f"issues/{n}").get("assignees", [])}
+            on, target = e.get("on") or "issue", n
+            if on == "pr":
+                pr = self._pr(n)
+                if pr is None:
+                    return False
+                if kind == "assign" and pr.get("state") != "open":
+                    return False
+                target = pr["number"]
+            elif on != "issue":
+                raise ValueError(f"{kind}: bad target: {on}")
+            current = {a["login"] for a in self._api(f"issues/{target}").get("assignees", [])}
             desired = set((value if isinstance(value, list) else [value])) if kind == "assign" else set()
             if current == desired:
                 return False
             flags = [x for a in sorted(desired - current) for x in ("--add-assignee", a)]
             flags += [x for a in sorted(current - desired) for x in ("--remove-assignee", a)]
-            self.run(["issue", "edit", str(n), "-R", self.repo, *flags])
+            self.run(["issue", "edit", str(target), "-R", self.repo, *flags])
             return True
         if kind == "comment":
             body = value if value.startswith("[factory]") else f"[factory] {value}"
