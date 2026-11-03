@@ -30,6 +30,9 @@ class MemoryTracker:
     def set_stage(self, t, stage):
         t["stage"] = stage
 
+    def sweep_tickets(self, stages):
+        return sorted(k for k, t in self.tickets.items() if self.get_stage(t) in stages)
+
     def blocking(self, ticket):
         return self._t(ticket).get("blocking", [])
 
@@ -51,7 +54,7 @@ class MemoryTracker:
         t = self._t(ticket)
         sent = [json.loads(v) for k, v in t.get("log", []) if k == "comment"]
         return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "stage_at", "command", "command_at", "commit_at", "ci_label", "command_pending", "pr_state", "issue_state") if k in t},
-                "recover_comments": [c for c in sent if c.startswith("[factory] recover:")]}
+                "recover_comments": [c for c in sent if c.startswith(("[factory] recover:", "[factory] reconcile:"))]}
 
     def apply(self, effect):
         if effect["kind"] == self.fail_on:
