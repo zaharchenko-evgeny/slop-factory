@@ -52,12 +52,24 @@ class ContractsTest(unittest.TestCase):
         self.assertIn("result", ok)
 
     def test_fake_mcp_accepts_any_type_of_a_type_list(self):
-        args = {"name": "abc", "prompt": "", "repository": {}, "agentAndModel": {}, "triggers": []}
+        args = {"name": "abc", "prompt": "", "repository": {"fullName": "o/r", "cloneUrl": "x",
+                "browseUrl": "x", "provider": "github"}, "agentAndModel": {"id": "x", "name": "x",
+                "isDefault": False}, "triggers": [{"triggerType": "WEBHOOK"}]}
         null, text, num = (ask("air-automations", ("create_automation", {**args, "environmentConfigId": v}))[0]
                            for v in (None, "x", 1))
         self.assertIn("result", null)
         self.assertIn("result", text)
         self.assertIn("invalid value", num["error"]["message"])
+
+    def test_fake_rejects_nested_schema_violation(self):
+        args = {"name": "abc", "prompt": "", "repository": {"fullName": "o/r", "cloneUrl": "x",
+                "browseUrl": "x", "provider": "github"}, "agentAndModel": {"id": "x", "name": "x",
+                "isDefault": False}, "triggers": [{"triggerType": "EVENT", "source": "github", "eventType": "push"}],
+                "environmentConfigId": None}
+        for field, value in (("repository", {}), ("agentAndModel", {}), ("triggers", [{}])):
+            with self.subTest(field=field):
+                bad = ask("air-automations", ("create_automation", {**args, field: value}))[0]
+                self.assertIn("error", bad)
 
     def test_every_called_tool_is_recorded(self):
         rec = json.loads(REC.read_text())["servers"]
