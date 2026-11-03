@@ -37,16 +37,38 @@ def redact(x):
 
 
 def check_value(name, value, schema):
-    """Raise ValueError when `value` breaks the type, enum, minLength, pattern, minimum or maximum of its recorded schema."""
+    """Raise ValueError when `value` breaks its recorded JSON schema."""
+    if "anyOf" in schema:
+        for choice in schema["anyOf"]:
+            try:
+                check_value(name, value, choice)
+                break
+            except ValueError:
+                pass
+        else:
+            raise ValueError(f"{name}: invalid value {value!r} for schema {json.dumps(schema)[:120]}")
     types = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "array": list, "object": dict, "null": type(None)}
     wants = [w for w in ([schema["type"]] if isinstance(schema.get("type"), str) else schema.get("type", [])) if w in types]
     ok = not wants or any(isinstance(value, types[w]) and not (w not in ("boolean", "null") and isinstance(value, bool)) for w in wants)
     if ok and "enum" in schema:
         ok = value in schema["enum"]
+    if ok and "const" in schema:
+        ok = value == schema["const"]
     if ok and isinstance(value, str):
         ok = len(value) >= schema.get("minLength", 0) and re.search(schema.get("pattern", ""), value) is not None
     if ok and isinstance(value, (int, float)) and not isinstance(value, bool):
         ok = schema.get("minimum", value) <= value <= schema.get("maximum", value)
+    if ok and isinstance(value, list) and len(value) < schema.get("minItems", 0):
+        ok = False
+    if ok and isinstance(value, dict):
+        if missing := [key for key in schema.get("required", []) if key not in value]:
+            raise ValueError(f"{name}: missing {missing}")
+        for key, child in schema.get("properties", {}).items():
+            if key in value:
+                check_value(f"{name}.{key}", value[key], child)
+    if ok and isinstance(value, list) and "items" in schema:
+        for i, item in enumerate(value):
+            check_value(f"{name}[{i}]", item, schema["items"])
     if not ok:
         raise ValueError(f"{name}: invalid value {value!r} for schema {json.dumps(schema)[:120]}")
 
