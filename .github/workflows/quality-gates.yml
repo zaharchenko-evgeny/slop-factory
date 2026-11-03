@@ -173,6 +173,7 @@ jobs:
       - name: Run startup.sh as in Air
         run: |
           docker run --rm --network host --user workspace -e HOME=/home/workspace -e REPO=/repo \
+            -e FACTORY_TEAM=/repo/factory/tests/fixtures/team \
             -e HTTPS_PROXY=http://127.0.0.1:8888 -e NO_PROXY=localhost,127.0.0.1 \
             -v "/tmp/air-like-repo:/repo" air-like bash /repo/scripts/air-like.sh
       - name: Check for downloads from other hosts
