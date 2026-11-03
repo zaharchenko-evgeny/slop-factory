@@ -248,8 +248,10 @@ def actions_files(nodes: dict, config: dict) -> dict:
     for name, n in nodes["nodes"].items():
         if n.get("runner") == "actions" and n.get("enabled") is not False:
             cron = next(scheds[str(t)[9:]]["cron"] for t in n["triggers"] if str(t).startswith("schedule "))
+            wake = "".join(f"  # jactionlint ignore=dangerous-triggers\n  workflow_run:\n    workflows: [{str(t)[13:]}]\n    types: [completed]\n"
+                           for t in n["triggers"] if str(t).startswith("workflow_run "))
             files[f".github/workflows/factory-{name}.yml"] = ACTIONS_WORKFLOW.format(
-                name=name, project=project_name(config), cron=cron, run=n["run"].replace("uv run factory/cli.py", "uv run --quiet factory/cli.py"))
+                name=name, project=project_name(config), cron=cron, wake=wake, run=n["run"].replace("uv run factory/cli.py", "uv run --quiet factory/cli.py"))
     return files
 
 
@@ -260,12 +262,13 @@ name: factory-{name}
 on:
   schedule:
     - cron: "{cron}"
-  workflow_dispatch:
+{wake}  workflow_dispatch:
 
 permissions: {{}}
 
 concurrency:
   group: factory-{name}
+  cancel-in-progress: false
 
 jobs:
   {name}:
@@ -292,6 +295,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     `gh issue edit --add-label` fail, so the deploy creates them first)."""
     t = config.get("tracker") or {}
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
+    out.add("factory:needs-human")
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
@@ -476,7 +480,11 @@ def main(argv: list[str]) -> int:
         try:
             plan = {**plan_air(nodes_mod.load(), config_mod.load()), "renames": renames}
             code = deploy(argv[0], "--allow-delete" in argv, plan, *servers)
-            return code or write_files(plan["files"], argv[0] == "--apply")
+            code = code or write_files(plan["files"], argv[0] == "--apply")
+            if code == 0 and argv[0] == "--apply":
+                from gate_github import GitHubGateTracker
+                GitHubGateTracker.from_config().deploy_applied(plan)
+            return code
         finally:
             for server in servers:
                 server.close()
