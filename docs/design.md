@@ -262,7 +262,7 @@ where a repository requires it.
 - An LME-A-22 record is generated for each automation in `docs/automations/`.
 - Enforcement (ADR-0013): all automations share one Air account and one set of
   tokens, so roles are not a security boundary. `read-only` limits version
-  control only, so `factory/step.py` checks every transition. Reviewer, approver,
+  control only, so `factory/gate.py` checks every transition. Reviewer, approver,
   auditor and ops automations still use `outputBehaviour: read-only`.
 - Triggers match narrowly: every event trigger filters on the factory branch
   prefix, a label or a tag. Never trigger on every comment.

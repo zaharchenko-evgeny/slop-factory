@@ -1,12 +1,15 @@
 environments:
   read: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
   write: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
+  ops: { repository: main, startup: .air/cloud/startup.sh, secrets: [], domains: [github.com, release-assets.githubusercontent.com, '*.blob.core.windows.net'], vm: default }
 schedules:
   sweep: { cron: "*/10 * * * *" }
-  recover: { cron: "15 * * * *"}
+  recover: { cron: "0 6,18 * * *"}
+  doctor: { cron: "0 5 * * *" }
 nodes:
   human: { triggers: [manual], when: { actor: human }, role: human, outcomes: {} }
-  intake: { env: read, triggers: ["issues.labeled factory:ready"], role: router, tier: cheap, output: read-only, outcomes: {} }
+  intake: { env: read, triggers: ["issues.labeled factory:triage"], role: router, tier: cheap, output: read-only, outcomes: {} }
+  start: { env: read, triggers: ["issues.labeled factory:ready"], when: { stage: ready, blockers: closed }, role: script, tier: cheap, run: uv run factory/gate.py sweep, output: read-only, outcomes: { started: { from: [ready], effects: [{ stage: in-dev }] } } }
   implement: { env: write, tiers: [cheap, mid], triggers: ["issues.labeled factory:implement-<tier>"], role: developer, output: create-pr, outcomes: {} }
   update: { env: write, tiers: [cheap, mid, strong], triggers: ["pull_request.labeled factory:update-<tier>"], role: developer, output: push-to-source, outcomes: {} }
   review: { env: read, focuses: [full, behaviour], triggers: ["pull_request.opened", "pull_request.synchronize", "pull_request.labeled factory:rereview-<focus>"], role: reviewer, outcomes: {} }
@@ -15,3 +18,6 @@ nodes:
   recover: { env: read, triggers: ["schedule recover"], when: { always: true }, role: script, tier: cheap, run: uv run factory/gate.py sweep --stale, output: read-only, outcomes: {} }
   merge: { env: read, triggers: ["issues.labeled factory:approved", "pull_request.labeled factory:ci-green"], when: { stage: approved, round: complete-at-head, ci: green }, role: script, tier: cheap, run: uv run factory/gate.py sweep, output: read-only, outcomes: { merged: { from: [approved], effects: [{ merge: match-head }] } } }
   notify: { env: read, pilot: true, triggers: ["issues.labeled factory:blocked", "issues.labeled factory:needs-answers"], when: { stage: [blocked, needs-answers] }, role: script, tier: cheap, run: uv run factory/cli.py notify --issue <issue number from the trigger payload>, output: read-only, outcomes: { notified: { from: [blocked, needs-answers] } } }
+  doctor: { env: read, routine: true, triggers: ["schedule doctor"], when: { always: true }, role: script, tier: cheap, run: uv run factory/cli.py doctor, output: read-only, outcomes: { probed: {} } }
+  doctor-write: { env: write, routine: true, triggers: ["schedule doctor"], when: { always: true }, role: script, tier: cheap, run: uv run factory/cli.py doctor, output: read-only, outcomes: { probed: {} } }
+  doctor-ops: { env: ops, routine: true, triggers: ["schedule doctor"], when: { always: true }, role: script, tier: cheap, run: uv run factory/cli.py doctor, output: read-only, outcomes: { probed: {} } }

@@ -20,9 +20,10 @@ change, whether you are a person, a pi session or a factory role.
    in the body. Tracker operations are in
    [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 2. **Stage labels.** A ticket carries exactly one `factory:*` stage label:
-   `draft → ready → in-dev → in-review → approved → merged → done`, with
+   `draft → triage → ready → in-dev → in-review → approved → merged → done`, with
    `changes-requested` for a fix round and `blocked` or `failed` when a run
-   stops. The next ticket to work on comes from the frontier: open, `ready`,
+   stops. `triage` starts the router; `ready` starts a developer once every
+   blocker is closed. The next ticket to work on comes from the frontier: open, `ready`,
    every blocker closed, unclaimed (no assignee), in map order.
 3. **Split large tickets.** Estimate size as lines a reviewer must read: added
    lines plus modified lines, counting tests and fixtures. Exclude paths listed

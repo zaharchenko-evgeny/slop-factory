@@ -67,7 +67,7 @@ class GitHubGateTracker:
         """Issue numbers (open or closed) whose stage label is one of `stages`; ready, in-review, changes-requested and in-dev only when open."""
         found = set()
         for st in stages:
-            state = "open" if st in ("ready", "in-review", "changes-requested", "in-dev") else "all"
+            state = "open" if st in ("triage", "ready", "in-review", "changes-requested", "in-dev") else "all"
             found |= {i["number"] for i in self._list(f"issues?state={state}&labels={self.stages[st]}&per_page=100")
                       if "pull_request" not in i}
         return sorted(found)
@@ -217,6 +217,11 @@ class GitHubGateTracker:
                 known.add(issue["number"])
         return dependents
 
+    def not_planned(self, n):
+        """True when issue `n` was closed with state_reason not_planned."""
+        issue = self._api(f"issues/{n}")
+        return issue.get("state") == "closed" and issue.get("state_reason") == "not_planned"
+
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
         the label when it finishes, so every round adds it again)."""
@@ -298,7 +303,7 @@ class GitHubGateTracker:
             comments = self._list(f"issues/{n}/comments")
             if waiting and comments:
                 started = waiting[-1].get("created_at", "")
-                ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["ready"]]
+                ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") in (self.stages["triage"], self.stages["ready"])]
                 setter = (ready[-1].get("actor") or {}).get("login") if ready else None
                 f["answered"] = any((c.get("created_at") or "") > started and
                                      (c.get("user") or {}).get("type") != "Bot" and
@@ -365,7 +370,7 @@ class GitHubGateTracker:
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
         comments = [c["body"] for c in self._list(f"issues/{n}/comments") if c["body"].startswith("[factory] recover:")
                     and c["created_at"] >= stage_at]
-        return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1],
+        return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
                 "command_pending": bool(latest_command and latest_command == latest_event),
                 "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
                 "ci_label": next((x[11:] for x in pr_labels if x in ("factory:ci-green", "factory:ci-red")
@@ -584,8 +589,8 @@ class GitHubGateTracker:
             if new is None:
                 new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
                                            "-f", f"body={want}",
-                                           "-f", f"labels[]={self.stages['draft']}", *[x for r in risk for x in ("-f", f"labels[]={r}")]]))
-                chained = False
+                                           *[x for r in risk for x in ("-f", f"labels[]={r}")]]))  # no stage yet: not runnable
+                chained, have = False, set()
             else:  # a reused child converges too: body, risk labels, chain
                 path = f"repos/{self.repo}/issues/{new['number']}"
                 if (new.get("body") or "") != want:
@@ -620,6 +625,12 @@ class GitHubGateTracker:
                     parent_body = self._blocked_body(parent_body, new["number"])
                     self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{n}", "-f",
                               f"body={parent_body}"])
+                wrote = True
+            if self.stages["ready"] not in have:  # publish `ready` only once the links exist
+                for x in have:  # a reused draft child leaves its old stage
+                    if x.startswith("factory:") and x != self.stages["ready"]:
+                        self.run(["api", "-X", "DELETE", f"repos/{self.repo}/issues/{new['number']}/labels/{x}"])
+                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/labels", "-f", f"labels[]={self.stages['ready']}"])
                 wrote = True
             wrote = wrote or c["title"] not in subs or new["id"] not in blockers
             prev = new["id"]

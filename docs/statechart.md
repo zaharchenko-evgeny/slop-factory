@@ -95,9 +95,9 @@ event, because only those triggers allow `push-to-source` (Air automation API).
 | `sweep` | scheduled, every 10 minutes | none | `as-instructed` | router, cheap | frontier offers, comment rechecks, pending triggers, lost joins, stale leases and intents, pending human reviews, CI backstop, retro, distill, cleanup |
 
 Every automation has the same thin prompt. The prompt tells the agent to save the `<trigger_event>`
-JSON to a file and run `factory/step.py begin` on it. If `begin` prints `SKIP`, the agent stops.
+JSON to a file and run `factory/gate.py check` on it. If the gate says to stop, the agent stops.
 Otherwise it follows the role file that `begin` names, writes the handoff to the path `begin` gives, and
-runs `factory/step.py end`. The agent does the role's work. The script owns every state decision.
+runs `factory/gate.py apply`. The agent does the role's work. The gate owns every state decision.
 
 ## The step contract
 
@@ -277,9 +277,9 @@ Each slice is a factory ticket under #100 and ends in a state that can be checke
 
 1. The transition table in `workflows/delivery.sm.yaml`: states, events with their source, guards, and
    command labels, without `parallel` and `loop`. `sm.py validate` and `sm.py simulate` cover the table.
-2. `factory/step.py`: `begin` and `end` with the GitHub adapter. The tests stub `gh` and cover each
+2. `factory/gate.py`: `check` and `apply` with the GitHub adapter. The tests stub `gh` and cover each
    of the 30 numbered problems above.
-3. The local target runs on `step.py`: the local driver (since retired) turned polled events into the same calls. The fork
+3. The local target runs on `gate.py`: the local driver (since retired) turned polled events into the same calls. The fork
    and loop engine code is deleted in the same change.
 4. The Air target (#7): render the automations in the table from `delivery.sm.yaml` and `factory.yaml`.
 5. The sweep on both targets.
@@ -297,7 +297,8 @@ flowchart LR
     classDef planned fill:#fafafa,stroke:#999,stroke-dasharray:5 5,color:#666
     classDef ext fill:#efe,stroke:#393
     N_human["<b>human</b><br/>on: a person<br/>human"]:::node
-    N_intake["<b>intake</b><br/>on: issue +factory:ready<br/>router · cheap"]:::node
+    N_intake["<b>intake</b><br/>on: issue +factory:triage<br/>router · cheap"]:::node
+    N_start["<b>start</b><br/>on: issue +factory:ready<br/>script"]:::node
     N_investigate["<b>investigate</b> (#161)<br/>on: issue +factory:investigating<br/>developer · mid"]:::planned
     N_implement["<b>implement</b><br/>on: issue +factory:implement-{cheap|mid|strong}<br/>developer · cheap|mid|strong"]:::node
     N_adopt["<b>adopt</b> (#160)<br/>on: PR +factory:adopt<br/>router · cheap"]:::planned
@@ -309,7 +310,10 @@ flowchart LR
     N_merge["<b>merge</b><br/>on: issue +factory:approved<br/>on: PR +factory:ci-green<br/>script"]:::node
     N_finish["<b>finish</b><br/>on: PR merged<br/>on: issue closed<br/>on: issue +factory:blocked<br/>on: issues.comment<br/>script"]:::node
     N_notify["<b>notify</b><br/>on: issue +factory:blocked<br/>on: issue +factory:needs-answers<br/>script"]:::node
-    N_recover["<b>recover</b><br/>on: cron 15 * * * *<br/>script"]:::node
+    N_recover["<b>recover</b><br/>on: cron 0 6,18 * * *<br/>script"]:::node
+    N_doctor["<b>doctor</b><br/>on: cron 0 5 * * *<br/>script"]:::node
+    N_doctor_write["<b>doctor-write</b><br/>on: cron 0 5 * * *<br/>script"]:::node
+    N_doctor_ops["<b>doctor-ops</b><br/>on: cron 0 5 * * *<br/>script"]:::node
     N_retro["<b>retro</b><br/>on: cron 0 2 * * *<br/>retro · review tiers"]:::node
     N_distill["<b>distill</b><br/>on: cron 0 3 * * 1<br/>distill · review tiers"]:::node
     CI["<b>CI</b> quality-gates + ci-state.yml<br/>on: PR push<br/>writes +factory:ci-green or +factory:ci-red"]:::ext
@@ -325,8 +329,10 @@ flowchart LR
     S_not_actionable(["not-actionable"]):::stage
     S_ready(["ready"]):::stage
     S_split(["split"]):::stage
+    S_triage(["triage"]):::stage
     S_none(["PR with no stage"]):::stage
     S_draft --> N_human
+    S_ready --> N_human
     S_in_dev --> N_human
     S_in_review --> N_human
     S_changes_requested --> N_human
@@ -336,14 +342,18 @@ flowchart LR
     S_split --> N_human
     S_not_actionable --> N_human
     S_investigating --> N_human
+    N_human -- "triage" --> S_triage
+    S_triage --> N_human
     N_human -- "ready" --> S_ready
-    S_ready --> N_intake
-    N_intake -- "proceed +factory:implement-{tier}" --> S_in_dev
+    S_triage --> N_intake
+    N_intake -- "proceed" --> S_ready
     N_intake -- "grill" --> S_needs_answers
     N_intake -- "split" --> S_split
     N_intake -- "not-actionable" --> S_not_actionable
-    S_ready -.-> N_intake
+    S_triage -.-> N_intake
     N_intake -. "bug (#161)" -.-> S_investigating
+    S_ready --> N_start
+    N_start -- "started +factory:implement-{tier}" --> S_in_dev
     S_investigating -.-> N_investigate
     N_investigate -. "bug" -.-> S_in_dev
     N_investigate -. "intended" -.-> S_not_actionable
@@ -370,7 +380,7 @@ flowchart LR
     N_reopen -- "reopened" --> S_in_review
     S_approved --> N_merge
     S_needs_answers --> N_finish
-    N_finish -- "answered" --> S_ready
+    N_finish -- "answered" --> S_triage
     S_split --> N_finish
     N_finish -- "children-done" --> S_done
     N_finish -- "child-blocked" --> S_blocked
@@ -395,8 +405,9 @@ flowchart LR
 
 | Node | Starts on | Writes (labels it adds, stage it sets) | Role · tier | Status |
 |---|---|---|---|---|
-| `human` | `a person` | ready: → ready | human | built |
-| `intake` | `issue +factory:ready` | proceed: +factory:implement-{tier} → in-dev<br>grill: → needs-answers<br>split: → split<br>not-actionable: → not-actionable<br>bug: → investigating (planned #161) | router · cheap | built |
+| `human` | `a person` | triage: → triage<br>ready: → ready | human | built |
+| `intake` | `issue +factory:triage` | proceed: → ready<br>grill: → needs-answers<br>split: → split<br>not-actionable: → not-actionable<br>bug: → investigating (planned #161) | router · cheap | built |
+| `start` | `issue +factory:ready` | started: +factory:implement-{tier} → in-dev | script | built |
 | `investigate` | `issue +factory:investigating` | bug: → in-dev<br>intended: → not-actionable<br>cannot-reproduce: → needs-answers | developer · mid | planned #161 |
 | `implement` | `issue +factory:implement-{cheap|mid|strong}` | done: → in-review<br>error: +factory:implement-{next} → in-dev<br>blocked: → blocked<br>failed: → blocked | developer · cheap/mid/strong | built |
 | `adopt` | `PR +factory:adopt` | adopted: → in-review | router · cheap | planned #160 |
@@ -406,9 +417,12 @@ flowchart LR
 | `update` | `PR +factory:update-{cheap|mid|strong}` | resolved: → in-review<br>escalate: +factory:update-{next} → changes-requested<br>unresolvable: → blocked | developer · cheap/mid/strong | built |
 | `reopen` | `PR push`<br>`PR +factory:ci-red` | reopened: → in-review | script | built |
 | `merge` | `issue +factory:approved`<br>`PR +factory:ci-green` | merged: —<br>updated: —<br>waiting: — | script | built |
-| `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked`<br>`issues.comment` | answered: → ready<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
+| `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked`<br>`issues.comment` | answered: → triage<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
 | `notify` | `issue +factory:blocked`<br>`issue +factory:needs-answers` | notified: — | script | built |
-| `recover` | `cron 15 * * * *` | blocked: → blocked | script | built |
+| `recover` | `cron 0 6,18 * * *` | blocked: → blocked | script | built |
+| `doctor` | `cron 0 5 * * *` | probed: — | script | built |
+| `doctor-write` | `cron 0 5 * * *` | probed: — | script | built |
+| `doctor-ops` | `cron 0 5 * * *` | probed: — | script | built |
 | `retro` | `cron 0 2 * * *` | recorded: — | retro · per focus | built |
 | `distill` | `cron 0 3 * * 1` | proposed: — | distill · per focus | built |
 <!-- /nodes-chart -->

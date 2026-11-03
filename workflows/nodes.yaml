@@ -33,7 +33,8 @@ adapters:
 schedules:
   retro: { cron: "0 2 * * *" }
   distill: { cron: "0 3 * * 1" }
-  recover: { cron: "15 * * * *" }
+  recover: { cron: "0 6,18 * * *" }
+  doctor: { cron: "0 5 * * *" }
 nodes:
   human:
     triggers: ["manual"]
@@ -41,21 +42,35 @@ nodes:
     role: human
     outcomes:
       # A person resumes a ticket from every stage but done; the gate reads the stage as the latest stage label added.
-      ready: { from: [draft, in-dev, in-review, changes-requested, approved, blocked, needs-answers, split, not-actionable, investigating], effects: [{ stage: ready }] }
+      # `triage` runs the router again (after answers or a scope change); `ready` skips it, or restarts development.
+      triage: { from: [draft, ready, in-dev, in-review, changes-requested, approved, blocked, needs-answers, split, not-actionable, investigating], effects: [{ stage: triage }] }
+      ready: { from: [draft, triage, in-dev, in-review, changes-requested, approved, blocked, needs-answers, split, not-actionable, investigating], effects: [{ stage: ready }] }
   intake:
     env: read
     pilot: true
-    triggers: ["issues.labeled factory:ready"]
-    when: { stage: ready, blockers: closed }
+    triggers: ["issues.labeled factory:triage"]
+    when: { stage: triage }
     role: router
     tier: cheap
     output: read-only
     outcomes:
-      proceed: { effects: [{ set-field: risk }, { set-field: complexity }, { label: "factory:implement-<tier>" }, { stage: in-dev }] }
+      proceed: { effects: [{ set-field: risk }, { set-field: complexity }, { stage: ready }] }
       grill: { effects: [{ comment: questions }, { stage: needs-answers }] }
       split: { effects: [{ create-issues: children }, { stage: split }] }
       not-actionable: { effects: [{ comment: reason }, { stage: not-actionable }] }
       bug: { enabled: false, ticket: 161, effects: [{ stage: investigating }] }   # investigate is not built yet
+  start:
+    env: read
+    pilot: true
+    triggers: ["issues.labeled factory:ready"]
+    when: { stage: ready, blockers: closed }
+    role: script
+    tier: cheap   # Air automation model; it does no work: the automation runs `uv run factory/gate.py sweep`
+    run: uv run factory/gate.py sweep
+    output: read-only
+    outcomes:
+      # The tier comes from the ticket's `complexity:<size>` label (`defaults.tier` without one); no agent judges.
+      started: { from: [ready], effects: [{ label: "factory:implement-<tier>" }, { stage: in-dev }] }
   investigate:
     env: write
     enabled: false
@@ -147,7 +162,7 @@ nodes:
     outcomes:
       resolved: { effects: [{ unlabel: "factory:update-*", "on": pr }, { stage: in-review }] }
       escalate: { effects: [{ unlabel: "factory:update-*", "on": pr }, { label: "factory:update-<next tier>", "on": pr }, { stage: changes-requested }] }
-      unresolvable: { effects: [{ comment: reason }, { stage: blocked }] }
+      unresolvable: { effects: [{ unlabel: "factory:update-*", "on": pr }, { comment: reason }, { stage: blocked }] }
   reopen:
     env: read
     pilot: true
@@ -185,7 +200,7 @@ nodes:
     run: uv run factory/gate.py sweep
     output: read-only
     outcomes:
-      answered: { from: [needs-answers], effects: [{ stage: ready }] }
+      answered: { from: [needs-answers], effects: [{ stage: triage }] }
       children-done: { from: [split], effects: [{ stage: done }] }
       child-blocked: { from: [split], effects: [{ comment: reason }, { stage: blocked }] }
       conflict: { from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
@@ -214,6 +229,41 @@ nodes:
     outcomes:
       # The sweep writes these itself: one re-fire per ticket and stage, then blocked.
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
+  # `factory doctor` probes permissions and tools of the environment it runs in; one node per environment (read, write, ops)
+  # because an automation belongs to one environment. It changes no ticket: probe failures open `Doctor:` tickets itself.
+  doctor:
+    env: read
+    routine: true  # outside any ticket, and not a sweep step
+    triggers: ["schedule doctor"]
+    when: { always: true }
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py doctor
+    output: read-only
+    outcomes:
+      probed: {}
+  doctor-write:
+    env: write
+    routine: true
+    triggers: ["schedule doctor"]
+    when: { always: true }
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py doctor
+    output: read-only
+    outcomes:
+      probed: {}
+  doctor-ops:
+    env: ops
+    routine: true
+    triggers: ["schedule doctor"]
+    when: { always: true }
+    role: script
+    tier: cheap
+    run: uv run factory/cli.py doctor
+    output: read-only
+    outcomes:
+      probed: {}
   # Routines (ADR-0015): outside any ticket. `factory/knowledge.py` holds the entry and PR plans the roles follow.
   retro:
     env: ops

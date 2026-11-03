@@ -34,6 +34,8 @@ jobs:
       - name: Merge main
         if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
         run: git -c user.name=ci -c user.email=ci@example.invalid merge --no-edit origin/main
+      - name: Check documentation references
+        run: uv run --quiet factory/check_refs.py
       - id: checks
         run: |
           set -o pipefail
@@ -46,6 +48,8 @@ jobs:
           for check in config.get("checks", []):
               if check.get("stage", "pre-review") != "pre-review" or check.get("mode") != "blocking":
                   continue
+              if check.get("run") == "uv run --quiet factory/check_refs.py":
+                  continue  # Run once above; the command also lives in the descriptor.
               if check.get("requires") and not shutil.which(check["requires"]):
                   print(f"{check['name']}: skipped")
                   sys.exit(1)
