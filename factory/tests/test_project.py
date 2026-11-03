@@ -47,6 +47,16 @@ class ProjectTest(unittest.TestCase):
             errors = project.validate(write_project(tmp, descriptor))
         self.assertTrue(any("kind" in error and "paused" in error for error in errors), errors)
 
+    def test_tracker_url_and_project_accepted(self):
+        descriptor = self.descriptor()
+        descriptor["tracker"] = {"adapter": "youtrack", "url": "https://example.youtrack.cloud", "project": "EX"}
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(project.validate(write_project(tmp, descriptor)), [])
+        del descriptor["tracker"]["project"]
+        with tempfile.TemporaryDirectory() as tmp:
+            errors = project.validate(write_project(tmp, descriptor))
+        self.assertTrue(any(error.startswith("factory.project.yaml.tracker") for error in errors), errors)
+
     def test_defaults_merged(self):
         config.set_team(FIXTURE)
         try:

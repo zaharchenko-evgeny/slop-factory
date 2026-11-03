@@ -16,10 +16,16 @@
     "tracker": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["adapter", "repository"],
+      "required": ["adapter"],
+      "oneOf": [
+        {"required": ["repository"]},
+        {"required": ["url", "project"]}
+      ],
       "properties": {
         "adapter": {"type": "string"},
         "repository": {"type": "string"},
+        "url": {"type": "string"},
+        "project": {"type": "string"},
         "map_label": {"type": "string"},
         "review_trigger": {"type": "string"},
         "risk_labels": {"type": "object"},
@@ -90,7 +96,7 @@
     "targets": {"type": "object"},
     "defaults": {"type": "object"},
     "models": {"type": "object", "additionalProperties": {"type": "string"}},
-    "roles": {"type": "object"},
+    "roles": {"type": ["string", "object"]},
     "limits": {"type": "object"},
     "gates": {"type": "object"},
     "checks": {"type": "array", "items": {"type": "object"}},
