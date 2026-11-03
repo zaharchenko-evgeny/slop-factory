@@ -1352,8 +1352,10 @@ class UnblockedSweepTest(unittest.TestCase):
         tr = MemoryTracker({10: {"stage": "approved", "pr_state": "merged",
                                  "body": "- [ ] Operator check after the merge (not part of the PR): re-fire Air"}})
         tr.sweep_tickets = lambda stages: [10]
-        code, result = gate.apply("finish", "merged", {"ticket": 10}, tr, NODES)
-        self.assertEqual((code, result["applied"], tr.tickets[10]["stage"]), (gate.GO, True, "approved"))
+        results, failed = gate.sweep(tr, NODES)
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.tickets[10]["stage"], "approved")
         self.assertIn("factory:needs-human", tr.tickets[10]["attrs"])
         body = next(json.loads(value) for kind, value in tr.tickets[10]["log"] if kind == "comment")
         self.assertIn("- [ ] re-fire Air", body)

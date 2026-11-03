@@ -682,8 +682,9 @@ def sweep_plan(facts, auto_merge=None, default_tier="mid"):
     if stage == "needs-answers" and facts.get("answered"):
         return "finish", "answered", {}
     if stage == "approved" and facts.get("pr_state") == "merged":
+        comments = facts.get("comments", [])
         return ("finish", "merged", {}) if not after_merge_checks(facts.get("body")) \
-            or after_merge_complete(facts.get("comments", [])) else None
+            or not after_merge_comment(comments) or after_merge_complete(comments) else None
     if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
         return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
     if stage == "approved" and facts.get("pr_state") == "open" \
