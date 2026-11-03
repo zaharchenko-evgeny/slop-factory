@@ -261,6 +261,42 @@ class FactsTest(unittest.TestCase):
         self.assertEqual(tr(FakeGh(labels=["x"])).facts(7)["stage"], "none")
 
 
+class BaseMergeGh(FakeGh):
+    """Head h2 follows the approved commit h1; `merge_parents` are the parents of the commit between them."""
+    files = ["a.py"]
+    merge_parents = ["h1", "m0"]
+
+    def __call__(self, args, timeout=None):
+        a = next((x for x in args if x.startswith("repos/")), "")
+        if a.endswith("/compare/h1...h2"):
+            return json.dumps({"commits": [{"sha": "h2", "parents": [{"sha": p} for p in self.merge_parents]}],
+                               "files": [{"filename": x} for x in self.files]})
+        if a.endswith("/compare/main...m0"):
+            return json.dumps({"ahead_by": 0})
+        if a.endswith("/pulls/5/files"):
+            return "\n".join(json.dumps({"filename": x}) for x in ("a.py", "b.py"))
+        return super().__call__(args, timeout)
+
+
+class CarriedApprovalTest(unittest.TestCase):
+    def facts(self, **kw):
+        gh = BaseMergeGh(reviews=[review(BOT, M, commit="h1")])
+        gh.head_sha = "h2"
+        gh.__dict__.update(kw)
+        return tr(gh).facts(7)
+
+    def test_approval_survives_clean_base_merge(self):
+        f = self.facts(files=["c.py"])  # the merge only brings in base changes to other files
+        self.assertEqual((f["round_complete"], f["round_verdict"], f["round_head"], f["focus_missing"]), (True, "approve", "h2", []))
+
+    def test_approval_lost_after_conflict_resolution(self):
+        for kw in ({"files": ["a.py"]},  # the merge touched a file the PR changes
+                   {"files": ["c.py"], "merge_parents": ["h1"]}):  # a developer commit, not a merge
+            with self.subTest(kw=kw):
+                f = self.facts(**kw)
+                self.assertEqual((f["round_complete"], f["round_head"], f["focus_missing"]), (False, "h1", ["full"]))
+
+
 class EffectsTest(unittest.TestCase):
     def twice(self, gh, e):
         t = tr(gh)

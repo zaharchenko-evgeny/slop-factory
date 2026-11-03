@@ -1205,6 +1205,13 @@ class AutoMergeTest(unittest.TestCase):
         self.assertEqual(results, [("merge", "merged")])
         self.assertEqual(self.log(tr, "merge"), ["match-head"])
 
+    def test_merge_after_update_branch_without_rereview(self):
+        tr, results = self.sweep(behind=True, head="h2", round_head="h2")  # facts carry a clean-merge approval to the new head
+        self.assertEqual(results, [("merge", "updated")])
+        tr, results = self.sweep(head="h2", round_head="h2")
+        self.assertEqual(results, [("merge", "merged")])
+        self.assertEqual(self.log(tr, "merge"), ["match-head"])
+
     def test_no_merge_when_head_not_reviewed(self):
         for kw in ({"round_head": "old"}, {"round_head": None}, {"round_verdict": "changes"}, {"round_complete": False}):
             with self.subTest(kw=kw):

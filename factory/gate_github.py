@@ -243,6 +243,28 @@ class GitHubGateTracker:
             out[-1]["findings"] = re.findall(r"^\*\*([A-Z]\d+)\*\*", r.get("body") or "", re.M)
         return out
 
+    def _clean_base_advance(self, old, head, pr, own):
+        """True when every commit from `old` to `head` merges the base branch (second parent already on the base) and
+        the files the PR changes are the same at both commits, so a merge needed no conflict resolution."""
+        try:
+            span = self._api(f"compare/{old}...{head}")
+            return bool(span["commits"]) and not own & {x["filename"] for x in span["files"]} and all(
+                len(c["parents"]) == 2 and self._api(f"compare/{pr['base']['ref']}...{c['parents'][1]['sha']}")["ahead_by"] == 0
+                for c in span["commits"])
+        except Exception:  # unknown means the new head needs a review
+            return False
+
+    def _carry_approvals(self, reviews, pr):
+        """An agent approval of an earlier commit counts at `head` after a clean merge of the base (marked `carried`)."""
+        head, own, clean = pr["head"]["sha"], None, {}
+        for r in reviews:
+            if r["agent"] and r["verdict"] == "approve" and r["commit_id"] != head:
+                if own is None:
+                    own = {x["filename"] for x in self._list(f"pulls/{pr['number']}/files")}
+                if clean.setdefault(r["commit_id"], self._clean_base_advance(r["commit_id"], head, pr, own)):
+                    r.update(commit_id=head, carried=True)
+        return reviews
+
     def _can_write(self, login):
         """Write access from the collaborator permission API (author_association says nothing about the role)."""
         try:
@@ -389,7 +411,7 @@ class GitHubGateTracker:
                                 "blocked": k.get("state") != "closed" and self.stages["blocked"] in [x["name"] for x in k.get("labels") or []]}
                                for k in kids])
         if pr:
-            head, reviews = pr["head"]["sha"], self._reviews(pr)
+            head, reviews = pr["head"]["sha"], self._carry_approvals(self._reviews(pr), pr)
             pr_labels = {x["name"] for x in pr.get("labels", [])}
             pending_rereviews = [focus for focus in required if f"factory:rereview-{focus}" in pr_labels]
             latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
