@@ -17,11 +17,12 @@ pushes the tag; the tag is not created by this change.
 ## Use
 
 `factory --help` lists the available commands. The subcommands are `begin`,
-`end`, `check`, `apply`, `sweep`, `deploy`, `chart`, `validate`, and `doctor`.
+`end`, `check`, `apply`, `sweep`, `deploy`, `contracts`, `chart`, `validate`, and `doctor`.
 `begin` starts a node and prints its handoff path; `end` applies the completed
 handoff. `check` and `apply` operate the gate, while `sweep` runs its event
 processing. `deploy` creates Air automations, `chart` renders the workflow,
 `validate` checks configuration, and `doctor` diagnoses the local setup.
+`contracts refresh` re-records the Air service contracts and is operator-only.
 
 ## Team configuration
 
@@ -45,3 +46,8 @@ repository's descriptor and overrides configure its own factory.
 
 See [factory setup](skills/factory-setup/SKILL.md), [design](docs/design.md),
 and the [delivery workflow](workflows/delivery.md) for more detail.
+
+## Attention
+
+Find every open ticket or pull request waiting for a person with
+`is:open label:factory:needs-human`.

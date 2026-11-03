@@ -20,7 +20,11 @@ Input: a request (free text or a tracker issue).
    excludes. If it does not, or uses a judgement word such as "history",
    "clean" or "appropriate" instead of a command or test name, choose `grill`:
    mark the ticket not ready and ask which paths the check should cover or
-   exclude, and what command or test should verify it.
+   exclude, and what command or test should verify it. Put the proposed
+   replacement checks in the handoff's `proposed_checks` (a list: named tests,
+   paths and commands), so a person accepts by editing the ticket or by
+   `factory:triage` with the proposal pasted.
+   Every Operator check must become a test or be rewritten as `Operator check after the merge (not part of the PR): …`.
 3. The gate derives the risk path from the issue's risk label; do not state it.
 4. Estimate the size as the lines a reviewer must read: added lines plus
    modified lines, counting tests and fixtures, not only production code.

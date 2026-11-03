@@ -302,7 +302,7 @@ flowchart LR
     N_investigate["<b>investigate</b> (#161)<br/>on: issue +factory:investigating<br/>developer · mid"]:::planned
     N_implement["<b>implement</b><br/>on: issue +factory:implement-{cheap|mid|strong}<br/>developer · cheap|mid|strong"]:::node
     N_adopt["<b>adopt</b> (#160)<br/>on: PR +factory:adopt<br/>router · cheap"]:::planned
-    N_review["<b>review</b><br/>on: PR +factory:ci-green<br/>on: PR +factory:rereview-<focus><br/>reviewer · review tiers"]:::node
+    N_review["<b>review</b><br/>on: PR +factory:review-<focus><br/>on: PR +factory:rereview-<focus><br/>reviewer · review tiers"]:::node
     N_join["<b>join</b><br/>on: PR review submitted<br/>on: PR +factory:ci-red<br/>script"]:::node
     N_fix["<b>fix</b><br/>on: PR +factory:fix-{cheap|mid|strong}<br/>developer · cheap|mid|strong"]:::node
     N_update["<b>update</b><br/>on: PR +factory:update-{cheap|mid|strong}<br/>developer · cheap|mid|strong"]:::node
@@ -310,7 +310,8 @@ flowchart LR
     N_merge["<b>merge</b><br/>on: issue +factory:approved<br/>on: PR +factory:ci-green<br/>script"]:::node
     N_finish["<b>finish</b><br/>on: PR merged<br/>on: issue closed<br/>on: issue +factory:blocked<br/>on: issues.comment<br/>script"]:::node
     N_notify["<b>notify</b><br/>on: issue +factory:blocked<br/>on: issue +factory:needs-answers<br/>script"]:::node
-    N_recover["<b>recover</b><br/>on: cron 0 6,18 * * *<br/>script"]:::node
+    N_recover["<b>recover</b><br/>on: a person<br/>script"]:::node
+    N_reconcile["<b>reconcile</b><br/>on: cron 7,37 * * * *<br/>on: run of quality-gates<br/>on: issue +<br/>on: issue label removed<br/>on: issue closed<br/>on: PR review submitted<br/>script"]:::node
     N_doctor["<b>doctor</b><br/>on: cron 0 5 * * *<br/>script"]:::node
     N_doctor_write["<b>doctor-write</b><br/>on: cron 0 5 * * *<br/>script"]:::node
     N_doctor_ops["<b>doctor-ops</b><br/>on: cron 0 5 * * *<br/>script"]:::node
@@ -363,6 +364,7 @@ flowchart LR
     N_implement -- "error +factory:implement-{next}" --> S_in_dev
     N_implement -- "blocked" --> S_blocked
     N_implement -- "failed" --> S_blocked
+    N_implement -- "env-broken" --> S_ready
     S_none -.-> N_adopt
     N_adopt -. "adopted" -.-> S_in_review
     S_in_review --> N_review
@@ -372,6 +374,8 @@ flowchart LR
     S_changes_requested --> N_fix
     N_fix -- "done" --> S_in_review
     N_fix -- "blocked" --> S_blocked
+    N_fix -- "env-broken" --> S_ready
+    N_fix -- "nothing-to-fix join" --> S_in_review
     S_changes_requested --> N_update
     N_update -- "resolved" --> S_in_review
     N_update -- "escalate +factory:update-{next}" --> S_changes_requested
@@ -409,17 +413,18 @@ flowchart LR
 | `intake` | `issue +factory:triage` | proceed: → ready<br>grill: → needs-answers<br>split: → split<br>not-actionable: → not-actionable<br>bug: → investigating (planned #161) | router · cheap | built |
 | `start` | `issue +factory:ready` | started: +factory:implement-{tier} → in-dev | script | built |
 | `investigate` | `issue +factory:investigating` | bug: → in-dev<br>intended: → not-actionable<br>cannot-reproduce: → needs-answers | developer · mid | planned #161 |
-| `implement` | `issue +factory:implement-{cheap|mid|strong}` | done: → in-review<br>error: +factory:implement-{next} → in-dev<br>blocked: → blocked<br>failed: → blocked | developer · cheap/mid/strong | built |
+| `implement` | `issue +factory:implement-{cheap|mid|strong}` | done: → in-review<br>error: +factory:implement-{next} → in-dev<br>blocked: → blocked<br>failed: → blocked<br>env-broken: → ready | developer · cheap/mid/strong | built |
 | `adopt` | `PR +factory:adopt` | adopted: → in-review | router · cheap | planned #160 |
-| `review` | `PR +factory:ci-green`<br>`PR +factory:rereview-<focus>` | approve: —<br>changes: — | reviewer · per focus | built |
+| `review` | `PR +factory:review-<focus>`<br>`PR +factory:rereview-<focus>` | approve: —<br>changes: — | reviewer · per focus | built |
 | `join` | `PR review submitted`<br>`PR +factory:ci-red` | changes: +factory:fix-{tier} → changes-requested<br>approved: → approved<br>waiting: join | script | built |
-| `fix` | `PR +factory:fix-{cheap|mid|strong}` | done: → in-review<br>blocked: → blocked | developer · cheap/mid/strong | built |
+| `fix` | `PR +factory:fix-{cheap|mid|strong}` | done: → in-review<br>blocked: → blocked<br>env-broken: → ready<br>nothing-to-fix: join → in-review | developer · cheap/mid/strong | built |
 | `update` | `PR +factory:update-{cheap|mid|strong}` | resolved: → in-review<br>escalate: +factory:update-{next} → changes-requested<br>unresolvable: → blocked | developer · cheap/mid/strong | built |
 | `reopen` | `PR push`<br>`PR +factory:ci-red` | reopened: → in-review | script | built |
 | `merge` | `issue +factory:approved`<br>`PR +factory:ci-green` | merged: —<br>updated: —<br>waiting: — | script | built |
 | `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked`<br>`issues.comment` | answered: → triage<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
 | `notify` | `issue +factory:blocked`<br>`issue +factory:needs-answers` | notified: — | script | built |
-| `recover` | `cron 0 6,18 * * *` | blocked: → blocked | script | built |
+| `recover` | `a person` | blocked: → blocked | script | built |
+| `reconcile` | `cron 7,37 * * * *`<br>`run of quality-gates`<br>`issue +`<br>`issue label removed`<br>`issue closed`<br>`PR review submitted` | reconciled: — | script | built |
 | `doctor` | `cron 0 5 * * *` | probed: — | script | built |
 | `doctor-write` | `cron 0 5 * * *` | probed: — | script | built |
 | `doctor-ops` | `cron 0 5 * * *` | probed: — | script | built |

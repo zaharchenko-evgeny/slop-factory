@@ -8,7 +8,9 @@ A marker `<!-- factory:review focus=<f> round=<n> verdict=approve|changes -->` c
 """
 import json
 import re
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,7 +18,60 @@ from pathlib import Path
 import yaml
 
 import config
+from gate_port import fix_round_count
 from github_tracker import gh
+
+COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
+NOTE_FIELDS, NOTE_FOR, NOTE_MAX = ("for", "files", "repro", "hint", "context"), ("fixer", "reviewer", "developer", "any"), 2000
+NOTES_PARKED = "[factory] Agent notes for the PR description"  # ticket comment that holds them until the PR exists
+NOTES = re.compile(r"<!-- factory:agent-notes\s*(\{.*?\})\s*-->", re.S)
+SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)|\bAIza[\w-]{35}\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}"
+                    r"|\bgithub_pat_\w{20,}|\bxox[abprs]-[\w-]{10,}|\bsk-[A-Za-z0-9_-]{20,}"
+                    r'|(?i:\b(?:api[_-]?key|secret|token|passw(?:or)?d)\b\s*[:=]\s*(?:"[^"]*"|[^\s",]+))', re.S)
+
+
+def redact(v):
+    """`v` with secret-looking text redacted in every string, before any serialisation."""
+    if isinstance(v, str):
+        return SECRET.sub("[redacted]", v)
+    if isinstance(v, list):
+        return [redact(x) for x in v]
+    if isinstance(v, dict):
+        return {k: redact(x) for k, x in v.items()}
+    return v
+
+
+def clean_notes(raw):
+    """The notes object of one block: known fields only, secret-looking text redacted; ValueError when it is no
+    object, `for` is unknown or it serialises past NOTE_MAX characters after redaction."""
+    if not isinstance(raw, dict):
+        raise ValueError("agent notes: needs an object")
+    notes = {k: raw[k] for k in NOTE_FIELDS if k in raw}
+    if notes.get("for") not in NOTE_FOR:
+        raise ValueError(f"agent notes: `for` is one of {', '.join(NOTE_FOR)}")
+    notes = {k: redact(v) for k, v in notes.items()}
+    if len(json.dumps(notes)) > NOTE_MAX:
+        raise ValueError(f"agent notes: over {NOTE_MAX} characters")
+    return notes
+
+
+def notes_block(notes):
+    """The hidden block of cleaned notes; `<` and `>` are JSON-escaped so no text can close the comment early."""
+    body = json.dumps(notes).replace("<", "\\u003c").replace(">", "\\u003e")
+    return f"<!-- factory:agent-notes\n{body}\n-->"
+
+
+def parse_notes(body, login="", kind="User"):
+    """The valid notes blocks of `body`, only from a bot author: a person's text is no source of notes."""
+    if kind != "Bot" and not login.endswith("[bot]"):
+        return []
+    out = []
+    for m in NOTES.finditer(body or ""):
+        try:
+            out.append(clean_notes(json.loads(m[1])))
+        except ValueError:
+            pass
+    return out
 
 
 def gate_clear(n):
@@ -28,6 +83,20 @@ def gate_stop(f):
     """The reason a new fix round must not start, else None (the gate's own rule, shared with gate.apply)."""
     from gate import stop_reason
     return stop_reason(f, fix=True)
+
+
+def deploy_plan_at(revision):
+    """Render the plan with the code and config at `revision`, not today's generator."""
+    with tempfile.TemporaryDirectory(prefix="factory-plan-") as path:
+        subprocess.run(["git", "worktree", "add", "--detach", "--quiet", path, revision], check=True,
+                       capture_output=True, text=True)
+        try:
+            output = subprocess.run(["uv", "run", "--quiet", "factory/deploy.py", "plan", "--target", "air"],
+                                    cwd=path, check=True, capture_output=True, text=True).stdout
+            return json.loads(output)
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", path], check=True,
+                           capture_output=True, text=True)
 
 MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))?(?: rereview=(1))? -->")
 FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
@@ -80,25 +149,64 @@ class GitHubGateTracker:
         return sorted(found)
 
     def config_change_merged(self, pr):
-        """Ask open factory PRs to merge main when this merge changes engine configuration."""
+        """Create a deployment reminder when this merge changes the rendered Air plan."""
         if not pr:
             return
-        files = self._list(f"pulls/{pr}/files?per_page=100")
-        if not any(f["filename"] == "factory.descriptor.yaml" or f["filename"].startswith(("engine/", "workflows/"))
-                   for f in files):
+        import config
+        pull = self._api(f"pulls/{pr}")
+        merge_sha = pull.get("merge_commit_sha")
+        if not merge_sha:
             return
-        for other in self._list("pulls?state=open&per_page=100"):
-            head = other.get("head") or {}
-            match = re.match(r"ez/(\d+)-", head.get("ref") or "")
-            if not match or \
-                    ((head.get("repo") or {}).get("full_name") or "").lower() != self.repo.lower():
-                continue
-            # The update node only starts from changes-requested. Move the ticket
-            # before adding its PR command label so the label event can pass check.
-            self.apply({"ticket": int(match[1]), "kind": "stage", "value": "changes-requested"})
-            labels = [x["name"] for x in self._api(f"issues/{other['number']}")["labels"]]
-            if "factory:update-cheap" not in labels:
-                self._edit(other["number"], ["factory:update-cheap"], on="pr")
+        commit = self._api(f"commits/{merge_sha}")
+        parents = commit.get("parents") or []
+        if not parents:
+            return
+
+        before, after = deploy_plan_at(parents[0]["sha"]), deploy_plan_at(merge_sha)
+        if before == after:
+            return
+        # Ensure labels exist before the new plan can wake CI or an automation.
+        known = {x["name"] for x in self._list("labels?per_page=100")}
+        for label in after["labels"]:
+            if label not in known:
+                self.run(["api", f"repos/{self.repo}/labels", "-f", f"name={label}", "-f", "color=ededed"])
+        title = "Deploy needed"
+        existing = next((i for i in self._list("issues?state=open&per_page=100")
+                         if "pull_request" not in i and i.get("title") == title), None)
+        items = []
+        for key in ("automations", "environments", "labels", "files"):
+            old, new = ((before.get(key) or {}, after.get(key) or {}) if key == "files"
+                        else (before.get(key) or [], after.get(key) or []))
+            if key in ("automations", "environments"):
+                old = {x["name"]: x for x in old}
+                new = {x["name"]: x for x in new}
+            elif key == "labels":
+                old, new = {x: x for x in old}, {x: x for x in new}
+            else:
+                old, new = old, new
+            items.extend(f"- {key}: {name}" for name in sorted(old.keys() | new.keys()) if old.get(name) != new.get(name))
+        body = ("[factory] The merged commit changes the Air deploy plan. Run `factory deploy --apply` locally.\n\n"
+                + "\n".join(items) + f"\n\nFactory-Run: finish:{pr}")
+        if existing:
+            self.run(["issue", "edit", str(existing["number"]), "-R", self.repo, "--body", body,
+                      "--add-label", "factory:needs-human", "--add-assignee", config.load()["notify"]["github_user"]])
+            self.run(["issue", "comment", str(existing["number"]), "-R", self.repo, "--body",
+                      f"[factory] Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}"])
+        else:
+            url = self.run(["issue", "create", "-R", self.repo, "--title", title, "--body", body,
+                            "--label", "factory:needs-human", "--assignee", config.load()["notify"]["github_user"]]).strip()
+            self.run(["issue", "comment", url.rsplit("/", 1)[-1], "-R", self.repo, "--body",
+                      f"[factory] Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}"])
+
+    def deploy_applied(self, plan):
+        """Close the reminder after an operator confirms the deployed plan is unchanged."""
+        issue = next((i for i in self._list("issues?state=open&per_page=100")
+                      if "pull_request" not in i and i.get("title") == "Deploy needed"), None)
+        if not issue:
+            return
+        self.run(["issue", "comment", str(issue["number"]), "-R", self.repo, "--body",
+                  "[factory] `factory deploy --apply` confirmed the current plan is applied. <!-- factory:deploy-applied -->\n\nFactory-Run: deploy:apply"])
+        self.run(["issue", "close", str(issue["number"]), "-R", self.repo])
 
     def _pr(self, n):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""
@@ -114,6 +222,21 @@ class GitHubGateTracker:
             time.sleep(2)
             pr = self._api(f"pulls/{prs[-1]['number']}")
         return pr
+
+    def ticket_for_pr(self, number):
+        """Resolve a PR number to its ticket from the live head ref."""
+        pr = self._api(f"pulls/{number}")
+        ref = ((pr.get("head") or {}).get("ref") or "")
+        match = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
+        return int(match[1]) if match else None
+
+    def _prs(self, n, open_only=False):
+        """The ticket's PRs from its branch; cleanup also includes closed PRs."""
+        prs = [p for p in self._list("pulls?state=all&per_page=100")
+               if p["head"]["ref"].startswith(f"ez/{n}-")
+               and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.repo.lower()
+               and (not open_only or p["state"] == "open")]
+        return sorted(prs, key=lambda p: p["number"])
 
     def _ci(self, sha):
         """CI at `sha` from the Actions workflow runs (the Air GitHub App has Actions: read, not Checks: read, so
@@ -182,6 +305,42 @@ class GitHubGateTracker:
                         "bot": r["user"].get("type") == "Bot" or r["user"]["login"].endswith("[bot]")})
             out[-1]["findings"] = re.findall(r"^\*\*([A-Z]\d+)\*\*", r.get("body") or "", re.M)
         return out
+
+    def _pr_patch(self, base, sha):
+        """The PR's patch at `sha` as {file: patch with hunk line numbers dropped}, like `git patch-id --stable`.
+        None when GitHub omits a patch (binary or huge diff) or the compare list may be cut at its 300-file limit,
+        so the caller cannot compare."""
+        files = self._api(f"compare/{base}...{sha}")["files"]
+        if len(files) >= COMPARE_FILE_LIMIT or any(x.get("patch") is None for x in files):
+            return None
+        return {x["filename"]: re.sub(r"^@@ .*? @@", "@@", x["patch"], flags=re.M) for x in files}
+
+    def _clean_base_advance(self, old, head, pr):
+        """True when every commit from `old` to `head` is a merge whose first parent is the previous commit and whose
+        other parent is already on the base branch, and the PR's patch is identical at both. Who made the merge does
+        not matter; what it contains does."""
+        base = pr["base"]["ref"]
+        try:
+            prev = old
+            for c in self._api(f"compare/{old}...{head}")["commits"]:
+                parents = [x["sha"] for x in c["parents"]]
+                if len(parents) != 2 or parents[0] != prev or self._api(f"compare/{base}...{parents[1]}")["ahead_by"] != 0:
+                    return False
+                prev = c["sha"]
+            patch = self._pr_patch(base, old)
+            # a truncated compare list stops short of the head: the omitted commits are unchecked
+            return prev == head != old and patch is not None and patch == self._pr_patch(base, head)
+        except Exception:  # unknown means the new head needs a review
+            return False
+
+    def _carry_approvals(self, reviews, pr):
+        """An agent approval of an earlier commit counts at `head` after a clean merge of the base (marked `carried`)."""
+        head, clean = pr["head"]["sha"], {}
+        for r in reviews:
+            if r["agent"] and r["verdict"] == "approve" and r["commit_id"] != head:
+                if clean.setdefault(r["commit_id"], self._clean_base_advance(r["commit_id"], head, pr)):
+                    r.update(commit_id=head, carried=True)
+        return reviews
 
     def _can_write(self, login):
         """Write access from the collaborator permission API (author_association says nothing about the role)."""
@@ -279,6 +438,7 @@ class GitHubGateTracker:
         labels = [x["name"] for x in issue["labels"]]
         by_label = {v: k for k, v in self.stages.items()}
         events = self._list(f"issues/{n}/events")
+        actor_events = [e for e in events if e.get("event") in ("labeled", "unlabeled", "closed", "reopened")]
         # The stage is the stage label added last (a person's factory:ready on a running ticket wins over the
         # label it replaces); `apply` of the stage effect removes the others.
         # Order by event position, not timestamp: the events list is chronological and timestamps can tie.
@@ -303,11 +463,15 @@ class GitHubGateTracker:
              "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none", "pending_rereviews": [],
              "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
              "handed_to_fix": False, "risk": risk, "behind": False,
-             "issue_state": issue.get("state", "open"),
+             "issue_state": issue.get("state", "open"), "updated_at": issue.get("updated_at"),
+             "event_actor": ((actor_events[-1].get("actor") or {}).get("login") if actor_events else None),
              "title": issue.get("title", ""), "body": body, "author": (issue.get("user") or {}).get("login"), "branch": None}
+        since = getattr(self, "_since", "")  # a person's factory:ready starts fresh
+        comments = self._list(f"issues/{n}/comments")
+        f["comments"] = comments
+        got = self._notes(comments, "created_at", since)
         if stage == "needs-answers":
             waiting = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["needs-answers"]]
-            comments = self._list(f"issues/{n}/comments")
             if waiting and comments:
                 started = waiting[-1].get("created_at", "")
                 ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") in (self.stages["triage"], self.stages["ready"])]
@@ -324,7 +488,7 @@ class GitHubGateTracker:
                                 "blocked": k.get("state") != "closed" and self.stages["blocked"] in [x["name"] for x in k.get("labels") or []]}
                                for k in kids])
         if pr:
-            head, reviews = pr["head"]["sha"], self._reviews(pr)
+            head, reviews = pr["head"]["sha"], self._carry_approvals(self._reviews(pr), pr)
             pr_labels = {x["name"] for x in pr.get("labels", [])}
             pending_rereviews = [focus for focus in required if f"factory:rereview-{focus}" in pr_labels]
             latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
@@ -338,6 +502,9 @@ class GitHubGateTracker:
             f["handed_to_fix"] = bool(writes) and max(writes) > max(latest_review, commit_date)
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
+            got += (self._notes(self._list(f"issues/{pr['number']}/comments"), "created_at", since)
+                    + self._notes(self._list(f"pulls/{pr['number']}/reviews"), "submitted_at", since)
+                    + self._notes([pr], "updated_at", since))  # the PR body is edited after creation
             if stage == "approved" and pr.get("state") == "open":  # only the merge gates read it
                 f["behind"] = self._api(f"compare/{pr['base']['ref']}...{head}")["behind_by"] > 0
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
@@ -346,10 +513,14 @@ class GitHubGateTracker:
                      pending_rereviews=pending_rereviews, pr_labels=sorted(pr_labels),
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                     fix_rounds=len({(r["commit_id"], r["rereview"]) for r in reviews
-                                     if r["agent"] and r["verdict"] == "changes"
-                                     and (r.get("submitted_at") or "") >= since}))  # same-head dispute rereviews count as a new round
+                     fix_rounds=fix_round_count(reviews, since))  # same-head dispute rereviews count as a new round
+        f["agent_notes"] = [n for _, n in sorted(got, key=lambda t: t[0], reverse=True)]
         return f
+
+    def _notes(self, items, stamp, since):
+        """(time, notes) of the bot-written items (comments, reviews, a PR) from `since` on."""
+        return [(x.get(stamp) or "", n) for x in items if (x.get(stamp) or "") >= since
+                for n in parse_notes(x.get("body"), (x.get("user") or {}).get("login", ""), (x.get("user") or {}).get("type", ""))]
 
     def stale_facts(self, n):
         """facts plus what the stale sweep needs: `since` (last label or commit event, ISO), the command label
@@ -363,23 +534,26 @@ class GitHubGateTracker:
                 if e.get("event") == "labeled":
                     labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
         pr_labels = f.get("pr_labels", [])
+        review_labels = [(x, labeled.get((pr, x), "")) for x in pr_labels
+                         if x.startswith(("factory:review-", "factory:rereview-")) and labeled.get((pr, x))]
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
-        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-", "factory:update-"))), None)
+        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-", "factory:update-", "factory:review-"))), None)
         command_labels = ("factory:ready", "factory:triage", "factory:implement-", "factory:fix-",
                           "factory:update-", "factory:ci-green")
         active_commands = {(t, x) for t, x in have if x == "factory:ready" or x == "factory:triage"
-                           or x == "factory:ci-green" or x.startswith(command_labels[2:5])}
+                           or x == "factory:ci-green" or x.startswith(command_labels[2:5]) or x.startswith("factory:review-")}
         command_events = [e for t, e in events if e.get("event") == "labeled"
                           and (t, e.get("label", {}).get("name")) in active_commands]
         commit_at = self._api(f"commits/{f['head']}")["commit"]["committer"]["date"] if f["head"] else None
         latest_event = max([e.get("created_at", "") for _, e in events] + [commit_at or ""])
         latest_command = max((e["created_at"] for e in command_events), default="")
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
-        comments = [c["body"] for c in self._list(f"issues/{n}/comments") if c["body"].startswith("[factory] recover:")
+        comments = [c["body"] for c in self._list(f"issues/{n}/comments") if c["body"].startswith(("[factory] recover:", "[factory] reconcile:"))
                     and c["created_at"] >= stage_at]
         return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
                 "command_pending": bool(latest_command and latest_command == latest_event),
                 "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
+                "review_labels": review_labels,
                 "ci_label": next((x[11:] for x in pr_labels if x in ("factory:ci-green", "factory:ci-red")
                                  and x[11:] == f.get("ci")), None)}  # a label left over from an earlier head is not this head's CI
 
@@ -405,12 +579,25 @@ class GitHubGateTracker:
         if kind in ("label", "unlabel"):
             on, target = e.get("on") or "issue", n
             if on == "pr":
-                pr = self._pr(n)
-                if pr is None:
-                    if kind == "unlabel":
-                        return False  # nothing to remove from a PR that does not exist
-                    raise RuntimeError(f"{kind}: no PR for ticket {n}")
-                target = pr["number"]
+                attention = value == "factory:needs-human"
+                if attention:
+                    prs = self._prs(n, open_only=kind == "label")
+                else:
+                    pr = self._pr(n)
+                    prs = [pr] if pr else []
+                if not prs:
+                    return False  # ticket-level waits also apply before a PR exists
+                changed = False
+                for pr in prs:
+                    labels = self._labels(pr["number"])
+                    if kind == "label":
+                        if value not in labels:
+                            changed |= self._edit(pr["number"], [value], on=on)
+                    else:
+                        gone = [x for x in labels if x.startswith(value[:-1])] if value.endswith("*") else [value] if value in labels else []
+                        if gone:
+                            changed |= self._edit(pr["number"], remove=gone, on=on)
+                return changed
             elif on != "issue":
                 raise ValueError(f"{kind}: bad target: {on}")
             labels = self._labels(target)
@@ -425,13 +612,30 @@ class GitHubGateTracker:
             return have != [f"{k}:{v}"] and self._edit(n, [f"{k}:{v}"] if f"{k}:{v}" not in have else [],
                                                        [x for x in have if x != f"{k}:{v}"])
         if kind in ("assign", "unassign"):
-            current = {a["login"] for a in self._api(f"issues/{n}").get("assignees", [])}
+            on, target = e.get("on") or "issue", n
+            if on == "pr":
+                prs = self._prs(n, open_only=kind == "assign")
+                if not prs:
+                    return False
+                changed = False
+                for pr in prs:
+                    current = {a["login"] for a in self._api(f"issues/{pr['number']}").get("assignees", [])}
+                    desired = set((value if isinstance(value, list) else [value])) if kind == "assign" else set()
+                    if current != desired:
+                        flags = [x for a in sorted(desired - current) for x in ("--add-assignee", a)]
+                        flags += [x for a in sorted(current - desired) for x in ("--remove-assignee", a)]
+                        self.run(["issue", "edit", str(pr["number"]), "-R", self.repo, *flags])
+                        changed = True
+                return changed
+            elif on != "issue":
+                raise ValueError(f"{kind}: bad target: {on}")
+            current = {a["login"] for a in self._api(f"issues/{target}").get("assignees", [])}
             desired = set((value if isinstance(value, list) else [value])) if kind == "assign" else set()
             if current == desired:
                 return False
             flags = [x for a in sorted(desired - current) for x in ("--add-assignee", a)]
             flags += [x for a in sorted(current - desired) for x in ("--remove-assignee", a)]
-            self.run(["issue", "edit", str(n), "-R", self.repo, *flags])
+            self.run(["issue", "edit", str(target), "-R", self.repo, *flags])
             return True
         if kind == "comment":
             body = value if value.startswith("[factory]") else f"[factory] {value}"
@@ -443,7 +647,31 @@ class GitHubGateTracker:
                 raise RuntimeError(f"comment: no PR for ticket {n}")
             if any(c["body"] == body for c in self._list(f"issues/{pr['number'] if pr else n}/comments")):
                 return False
+            body += self._block(e)
             self.run(["issue", "comment", str(pr["number"] if pr else n), "-R", self.repo, "--body", body])
+            return True
+        if kind in ("pr-notes", "pr-notes-sync"):  # a developer's `done` notes for the PR description
+            pr = self._pr(n)
+            if kind == "pr-notes" and pr is None:  # Air opens the PR after the run: park the notes on the ticket
+                body = f"{NOTES_PARKED}\n\n{value}"
+                if e.get("run_id"):
+                    body += f"\n\nFactory-Run: {e['run_id']}"
+                if any(c["body"] == body for c in self._list(f"issues/{n}/comments")):
+                    return False
+                self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
+                return True
+            if pr is None:
+                return False
+            if kind == "pr-notes-sync":  # the first gate step that sees the PR copies the parked notes
+                parked = [c for c in self._list(f"issues/{n}/comments") if (c.get("body") or "").startswith(NOTES_PARKED)]
+                found = parse_notes(parked[-1]["body"], (parked[-1].get("user") or {}).get("login", ""),
+                                    (parked[-1].get("user") or {}).get("type", "")) if parked else []
+                if not found:
+                    return False
+                value = notes_block(found[-1])
+            if value in (pr.get("body") or ""):
+                return False
+            self.run(["pr", "edit", str(pr["number"]), "-R", self.repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
             return True
         if kind == "review":
             return self._review(n, e)
@@ -451,6 +679,8 @@ class GitHubGateTracker:
             return self._rerequest(n)
         if kind == "create-issues":
             return self._create(n, value)
+        if kind == "park-behind-main-red":
+            return self._park(n, value)
         if kind == "merge":
             pr = self._pr(n)
             if pr is None:
@@ -544,6 +774,11 @@ class GitHubGateTracker:
                   *[x for a in who for x in ("-f", f"reviewers[]={a}")]])
         return True
 
+    @staticmethod
+    def _block(e):
+        """The hidden notes block an effect carries (`notes`: the gate's cleaned object), after the visible text."""
+        return f"\n\n{notes_block(e['notes'])}" if e.get("notes") else ""
+
     def _review(self, n, e):
         pr, focus = self._pr(n), e.get("focus")
         if pr is None or not focus:
@@ -570,7 +805,7 @@ class GitHubGateTracker:
         if e.get("run_id"):
             body += f"\n\nFactory-Run: {e['run_id']}"
         self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
-                  "-f", "event=COMMENT", "-f", f"body={body}"])
+                  "-f", "event=COMMENT", "-f", f"body={body}{self._block(e)}"])
         if rereview:
             self._edit(pr["number"], remove=[f"factory:rereview-{focus}"], on="pr")
         return True
@@ -643,6 +878,20 @@ class GitHubGateTracker:
             prev = new["id"]
             prev_number = new["number"]
         return wrote
+
+    def _park(self, n, check):
+        """Open or reuse the one `Main is red in Air: <check>` ticket, then block ticket `n` by it."""
+        title = f"Main is red in Air: {check}"
+        red = next((i for i in self._list("issues?state=open&per_page=100") if "pull_request" not in i and i["title"] == title), None)
+        if red is None:
+            body = (f"[factory] The required check `{check}` fails identically on unchanged `main` in Air (found while working on #{n}). "
+                    "Fix main; the tickets blocked by this one restart when it closes.")
+            red = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={title}", "-f", f"body={body}",
+                                       "-f", f"labels[]={self.stages['triage']}"]))
+        if red["id"] in {b["id"] for b in self._list(f"issues/{n}/dependencies/blocked_by")}:
+            return False
+        self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={red['id']}"])
+        return True
 
     @staticmethod
     def _blocked_body(body, number):

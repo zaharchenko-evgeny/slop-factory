@@ -21,7 +21,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-cfg.set_team(Path(__file__).resolve().parents[2])
+cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 import deploy  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
@@ -42,6 +42,74 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_plan_change_opens_deploy_ticket(self):
+        class PlanTracker(MemoryTracker):
+            def config_change_merged(self, pr):
+                self.deploy_ticket = {"title": "Deploy needed", "pr": pr}
+        tr = PlanTracker({10: {"stage": "approved", "pr_state": "merged", "pr": 300}})
+        tr.sweep_tickets = lambda stages: [10]
+        facts = tr.facts
+        tr.facts = lambda ticket: {**facts(ticket), "reviews": [], "fix_rounds": 0}
+        gate.sweep(tr, NODES)
+        self.assertEqual(tr.deploy_ticket, {"title": "Deploy needed", "pr": 300})
+
+    def test_unchanged_plan_opens_nothing(self):
+        class PlanTracker(MemoryTracker):
+            def config_change_merged(self, pr):
+                self.deploy_ticket = None
+        tr = PlanTracker({10: {"stage": "approved", "pr_state": "merged", "pr": 300}})
+        tr.sweep_tickets = lambda stages: [10]
+        facts = tr.facts
+        tr.facts = lambda ticket: {**facts(ticket), "reviews": [], "fix_rounds": 0}
+        gate.sweep(tr, NODES)
+        self.assertIsNone(tr.deploy_ticket)
+
+    def test_new_labels_created_at_merge(self):
+        plan = deploy.plan_air(NODES, CONFIG)
+        self.assertIn("factory:needs-human", plan["labels"])
+
+    def test_low_risk_wakes_full_only(self):
+        facts = {"stage": "in-review", "ci": "green", "focus_missing": ["full"]}
+        self.assertEqual(gate.review_wake_labels(facts), ["factory:review-full"])
+
+    def test_ci_completion_wakes_matching_head_while_workflow_is_still_running(self):
+        with tempfile.TemporaryDirectory() as d:
+            tracker = Path(d, "tickets.json")
+            tracker.write_text(json.dumps({"7": {"stage": "in-review", "ci": "pending", "head": "abc",
+                                                   "focus_missing": ["full"]}}))
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(gate.main(["wake-reviewers", "--issue", "7", "--completed-head", "abc",
+                                            "--tracker", f"memory:{tracker}"]), 0)
+            self.assertEqual(json.loads(out.getvalue())["labels"], ["factory:review-full"])
+            out = StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(gate.main(["wake-reviewers", "--issue", "7", "--completed-head", "stale",
+                                            "--tracker", f"memory:{tracker}"]), 0)
+            self.assertEqual(json.loads(out.getvalue())["labels"], [])
+
+    def test_high_risk_wakes_two_focuses(self):
+        facts = {"stage": "in-review", "ci": "green", "focus_missing": ["behaviour", "structure-security"]}
+        self.assertEqual(gate.review_wake_labels(facts),
+                         ["factory:review-behaviour", "factory:review-structure-security"])
+
+    def test_reviewed_focus_not_woken_again(self):
+        facts = {"stage": "in-review", "ci": "green", "focus_missing": ["structure-security"]}
+        self.assertEqual(gate.review_wake_labels(facts), ["factory:review-structure-security"])
+
+    def test_review_check_reads_rereview_focus_from_tracker_facts(self):
+        tracker = MemoryTracker({"7": {
+            "stage": "in-review", "head": "abc", "ci": "green",
+            "focus_missing": [], "pending_rereviews": ["behaviour"],
+        }})
+        event = {"id": "pull_request:7:labeled", "ticket": 7,
+                 "event_name": "pull_request", "action": "labeled", "focus": "behaviour"}
+
+        code, result = gate.check("review", event, tracker, NODES, CONFIG)
+
+        self.assertEqual(code, gate.GO)
+        self.assertTrue(result["go"])
+
     def test_writer_answer_resumes_needs_answers(self):
         self.assertEqual(gate.sweep_plan({"stage": "needs-answers", "answered": True}), ("finish", "answered", {}))
 
@@ -138,8 +206,8 @@ def tests_for(cls, tid):
             tr = self.tr(focus_missing=["full"])
             tr.set_stage(tr.tickets[tid], "in-review")
             pl = {"ticket": tid, "event": "r1", "head": "abc"}
-            self.assertEqual(gate.apply("review", "approve", pl, tr, NODES)[0], 0)
-            code, out = gate.apply("review", "approve", pl, tr, NODES)
+            self.assertEqual(gate.apply("review", "approve", pl, tr, NODES, focus="full")[0], 0)
+            code, out = gate.apply("review", "approve", pl, tr, NODES, focus="full")
             self.assertEqual((code, out["reason"]), (10, "duplicate event"))
             self.assertEqual(gate.check("review", {"id": "r1", "ticket": tid}, tr, NODES, CONFIG)[0], 10)
 
@@ -226,6 +294,29 @@ class CliAndValidate(unittest.TestCase):
         self.assertIn(("label", "factory:rereview-behaviour"), log)
         self.assertIn(("comment", "[factory] Disputed findings:\nB1: disputed — operator-only redeploy"), log)
         self.assertEqual(tr.tickets["7"]["stage"], "in-review")
+
+    def _done(self, **facts):
+        tr = MemoryTracker({"7": {"stage": "changes-requested", "pr": 9, "head": "abc", "ci": "green",
+                                   "round_complete": True, "focus_missing": ["full"], **facts}})
+        with patch.object(gate, "local_head", return_value="abc"):
+            gate.apply("fix", "done", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        return tr.tickets["7"]
+
+    def test_done_after_green_ci_wakes_reviewers(self):
+        t = self._done()
+        self.assertEqual(t["stage"], "in-review")
+        self.assertIn(["label", json.dumps("factory:review-full")], t["log"])
+
+    def test_done_before_ci_or_after_wake_adds_no_review_label(self):
+        for facts in ({"ci": "pending"}, {"pr_labels": ["factory:review-full"]}):
+            log = self._done(**facts).get("log", [])
+            self.assertNotIn(("label", json.dumps("factory:review-full")), [tuple(x) for x in log])
+
+    def test_green_ci_after_done_wakes_reviewers_once(self):
+        facts = {"stage": "in-review", "ci": "green", "head": "abc", "focus_missing": ["full"]}
+        self.assertEqual(gate.review_wake_labels(facts, "abc"), ["factory:review-full"])  # CI last: wakes it
+        t = self._done(ci="pending")  # done first: no wake yet, so the CI step is the only one
+        self.assertNotIn(("label", json.dumps("factory:review-full")), [tuple(x) for x in t.get("log", [])])
 
     def test_undisputed_finding_without_commit_blocks(self):
         review = {"agent": True, "focus": "behaviour", "verdict": "changes", "commit_id": "abc",
@@ -417,11 +508,31 @@ class TriggerTest(unittest.TestCase):
         return code, json.loads(out.getvalue())
 
     def test_check_resolves_ticket_and_head_from_raw_payloads(self):
-        want = {"issues": (None, "issues:2026-10-31T09:00:00Z"), "pull_request": ("abc", "pull_request:2026-10-31T10:00:00Z"),
-                "pull_request_review": ("abc", "pull_request_review:2026-10-31T11:00:00Z")}
+        want = {"issues": 7, "pull_request": 7, "pull_request_review": 7}
         for name, payload in TRIGGERS.items():
             ev = gate.read(self.file(payload), "event", raw=True)
-            self.assertEqual((ev["ticket"], ev["head"], ev["id"]), (7, *want[name]), name)
+            self.assertEqual(ev["ticket"], want[name], name)
+            self.assertNotIn("head", ev)
+
+    def test_begin_reads_head_from_port_not_payload(self):
+        tracker = MemoryTracker({7: {"stage": "in-review", "head": "trusted", "risk": "low", "ci": "green",
+                                     "pr": 9, "pr_state": "open", "focus_missing": ["full"]}})
+        payload = {"eventType": "pull_request.labeled", "data": {"action": "labeled", "number": 9,
+                                                                      "head": {"sha": "untrusted"}}}
+        path = self.file(payload)
+        with patch.object(tracker, "ticket_for_pr", return_value=7, create=True), \
+                patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker):
+            code, out = self.run_main(["check", "--node", "review", "--event", str(path)])
+        self.assertEqual(code, gate.GO)
+        self.assertTrue(out["go"])
+        self.assertEqual(out["context"]["head"], "trusted")
+
+    def test_begin_without_number_exits_11(self):
+        path = self.file({"eventType": "issues.labeled", "data": {"action": "labeled"}})
+        code, out = self.run_main(["check", "--node", "review", "--event", str(path),
+                                   "--tracker", "memory:" + str(self.file({}))])
+        self.assertEqual(code, 11)
+        self.assertEqual(out, {"go": False, "why": "payload has no issue or PR number"})
 
     def test_check_names_a_truncated_event_as_malformed(self):
         fd, name = tempfile.mkstemp()
@@ -472,19 +583,16 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual(code, gate.BAD)
         self.assertIn("invalid sweep event", out["error"])
 
-    def test_sweep_event_resolves_ticket_from_pr_title(self):
+    def test_sweep_event_resolves_ticket_from_tracker_pr_head(self):
         from gate_port import MemoryTracker
-        cases = (("#335 API rate limit fix", ""),
-                 ("Factory change", "Closes #335"),
-                 ("Factory change\n\nCloses #335", ""))
-        for title, body in cases:
-            with self.subTest(title=title, body=body):
-                tracker = MemoryTracker({335: {"stage": "ready"}, 336: {"stage": "ready"}})
-                tracker.sweep_tickets = lambda stages: self.fail("event sweep must not list all tickets")
-                f = self.file({"action": "labeled", "pull_request": {"title": title, "body": body}})
-                code, out, _ = self.run_sweep(["--event", str(f), "--dry-run"], tracker)
-                self.assertEqual(code, gate.GO)
-                self.assertEqual([x["ticket"] for x in out["sweep"]], [335])
+        tracker = MemoryTracker({335: {"stage": "ready"}})
+        tracker.sweep_tickets = lambda stages: self.fail("event sweep must not list all tickets")
+        tracker.ticket_for_pr = lambda number: 335
+        f = self.file({"eventType": "pull_request.labeled", "data": {"action": "labeled", "number": 44,
+                                                                         "title": "untrusted"}})
+        code, out, _ = self.run_sweep(["--event", str(f), "--dry-run"], tracker)
+        self.assertEqual(code, gate.GO)
+        self.assertEqual([x["ticket"] for x in out["sweep"]], [335])
 
     def test_sweep_without_scope_is_rejected_except_stale(self):
         from gate_port import MemoryTracker
@@ -646,6 +754,55 @@ class TriggerTest(unittest.TestCase):
         gate.apply("human", "ready", {"ticket": "7", "actor": "human"}, tr, NODES)
         self.assertNotIn("factory:needs-human", tr.tickets["7"]["attrs"])
         self.assertEqual(tr.tickets["7"]["assignees"], [])
+
+    def test_blocked_ticket_marks_its_pr(self):
+        effects = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "in-dev", "pr": 42}})
+        gate.apply("implement", "blocked", {"ticket": "7", "reason": "[factory] blocked"}, tr, NODES)
+        self.assertIn({"kind": "label", "ticket": "7", "value": "factory:needs-human", "on": "pr"}, effects)
+        self.assertIn({"kind": "assign", "ticket": "7", "value": CONFIG["notify"]["github_user"], "on": "pr"}, effects)
+
+    def test_resume_clears_pr_mark(self):
+        effects = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "blocked", "attrs": ["factory:needs-human"], "pr": 42}})
+        gate.apply("human", "ready", {"ticket": "7", "actor": "human"}, tr, NODES)
+        self.assertIn({"kind": "unlabel", "ticket": "7", "value": "factory:needs-human", "on": "pr"}, effects)
+        self.assertIn({"kind": "unassign", "ticket": "7", "value": None, "on": "pr"}, effects)
+
+    def test_human_changes_request_marks_pr(self):
+        effects = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "in-review", "head": "abc", "pr": 42, "ci": "green",
+                             "round_complete": True, "round_verdict": "changes",
+                             "reviews": [{"author": "reviewer", "agent": False, "verdict": "changes", "commit_id": "abc"}]}})
+        gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        self.assertIn({"kind": "label", "ticket": "7", "value": "factory:needs-human", "on": "pr"}, effects)
+        self.assertIn({"kind": "assign", "ticket": "7", "value": ["reviewer"], "on": "pr"}, effects)
+
+    def test_held_approved_marks_pr(self):
+        effects = []
+        class Capture(MemoryTracker):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "approved", "head": "abc", "pr": 42, "pr_state": "open",
+                             "ci": "green", "risk": "low", "round_complete": True,
+                             "round_verdict": "approve", "round_head": "abc"}})
+        gate.apply("merge", "waiting", {"ticket": "7", "reason": "[factory] merge"}, tr, NODES,
+                   auto_merge={"enabled": False, "max_risk": "high"})
+        self.assertIn({"kind": "label", "ticket": "7", "value": "factory:needs-human", "on": "pr"}, effects)
+        self.assertIn({"kind": "assign", "ticket": "7", "value": CONFIG["notify"]["github_user"], "on": "pr"}, effects)
 
     def test_a_stop_clears_every_command_label(self):
         # review of PR #198: a label left on the ticket makes the command after factory:ready a no-op
@@ -822,9 +979,9 @@ class StaleSweepTest(unittest.TestCase):
         self.assertNotIn("log", tr.tickets[1])
 
     def test_in_review_with_ci_green_and_no_review_refires_ci_green(self):
-        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": "green", "reviews": []}})
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": "green", "reviews": [], "focus_missing": ["behaviour"]}})
         self.assertEqual([(r["recover"], r["stage"]) for r in res], [("refire", "in-review")])
-        self.assertIn(["label", '"factory:ci-green"'], tr.tickets[3]["log"])
+        self.assertIn(["label", '"factory:review-behaviour"'], tr.tickets[3]["log"])
 
     def test_in_review_without_ci_label_only_comments(self):
         tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": None}})
@@ -834,7 +991,7 @@ class StaleSweepTest(unittest.TestCase):
     def test_comment_only_note_does_not_use_the_retry(self):
         tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": None}})
         self.assertEqual([r["recover"] for r in res], ["comment"])
-        tr.tickets[3].update(ci_label="green", reviews=[])  # CI finished, the reviewer run then died
+        tr.tickets[3].update(ci_label="green", reviews=[], focus_missing=["behaviour"])  # CI finished, the reviewer run then died
         res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
         self.assertEqual([r["recover"] for r in res], ["refire"])
         self.assertEqual(gate.sweep_stale(tr, NODES, 2, self.NOW)[0][0]["recover"], "blocked")
@@ -913,7 +1070,7 @@ class SpecTest(unittest.TestCase):
             d = Path(d)
             self.spec(d)
             code, out = self.run_gate(d, "check", "--node", "implement", "--event", str(d / "ev.json"), "--tier", "mid")
-            self.assertEqual((code, json.loads(out)["outcomes"]), (0, ["done", "error", "blocked", "failed"]))
+            self.assertEqual((code, json.loads(out)["outcomes"]), (0, ["done", "error", "blocked", "failed", "env-broken"]))
             (d / "p.json").write_text(json.dumps({"ticket": "7", "event": "e", "tier": "mid"}))
             code, _ = self.run_gate(d, "apply", "--node", "implement", "--outcome", "done", "--payload", str(d / "p.json"))
             self.assertEqual(code, 0)
@@ -1107,6 +1264,13 @@ class AutoMergeTest(unittest.TestCase):
         self.assertEqual(results, [("merge", "merged")])
         self.assertEqual(self.log(tr, "merge"), ["match-head"])
 
+    def test_merge_after_update_branch_without_rereview(self):
+        tr, results = self.sweep(behind=True, head="h2", round_head="h2")  # facts carry a clean-merge approval to the new head
+        self.assertEqual(results, [("merge", "updated")])
+        tr, results = self.sweep(head="h2", round_head="h2")
+        self.assertEqual(results, [("merge", "merged")])
+        self.assertEqual(self.log(tr, "merge"), ["match-head"])
+
     def test_no_merge_when_head_not_reviewed(self):
         for kw in ({"round_head": "old"}, {"round_head": None}, {"round_verdict": "changes"}, {"round_complete": False}):
             with self.subTest(kw=kw):
@@ -1250,6 +1414,24 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(10, "merged"), (11, "unblocked")])
         self.assertIn(["comment", '"[factory] unblocked by #10"'], tr.tickets[11]["log"])
 
+    def test_after_merge_checks_listed_on_finish(self):
+        tr = MemoryTracker({10: {"stage": "approved", "pr_state": "merged",
+                                 "body": "- [ ] Operator check after the merge (not part of the PR): re-fire Air"}})
+        tr.sweep_tickets = lambda stages: [10]
+        results, failed = gate.sweep(tr, NODES)
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.tickets[10]["stage"], "approved")
+        self.assertIn("factory:needs-human", tr.tickets[10]["attrs"])
+        body = next(json.loads(value) for kind, value in tr.tickets[10]["log"] if kind == "comment")
+        self.assertIn("- [ ] re-fire Air", body)
+
+        tr.tickets[10]["comments"] = [{"body": body.replace("- [ ]", "- [x]")}]
+        results, failed = gate.sweep(tr, NODES)
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.tickets[10]["stage"], "done")
+
     def test_config_change_merge_updates_open_prs(self):
         class ConfigTracker(MemoryTracker):
             def config_change_merged(self, pr):
@@ -1321,6 +1503,50 @@ class UnblockedSweepTest(unittest.TestCase):
 
         self.assertFalse(failed)
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(11, "unblocked")])
+
+
+class RecalibratedBlocksTest(unittest.TestCase):
+    def test_env_broken_parks_ticket_behind_main_red_ticket(self):
+        tr = MemoryTracker({"7": {"stage": "in-dev", "attrs": ["factory:implement-mid"]},
+                            "8": {"stage": "in-dev", "attrs": ["factory:implement-mid"]}})
+        for n in ("7", "8"):
+            code, out = gate.apply("implement", "env-broken", {"ticket": n, "failing_check": "shellcheck"}, tr, NODES)
+            self.assertEqual(code, gate.GO)
+        red = [k for k, t in tr.tickets.items() if t.get("title") == "Main is red in Air: shellcheck"]
+        self.assertEqual(len(red), 1)  # reused, not duplicated
+        for n in ("7", "8"):
+            t = tr.tickets[n]
+            self.assertEqual((t["stage"], t["blockers_open"], t["blocked_by"]), ("ready", 1, red))
+            self.assertNotIn("factory:implement-mid", t["attrs"])
+
+    def test_nothing_to_fix_reruns_join_not_block(self):
+        tr = MemoryTracker({"7": {"stage": "changes-requested", "pr": 3, "round_complete": True,
+                                   "attrs": ["factory:fix-mid"]}})
+        code, _ = gate.apply("fix", "nothing-to-fix", {"ticket": "7"}, tr, NODES)
+        self.assertEqual(code, gate.GO)
+        t = tr.tickets["7"]
+        self.assertEqual(t["stage"], "in-review")
+        self.assertNotIn("factory:fix-mid", t["attrs"])
+        self.assertIn(["join", '"all-approve"'], t["log"])
+        self.assertNotIn(["label", '"factory:needs-human"'], t["log"])
+
+    def test_finding_free_round_not_counted(self):
+        def review(head, findings):
+            return {"agent": True, "verdict": "changes", "commit_id": head, "rereview": False, "findings": findings}
+        tr = MemoryTracker({"7": {"stage": "in-review", "reviews": [
+            review("a", []), review("b", ["M1"]), review("c", ["B1", "M1"])]}})
+        self.assertEqual(tr.facts("7")["fix_rounds"], 1)
+
+    def test_grill_includes_proposed_checks(self):
+        fields = gate.intake_fields({
+            "handoff": "ROUTER-INTAKE", "ready": "no", "missing": ["a check says 'clean'"], "split": "none",
+            "size_estimate": "~40",
+            "proposed_checks": ["`uv run factory/tests/test_gate.py` passes", "no match: `rg TODO factory/`"]})
+        self.assertIn("- `uv run factory/tests/test_gate.py` passes", fields["questions"])
+        self.assertIn("- no match: `rg TODO factory/`", fields["questions"])
+        tr = MemoryTracker({"7": {"stage": "triage"}})
+        gate.apply("intake", "grill", {"ticket": "7", **fields}, tr, NODES)
+        self.assertEqual(tr.tickets["7"]["stage"], "needs-answers")
 
 
 if __name__ == "__main__":

@@ -15,6 +15,15 @@ class Tracker(Protocol):
     def apply(self, effect: dict) -> bool: ...
 
 
+def fix_round_count(reviews, since=""):
+    """Rounds a fix answers: an agent change request, per head and dispute rereview, since the person's last
+    `factory:ready`, with at least one blocking finding (id `B<n>`). A round with none (a verdict bug,
+    environment noise) is not counted against `limits.fix_rounds`."""
+    return len({(r["commit_id"], r.get("rereview")) for r in reviews
+                if r.get("agent") and r.get("verdict") == "changes" and (r.get("submitted_at") or "") >= since
+                and any(str(i).startswith("B") for i in r.get("findings", []))})
+
+
 class MemoryTracker:
     """Integer ids, stage in its own field. `fail_on` makes the effect kind raise."""
 
@@ -24,11 +33,17 @@ class MemoryTracker:
     def _t(self, ticket):
         return self.tickets[ticket] if ticket in self.tickets else self.tickets[str(ticket)]  # JSON files key by string
 
+    def ticket_for_pr(self, number):
+        return next((int(k) for k, t in self.tickets.items() if t.get("pr") == number), None)
+
     def get_stage(self, t):
         return t.get("stage", "none")
 
     def set_stage(self, t, stage):
         t["stage"] = stage
+
+    def sweep_tickets(self, stages):
+        return sorted(k for k, t in self.tickets.items() if self.get_stage(t) in stages)
 
     def blocking(self, ticket):
         return self._t(ticket).get("blocking", [])
@@ -41,9 +56,11 @@ class MemoryTracker:
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
                 "round_verdict": None, "round_head": None, "attrs": [], "agent_runs": 0, "run_cap": 8, "handed_to_fix": False,
                 "pending_rereviews": [], "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False, "conflict": False,
-                "pr_state": "none", "risk": "high", "behind": False, "answered": False}
-        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr", "ci_failure", "author", "waiting_reviewers")}, "stage": self.get_stage(t),
-                "seen": list(t.get("seen", []))}
+                "pr_state": "none", "risk": "high", "behind": False, "answered": False, "updated_at": None,
+                "review_labels": []}
+        t = {**t, "fix_rounds": fix_round_count(t["reviews"])} if "reviews" in t and "fix_rounds" not in t else t
+        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr", "ci_failure", "author", "waiting_reviewers", "agent_notes", "pr_labels")}, "stage": self.get_stage(t),
+                "seen": list(t.get("seen", [])), "comments": t.get("comments", [])}
 
     def stale_facts(self, ticket):
         """facts plus the stale-sweep fields a record may set (since, command, command_at, commit_at, ci_label);
@@ -51,7 +68,7 @@ class MemoryTracker:
         t = self._t(ticket)
         sent = [json.loads(v) for k, v in t.get("log", []) if k == "comment"]
         return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "stage_at", "command", "command_at", "commit_at", "ci_label", "command_pending", "pr_state", "issue_state") if k in t},
-                "recover_comments": [c for c in sent if c.startswith("[factory] recover:")]}
+                "recover_comments": [c for c in sent if c.startswith(("[factory] recover:", "[factory] reconcile:"))]}
 
     def apply(self, effect):
         if effect["kind"] == self.fail_on:
@@ -65,6 +82,18 @@ class MemoryTracker:
             ev = effect.get("event") if kind == "stage" else value
             if ev is not None and ev not in seen:
                 seen.append(ev)
+                wrote = True
+            return wrote
+        if kind == "park-behind-main-red":  # open or reuse `Main is red in Air: <check>`, block this ticket by it, wait in ready
+            title = f"Main is red in Air: {value}"
+            red = next((i for i, x in self.tickets.items() if x.get("title") == title and x.get("state", "open") == "open"), None)
+            wrote = red is None
+            if wrote:
+                red = f"red-{value}"
+                self.tickets[red] = {"title": title, "stage": "triage", "state": "open"}
+            if red not in t.setdefault("blocked_by", []):
+                t["blocked_by"].append(red)
+                t["blockers_open"] = t.get("blockers_open", 0) + 1
                 wrote = True
             return wrote
         if kind == "set-field":

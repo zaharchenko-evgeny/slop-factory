@@ -33,7 +33,7 @@ adapters:
 schedules:
   retro: { cron: "0 2 * * *" }
   distill: { cron: "0 3 * * 1" }
-  recover: { cron: "0 6,18 * * *" }
+  reconcile: { cron: "7,37 * * * *" }  # off-peak: GitHub delays or drops schedule runs at :00 and :30
   doctor: { cron: "0 5 * * *" }
 nodes:
   human:
@@ -97,6 +97,8 @@ nodes:
       error: { effects: [{ unlabel: "factory:implement-*" }, { label: "factory:implement-<next tier>" }, { stage: in-dev }] }
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
       failed: { effects: [{ comment: reason }, { stage: blocked }] }   # one stop stage: the reason is the comment
+      # A required check fails identically on unchanged `main` in Air: not the ticket's fault. It waits behind a `Main is red in Air` ticket.
+      env-broken: { effects: [{ unlabel: "factory:implement-*" }, { park-behind-main-red: failing_check }, { stage: ready }] }
   adopt:
     env: read
     enabled: false
@@ -114,14 +116,14 @@ nodes:
     pilot: true
     focuses: [full, behaviour, structure-security, knowledge]
     # CI labels the PR when it finishes (.github/workflows/quality-gates.yml): reviewers only read green code.
-    triggers: ["pull_request.labeled factory:ci-green", "pull_request.labeled factory:rereview-<focus>"]
+    triggers: ["pull_request.labeled factory:review-<focus>", "pull_request.labeled factory:rereview-<focus>"]
     when: { stage: in-review, focus: required-by-risk, ci: [green] }
     role: reviewer
     output: read-only
     outcomes:
       # The posted review starts the join (pull_request_review.submitted); only the join chooses the fix tier.
-      approve: { effects: [{ review: approve-at-head }] }
-      changes: { effects: [{ review: request-changes-at-head }] }
+      approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-<focus>", "on": pr }] }
+      changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-<focus>", "on": pr }] }
   join:
     env: read
     pilot: true
@@ -150,6 +152,9 @@ nodes:
       # People who requested changes are asked again, after the push, so round 2 waits for them.
       done: { effects: [{ unlabel: "factory:fix-*", "on": pr }, { request-reviewers: changes }, { stage: in-review }] }
       blocked: { from: [changes-requested], effects: [{ comment: reason }, { stage: blocked }] }
+      env-broken: { from: [changes-requested], effects: [{ unlabel: "factory:fix-*", "on": pr }, { park-behind-main-red: failing_check }, { stage: ready }] }
+      # A stale or duplicate fix label: no blocking finding, red CI or conflict for the head. The join reruns.
+      nothing-to-fix: { from: [changes-requested], effects: [{ unlabel: "factory:fix-*", "on": pr }, { join: all-approve }, { stage: in-review }] }
   update:
     env: write
     pilot: true
@@ -218,17 +223,35 @@ nodes:
       notified: { from: [blocked, needs-answers] }
   recover:
     env: read
-    pilot: true
-    # Safety net for an Air run that died silently: re-fires the label that woke it (limits.stale_hours).
-    triggers: ["schedule recover"]
+    # No automation: the reconciler replaced the Air schedule. Only `gate.py sweep --stale`, run by a person, still applies this outcome.
+    runner: manual
+    routine: true
+    triggers: ["manual"]
     when: { always: true }
     role: script
     tier: cheap
     run: uv run factory/gate.py sweep --stale
     output: read-only
     outcomes:
-      # The sweep writes these itself: one re-fire per ticket and stage, then blocked.
       blocked: { effects: [{ comment: reason }, { stage: blocked }] }
+  reconcile:
+    env: ops
+    # Not an Air automation: `factory deploy` renders .github/workflows/factory-reconcile.yml in the factory repository from this node.
+    # A state-driven safety net for a lost wake: `factory reconcile` re-fires the waking label of a step with no outcome after
+    # `limits.run_timeout_minutes` (`timeout_minutes` on a node overrides it), then blocks the ticket on a second miss.
+    runner: actions
+    routine: true
+    # `workflow_run <workflow>` also wakes it after each completed run of that workflow (a pass reads state; it acts on no PR head).
+    # GitHub has never fired the schedule here, so a label change or a submitted review wakes it too; a pass acts only past a timeout,
+    # and labels set with `github.token` start no workflow, so it cannot wake itself.
+    triggers: ["schedule reconcile", "workflow_run quality-gates", "issues.labeled", "issues.unlabeled", "issues.closed", "pull_request_review.submitted"]
+    ci-independent: true
+    when: { always: true }
+    role: script
+    run: uv run factory/cli.py reconcile
+    output: read-only
+    outcomes:
+      reconciled: {}
   # `factory doctor` probes permissions and tools of the environment it runs in; one node per environment (read, write, ops)
   # because an automation belongs to one environment. It changes no ticket: probe failures open `Doctor:` tickets itself.
   doctor:
@@ -271,7 +294,7 @@ nodes:
     triggers: ["schedule retro"]
     when: { always: true }
     role: retro
-    output: push-to-new-branch
+    output: as-instructed  # the role pushes to the reusable source branch and keeps one open PR into `knowledge.branch` (knowledge.inbox_pr_action)
     outcomes:
       recorded: {}
   distill:

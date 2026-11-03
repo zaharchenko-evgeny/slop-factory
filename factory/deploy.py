@@ -56,6 +56,8 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
     """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
     spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
             "when": n.get("when"), "outcomes": n["outcomes"]}
+    if n.get("routine"):
+        spec["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
     if n.get("tiers"):
         spec["tiers"] = n["tiers"]  # the ordered tiers the gate escalates through
     if any((o or {}).get("else") for o in n["outcomes"].values()):
@@ -104,25 +106,27 @@ def repository(r: dict) -> dict:
 # A script node runs one command and judges nothing: the gate's sweep decides every scripted step (join, waiting
 # reviewers, merged to done) from facts. `--main` runs it from main's graph (a PR-triggered node never trusts the PR).
 SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no file, label, comment or review "
-                 "itself. Run `factory sweep{args}` in the foreground with no time limit{event_input}; "
+                 "itself. Run `factory sweep{args}` in the foreground with no time limit; "
                  "wait until it exits, "
                  "and report its JSON output.")
-SCRIPT_ARGS = {"join": " --main --event", "start": " --main --event", "finish": " --main --event",
-               "reopen": " --main --event", "merge": " --main --event",
-               "recover": " --stale",
+PR_NUMBER = " --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>"
+SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>", "finish": PR_NUMBER,
+               "reopen": PR_NUMBER, "merge": PR_NUMBER,
                "doctor": " doctor", "doctor-write": " doctor", "doctor-ops": " doctor",
-               "notify": " notify --issue <issue number from the trigger payload>"}
+               "notify": " notify --issue <the issue number>"}
 
 
 def script_prompt(name: str) -> str:
     if name.startswith("doctor"):
         return "Run `factory doctor` once and report its JSON lines. It changes no ticket itself."
     if name == "notify":
-        return ("Run `factory notify --issue <issue number from the trigger payload>` in the foreground with no "
+        return ("Run `factory notify --issue <the issue number>` in the foreground with no "
                 "time limit, wait until it exits, and report its output.")
     args = SCRIPT_ARGS.get(name, "")
-    event_input = " and pass the trigger payload on stdin" if "--event" in args else ""
-    return SCRIPT_PROMPT.format(args=args, event_input=event_input)
+    prompt = SCRIPT_PROMPT.format(args=args)
+    if "--issue" in args:
+        prompt += " Copy only that one number; never write the payload or any JSON."
+    return prompt
 
 
 def skill_lines(role: str) -> str:
@@ -144,13 +148,22 @@ def this_step(node: dict, focus: str | None) -> str:
     return f"Woken by: {flow_triggers(node)}.\n\nOutcomes:\n{outcomes}"
 
 
+def begin_arg(node: str, n: dict) -> str:
+    """The number a node begins with; a scheduled routine has no ticket or PR, so it takes none."""
+    if all(str(t).startswith("schedule ") for t in n["triggers"]):
+        return ""
+    return "--pr <the pull request number>" if node in PR_TRIGGERED_NODES else "--issue <the issue number>"
+
+
 def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None) -> str:
     role = n["role"]
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
     text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
+    arg = begin_arg(name, n)
+    arg = f" {arg}" if arg else ""
     return (f"{who}\n\n{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
-            f"1. Run `factory begin {aname}` with the trigger payload (the <trigger_event> JSON) on stdin, as a heredoc. "
+            f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts, the branch or PR head and the handoff path. "
             "If it exits 10 the node must not act: report the reason and stop.\n"
             "2. Do the role's work, write the handoff to the handoff path, then run `factory end <handoff_path>`.")
@@ -188,9 +201,9 @@ def plan_air(nodes: dict, config: dict) -> dict:
     bot = config["targets"]["air"]["bot_login"]
     prefix = f"[{project_name(config)}] "
     automations = []
-    used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human"))
+    used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
     for name, n in nodes["nodes"].items():
-        if n.get("enabled") is False or n["role"] == "human":
+        if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
         env = n["env"]
         for aname, tier_arg, tier, focus in variants(name, n, roles):
@@ -221,12 +234,67 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "name": f"{prefix}{env}",
             "repository": repo["url"],
             "startup": d["startup"],
-            "variables": {"FACTORY_ENV": env},
+            "variables": {"FACTORY_ENV": env, **({"FACTORY_TEAM_REPOSITORY": config["team_repository"]}
+                                                 if config.get("team_repository") else {})},
             "secrets": d.get("secrets", []),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
-    return {"prefix": prefix, "automations": automations, "environments": envs, "labels": labels(nodes, config)}
+    return {"prefix": prefix, "automations": automations, "environments": envs, "labels": labels(nodes, config),
+            "files": actions_files(nodes, config)}
+
+
+def actions_files(nodes: dict, config: dict) -> dict:
+    """{path: text} of the GitHub Actions workflows the graph's `runner: actions` nodes render, in the factory repository only."""
+    scheds, files = nodes.get("schedules") or {}, {}
+    for name, n in nodes["nodes"].items():
+        if n.get("runner") == "actions" and n.get("enabled") is not False:
+            cron = next(scheds[str(t)[9:]]["cron"] for t in n["triggers"] if str(t).startswith("schedule "))
+            wake = "".join(f"  # jactionlint ignore=dangerous-triggers\n  workflow_run:\n    workflows: [{str(t)[13:]}]\n    types: [completed]\n"
+                           for t in n["triggers"] if str(t).startswith("workflow_run "))
+            events = {}
+            for t in n["triggers"]:
+                if str(t).startswith(("issues.", "pull_request_review.")):
+                    event, _, kind = str(t).partition(".")
+                    events.setdefault(event, []).append(kind)
+            wake = "".join(f"  {e}:\n    types: [{', '.join(k)}]\n" for e, k in events.items()) + wake
+            files[f".github/workflows/factory-{name}.yml"] = ACTIONS_WORKFLOW.format(
+                name=name, project=project_name(config), cron=cron, wake=wake, run=n["run"].replace("uv run factory/cli.py", "uv run --quiet factory/cli.py"))
+    return files
+
+
+# The token is the built-in github.token while the factory repository is also the target (#339); labels it sets wake Air.
+ACTIONS_WORKFLOW = """# Generated by `factory deploy` from workflows/nodes.yaml (node `{name}`). Do not edit.
+name: factory-{name}
+
+on:
+  schedule:
+    - cron: "{cron}"
+{wake}  workflow_dispatch:
+
+permissions: {{}}
+
+concurrency:
+  group: factory-{name}
+  cancel-in-progress: false
+
+jobs:
+  {name}:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{{{ github.token }}}}
+      GH_REPO: ${{{{ github.repository }}}}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: {{ persist-credentials: false }}
+      - run: pipx install uv
+      - run: {run}
+"""
 
 
 def labels(nodes: dict, config: dict) -> list[str]:
@@ -235,6 +303,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     `gh issue edit --add-label` fail, so the deploy creates them first)."""
     t = config.get("tracker") or {}
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
+    out.add("factory:needs-human")
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
@@ -300,6 +369,8 @@ def _items(res) -> list[dict]:
 def same(key: str, have, want) -> bool:
     if key == "repository" and isinstance(have, dict) and have.keys() == {"fullName"}:
         return have["fullName"] == want["fullName"]
+    if key == "domains":
+        return set(want or []) <= set(have or [])
     return have == want
 
 
@@ -312,6 +383,10 @@ def environment_detail(x: dict) -> dict:
         x["domains"] = x.pop("allowedDomains")
     if "instanceTypeKey" in x:
         x["vm"] = x.pop("instanceTypeKey") or "default"
+    if isinstance(x.get("variables"), list):
+        x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
+    if "personalSecrets" in x:
+        x["secrets"] = [s["name"] for s in x.pop("personalSecrets")]
     return x
 
 
@@ -327,7 +402,8 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
             p = {k: v for k, v in raw.items() if k != "spec"}
             x = have.pop(p["name"], None) or have.pop(new_to_old.get(p["name"]), None)
             want = {**p, "environmentConfigId": env_ids.get(p.get("environmentConfigId"), p.get("environmentConfigId"))}
-            changed = [k for k in p if x is not None and not same(k, x.get(k), want[k])]
+            changed = [k for k in p if x is not None and (kind != "environment" or k in x)
+                       and not same(k, x.get(k), want[k])]
             if x is None or changed:
                 out.append(("create" if x is None else "update", kind, p["name"], p, x, changed))
         out += [("delete", kind, n, None, x, []) for n, x in have.items()]
@@ -359,12 +435,14 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url: str
     """Environments before automations on create and update, after them on delete."""
     order = {"create": 0, "update": 0, "delete": 1}
     env_ids = None
-    for action, kind, name, p, x, _ in sorted(changes, key=lambda c: (order[c[0]], (c[1] == "automation") == (c[0] != "delete"))):
+    for action, kind, name, p, x, changed in sorted(changes, key=lambda c: (order[c[0]], (c[1] == "automation") == (c[0] != "delete"))):
         client, noun = (cloud, "environment") if kind == "environment" else (automations, "automation")
         if p and kind == "automation":  # the environment id exists only after its create
             env_ids = env_ids or {e["name"]: e["id"] for e in _items(cloud.call("list_environments", {"repositoryUrl": repo_url}))}
             p = {**p, "environmentConfigId": env_ids[p["environmentConfigId"]]}
         p = {k: v for k, v in (p or {}).items() if k != "spec"}
+        if action == "update":
+            p = {k: v for k, v in p.items() if k in changed}
         tool_action = ("edit" if kind == "environment" else "update") if action == "update" else action
         id_key = "automationId" if kind == "automation" else "id"
         args = {**p, id_key: x["id"]} if action == "update" else p if p else {id_key: x["id"]}
@@ -441,6 +519,20 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     return 0
 
 
+def write_files(files: dict, apply: bool) -> int:
+    """Create or update the rendered workflow files under the factory repository's root (never a target repository)."""
+    root = config_mod.team_root()
+    for path, text in files.items():
+        target = root / path
+        if target.exists() and target.read_text() == text:
+            continue
+        print(f"{'update' if target.exists() else 'create'} file {path}")
+        if apply:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     argv = config_mod.pop_team(argv)
     rest, renames = argv[1:], {}
@@ -456,11 +548,16 @@ def main(argv: list[str]) -> int:
         servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
         try:
             plan = {**plan_air(nodes_mod.load(), config_mod.load()), "renames": renames}
-            tracker = None
-            if argv[0] == "--apply":
+            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers)
+            code = code or write_files(plan["files"], argv[0] == "--apply")
+            if code == 0 and argv[0] == "--apply":
                 from github_tracker import GitHubTracker
                 tracker = GitHubTracker.from_config()
-            return deploy(argv[0], "--allow-delete" in argv, plan, *servers, tracker=tracker)
+                from gate_github import GitHubGateTracker
+                GitHubGateTracker.from_config().deploy_applied(plan)
+                deploy_id = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+                code = create_canary(tracker, deploy_id)
+            return code
         finally:
             for server in servers:
                 server.close()

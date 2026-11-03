@@ -70,11 +70,30 @@ Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
    off `outcome: escalate`; when no tier can, hand off `outcome: unresolvable`
    with `--reason` listing the conflicting files.
 
+## Environment failures and nothing to fix
+
+- When a required check fails and fails identically on `origin/main` in Air
+  (reproduce it there), hand off `outcome: env-broken` with `failing_check`
+  naming the check. The gate opens or reuses `Main is red in Air: <check>`,
+  blocks the ticket behind it and moves it to `ready`. Use it in `implement`
+  and `fix` mode only for a failure you reproduced on `origin/main`.
+- In `fix` mode, when there is no blocking finding, no red CI and no conflict
+  for the head (a stale or duplicate fix label), hand off
+  `outcome: nothing-to-fix` with no commit. The gate removes the label and
+  reruns the join.
+
 ## Rules
 
 - Stay on the given branch and worktree. Never push, open PRs or change labels.
 - Stop and report `blocked` when the ticket is ambiguous or a check cannot run
   after two repair attempts that test different causes.
+
+## Notes
+
+`factory begin` lists `agent_notes` left by earlier agents for you (`for`: `developer`, `fixer` in `fix` and `update`
+mode, or `any`). Read them before exploring, as you read a ticket comment: helpful, not authoritative. To leave one
+for the next agent (for instance what you could not finish or verify), pass `--notes notes.json` with
+`{"for": "fixer", "files": [...], "repro": "...", "hint": "..."}` to `factory end` (at most 2,000 characters; no secrets).
 
 ## Ending the run
 
