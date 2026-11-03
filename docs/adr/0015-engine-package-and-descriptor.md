@@ -1,4 +1,4 @@
-# ADR-0015: Slop factory, a shared engine and a team descriptor repo
+# ADR-0015: Slop factory engine and team descriptor repository
 
 Status: accepted when #205 merges. Builds on ADR-0014 (the node model). Supersedes, from ADR-0014, the per-node environment, the scheduled sweep and merge train, and the copy of the engine into each project repository. Supersedes ADR-0009 (the setup skill writes a factory into each repository).
 
@@ -19,8 +19,8 @@ The product's display name is **Slop factory**. Every identifier uses the plain 
 
 **Two kinds of repository.**
 
-- **`factory`, the engine**, shared by every team and installed as a dependency: `uv tool install git+…/factory@vX`, which gives the `factory` command. It holds the gate and its tracker adapters, `deploy`, `chart` and `validate`, the roles, the vendored skills and the base node graph. The retired transition engine is deleted first (#179), which leaves about 1,400 lines of gate code.
-- **`<team>-factory`, the team repo.** It holds the descriptor `factory.descriptor.yaml`, override files, the knowledge inbox, and the routines. A project repository holds only `ci-state.yml` and its own CI checks.
+- **`zaharchenko-evgeny/slop-factory`, the engine**, shared by every team and installed as a dependency: `uv tool install git+https://github.com/zaharchenko-evgeny/slop-factory@v0.1.0`, which gives the `factory` command. It holds the gate and its tracker adapters, `deploy`, `chart` and `validate`, the roles, the vendored skills and the base node graph.
+- **`zaharchenko-evgeny/slop-eval-factory`, the team repo.** It holds the descriptor `factory.descriptor.yaml`, override files, the knowledge inbox, and the routines. A project repository holds only `ci-state.yml` and its own CI checks.
 
 **The descriptor** chooses settings and holds no logic: the engine version, the tracker, the project repositories with read and write access per role, models per tier, limits, gates, which optional engine nodes are switched on, the knowledge targets, and Air Mate settings. Teams never add or rewrite nodes. A new node goes into the engine through a ticket.
 
@@ -48,7 +48,7 @@ The product's display name is **Slop factory**. Every identifier uses the plain 
 2. #203: simplify stages and fix two stalls.
 3. Package the engine: the `factory` CLI, a descriptor loader that replaces `factory.yaml`, overrides by path, and node specs compiled into prompts.
 4. `startup.sh` installs the pinned engine. Environments `read`, `write` and `ops`.
-5. Create the engine repository `factory` and move the engine into it with its history. This repository, `offline-eval-factory`, keeps its tickets and becomes the team repo: the descriptor, overrides and knowledge. Redeploy from it.
+5. Keep this repository, `slop-factory`, as the engine and use `slop-eval-factory` for the team descriptor, overrides and knowledge. Deploy the team's automations from that repository.
 6. The knowledge routines and the knowledge reviewer (#162).
 7. One project repository from the eval repositories.
 8. Several repositories per ticket, the YouTrack adapter, Air Mate, and the local loop.
