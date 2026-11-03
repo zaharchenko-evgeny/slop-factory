@@ -44,7 +44,7 @@ class ReconcileTest(unittest.TestCase):
         t, results, _ = run({"stage": "in-dev", "since": OLD, "command": "factory:implement-mid"})
         self.assertEqual(results[0]["reconcile"], "refire")
         self.assertIn('"factory:implement-mid"', logged(t, "label"))
-        self.assertTrue(logged(t, "comment")[0].startswith(f'"{reconcile.PREFIX} stage=in-dev re-fired'))
+        self.assertTrue(logged(t, "comment")[0].startswith(f'"{reconcile.PREFIX} stage=in-dev head= re-fired'))
 
     def test_conflicting_unapproved_pr_gets_fix(self):
         t, results, _ = run({"stage": "in-review", "pr": 5, "conflict": True, "since": OLD})
@@ -53,15 +53,21 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn('"factory:update-cheap"', logged(t, "label"))
 
     def test_second_miss_blocks_and_needs_human(self):
-        refired = [["comment", '"[factory] reconcile: stage=in-dev re-fired factory:implement-mid (x)"']]
-        t, results, _ = run({"stage": "in-dev", "since": OLD, "command": "factory:implement-mid", "log": refired})
+        refired = [["comment", '"[factory] reconcile: stage=in-dev head=aaa re-fired factory:implement-mid (x)"']]
+        t, results, _ = run({"stage": "in-dev", "since": OLD, "head": "aaa", "command": "factory:implement-mid", "log": refired})
         self.assertEqual((results[0]["reconcile"], t.tickets[1]["stage"]), ("blocked", "blocked"))
         self.assertIn('"factory:needs-human"', logged(t, "label"))
 
     def test_second_miss_counts_per_step(self):
-        refired = [["comment", '"[factory] reconcile: stage=in-review re-fired factory:rereview-behaviour (x)"']]
+        refired = [["comment", '"[factory] reconcile: stage=in-review head=aaa re-fired factory:rereview-behaviour (x)"']]
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD,
-                             "focus_missing": ["structure-security"], "log": refired})
+                             "head": "aaa", "focus_missing": ["structure-security"], "log": refired})
+        self.assertEqual((results[0]["reconcile"], t.tickets[1]["stage"]), ("refire", "in-review"))
+
+    def test_retry_is_per_head(self):
+        refired = [["comment", '"[factory] reconcile: stage=in-review head=aaa re-fired factory:rereview-behaviour (x)"']]
+        t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "head": "bbb",
+                             "focus_missing": ["behaviour"], "log": refired})
         self.assertEqual((results[0]["reconcile"], t.tickets[1]["stage"]), ("refire", "in-review"))
 
     def test_waiting_stage_not_refired(self):

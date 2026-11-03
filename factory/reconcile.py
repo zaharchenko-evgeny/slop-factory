@@ -82,12 +82,13 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 if step is None:
                     continue
             node, label, on, why = step
-            missed = sum(f"stage={stage} re-fired {label} (" in c for c in facts.get("recover_comments", []))
+            head = (facts.get("head") or "")[:12]
+            missed = sum(f"stage={stage} head={head} re-fired {label} (" in c for c in facts.get("recover_comments", []))
             kind = "conflict" if conflict else "blocked" if missed else "refire"
             r = {"ticket": n, "stage": stage, "node": node, "reconcile": kind, "why": why}
             results.append(r)
             if not dry_run:
-                send(tracker, n, nodes, stage, kind, label, on, why)
+                send(tracker, n, nodes, stage, head, kind, label, on, why)
             if progress:
                 progress(r)
         except Exception as e:  # one ticket failing does not stop the others
@@ -98,7 +99,7 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
     return results, failed
 
 
-def send(tracker, n, nodes, stage, kind, label, on, why):
+def send(tracker, n, nodes, stage, head, kind, label, on, why):
     def apply(**e):
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
     if kind == "conflict":  # the effects the graph gives a conflicting approved PR: an update label, then the stage
@@ -112,7 +113,7 @@ def send(tracker, n, nodes, stage, kind, label, on, why):
     else:  # the comment last: the counter for the second miss
         apply(kind="unlabel", value=label, on=on)
         apply(kind="label", value=label, on=on)
-        apply(kind="comment", value=f"{PREFIX} stage={stage} re-fired {label} ({why})")
+        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} re-fired {label} ({why})")
 
 
 def main(argv):
