@@ -113,13 +113,6 @@ jobs:
               if [ -n "$id" ] && gh run rerun "$id"; then continue; fi
               echo "::warning::could not re-run quality-gates on $ref"
             done
-      - name: Label the PR with this run's CI result
-        if: always() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'ez/')
-        env:
-          BRANCH: ${{ github.head_ref }}
-          SHA: ${{ github.event.pull_request.head.sha }}
-          CONCLUSION: ${{ job.status }}
-        run: scripts/ci-state-label.sh
       - name: Summarize quality checks
         if: always()
         env:
@@ -198,3 +191,29 @@ jobs:
         with: { persist-credentials: false }
       # Scans the whole tree; it picks up AGENTS.md, SKILL.md and roles/**/*.md.
       - run: npx --yes agnix@0.59.3 .
+
+  # The CI label is the result of every job: it runs last, so the run is about to complete when the label wakes a
+  # reviewer or the join, and they read the same result from the workflow runs instead of `pending`.
+  ci-label:
+    needs: [factory-checks, air-like, agnix]
+    if: always() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'ez/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - run: pipx install uv
+      - name: Label the PR with this run's CI result
+        env:
+          BRANCH: ${{ github.head_ref }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          CONCLUSION: ${{ contains(needs.*.result, 'failure') && 'failure' || (contains(needs.*.result, 'cancelled') && 'cancelled' || (contains(needs.*.result, 'skipped') && 'skipped' || 'success')) }}
+        run: scripts/ci-state-label.sh

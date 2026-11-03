@@ -295,6 +295,29 @@ class CliAndValidate(unittest.TestCase):
         self.assertIn(("comment", "[factory] Disputed findings:\nB1: disputed — operator-only redeploy"), log)
         self.assertEqual(tr.tickets["7"]["stage"], "in-review")
 
+    def _done(self, **facts):
+        tr = MemoryTracker({"7": {"stage": "changes-requested", "pr": 9, "head": "abc", "ci": "green",
+                                   "round_complete": True, "focus_missing": ["full"], **facts}})
+        with patch.object(gate, "local_head", return_value="abc"):
+            gate.apply("fix", "done", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
+        return tr.tickets["7"]
+
+    def test_done_after_green_ci_wakes_reviewers(self):
+        t = self._done()
+        self.assertEqual(t["stage"], "in-review")
+        self.assertIn(["label", json.dumps("factory:review-full")], t["log"])
+
+    def test_done_before_ci_or_after_wake_adds_no_review_label(self):
+        for facts in ({"ci": "pending"}, {"pr_labels": ["factory:review-full"]}):
+            log = self._done(**facts).get("log", [])
+            self.assertNotIn(("label", json.dumps("factory:review-full")), [tuple(x) for x in log])
+
+    def test_green_ci_after_done_wakes_reviewers_once(self):
+        facts = {"stage": "in-review", "ci": "green", "head": "abc", "focus_missing": ["full"]}
+        self.assertEqual(gate.review_wake_labels(facts, "abc"), ["factory:review-full"])  # CI last: wakes it
+        t = self._done(ci="pending")  # done first: no wake yet, so the CI step is the only one
+        self.assertNotIn(("label", json.dumps("factory:review-full")), [tuple(x) for x in t.get("log", [])])
+
     def test_undisputed_finding_without_commit_blocks(self):
         review = {"agent": True, "focus": "behaviour", "verdict": "changes", "commit_id": "abc",
                   "findings": ["B1", "B2"]}
@@ -1094,6 +1117,12 @@ class ConflictTest(unittest.TestCase):
         tr.tickets[7]["conflict"] = False
         self.assertFalse(gate.check("fix", {"id": "e", "ticket": 7}, tr, NODES, CONFIG)[1]["merge_main"])
 
+    def test_fix_starts_for_conflict_without_findings(self):
+        tr = MemoryTracker({7: {"stage": "changes-requested", "head": "abc", "pr": 42,
+                                "conflict": True, "round_complete": False}})
+        code, out = gate.check("fix", {"id": "e", "ticket": 7}, tr, NODES, CONFIG)
+        self.assertEqual((code, out["merge_main"]), (gate.GO, True))
+
     def test_dispute_rereview_sweep_approves_or_starts_a_new_fix_round(self):
         original = {"agent": True, "focus": "full", "verdict": "changes", "commit_id": "abc",
                     "findings": ["B1"]}
@@ -1228,6 +1257,13 @@ class AutoMergeTest(unittest.TestCase):
 
     def test_merge_when_all_gates_pass(self):
         tr, results = self.sweep()
+        self.assertEqual(results, [("merge", "merged")])
+        self.assertEqual(self.log(tr, "merge"), ["match-head"])
+
+    def test_merge_after_update_branch_without_rereview(self):
+        tr, results = self.sweep(behind=True, head="h2", round_head="h2")  # facts carry a clean-merge approval to the new head
+        self.assertEqual(results, [("merge", "updated")])
+        tr, results = self.sweep(head="h2", round_head="h2")
         self.assertEqual(results, [("merge", "merged")])
         self.assertEqual(self.log(tr, "merge"), ["match-head"])
 

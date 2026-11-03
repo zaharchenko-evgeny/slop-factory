@@ -199,6 +199,23 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(cli.PR_NODES, cli.deploy.PR_TRIGGERED_NODES)
 
 
+class PackagingTest(unittest.TestCase):
+    def test_installed_command_ships_every_engine_module_it_imports(self):
+        """Air installs `factory` with `uv tool install`: a module missing from py-modules fails only there (ImportError)."""
+        import ast
+        import tomllib
+        shipped = set(tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["setuptools"]["py-modules"])
+        engine = {p.stem for p in (ROOT / "factory").glob("*.py")}
+        imported = set()
+        for mod in shipped:
+            for node in ast.walk(ast.parse((ROOT / "factory" / f"{mod}.py").read_text())):
+                if isinstance(node, ast.Import):
+                    imported |= {a.name.split(".")[0] for a in node.names}
+                elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                    imported.add(node.module.split(".")[0])
+        self.assertEqual(sorted((imported & engine) - shipped), [])
+
+
 class ImportTimeBoundaryTest(unittest.TestCase):
     def test_pull_request_module_with_import_side_effect_never_runs(self):
         """A pull request that changes the engine cannot run code at import: begin imports main's modules."""

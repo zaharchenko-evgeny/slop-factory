@@ -11,6 +11,7 @@ from pathlib import Path
 import yaml
 
 DESCRIPTOR = "factory.descriptor.yaml"
+PROJECT_DESCRIPTOR = "factory.project.yaml"
 _HERE = Path(__file__).resolve().parents[1]
 
 
@@ -77,33 +78,65 @@ def descriptor():
 
 
 def load():
+    root = team_root()
+    if (root / PROJECT_DESCRIPTOR).is_file():
+        import project
+        return project.legacy_config(project.load(root))
     defaults = yaml.safe_load((engine_root() / "engine/defaults.yaml").read_text()) or {}
     return merge(defaults, descriptor())
 
 
-def _check(schema, value, where, errs):
+def _check(schema, value, where, errs, root_schema=None):
+    root_schema = schema if root_schema is None else root_schema
+    if "$ref" in schema:
+        target = root_schema
+        for key in schema["$ref"].removeprefix("#/").split("/"):
+            target = target[key]
+        _check(target, value, where, errs, root_schema)
+        return
     t = schema.get("type")
     kinds = {"object": dict, "array": list, "string": str, "boolean": bool, "integer": int, "number": (int, float)}
-    if t in kinds and (not isinstance(value, kinds[t]) or (t != "boolean" and isinstance(value, bool))):
-        errs.append(f"{where}: must be {t}")
-        return
-    if isinstance(value, dict) and ("properties" in schema or "additionalProperties" in schema):
-        for k, v in value.items():
-            if k in schema.get("properties", {}):
-                _check(schema["properties"][k], v, f"{where}.{k}", errs)
-            else:
-                extra = schema.get("additionalProperties")
-                if extra is False:
-                    errs.append(f"unknown-key: {where}.{k}")
-                elif isinstance(extra, dict):
-                    _check(extra, v, f"{where}.{k}", errs)
+    if t:
+        types = t if isinstance(t, list) else [t]
+        valid = any(kind in kinds and isinstance(value, kinds[kind])
+                    and (kind == "boolean" or not isinstance(value, bool)) for kind in types)
+        if not valid:
+            errs.append(f"{where}: must be {' or '.join(types)}")
+            return
+    if "enum" in schema and value not in schema["enum"]:
+        errs.append(f"{where}: {value!r} is not one of {', '.join(schema['enum'])}")
+    if "oneOf" in schema:
+        matches = 0
+        for option in schema["oneOf"]:
+            option_errors = []
+            _check(option, value, where, option_errors, root_schema)
+            matches += not option_errors
+        if matches != 1:
+            errs.append(f"{where}: must match exactly one schema")
+    if isinstance(value, dict):
+        for key in schema.get("required", []):
+            if key not in value:
+                errs.append(f"{where}.{key}: required")
+        if "properties" in schema or "additionalProperties" in schema:
+            for k, v in value.items():
+                if k in schema.get("properties", {}):
+                    _check(schema["properties"][k], v, f"{where}.{k}", errs, root_schema)
+                else:
+                    extra = schema.get("additionalProperties")
+                    if extra is False:
+                        errs.append(f"unknown-key: {where}.{k}")
+                    elif isinstance(extra, dict):
+                        _check(extra, v, f"{where}.{k}", errs, root_schema)
     if isinstance(value, list) and "items" in schema:
         for i, v in enumerate(value):
-            _check(schema["items"], v, f"{where}[{i}]", errs)
+            _check(schema["items"], v, f"{where}[{i}]", errs, root_schema)
 
 
 def validate():
     """Error lines for the team descriptor against engine/descriptor.schema.json."""
+    if (team_root() / PROJECT_DESCRIPTOR).is_file():
+        import project
+        return project.validate(team_root())
     schema = json.loads((engine_root() / "engine/descriptor.schema.json").read_text())
     errs = []
     _check(schema, descriptor(), DESCRIPTOR, errs)

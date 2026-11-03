@@ -79,7 +79,7 @@ class FakeGh:
             self.workflow_timeout = timeout
             if getattr(self, "workflow_error", False):
                 raise RuntimeError("workflow lookup failed")
-            return "\n".join(json.dumps({"workflow_id": k, "event": "pull_request", "run_number": 1,
+            return "\n".join(json.dumps({"workflow_id": k, "name": "quality-gates", "event": "pull_request", "run_number": 1,
                                           "id": 100 + k, "status": "completed" if c else "in_progress", "conclusion": c})
                              for k, c in enumerate(self.checks))
         if "/actions/runs/100/jobs?" in a:
@@ -236,11 +236,32 @@ class FactsTest(unittest.TestCase):
         self.assertEqual(tr(FakeGh(checks=["success", None])).facts(7)["ci"], "pending")
         self.assertEqual(tr(FakeGh(checks=[])).facts(7)["ci"], "none")
 
+    def _with_runs(self, *runs):
+        class Runs(FakeGh):
+            def __call__(self, args, timeout=None):
+                if any("actions/runs?head_sha=" in x for x in args):
+                    return "\n".join(json.dumps({"event": "pull_request", "run_number": 1, "status": "completed",
+                                                 **r}) for r in runs)
+                return FakeGh.__call__(self, args, timeout)
+        return Runs()
+
+    def test_cancelled_reconcile_run_is_not_ci(self):
+        gh = self._with_runs({"workflow_id": 1, "name": "quality-gates", "conclusion": "success"},
+                             {"workflow_id": 2, "name": "factory-reconcile", "conclusion": "cancelled"})
+        self.assertEqual(tr(gh).facts(7)["ci"], "green")
+
+    def test_ci_counts_configured_workflows_only(self):
+        gh = self._with_runs({"workflow_id": 1, "name": "quality-gates", "conclusion": "success"},
+                             {"workflow_id": 3, "name": "extra-ci", "conclusion": "failure"})
+        self.assertEqual(tr(gh).facts(7)["ci"], "green")
+        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, ci_workflows=["quality-gates", "extra-ci"])
+        self.assertEqual(t.facts(7)["ci"], "red")
+
     def test_ci_rerun_replaces_a_failure(self):
         class Rerun(FakeGh):
             def __call__(self, args):
                 if any("actions/runs?head_sha=" in x for x in args):
-                    return "\n".join(json.dumps({"workflow_id": 1, "event": "pull_request", "run_number": 1,
+                    return "\n".join(json.dumps({"workflow_id": 1, "name": "quality-gates", "event": "pull_request", "run_number": 1,
                                                   "run_attempt": n, "status": "completed", "conclusion": c})
                                       for n, c in ((1, "failure"), (2, "success")))
                 return FakeGh.__call__(self, args)
@@ -284,6 +305,84 @@ class FactsTest(unittest.TestCase):
 
     def test_no_stage_label(self):
         self.assertEqual(tr(FakeGh(labels=["x"])).facts(7)["stage"], "none")
+
+
+class BaseMergeGh(FakeGh):
+    """Head h2 follows the approved commit h1; `merge_parents` are the parents of the commit between them."""
+    merge_parents = ["h1", "m0"]
+    head_patch = "@@ -1 +1 @@\n-a\n+b"
+    old_patch = "@@ -1 +1 @@\n-a\n+b"
+
+    def __call__(self, args, timeout=None):
+        a = next((x for x in args if x.startswith("repos/")), "")
+        if a.endswith("/commits/h2"):
+            return json.dumps({"sha": "h2", "commit": {"committer": {"date": "2026-01-02T00:00:00Z"}}, "parents": [{"sha": p} for p in self.merge_parents]})
+        if a.endswith("/compare/h1...h2"):  # lists the base commits the merge brought in as well
+            return json.dumps({"commits": [{"sha": "m0", "parents": [{"sha": "m"}]},
+                                           {"sha": "h2", "parents": [{"sha": p} for p in self.merge_parents]}]})
+        if a.endswith("/compare/main...m0"):
+            return json.dumps({"ahead_by": 0})
+        for sha, patch in (("h1", self.old_patch), ("h2", self.head_patch)):
+            if a.endswith(f"/compare/main...{sha}"):
+                return json.dumps({"files": [{"filename": "a.py", "patch": patch}]})
+        return super().__call__(args, timeout)
+
+
+class CarriedApprovalTest(unittest.TestCase):
+    def facts(self, **kw):
+        gh = BaseMergeGh(reviews=[review(BOT, M, commit="h1")])
+        gh.head_sha = "h2"
+        gh.__dict__.update(kw)
+        return tr(gh).facts(7)
+
+    def test_approval_survives_clean_base_merge(self):
+        # same patch; the merge only moved its line numbers
+        f = self.facts(head_patch="@@ -9 +9 @@\n-a\n+b")
+        self.assertEqual((f["round_complete"], f["round_verdict"], f["round_head"], f["focus_missing"]), (True, "approve", "h2", []))
+
+    def test_approval_lost_after_conflict_resolution(self):
+        for kw in ({"head_patch": "@@ -1 +1 @@\n-a\n+c"},  # the PR's patch changed
+                   {"merge_parents": ["h1"]},  # a developer commit, not a merge
+                   {"merge_parents": ["m0", "h1"]}):  # first parent is not the previous head
+            with self.subTest(kw=kw):
+                f = self.facts(**kw)
+                self.assertEqual((f["round_complete"], f["round_head"], f["focus_missing"]), (False, "h1", ["full"]))
+
+    def test_carry_ignores_base_commits_listed_by_compare(self):
+        f = self.facts()
+        self.assertEqual((f["round_complete"], f["round_head"]), (True, "h2"))
+
+    def test_approval_lost_when_first_parent_chain_does_not_reach_approved_commit(self):
+        class Long(BaseMergeGh):
+            def __call__(self, args, timeout=None):
+                a = next((x for x in args if x.startswith("repos/")), "")
+                if a.endswith("/commits/h3"):
+                    return json.dumps({"sha": "h3", "commit": {"committer": {"date": "2026-01-02T00:00:00Z"}}, "parents": [{"sha": "h2"}, {"sha": "m0"}]})
+                if a.endswith("/commits/h2"):
+                    return json.dumps({"sha": "h2", "parents": [{"sha": "x"}, {"sha": "m0"}]})
+                if a.endswith("/commits/x"):
+                    return json.dumps({"sha": "x", "parents": [{"sha": "y"}]})
+                return super().__call__(args, timeout)
+
+        gh = Long(reviews=[review(BOT, M, commit="h1")])
+        gh.head_sha = "h3"
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_complete"], f["round_head"], f["focus_missing"]), (False, "h1", ["full"]))
+
+    def test_approval_lost_when_compare_file_list_is_at_its_limit(self):
+        # a 301-file PR: GitHub lists 300, so equal lists prove nothing about the omitted file
+        files = [{"filename": f"f{i}.py", "patch": "@@ -1 +1 @@\n-a\n+b"} for i in range(300)]
+
+        class Capped(BaseMergeGh):
+            def __call__(self, args, timeout=None):
+                a = next((x for x in args if x.startswith("repos/")), "")
+                if a.endswith(("/compare/main...h1", "/compare/main...h2")):
+                    return json.dumps({"files": files})
+                return super().__call__(args, timeout)
+        gh = Capped(reviews=[review(BOT, M, commit="h1")])
+        gh.head_sha = "h2"
+        f = tr(gh).facts(7)
+        self.assertEqual((f["round_complete"], f["focus_missing"]), (False, ["full"]))
 
 
 class EffectsTest(unittest.TestCase):
@@ -1218,9 +1317,10 @@ class GateTest(unittest.TestCase):
         gh, nd = FakeGh(labels=["factory:in-dev"]), nodes.load()
         payload = {"ticket": 7, "event": "e1"}
         self.assertEqual(gate.apply("implement", "done", payload, tr(gh), nd)[0], gate.GO)
+        writes = len(gh.writes)  # the stage change and, with CI green, the reviewer wake labels
         code, out = gate.apply("implement", "done", payload, tr(gh), nd)
         self.assertEqual((code, out["applied"]), (gate.NO_GO, False))
-        self.assertEqual(len(gh.writes), 1)
+        self.assertEqual(len(gh.writes), writes)
 
     def test_bad_values_and_bad_tracker(self):
         facts = {"fix_rounds": 3, "fix_cap": 3, "ci": "green"}
