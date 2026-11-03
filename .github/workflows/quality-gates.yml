@@ -148,15 +148,15 @@ jobs:
       - name: Start the domain allowlist proxy
         run: |
           domains=$(uv run --quiet --with pyyaml python -c "import yaml; print(*{d for e in yaml.safe_load(open('workflows/nodes.yaml'))['environments'].values() for d in e.get('domains', [])})")
-          touch "$RUNNER_TEMP/denied.log"
-          chmod 666 "$RUNNER_TEMP/denied.log"
+          touch "/tmp/air-like-denied.log"
+          chmod 666 "/tmp/air-like-denied.log"
           # The proxy runs as `nobody`; the container user (uid 1500, not the runner's own uid) may reach only loopback, so direct downloads fail.
           sudo iptables -I OUTPUT 1 -m owner --uid-owner 1500 ! -o lo -j REJECT
-          sudo cp -a "$PWD" "$RUNNER_TEMP/repo"
-          sudo chown -R 1500 "$RUNNER_TEMP/repo"
+          sudo cp -a "$PWD" "/tmp/air-like-repo"
+          sudo chown -R 1500 "/tmp/air-like-repo"
           # shellcheck disable=SC2086
-          # Run the copy (world-readable path, cwd readable by `nobody`), detached from the step, and wait until it listens.
-          (cd "$RUNNER_TEMP/repo" && setsid nohup sudo -u nobody python3 scripts/allowlist_proxy.py 8888 "$RUNNER_TEMP/denied.log" $domains > "$RUNNER_TEMP/proxy.log" 2>&1 &)
+          # Run the copy (under /tmp: `nobody` cannot traverse the runner home), detached from the step, and wait until it listens.
+          (cd "/tmp/air-like-repo" && setsid nohup sudo -u nobody python3 scripts/allowlist_proxy.py 8888 "/tmp/air-like-denied.log" $domains > "$RUNNER_TEMP/proxy.log" 2>&1 &)
           for _ in $(seq 20); do (echo > /dev/tcp/127.0.0.1/8888) 2>/dev/null && exit 0; sleep 0.5; done
           echo "::error::allowlist proxy did not start: $(cat "$RUNNER_TEMP/proxy.log")"
           exit 1
@@ -172,7 +172,7 @@ jobs:
         run: |
           docker run --rm --network host --user workspace -e HOME=/home/workspace -e REPO=/repo \
             -e HTTPS_PROXY=http://127.0.0.1:8888 -e NO_PROXY=localhost,127.0.0.1 \
-            -v "$RUNNER_TEMP/repo:/repo" air-like bash /repo/scripts/air-like.sh
+            -v "/tmp/air-like-repo:/repo" air-like bash /repo/scripts/air-like.sh
       - name: Check for downloads from other hosts
         if: always()
         run: |
@@ -181,8 +181,8 @@ jobs:
             echo "::error::direct egress is not blocked"
             exit 1
           fi
-          if [ -s "$RUNNER_TEMP/denied.log" ]; then
-            echo "::error::downloads from hosts outside the environment plan: $(sort -u "$RUNNER_TEMP/denied.log" | tr '\n' ' ')"
+          if [ -s "/tmp/air-like-denied.log" ]; then
+            echo "::error::downloads from hosts outside the environment plan: $(sort -u "/tmp/air-like-denied.log" | tr '\n' ' ')"
             exit 1
           fi
   agnix:
