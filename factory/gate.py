@@ -605,11 +605,12 @@ def sweep_plan(facts, auto_merge=None, default_tier="mid"):
     return None
 
 
-def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, default_tier="mid", progress=None):
+def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, default_tier="mid", progress=None,
+          issue=None):
     """Move every listed ticket through each step its facts allow (a merged PR goes approved to done in one
     step). A ticket that reaches done or blocked also lets its split parent finish. Returns (results, failed)."""
     results, failed, done_tickets = [], False, []
-    queue, seen, merged = list(tracker.sweep_tickets(SWEEP_STAGES)), set(), False
+    queue, seen, merged = ([issue] if issue is not None else list(tracker.sweep_tickets(SWEEP_STAGES))), set(), False
     while queue:
         n = queue.pop(0)
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
@@ -659,6 +660,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
         for source in wake_sources:
             try:
                 dependents = tracker.blocking(source)
+                not_planned = hasattr(tracker, "not_planned") and tracker.not_planned(source)
             except Exception as e:  # a tracker lookup must not fail the whole sweep
                 results.append({"ticket": source, "error": f"{type(e).__name__}: {e}"})
                 continue
@@ -674,16 +676,27 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                         if progress:
                             progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
                         continue
+                    facts = tracker.stale_facts(n)
+                    since = facts.get("stage_at")  # when this ticket last got its stage label, i.e. the re-fire
+                    recent = since and datetime.now(timezone.utc) - datetime.fromisoformat(since.replace("Z", "+00:00")) <= timedelta(minutes=5)
+                    if facts.get("issue_state", "open") != "open" or recent:  # closed, or this event's re-fire already landed
+                        if progress:
+                            progress({"ticket": n, "outcome": "skipped", "why": "closed" if facts.get("issue_state", "open") != "open" else "re-fired within 5 minutes"})
+                        continue
                     woken.add(n)
-                    results.append({"ticket": n, "stage": "ready", "node": "start", "outcome": "unblocked"})
+                    outcome = "re-triage" if not_planned else "unblocked"
+                    results.append({"ticket": n, "stage": "ready", "node": "start", "outcome": outcome})
                     if progress:
                         progress(results[-1])
                     if dry_run:
                         continue
-                    for effect in ({"kind": "unlabel", "ticket": n, "value": "factory:ready"},
+                    effects = ({"kind": "comment", "ticket": n, "run_id": "finish:re-triage",
+                                "value": f"[factory] Blocker #{source} was closed as not planned; re-triage this ticket"},
+                               {"kind": "stage", "ticket": n, "value": "triage"}) if not_planned else ({"kind": "unlabel", "ticket": n, "value": "factory:ready"},
                                    {"kind": "label", "ticket": n, "value": "factory:ready"},
                                    {"kind": "comment", "ticket": n, "value": f"[factory] unblocked by #{source}",
-                                    "run_id": "finish:unblocked"}):
+                                    "run_id": "finish:unblocked"})
+                    for effect in effects:
                         tracker.apply(effect)
                 except Exception as e:
                     failed = True
@@ -812,7 +825,7 @@ def main(argv):
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
-    p.add_argument("--event")
+    p.add_argument("--event", nargs="?", const="-")
     p.add_argument("--issue", type=int)
     p.add_argument("--outcome")
     p.add_argument("--payload")
@@ -843,24 +856,40 @@ def main(argv):
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):
                 raise Bad("sweep needs --tracker github")
-            closed_ticket = a.issue
-            if a.event and a.issue is None:
+            issue, closed_ticket = a.issue, a.issue
+            if a.event and issue is None:
                 try:
-                    raw = json.loads(Path(a.event).read_text())
+                    raw = json.loads(sys.stdin.read() if a.event == "-" else Path(a.event).read_text())
                     if not isinstance(raw, dict):
                         raise ValueError("expected an event object")
                     raw = raw.get("data", raw)
                     if (not isinstance(raw, dict) or not isinstance(raw.get("action"), str)
                             or not any(isinstance(raw.get(key), dict) for key in ("issue", "pull_request"))):
                         raise ValueError("expected an event with an action and issue or pull request")
-                    if raw["action"] == "closed" and isinstance(raw.get("issue"), dict):
-                        closed_ticket = raw["issue"].get("number")
-                except (OSError, ValueError) as e:
-                    print(f"warning: ignoring invalid sweep event; running full sweep: {e}", file=sys.stderr)
+                    issue_payload, pr_payload = raw.get("issue"), raw.get("pull_request")
+                    if issue_payload:
+                        issue = issue_payload.get("number")
+                        if raw["action"] == "closed":
+                            closed_ticket = issue
+                    else:
+                        title = pr_payload.get("title") or ""
+                        body = pr_payload.get("body") or ""
+                        match = re.match(r"\s*#(\d+)\b", title) or re.search(
+                            r"(?im)^\s*closes\s+#(\d+)\b", f"{title}\n{body}"
+                        )
+                        if not match:
+                            raise ValueError("PR title must start with #<ticket> or contain Closes #<ticket>")
+                        issue = int(match[1])
+                    if not isinstance(issue, int) or issue < 1:
+                        raise ValueError("event does not identify a ticket number")
+                except (OSError, ValueError, TypeError) as e:
+                    raise Bad(f"invalid sweep event: {e}")
+            if issue is None and not a.stale:
+                raise Bad("sweep needs --issue or --event; only stale recovery may be unscoped")
             progress = lambda item: print(json.dumps(item), file=sys.stderr, flush=True)
-            results, failed = sweep(tracker, nodes, a.dry_run, closed_ticket,
-                                    config["gates"].get("auto_merge"),
-                                    config.get("defaults", {}).get("tier", "mid"), progress)
+            results, failed = ([], False) if a.stale and issue is None else sweep(
+                tracker, nodes, a.dry_run, closed_ticket, config["gates"].get("auto_merge"),
+                config.get("defaults", {}).get("tier", "mid"), progress, issue)
             out = {"dry_run": a.dry_run, "sweep": results}
             if a.stale:
                 out["stale"], stale_failed = sweep_stale(tracker, nodes, config["limits"].get("stale_hours", 2),

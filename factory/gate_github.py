@@ -217,6 +217,11 @@ class GitHubGateTracker:
                 known.add(issue["number"])
         return dependents
 
+    def not_planned(self, n):
+        """True when issue `n` was closed with state_reason not_planned."""
+        issue = self._api(f"issues/{n}")
+        return issue.get("state") == "closed" and issue.get("state_reason") == "not_planned"
+
     def _fix_writes(self, pr):
         """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
         the label when it finishes, so every round adds it again)."""
@@ -365,7 +370,7 @@ class GitHubGateTracker:
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
         comments = [c["body"] for c in self._list(f"issues/{n}/comments") if c["body"].startswith("[factory] recover:")
                     and c["created_at"] >= stage_at]
-        return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1],
+        return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
                 "command_pending": bool(latest_command and latest_command == latest_event),
                 "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
                 "ci_label": next((x[11:] for x in pr_labels if x in ("factory:ci-green", "factory:ci-red")

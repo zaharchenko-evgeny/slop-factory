@@ -33,6 +33,9 @@ class MemoryTracker:
     def blocking(self, ticket):
         return self._t(ticket).get("blocking", [])
 
+    def not_planned(self, ticket):
+        return (self.tickets.get(ticket) or self.tickets.get(str(ticket)) or {}).get("state_reason") == "not_planned"
+
     def facts(self, ticket):
         t = self._t(ticket)
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
@@ -47,7 +50,7 @@ class MemoryTracker:
         the recover comments come from the log."""
         t = self._t(ticket)
         sent = [json.loads(v) for k, v in t.get("log", []) if k == "comment"]
-        return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "command", "command_at", "commit_at", "ci_label", "command_pending", "pr_state", "issue_state") if k in t},
+        return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "stage_at", "command", "command_at", "commit_at", "ci_label", "command_pending", "pr_state", "issue_state") if k in t},
                 "recover_comments": [c for c in sent if c.startswith("[factory] recover:")]}
 
     def apply(self, effect):
