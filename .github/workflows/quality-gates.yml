@@ -23,9 +23,11 @@ jobs:
       contents: read
       issues: write
       actions: write
-      pull-requests: read
+      pull-requests: write
+      statuses: write
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { fetch-depth: 0, persist-credentials: false }
@@ -59,6 +61,30 @@ jobs:
                   print(result.stdout + result.stderr, file=sys.stderr)
                   sys.exit(1)
           PY
+      - id: agnix
+        name: agnix
+        run: npx --yes agnix@0.59.3 .
+      - id: shellcheck
+        name: shellcheck
+        run: find . -name setup.sh -not -path './.factory/*' -exec shellcheck -x {} +
+      - id: jactionlint
+        name: jactionlint
+        run: pipx run jactionlint==2.3.0 --shellcheck=
+      - id: betterleaks_download
+        name: Betterleaks download
+        shell: bash
+        env:
+          BETTERLEAKS_VERSION: 1.9.0
+        run: curl -sSfL "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz" | tar xz betterleaks
+      - id: betterleaks_repository
+        name: Betterleaks repository
+        run: ./betterleaks dir . --no-banner
+      - id: betterleaks_diff
+        name: Betterleaks PR diff
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: ./betterleaks git . --no-banner --log-opts="${BASE_SHA}..HEAD"
       # No branch protection (private repository): a red main is owned by one ticket.
       - name: Open or reuse the Main is red ticket
         if: failure() && github.event_name == 'push'
@@ -72,71 +98,42 @@ jobs:
 
           Factory-Run: ${GITHUB_RUN_ID}"
           fi
-  # Separate from the blocking checks: its failure never turns factory-checks red or opens a Main is red ticket.
-  rerun-open-prs:
-    if: github.event_name == 'push'
-    needs: factory-checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    continue-on-error: true
-    permissions:
-      actions: write
-      pull-requests: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}  # no checkout here, so gh needs the repository named
-    steps:
-      # A PR green only against an old main must turn red before anyone merges it.
-      # The rerun fallback replays the run's original commit, so it may not see the new main.
-      # A branch older than the workflow_dispatch trigger returns 422: re-run its latest run instead.
-      - name: Re-run on open factory PRs
+      # Re-test only approved PRs before merge; other branches are updated on their next push.
+      - name: Re-run on approved factory PRs
+        if: github.event_name == 'push'
+        continue-on-error: true
         shell: bash
         run: |
-          gh pr list --state open --base main --json headRefName --jq '.[].headRefName | select(startswith("ez/"))' |
+          set -o pipefail
+          gh pr list --state open --base main --json headRefName,labels --jq '.[] | select(any(.labels[]; .name == "factory:approved")) | .headRefName' |
             while read -r ref; do
               gh workflow run quality-gates.yml --ref "$ref" 2>/dev/null && continue
               id=$(gh run list --workflow quality-gates.yml --branch "$ref" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
               if [ -n "$id" ] && gh run rerun "$id"; then continue; fi
               echo "::warning::could not re-run quality-gates on $ref"
             done
-  agnix:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with: { persist-credentials: false }
-      # Scans the whole tree; it picks up AGENTS.md, SKILL.md and roles/**/*.md.
-      - run: npx --yes agnix@0.59.3 .
 
-  shellcheck:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with: { persist-credentials: false }
-      - run: find . -name setup.sh -not -path './.factory/*' -exec shellcheck -x {} +
-
-  jactionlint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with: { persist-credentials: false }
-      - run: pipx run jactionlint==2.3.0 --shellcheck=
-
-  betterleaks:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      BETTERLEAKS_VERSION: 1.9.0
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with: { fetch-depth: 0, persist-credentials: false }
-      - shell: bash
-        run: curl -sSfL "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz" | tar xz betterleaks
-      - name: Repository
-        run: ./betterleaks dir . --no-banner
-      - name: PR diff
+      - name: Label the PR with this run's CI result
+        if: always() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'ez/')
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: ./betterleaks git . --no-banner --log-opts="${BASE_SHA}..HEAD"
+          BRANCH: ${{ github.head_ref }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          CONCLUSION: ${{ job.status }}
+        run: scripts/ci-state-label.sh
+      - name: Summarize quality checks
+        if: always()
+        env:
+          AGNIX: ${{ steps.agnix.outcome }}
+          SHELLCHECK: ${{ steps.shellcheck.outcome }}
+          JACTIONLINT: ${{ steps.jactionlint.outcome }}
+          BETTERLEAKS_DOWNLOAD: ${{ steps.betterleaks_download.outcome }}
+          BETTERLEAKS_REPOSITORY: ${{ steps.betterleaks_repository.outcome }}
+          BETTERLEAKS_DIFF: ${{ steps.betterleaks_diff.outcome }}
+        run: |
+          {
+            echo '## Quality checks'
+            echo "- agnix: ${AGNIX:-not run}"
+            echo "- shellcheck: ${SHELLCHECK:-not run}"
+            echo "- jactionlint: ${JACTIONLINT:-not run}"
+            echo "- betterleaks: download ${BETTERLEAKS_DOWNLOAD:-not run}, repository ${BETTERLEAKS_REPOSITORY:-not run}, PR diff ${BETTERLEAKS_DIFF:-not run}"
+          } >> "$GITHUB_STEP_SUMMARY"

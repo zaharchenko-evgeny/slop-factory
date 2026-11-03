@@ -316,7 +316,7 @@ flowchart LR
     N_doctor_ops["<b>doctor-ops</b><br/>on: cron 0 5 * * *<br/>script"]:::node
     N_retro["<b>retro</b><br/>on: cron 0 2 * * *<br/>retro · review tiers"]:::node
     N_distill["<b>distill</b><br/>on: cron 0 3 * * 1<br/>distill · review tiers"]:::node
-    CI["<b>CI</b> quality-gates + ci-state.yml<br/>on: PR push<br/>writes +factory:ci-green or +factory:ci-red"]:::ext
+    CI["<b>CI</b> quality-gates (labels CI result)<br/>on: PR push<br/>writes +factory:ci-green or +factory:ci-red"]:::ext
     S_approved(["approved"]):::stage
     S_blocked(["blocked"]):::stage
     S_changes_requested(["changes-requested"]):::stage
