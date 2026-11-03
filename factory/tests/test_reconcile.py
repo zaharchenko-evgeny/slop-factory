@@ -63,6 +63,13 @@ class ReconcileTest(unittest.TestCase):
         code, result = gate.check("fix", {"id": "recovered-conflict", "ticket": 1}, t, NODES, CONFIG)
         self.assertEqual((code, result["merge_main"]), (gate.GO, True))
 
+    def test_stale_fix_label_on_conflicting_pr_refired(self):
+        t, results, _ = run({"stage": "changes-requested", "pr": 5, "conflict": True, "since": OLD,
+                             "round_complete": False, "command": "factory:fix-cheap",
+                             "command_at": FRESH, "commit_at": OLD, "attrs": ["factory:fix-cheap"]})
+        self.assertEqual((results[0]["node"], results[0]["reconcile"]), ("fix", "refire"))
+        self.assertIn('"factory:fix-cheap"', logged(t, "label"))
+
     def test_second_miss_blocks_and_needs_human(self):
         refired = [["comment", '"[factory] reconcile: stage=in-dev head=aaa re-fired factory:implement-mid (x)"']]
         t, results, _ = run({"stage": "in-dev", "since": OLD, "head": "aaa", "command": "factory:implement-mid", "log": refired})
