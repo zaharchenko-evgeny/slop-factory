@@ -38,7 +38,7 @@ class ReconcileTest(unittest.TestCase):
     def test_missing_review_focus_refired(self):
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "focus_missing": ["behaviour"]})
         self.assertEqual(results[0]["node"], "review")
-        self.assertIn('"factory:rereview-behaviour"', logged(t, "label"))
+        self.assertIn('"factory:review-behaviour"', logged(t, "label"))
 
     def test_command_label_without_outcome_refired(self):
         t, results, _ = run({"stage": "in-dev", "since": OLD, "command": "factory:implement-mid"})
@@ -59,13 +59,13 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn('"factory:needs-human"', logged(t, "label"))
 
     def test_second_miss_counts_per_step(self):
-        refired = [["comment", '"[factory] reconcile: stage=in-review head=aaa re-fired factory:rereview-behaviour (x)"']]
+        refired = [["comment", '"[factory] reconcile: stage=in-review head=aaa re-fired factory:review-behaviour (x)"']]
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD,
                              "head": "aaa", "focus_missing": ["structure-security"], "log": refired})
         self.assertEqual((results[0]["reconcile"], t.tickets[1]["stage"]), ("refire", "in-review"))
 
     def test_retry_is_per_head(self):
-        refired = [["comment", '"[factory] reconcile: stage=in-review head=aaa re-fired factory:rereview-behaviour (x)"']]
+        refired = [["comment", '"[factory] reconcile: stage=in-review head=aaa re-fired factory:review-behaviour (x)"']]
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "head": "bbb",
                              "focus_missing": ["behaviour"], "log": refired})
         self.assertEqual((results[0]["reconcile"], t.tickets[1]["stage"]), ("refire", "in-review"))

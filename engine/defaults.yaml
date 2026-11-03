@@ -1,6 +1,8 @@
 # What every team shares (ADR-0015). A team descriptor overrides it key by key, one level deep.
 branch_pattern: "ez/{ticket}-{slug}"
 commit_prefix: "#{ticket} "
+# The settings repository every Air environment clones as the team root; empty: the run uses the engine root.
+team_repository: ""
 
 tracker:
   # Stage → label. Exactly one stage label is set on an issue at a time.

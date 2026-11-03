@@ -21,7 +21,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config as cfg  # noqa: E402
-cfg.set_team(Path(__file__).resolve().parents[2])
+cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / ".air/cloud/startup.sh"
@@ -29,7 +29,7 @@ SCRIPT = ROOT / ".air/cloud/startup.sh"
 STUBS = {
     "curl": 'echo curl >> "$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\ncat "$STUB_TAR" > "$out"\n',
     "gh": "",
-    "git": 'echo git "$@" >> "$LOG"\ncase "$*" in\n  "fetch --depth 1 origin main") [ "${GIT_FAIL:-}" != fetch ] ;;\n  "worktree add --detach "*) [ "${GIT_FAIL:-}" != worktree-add ] ;;\n  *) exit 0 ;;\nesac\n',
+    "git": 'echo git "$@" >> "$LOG"\ncase "$*" in\n  "fetch --depth 1 origin "*) [ "${GIT_FAIL:-}" != fetch ] ;;\n  "clone --depth 1 "*) mkdir -p "$5"; echo "engine: ${TEAM_ENGINE:-v0.1.0}" > "$5/factory.descriptor.yaml" ;;\n  "worktree add --detach "*) [ "${GIT_FAIL:-}" != worktree-add ] ;;\n  *) exit 0 ;;\nesac\n',
     "uv": 'echo uv "$@" >> "$LOG"\nprintf "#!/bin/sh\\n" > "$HOME/.local/bin/decide"; chmod +x "$HOME/.local/bin/decide"\n',
 }
 
@@ -81,8 +81,32 @@ class StartupTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         log = self.log.read_text()
         self.assertIn('git fetch --depth 1 origin main', log)
-        self.assertIn('git worktree add --detach ' + str(self.home / "factory-main") + ' origin/main', log)
+        self.assertIn('git worktree add --detach ' + str(self.home / "factory-main") + ' FETCH_HEAD', log)
         self.assertIn('uv tool install --force ' + str(self.home / "factory-main"), log)
+
+    def test_team_repository_is_cloned_and_names_the_engine_version(self):
+        self.env["FACTORY_TEAM_REPOSITORY"] = "https://github.com/o/team"
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        team = self.home / "factory-team"
+        log = self.log.read_text()
+        self.assertIn(f"git clone --depth 1 https://github.com/o/team {team}", log)
+        self.assertIn("git fetch --depth 1 origin refs/tags/v0.1.0", log)
+        self.assertIn(f'export FACTORY_TEAM="{team}"', (self.home / ".bashrc").read_text())
+
+    def test_non_v_engine_tag_is_used(self):
+        self.env.update(FACTORY_TEAM_REPOSITORY="https://github.com/o/team", TEAM_ENGINE="release-2026.11")
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("git fetch --depth 1 origin refs/tags/release-2026.11", self.log.read_text())
+
+    def test_additional_team_repository_is_used_without_clone(self):
+        self.env["FACTORY_TEAM_REPOSITORY"] = "https://github.com/o/team"
+        (self.repo.parent / "team/.git").mkdir(parents=True)
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("git clone", self.log.read_text())
+        self.assertEqual((self.home / "factory-team").resolve(), (self.repo.parent / "team").resolve())
 
     def test_factory_install_failure_is_reported(self):
         uv = Path(self.env["PATH"].split(":", 1)[0]) / "uv"

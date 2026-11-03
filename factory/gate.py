@@ -36,7 +36,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
-from gate_github import GitHubGateTracker  # noqa: E402
+from gate_github import GitHubGateTracker, clean_notes  # noqa: E402
 from gate_port import MemoryTracker  # noqa: E402
 
 ROOT = nodes_mod.ROOT
@@ -91,7 +91,7 @@ def spec_nodes(path):
         spec = json.loads(Path(path).read_text())
         out = {}
         for s in [spec, *(spec.get("runs") or {}).values()]:
-            node = {k: s[k] for k in ("role", "when", "outcomes", "else_tier", "tiers") if k in s}
+            node = {k: s[k] for k in ("role", "when", "outcomes", "else_tier", "tiers", "routine") if k in s}
             node.update({"tier": s["tier"]} if s.get("tier") else {}, **({"focuses": [s["focus"]]} if s.get("focus") else {}))
             out[s["node"]] = node
     except (OSError, ValueError, KeyError, AttributeError, TypeError) as e:
@@ -131,9 +131,8 @@ def from_trigger(d, tracker=None):
     name = "pull_request_review" if review and is_pr else "pull_request" if is_pr else "issues"
     if is_pr:
         ref = ""
-        if tracker and hasattr(tracker, "ticket_for_pr"):
-            ticket = tracker.ticket_for_pr(number)
-        else:
+        ticket = tracker.ticket_for_pr(number) if tracker and hasattr(tracker, "ticket_for_pr") else None
+        if ticket is None and not isinstance(tracker, GitHubGateTracker):
             ref = ((pr or {}).get("head") or {}).get("ref") or ""
             m = re.match(r"(?:refs/heads/)?ez/(\d+)-", ref)
             ticket = int(m[1]) if m else None
@@ -157,6 +156,7 @@ def read(path, what, raw=False, tracker=None):
     return data
 
 
+NOTE_AUDIENCE = {"developer": ("developer",), "reviewer": ("reviewer",)}  # the `for` values a role reads, besides `any`
 COMPLEXITY_TIER = {"small": "cheap", "medium": "mid", "large": "strong"}
 FIX_TIERS = ("cheap", "mid", "strong")
 
@@ -211,6 +211,14 @@ def fix_tier(facts, default="mid"):
     return default
 
 
+def review_wake_labels(facts, completed_head=None):
+    """The per-focus reviewer commands needed for this green PR head."""
+    ci = "green" if completed_head and facts.get("head") == completed_head else facts.get("ci")
+    if facts.get("stage") != "in-review" or ci != "green":
+        return []
+    return [f"factory:review-{focus}" for focus in facts.get("focus_missing", [])]
+
+
 def branch_of(facts, config):
     """The ticket's branch: the PR's head, else `branch_pattern` from the issue title."""
     if facts.get("branch"):
@@ -254,7 +262,8 @@ def check(name, event, tracker, nodes, config):
             facts["ci_failure"] = failure
     why = matches(node, facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
-    facts = {k: v for k, v in facts.items() if k != "body"}
+    notes = facts.get("agent_notes", [])
+    facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
     if node.get("focuses"):  # one review tier per focus (roles.<role>.modes.<focus>.tier)
@@ -267,6 +276,7 @@ def check(name, event, tracker, nodes, config):
         "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
+        "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if name in ("fix", "update") else ()))],
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and name in ("fix", "update")),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
     }
@@ -377,6 +387,19 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
         payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
+    if payload.get("agent_notes"):  # hidden notes for later agents ride on the review, the comments or the PR text
+        try:
+            notes = clean_notes(payload["agent_notes"])
+        except ValueError as err:
+            raise Bad(str(err))
+        for e in effects:
+            if e["kind"] in ("review", "comment"):
+                e["notes"] = notes
+        if name == "implement" and outcome == "done":
+            effects.append({"kind": "pr-notes", "ticket": ticket, "run_id": payload.get("run_id"), "value":
+                            f"<!-- factory:agent-notes\n{json.dumps(notes)}\n-->"})
+    if name in ("review", "join"):
+        effects.append({"kind": "pr-notes-sync", "ticket": ticket, "value": ""})  # notes parked before the PR existed
     facts = tracker.facts(ticket)
     if name == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
             and not facts.get("focus_missing") and facts.get("ci") == "green" and facts.get("pr") and facts.get("head"):
@@ -456,7 +479,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         # A resumed ticket implemented on its open PR with no new commit: no push, so no CI label would come.
         # Re-fire it, and run the join once the stage is in-review: reviews already at this head decide.
         effects = refire_ci(ticket, facts["ci"]) + effects
-        after = [{"kind": "join", "ticket": ticket, "value": "all-approve", "tier": fix_tier(facts)}]
+        after = ([{"kind": "label", "ticket": ticket, "value": f"factory:review-{focus}", "on": "pr"}
+                  for focus in facts.get("focus_missing", [])] if facts["ci"] == "green" else [])
+        after.append({"kind": "join", "ticket": ticket, "value": "all-approve", "tier": fix_tier(facts)})
     starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(COMMANDS)]
     stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith("factory:fix-") for e in starts))
     if stop:
@@ -787,8 +812,13 @@ def stale_plan(facts, now, hours, command_minutes=30):
         return "refire", cmd, "issue", "no PR or commit since the command label"
     if stage == "in-review" and facts.get("pr"):
         head = facts.get("head")
+        if facts.get("ci_label") == "green" and cmd and cmd.startswith("factory:review-") \
+                and cmd.removeprefix("factory:review-") in facts.get("focus_missing", []):
+            return "refire", cmd, "pr", "no review for this focus at the head"
         if facts.get("ci_label") == "green" and not any(r["agent"] and r["commit_id"] == head for r in facts.get("reviews", [])):
-            return "refire", "factory:ci-green", "pr", "no agent review at the head"
+            missing = facts.get("focus_missing", [])
+            if missing:
+                return "refire", f"factory:review-{missing[0]}", "pr", "no review for this focus at the head"
         if not facts.get("ci_label"):
             if facts.get("conflict"):
                 return "comment", None, None, f"no CI label at head {head}: the PR conflicts with main (GitHub starts no CI on a conflict); the update runs after the join"
@@ -871,7 +901,7 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
 
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply", "sweep"])
+    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers"])
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
@@ -885,6 +915,7 @@ def main(argv):
     p.add_argument("--spec")
     p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
     p.add_argument("--tier")
+    p.add_argument("--completed-head")  # CI's terminal label step runs before Actions marks its workflow completed
     try:
         a = p.parse_args(config_mod.pop_team(argv))
     except SystemExit:
@@ -903,6 +934,15 @@ def main(argv):
             raise Bad("--tracker is github or memory:FILE")
         nodes = spec_nodes(a.spec) if a.spec else nodes_mod.load(a.nodes)
         config = config_mod.load()
+        if a.cmd == "wake-reviewers":
+            if not a.issue:
+                raise Bad("wake-reviewers needs --issue TICKET")
+            facts = tracker.facts(a.issue)
+            labels = review_wake_labels(facts, a.completed_head)
+            for label in labels:
+                tracker.apply({"ticket": a.issue, "kind": "label", "value": label, "on": "pr"})
+            print(json.dumps({"ticket": a.issue, "labels": labels}))
+            return GO
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):
                 raise Bad("sweep needs --tracker github")

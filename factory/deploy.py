@@ -54,6 +54,8 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
     """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
     spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
             "when": n.get("when"), "outcomes": n["outcomes"]}
+    if n.get("routine"):
+        spec["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
     if n.get("tiers"):
         spec["tiers"] = n["tiers"]  # the ordered tiers the gate escalates through
     if any((o or {}).get("else") for o in n["outcomes"].values()):
@@ -102,26 +104,26 @@ def repository(r: dict) -> dict:
 # A script node runs one command and judges nothing: the gate's sweep decides every scripted step (join, waiting
 # reviewers, merged to done) from facts. `--main` runs it from main's graph (a PR-triggered node never trusts the PR).
 SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no file, label, comment or review "
-                 "itself. Run `factory sweep{args}` in the foreground with no time limit{event_input}; "
+                 "itself. Run `factory sweep{args}` in the foreground with no time limit; "
                  "wait until it exits, "
                  "and report its JSON output.")
-SCRIPT_ARGS = {"join": " --main --event", "start": " --main --event", "finish": " --main --event",
-               "reopen": " --main --event", "merge": " --main --event",
+PR_NUMBER = " --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>"
+SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>", "finish": PR_NUMBER,
+               "reopen": PR_NUMBER, "merge": PR_NUMBER,
                "doctor": " doctor", "doctor-write": " doctor", "doctor-ops": " doctor",
-               "notify": " notify --issue <issue number from the trigger payload>"}
+               "notify": " notify --issue <the issue number>"}
 
 
 def script_prompt(name: str) -> str:
     if name.startswith("doctor"):
         return "Run `factory doctor` once and report its JSON lines. It changes no ticket itself."
     if name == "notify":
-        return ("Run `factory notify --issue <issue number from the trigger payload>` in the foreground with no "
+        return ("Run `factory notify --issue <the issue number>` in the foreground with no "
                 "time limit, wait until it exits, and report its output.")
     args = SCRIPT_ARGS.get(name, "")
-    event_input = " and pass the trigger payload on stdin" if "--event" in args else ""
-    prompt = SCRIPT_PROMPT.format(args=args, event_input=event_input)
-    if event_input:
-        prompt += " Pass the trigger payload exactly as received; never shorten or retype it."
+    prompt = SCRIPT_PROMPT.format(args=args)
+    if "--issue" in args:
+        prompt += " Copy only that one number; never write the payload or any JSON."
     return prompt
 
 
@@ -144,14 +146,22 @@ def this_step(node: dict, focus: str | None) -> str:
     return f"Woken by: {flow_triggers(node)}.\n\nOutcomes:\n{outcomes}"
 
 
+def begin_arg(node: str, n: dict) -> str:
+    """The number a node begins with; a scheduled routine has no ticket or PR, so it takes none."""
+    if all(str(t).startswith("schedule ") for t in n["triggers"]):
+        return ""
+    return "--pr <the pull request number>" if node in PR_TRIGGERED_NODES else "--issue <the issue number>"
+
+
 def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None) -> str:
     role = n["role"]
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
     text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
+    arg = begin_arg(name, n)
+    arg = f" {arg}" if arg else ""
     return (f"{who}\n\n{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
-            f"1. Run `factory begin {aname}` with the trigger payload (the <trigger_event> JSON) on stdin, as a heredoc. "
-            "Pass the payload exactly as received; never shorten or retype it. "
+            f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts, the branch or PR head and the handoff path. "
             "If it exits 10 the node must not act: report the reason and stop.\n"
             "2. Do the role's work, write the handoff to the handoff path, then run `factory end <handoff_path>`.")
@@ -222,7 +232,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "name": f"{prefix}{env}",
             "repository": repo["url"],
             "startup": d["startup"],
-            "variables": {"FACTORY_ENV": env},
+            "variables": {"FACTORY_ENV": env, **({"FACTORY_TEAM_REPOSITORY": config["team_repository"]}
+                                                 if config.get("team_repository") else {})},
             "secrets": d.get("secrets", []),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),

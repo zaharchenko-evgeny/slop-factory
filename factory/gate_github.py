@@ -19,6 +19,57 @@ import config
 from gate_port import fix_round_count
 from github_tracker import gh
 
+NOTE_FIELDS, NOTE_FOR, NOTE_MAX = ("for", "files", "repro", "hint", "context"), ("fixer", "reviewer", "developer", "any"), 2000
+NOTES_PARKED = "[factory] Agent notes for the PR description"  # ticket comment that holds them until the PR exists
+NOTES = re.compile(r"<!-- factory:agent-notes\s*(\{.*?\})\s*-->", re.S)
+SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)|\bAIza[\w-]{35}\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}"
+                    r"|\bgithub_pat_\w{20,}|\bxox[abprs]-[\w-]{10,}|\bsk-[A-Za-z0-9_-]{20,}"
+                    r'|(?i:\b(?:api[_-]?key|secret|token|passw(?:or)?d)\b\s*[:=]\s*(?:"[^"]*"|[^\s",]+))', re.S)
+
+
+def redact(v):
+    """`v` with secret-looking text redacted in every string, before any serialisation."""
+    if isinstance(v, str):
+        return SECRET.sub("[redacted]", v)
+    if isinstance(v, list):
+        return [redact(x) for x in v]
+    if isinstance(v, dict):
+        return {k: redact(x) for k, x in v.items()}
+    return v
+
+
+def clean_notes(raw):
+    """The notes object of one block: known fields only, secret-looking text redacted; ValueError when it is no
+    object, `for` is unknown or it serialises past NOTE_MAX characters after redaction."""
+    if not isinstance(raw, dict):
+        raise ValueError("agent notes: needs an object")
+    notes = {k: raw[k] for k in NOTE_FIELDS if k in raw}
+    if notes.get("for") not in NOTE_FOR:
+        raise ValueError(f"agent notes: `for` is one of {', '.join(NOTE_FOR)}")
+    notes = {k: redact(v) for k, v in notes.items()}
+    if len(json.dumps(notes)) > NOTE_MAX:
+        raise ValueError(f"agent notes: over {NOTE_MAX} characters")
+    return notes
+
+
+def notes_block(notes):
+    """The hidden block of cleaned notes; `<` and `>` are JSON-escaped so no text can close the comment early."""
+    body = json.dumps(notes).replace("<", "\\u003c").replace(">", "\\u003e")
+    return f"<!-- factory:agent-notes\n{body}\n-->"
+
+
+def parse_notes(body, login="", kind="User"):
+    """The valid notes blocks of `body`, only from a bot author: a person's text is no source of notes."""
+    if kind != "Bot" and not login.endswith("[bot]"):
+        return []
+    out = []
+    for m in NOTES.finditer(body or ""):
+        try:
+            out.append(clean_notes(json.loads(m[1])))
+        except ValueError:
+            pass
+    return out
+
 
 def gate_clear(n):
     from gate import clear_commands
@@ -316,6 +367,8 @@ class GitHubGateTracker:
              "issue_state": issue.get("state", "open"), "updated_at": issue.get("updated_at"),
              "event_actor": ((actor_events[-1].get("actor") or {}).get("login") if actor_events else None),
              "title": issue.get("title", ""), "body": body, "author": (issue.get("user") or {}).get("login"), "branch": None}
+        since = getattr(self, "_since", "")  # a person's factory:ready starts fresh
+        got = self._notes(self._list(f"issues/{n}/comments"), "created_at", since)
         if stage == "needs-answers":
             waiting = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["needs-answers"]]
             comments = self._list(f"issues/{n}/comments")
@@ -349,6 +402,9 @@ class GitHubGateTracker:
             f["handed_to_fix"] = bool(writes) and max(writes) > max(latest_review, commit_date)
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
+            got += (self._notes(self._list(f"issues/{pr['number']}/comments"), "created_at", since)
+                    + self._notes(self._list(f"pulls/{pr['number']}/reviews"), "submitted_at", since)
+                    + self._notes([pr], "updated_at", since))  # the PR body is edited after creation
             if stage == "approved" and pr.get("state") == "open":  # only the merge gates read it
                 f["behind"] = self._api(f"compare/{pr['base']['ref']}...{head}")["behind_by"] > 0
             f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
@@ -358,7 +414,13 @@ class GitHubGateTracker:
                      focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
                      round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
                      fix_rounds=fix_round_count(reviews, since))  # same-head dispute rereviews count as a new round
+        f["agent_notes"] = [n for _, n in sorted(got, key=lambda t: t[0], reverse=True)]
         return f
+
+    def _notes(self, items, stamp, since):
+        """(time, notes) of the bot-written items (comments, reviews, a PR) from `since` on."""
+        return [(x.get(stamp) or "", n) for x in items if (x.get(stamp) or "") >= since
+                for n in parse_notes(x.get("body"), (x.get("user") or {}).get("login", ""), (x.get("user") or {}).get("type", ""))]
 
     def stale_facts(self, n):
         """facts plus what the stale sweep needs: `since` (last label or commit event, ISO), the command label
@@ -373,11 +435,11 @@ class GitHubGateTracker:
                     labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
         pr_labels = f.get("pr_labels", [])
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
-        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-", "factory:update-"))), None)
+        cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-", "factory:update-", "factory:review-"))), None)
         command_labels = ("factory:ready", "factory:triage", "factory:implement-", "factory:fix-",
                           "factory:update-", "factory:ci-green")
         active_commands = {(t, x) for t, x in have if x == "factory:ready" or x == "factory:triage"
-                           or x == "factory:ci-green" or x.startswith(command_labels[2:5])}
+                           or x == "factory:ci-green" or x.startswith(command_labels[2:5]) or x.startswith("factory:review-")}
         command_events = [e for t, e in events if e.get("event") == "labeled"
                           and (t, e.get("label", {}).get("name")) in active_commands]
         commit_at = self._api(f"commits/{f['head']}")["commit"]["committer"]["date"] if f["head"] else None
@@ -482,7 +544,31 @@ class GitHubGateTracker:
                 raise RuntimeError(f"comment: no PR for ticket {n}")
             if any(c["body"] == body for c in self._list(f"issues/{pr['number'] if pr else n}/comments")):
                 return False
+            body += self._block(e)
             self.run(["issue", "comment", str(pr["number"] if pr else n), "-R", self.repo, "--body", body])
+            return True
+        if kind in ("pr-notes", "pr-notes-sync"):  # a developer's `done` notes for the PR description
+            pr = self._pr(n)
+            if kind == "pr-notes" and pr is None:  # Air opens the PR after the run: park the notes on the ticket
+                body = f"{NOTES_PARKED}\n\n{value}"
+                if e.get("run_id"):
+                    body += f"\n\nFactory-Run: {e['run_id']}"
+                if any(c["body"] == body for c in self._list(f"issues/{n}/comments")):
+                    return False
+                self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
+                return True
+            if pr is None:
+                return False
+            if kind == "pr-notes-sync":  # the first gate step that sees the PR copies the parked notes
+                parked = [c for c in self._list(f"issues/{n}/comments") if (c.get("body") or "").startswith(NOTES_PARKED)]
+                found = parse_notes(parked[-1]["body"], (parked[-1].get("user") or {}).get("login", ""),
+                                    (parked[-1].get("user") or {}).get("type", "")) if parked else []
+                if not found:
+                    return False
+                value = notes_block(found[-1])
+            if value in (pr.get("body") or ""):
+                return False
+            self.run(["pr", "edit", str(pr["number"]), "-R", self.repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
             return True
         if kind == "review":
             return self._review(n, e)
@@ -585,6 +671,11 @@ class GitHubGateTracker:
                   *[x for a in who for x in ("-f", f"reviewers[]={a}")]])
         return True
 
+    @staticmethod
+    def _block(e):
+        """The hidden notes block an effect carries (`notes`: the gate's cleaned object), after the visible text."""
+        return f"\n\n{notes_block(e['notes'])}" if e.get("notes") else ""
+
     def _review(self, n, e):
         pr, focus = self._pr(n), e.get("focus")
         if pr is None or not focus:
@@ -611,7 +702,7 @@ class GitHubGateTracker:
         if e.get("run_id"):
             body += f"\n\nFactory-Run: {e['run_id']}"
         self.run(["api", "-X", "POST", f"repos/{self.repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
-                  "-f", "event=COMMENT", "-f", f"body={body}"])
+                  "-f", "event=COMMENT", "-f", f"body={body}{self._block(e)}"])
         if rereview:
             self._edit(pr["number"], remove=[f"factory:rereview-{focus}"], on="pr")
         return True

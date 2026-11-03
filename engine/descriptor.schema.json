@@ -5,7 +5,10 @@
   "additionalProperties": false,
   "properties": {
     "engine": {
-      "type": "integer"
+      "description": "Engine version: a tag such as v0.1.0, or main; a number installs main"
+    },
+    "team_repository": {
+      "type": "string"
     },
     "project": {
       "type": "object",

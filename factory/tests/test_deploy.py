@@ -21,7 +21,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-cfg.set_team(Path(__file__).resolve().parents[2])
+cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 import deploy
 import nodes
 
@@ -258,6 +258,19 @@ class PlanTest(unittest.TestCase):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
 
+    def test_environments_render_team_repository(self):
+        url = "https://github.com/o/team"
+        plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": url})
+        self.assertTrue(plan["environments"])
+        for e in plan["environments"]:
+            self.assertEqual(e["variables"], {"FACTORY_ENV": e["variables"]["FACTORY_ENV"], "FACTORY_TEAM_REPOSITORY": url})
+        plain = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": ""})
+        self.assertTrue(all("FACTORY_TEAM_REPOSITORY" not in e["variables"] for e in plain["environments"]))
+
+    def test_automations_have_no_additional_repositories(self):
+        plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
+        self.assertTrue(all("additionalRepositories" not in a for a in plan["automations"]))
+
     def test_nodes_get_environment_by_env(self):
         plan = deploy.plan_air(nodes.load(), cfg.load())
         env = {x["name"]: x["environmentConfigId"] for x in plan["automations"]}
@@ -281,7 +294,7 @@ class PlanTest(unittest.TestCase):
         plan = json.loads((FIX / "air-plan.json").read_text())
         a = {x["name"]: x for x in plan["automations"]}
         self.assertIn("Run `factory sweep` in the foreground", a["[Slop factory] sweep"]["prompt"])
-        self.assertIn("`factory begin intake`", a["[Slop factory] intake"]["prompt"])
+        self.assertIn("`factory begin intake --issue <the issue number>`", a["[Slop factory] intake"]["prompt"])
 
     def test_every_script_prompt_waits_for_command_exit(self):
         plans = (deploy.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
@@ -293,14 +306,19 @@ class PlanTest(unittest.TestCase):
                                                    "[Slop factory] notify")):
                     self.assertIn("wait until it exits", automation["prompt"])
 
-    def test_payload_consumers_preserve_the_trigger_payload(self):
+    def test_no_prompt_asks_for_json(self):
         plans = (deploy.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
         for plan in plans:
+            for x in plan["automations"]:
+                prompt = x["prompt"].replace("never write the payload or any JSON", "")
+                for word in ("--event", "stdin", "heredoc", "payload"):
+                    self.assertNotIn(word, prompt, x["name"])
             prompts = {x["name"]: x["prompt"] for x in plan["automations"]}
-            self.assertIn("Pass the payload exactly as received; never shorten or retype it.",
-                          prompts["[Slop factory] implement-mid"])
-        self.assertIn("Pass the trigger payload exactly as received; never shorten or retype it.",
-                      deploy.script_prompt("join"))
+            self.assertIn("`factory begin implement-mid --issue <the issue number>`", prompts["[Slop factory] implement-mid"])
+
+    def test_pull_request_nodes_begin_with_the_pr_number(self):
+        a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
+        self.assertIn("`factory begin fix-mid --pr <the pull request number>`", a["[Slop factory] fix-mid"])
 
     def test_review_automations_trigger_on_focus_rerequest_labels(self):
         for a in json.loads((FIX / "air-plan.json").read_text())["automations"]:
@@ -384,7 +402,7 @@ class PlanTest(unittest.TestCase):
             self.assertEqual(marks, sorted(marks), name)
             self.assertTrue(prompt.startswith(f"You are the {role} of Slop factory"))
             self.assertIn((ROOT / f"roles/{role}/role.md").read_text().strip(), prompt)
-            self.assertIn(f"`factory begin {name}`", prompt)
+            self.assertIn(f"`factory begin {name} --", prompt)
             self.assertIn("`factory end <handoff_path>`", prompt)
             for word in ("gate.py", "--node", "--tier", "--focus", "read `role_file`"):
                 self.assertNotIn(word, prompt)
@@ -394,18 +412,33 @@ class PlanTest(unittest.TestCase):
         self.assertIn("- `grill`:", intake)
         self.assertNotIn("- `bug`:", intake)
 
+    def test_scheduled_routine_prompts_take_no_number(self):
+        a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
+        for name in ("retro", "distill"):
+            prompt = a[f"[Slop factory] {name}"]
+            self.assertIn(f"`factory begin {name}`", prompt)
+            self.assertNotIn("<the issue number>", prompt)
+
     def test_pull_request_scripts_run_from_main(self):
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
-        self.assertIn("`factory sweep --main --event`", a["[Slop factory] join"])
-        self.assertIn("`factory sweep --main --event`", a["[Slop factory] finish"])
-        self.assertIn("`factory sweep --main --event`", a["[Slop factory] reopen"])
+        self.assertIn("`factory sweep --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>`", a["[Slop factory] join"])
+        self.assertIn("`factory sweep --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>`", a["[Slop factory] finish"])
+        self.assertIn("`factory sweep --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>`", a["[Slop factory] reopen"])
+
+    def test_no_review_automation_triggers_on_ci_green(self):
+        automations = deploy.plan_air(nodes.load(), cfg.load())["automations"]
+        reviews = [a for a in automations if a["name"].startswith("[Slop factory] review-")]
+        self.assertTrue(reviews)
+        self.assertTrue(all("factory:ci-green" not in json.dumps(a["triggers"]) for a in reviews))
+        self.assertTrue(all(any(t["filters"].get("label", "").startswith("factory:review-")
+                               for t in a["triggers"]) for a in reviews))
 
     def test_event_script_nodes_scope_to_one_ticket(self):
         scripts = {"join", "start", "finish", "reopen", "merge"}
         for automation in deploy.plan_air(nodes.load(), cfg.load())["automations"]:
             name = automation["name"].removeprefix("[Slop factory] ")
             if name in scripts:
-                self.assertIn("factory sweep --main --event", automation["prompt"], name)
+                self.assertIn("factory sweep --main --issue", automation["prompt"], name)
             elif "factory sweep" in automation["prompt"]:
                 self.assertTrue("--issue" in automation["prompt"] or "--event" in automation["prompt"], name)
 

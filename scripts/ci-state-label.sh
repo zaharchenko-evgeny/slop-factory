@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# GitHub returns transient errors now and then: retry each gh call, 3 attempts, waits 5 s and 15 s.
+gh() {
+  local waits n=0
+  read -ra waits <<< "${CI_LABEL_WAITS:-5 15}"
+  until command gh "$@"; do
+    if [ "$n" -ge "${#waits[@]}" ]; then
+      echo "::error title=ci-state-label::gh $1 $2 failed after $((n + 1)) attempts (label step error, not a failed check)" >&2
+      return 1
+    fi
+    echo "gh $1 $2 failed, retrying in ${waits[$n]} s" >&2
+    sleep "${waits[$n]}"
+    n=$((n + 1))
+  done
+}
+
 pr=$(gh pr list --head "$BRANCH" --state open --json number,headRefOid --jq ".[] | select(.headRefOid == \"$SHA\") | .number")
 if [ -z "$pr" ]; then echo "no open PR at $SHA (head moved or PR closed): nothing to label"; exit 0; fi
 case "$CONCLUSION" in
@@ -28,3 +43,8 @@ fi
 gh pr edit "$pr" --add-label "$want"
 gh api "repos/$GH_REPO/statuses/$SHA" -f state=success -f context=factory-ci-label -f description="$want" >/dev/null
 echo "PR #$pr at $SHA: $want"
+if [ "$want" = factory:ci-green ]; then
+  ticket=${BRANCH#ez/}
+  ticket=${ticket%%-*}
+  uv run --quiet factory/gate.py wake-reviewers --issue "$ticket" --completed-head "$SHA"
+fi

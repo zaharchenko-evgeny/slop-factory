@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-cfg.set_team(ROOT)
+cfg.set_team(ROOT / "factory/tests/fixtures/team")
 import cli  # noqa: E402
 
 cli.load_engine(cli.HERE)
@@ -30,7 +30,7 @@ PAYLOAD = {"action": "labeled", "issue": {"number": 7, "title": "Add x", "update
 
 class BeginEndTest(unittest.TestCase):
     def setUp(self):
-        cfg.set_team(ROOT)
+        cfg.set_team(ROOT / "factory/tests/fixtures/team")
         self.old = os.getcwd()
         self.tmp = tempfile.TemporaryDirectory()
         os.chdir(self.tmp.name)
@@ -65,6 +65,18 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(out)["ticket"], 299)
 
+    def test_begin_with_issue_number_only(self):
+        self.tracker()
+        Path("event.json").unlink()
+        code, out = self.run_cli("begin", "implement-mid", "--issue", "7", "--tracker", "memory:tickets.json")
+        self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
+
+    def test_begin_with_pr_number_only(self):
+        self.tracker(stage="changes-requested", pr=300, pr_state="open", round_complete=True)
+        with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
+            code, out = self.run_cli("begin", "fix-cheap", "--pr", "300", "--tracker", "memory:tickets.json")
+        self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
+
     def test_end_applies_handoff_for_begun_node(self):
         tracker = self.tracker()
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
@@ -73,6 +85,15 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.run_cli("end", "done")
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-review")
+
+    def test_begin_lists_notes_for_role(self):
+        mine, theirs = {"for": "developer", "hint": "see a.py"}, {"for": "reviewer", "hint": "skip"}
+        tracker = self.tracker(agent_notes=[theirs, mine, {"for": "any", "hint": "all"}])
+        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        got = json.loads(out)
+        self.assertEqual([n["hint"] for n in got["agent_notes"]], ["see a.py", "all"])
+        self.assertNotIn("agent_notes", got["context"])
 
     def test_end_without_begin_is_an_error(self):
         self.assertEqual(self.run_cli("end", "done")[0], 2)
@@ -108,7 +129,7 @@ class BeginEndTest(unittest.TestCase):
     def test_end_carries_dispute_data(self):
         Path("a.json").write_text(json.dumps(["B1: disputed — intended"]))
         a = argparse.Namespace(outcome="done", findings=None, slices=None, checks=None, reason=None, summary=None,
-                               size_estimate=None, addressed="a.json", disputed_focuses="behaviour,full")
+                               size_estimate=None, addressed="a.json", disputed_focuses="behaviour,full", notes=None)
         data = cli.handoff_of(a)
         self.assertEqual(data["findings_addressed"], ["B1: disputed — intended"])
         self.assertEqual(data["disputed_focuses"], ["behaviour", "full"])
@@ -140,7 +161,7 @@ class BeginEndTest(unittest.TestCase):
     def test_begin_main_uses_existing_main_worktree(self):
         main = Path("main")
         main.mkdir()
-        shutil.copy2(ROOT / "factory.descriptor.yaml", main / "factory.descriptor.yaml")
+        shutil.copy2(ROOT / "factory/tests/fixtures/team/factory.descriptor.yaml", main / "factory.descriptor.yaml")
         (main / "factory").mkdir()
         (main / "factory/gate.py").write_text(
             'import json, sys\nprint(json.dumps({"gate": "main", "handoff_path": "h.json"}))\n')
