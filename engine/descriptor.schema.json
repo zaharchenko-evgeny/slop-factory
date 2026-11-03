@@ -59,6 +59,10 @@
         "stages": {
           "type": "object"
         },
+        "stage_kinds": {
+          "type": "object",
+          "additionalProperties": { "enum": ["active", "waiting", "final"] }
+        },
         "map_label": {
           "type": "string"
         },
@@ -185,6 +189,9 @@
           "type": "integer"
         },
         "run_timeout_minutes": {
+          "type": "integer"
+        },
+        "remind_after_hours": {
           "type": "integer"
         },
         "resume_cap": {

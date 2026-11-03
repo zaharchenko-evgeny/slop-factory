@@ -449,7 +449,8 @@ class GitHubGateTracker:
                 blockers.append({"number": int(number)})
         risk = "low" if self.risk_labels["low"] in labels else "high"
         required, pr = FOCUSES[risk], self._pr(n)
-        f = {"stage": stage, "attrs": [x for x in labels if x not in by_label], "blockers_open": len(blockers),
+        f = {"stage": stage, "attrs": [x for x in labels if x not in by_label],
+             "assignees": [a["login"] for a in issue.get("assignees", [])], "blockers_open": len(blockers),
              "head": None, "pr": None, "mergeable": None, "conflict": False, "ci": "none", "reviews": [], "requested_reviewers": [],
              "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
              "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
