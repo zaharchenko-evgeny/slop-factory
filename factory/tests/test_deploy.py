@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 import deploy
+import gate_github
 import nodes
 
 FIX = HERE / "fixtures/deploy"
@@ -248,6 +249,34 @@ class ApplyTest(unittest.TestCase):
         (self.tmp / "server.py").write_text(FAKE_SERVER.replace('{**i, **{k: v for k, v in a.items() if k != key}}', '{**i}'))
         self.assertEqual(self.run_deploy("--apply"), 1)
 
+    def test_main_closes_reminder_after_successful_changed_apply(self):
+        plan = {"prefix": "[F] ", "environments": [], "automations": [], "files": {}}
+        servers = [mock.Mock(), mock.Mock()]
+        changed = [("update", "automation", "a", None, None, [])]
+        writes = []
+
+        def run(args):
+            writes.append(args)
+            if args[:2] == ["api", "--paginate"]:
+                return json.dumps({"number": 42, "title": "Deploy needed"})
+            return "{}"
+
+        tracker = gate_github.GitHubGateTracker("o/r", {}, "bot", run=run)
+        with (mock.patch.dict(os.environ, {"FACTORY_MCP_AIR_AUTOMATIONS": "automation",
+                                          "FACTORY_MCP_AIR_CLOUD": "cloud"}),
+              mock.patch.object(deploy.config_mod, "pop_team", side_effect=lambda argv: argv),
+              mock.patch.object(deploy, "plan_air", return_value=plan),
+              mock.patch.object(deploy, "Mcp", side_effect=servers),
+              mock.patch.object(deploy, "read_state", return_value=([], [])),
+              mock.patch.object(deploy, "diff", side_effect=[changed, []]),
+              mock.patch.object(deploy, "apply_diff") as apply,
+              mock.patch.object(deploy, "write_files", return_value=0),
+              mock.patch("gate_github.GitHubGateTracker.from_config", return_value=tracker)):
+            self.assertEqual(deploy.main(["--apply"]), 0)
+        apply.assert_called_once()
+        self.assertTrue(any(x[:2] == ["issue", "close"] and "42" in x for x in writes))
+        self.assertTrue(any(x[:2] == ["issue", "comment"] and "factory:deploy-applied" in " ".join(x) for x in writes))
+
 
 class PlanTest(unittest.TestCase):
     def test_air_matches_fixture(self):
@@ -333,10 +362,17 @@ class PlanTest(unittest.TestCase):
         self.assertFalse([x for x in plan["automations"] if "reconcile" in x["name"]])
         self.assertEqual(list(plan["files"]), [".github/workflows/factory-reconcile.yml"])
         text = plan["files"][".github/workflows/factory-reconcile.yml"]
-        self.assertIn('cron: "*/30 * * * *"', text)
+        self.assertIn('cron: "7,37 * * * *"', text)
         self.assertIn("workflow_dispatch:", text)
         self.assertIn("uv run --quiet factory/cli.py reconcile", text)
         self.assertEqual(text, (ROOT / ".github/workflows/factory-reconcile.yml").read_text())  # generated: rerun `factory deploy --apply`
+
+    def test_reconcile_renders_off_peak_schedule_and_ci_wake(self):
+        text = deploy.plan_air(nodes.load(), cfg.load())["files"][".github/workflows/factory-reconcile.yml"]
+        self.assertIn('cron: "7,37 * * * *"', text)
+        self.assertIn("workflow_run:\n    workflows: [quality-gates]\n    types: [completed]", text)
+        self.assertIn("group: factory-reconcile\n  cancel-in-progress: false\n\njobs:", text)
+        self.assertNotIn("cancel-in-progress: true", text)
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(deploy.config_mod, "team_root", return_value=Path(d)):

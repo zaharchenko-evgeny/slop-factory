@@ -42,6 +42,32 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_plan_change_opens_deploy_ticket(self):
+        class PlanTracker(MemoryTracker):
+            def config_change_merged(self, pr):
+                self.deploy_ticket = {"title": "Deploy needed", "pr": pr}
+        tr = PlanTracker({10: {"stage": "approved", "pr_state": "merged", "pr": 300}})
+        tr.sweep_tickets = lambda stages: [10]
+        facts = tr.facts
+        tr.facts = lambda ticket: {**facts(ticket), "reviews": [], "fix_rounds": 0}
+        gate.sweep(tr, NODES)
+        self.assertEqual(tr.deploy_ticket, {"title": "Deploy needed", "pr": 300})
+
+    def test_unchanged_plan_opens_nothing(self):
+        class PlanTracker(MemoryTracker):
+            def config_change_merged(self, pr):
+                self.deploy_ticket = None
+        tr = PlanTracker({10: {"stage": "approved", "pr_state": "merged", "pr": 300}})
+        tr.sweep_tickets = lambda stages: [10]
+        facts = tr.facts
+        tr.facts = lambda ticket: {**facts(ticket), "reviews": [], "fix_rounds": 0}
+        gate.sweep(tr, NODES)
+        self.assertIsNone(tr.deploy_ticket)
+
+    def test_new_labels_created_at_merge(self):
+        plan = deploy.plan_air(NODES, CONFIG)
+        self.assertIn("factory:needs-human", plan["labels"])
+
     def test_low_risk_wakes_full_only(self):
         facts = {"stage": "in-review", "ci": "green", "focus_missing": ["full"]}
         self.assertEqual(gate.review_wake_labels(facts), ["factory:review-full"])
@@ -1378,6 +1404,24 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertFalse(failed)
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(10, "merged"), (11, "unblocked")])
         self.assertIn(["comment", '"[factory] unblocked by #10"'], tr.tickets[11]["log"])
+
+    def test_after_merge_checks_listed_on_finish(self):
+        tr = MemoryTracker({10: {"stage": "approved", "pr_state": "merged",
+                                 "body": "- [ ] Operator check after the merge (not part of the PR): re-fire Air"}})
+        tr.sweep_tickets = lambda stages: [10]
+        results, failed = gate.sweep(tr, NODES)
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.tickets[10]["stage"], "approved")
+        self.assertIn("factory:needs-human", tr.tickets[10]["attrs"])
+        body = next(json.loads(value) for kind, value in tr.tickets[10]["log"] if kind == "comment")
+        self.assertIn("- [ ] re-fire Air", body)
+
+        tr.tickets[10]["comments"] = [{"body": body.replace("- [ ]", "- [x]")}]
+        results, failed = gate.sweep(tr, NODES)
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.tickets[10]["stage"], "done")
 
     def test_config_change_merge_updates_open_prs(self):
         class ConfigTracker(MemoryTracker):
