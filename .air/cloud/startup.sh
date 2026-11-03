@@ -74,7 +74,13 @@ FACTORY_TEAM=$(cd "$TEAM" && pwd)
 export FACTORY_TEAM
 # The engine version is the settings descriptor's `engine`: a tag or `main`; a number or none means main.
 REF=$(sed -n 's/^engine: *"\{0,1\}\([^" #]*\).*/\1/p' "$TEAM/factory.descriptor.yaml" 2>/dev/null | head -n 1)
-case "$REF" in main|v[0-9]*) ;; *) REF=main ;; esac
+case "$REF" in
+  main|"") REF=main ;;
+  *[!0-9]*)
+    if git check-ref-format "refs/tags/$REF"; then REF="refs/tags/$REF"; else REF=main; fi
+    ;;
+  *) REF=main ;;
+esac
 if ! { git worktree remove --force "$HOME/factory-main" 2>/dev/null || rm -rf "$HOME/factory-main"; } ||
   ! git fetch --depth 1 origin "$REF" ||
   ! git worktree add --detach "$HOME/factory-main" FETCH_HEAD ||
