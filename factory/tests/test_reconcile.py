@@ -126,6 +126,27 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(results[0]["node"], "custom")
         self.assertIn('"factory:custom"', logged(t, "label"))
 
+    def test_lists_only_open_tickets_in_non_final_stages(self):
+        asked = []
+
+        class Counting(MemoryTracker):
+            def sweep_tickets(self, stages, open_only=False):
+                asked.append((sorted(stages), open_only))
+                return super().sweep_tickets(stages, open_only)
+
+            def stale_facts(self, ticket):
+                read.append(ticket)
+                return super().stale_facts(ticket)
+
+        read = []
+        tracker = Counting({1: {"stage": "in-dev", "since": OLD, "command": "factory:implement-mid"},
+                            2: {"stage": "done", "since": OLD},
+                            3: {"stage": "blocked", "since": OLD, "issue_state": "closed"}})
+        reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
+        finals = {s for s, k in CONFIG["tracker"]["stage_kinds"].items() if k == "final"}
+        self.assertEqual(asked, [(sorted(s for s in STAGES if s not in finals), True)])
+        self.assertEqual(read, [1])  # no facts reads for a done or closed ticket
+
     def test_fresh_step_waits_for_the_timeout(self):
         _, results, _ = run({"stage": "in-dev", "since": FRESH, "command": "factory:implement-mid"})
         self.assertEqual(results, [])

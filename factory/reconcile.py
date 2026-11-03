@@ -62,7 +62,9 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
     now, results, failed = now or datetime.now(timezone.utc), [], False
     default = limits.get("run_timeout_minutes", 30)
     stage_kinds = stage_kinds or {}
-    for n in tracker.sweep_tickets(stages):
+    # Open tickets in an active or waiting stage only: each listed ticket costs a dozen API reads, and a closed or
+    # done one is never re-fired, so listing them spent the hourly GitHub budget for nothing.
+    for n in tracker.sweep_tickets([s for s in stages if stage_kinds.get(s) != "final"], open_only=True):
         try:
             facts, stage = tracker.stale_facts(n), None
             stage, since = facts["stage"], facts.get("since")
