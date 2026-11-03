@@ -112,7 +112,6 @@ jobs:
               if [ -n "$id" ] && gh run rerun "$id"; then continue; fi
               echo "::warning::could not re-run quality-gates on $ref"
             done
-
       - name: Label the PR with this run's CI result
         if: always() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'ez/')
         env:
@@ -137,3 +136,63 @@ jobs:
             echo "- jactionlint: ${JACTIONLINT:-not run}"
             echo "- betterleaks: download ${BETTERLEAKS_DOWNLOAD:-not run}, repository ${BETTERLEAKS_REPOSITORY:-not run}, PR diff ${BETTERLEAKS_DIFF:-not run}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Air's environment: non-root user, HOME with factory-main (#281), only the domains of the environment plan.
+  air-like:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { fetch-depth: 0, persist-credentials: false }
+      - run: pipx install uv
+      - name: Start the domain allowlist proxy
+        run: |
+          domains=$(uv run --quiet --with pyyaml python -c "import yaml; print(*{d for e in yaml.safe_load(open('workflows/nodes.yaml'))['environments'].values() for d in e.get('domains', [])})")
+          touch "/tmp/air-like-denied.log"
+          chmod 666 "/tmp/air-like-denied.log"
+          # The proxy runs as `nobody`; the container user (uid 1500, not the runner's own uid) may reach only loopback, so direct downloads fail.
+          sudo iptables -I OUTPUT 1 -m owner --uid-owner 1500 ! -o lo -j REJECT
+          sudo ip6tables -I OUTPUT 1 -m owner --uid-owner 1500 ! -o lo -j REJECT
+          sudo cp -a "$PWD" "/tmp/air-like-repo"
+          sudo chown -R 1500 "/tmp/air-like-repo"
+          # shellcheck disable=SC2086
+          # Run the copy (under /tmp: `nobody` cannot traverse the runner home), detached from the step, and wait until it listens.
+          (cd "/tmp/air-like-repo" && setsid nohup sudo -u nobody python3 scripts/allowlist_proxy.py 8888 "/tmp/air-like-denied.log" $domains > "$RUNNER_TEMP/proxy.log" 2>&1 &)
+          for _ in $(seq 20); do (echo > /dev/tcp/127.0.0.1/8888) 2>/dev/null && exit 0; sleep 0.5; done
+          echo "::error::allowlist proxy did not start: $(cat "$RUNNER_TEMP/proxy.log")"
+          exit 1
+      - name: Build the image
+        run: |
+          docker build -t air-like --build-arg UID=1500 - <<'EOF'
+          FROM ubuntu:24.04
+          ARG UID
+          RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates python3 && rm -rf /var/lib/apt/lists/*
+          RUN userdel -r ubuntu 2>/dev/null; useradd -m -u "$UID" -d /home/workspace workspace
+          EOF
+      - name: Run startup.sh as in Air
+        run: |
+          docker run --rm --network host --user workspace -e HOME=/home/workspace -e REPO=/repo \
+            -e HTTPS_PROXY=http://127.0.0.1:8888 -e NO_PROXY=localhost,127.0.0.1 \
+            -v "/tmp/air-like-repo:/repo" air-like bash /repo/scripts/air-like.sh
+      - name: Check for downloads from other hosts
+        if: always()
+        run: |
+          # A direct (non-proxy) download as the container's uid must be rejected.
+          for family in -4 -6; do
+            if sudo -u '#1500' curl "$family" -sS --max-time 10 -o /dev/null https://example.com 2>/dev/null; then
+              echo "::error::direct IPv${family#-} egress is not blocked"
+              exit 1
+            fi
+          done
+          if [ -s "/tmp/air-like-denied.log" ]; then
+            echo "::error::downloads from hosts outside the environment plan: $(sort -u "/tmp/air-like-denied.log" | tr '\n' ' ')"
+            exit 1
+          fi
+  agnix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      # Scans the whole tree; it picks up AGENTS.md, SKILL.md and roles/**/*.md.
+      - run: npx --yes agnix@0.59.3 .

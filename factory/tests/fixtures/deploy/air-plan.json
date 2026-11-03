@@ -647,7 +647,7 @@
       },
       "environmentConfigId": "[Slop factory] read",
       "name": "[Slop factory] recover",
-      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --stale` in the foreground with no time limit; wait until it exits, and report its JSON output.",
+      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep` in the foreground with no time limit; wait until it exits, and report its JSON output.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -1470,6 +1470,7 @@
       "vm": "default"
     }
   ],
+  "files": {},
   "labels": [
     "complexity:large",
     "complexity:medium",
