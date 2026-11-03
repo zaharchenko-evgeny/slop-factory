@@ -3,13 +3,18 @@ name: factory-reconcile
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "7,37 * * * *"
+  # jactionlint ignore=dangerous-triggers
+  workflow_run:
+    workflows: [quality-gates]
+    types: [completed]
   workflow_dispatch:
 
 permissions: {}
 
 concurrency:
   group: factory-reconcile
+  cancel-in-progress: false
 
 jobs:
   reconcile:

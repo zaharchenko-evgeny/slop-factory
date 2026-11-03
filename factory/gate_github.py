@@ -368,10 +368,11 @@ class GitHubGateTracker:
              "event_actor": ((actor_events[-1].get("actor") or {}).get("login") if actor_events else None),
              "title": issue.get("title", ""), "body": body, "author": (issue.get("user") or {}).get("login"), "branch": None}
         since = getattr(self, "_since", "")  # a person's factory:ready starts fresh
-        got = self._notes(self._list(f"issues/{n}/comments"), "created_at", since)
+        comments = self._list(f"issues/{n}/comments")
+        f["comments"] = comments
+        got = self._notes(comments, "created_at", since)
         if stage == "needs-answers":
             waiting = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") == self.stages["needs-answers"]]
-            comments = self._list(f"issues/{n}/comments")
             if waiting and comments:
                 started = waiting[-1].get("created_at", "")
                 ready = [e for e in events if e.get("event") == "labeled" and e.get("label", {}).get("name") in (self.stages["triage"], self.stages["ready"])]
@@ -434,6 +435,8 @@ class GitHubGateTracker:
                 if e.get("event") == "labeled":
                     labeled[(t, e["label"]["name"])] = max(e["created_at"], labeled.get((t, e["label"]["name"]), ""))
         pr_labels = f.get("pr_labels", [])
+        review_labels = [(x, labeled.get((pr, x), "")) for x in pr_labels
+                         if x.startswith(("factory:review-", "factory:rereview-")) and labeled.get((pr, x))]
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
         cmd = next(((t, x) for t, x in have if x.startswith(("factory:implement-", "factory:fix-", "factory:update-", "factory:review-"))), None)
         command_labels = ("factory:ready", "factory:triage", "factory:implement-", "factory:fix-",
@@ -451,6 +454,7 @@ class GitHubGateTracker:
         return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
                 "command_pending": bool(latest_command and latest_command == latest_event),
                 "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
+                "review_labels": review_labels,
                 "ci_label": next((x[11:] for x in pr_labels if x in ("factory:ci-green", "factory:ci-red")
                                  and x[11:] == f.get("ci")), None)}  # a label left over from an earlier head is not this head's CI
 

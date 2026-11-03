@@ -32,6 +32,7 @@ Break the work into **tracer bullet** tickets.
 - A completed slice is demoable or verifiable on its own
 - Each slice is sized to fit in a single fresh context window
 - Any prefactoring should be done first
+- Turn every Operator check into a test or mark it `Operator check after the merge (not part of the PR): …`.
 
 </vertical-slice-rules>
 

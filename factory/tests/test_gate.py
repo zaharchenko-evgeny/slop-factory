@@ -1348,6 +1348,24 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(10, "merged"), (11, "unblocked")])
         self.assertIn(["comment", '"[factory] unblocked by #10"'], tr.tickets[11]["log"])
 
+    def test_after_merge_checks_listed_on_finish(self):
+        tr = MemoryTracker({10: {"stage": "approved", "pr_state": "merged",
+                                 "body": "- [ ] Operator check after the merge (not part of the PR): re-fire Air"}})
+        tr.sweep_tickets = lambda stages: [10]
+        results, failed = gate.sweep(tr, NODES)
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.tickets[10]["stage"], "approved")
+        self.assertIn("factory:needs-human", tr.tickets[10]["attrs"])
+        body = next(json.loads(value) for kind, value in tr.tickets[10]["log"] if kind == "comment")
+        self.assertIn("- [ ] re-fire Air", body)
+
+        tr.tickets[10]["comments"] = [{"body": body.replace("- [ ]", "- [x]")}]
+        results, failed = gate.sweep(tr, NODES)
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.tickets[10]["stage"], "done")
+
     def test_config_change_merge_updates_open_prs(self):
         class ConfigTracker(MemoryTracker):
             def config_change_merged(self, pr):
