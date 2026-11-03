@@ -130,9 +130,8 @@ def from_trigger(d, code_host=None):
         raise MissingNumber("payload has no issue or PR number")
     name = "pull_request_review" if review and is_pr else "pull_request" if is_pr else "issues"
     if is_pr:
-        if code_host:
-            ticket = code_host.ticket_for_pr(number)
-        else:
+        ticket = code_host.ticket_for_pr(number) if code_host else None
+        if ticket is None and not isinstance(code_host, GitHubCodeHost):  # a live lookup is the only source for GitHub
             ticket = ticket_from_ref(((pr or {}).get("head") or {}).get("ref")) or ticket_from_ref((pr or {}).get("title"))
         if ticket is None:
             raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
@@ -925,8 +924,8 @@ def main(argv):
             tracker, code_host = GitHubGateTracker.from_config(), GitHubCodeHost.from_config()
         elif kind == "memory" and path:
             try:
-                code_host = None
                 tracker = MemoryTracker(dict(json.loads(Path(path).read_text())))
+                code_host = tracker  # the memory tracker also maps a PR number to its ticket
             except (OSError, ValueError, TypeError) as e:
                 raise Bad(f"malformed --tracker file: {e}")
         else:

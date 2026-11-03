@@ -416,7 +416,7 @@ class GitHubGateTracker:
             complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
             f.update(branch=pr["head"]["ref"])
             got += (self._notes(self._list(f"issues/{pr['number']}/comments"), "created_at", since)
-                    + self._notes(self._list(f"pulls/{pr['number']}/reviews"), "submitted_at", since)
+                    + self._notes(self._list(f"pulls/{pr['number']}/reviews", repo=self.pr_repo), "submitted_at", since)
                     + self._notes([pr], "updated_at", since))  # the PR body is edited after creation
             if stage == "approved" and pr.get("state") == "open":  # only the merge gates read it
                 f["behind"] = self._api(f"compare/{pr['base']['ref']}...{head}", repo=self.pr_repo)["behind_by"] > 0
@@ -582,7 +582,7 @@ class GitHubGateTracker:
                 value = notes_block(found[-1])
             if value in (pr.get("body") or ""):
                 return False
-            self.run(["pr", "edit", str(pr["number"]), "-R", self.repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
+            self.run(["pr", "edit", str(pr["number"]), "-R", self.pr_repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
             return True
         if kind == "review":
             return self._review(n, e)
