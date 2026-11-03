@@ -155,7 +155,11 @@ jobs:
           sudo cp -a "$PWD" "$RUNNER_TEMP/repo"
           sudo chown -R 1500 "$RUNNER_TEMP/repo"
           # shellcheck disable=SC2086
-          nohup sudo -u nobody python3 scripts/allowlist_proxy.py 8888 "$RUNNER_TEMP/denied.log" $domains > "$RUNNER_TEMP/proxy.log" 2>&1 &
+          # Run the copy (world-readable path, cwd readable by `nobody`), detached from the step, and wait until it listens.
+          (cd "$RUNNER_TEMP/repo" && setsid nohup sudo -u nobody python3 scripts/allowlist_proxy.py 8888 "$RUNNER_TEMP/denied.log" $domains > "$RUNNER_TEMP/proxy.log" 2>&1 &)
+          for _ in $(seq 20); do (echo > /dev/tcp/127.0.0.1/8888) 2>/dev/null && exit 0; sleep 0.5; done
+          echo "::error::allowlist proxy did not start: $(cat "$RUNNER_TEMP/proxy.log")"
+          exit 1
       - name: Build the image
         run: |
           docker build -t air-like --build-arg UID=1500 - <<'EOF'
