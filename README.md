@@ -1,7 +1,7 @@
 # Slop factory
 
 Slop factory is a reusable engine for delivering GitHub Issues as reviewed pull
-requests. This repository contains the engine and its own team configuration.
+requests. This repository contains the engine, setup skill, and deploy tooling.
 
 ## Install
 
@@ -45,11 +45,11 @@ converts the old pair. A new project starts from the engine's
 in it since the project's `engine` version, and `factory upgrade --apply PATH`
 takes one file.
 
-### Team overrides
+### Team-owned runtime files
 
-The engine resolves `roles/`, `skills/`, and `workflows/` in the team repository
-first. A matching team file replaces the engine file at that path; unmatched
-files come from the engine.
+Runtime `roles/`, `skills/`, workflows, policies, and judgments come only from
+the team's repository. `template/roles/` and `template/skills/` are setup
+examples, not runtime fallbacks; the engine's node graph is `engine/nodes.yaml`.
 
 An environment can also define a `setup.sh` in the team's `environments`
 directory. It runs for every environment, followed by the `setup.sh` in the
@@ -58,9 +58,8 @@ after the factory and skills are installed; a failing hook stops startup.
 
 ## This repository
 
-This repository is both the engine package and the `slop-factory` team
-configuration. The engine is installed with the command above; this
-repository's descriptor and overrides configure its own factory.
+This repository is the engine and deploy package only. The Slop factory
+configuration and runtime files live in the separate settings repository.
 
 Slop factory's settings live in
 [slop-eval-factory](https://github.com/zaharchenko-evgeny/slop-eval-factory):
@@ -68,7 +67,7 @@ a change to its workflow, states, roles or skills goes there. CI checks the
 migrated copy in `factory/tests/fixtures/slop/` (`test_slop_plan_unchanged`).
 
 See [factory setup](skills/factory-setup/SKILL.md), [design](docs/design.md),
-and the [delivery workflow](workflows/delivery.md) for more detail.
+and the [delivery template](template/workflows/delivery.md) for more detail.
 
 ## Attention
 

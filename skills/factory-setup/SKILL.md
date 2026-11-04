@@ -92,8 +92,8 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 A new project keeps its settings in a repository of its own, started from the
 engine's `template/` (ADR-0016): `render.py --project ANSWERS.json OUT_DIR`
 writes `factory.project.yaml`, `workflows/delivery.yaml`, `knowledge/` and
-`README.md`. Roles and skills are not copied; the engine supplies them, and the
-project adds `roles/<name>/` or `skills/<name>/` only to replace one. Then run
+`README.md`. Runtime roles and skills must come from the project repository;
+`template/roles/` and `template/skills/` are examples, not fallbacks. Then run
 `factory validate --team OUT_DIR`. After an engine upgrade,
 `factory upgrade --diff --team OUT_DIR` shows what changed in the template.
 

@@ -176,7 +176,7 @@ def tests_for(cls, tid):
         def test_go(self):
             code, out = self.check(self.tr(), self.ev(head="abc"))
             self.assertEqual((code, out["go"], out["role"], out["tier"]), (0, True, "router", "cheap"))
-            self.assertEqual(out["role_file"], "roles/router/role.md")
+            self.assertEqual(Path(out["role_file"]).resolve(), cfg.resolve("roles/router/role.md").resolve())
             self.assertIn("grill", out["outcomes"])
 
         def test_condition_fails(self):
@@ -375,7 +375,7 @@ class CliAndValidate(unittest.TestCase):
             (Path(delivery) / "retained.txt").write_text("still here\n")
             result = type("Result", (), {
                 "returncode": 0,
-                "stdout": "5\t7\tretained.txt\n0\t9\tdeleted.txt\n4\t0\tskills/vendor/copy.txt\n",
+                "stdout": "5\t7\tretained.txt\n0\t9\tdeleted.txt\n4\t0\ttemplate/skills/copy.txt\n",
                 "stderr": "",
             })()
             with patch.object(gate, "ROOT", Path(engine)), \
@@ -391,6 +391,7 @@ class CliAndValidate(unittest.TestCase):
                 "stdout": "175\t0\tfactory/tests/fixtures/deploy/air-plan.json\n"
                           "12\t3\tdocs/statechart.md\n"
                           "9\t0\tskills/factory-setup/templates/roles/router/role.md\n"
+                          "9\t0\ttemplate/roles/router/role.md\n"
                           "4\t1\tfactory/gate.py\n",
                 "stderr": "",
             })()
@@ -399,7 +400,7 @@ class CliAndValidate(unittest.TestCase):
                     "origin/main", checkout=delivery,
                     generated_paths=["factory/tests/fixtures/deploy/air-plan.json",
                                      "docs/statechart.md", "docs/statechart-proposed.md",
-                                     "skills/factory-setup/templates/**"],
+                                     "skills/factory-setup/templates/**", "template/roles/**"],
                 ), (5, [("factory/gate.py", 5)]))
 
     def test_intake_size_uses_first_number(self):

@@ -1,7 +1,8 @@
 # Slop factory: project rules
 
-This repository holds the factory setup skill (`skills/factory-setup/`) and the
-Slop factory generated from it. Design: `docs/design.md`,
+This repository holds the engine, deploy tooling, template, and factory setup
+skill (`skills/factory-setup/`). Team runtime files live in `slop-eval-factory`.
+Design: `docs/design.md`,
 decisions: `docs/adr/`, plan: `docs/plan.md`.
 
 ## Development workflow
@@ -94,7 +95,7 @@ Models: Air tiers come from `targets.air.models` in the team repository’s `fac
 - Roles and workflows never name a repository, tracker project, model or
   harness. Put those in the team repository’s `factory.descriptor.yaml`.
 - `docs/design.md` and the ADRs change only with an issue that asks for it.
-- Keep `roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
+- Keep `template/roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
   ShellCheck.
 - Run artefacts live in `.factory/` (git-ignored). Never commit them.
 - Slop factory's workflow, states, roles and skills live in `slop-eval-factory`

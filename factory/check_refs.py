@@ -4,12 +4,30 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "factory"))
 import config
 
-REPO = config.load()["tracker"]["repository"]
+
+def repository_name():
+    try:
+        return config.load()["tracker"]["repository"]
+    except FileNotFoundError:
+        remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT,
+                                capture_output=True, text=True)
+        if remote.returncode:
+            raise FileNotFoundError("no team descriptor or Git origin is available")
+        url = remote.stdout.strip()
+        path = urlsplit(url).path if "://" in url else url.split(":", 1)[-1]
+        parts = path.removesuffix(".git").strip("/").split("/")
+        if len(parts) < 2:
+            raise FileNotFoundError("Git origin does not contain an owner/repository path")
+        return "/".join(parts[-2:])
+
+
+REPO = repository_name()
 ALLOW = {
     # Illustrative names used by the superseded state chart and old design docs.
     "factory.yaml", "setup.sh", "CLAUDE.md", "skills.txt", "startup.sh", "role.md", "docs/automations/",
@@ -24,6 +42,9 @@ ALLOW = {
     "workflows/*.md", "Design: docs/<file>.md#<section>", "drive.py", "sm.py", "delivery.sm.yaml",
     "git/refs", "github/", "claude/skills/", "agents/skills/", "ez/", "ez/152-probes", "ez/152-probe-p5",
     "checks.json", "addressed.json", "findings.json", "notes.json",
+    # Runtime paths intentionally resolve from the settings repository, not this engine checkout.
+    "roles/", "roles/_common.md", "roles/approver/role.md", "policies/", "judgments/", "policies/auto-approve.rego",
+    "judgments/auto-approve.yaml", "workflows/delivery.md", ".air/cloud/startup.sh",
     "AGENTS.md:ez/<issue>-*", "AGENTS.md:roles/*/setup.sh",
     "docs/design.md:roles/<role>/", "docs/plan.md:roles/{router,developer,reviewer}/",
     "docs/recipes/auto-approve.md:conftest test --policy policies summary.json",
@@ -40,7 +61,7 @@ ISSUE = re.compile(r"(?<![\w/])#(\d+)\b")
 def docs(root=ROOT):
     paths = [root / "README.md", root / "AGENTS.md"]
     paths += sorted((root / "docs").glob("**/*.md"))
-    paths += sorted((root / "roles").glob("**/*.md"))
+    paths += sorted((root / "template" / "roles").glob("**/*.md"))
     return [p for p in paths if p.is_file() and "docs/adr/" not in p.relative_to(root).as_posix()
             and "knowledge/" not in p.relative_to(root).as_posix()]
 

@@ -94,7 +94,7 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
     for t in tools:
         results.append({"probe": f"tool:{t}", "result": "ok" if which(t) else "missing", "detail": env})
     for s in skills:
-        found = has_skill(s) if has_skill else any(config.engine_root().glob(f"skills/**/{s}/SKILL.md"))
+        found = has_skill(s) if has_skill else config.resolve(f"skills/{s}/SKILL.md").is_file()
         results.append({"probe": f"skill:{s}", "result": "ok" if found else "missing", "detail": env})
     return results
 

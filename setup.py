@@ -1,4 +1,4 @@
-"""Ship the engine assets (roles, vendored skills, node list, project template, defaults, schema) beside the code.
+"""Ship the engine and template assets beside the code.
 
 An installed `factory` command finds them under `<prefix>/share/factory-engine` (config.ENGINE_ROOT).
 """
@@ -6,7 +6,7 @@ import os
 
 from setuptools import setup
 
-ROOTS = ["engine", "roles", "skills/vendor", "template", "workflows"]
+ROOTS = ["engine", "template"]
 
 
 def engine_files():

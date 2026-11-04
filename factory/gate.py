@@ -610,7 +610,7 @@ def branch_size(base, checkout=None, generated_paths=()):
     """Changed lines in the delivery checkout against the default branch, with whole-file deletions counted once."""
     checkout = Path(checkout or Path.cwd())
     result = subprocess.run(
-        ["git", "diff", "--no-renames", "--numstat", f"{base}...HEAD", "--", ".", ":(exclude)skills/vendor/**"],
+        ["git", "diff", "--no-renames", "--numstat", f"{base}...HEAD", "--", ".", ":(exclude)template/skills/**"],
         cwd=checkout, capture_output=True, text=True,
     )
     if result.returncode:
@@ -618,7 +618,7 @@ def branch_size(base, checkout=None, generated_paths=()):
     files = []
     for line in result.stdout.splitlines():
         added, deleted, path = line.split("\t", 2)
-        if path.startswith("skills/vendor/"):
+        if path.startswith("template/skills/"):
             continue
         if any(fnmatch.fnmatchcase(path, pattern) for pattern in generated_paths):
             continue

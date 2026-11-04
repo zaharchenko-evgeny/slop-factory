@@ -119,20 +119,32 @@ SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>",
                "notify": " notify --issue <the issue number>"}
 
 
-def script_prompt(name: str) -> str:
+def checkout_instructions(main_repository: dict | None, config: dict) -> str:
+    primary = next(r for r in config["repositories"] if r.get("role") == "primary")
+    team = repository({"url": config.get("team_repository") or primary["url"]})
+    if not main_repository or main_repository["fullName"] == team["fullName"]:
+        return ""
+    project = main_repository["fullName"].rsplit("/", 1)[-1]
+    return (f"## Project checkout\n\nBefore running project commands, `cd /workspaces/{project}`. "
+            "The factory repository is checked out beside it and is read-only.\n\n")
+
+
+def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None) -> str:
+    checkout = checkout_instructions(main_repository, config) if config else ""
     if name.startswith("doctor"):
-        return "Run `factory doctor` once and report its JSON lines. It changes no ticket itself."
-    if name == "reconcile":
-        return ("This step runs one command and judges nothing: it changes no file, label, comment or review itself. "
-                "Run `factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
-    if name == "notify":
-        return ("Run `factory notify --issue <the issue number>` in the foreground with no "
-                "time limit, wait until it exits, and report its output.")
-    args = SCRIPT_ARGS.get(name, "")
-    prompt = SCRIPT_PROMPT.format(args=args)
-    if "--issue" in args:
-        prompt += " Copy only that one number; never write the payload or any JSON."
-    return prompt
+        prompt = "Run `factory doctor` once and report its JSON lines. It changes no ticket itself."
+    elif name == "reconcile":
+        prompt = ("This step runs one command and judges nothing: it changes no file, label, comment or review itself. "
+                  "Run `factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
+    elif name == "notify":
+        prompt = ("Run `factory notify --issue <the issue number>` in the foreground with no "
+                  "time limit, wait until it exits, and report its output.")
+    else:
+        args = SCRIPT_ARGS.get(name, "")
+        prompt = SCRIPT_PROMPT.format(args=args)
+        if "--issue" in args:
+            prompt += " Copy only that one number; never write the payload or any JSON."
+    return checkout + prompt
 
 
 def skill_lines(role: str) -> str:
@@ -140,11 +152,12 @@ def skill_lines(role: str) -> str:
     skills = config_mod.resolve(f"roles/{role}/skills.txt")
     lines = []
     for skill in skills.read_text().split() if skills.exists() else []:
-        path = next(ROOT.glob(f"skills/**/{skill}/SKILL.md"))
+        path = config_mod.resolve(f"skills/{skill}/SKILL.md")
         text = path.read_text()
         meta = yaml.safe_load(text.split("---")[1]) if text.startswith("---") else {}
         desc = " ".join(str(meta.get("description", "")).split())
-        lines.append(f"- {skill}: {desc} (file: `{path.relative_to(ROOT)}`)")  # the path until skills install (#213)
+        shown = path.relative_to(config_mod.team_root()).as_posix()
+        lines.append(f"- {skill}: {desc} (file: `{shown}`)")
     return "\n".join(lines)
 
 
@@ -161,13 +174,15 @@ def begin_arg(node: str, n: dict) -> str:
     return "--pr <the pull request number>" if node in PR_TRIGGERED_NODES else "--issue <the issue number>"
 
 
-def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None) -> str:
+def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None,
+                 main_repository: dict | None = None) -> str:
     role = n["role"]
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
     text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
+    checkout = checkout_instructions(main_repository, config)
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
-    return (f"{who}\n\n{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n## This step\n\n{this_step(n, focus)}\n\n"
+    return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts, the branch or PR head and the handoff path. "
@@ -233,7 +248,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
                 "environmentConfigId": f"{prefix}{env}",
-                "prompt": script_prompt(name) if n["role"] == "script" else agent_prompt(name, n, config, aname, focus),
+                "prompt": script_prompt(name, automation_repository, config) if n["role"] == "script" else agent_prompt(
+                    name, n, config, aname, focus, automation_repository),
             }
             if automation_repository["fullName"] != repository(team)["fullName"]:
                 automation["additionalRepositories"] = [{"repository": repository(team), "branch": "main"}]
@@ -246,8 +262,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "name": f"{prefix}{env}",
             "repository": repo["url"],
             "startup": d["startup"],
-            "variables": {"FACTORY_ENV": env, **({"FACTORY_TEAM_REPOSITORY": config["team_repository"]}
-                                                 if config.get("team_repository") else {})},
+            "variables": {"FACTORY_ENV": env},
             "secrets": d.get("secrets", []),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),

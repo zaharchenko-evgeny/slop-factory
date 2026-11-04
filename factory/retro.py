@@ -77,7 +77,7 @@ def changed_lines(files, generated_paths=()):
     total = 0
     for f in files:
         name = f["filename"]
-        if name.startswith("skills/vendor/") or any(fnmatch.fnmatchcase(name, g) for g in generated_paths):
+        if name.startswith("template/skills/") or any(fnmatch.fnmatchcase(name, g) for g in generated_paths):
             continue
         total += 1 if f.get("status") == "removed" else f.get("additions", 0) + f.get("deletions", 0)
     return total

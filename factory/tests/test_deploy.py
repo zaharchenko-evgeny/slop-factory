@@ -28,6 +28,7 @@ import gate_github
 import nodes
 from gate_port import MemoryTracker
 import workflow  # noqa: E402
+from project_mode import link_runtime_files, team as project_team  # noqa: E402
 
 FIX = HERE / "fixtures/deploy"
 
@@ -45,6 +46,7 @@ def project_plan(project, wf):
         (Path(tmp) / workflow.WORKFLOW_PATH).parent.mkdir(parents=True)
         (Path(tmp) / cfg.PROJECT_DESCRIPTOR).write_text(workflow.dump(project))
         (Path(tmp) / workflow.WORKFLOW_PATH).write_text(workflow.dump(wf))
+        link_runtime_files(tmp)
         cfg.set_team(tmp)
         try:
             return deploy.plan_air(nodes.load(), cfg.load())
@@ -137,7 +139,7 @@ class RecordedTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"WRAP_STRUCTURED": "1"}):
             self.read_recorded()
 
-    def test_unchanged_environment_is_unchanged(self):
+    def test_settings_environments_drop_legacy_repository_variable(self):
         contract = json.loads((HERE / "contracts/air-mcp.json").read_text())
         responses = contract["servers"]["air-cloud"]["responses"]
         plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository":
@@ -147,8 +149,10 @@ class RecordedTest(unittest.TestCase):
                 for name in ("read", "write", "ops")]
         changes = deploy.diff(plan, [], envs)
         self.assertEqual([(kind, resource, name) for kind, resource, name, *_ in changes],
-                         [("update", "environment", "[Slop factory] ops")])
-        self.assertEqual(changes[0][3]["repository"], "https://github.com/zaharchenko-evgeny/slop-eval-factory")
+                         [("update", "environment", f"[Slop factory] {env}") for env in ("read", "write", "ops")])
+        self.assertEqual([change[3]["variables"] for change in changes],
+                         [{"FACTORY_ENV": env} for env in ("read", "write", "ops")])
+        self.assertEqual(changes[-1][3]["repository"], "https://github.com/zaharchenko-evgeny/slop-eval-factory")
 
     def read_recorded(self):
         tmp = Path(tempfile.mkdtemp())
@@ -515,14 +519,15 @@ class ProjectPlanTest(unittest.TestCase):
             cfg.set_team(HERE / "fixtures/team")
             current = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository":
                                                      yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())["team_repository"]})
-            cfg.set_team(slop)
+            with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
+                cfg.set_team(project_team(slop))
             migrated = deploy.plan_air(nodes.load(), cfg.load())
         finally:
             cfg.set_team(before)
         self.assertEqual(json.dumps(migrated, indent=2, sort_keys=True), json.dumps(current, indent=2, sort_keys=True))
 
     def test_slop_fixture_renders_this_repository_nodes(self):
-        """The generator check of the generated fixture: it validates and renders back to engine/nodes.yaml."""
+        """The generator check of the generated fixture: it validates and renders back to workflows/nodes.yaml."""
         slop = HERE / "fixtures/slop"
         project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
         wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
@@ -582,12 +587,12 @@ class PlanTest(unittest.TestCase):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
 
-    def test_environments_render_team_repository(self):
+    def test_environments_only_export_the_environment_name(self):
         url = "https://github.com/o/team"
         plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": url})
         self.assertTrue(plan["environments"])
         for e in plan["environments"]:
-            self.assertEqual(e["variables"], {"FACTORY_ENV": e["variables"]["FACTORY_ENV"], "FACTORY_TEAM_REPOSITORY": url})
+            self.assertEqual(e["variables"], {"FACTORY_ENV": e["variables"]["FACTORY_ENV"]})
         plain = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": ""})
         self.assertTrue(all("FACTORY_TEAM_REPOSITORY" not in e["variables"] for e in plain["environments"]))
 
@@ -605,6 +610,15 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(deploy.same("additionalRepositories", None, []))
         self.assertFalse(deploy.same("additionalRepositories", live, [{"repository": {"fullName": "o/team"},
                                                                         "branch": "develop"}]))
+
+    def test_prompts_enter_the_main_project_checkout_only_when_it_is_not_the_team(self):
+        plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
+        project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
+        team = [a for a in plan["automations"] if a["repository"]["fullName"] == "o/team"]
+        self.assertTrue(project and all("cd /workspaces/slop-factory" in a["prompt"] for a in project))
+        self.assertTrue(team and all("cd /workspaces/" not in a["prompt"] for a in team))
+        self.assertIn("(file: `skills/tdd/SKILL.md`)", next(a["prompt"] for a in project
+                                                             if a["name"] == "[Slop factory] implement-mid"))
 
     def test_nodes_get_environment_by_env(self):
         plan = deploy.plan_air(nodes.load(), cfg.load())
@@ -739,7 +753,7 @@ class PlanTest(unittest.TestCase):
             marks = [prompt.index(m) for m in (intro, "## Your skills", "## This step", "## How you start and finish")]
             self.assertEqual(marks, sorted(marks), name)
             self.assertTrue(prompt.startswith(f"You are the {role} of Slop factory"))
-            self.assertIn((ROOT / f"roles/{role}/role.md").read_text().strip(), prompt)
+            self.assertIn((ROOT / f"template/roles/{role}/role.md").read_text().strip(), prompt)
             self.assertIn(f"`factory begin {name} --", prompt)
             self.assertIn("`factory end <handoff_path>`", prompt)
             for word in ("gate.py", "--node", "--tier", "--focus", "read `role_file`"):

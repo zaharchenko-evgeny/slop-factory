@@ -139,6 +139,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { fetch-depth: 0, persist-credentials: false }
       - run: pipx install uv
+      - id: settings-repository
+        run: |
+          repository=$(uv run --quiet --with pyyaml python -c "import yaml; from urllib.parse import urlparse; print(urlparse(yaml.safe_load(open('factory/tests/fixtures/slop/factory.project.yaml'))['team_repository']).path.strip('/'))")
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ steps.settings-repository.outputs.repository }}
+          ref: main
+          path: factory-team
+          persist-credentials: false
       - name: Start the domain allowlist proxy
         run: |
           domains=$(uv run --quiet --with pyyaml python -c "import yaml; print(*{d for e in yaml.safe_load(open('engine/nodes.yaml'))['environments'].values() for d in e.get('domains', [])})")
@@ -166,7 +176,7 @@ jobs:
       - name: Run startup.sh as in Air
         run: |
           docker run --rm --network host --user workspace -e HOME=/home/workspace -e REPO=/repo \
-            -e FACTORY_TEAM=/repo/factory/tests/fixtures/team \
+            -e FACTORY_TEAM=/repo/factory-team \
             -e HTTPS_PROXY=http://127.0.0.1:8888 -e NO_PROXY=localhost,127.0.0.1 \
             -v "/tmp/air-like-repo:/repo" air-like bash /repo/scripts/air-like.sh
       - name: Check for downloads from other hosts
