@@ -436,13 +436,12 @@ class Backend:
 
     def set_additional(self, automation_id: str, repositories: list[dict]) -> None:
         current = self.get_automation(automation_id)
-        body = {key: current[key] for key in self.SPEC_FIELDS if key in current}
+        body = {key: current[key] for key in self.SPEC_FIELDS if current.get(key) is not None}  # the API rejects nulls
         if "triggers" in body:
             body["triggers"] = [{key: value for key, value in trigger.items()
                                  if key not in ("triggerId", "automationSnapshotId")}
                                 for trigger in body["triggers"]]
-        body.update({"automationId": current.get("automationId", automation_id),
-                     "additionalRepositories": repositories})
+        body.update({"id": current.get("automationId", automation_id), "additionalRepositories": repositories})
         self.request("POST", "/automations", body)
 
 

@@ -506,7 +506,7 @@ class BackendTest(unittest.TestCase):
                     "triggers": [{"triggerId": "t1", "isEnabled": False, "automationSnapshotId": "snapshot",
                                   "triggerType": "EVENT", "source": "github", "eventType": "issues.labeled",
                                   "filters": {"label": "factory:ready"}}],
-                    "outboundWebhooks": [], "mcpConnectors": [], "outputDescription": "keep output",
+                    "outboundWebhooks": [], "mcpConnectors": [], "outputDescription": None,
                     "projectId": "project",
                     "additionalRepositories": [{"repository": {"fullName": "o/old"}, "branch": "main"}],
                     "automationSnapshotId": "server snapshot", "latestSnapshotVersion": 7,
@@ -528,11 +528,11 @@ class BackendTest(unittest.TestCase):
             ("https://backend.test/air-automations-backend/api/v1/automations", "POST")])
         self.assertEqual(post_req.get_header("Authorization"), "Bearer access-token")
         body = json.loads(post_req.data)
-        expected = {key: existing[key] for key in deploy.Backend.SPEC_FIELDS}
+        expected = {key: existing[key] for key in deploy.Backend.SPEC_FIELDS if key != "outputDescription"}
         expected["triggers"] = [{key: value for key, value in trigger.items()
                                   if key not in ("triggerId", "automationSnapshotId")}
                                  for trigger in existing["triggers"]]
-        expected.update({"automationId": "a1", "additionalRepositories": target})
+        expected.update({"id": "a1", "additionalRepositories": target})
         self.assertEqual(body, expected)
         self.assertEqual(runner.call_args.args[0][1:], ["token", "--env", "prod", "--audience",
                                                         "air-automations-backend"])
