@@ -124,9 +124,10 @@ class GitHubCodeHost:
         c = yaml.safe_load(Path(path).read_text()) if path else config.load()
         return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"], run)
 
-    def ticket_for_pr(self, number):
-        """Resolve a PR number to its ticket from the live head ref, else the live title."""
-        pr = json.loads(self.run(["api", f"repos/{self.repo}/pulls/{number}"]))
+    def ticket_for_pr(self, number, repository=None):
+        """Resolve a PR number to its ticket from the live head ref, else the live title; `repository` (owner/repo)
+        when the PR is in another of the ticket's repositories."""
+        pr = json.loads(self.run(["api", f"repos/{repository or self.repo}/pulls/{number}"]))
         return ticket_from_ref((pr.get("head") or {}).get("ref")) or ticket_from_ref(pr.get("title"))
 
 
@@ -747,20 +748,43 @@ class GitHubGateTracker(DescriptorPort):
             return self._create(n, value)
         if kind == "park-behind-main-red":
             return self._park(n, value)
-        if kind == "merge":
-            pr = self._pr(n)
-            if pr is None:
-                raise RuntimeError(f"merge: no PR for ticket {n}")
-            if pr["merged"]:
-                return False
-            return self._locked_merge(pr, e.get("head") or pr["head"]["sha"])
+        if kind == "merge":  # the primary last: only its merge event wakes `finish` (Air triggers on its repository)
+            views, wrote = self._views(n), False
+            for name, view, pr in views[1:] + views[:1]:
+                if pr is None:
+                    raise RuntimeError(f"merge: no PR for ticket {n} in {name}")
+                if pr["merged"]:
+                    continue
+                if not view._locked_merge(pr, self._judged_head(e, name, views) or pr["head"]["sha"]):
+                    return wrote  # locked, or behind and updated: the next sweep merges the rest
+                wrote = True
+            return wrote
         if kind == "update-branch":  # a merge commit of the base into the PR branch; refused when the head moved
-            pr = self._pr(n)
-            if pr is None or pr["merged"]:
-                return False
-            self._update_branch(pr, e.get("head") or pr["head"]["sha"])
-            return True
+            views, wrote = self._views(n), False
+            for name, view, pr in views:
+                if pr is None or pr["merged"]:
+                    continue
+                head = self._judged_head(e, name, views) or pr["head"]["sha"]
+                if len(views) > 1 and view._api(f"compare/{pr['base']['ref']}...{head}", repo=view.pr_repo)["behind_by"] == 0:
+                    continue
+                view._update_branch(pr, head)
+                wrote = True
+            return wrote
         raise ValueError(f"unknown effect: {kind}")
+
+    def _views(self, n):
+        """(repository name, view, PR or None) per repository of ticket `n`, in the ticket's order (ADR-0017)."""
+        body = self._api(f"issues/{n}").get("body") or ""
+        out = []
+        for name in ticket_repositories(body, list(self.repositories), next(iter(self.repositories))):
+            view = self if self.repositories[name] == self.pr_repo else self._on(self.repositories[name])
+            out.append((name, view, view._pr(n)))
+        return out
+
+    @staticmethod
+    def _judged_head(e, name, views):
+        """The head of repository `name` that the gates judged: `heads` of a multi-repository ticket, else `head`."""
+        return (e.get("heads") or {}).get(name) if len(views) > 1 else e.get("head")
 
     def _update_branch(self, pr, head):
         self.run(["api", "-X", "PUT", f"repos/{self.pr_repo}/pulls/{pr['number']}/update-branch",
@@ -846,20 +870,30 @@ class GitHubGateTracker(DescriptorPort):
         return f"\n\n{notes_block(e['notes'])}" if e.get("notes") else ""
 
     def _review(self, n, e):
-        pr, focus = self._pr(n), e.get("focus")
-        if pr is None or not focus:
+        """The reviewer's verdict as a COMMENT review on each PR of the ticket, pinned to that PR's own head. The
+        rereview command label lives on the primary PR, which wakes the reviewer."""
+        views, focus = [(name, view, pr) for name, view, pr in self._views(n) if pr], e.get("focus")
+        if not views or not focus:
             raise RuntimeError("review: needs a PR and a payload `focus`")
+        _, first, primary = views[0]
+        rereview = vocab.cmd("rereview-<focus>", focus) in first._labels(primary["number"], repo=first.pr_repo)
+        facts, wrote = self.facts(n), False
+        for name, view, pr in views:
+            wrote |= view._post_review(pr, e, focus, rereview, [r for r in facts["reviews"] if r.get("repo", name) == name],
+                                       self._since)
+        if wrote and rereview:
+            first._edit(primary["number"], remove=[vocab.cmd("rereview-<focus>", focus)], on="pr")
+        return wrote
+
+    def _post_review(self, pr, e, focus, rereview, reviews, since):
         head = pr["head"]["sha"]
         existing = [r for r in self._reviews(pr) if r["agent"] and r["focus"] == focus and r["commit_id"] == head]
-        labels = self._labels(pr["number"], repo=self.pr_repo)
-        rereview = vocab.cmd("rereview-<focus>", focus) in labels
         if existing and (not rereview or any(r["rereview"] for r in existing)):
             return False
-        facts = self.facts(n)
-        earlier_change_heads = {r["commit_id"] for r in facts["reviews"]
+        earlier_change_heads = {r["commit_id"] for r in reviews
                                 if r["agent"] and r["verdict"] == "changes"
                                 and r["commit_id"] != head
-                                and (r.get("submitted_at") or "") >= self._since}
+                                and (r.get("submitted_at") or "") >= since}
         rnd = e.get("round") or len(earlier_change_heads) + 1
         verdict = "approve" if e["value"].startswith("approve") else "changes"
         marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict}{' rereview=1' if rereview else ''} -->"
@@ -872,8 +906,6 @@ class GitHubGateTracker(DescriptorPort):
             body += f"\n\nFactory-Run: {e['run_id']}"
         self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
                   "-f", "event=COMMENT", "-f", f"body={body}{self._block(e)}"])
-        if rereview:
-            self._edit(pr["number"], remove=[vocab.cmd("rereview-<focus>", focus)], on="pr")
         return True
 
     def _create(self, n, children):

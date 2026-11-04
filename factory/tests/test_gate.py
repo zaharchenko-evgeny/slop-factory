@@ -1650,9 +1650,11 @@ class MultiRepositoryTest(unittest.TestCase):
     def test_ticket_repositories_default_listed_and_unknown(self):
         from gate_port import ticket_repositories
         self.assertEqual(ticket_repositories("Affected repositories: a.", ["a", "b"], "a"), ["a"])
-        self.assertEqual(ticket_repositories("repositories: b, a\n\n## Scope", ["a", "b"], "a"), ["b", "a"])
+        self.assertEqual(ticket_repositories("repositories: a, b\n\n## Scope", ["a", "b"], "a"), ["a", "b"])
         with self.assertRaisesRegex(ValueError, "unknown repositories: c"):
             ticket_repositories("repositories: a c", ["a", "b"], "a")
+        with self.assertRaisesRegex(ValueError, "start with the primary repository a"):
+            ticket_repositories("repositories: b, a", ["a", "b"], "a")
 
     def test_both_approved_and_green_merge(self):
         facts = self.facts(self.pr("a", "h1"), self.pr("b", "h2"))
@@ -1682,6 +1684,16 @@ class MultiRepositoryTest(unittest.TestCase):
         self.assertNotEqual(gate.sweep_plan(partly, self.ON)[:2], ("finish", "merged"))
         both = self.facts(self.pr("a", "h1", pr_state="merged"), self.pr("b", "h2", pr_state="merged"))
         self.assertEqual(gate.sweep_plan(both, self.ON), ("finish", "merged", {}))
+
+    def test_sweep_merges_the_other_repository_first_then_finishes(self):
+        tr = MemoryTracker({7: {"stage": "approved", "risk": "low", "prs": [self.pr("a", "h1"), self.pr("b", "h2")]}})
+        tr.sweep_tickets = lambda stages: [7]
+        gate.sweep(tr, NODES, auto_merge=self.ON)
+        merged = [json.loads(v) for k, v in tr.tickets[7]["log"] if k == "merge"]
+        self.assertEqual(merged, [{"repo": "b", "head": "h2"}, {"repo": "a", "head": "h1"}])
+        self.assertEqual(tr.tickets[7]["stage"], "approved")  # the primary's merge event runs `finish`
+        gate.sweep(tr, NODES, auto_merge=self.ON)
+        self.assertEqual(tr.tickets[7]["stage"], "done")
 
     def test_check_lists_checkouts_and_refuses_a_stale_head_in_any_repository(self):
         tr = MemoryTracker({7: {"stage": "approved", "risk": "low",
