@@ -385,20 +385,18 @@ class Backend:
     SPEC_FIELDS = ("name", "repository", "branch", "prompt", "agentAndModel", "triggers", "triggerVcs", "kind",
                    "executor", "botDevSettings", "paused", "outputDescription", "outboundWebhooks", "mcpConnectors",
                    "environmentConfigId", "projectId")
+    API_BASE_URL = "https://api.jetbrains.cloud/air-automations-backend/api/v1"
 
     def __init__(self, base_url: str | None = None, token: str | None = None, run=subprocess.run):
-        api_url = base_url or os.environ.get("FACTORY_AIR_AUTOMATIONS_API_URL")
-        if not api_url:
-            api_url = os.environ.get("JCP_MCP_API_URL", "https://api.jetbrains.cloud")
-            api_url = f"{api_url.rstrip('/')}/air-automations-backend/api/v1"
-        self.base_url = api_url.rstrip("/")
+        self.base_url = (base_url or self.API_BASE_URL).rstrip("/")
         self._token = token
         self.run = run
 
     def token(self) -> str:
         if self._token is None:
             env = os.environ.copy()
-            env.update({"JCP_MCP_CLIENT_ID": "pi-lot", "JCP_MCP_REDIRECT_PATH": "/space/auth",
+            env.update({"JCP_MCP_API_URL": "https://api.jetbrains.cloud", "JCP_MCP_CLIENT_ID": "pi-lot",
+                        "JCP_MCP_REDIRECT_PATH": "/space/auth",
                         "JCP_MCP_CONFIG_DIR": str(Path.home() / ".config/jcp-mcp-bridge-pilot")})
             result = self.run(["jcp-mcp-bridge", "token", "--env", "prod", "--audience", "air-automations-backend"],
                               check=True, capture_output=True, text=True, env=env)

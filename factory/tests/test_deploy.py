@@ -486,8 +486,13 @@ class BackendTest(unittest.TestCase):
         self.assertEqual(runner.call_args.args[0][1:], ["token", "--env", "prod", "--audience",
                                                         "air-automations-backend"])
         env = runner.call_args.kwargs["env"]
-        self.assertEqual((env["JCP_MCP_CLIENT_ID"], env["JCP_MCP_REDIRECT_PATH"], env["JCP_MCP_CONFIG_DIR"]),
-                         ("pi-lot", "/space/auth", str(Path.home() / ".config/jcp-mcp-bridge-pilot")))
+        self.assertEqual((env["JCP_MCP_API_URL"], env["JCP_MCP_CLIENT_ID"], env["JCP_MCP_REDIRECT_PATH"],
+                          env["JCP_MCP_CONFIG_DIR"]),
+                         ("https://api.jetbrains.cloud", "pi-lot", "/space/auth",
+                          str(Path.home() / ".config/jcp-mcp-bridge-pilot")))
+        with mock.patch.dict(os.environ, {"FACTORY_AIR_AUTOMATIONS_API_URL": "https://evil.example",
+                                          "JCP_MCP_API_URL": "https://evil.example"}):
+            self.assertEqual(deploy.Backend().base_url, deploy.Backend.API_BASE_URL)
 
 
 class ProjectPlanTest(unittest.TestCase):
