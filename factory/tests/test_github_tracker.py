@@ -27,7 +27,8 @@ class FakeGh:
 
     def __init__(self, issues, subs=None):
         self.issues, self.subs, self.writes, self.next_id = issues, subs or {}, [], 100
-        for i in issues.values():
+        for n, i in issues.items():
+            i.setdefault("id", n + 1000)
             i.setdefault("state", "OPEN"), i.setdefault("labels", []), i.setdefault("assignees", [])
             i.setdefault("blocked_by", []), i.setdefault("comments", [])
 
@@ -36,8 +37,12 @@ class FakeGh:
             return "bot\n"
         if args[:2] == ["issue", "view"]:
             i = self.issues[int(args[2])]
-            return json.dumps({"state": i["state"], "labels": [{"name": x} for x in i["labels"]],
+            return json.dumps({"title": i.get("title", ""), "body": i.get("body", ""),
+                               "state": i["state"], "labels": [{"name": x} for x in i["labels"]],
                                "assignees": [{"login": x} for x in i["assignees"]]})
+        if args[0] == "api" and len(args) == 4 and re.fullmatch(rf"repos/{REPO}/issues/\d+", args[1]):
+            n = int(args[1].rsplit("/", 1)[1])
+            return str(self.issues[n]["id"]) + "\n"
         if args[:2] == ["issue", "edit"]:
             self.writes.append(args)
             i, flags = self.issues[int(args[2])], args[5:]
@@ -74,6 +79,10 @@ class FakeGh:
             return "\n".join(json.dumps(x) for x in items)
         if args[0] == "api":  # comment create or PATCH
             self.writes.append(args)
+            if "--method" in args and args[args.index("--method") + 1] == "POST":
+                m = re.fullmatch(rf"repos/{REPO}/issues/(\d+)/sub_issues", args[args.index("--method") + 2])
+                self.subs.setdefault(int(m[1]), []).append(int(args[args.index("-F") + 1].split("=")[1]))
+                return ""
             body = args[-1].removeprefix("body=")
             if m := re.fullmatch(rf"repos/{REPO}/issues/(\d+)/comments", args[1]):
                 self.next_id += 1
@@ -93,6 +102,36 @@ def tracker(fake):
 
 
 class GitHub(unittest.TestCase):
+
+    def test_add_to_configured_map(self):
+        fake = FakeGh({21: {"labels": ["factory:map"], "id": 2100},
+                       22: {"labels": ["factory:map"], "id": 2200},
+                       30: {"id": 3000}})
+        tracker(fake).add_to_map(30)
+        self.assertEqual(fake.subs, {21: [3000]})
+        self.assertIn("-F", fake.writes[-1])
+        self.assertEqual(fake.writes[-1][fake.writes[-1].index("-F") + 1], "sub_issue_id=3000")
+
+    def test_canary_issue_operations(self):
+        fake = FakeGh({23: {"title": "Canary", "labels": ["factory:canary", "factory:in-dev"],
+                            "comments": [{"id": 8, "body": "[factory] Last run summary", "user": {"login": "bot"}}]}})
+        tr = tracker(fake)
+        self.assertEqual(tr.canary_tickets(), [23])
+        self.assertEqual(tr.canary_status(23), {"stage": "in-dev", "summary": "[factory] Last run summary",
+                                                "error": False})
+        tr.add_label(23, "risk:low")
+        tr.close_issue(23, "[factory] Superseded.\n\nFactory-Run: test")
+        self.assertEqual(fake.issues[23]["state"], "CLOSED")
+        self.assertIn("risk:low", fake.issues[23]["labels"])
+
+    def test_canary_status_detects_a_sweep_node_error(self):
+        fake = FakeGh({23: {"labels": ["factory:canary", "factory:in-dev"]}})
+        tr = tracker(fake)
+        tr.record_node_error(23)
+        status = tr.canary_status(23)
+        self.assertTrue(status["error"])
+        self.assertIn("node reported an execution error", status["summary"])
+        self.assertIn("<!-- factory-node-error -->", fake.issues[23]["comments"][0]["body"])
 
     def test_done_closes_the_issue_once(self):
         fake = FakeGh({23: {"labels": ["factory:merged"]}})

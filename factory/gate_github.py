@@ -156,6 +156,14 @@ class GitHubGateTracker(DescriptorPort):
     def _labels(self, n, repo=None):
         return [x["name"] for x in self._api(f"issues/{n}", repo=repo)["labels"]]
 
+    def record_node_error(self, n):
+        """Leave a durable canary signal when a sweep catches a node exception."""
+        import vocab
+        if vocab.issue_label("canary") in self._labels(n):
+            self.run(["api", f"repos/{self.repo}/issues/{n}/comments", "-f",
+                      "body=[factory] A factory node reported an execution error.\n\n"
+                           "<!-- factory-node-error -->\n\nFactory-Run: sweep:node-error"])
+
     def sweep_tickets(self, stages, open_only=False):
         """Issue numbers (open or closed) whose stage label is one of `stages`; ready, in-review, changes-requested and in-dev
         (every stage with `open_only`) only when open."""

@@ -642,6 +642,25 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual((code, out["sweep"]), (gate.GO, []))
         self.assertEqual(json.loads(progress), {"ticket": 1, "stage": "ready", "outcome": "skipped"})
 
+    def test_sweep_persists_node_errors_for_canaries(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({1: {"stage": "in-review", "labels": ["factory:canary"]}})
+        tracker.sweep_tickets = lambda stages: [1]
+        tracker.facts = lambda ticket: (_ for _ in ()).throw(RuntimeError("node broke"))
+        code, out, _ = self.run_sweep(["--issue", "1"], tracker)
+        self.assertEqual(code, gate.FAILED)
+        self.assertIn("node broke", out["sweep"][0]["error"])
+        self.assertTrue(tracker.canary_status(1)["error"])
+
+    def test_dry_run_sweep_leaves_no_node_error_signal(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({1: {"stage": "in-review", "labels": ["factory:canary"]}})
+        tracker.facts = lambda ticket: (_ for _ in ()).throw(RuntimeError("read broke"))
+        results, failed = gate.sweep(tracker, {}, dry_run=True, issue=1)
+        self.assertTrue(failed)
+        self.assertIn("read broke", results[0]["error"])
+        self.assertFalse(tracker.canary_status(1)["error"])
+
     def test_sweep_reports_ineligible_dependent_as_progress(self):
         from gate_port import MemoryTracker
         tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "in-dev"}})

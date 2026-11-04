@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from unittest import mock
 from pathlib import Path
 
@@ -25,6 +26,7 @@ cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 import deploy
 import gate_github
 import nodes
+from gate_port import MemoryTracker
 import workflow  # noqa: E402
 
 FIX = HERE / "fixtures/deploy"
@@ -181,6 +183,96 @@ class ApplyTest(unittest.TestCase):
             for s in servers:
                 s.close()
 
+    def test_canary_created_after_apply(self):
+        self.seed([], [])
+        tracker = MemoryTracker({})
+        now = [0]
+        def sleep(seconds):
+            now[0] += seconds
+            canary = next(iter(tracker.canary_tickets()), None)
+            if canary:
+                tracker.tickets[canary]["stage"] = "done"
+        servers = [deploy.Mcp(f"{sys.executable} {self.tmp / 'server.py'} {self.state[k]} {k}") for k in self.state]
+        try:
+            self.assertEqual(deploy.deploy("--apply", False, self.plan, *servers, tracker=tracker,
+                                           deploy_id="d-123", sleep=sleep, clock=lambda: now[0]), 0)
+        finally:
+            for server in servers:
+                server.close()
+        ticket = tracker.tickets[1]
+        self.assertEqual(ticket["title"], "Canary after deploy d-123")
+        self.assertEqual(ticket["stage"], "done")
+        self.assertEqual(ticket["parent"], "map")
+        self.assertCountEqual(ticket["labels"], ["risk:low", "factory:triage", "factory:canary"])
+        self.assertIn("grep -q d-123 docs/canary.md", ticket["body"])
+        self.assertEqual([x[0] for x in self.calls("environment")], ["create_environment"])
+
+    def test_canary_timeout_opens_ticket(self):
+        tracker = MemoryTracker({7: {"stage": "in-dev"}})
+        now = [0]
+        def sleep(seconds):
+            now[0] += seconds
+        self.assertEqual(deploy.wait_for_canary(tracker, 7, "d-7", sleep=sleep,
+                                                clock=lambda: now[0], timeout=45, interval=15), 1)
+        self.assertEqual(tracker.tickets[8]["title"], "Canary failed after deploy d-7")
+        self.assertIn("timed out", tracker.tickets[8]["body"])
+        self.assertEqual(tracker.tickets[8]["parent"], "map")
+
+    def test_blocked_canary_reports_stage_and_last_summary(self):
+        tracker = MemoryTracker({7: {"stage": "blocked", "last_summary": "check failed"}})
+        self.assertEqual(deploy.wait_for_canary(tracker, 7, "d-7", clock=lambda: 0), 1)
+        failure = tracker.tickets[8]
+        self.assertIn("Stage: blocked", failure["body"])
+        self.assertIn("Last run summary: check failed", failure["body"])
+
+    def test_node_error_canary_opens_failure_ticket_immediately(self):
+        tracker = MemoryTracker({7: {"stage": "in-dev", "labels": ["factory:canary"]}})
+        tracker.record_node_error(7)
+        self.assertEqual(deploy.wait_for_canary(tracker, 7, "d-7", clock=lambda: 0), 1)
+        failure = tracker.tickets[8]
+        self.assertIn("node error", failure["body"])
+        self.assertIn("node reported an execution error", failure["body"])
+
+    def test_lost_air_run_opens_failure_ticket_before_timeout(self):
+        """An Air agent that exits after its command label without an outcome raises nothing in a sweep; the
+        reconcile dry run on the canary finds the step past its time-out and the poller reports a node error."""
+        tracker = MemoryTracker({7: {"stage": "in-dev", "labels": ["factory:canary"],
+                                     "since": "2026-11-03T11:00:00Z", "command": "factory:implement-mid"}})
+        now = [0]
+        def sleep(seconds):
+            now[0] += seconds
+        probe = lambda t: deploy.canary_lost_run(tracker, t, now=datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(deploy.wait_for_canary(tracker, 7, "d-7", sleep=sleep, clock=lambda: now[0],
+                                                lost_run=probe), 1)
+        self.assertEqual(now[0], 0)
+        self.assertIn("Reason: node error: no outcome after the command label", tracker.tickets[8]["body"])
+        self.assertEqual(tracker.tickets[7].get("log", []), [])  # the probe is a dry run
+
+    def test_fresh_step_is_not_a_lost_run_and_probe_is_throttled(self):
+        tracker = MemoryTracker({7: {"stage": "in-dev", "since": "2026-11-03T11:50:00Z",
+                                     "command": "factory:implement-mid"}})
+        now, probes = [0], []
+        def sleep(seconds):
+            now[0] += seconds
+        def probe(t):
+            probes.append(now[0])
+            return deploy.canary_lost_run(tracker, t, now=datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(deploy.wait_for_canary(tracker, 7, "d-7", sleep=sleep, clock=lambda: now[0], timeout=600,
+                                                interval=30, lost_run=probe, lost_every=300), 1)
+        self.assertEqual(probes, [0, 300, 600])
+        self.assertIn("timed out", tracker.tickets[8]["body"])
+
+    def test_new_deploy_closes_old_canary(self):
+        tracker = MemoryTracker({1: {"title": "Canary after deploy old", "labels": ["factory:canary"],
+                                     "stage": "in-dev", "state": "open"}})
+        now = [0]
+        def sleep(seconds):
+            now[0] += seconds
+            tracker.tickets[2]["stage"] = "done"
+        self.assertEqual(deploy.create_canary(tracker, "new", sleep=sleep, clock=lambda: now[0]), 0)
+        self.assertEqual(tracker.tickets[1]["state"], "closed")
+        self.assertEqual(tracker.tickets[2]["title"], "Canary after deploy new")
+
     def calls(self, kind):
         return [c for c in json.loads(self.state[kind].read_text())["calls"]
                 if c[0].startswith(("create_", "update_", "edit_", "delete_"))]
@@ -297,6 +389,8 @@ class ApplyTest(unittest.TestCase):
               mock.patch.object(deploy, "diff", side_effect=[changed, []]),
               mock.patch.object(deploy, "apply_diff") as apply,
               mock.patch.object(deploy, "write_files", return_value=0),
+              mock.patch.object(deploy, "create_canary", return_value=0),
+              mock.patch("github_tracker.GitHubTracker.from_config", return_value=mock.Mock()),
               mock.patch("gate_github.GitHubGateTracker.from_config", return_value=tracker)):
             self.assertEqual(deploy.main(["--apply"]), 0)
         apply.assert_called_once()
@@ -409,7 +503,8 @@ class PlanTest(unittest.TestCase):
 
     def test_plan_lists_every_label_the_gate_writes(self):
         plan = deploy.plan_air(nodes.load(), cfg.load())
-        for want in ("factory:ready", "factory:implement-cheap", "factory:fix-strong", "complexity:small", "risk:high"):
+        for want in ("factory:ready", "factory:implement-cheap", "factory:fix-strong", "factory:canary",
+                     "complexity:small", "risk:high"):
             self.assertIn(want, plan["labels"])
         self.assertFalse([x for x in plan["labels"] if "<" in x])
 
