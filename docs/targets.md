@@ -32,9 +32,17 @@ the factory repository checkout).
   factory repository checkout, and a checkout of every descriptor repository at `<workspace>/<name>` whose
   `origin` is that repository. It names each missing item and exits 1. `--apply` writes `.factory/local.json`
   (harness, login, checkouts, the automations the loop serves).
-- `factory run --local [--once]` (#465) polls GitHub for the events the node triggers name and runs each node
-  through `gate check`, the harness in a worktree, push and `gh pr create` for write nodes, then `gate apply`.
-  Scheduled nodes stay on Air or GitHub Actions.
+- `factory run --local [--once] [--dry-run]` does Air's part and nothing else. It polls GitHub for the events
+  the node triggers name: a label added to an issue or PR, a PR merged or pushed, an issue closed. For each new
+  event it makes a worktree per repository in `.factory/worktrees/<n>/<repo>` and runs `factory begin` there; on
+  exit 10 nothing runs. It then starts the harness with the node's Air prompt, so the agent runs `factory begin`
+  and `factory end` and the gate alone moves the stage. For a write node it pushes the `ez/` branch, and for
+  `create-pr` it runs `gh pr create`. Script nodes run `factory sweep --event`.
+- Seen events are kept in `.factory/local/seen.json`. The first run takes earlier merges, closes and pushes as
+  history and acts only on the labels that are set now. `--dry-run` lists the events without running or
+  recording them.
+- Not polled: scheduled nodes (they stay on Air or GitHub Actions), `pull_request_review.submitted` and
+  `issues.comment`. The reconcile sweep catches what those would have woken.
 
 ## Known Air limits that shape the design
 

@@ -28,7 +28,7 @@ URL = "https://github.com/zaharchenko-evgeny/slop-factory"
 class Machine:
     """The laptop: which CLIs are on PATH, whether `gh` is logged in, and each checkout's origin."""
 
-    def __init__(self, tools=("claude", "gh"), logged_in=True, origins=None):
+    def __init__(self, tools=("claude", "gh", "factory"), logged_in=True, origins=None):
         self.tools, self.logged_in, self.origins, self.calls = set(tools), logged_in, origins or {}, []
 
     def which(self, name):
@@ -66,7 +66,7 @@ class LocalDeployTest(unittest.TestCase):
         return code, out.getvalue()
 
     def test_missing_harness_is_named(self):
-        code, out = self.deploy(Machine(tools=("gh",), origins={"slop-factory": URL}))
+        code, out = self.deploy(Machine(tools=("gh", "factory"), origins={"slop-factory": URL}))
         self.assertEqual(code, 1)
         self.assertIn("missing harness: `claude` (claude-code) is not on PATH", out)
 
@@ -123,6 +123,121 @@ class PlanLocalTest(unittest.TestCase):
         self.assertTrue(local.same_repository(URL, "git@github.com:zaharchenko-evgeny/slop-factory.git\n"))
         self.assertTrue(local.same_repository(URL + "/", URL + ".git"))
         self.assertFalse(local.same_repository(URL, "https://github.com/zaharchenko-evgeny/slop-eval-factory"))
+
+
+class GitHub:
+    """The `gh`, `git`, `factory` and harness calls of one `factory run --local` pass; records them in order."""
+
+    def __init__(self, issues=None, prs=None, merged=(), begin_code=0):
+        self.issues, self.prs, self.merged, self.begin_code, self.calls = issues or {}, prs or {}, list(merged), begin_code, []
+
+    def kind(self, argv):
+        if argv[:2] == ["gh", "pr"] and argv[2] == "create":
+            return "pr-create"
+        if argv[0] == "git" and "push" in argv:
+            return "push"
+        if argv[0] == "git" and "worktree" in argv:
+            return "worktree"
+        if argv[0] == "git" and "checkout" in argv:
+            return "checkout"
+        if argv[0] in ("claude", "codex", "pi"):
+            return "harness"
+        if argv[0] == "uv" and "begin" in argv:
+            return "begin"
+        if argv[0] == "uv" and "sweep" in argv:
+            return "sweep"
+        return None
+
+    def __call__(self, argv, **kw):
+        self.calls.append((self.kind(argv), argv))
+        ok = lambda out="": subprocess.CompletedProcess(argv, 0, out, "")  # noqa: E731
+        rows = lambda items: ok("\n".join(json.dumps(x) for x in items))  # noqa: E731
+        if argv[:3] in (["gh", "issue", "list"], ["gh", "pr", "list"]):
+            if "--label" in argv:
+                return rows((self.issues if argv[1] == "issue" else self.prs).get(argv[argv.index("--label") + 1], []))
+            return rows(self.merged if "merged" in argv else [])
+        if argv[:2] == ["gh", "api"]:
+            n = int(argv[3].split("/")[-2])
+            labels = {**{k: v for k, v in self.issues.items()}, **{k: v for k, v in self.prs.items()}}
+            return rows([{"id": 100 + n, "name": label} for label, items in labels.items() if any(i["number"] == n for i in items)])
+        if argv[0] == "uv" and "begin" in argv:
+            return subprocess.CompletedProcess(argv, self.begin_code, json.dumps(
+                {"go": True, "branch": "ez/7-add-x", "checkouts": [], "context": {"title": "Add x"}}), "")
+        if argv[0] == "git" and "rev-list" in argv:
+            return ok("1\n")
+        return ok()
+
+    def kinds(self):
+        return [k for k, _ in self.calls if k]
+
+
+class RunLocalTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        before, cwd = cfg.team_root(), os.getcwd()
+        cfg.set_team(FIXTURE)
+        os.chdir(self.tmp.name)
+        self.addCleanup(lambda: (cfg.set_team(before), os.chdir(cwd)))
+        Path(".factory").mkdir()
+        Path(".factory/local.json").write_text(json.dumps(
+            {"harness": "claude-code", "factory": str(FIXTURE), "checkouts": {"slop-factory": str(Path(self.tmp.name))}}))
+
+    def run_local(self, gh, *argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = local.main(["--local", "--once", *argv], run=gh)
+        return code, [json.loads(x) for x in out.getvalue().splitlines()]
+
+    def test_implement_label_runs_begin_harness_push_and_pr_then_never_again(self):
+        gh = GitHub(issues={"factory:implement-mid": [{"number": 7}]})
+        code, out = self.run_local(gh)
+        self.assertEqual((code, out), (0, [{"ran": "implement-mid", "event": "labeled:107", "result": "pushed"}]))
+        kinds = [k for k in gh.kinds() if k in ("begin", "harness", "push", "pr-create")]
+        self.assertEqual(kinds, ["begin", "harness", "push", "pr-create"])
+        harness = next(a for k, a in gh.calls if k == "harness")
+        self.assertIn("acceptEdits", harness)
+        self.assertIn("`factory begin implement-mid --issue <the issue number>`", harness[-1])  # the Air prompt
+        self.assertIn(["-B", "ez/7-add-x"], [a[a.index("-B"):a.index("-B") + 2] for k, a in gh.calls if k == "checkout" and "-B" in a])
+        create = next(a for k, a in gh.calls if k == "pr-create")
+        self.assertEqual(create[create.index("--head") + 1], "ez/7-add-x")
+        again = GitHub(issues={"factory:implement-mid": [{"number": 7}]})
+        self.assertEqual(self.run_local(again), (0, []))
+        self.assertNotIn("begin", again.kinds())
+
+    def test_no_go_runs_no_harness(self):
+        gh = GitHub(issues={"factory:implement-mid": [{"number": 7}]}, begin_code=10)
+        self.assertEqual(self.run_local(gh)[1][0]["result"], "no-go")
+        self.assertNotIn("harness", gh.kinds())
+
+    def test_a_review_runs_read_only_in_a_detached_worktree_and_pushes_nothing(self):
+        gh = GitHub(prs={"factory:review-full": [{"number": 5, "headRefName": "ez/7-add-x"}]})
+        code, out = self.run_local(gh)
+        self.assertEqual(out, [{"ran": "review-full", "event": "labeled:105", "result": "ran"}])
+        self.assertNotIn("push", gh.kinds())
+        self.assertNotIn("acceptEdits", next(a for k, a in gh.calls if k == "harness"))
+        self.assertTrue(all("--detach" in a for k, a in gh.calls if k == "checkout"))
+
+    def test_a_merged_pr_runs_the_finish_sweep_but_the_first_run_takes_old_merges_as_history(self):
+        old = {"number": 4, "headRefName": "ez/6-old", "headRefOid": "h0"}
+        self.assertEqual(self.run_local(GitHub(merged=[old])), (0, []))
+        gh = GitHub(merged=[old, {"number": 5, "headRefName": "ez/7-add-x", "headRefOid": "h1"}])
+        code, out = self.run_local(gh)
+        self.assertEqual(out, [{"ran": "finish", "event": "merged:5", "result": "swept"}])
+        self.assertNotIn("harness", gh.kinds())
+
+    def test_dry_run_lists_and_records_nothing(self):
+        gh = GitHub(issues={"factory:implement-mid": [{"number": 7}]})
+        self.assertEqual(self.run_local(gh, "--dry-run")[1], [{"would_run": "implement-mid", "event": "labeled:107"}])
+        self.assertFalse(Path(".factory/local/seen.json").exists())
+        self.assertEqual([k for k in gh.kinds() if k], [])
+
+    def test_without_the_deploy_record_it_refuses(self):
+        Path(".factory/local.json").unlink()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(local.main(["--local", "--once"], run=GitHub()), 2)
+        self.assertIn("factory deploy --target local --apply", out.getvalue())
 
 
 if __name__ == "__main__":
