@@ -1695,6 +1695,19 @@ class MultiRepositoryTest(unittest.TestCase):
         gate.sweep(tr, NODES, auto_merge=self.ON)
         self.assertEqual(tr.tickets[7]["stage"], "done")
 
+    def test_a_partly_merged_ticket_merges_only_the_rest_on_the_next_sweep(self):
+        tr = MemoryTracker({7: {"stage": "approved", "risk": "low",
+                                "prs": [self.pr("a", "h1"), self.pr("b", "h2", pr_state="merged")]}})
+        tr.sweep_tickets = lambda stages: [7]
+        gate.sweep(tr, NODES, auto_merge=self.ON)
+        merged = [json.loads(v) for k, v in tr.tickets[7]["log"] if k == "merge"]
+        self.assertEqual(merged, [{"repo": "a", "head": "h1"}])
+
+    def test_ticket_for_pr_finds_single_and_multi_repository_tickets(self):
+        tr = MemoryTracker({7: {"pr": 9}, 8: {"prs": [self.pr("a", "h1"), self.pr("bb", "h2")]}})
+        self.assertEqual([tr.ticket_for_pr(9), tr.ticket_for_pr(9, "o/primary")], [7, 7])
+        self.assertEqual([tr.ticket_for_pr(2, "bb"), tr.ticket_for_pr(2), tr.ticket_for_pr(2, "a")], [8, 8, None])
+
     def test_check_lists_checkouts_and_refuses_a_stale_head_in_any_repository(self):
         tr = MemoryTracker({7: {"stage": "approved", "risk": "low",
                                 "prs": [self.pr("a", "h1"), self.pr("b", "h2")]}})

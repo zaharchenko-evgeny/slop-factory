@@ -187,8 +187,8 @@ class MemoryTracker(DescriptorPort):
         return self.tickets[ticket] if ticket in self.tickets else self.tickets[str(ticket)]  # JSON files key by string
 
     def ticket_for_pr(self, number, repository=None):
-        return next((int(k) for k, t in self.tickets.items() if t.get("pr") == number and repository is None
-                     or any(p.get("pr") == number and p.get("repo") == repository for p in t.get("prs") or [])), None)
+        return next((int(k) for k, t in self.tickets.items() if (t.get("pr") == number and (repository is None or not t.get("prs")))
+                     or any(p.get("pr") == number and repository in (None, p.get("repo")) for p in t.get("prs") or [])), None)
 
     def get_stage(self, t):
         return t.get("stage", "none")
