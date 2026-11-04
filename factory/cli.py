@@ -12,6 +12,7 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
                    [--notes notes.json]
                    (the outcome and the data its effects use)
        factory sweep --main ...                    (the gate's sweep from main's graph)
+       factory deploy --target local [--apply] | factory run --local [--once] [--dry-run]   (the local target, ADR-0017)
 """
 import argparse
 import contextlib
@@ -200,6 +201,9 @@ def main(argv=None):
     if cmd == "deploy" and rest[:2] == ["--target", "local"]:
         from local import deploy as local_deploy
         return local_deploy(rest[2:])
+    if cmd == "run":
+        from local import main as local_main
+        return local_main(rest)
     if cmd == "deploy":
         return deploy.main(rest)
     if cmd == "contracts":
