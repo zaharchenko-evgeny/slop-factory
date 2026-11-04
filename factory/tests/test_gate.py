@@ -642,6 +642,25 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual((code, out["sweep"]), (gate.GO, []))
         self.assertEqual(json.loads(progress), {"ticket": 1, "stage": "ready", "outcome": "skipped"})
 
+    def test_sweep_persists_node_errors_for_canaries(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({1: {"stage": "in-review", "labels": ["factory:canary"]}})
+        tracker.sweep_tickets = lambda stages: [1]
+        tracker.facts = lambda ticket: (_ for _ in ()).throw(RuntimeError("node broke"))
+        code, out, _ = self.run_sweep(["--issue", "1"], tracker)
+        self.assertEqual(code, gate.FAILED)
+        self.assertIn("node broke", out["sweep"][0]["error"])
+        self.assertTrue(tracker.canary_status(1)["error"])
+
+    def test_dry_run_sweep_leaves_no_node_error_signal(self):
+        from gate_port import MemoryTracker
+        tracker = MemoryTracker({1: {"stage": "in-review", "labels": ["factory:canary"]}})
+        tracker.facts = lambda ticket: (_ for _ in ()).throw(RuntimeError("read broke"))
+        results, failed = gate.sweep(tracker, {}, dry_run=True, issue=1)
+        self.assertTrue(failed)
+        self.assertIn("read broke", results[0]["error"])
+        self.assertFalse(tracker.canary_status(1)["error"])
+
     def test_sweep_reports_ineligible_dependent_as_progress(self):
         from gate_port import MemoryTracker
         tracker = MemoryTracker({10: {"blocking": [11]}, 11: {"stage": "in-dev"}})
@@ -1441,6 +1460,24 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertFalse(failed)
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(10, "merged"), (11, "unblocked")])
         self.assertIn(["comment", '"[factory] unblocked by #10"'], tr.tickets[11]["log"])
+
+    def test_sweep_finishes_person_merged_pr_from_changes_requested(self):
+        tr = MemoryTracker({10: {"stage": "changes-requested", "pr_state": "merged"}})
+        tr.sweep_tickets = lambda stages: [10]
+        results, failed = gate.sweep(tr, NODES)
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.tickets[10]["stage"], "done")
+
+    def test_sweep_finishes_person_merged_pr_from_blocked_and_drops_needs_human(self):
+        tr = MemoryTracker({10: {"stage": "blocked", "pr_state": "merged",
+                                 "attrs": ["factory:needs-human"]}})
+        tr.sweep_tickets = lambda stages: [10]
+        results, failed = gate.sweep(tr, NODES)
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.tickets[10]["stage"], "done")
+        self.assertNotIn("factory:needs-human", tr.tickets[10]["attrs"])
 
     def test_after_merge_checks_listed_on_finish(self):
         tr = MemoryTracker({10: {"stage": "approved", "pr_state": "merged",

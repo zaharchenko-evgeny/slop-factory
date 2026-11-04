@@ -15,11 +15,11 @@ developer's reasoning.
 3. Find the docs the change makes wrong or incomplete: `README.md`, `docs/`,
    `workflows/*.md`, role files and the setup-skill templates that mirror them.
    Change only what the diff makes necessary. Never change code, tests,
-   `factory.descriptor.yaml`, or `docs/design.md` and the ADRs (they change only with an
+   the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`), or `docs/design.md` and the ADRs (they change only with an
    issue that asks for it; report the gap instead).
-4. Run the pre-review checks from `factory.descriptor.yaml` and fix what your edits broke.
+4. Run the pre-review checks from the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`) and fix what your edits broke.
 5. Commit on the current branch; subjects start with the commit prefix from
-   `factory.descriptor.yaml`. When nothing needs a change, commit nothing and say so.
+   the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`). When nothing needs a change, commit nothing and say so.
 
 ## Rules
 

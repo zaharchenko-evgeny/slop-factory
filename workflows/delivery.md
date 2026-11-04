@@ -6,7 +6,7 @@ is a `[factory:<node>]` Air automation, started by a label or a PR event, that
 runs `uv run factory/gate.py check`, does its role's work, writes its handoff
 and runs `gate.py apply`. The gate moves the stage; the stage labels and the
 tracker operations are in `docs/agents/issue-tracker.md`. Names of
-repositories, stages, models and checks come from `factory.descriptor.yaml`.
+repositories, stages, models and checks come from the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`).
 
 By hand, use the `factory-delivery` skill: it runs one node the same way.
 

@@ -16,7 +16,7 @@ focus; stay in yours.
 - `knowledge`: a distill PR in the settings repository. Read the `knowledge` directory under `$FACTORY_TEAM` and check that every claim
   matches the code or the ticket thread, nothing duplicates another file,
   `AGENTS.md` stays within `knowledge.agents_md_lines` of
-  `factory.descriptor.yaml` (`wc -l`), and ticket trivia is dropped. A person
+  the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`; count with `wc -l`), and ticket trivia is dropped. A person
   merges it.
 - `structure-security`: structure and repository rules (layers, conventions,
   needless code), security and data-loss risks (trust boundaries, injection,

@@ -58,14 +58,17 @@ def wakes(nodes, facts):
                 yield name, label, on, f"no {name} outcome"
 
 
-def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=None, stage_kinds=None):
-    """Returns (results, failed). One re-fire per ticket and stage; the second miss blocks the ticket."""
+def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=None, stage_kinds=None, tickets=None):
+    """Returns (results, failed). One re-fire per ticket and stage; the second miss blocks the ticket.
+    `tickets` limits the pass to those tickets (the deploy canary probe) instead of listing the tracker."""
     now, results, failed = now or datetime.now(timezone.utc), [], False
     default = limits.get("run_timeout_minutes", 30)
     stage_kinds = stage_kinds or {}
     # Open tickets in an active or waiting stage only: each listed ticket costs a dozen API reads, and a closed or
     # done one is never re-fired, so listing them spent the hourly GitHub budget for nothing.
-    for n in tracker.sweep_tickets([s for s in stages if stage_kinds.get(s) != "final"], open_only=True):
+    listed = tickets if tickets is not None else tracker.sweep_tickets(
+        [s for s in stages if stage_kinds.get(s) != "final"], open_only=True)
+    for n in listed:
         try:
             facts, stage = tracker.stale_facts(n), None
             stage, since = facts["stage"], facts.get("since")

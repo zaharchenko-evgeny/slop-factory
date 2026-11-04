@@ -403,6 +403,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         effects.append({"kind": "pr-notes-sync", "ticket": ticket, "value": ""})  # notes parked before the PR existed
     facts = tracker.facts(ticket)
     if name == "finish" and outcome == "merged":
+        effects.append({"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human()})
         checks = after_merge_checks(facts.get("body"))
         if checks and not after_merge_complete(facts.get("comments", [])):
             if after_merge_comment(facts.get("comments", [])):
@@ -688,14 +689,14 @@ def after_merge_complete(comments):
 def sweep_plan(facts, auto_merge=None, default_tier="mid"):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
+    if facts.get("pr_state") == "merged" and config_mod.load()["tracker"]["stage_kinds"].get(stage) != "final":
+        comments = facts.get("comments", [])
+        return ("finish", "merged", {}) if not after_merge_checks(facts.get("body")) \
+            or not after_merge_comment(comments) or after_merge_complete(comments) else None
     if stage == "ready" and not facts.get("blockers_open") and facts.get("issue_state", "open") == "open":
         return "start", "started", {"tier": fix_tier(facts, default_tier)}
     if stage == "needs-answers" and facts.get("answered"):
         return "finish", "answered", {}
-    if stage == "approved" and facts.get("pr_state") == "merged":
-        comments = facts.get("comments", [])
-        return ("finish", "merged", {}) if not after_merge_checks(facts.get("body")) \
-            or not after_merge_comment(comments) or after_merge_complete(comments) else None
     if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
         return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
     if stage == "approved" and facts.get("pr_state") == "open" \
@@ -724,7 +725,8 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
     """Move every listed ticket through each step its facts allow (a merged PR goes approved to done in one
     step). A ticket that reaches done or blocked also lets its split parent finish. Returns (results, failed)."""
     results, failed, done_tickets = [], False, []
-    queue, seen, merged = ([issue] if issue is not None else list(tracker.sweep_tickets(SWEEP_STAGES))), set(), False
+    stages = config_mod.load()["tracker"]["stages"]
+    queue, seen, merged = ([issue] if issue is not None else list(tracker.sweep_tickets(stages))), set(), False
     while queue:
         n = queue.pop(0)
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
@@ -765,6 +767,11 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                 failed = True
                 r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
                 results.append(r)
+                if not dry_run and hasattr(tracker, "record_node_error"):  # a simulation writes no live signal
+                    try:
+                        tracker.record_node_error(n)
+                    except Exception:
+                        pass  # preserve the original sweep error; the log still reports it
                 if progress:
                     progress(r)
                 break
