@@ -242,6 +242,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 elif str(t) != "manual":
                     trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus))
             automation_repository = repository(team if focus == "knowledge" else repos.get(envs_def[env]["repository"]) or primary)
+            if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
+                env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
             automation = {
                 "name": f"{prefix}{aname}",
                 "triggers": trig,

@@ -643,6 +643,14 @@ class PlanTest(unittest.TestCase):
         plain = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": ""})
         self.assertTrue(all("FACTORY_TEAM_REPOSITORY" not in e["variables"] for e in plain["environments"]))
 
+    def test_every_automation_runs_in_an_environment_of_its_repository(self):
+        plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
+        env_repos = {e["name"]: e["repository"] for e in plan["environments"]}
+        mismatched = [a["name"] for a in plan["automations"]
+                      if env_repos[a["environmentConfigId"]] != a["repository"]["browseUrl"]]
+        self.assertEqual(mismatched, [])
+        self.assertTrue(any(a["repository"]["fullName"] == "o/team" for a in plan["automations"]))
+
     def test_non_team_automations_use_team_repository_as_additional_repository(self):
         team = {"repository": deploy.repository({"url": "https://github.com/o/team"}), "branch": "main"}
         plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
