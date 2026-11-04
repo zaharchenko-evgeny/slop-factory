@@ -6,7 +6,7 @@
 """`factory reconcile`: re-fire the waking label of a node whose outcome is missing, from the state alone.
 
 Usage: reconcile.py [--dry-run] [--tracker memory:FILE]
-No model and no Air quota: the expected next step of each ticket comes from workflows/nodes.yaml (the node whose
+No model and no Air quota: the expected next step of each ticket comes from engine/nodes.yaml (the node whose
 `when` matches the ticket's state and whose trigger is a label). A step with no outcome after `limits.run_timeout_minutes`
 (a node's `timeout_minutes` overrides it) gets its label once; a second miss sets `blocked` and `factory:needs-human`.
 A ticket in a waiting stage, closed, or already marked `factory:needs-human` is left alone.

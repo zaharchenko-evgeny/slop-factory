@@ -1,6 +1,6 @@
 # A factory project (ADR-0016). `skills/factory-setup/render.py --project ANSWERS OUT` fills the placeholders.
 # Generated below the header: `environments`, `workflow`, `states` and `commands`, and workflows/delivery.yaml, are
-# `factory migrate workflow` of the engine's workflows/nodes.yaml (factory/tests/test_upgrade.py).
+# `factory migrate workflow` from `engine/nodes.yaml` (factory/tests/test_upgrade.py).
 engine: "{{ENGINE_REF}}"
 project:
   name: "{{PROJECT_NAME}}"

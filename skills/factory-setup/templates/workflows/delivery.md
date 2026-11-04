@@ -1,7 +1,7 @@
 # Workflow: delivery
 
 The per-ticket loop {{DESIGN_REF}}. The definition is the node list in
-`workflows/nodes.yaml` ([ADR-0014](../docs/adr/0014-node-model.md)): each node
+`engine/nodes.yaml` ([ADR-0014](../docs/adr/0014-node-model.md)): each node
 is a `[factory:<node>]` Air automation, started by a label or a PR event, that
 runs `uv run factory/gate.py check`, does its role's work, writes its handoff
 and runs `gate.py apply`. The gate moves the stage; the stage labels and the

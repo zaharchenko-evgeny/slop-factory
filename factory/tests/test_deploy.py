@@ -33,8 +33,8 @@ FIX = HERE / "fixtures/deploy"
 
 
 def this_repository():
-    """(project descriptor, v2 workflow) migrated from this repository's nodes.yaml and team fixture."""
-    return workflow.migrate(yaml.safe_load((ROOT / "workflows/nodes.yaml").read_text()),
+    """(project descriptor, v2 workflow) migrated from engine/nodes.yaml and the team fixture."""
+    return workflow.migrate(yaml.safe_load((ROOT / cfg.NODES).read_text()),
                             yaml.safe_load((HERE / "fixtures/team/factory.descriptor.yaml").read_text()))
 
 
@@ -522,12 +522,12 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(json.dumps(migrated, indent=2, sort_keys=True), json.dumps(current, indent=2, sort_keys=True))
 
     def test_slop_fixture_renders_this_repository_nodes(self):
-        """The generator check of the generated fixture: it validates and renders back to workflows/nodes.yaml."""
+        """The generator check of the generated fixture: it validates and renders back to engine/nodes.yaml."""
         slop = HERE / "fixtures/slop"
         project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
         wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
         self.assertEqual(workflow.validate(project, wf), [])
-        self.assertEqual(workflow.to_nodes(project, wf), yaml.safe_load((ROOT / "workflows/nodes.yaml").read_text()))
+        self.assertEqual(workflow.to_nodes(project, wf), yaml.safe_load((ROOT / cfg.NODES).read_text()))
 
     def test_triggers_from_command_store(self):
         project, wf = this_repository()

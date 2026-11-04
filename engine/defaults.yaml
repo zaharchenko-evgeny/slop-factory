@@ -68,4 +68,5 @@ limits:
     - docs/statechart-proposed.md
     - skills/factory-setup/templates/**
     - factory/tests/fixtures/slop/**
+    - template/factory.project.yaml
     - template/workflows/delivery.yaml

@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Validate workflows/nodes.yaml (ADR-0014) and print its stage chart.
+"""Validate engine/nodes.yaml (ADR-0014) and print its stage chart.
 
 Usage: nodes.py validate [nodes.yaml] | nodes.py chart [nodes.yaml]
 Each error line starts with a name: no-trigger, bad-condition, unknown-effect, unknown-role,
@@ -32,7 +32,7 @@ def load(path=None):
         import workflow
         descriptor = project.load(config.team_root())
         return workflow.to_nodes(descriptor, workflow.load(config.team_root(), descriptor))
-    return yaml.safe_load(Path(path or config.resolve("workflows/nodes.yaml")).read_text())
+    return yaml.safe_load(Path(path or (config.engine_root() / config.NODES)).read_text())
 
 
 def effect_stage(outcome):
