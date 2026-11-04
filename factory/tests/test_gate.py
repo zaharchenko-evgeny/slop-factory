@@ -1461,6 +1461,24 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(10, "merged"), (11, "unblocked")])
         self.assertIn(["comment", '"[factory] unblocked by #10"'], tr.tickets[11]["log"])
 
+    def test_sweep_finishes_person_merged_pr_from_changes_requested(self):
+        tr = MemoryTracker({10: {"stage": "changes-requested", "pr_state": "merged"}})
+        tr.sweep_tickets = lambda stages: [10]
+        results, failed = gate.sweep(tr, NODES)
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.tickets[10]["stage"], "done")
+
+    def test_sweep_finishes_person_merged_pr_from_blocked_and_drops_needs_human(self):
+        tr = MemoryTracker({10: {"stage": "blocked", "pr_state": "merged",
+                                 "attrs": ["factory:needs-human"]}})
+        tr.sweep_tickets = lambda stages: [10]
+        results, failed = gate.sweep(tr, NODES)
+        self.assertFalse(failed)
+        self.assertEqual([(r["node"], r["outcome"]) for r in results], [("finish", "merged")])
+        self.assertEqual(tr.tickets[10]["stage"], "done")
+        self.assertNotIn("factory:needs-human", tr.tickets[10]["attrs"])
+
     def test_after_merge_checks_listed_on_finish(self):
         tr = MemoryTracker({10: {"stage": "approved", "pr_state": "merged",
                                  "body": "- [ ] Operator check after the merge (not part of the PR): re-fire Air"}})

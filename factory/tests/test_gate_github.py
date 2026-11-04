@@ -275,6 +275,12 @@ def eff(kind, value, **kw):
 
 
 class FactsTest(unittest.TestCase):
+    def test_sweep_tickets_includes_closed_changes_requested_issues(self):
+        gh = FakeGh(labels=["factory:changes-requested"])
+        gh.state = "closed"
+
+        self.assertEqual(tr(gh).sweep_tickets(["changes-requested"]), [7])
+
     def test_node_error_signal_is_written_only_for_canary(self):
         gh = FakeGh(labels=["factory:in-review", "factory:canary"])
         tr(gh).record_node_error(7)
