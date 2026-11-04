@@ -21,10 +21,13 @@ import github_tracker  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 
 BASE_TOOLS = ("gh", "uv")
+# The local agent harness: a role's setup.sh needs it for a local run, but on Air the platform runs the agent (#438).
+HARNESS_TOOLS = ("pi",)
 
 
 def env_needs(env, nodes, resolve=config.resolve):
-    """(tools, skills) the roles of the nodes in `env` need: `need_tools` of roles/<r>/setup.sh and roles/<r>/skills.txt."""
+    """(tools, skills) the roles of the nodes in `env` need: `need_tools` of roles/<r>/setup.sh, less the local
+    harness, and roles/<r>/skills.txt."""
     roles = sorted({n["role"] for n in nodes["nodes"].values()
                     if n.get("env") == env and n["role"] not in ("script", "human") and n.get("enabled") is not False})
     tools, skills = set(BASE_TOOLS), set()
@@ -32,7 +35,7 @@ def env_needs(env, nodes, resolve=config.resolve):
         setup, names = Path(resolve(f"roles/{r}/setup.sh")), Path(resolve(f"roles/{r}/skills.txt"))
         tools |= {t for line in setup.read_text().splitlines() if line.startswith("need_tools ") for t in line.split()[1:]}
         skills |= set(names.read_text().split()) if names.exists() else set()
-    return sorted(tools), sorted(skills)
+    return sorted(tools - set(HARNESS_TOOLS)), sorted(skills)
 
 
 def run_log(api, run, repo):
