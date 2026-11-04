@@ -17,9 +17,9 @@ merge conflict.
    every check in `checks` with its text and result (`pass`, `fail`, or
    `not-run`); give `not-run` checks a reason. A failed check cannot be handed
    off as `done`.
-4. Run the pre-review checks from `factory.descriptor.yaml` yourself and fix failures.
+4. Run the pre-review checks from the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`) yourself and fix failures.
 5. Commit on the current branch. Subjects start with the commit prefix from
-   `factory.descriptor.yaml`. Do not push; the platform pushes the branch after the run.
+   the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`). Do not push; the platform pushes the branch after the run.
 
 ## Mode `fix`
 
