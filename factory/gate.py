@@ -240,6 +240,14 @@ def matches(node, facts, event, outcome=None):
     return None if holds(node["when"], facts, event) else "condition does not hold"
 
 
+def gated(name, node, facts):
+    """The node whose `when` check and apply both judge. Reconciliation can route an unapproved conflict to a fix
+    before its review round completes, so a conflicting fix in changes-requested drops the round condition."""
+    if name == "fix" and facts.get("stage") == "changes-requested" and facts.get("conflict"):
+        return {**node, "when": {k: v for k, v in node["when"].items() if k != "round"}}
+    return node
+
+
 def check(name, event, tracker, nodes, config):
     node = load_node(name, nodes)
     if "id" not in event:
@@ -258,10 +266,7 @@ def check(name, event, tracker, nodes, config):
         failure = tracker.ci_failure(facts["head"])
         if failure:
             facts["ci_failure"] = failure
-    why = matches(node, facts, event)
-    if name == "fix" and facts.get("stage") == "changes-requested" and facts.get("conflict"):
-        # Reconciliation can route an unapproved conflict before its review round completes.
-        why = matches({**node, "when": {k: v for k, v in node["when"].items() if k != "round"}}, facts, event)
+    why = matches(gated(name, node, facts), facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     notes = facts.get("agent_notes", [])
     facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
@@ -546,7 +551,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             e["run_id"] = payload["run_id"]
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
-    why = matches(node, facts, {**payload, "id": payload.get("event")}, out)
+    why = matches(gated(name, node, facts), facts, {**payload, "id": payload.get("event")}, out)
     if why:
         return NO_GO, {"applied": False, "reason": why}
     return GO, {"applied": True, "written": [e["kind"] for e in effects + after if tracker.apply(e)]}
