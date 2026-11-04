@@ -3,8 +3,8 @@
 Selected per role by `roles.<role>.harness` (a reviewer mode may set its own) in
 `factory.descriptor.yaml`, defaulting to `pi`. Values: `pi`,
 `claude-code`, `codex`, `junie`; an unknown value fails `sm.py validate`. Model ids
-stay per role. Adapters live in `factory/harnesses.py`; the local role runner and
-preflight dispatch through them.
+stay per role. On the local target (ADR-0017), `targets.local.harness` picks the
+CLI that `factory deploy --target local` checks and `factory run --local` starts.
 
 ## Adapter contract (local target)
 

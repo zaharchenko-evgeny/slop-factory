@@ -198,6 +198,13 @@ class BeginEndTest(unittest.TestCase):
     def test_pr_nodes_match_deploy(self):
         self.assertEqual(cli.PR_NODES, cli.deploy.PR_TRIGGERED_NODES)
 
+    def test_deploy_target_local_goes_to_the_local_target(self):
+        with mock.patch("local.deploy", return_value=0) as local_deploy, \
+                mock.patch.object(cli.deploy, "main", side_effect=AssertionError("the Air deploy ran")):
+            code, _ = self.run_cli("deploy", "--target", "local", "--apply")
+        self.assertEqual(code, 0)
+        local_deploy.assert_called_once_with(["--apply"])
+
 
 class PackagingTest(unittest.TestCase):
     def test_installed_command_ships_every_engine_module_it_imports(self):

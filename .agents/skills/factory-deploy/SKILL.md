@@ -39,4 +39,4 @@ The one-time rename of legacy `[factory:<node>]` items is not automated: apply i
 
 ## Local target
 
-`uv run --quiet factory/deploy.py plan --target local` prints the launchd job; `uv run factory/schedule_local.py install` applies it.
+`factory --team <team-repo> deploy --target local` checks the harness CLI, the `gh` login and the repository checkouts and names what is missing; `--apply` writes `.factory/local.json` for `factory run --local` (ADR-0017, `docs/targets.md`).
