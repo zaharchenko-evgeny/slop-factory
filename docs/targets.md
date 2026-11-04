@@ -22,6 +22,22 @@ by hand, see the `factory-delivery` skill.
 | Overlap | Duplicate trigger firings are expected; the gate refuses a stale or duplicate event (exit 10) |
 | Logs | Run page in Air plus the run files in the run's workspace |
 
+## Repositories of an automation (ADR-0017)
+
+| Automation | Main repository | Additional repositories |
+| --- | --- | --- |
+| Project nodes (intake, review, implement, fix, join, merge, finish, …) | the `role: primary` repository | every other descriptor repository at its `default_branch`, then the factory repository at `main` (read-only) |
+| Retro, distill, knowledge review, ops nodes (notify, reconcile, doctor-ops) | the factory repository | none |
+
+The prompt's "Project checkout" section names each checkout under `/workspaces/<name>`.
+`deploy.py` writes `additionalRepositories` through the Air REST API (`Backend.set_additional`), because
+the automations MCP does not expose it.
+
+Open (#459): whether Air pushes a branch or opens a PR from an additional repository (`create-pr`,
+`push-to-source` act on the main repository). Until a probe answers it, a ticket that changes a second
+project repository needs its developer to push that branch itself, or it is split into one ticket per
+repository.
+
 ## Known Air limits that shape the design
 
 - Trigger filters are exact key/value matches with no OR or NOT; YouTrack values are case-sensitive.
