@@ -74,11 +74,19 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual([c[:3] for c in gh.calls if c[:2] in (["issue", "create"], ["issue", "comment"])], [["issue", "comment", "7"]])
 
     def test_missing_tool_reported_for_env(self):
-        got = run(FakeGh(), "write", which=lambda t: None if t == "pi" else "/bin/" + t)
-        self.assertEqual(got["tool:pi"]["result"], "missing")
-        self.assertEqual(got["tool:git"]["result"], "ok")
+        got = run(FakeGh(), "write", which=lambda t: None if t == "git" else "/bin/" + t)
+        self.assertEqual(got["tool:git"]["result"], "missing")
+        self.assertEqual(got["tool:gh"]["result"], "ok")
         self.assertEqual(got["skill:ponytail"]["result"], "ok")  # a developer skill, only in `write`
         self.assertNotIn("skill:ponytail", run(FakeGh(), "ops", which=lambda t: "/bin/" + t))
+
+    def test_local_harness_is_not_probed_on_air(self):
+        """Air runs the agent itself; `pi` in a role's need_tools is the local harness (#438)."""
+        for env in ("read", "write", "ops"):
+            got = run(FakeGh(), env, which=lambda t: None if t == "pi" else "/bin/" + t)
+            self.assertNotIn("tool:pi", got)
+            self.assertEqual([p for p, r in got.items() if r["result"] != "ok"], [])
+        self.assertIn("git", doctor.env_needs("write", nodes.load())[0])
 
     def test_probe_objects_are_deleted(self):
         for deny in ((), ("blocked_by", "update-branch")):
