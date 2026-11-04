@@ -89,6 +89,7 @@ for line in sys.stdin:
         elif tool == "get_environment":
             out = next(i for i in db["items"] if i["id"] == a["id"])
         elif tool.startswith("create_"):
+            assert kind != "environment" or all(i["name"] != a["name"] for i in db["items"]), a  # Air names are unique
             created = {**{("repository" if k == "repositoryUrl" else k): v for k, v in a.items()},
                        "id": f"{kind}-{len(db['items'])}"}
             db["items"].append(created)
@@ -397,6 +398,7 @@ class ApplyTest(unittest.TestCase):
                     "variables": {"FACTORY_ENV": "read", "FACTORY_TEAM_REPOSITORY": "https://github.com/o/team"}}])
         self.assertEqual(self.run_deploy("--apply"), 0)
         self.assertEqual([call for call in self.calls("environment") if not call[0].startswith(("list_", "get_"))], [
+            ["edit_environment", {"id": "e1", "name": "retired [F] read"}],
             ["create_environment", {"name": "[F] read", "repositoryUrl": "https://github.com/o/team",
                                     "allowedDomains": ["github.com", "pypi.org"],
                                     "variables": [{"key": "FACTORY_ENV", "value": "read"}],

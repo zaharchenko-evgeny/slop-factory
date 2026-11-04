@@ -554,7 +554,8 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, bac
 def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", *, backend=None,
                env_repositories=None) -> None:
     """Environments before automations on create, update and replace, after them on delete. A replaced environment
-    is created under its new repository, and the old one is deleted once its automations point at the new one.
+    is created under its new repository (the old one renamed aside first: Air names are unique), and the old one is
+    deleted once its automations point at the new one.
     `env_repositories` ({environment name: planned repository URL}) picks the right one of two same-named environments."""
     order = {"create": 0, "update": 0, "replace": 0, "delete": 1}
     env_repositories = env_repositories or {}
@@ -568,6 +569,7 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
                     "allowedDomains": live_domains + [d for d in p.get("domains") or [] if d not in live_domains],
                     "variables": [{"key": key, "value": value} for key, value in (p.get("variables") or {}).items()]}
             args.update({k: x[k] for k in ("networkAccess", "predefinedDomainLists") if x.get(k)})
+            client.call("edit_environment", {"id": x["id"], "name": f"retired {x['name']}"})
             client.call("create_environment", args)
             retired.append(x["id"])
             continue
