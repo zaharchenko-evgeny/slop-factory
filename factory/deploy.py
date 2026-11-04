@@ -580,7 +580,9 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
             p = {**p, "environmentConfigId": env_ids[p["environmentConfigId"]]}
         p = {k: v for k, v in (p or {}).items() if k not in ("spec", "additionalRepositories")}
         if action == "update":
-            p = {k: v for k, v in p.items() if k in changed}
+            # triggers and triggerVcs pair by position: update_automation takes both or neither
+            pair = {"triggers", "triggerVcs"} if kind == "automation" and {"triggers", "triggerVcs"} & set(changed) else set()
+            p = {k: v for k, v in p.items() if k in changed or k in pair}
         if kind == "environment" and isinstance(p.get("variables"), dict):
             p["variables"] = [{"key": key, "value": value} for key, value in p["variables"].items()]
         tool_action = ("edit" if kind == "environment" else "update") if action == "update" else action

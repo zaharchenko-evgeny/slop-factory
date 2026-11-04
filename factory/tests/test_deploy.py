@@ -387,6 +387,17 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(deploy.environment_detail(live)["variables"], {"FACTORY_ENV": "read"})
         self.assertEqual(self.run_deploy("--dry-run"), 0)
 
+    def test_apply_sends_trigger_destinations_with_changed_triggers(self):
+        manual = {"triggerType": "WEBHOOK"}
+        label = {"triggerType": "EVENT", "source": "github", "eventType": "issues.labeled"}
+        self.plan["automations"][0].update({"triggers": [label], "triggerVcs": [{"outputBehaviour": "read-only"}]})
+        self.seed([{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "triggers": [manual],
+                    "triggerVcs": [{"outputBehaviour": "read-only"}]}],
+                  [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual(self.calls("automation"), [["update_automation", {
+            "triggers": [label], "triggerVcs": [{"outputBehaviour": "read-only"}], "automationId": "a1"}]])
+
     def test_apply_replaces_environment_moved_to_another_repository(self):
         self.plan["environments"][0].update({"repository": "https://github.com/o/team", "variables": {"FACTORY_ENV": "read"},
                                             "domains": ["pypi.org"]})
