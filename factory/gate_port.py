@@ -18,6 +18,56 @@ def ticket_from_ref(ref):
     return None if not m else int(m[1]) if m[1].isdigit() else m[1]
 
 
+def ticket_repositories(body, names, primary):
+    """The repositories a ticket changes (ADR-0017): its `repositories: a, b` body line, else the primary one."""
+    m = re.search(r"(?m)^repositories:[ \t]*(.+)$", body or "")
+    if not m:
+        return [primary]
+    want = list(dict.fromkeys(x for x in re.split(r"[,\s]+", m[1]) if x))
+    unknown = [x for x in want if x not in names]
+    if unknown or not want:
+        raise ValueError(f"ticket names unknown repositories: {', '.join(unknown) or m[1]}")
+    return want
+
+
+# The facts one pull request gives its ticket; combine_prs joins them over a ticket's repositories.
+PR_DEFAULTS = {"head": None, "pr": None, "branch": None, "mergeable": None, "conflict": False, "ci": "none",
+               "reviews": [], "requested_reviewers": [], "focus_missing": [], "round_complete": False,
+               "round_verdict": None, "round_head": None, "ignored_reviews": [], "waiting_reviewers": [],
+               "pending_rereviews": [], "pr_labels": [], "fix_rounds": 0, "pr_state": "none",
+               "handed_to_fix": False, "behind": False}
+
+
+def combine_prs(prs):
+    """One ticket's PR facts over its PRs (`repo` plus the PR_DEFAULTS keys), in the ticket's repository order.
+    The first PR gives head, pr and branch. The ticket is approved only when every PR's round is complete with
+    approve at its own head; one PR with changes completes the round. One PR is returned as it is."""
+    if len(prs) == 1:
+        return dict(prs[0])
+    union = lambda key: list(dict.fromkeys(x for p in prs for x in p.get(key) or []))
+    cis, states = [p["ci"] for p in prs], [p["pr_state"] for p in prs]
+    changes = any(p["round_complete"] and p["round_verdict"] == "changes" for p in prs)
+    complete = changes or all(p["round_complete"] for p in prs)
+    moved = next((f"{p['repo']}:{p['round_head']}" for p in prs if p["round_head"] not in (None, p["head"])), None)
+    reviewed = all(p["round_head"] is not None for p in prs)
+    mergeable = [p["mergeable"] for p in prs]
+    return {**{k: v for k, v in prs[0].items() if k != "repo"}, "heads": {p["repo"]: p["head"] for p in prs},
+            "prs": [{k: p[k] for k in ("repo", "pr", "head", "branch", "pr_state", "ci", "round_complete",
+                                    "round_verdict", "round_head")} for p in prs],
+            "ci": next((c for c in ("red", "pending", "none") if c in cis), "green"),
+            "pr_state": next((s for s in ("open", "none", "closed") if s in states), "merged"),
+            "mergeable": False if False in mergeable else None if None in mergeable else True,
+            "conflict": any(p["conflict"] for p in prs), "behind": any(p["behind"] for p in prs),
+            "round_complete": complete,
+            "round_verdict": "changes" if changes else "approve" if complete and all(
+                p["round_verdict"] == "approve" for p in prs) else None,
+            "round_head": moved or (prs[0]["head"] if reviewed else None),
+            "handed_to_fix": any(p["handed_to_fix"] for p in prs), "fix_rounds": max(p["fix_rounds"] for p in prs),
+            "reviews": [{**r, "repo": p["repo"]} for p in prs for r in p["reviews"]],
+            **{k: union(k) for k in ("requested_reviewers", "focus_missing", "ignored_reviews", "waiting_reviewers",
+                                     "pending_rereviews", "pr_labels")}}
+
+
 class Tracker(Protocol):
     def facts(self, ticket) -> dict: ...
     def apply(self, effect: dict) -> bool: ...
@@ -160,7 +210,9 @@ class MemoryTracker(DescriptorPort):
                 "pr_state": "none", "risk": "high", "behind": False, "answered": False, "updated_at": None,
                 "review_labels": [], "assignees": []}
         t = {**t, "fix_rounds": fix_round_count(t["reviews"])} if "reviews" in t and "fix_rounds" not in t else t
-        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr", "ci_failure", "author", "waiting_reviewers", "agent_notes", "pr_labels")}, "stage": self.get_stage(t),
+        if t.get("prs"):  # one PR per repository: the record lists them, in the ticket's repository order
+            t = {**t, **combine_prs([{**PR_DEFAULTS, **p} for p in t["prs"]])}
+        return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr", "ci_failure", "author", "waiting_reviewers", "agent_notes", "pr_labels", "prs", "heads")}, "stage": self.get_stage(t),
                 "seen": list(t.get("seen", [])), "comments": t.get("comments", [])}
 
     def stale_facts(self, ticket):

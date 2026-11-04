@@ -233,6 +233,8 @@ def matches(node, facts, event, outcome=None):
     """None when the node matches, else the reason it does not."""
     if event.get("head") is not None and event["head"] != facts["head"]:
         return "stale head"
+    if event.get("heads") is not None and event["heads"] != facts.get("heads"):
+        return "stale head"  # a ticket with PRs in several repositories: any of them moved
     if event.get("id") is not None and event["id"] in facts["seen"]:
         return "duplicate event"
     if outcome and outcome.get("from") and facts["stage"] not in outcome["from"]:
@@ -256,6 +258,8 @@ def check(name, event, tracker, nodes, config):
     if "event_name" in event:
         event["id"] = f"{event['event_name']}:{event['ticket']}:{event['action']}:{facts.get('updated_at', '')}"
         event["head"] = facts.get("head")
+        if facts.get("heads"):
+            event["heads"] = facts["heads"]
         event["actor"] = facts.get("event_actor")
         pending = facts.get("pending_rereviews", [])
         labels = facts.get("pr_labels", [])
@@ -285,6 +289,8 @@ def check(name, event, tracker, nodes, config):
         "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if name in ("fix", "update") else ()))],
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and name in ("fix", "update")),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
+        # one entry per repository of a ticket that changes several (ADR-0017), all on the ticket's one branch
+        "checkouts": [{"repo": p["repo"], "branch": p["branch"] or branch} for p in facts.get("prs") or []],
     }
 
 

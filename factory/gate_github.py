@@ -6,6 +6,7 @@ A marker `<!-- factory:review focus=<f> round=<n> verdict=approve|changes -->` c
 (agent reviews are COMMENT reviews: the author cannot approve its own PR; the verdict is in the marker)
 (`targets.air.bot_login`; `gh api user` answers 403 inside an Air run, so it is never called).
 """
+import copy
 import json
 import re
 import subprocess
@@ -18,7 +19,7 @@ from pathlib import Path
 import yaml
 
 import config
-from gate_port import DescriptorPort, fix_round_count, ticket_from_ref
+from gate_port import PR_DEFAULTS, DescriptorPort, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
 from github_tracker import gh
 import vocab
 
@@ -106,6 +107,12 @@ GOOD_CI = {"success", "neutral", "skipped"}
 WRITE = {"admin", "maintain", "write"}  # repository roles with write access
 
 
+def repository_names(c):
+    """{name: owner/repo} of the descriptor's GitHub repositories, the primary first; None without any."""
+    repos = sorted(c.get("repositories") or [], key=lambda r: r.get("role") != "primary")
+    return {r["name"]: "/".join(r["url"].rstrip("/").split("/")[-2:]) for r in repos} or None
+
+
 class GitHubCodeHost:
     """The GitHub repository that hosts the pull requests; `code_host.repository`, else the tracker's."""
 
@@ -125,10 +132,13 @@ class GitHubCodeHost:
 
 class GitHubGateTracker(DescriptorPort):
     def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8,
-                 ci_workflows=("quality-gates",), pr_repo=None, project=None):
+                 ci_workflows=("quality-gates",), pr_repo=None, project=None, repositories=None):
         self.trusted, self.run_cap, self.ci_workflows = set(trusted_bots), run_cap, set(ci_workflows)
         self.project = project  # factory.project.yaml: the stores of states and commands (DescriptorPort)
         self.pr_repo = pr_repo or repo  # the code host: pull requests, CI, commits, merges
+        # {name: owner/repo} of the descriptor's repositories, the primary first; the primary is the code host
+        self.repositories = dict(repositories or {"primary": None})
+        self.repositories[next(iter(self.repositories))] = self.pr_repo
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, run
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
@@ -143,7 +153,8 @@ class GitHubGateTracker(DescriptorPort):
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
                    (c.get("ci") or {}).get("workflows") or ["quality-gates"],
                    (c.get("code_host") or {}).get("repository"),
-                   {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None)
+                   {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,
+                   repository_names(c))
 
     # --- reads
     def _api(self, path, *flags, repo=None):
@@ -343,7 +354,7 @@ class GitHubGateTracker(DescriptorPort):
         """The PR's patch at `sha` as {file: patch with hunk line numbers dropped}, like `git patch-id --stable`.
         None when GitHub omits a patch (binary or huge diff) or the compare list may be cut at its 300-file limit,
         so the caller cannot compare."""
-        files = self._api(f"compare/{base}...{sha}")["files"]
+        files = self._api(f"compare/{base}...{sha}", repo=self.pr_repo)["files"]
         if len(files) >= COMPARE_FILE_LIMIT or any(x.get("patch") is None for x in files):
             return None
         return {x["filename"]: re.sub(r"^@@ .*? @@", "@@", x["patch"], flags=re.M) for x in files}
@@ -358,8 +369,8 @@ class GitHubGateTracker(DescriptorPort):
             for _ in range(20):
                 if cur == old:
                     break
-                parents = [x["sha"] for x in self._api(f"commits/{cur}")["parents"]]
-                if len(parents) != 2 or self._api(f"compare/{base}...{parents[1]}")["ahead_by"] != 0:
+                parents = [x["sha"] for x in self._api(f"commits/{cur}", repo=self.pr_repo)["parents"]]
+                if len(parents) != 2 or self._api(f"compare/{base}...{parents[1]}", repo=self.pr_repo)["ahead_by"] != 0:
                     return False
                 cur = parents[0]
             patch = self._pr_patch(base, old)
@@ -523,35 +534,53 @@ class GitHubGateTracker(DescriptorPort):
             f.update(children=[{"number": k.get("number"), "state": k.get("state"), "not_planned": k.get("state") == "closed" and k.get("state_reason") == "not_planned",
                                 "blocked": k.get("state") != "closed" and self.stages["blocked"] in [x["name"] for x in k.get("labels") or []]}
                                for k in kids])
-        if pr:
-            head, reviews = pr["head"]["sha"], self._carry_approvals(self._reviews(pr), pr)
-            pr_labels = {x["name"] for x in pr.get("labels", [])}
-            pending_rereviews = [focus for focus in required if vocab.cmd("rereview-<focus>", focus) in pr_labels]
-            latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
-            heads = {latest[x]["commit_id"] for x in required if x in latest}
-            requested = [u["login"] for u in pr.get("requested_reviewers") or []]
-            ci = self._ci(head)
-            since = getattr(self, "_since", "")  # a person's factory:ready starts a fresh round count
-            writes = [t for t in self._fix_writes(pr["number"]) if t >= since]
-            latest_review = max((r.get("submitted_at") or "" for r in reviews if r["commit_id"] == head), default="")
-            commit_date = self._api(f"commits/{head}", repo=self.pr_repo)["commit"]["committer"]["date"]
-            f["handed_to_fix"] = bool(writes) and max(writes) > max(latest_review, commit_date)
-            complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
-            f.update(branch=pr["head"]["ref"])
-            got += (self._notes(self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo), "created_at", since)
-                    + self._notes(self._list(f"pulls/{pr['number']}/reviews", repo=self.pr_repo), "submitted_at", since)
-                    + self._notes([pr], "updated_at", since))  # the PR body is edited after creation
-            if stage == "approved" and pr.get("state") == "open":  # only the merge gates read it
-                f["behind"] = self._api(f"compare/{pr['base']['ref']}...{head}", repo=self.pr_repo)["behind_by"] > 0
-            f.update(pr_state="merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open")
-            f.update(pr=pr["number"], head=head, mergeable=pr.get("mergeable"), conflict=pr.get("mergeable") is False, ci=ci, reviews=reviews,
-                     requested_reviewers=requested, round_verdict=verdict, ignored_reviews=ignored, waiting_reviewers=waiting,
-                     pending_rereviews=pending_rereviews, pr_labels=sorted(pr_labels),
-                     focus_missing=[x for x in required if latest.get(x, {}).get("commit_id") != head],
-                     round_complete=complete, round_head=heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                     fix_rounds=fix_round_count(reviews, since))  # same-head dispute rereviews count as a new round
+        parts = []
+        for name in ticket_repositories(body, list(self.repositories), next(iter(self.repositories))):
+            view = self if self.repositories[name] == self.pr_repo else self._on(self.repositories[name])
+            found = pr if view is self else view._pr(n)
+            part, notes = view._pr_facts(found, required, stage) if found else ({}, [])
+            parts.append({**PR_DEFAULTS, **part, "repo": name})
+            got += notes
+        f.update({k: v for k, v in combine_prs(parts).items() if k != "repo"})
         f["agent_notes"] = [n for _, n in sorted(got, key=lambda t: t[0], reverse=True)]
         return f
+
+    def _on(self, repo):
+        """This tracker reading and writing the pull requests of `repo` (one repository of a ticket)."""
+        view = copy.copy(self)
+        view.pr_repo = repo
+        return view
+
+    def _pr_facts(self, pr, required, stage):
+        """(PR_DEFAULTS keys, agent notes) of the ticket's PR `pr` in this view's repository."""
+        head, reviews = pr["head"]["sha"], self._carry_approvals(self._reviews(pr), pr)
+        pr_labels = {x["name"] for x in pr.get("labels", [])}
+        pending_rereviews = [focus for focus in required if vocab.cmd("rereview-<focus>", focus) in pr_labels]
+        latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
+        heads = {latest[x]["commit_id"] for x in required if x in latest}
+        requested = [u["login"] for u in pr.get("requested_reviewers") or []]
+        ci = self._ci(head)
+        since = getattr(self, "_since", "")  # a person's factory:ready starts a fresh round count
+        writes = [t for t in self._fix_writes(pr["number"]) if t >= since]
+        latest_review = max((r.get("submitted_at") or "" for r in reviews if r["commit_id"] == head), default="")
+        commit_date = self._api(f"commits/{head}", repo=self.pr_repo)["commit"]["committer"]["date"]
+        complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
+        notes = (self._notes(self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo), "created_at", since)
+                 + self._notes(self._list(f"pulls/{pr['number']}/reviews", repo=self.pr_repo), "submitted_at", since)
+                 + self._notes([pr], "updated_at", since))  # the PR body is edited after creation
+        behind = (stage == "approved" and pr.get("state") == "open"  # only the merge gates read it
+                  and self._api(f"compare/{pr['base']['ref']}...{head}", repo=self.pr_repo)["behind_by"] > 0)
+        return {"branch": pr["head"]["ref"], "handed_to_fix": bool(writes) and max(writes) > max(latest_review, commit_date),
+                "behind": behind,
+                "pr_state": "merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open",
+                "pr": pr["number"], "head": head, "mergeable": pr.get("mergeable"), "conflict": pr.get("mergeable") is False,
+                "ci": ci, "reviews": reviews, "requested_reviewers": requested, "round_verdict": verdict,
+                "ignored_reviews": ignored, "waiting_reviewers": waiting, "pending_rereviews": pending_rereviews,
+                "pr_labels": sorted(pr_labels),
+                "focus_missing": [x for x in required if latest.get(x, {}).get("commit_id") != head],
+                "round_complete": complete,
+                "round_head": heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
+                "fix_rounds": fix_round_count(reviews, since)}, notes  # same-head dispute rereviews count as a new round
 
     def _notes(self, items, stamp, since):
         """(time, notes) of the bot-written items (comments, reviews, a PR) from `since` on."""
