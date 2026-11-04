@@ -667,6 +667,24 @@ class PlanTest(unittest.TestCase):
         self.assertFalse(deploy.same("additionalRepositories", live, [{"repository": {"fullName": "o/team"},
                                                                         "branch": "develop"}]))
 
+    def test_three_repositories_check_out_the_other_projects_and_the_read_only_team(self):
+        base = cfg.load()
+        other = {"name": "other", "url": "https://github.com/o/other", "default_branch": "develop", "role": "project"}
+        plan = deploy.plan_air(nodes.load(), {**base, "team_repository": "https://github.com/o/team",
+                                              "repositories": [*base["repositories"], other]})
+        want = [{"repository": deploy.repository(other), "branch": "develop"},
+                {"repository": deploy.repository({"url": "https://github.com/o/team"}), "branch": "main"}]
+        project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
+        team = [a for a in plan["automations"] if a["repository"]["fullName"] == "o/team"]
+        self.assertTrue(project and all(a["repository"]["fullName"] == "zaharchenko-evgeny/slop-factory"
+                                        and a["additionalRepositories"] == want for a in project))
+        self.assertTrue(all("checked out beside it: `/workspaces/other`" in a["prompt"] for a in project))
+        names = {a["name"] for a in team}
+        for name in ("retro", "distill", "review-knowledge"):
+            self.assertIn(f"[Slop factory] {name}", names)
+        self.assertTrue(all("additionalRepositories" not in a and a["environmentConfigId"] == "[Slop factory] ops"
+                            for a in team))
+
     def test_prompts_enter_the_main_project_checkout_only_when_it_is_not_the_team(self):
         plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
         project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]

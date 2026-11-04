@@ -121,14 +121,29 @@ SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>",
                "notify": " notify --issue <the issue number>"}
 
 
+def other_projects(main_repository: dict, team: dict, config: dict) -> list[dict]:
+    """The descriptor's repositories other than the automation's main one and the team repository, in order."""
+    return [r for r in config["repositories"]
+            if repository(r)["fullName"] not in (main_repository["fullName"], repository(team)["fullName"])]
+
+
+def additional_repositories(main_repository: dict, team: dict, config: dict) -> list[dict]:
+    """Air's extra checkouts (ADR-0017): the other project repositories, then the read-only team repository."""
+    return ([{"repository": repository(r), "branch": r["default_branch"]} for r in other_projects(main_repository, team, config)]
+            + [{"repository": repository(team), "branch": "main"}])
+
+
 def checkout_instructions(main_repository: dict | None, config: dict) -> str:
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
-    team = repository({"url": config.get("team_repository") or primary["url"]})
-    if not main_repository or main_repository["fullName"] == team["fullName"]:
+    team = {"url": config.get("team_repository") or primary["url"]}
+    if not main_repository or main_repository["fullName"] == repository(team)["fullName"]:
         return ""
     project = main_repository["fullName"].rsplit("/", 1)[-1]
+    others = ", ".join(f"`/workspaces/{repository(r)['fullName'].rsplit('/', 1)[-1]}`"
+                       for r in other_projects(main_repository, team, config))
     return (f"## Project checkout\n\nBefore running project commands, `cd /workspaces/{project}`. "
-            "The factory repository is checked out beside it and is read-only.\n\n")
+            + (f"The other project repositories are checked out beside it: {others}. " if others else "")
+            + "The factory repository is checked out beside it and is read-only.\n\n")
 
 
 def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None) -> str:
@@ -256,7 +271,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     name, n, config, aname, focus, automation_repository),
             }
             if automation_repository["fullName"] != repository(team)["fullName"]:
-                automation["additionalRepositories"] = [{"repository": repository(team), "branch": "main"}]
+                automation["additionalRepositories"] = additional_repositories(automation_repository, team, config)
             automations.append(automation)
     envs = []
     for env in used:
