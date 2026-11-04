@@ -205,6 +205,12 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(code, 0)
         local_deploy.assert_called_once_with(["--apply"])
 
+    def test_run_local_goes_to_the_local_loop(self):
+        with mock.patch("local.main", return_value=0) as local_main:
+            code, _ = self.run_cli("run", "--local", "--once")
+        self.assertEqual(code, 0)
+        local_main.assert_called_once_with(["--local", "--once"])
+
 
 class PackagingTest(unittest.TestCase):
     def test_installed_command_ships_every_engine_module_it_imports(self):
