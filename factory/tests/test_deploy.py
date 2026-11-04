@@ -84,8 +84,9 @@ for line in sys.stdin:
         elif tool == "get_environment":
             out = next(i for i in db["items"] if i["id"] == a["id"])
         elif tool.startswith("create_"):
-            db["items"].append({**a, "id": f"{kind}-{len(db['items'])}"})
-            out = {}
+            created = {**a, "id": f"{kind}-{len(db['items'])}"}
+            db["items"].append(created)
+            out = {"automationId": created["id"]} if kind == "automation" else {"id": created["id"]}
         elif tool in ("update_automation", "edit_environment"):
             key = "automationId" if kind == "automation" else "id"
             db["items"] = [{**i, **{k: v for k, v in a.items() if k != key}} if i["id"] == a[key] else i for i in db["items"]]
@@ -178,13 +179,27 @@ class ApplyTest(unittest.TestCase):
         for k, items in (("automation", automations), ("environment", envs)):
             self.state[k].write_text(json.dumps({"items": items, "calls": []}))
 
-    def run_deploy(self, mode, allow_delete=False):
+    def run_deploy(self, mode, allow_delete=False, backend=None):
         servers = [deploy.Mcp(f"{sys.executable} {self.tmp / 'server.py'} {self.state[k]} {k}") for k in self.state]
         try:
-            return deploy.deploy(mode, allow_delete, self.plan, *servers)
+            return deploy.deploy(mode, allow_delete, self.plan, *servers, backend=backend)
         finally:
             for s in servers:
                 s.close()
+
+    def backend(self):
+        path, backend = self.state["automation"], mock.Mock()
+        backend.calls = []
+        backend.get_automation.side_effect = lambda automation_id: next(
+            item for item in json.loads(path.read_text())["items"] if item["id"] == automation_id)
+        def set_additional(automation_id, repositories):
+            backend.calls.append((automation_id, repositories))
+            state = json.loads(path.read_text())
+            state["items"] = [{**item, "additionalRepositories": repositories} if item["id"] == automation_id else item
+                               for item in state["items"]]
+            path.write_text(json.dumps(state))
+        backend.set_additional.side_effect = set_additional
+        return backend
 
     def test_canary_created_after_apply(self):
         self.seed([], [])
@@ -309,6 +324,35 @@ class ApplyTest(unittest.TestCase):
         self.assertNotIn("spec", self.calls("automation")[0][1])
         self.assertEqual(self.calls("environment"), [])
 
+    def test_apply_writes_changed_repositories_and_skips_unchanged(self):
+        wanted = [{"repository": {"fullName": "o/team"}, "branch": "main"}]
+        env = [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}]
+        cases = [("create", [], [], "automation-0", True),
+                 ("update", [{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1",
+                              "additionalRepositories": [{"repository": {"fullName": "o/old"}, "branch": "main"}]}],
+                  env, "a1", True),
+                 ("unchanged", [{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1",
+                                 "additionalRepositories": [{"repository": {"fullName": "o/team", "id": "extra"},
+                                                             "branch": "main", "snapshotId": "extra"}]}],
+                  env, "a1", False)]
+        for action, existing, environments, automation_id, write in cases:
+            with self.subTest(action=action):
+                self.plan["automations"][0]["additionalRepositories"] = wanted
+                self.seed(existing, environments)
+                backend = self.backend()
+                self.assertEqual(self.run_deploy("--apply", backend=backend), 0)
+                live = json.loads(self.state["automation"].read_text())["items"][0]
+                self.assertTrue(deploy.same("additionalRepositories", live["additionalRepositories"], wanted))
+                if action == "unchanged":
+                    self.assertEqual(live["additionalRepositories"][0]["snapshotId"], "extra")
+                else:
+                    self.assertEqual(live["additionalRepositories"], wanted)
+                self.assertEqual(backend.calls, [(automation_id, wanted)] if write else [])
+                calls = self.calls("automation")
+                self.assertEqual([call[0] for call in calls], ["create_automation"] if action == "create" else [])
+                if action == "create":
+                    self.assertNotIn("additionalRepositories", calls[0][1])
+
     def test_apply_renames_in_place(self):
         self.plan["renames"] = {"[F] old": "[F] a"}
         self.seed([{"id": "a1", "name": "[F] old", "prompt": "new", "environmentConfigId": "e1"},
@@ -399,6 +443,56 @@ class ApplyTest(unittest.TestCase):
         apply.assert_called_once()
         self.assertTrue(any(x[:2] == ["issue", "close"] and "42" in x for x in writes))
         self.assertTrue(any(x[:2] == ["issue", "comment"] and "factory:deploy-applied" in " ".join(x) for x in writes))
+
+
+class BackendTest(unittest.TestCase):
+    def test_set_additional_preserves_the_full_automation_record(self):
+        existing = {"automationId": "a1", "name": "[F] a", "repository": {"fullName": "o/project"},
+                    "branch": "main", "prompt": "keep this", "environmentConfigId": "e1",
+                    "agentAndModel": {"id": "model"}, "triggerVcs": [{"outputBehaviour": "create-pr"}],
+                    "kind": "automation", "executor": {"type": "agent"}, "botDevSettings": {"branch": "main"},
+                    "paused": False,
+                    "triggers": [{"triggerId": "t1", "isEnabled": False, "automationSnapshotId": "snapshot",
+                                  "triggerType": "EVENT", "source": "github", "eventType": "issues.labeled",
+                                  "filters": {"label": "factory:ready"}}],
+                    "outboundWebhooks": [], "mcpConnectors": [], "outputDescription": "keep output",
+                    "projectId": "project",
+                    "additionalRepositories": [{"repository": {"fullName": "o/old"}, "branch": "main"}],
+                    "automationSnapshotId": "server snapshot", "latestSnapshotVersion": 7,
+                    "stats": {"serverField": True}}
+        target = [{"repository": {"fullName": "o/team"}, "branch": "main"}]
+        get_response, post_response = mock.MagicMock(), mock.MagicMock()
+        get_response.__enter__.return_value = get_response
+        get_response.read.return_value = json.dumps(existing).encode()
+        post_response.__enter__.return_value = post_response
+        post_response.read.return_value = b"{}"
+        runner = mock.Mock(return_value=mock.Mock(stdout="access-token\n"))
+        with mock.patch.object(deploy.urllib.request, "urlopen", side_effect=[get_response, post_response]) as request:
+            backend = deploy.Backend("https://backend.test/air-automations-backend/api/v1", run=runner)
+            backend.set_additional("a1", target)
+        self.assertEqual(request.call_count, 2)
+        get_req, post_req = (call.args[0] for call in request.call_args_list)
+        self.assertEqual([(r.full_url, r.get_method()) for r in (get_req, post_req)], [
+            ("https://backend.test/air-automations-backend/api/v1/automations/a1", "GET"),
+            ("https://backend.test/air-automations-backend/api/v1/automations", "POST")])
+        self.assertEqual(post_req.get_header("Authorization"), "Bearer access-token")
+        body = json.loads(post_req.data)
+        expected = {key: existing[key] for key in deploy.Backend.SPEC_FIELDS}
+        expected["triggers"] = [{key: value for key, value in trigger.items()
+                                  if key not in ("triggerId", "automationSnapshotId")}
+                                 for trigger in existing["triggers"]]
+        expected.update({"automationId": "a1", "additionalRepositories": target})
+        self.assertEqual(body, expected)
+        self.assertEqual(runner.call_args.args[0][1:], ["token", "--env", "prod", "--audience",
+                                                        "air-automations-backend"])
+        env = runner.call_args.kwargs["env"]
+        self.assertEqual((env["JCP_MCP_API_URL"], env["JCP_MCP_CLIENT_ID"], env["JCP_MCP_REDIRECT_PATH"],
+                          env["JCP_MCP_CONFIG_DIR"]),
+                         ("https://api.jetbrains.cloud", "pi-lot", "/space/auth",
+                          str(Path.home() / ".config/jcp-mcp-bridge-pilot")))
+        with mock.patch.dict(os.environ, {"FACTORY_AIR_AUTOMATIONS_API_URL": "https://evil.example",
+                                          "JCP_MCP_API_URL": "https://evil.example"}):
+            self.assertEqual(deploy.Backend().base_url, deploy.Backend.API_BASE_URL)
 
 
 class ProjectPlanTest(unittest.TestCase):
@@ -497,9 +591,20 @@ class PlanTest(unittest.TestCase):
         plain = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": ""})
         self.assertTrue(all("FACTORY_TEAM_REPOSITORY" not in e["variables"] for e in plain["environments"]))
 
-    def test_automations_have_no_additional_repositories(self):
+    def test_non_team_automations_use_team_repository_as_additional_repository(self):
+        team = {"repository": deploy.repository({"url": "https://github.com/o/team"}), "branch": "main"}
         plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
-        self.assertTrue(all("additionalRepositories" not in a for a in plan["automations"]))
+        team_automations = [a for a in plan["automations"] if a["repository"]["fullName"] == "o/team"]
+        project_automations = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
+        self.assertTrue(team_automations and all("additionalRepositories" not in a for a in team_automations))
+        self.assertTrue(project_automations and all(a.get("additionalRepositories") == [team] for a in project_automations))
+        planned = [{"repository": {"fullName": "o/team"}, "branch": "main"}]
+        live = [{"repository": {"fullName": "o/team", "id": "server-field"}, "branch": "main",
+                 "snapshotId": "server-field"}]
+        self.assertTrue(deploy.same("additionalRepositories", live, planned))
+        self.assertTrue(deploy.same("additionalRepositories", None, []))
+        self.assertFalse(deploy.same("additionalRepositories", live, [{"repository": {"fullName": "o/team"},
+                                                                        "branch": "develop"}]))
 
     def test_nodes_get_environment_by_env(self):
         plan = deploy.plan_air(nodes.load(), cfg.load())

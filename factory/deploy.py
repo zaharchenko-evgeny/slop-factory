@@ -21,6 +21,8 @@ import shlex
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -222,16 +224,20 @@ def plan_air(nodes: dict, config: dict) -> dict:
                                  "timezone": "UTC"})
                 elif str(t) != "manual":
                     trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus))
-            automations.append({
+            automation_repository = repository(team if focus == "knowledge" else repos.get(envs_def[env]["repository"]) or primary)
+            automation = {
                 "name": f"{prefix}{aname}",
                 "triggers": trig,
                 "triggerVcs": [{"outputBehaviour": n.get("output", "read-only")} for _ in trig],
                 "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
-                "repository": repository(team if focus == "knowledge" else repos.get(envs_def[env]["repository"]) or primary),
+                "repository": automation_repository,
                 "environmentConfigId": f"{prefix}{env}",
                 "prompt": script_prompt(name) if n["role"] == "script" else agent_prompt(name, n, config, aname, focus),
-            })
+            }
+            if automation_repository["fullName"] != repository(team)["fullName"]:
+                automation["additionalRepositories"] = [{"repository": repository(team), "branch": "main"}]
+            automations.append(automation)
     envs = []
     for env in used:
         d = envs_def[env]
@@ -373,6 +379,56 @@ class Mcp:
         self.proc.stdout.close()
 
 
+class Backend:
+    """The fields not yet exposed by air-automations MCP, through the Air automation REST API."""
+
+    SPEC_FIELDS = ("name", "repository", "branch", "prompt", "agentAndModel", "triggers", "triggerVcs", "kind",
+                   "executor", "botDevSettings", "paused", "outputDescription", "outboundWebhooks", "mcpConnectors",
+                   "environmentConfigId", "projectId")
+    API_BASE_URL = "https://api.jetbrains.cloud/air-automations-backend/api/v1"
+
+    def __init__(self, base_url: str | None = None, token: str | None = None, run=subprocess.run):
+        self.base_url = (base_url or self.API_BASE_URL).rstrip("/")
+        self._token = token
+        self.run = run
+
+    def token(self) -> str:
+        if self._token is None:
+            env = os.environ.copy()
+            env.update({"JCP_MCP_API_URL": "https://api.jetbrains.cloud", "JCP_MCP_CLIENT_ID": "pi-lot",
+                        "JCP_MCP_REDIRECT_PATH": "/space/auth",
+                        "JCP_MCP_CONFIG_DIR": str(Path.home() / ".config/jcp-mcp-bridge-pilot")})
+            result = self.run(["jcp-mcp-bridge", "token", "--env", "prod", "--audience", "air-automations-backend"],
+                              check=True, capture_output=True, text=True, env=env)
+            self._token = result.stdout.strip()
+            if not self._token:
+                raise RuntimeError("jcp-mcp-bridge returned an empty Air automation token")
+        return self._token
+
+    def request(self, method: str, path: str, body: dict | None = None):
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{self.base_url}{path}", data=data, method=method,
+                                     headers={"Authorization": f"Bearer {self.token()}",
+                                              "Accept": "application/json", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            raw = response.read()
+        return json.loads(raw) if raw else {}
+
+    def get_automation(self, automation_id: str) -> dict:
+        return self.request("GET", f"/automations/{urllib.parse.quote(automation_id, safe='')}")
+
+    def set_additional(self, automation_id: str, repositories: list[dict]) -> None:
+        current = self.get_automation(automation_id)
+        body = {key: current[key] for key in self.SPEC_FIELDS if key in current}
+        if "triggers" in body:
+            body["triggers"] = [{key: value for key, value in trigger.items()
+                                 if key not in ("triggerId", "automationSnapshotId")}
+                                for trigger in body["triggers"]]
+        body.update({"automationId": current.get("automationId", automation_id),
+                     "additionalRepositories": repositories})
+        self.request("POST", "/automations", body)
+
+
 def _items(res) -> list[dict]:
     return res if isinstance(res, list) else next(v for v in res.values() if isinstance(v, list))
 
@@ -380,6 +436,11 @@ def _items(res) -> list[dict]:
 def same(key: str, have, want) -> bool:
     if key == "repository" and isinstance(have, dict) and have.keys() == {"fullName"}:
         return have["fullName"] == want["fullName"]
+    if key == "additionalRepositories":
+        def identities(items):
+            return sorted((item.get("repository", {}).get("fullName") if isinstance(item.get("repository"), dict)
+                           else item.get("repository"), item.get("branch")) for item in (items or []))
+        return identities(have) == identities(want)
     if key == "domains":
         return set(want or []) <= set(have or [])
     return have == want
@@ -431,33 +492,56 @@ def automation_detail(x: dict) -> dict:
     return x
 
 
-def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url: str) -> tuple[list[dict], list[dict]]:
+def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url: str, *, backend=None,
+               additional_names=()) -> tuple[list[dict], list[dict]]:
     listed = automations.call("list_automations", {"privacy": "private"})
     automation_items = listed if isinstance(listed, list) else listed["personal"]
     automation_items = [automation_detail(automations.call("get_automation", {"automationId": x["automationId"]}))
                         for x in automation_items if x["name"].startswith(prefix)]
+    if backend:
+        for item in automation_items:
+            if item["name"] in additional_names:
+                record = backend.get_automation(item["id"])
+                item["additionalRepositories"] = record.get("additionalRepositories") or []
     env_items = _items(cloud.call("list_environments", {"repositoryUrl": repository_url}))
     env_items = [environment_detail(cloud.call("get_environment", {"id": x["id"]}))
                  for x in env_items if x["name"].startswith(prefix)]
     return automation_items, env_items
 
 
-def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url: str = "") -> None:
+def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url: str = "", *, backend=None) -> None:
     """Environments before automations on create and update, after them on delete."""
     order = {"create": 0, "update": 0, "delete": 1}
     env_ids = None
     for action, kind, name, p, x, changed in sorted(changes, key=lambda c: (order[c[0]], (c[1] == "automation") == (c[0] != "delete"))):
         client, noun = (cloud, "environment") if kind == "environment" else (automations, "automation")
+        additional = (p or {}).get("additionalRepositories") if kind == "automation" else None
         if p and kind == "automation":  # the environment id exists only after its create
             env_ids = env_ids or {e["name"]: e["id"] for e in _items(cloud.call("list_environments", {"repositoryUrl": repo_url}))}
             p = {**p, "environmentConfigId": env_ids[p["environmentConfigId"]]}
-        p = {k: v for k, v in (p or {}).items() if k != "spec"}
+        p = {k: v for k, v in (p or {}).items() if k not in ("spec", "additionalRepositories")}
         if action == "update":
             p = {k: v for k, v in p.items() if k in changed}
         tool_action = ("edit" if kind == "environment" else "update") if action == "update" else action
         id_key = "automationId" if kind == "automation" else "id"
-        args = {**p, id_key: x["id"]} if action == "update" else p if p else {id_key: x["id"]}
-        client.call(f"{tool_action}_{noun}", args)
+        if action == "update":
+            if p:
+                client.call(f"{tool_action}_{noun}", {**p, id_key: x["id"]})
+            if additional is not None and "additionalRepositories" in changed:
+                if backend is None:
+                    raise RuntimeError("Air automation backend is required to set additionalRepositories")
+                backend.set_additional(x["id"], additional)
+        elif action == "create":
+            result = client.call(f"create_{noun}", p)
+            if additional is not None:
+                if backend is None:
+                    raise RuntimeError("Air automation backend is required to set additionalRepositories")
+                automation_id = result.get("automationId") or result.get("id")
+                if not automation_id:
+                    raise RuntimeError(f"create_automation returned no automation id for {name}")
+                backend.set_additional(automation_id, additional)
+        else:
+            client.call(f"delete_{noun}", {id_key: x["id"]})
 
 
 def canary_body(deploy_id: str) -> str:
@@ -520,10 +604,14 @@ def create_canary(tracker, deploy_id, *, sleep=time.sleep, clock=time.monotonic,
     return wait_for_canary(tracker, ticket, deploy_id, sleep=sleep, clock=clock, lost_run=lost_run)
 
 
-def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, tracker=None,
+def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, tracker=None,
            deploy_id=None, sleep=time.sleep, clock=time.monotonic) -> int:
     repo_url = plan["environments"][0]["repository"] if plan["environments"] else ""
-    changes = diff(plan, *read_state(automations, cloud, plan["prefix"], repo_url))
+    additional_names = {a["name"] for a in plan["automations"] if "additionalRepositories" in a}
+    backend = backend or (Backend() if additional_names else None)
+    state = read_state(automations, cloud, plan["prefix"], repo_url, backend=backend,
+                       additional_names=additional_names)
+    changes = diff(plan, *state)
     for action, kind, name, _, _, changed in changes:
         print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
     if not changes:
@@ -534,8 +622,9 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
     if changes:
-        apply_diff(changes, automations, cloud, repo_url)
-        left = diff(plan, *read_state(automations, cloud, plan["prefix"], repo_url))
+        apply_diff(changes, automations, cloud, repo_url, backend=backend)
+        left = diff(plan, *read_state(automations, cloud, plan["prefix"], repo_url, backend=backend,
+                                      additional_names=additional_names))
         for action, kind, name, *_ in left:
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:
