@@ -24,7 +24,7 @@ need_skills() {
   while IFS= read -r s; do
     [ -z "$s" ] && continue
     found=no
-    [ -f "$repo_root/skills/vendor/$s/SKILL.md" ] && continue
+    [ -f "$repo_root/skills/$s/SKILL.md" ] && continue
     for d in "${skill_dirs[@]}"; do
       if [ -d "$d" ] && find "$d" -path "*/$s/SKILL.md" -print -quit 2>/dev/null | grep -q .; then
         found=yes

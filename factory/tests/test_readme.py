@@ -27,9 +27,9 @@ class ReadmeTest(unittest.TestCase):
                 self.assertIn(f"`{key}`", README)
 
     def test_readme_documents_overrides(self):
-        self.assertIn("## Team overrides", README)
+        self.assertIn("## Team-owned runtime files", README)
         normalized = " ".join(README.split())
-        self.assertIn("`roles/`, `skills/`, and `workflows/` in the team repository first", normalized)
+        self.assertIn("Runtime `roles/`, `skills/`, workflows, policies, and judgments come only from the team's repository", normalized)
 
 
 if __name__ == "__main__":

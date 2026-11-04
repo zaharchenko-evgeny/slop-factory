@@ -64,9 +64,12 @@ limits:
   remind_after_hours: 24
   generated_paths:
     - factory/tests/fixtures/deploy/air-plan.json
+    - factory/tests/fixtures/slop/**
     - docs/statechart.md
     - docs/statechart-proposed.md
     - skills/factory-setup/templates/**
-    - factory/tests/fixtures/slop/**
-    - template/factory.project.yaml
+    - skills/vendor/**
+    - template/roles/**
+    - template/skills/**
+    - template/workflows/delivery.md
     - template/workflows/delivery.yaml

@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Vendored skills (ADR-0008). `skills.lock` (JSON) pins each skill; `skills/vendor/<name>/` holds the copy.
+"""Vendored skills (ADR-0008). `skills.lock` (JSON) pins each skill; `template/skills/<name>/` holds the copy.
 
   vendor-skills.py --check      fail when a copy differs from its hash or a skills.txt name has no copy
   vendor-skills.py              refresh every copy from its pinned source, then verify the hash
@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCK = ROOT / "skills.lock"
-VENDOR = ROOT / "skills" / "vendor"
+VENDOR = ROOT / "template" / "skills"
 
 
 def tree_hash(d):
@@ -34,7 +34,7 @@ def load():
 
 def check(root=ROOT):
     lock = json.loads((root / "skills.lock").read_text())["skills"]
-    vendor = root / "skills" / "vendor"
+    vendor = root / "template" / "skills"
     errors = []
     for name, e in lock.items():
         d = vendor / name
@@ -42,7 +42,7 @@ def check(root=ROOT):
             errors.append(f"{name}: no vendored copy")
         elif tree_hash(d) != e["sha256"]:
             errors.append(f"{name}: differs from the hash in skills.lock")
-    for f in sorted((root / "roles").glob("*/skills.txt")):
+    for f in sorted((root / "template" / "roles").glob("*/skills.txt")):
         for name in f.read_text().split():
             if name not in lock:
                 errors.append(f"{f.parent.name}: skill {name} is not in skills.lock")

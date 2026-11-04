@@ -6,10 +6,12 @@
 """Unit tests for factory/doctor.py with a stubbed gh. Run: uv run --quiet factory/tests/test_doctor.py"""
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE.parent))
 import config as cfg  # noqa: E402
 cfg.set_team(HERE / "fixtures/team")
@@ -87,6 +89,17 @@ class DoctorTest(unittest.TestCase):
             self.assertNotIn("tool:pi", got)
             self.assertEqual([p for p, r in got.items() if r["result"] != "ok"], [])
         self.assertIn("git", doctor.env_needs("write", nodes.load())[0])
+
+    def test_missing_team_skill_does_not_fall_back_to_engine_template(self):
+        before = cfg.team_root()
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "roles").symlink_to(ROOT / "template/roles", target_is_directory=True)
+            cfg.set_team(tmp)
+            try:
+                got = run(FakeGh(), "write")
+            finally:
+                cfg.set_team(before)
+        self.assertEqual(got["skill:tdd"]["result"], "missing")
 
     def test_probe_objects_are_deleted(self):
         for deny in ((), ("blocked_by", "update-branch")):

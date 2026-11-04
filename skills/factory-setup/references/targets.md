@@ -1,10 +1,11 @@
 # Targets
 
-Selected by `targets.<name>` in `factory.descriptor.yaml`.
+Selected by `targets.<name>` in the team's effective configuration (`factory.project.yaml` or
+`factory.descriptor.yaml`).
 
 ## Contract
 
-- **Plan**: compare `factory.descriptor.yaml` with what is deployed and list creates,
+- **Plan**: compare the team configuration with what is deployed and list creates,
   updates and prunes. Change nothing.
 - **Apply**: only after the user approves the plan. While
   `gates.confirm_external_writes` is `true`, show every external write first.
@@ -15,14 +16,15 @@ Selected by `targets.<name>` in `factory.descriptor.yaml`.
 
 ## Air (`air`)
 
-- Config: `project` (id), `environment`, and the secret names the environment
-  provides.
+- Config: Air models and environment settings from the team's project or
+  factory descriptor.
 - Tools: the air-automations and air-cloud MCPs.
-- The workflow is rendered from `workflows/delivery.md` into an Air workflow
-  graph (`agentTask`, `gateway`, `humanTask` nodes).
-- Automations are event bridges only. Names start with `[factory]`, prompts are
-  thin and point to role files, and triggers filter on a branch prefix, label
-  or tag; never on every comment.
+- Descriptor-based node workflows use `engine/nodes.yaml`; project-mode teams
+  supply their own workflow file.
+- Runtime roles, skills and `.air/cloud/startup.sh` come from the team
+  repository. The engine is installed separately and is not a runtime fallback.
+- When the main project is another repository, deploy adds the team repository
+  as an additional repository for automation prompts and role content.
 - Reviewer, approver, auditor and ops automations use `outputBehaviour:
   read-only`; roles are not a security boundary inside one Air account.
 - Plan output: automations, workflows and environment diff.
@@ -31,7 +33,7 @@ Selected by `targets.<name>` in `factory.descriptor.yaml`.
 
 - Config: `harness`, `skill` (the delivery skill path), `run_dir` and
   `worktree_dir` (both git-ignored).
-- Apply links roles and skills through the harness adapter
+- Apply reads roles and skills from the team repository through the harness adapter
   (`harnesses.md`) and runs each `roles/<role>/setup.sh`; a failing script is a
   preflight failure.
 - Each ticket runs in its own worktree and branch; one agent process per role.

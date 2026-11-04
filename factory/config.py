@@ -1,7 +1,6 @@
 """The one config loader (ADR-0015): engine defaults overridden by the team descriptor.
 
-ENGINE_ROOT holds the engine (code, roles, skills, workflows, defaults); TEAM_ROOT holds the team's
-`factory.descriptor.yaml` and any file that replaces an engine one.
+ENGINE_ROOT holds the engine and its template; TEAM_ROOT holds all runtime roles, skills, and project configuration.
 """
 import json
 import os
@@ -42,9 +41,8 @@ def engine_root():
 
 
 def resolve(rel):
-    """TEAM_ROOT/rel when it exists, else ENGINE_ROOT/rel. A file is replaced whole."""
-    mine = team_root() / rel
-    return mine if mine.exists() else engine_root() / rel
+    """Resolve runtime files only from the team repository."""
+    return team_root() / rel
 
 
 def shown(rel):

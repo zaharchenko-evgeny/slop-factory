@@ -45,7 +45,13 @@ class TeamRootTest(unittest.TestCase):
             tracker = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "ci": "green", "blockers_open": 0}})
             _, out = gate.check("review", {"id": "e1", "ticket": "7"}, tracker, nodes.load(), config.load())
             self.assertEqual(Path(out["role_file"]), root / "roles/reviewer/role.md")
-            self.assertEqual(config.resolve("roles/router/role.md"), ROOT / "roles/router/role.md")
+            self.assertEqual(config.resolve("roles/router/role.md"), root / "roles/router/role.md")
+
+    def test_missing_team_file_does_not_fall_back_to_engine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = team(tmp)
+            config.set_team(root)
+            self.assertEqual(config.resolve("roles/router/role.md"), root / "roles/router/role.md")
 
     def test_installed_tool_finds_engine_assets_under_its_prefix(self):
         from unittest import mock
@@ -54,16 +60,6 @@ class TeamRootTest(unittest.TestCase):
             with mock.patch.object(config, "_HERE", Path(tmp) / "site"), mock.patch.object(config.sys, "prefix", tmp), \
                     mock.patch.dict(config.os.environ, {"FACTORY_ENGINE": ""}):
                 self.assertEqual(config._find_engine(), Path(tmp) / "share/factory-engine")
-
-    def test_engine_root_is_discovered_from_engine_node_graph(self):
-        from unittest import mock
-        with tempfile.TemporaryDirectory() as tmp:
-            root, prefix = Path(tmp) / "repo", Path(tmp) / "prefix"
-            (root / "engine").mkdir(parents=True)
-            (root / "engine/nodes.yaml").touch()
-            (prefix / "share/factory-engine").mkdir(parents=True)
-            with mock.patch.object(config, "_HERE", root), mock.patch.object(config.sys, "prefix", str(prefix)):
-                self.assertEqual(config._find_engine(), root)
 
     def test_factory_team_env_sets_team_root(self):
         from unittest import mock
@@ -76,7 +72,7 @@ class TeamRootTest(unittest.TestCase):
             root = team(tmp, files={"roles/developer/role.md": "# mine\n"})
             config.set_team(root)
             self.assertEqual(config.resolve("roles/developer/role.md"), root / "roles/developer/role.md")
-            self.assertEqual(config.resolve("roles/router/role.md"), ROOT / "roles/router/role.md")
+            self.assertEqual(config.resolve("roles/router/role.md"), root / "roles/router/role.md")
 
     def test_missing_key_comes_from_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:

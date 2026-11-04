@@ -20,21 +20,22 @@ class CheckTest(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root)
         shutil.copy(REPO / "skills.lock", self.root)
-        shutil.copytree(REPO / "skills/vendor", self.root / "skills/vendor")
-        shutil.copytree(REPO / "roles", self.root / "roles", ignore=shutil.ignore_patterns("*.md", "*.sh", "*.json"))
+        shutil.copytree(REPO / "template/skills", self.root / "template/skills")
+        shutil.copytree(REPO / "template/roles", self.root / "template/roles",
+                        ignore=shutil.ignore_patterns("*.md", "*.sh", "*.json"))
 
     def test_repository_is_clean(self):
         self.assertEqual(vs.check(), [])
 
     def test_one_byte_edit_fails(self):
-        with (self.root / "skills/vendor/ponytail/SKILL.md").open("a") as f:
+        with (self.root / "template/skills/ponytail/SKILL.md").open("a") as f:
             f.write("x")
         self.assertEqual(len(vs.check(self.root)), 1)
 
     def test_missing_directory_fails(self):
-        (self.root / "roles/reviewer/skills.txt").write_text("ponytail-review\nnope\n")
+        (self.root / "template/roles/reviewer/skills.txt").write_text("ponytail-review\nnope\n")
         self.assertIn("reviewer: skill nope is not in skills.lock", vs.check(self.root))
-        shutil.rmtree(self.root / "skills/vendor/ponytail-review")
+        shutil.rmtree(self.root / "template/skills/ponytail-review")
         self.assertTrue(any("no vendored" in e for e in vs.check(self.root)))
 
 

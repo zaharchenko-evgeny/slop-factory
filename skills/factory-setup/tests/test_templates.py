@@ -32,8 +32,12 @@ class Templates(unittest.TestCase):
                 want = cur[cur.index("## Development workflow"):cur.index("## Tracker and git")]
             elif rel in {"workflows/delivery.sm.yaml", "factory.descriptor.yaml"}:
                 continue  # the engine has no local team descriptor; validate the team fixture separately
+            elif rel.startswith("roles/") and rel.endswith("/setup.sh"):
+                role = Path(rel).parts[1]
+                want = render.fill((render.T / "roles/setup.sh.tmpl").read_text(),
+                                   {**ANSWERS, "ROLE": role, "TOOLS": ANSWERS["ROLES"][role]})
             else:
-                want = (ROOT / rel).read_text()
+                want = render.fill((SKILL / "templates" / rel).read_text(), ANSWERS)
             self.assertEqual(text.rstrip("\n"), want.rstrip("\n"), rel)
 
     def test_templates_name_no_project_value(self):
@@ -61,6 +65,9 @@ class Templates(unittest.TestCase):
         out = render.render_project(answers)
         self.assertIn("workflows/delivery.yaml", out)
         self.assertFalse([rel for rel, text in out.items() if render.PH.search(text)])
+        for rel, text in out.items():
+            if rel.startswith(("roles/", "skills/")):
+                self.assertEqual(text, (ROOT / "template" / rel).read_text(), rel)
         with tempfile.TemporaryDirectory() as tmp:
             for rel, text in out.items():
                 (Path(tmp) / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +76,7 @@ class Templates(unittest.TestCase):
             descriptor = project.load(tmp)
             self.assertEqual(descriptor["tracker"]["repository"], "example-tracker_repository")
             self.assertEqual(workflow.validate(descriptor, workflow.load(tmp, descriptor)), [])
-            self.assertNotIn("roles", {Path(rel).parts[0] for rel in out})
+            self.assertTrue({"roles", "skills"} <= {Path(rel).parts[0] for rel in out})
 
 
 if __name__ == "__main__":

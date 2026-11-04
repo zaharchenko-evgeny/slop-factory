@@ -47,7 +47,7 @@ class DistillTest(unittest.TestCase):
 
 class RoutineNodesTest(unittest.TestCase):
     def test_knowledge_paths_under_team_root(self):
-        roles = ROOT / "roles"
+        roles = ROOT / "template/roles"
         for name in ("retro/role.md", "distill/role.md"):
             self.assertIn("$FACTORY_TEAM/", (roles / name).read_text())
         self.assertIn("knowledge` directory under `$FACTORY_TEAM", (roles / "_common.md").read_text())
