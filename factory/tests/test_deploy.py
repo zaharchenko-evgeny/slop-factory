@@ -71,13 +71,16 @@ for line in sys.stdin:
         db["calls"].append([tool, a])
         if tool not in TOOLS[kind]:
             raise ValueError(f"unexpected {kind} tool: {tool}")
+        if kind == "environment" and tool in ("create_environment", "edit_environment") and "variables" in a:
+            assert isinstance(a["variables"], list) and all(v.get("value") for v in a["variables"]), a
         if tool == "list_automations":
             assert a == {"privacy": "private"}, a
             out = {"personal": [{"automationId": i["id"], "name": i["name"]} for i in db["items"]],
                    "project": []}
         elif tool == "list_environments":
             assert list(a) == ["repositoryUrl"] and a["repositoryUrl"].startswith("https://github.com/"), a
-            out = [{"id": i["id"], "name": i["name"]} for i in db["items"]]
+            out = [{"id": i["id"], "name": i["name"]} for i in db["items"]
+                   if i.get("repository", a["repositoryUrl"]) == a["repositoryUrl"]]
         elif tool == "get_automation":
             i = next(i for i in db["items"] if i["id"] == a["automationId"])
             out = {**{k: v for k, v in i.items() if k != "id"}, "automationId": i["id"],
@@ -86,7 +89,9 @@ for line in sys.stdin:
         elif tool == "get_environment":
             out = next(i for i in db["items"] if i["id"] == a["id"])
         elif tool.startswith("create_"):
-            created = {**a, "id": f"{kind}-{len(db['items'])}"}
+            assert kind != "environment" or all(i["name"] != a["name"] for i in db["items"]), a  # Air names are unique
+            created = {**{("repository" if k == "repositoryUrl" else k): v for k, v in a.items()},
+                       "id": f"{kind}-{len(db['items'])}"}
             db["items"].append(created)
             out = {"automationId": created["id"]} if kind == "automation" else {"id": created["id"]}
         elif tool in ("update_automation", "edit_environment"):
@@ -139,7 +144,7 @@ class RecordedTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"WRAP_STRUCTURED": "1"}):
             self.read_recorded()
 
-    def test_settings_environments_drop_legacy_repository_variable(self):
+    def test_settings_environments_ignore_legacy_variable_and_replace_moved_ops(self):
         contract = json.loads((HERE / "contracts/air-mcp.json").read_text())
         responses = contract["servers"]["air-cloud"]["responses"]
         plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository":
@@ -148,11 +153,10 @@ class RecordedTest(unittest.TestCase):
         envs = [deploy.environment_detail(json.loads(responses[f"get_environment:{name}"]["content"][0]["text"]))
                 for name in ("read", "write", "ops")]
         changes = deploy.diff(plan, [], envs)
-        self.assertEqual([(kind, resource, name) for kind, resource, name, *_ in changes],
-                         [("update", "environment", f"[Slop factory] {env}") for env in ("read", "write", "ops")])
-        self.assertEqual([change[3]["variables"] for change in changes],
-                         [{"FACTORY_ENV": env} for env in ("read", "write", "ops")])
-        self.assertEqual(changes[-1][3]["repository"], "https://github.com/zaharchenko-evgeny/slop-eval-factory")
+        self.assertEqual([change[:3] + (change[5],) for change in changes],
+                         [("replace", "environment", "[Slop factory] ops", ["repository"])])
+        self.assertEqual(changes[0][3]["repository"], "https://github.com/zaharchenko-evgeny/slop-eval-factory")
+        self.assertTrue(all("FACTORY_TEAM_REPOSITORY" not in env["variables"] for env in envs))
 
     def read_recorded(self):
         tmp = Path(tempfile.mkdtemp())
@@ -372,6 +376,50 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--apply"), 0)
         self.assertEqual(self.calls("environment"), [["edit_environment", {"startup": "x", "id": "e1"}]])
 
+    def test_apply_serializes_variables_and_ignores_legacy_team_repository(self):
+        self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                       "variables": {"FACTORY_ENV": "write", "FACTORY_TEAM_REPOSITORY": "https://github.com/o/team"}}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual(self.calls("environment"), [["edit_environment", {
+            "variables": [{"key": "FACTORY_ENV", "value": "read"}], "id": "e1"}]])
+        live = json.loads(self.state["environment"].read_text())["items"][0]
+        self.assertEqual(deploy.environment_detail(live)["variables"], {"FACTORY_ENV": "read"})
+        self.assertEqual(self.run_deploy("--dry-run"), 0)
+
+    def test_apply_sends_trigger_destinations_with_changed_triggers(self):
+        manual = {"triggerType": "WEBHOOK"}
+        label = {"triggerType": "EVENT", "source": "github", "eventType": "issues.labeled"}
+        self.plan["automations"][0].update({"triggers": [label], "triggerVcs": [{"outputBehaviour": "read-only"}]})
+        self.seed([{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1", "triggers": [manual],
+                    "triggerVcs": [{"outputBehaviour": "read-only"}]}],
+                  [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual(self.calls("automation"), [["update_automation", {
+            "triggers": [label], "triggerVcs": [{"outputBehaviour": "read-only"}], "automationId": "a1"}]])
+
+    def test_apply_replaces_environment_moved_to_another_repository(self):
+        self.plan["environments"][0].update({"repository": "https://github.com/o/team", "variables": {"FACTORY_ENV": "read"},
+                                            "domains": ["pypi.org"]})
+        self.plan["automations"][0]["repository"] = {"fullName": "o/r", "browseUrl": "https://github.com/o/r"}
+        self.seed([{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1",
+                    "repository": {"fullName": "o/r"}}],
+                  [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                    "domains": ["github.com"], "networkAccess": "RESTRICTED",
+                    "variables": {"FACTORY_ENV": "read", "FACTORY_TEAM_REPOSITORY": "https://github.com/o/team"}}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual([call for call in self.calls("environment") if not call[0].startswith(("list_", "get_"))], [
+            ["edit_environment", {"id": "e1", "name": "retired [F] read"}],
+            ["create_environment", {"name": "[F] read", "repositoryUrl": "https://github.com/o/team",
+                                    "allowedDomains": ["github.com", "pypi.org"],
+                                    "variables": [{"key": "FACTORY_ENV", "value": "read"}],
+                                    "networkAccess": "RESTRICTED"}]])
+        live = {i["id"]: i["name"] for i in json.loads(self.state["environment"].read_text())["items"]}
+        self.assertEqual(live, {"e1": "retired [F] read", "environment-1": "[F] read"})
+        self.assertEqual(self.calls("automation"), [["update_automation", {"environmentConfigId": "environment-1",
+                                                                         "automationId": "a1"}]])
+        self.assertEqual(self.run_deploy("--dry-run"), 0)
+
     def test_environment_update_preserves_unplanned_live_domains(self):
         self.plan["environments"][0]["vm"] = "new"
         self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x",
@@ -459,7 +507,7 @@ class BackendTest(unittest.TestCase):
                     "triggers": [{"triggerId": "t1", "isEnabled": False, "automationSnapshotId": "snapshot",
                                   "triggerType": "EVENT", "source": "github", "eventType": "issues.labeled",
                                   "filters": {"label": "factory:ready"}}],
-                    "outboundWebhooks": [], "mcpConnectors": [], "outputDescription": "keep output",
+                    "outboundWebhooks": [], "mcpConnectors": [], "outputDescription": None,
                     "projectId": "project",
                     "additionalRepositories": [{"repository": {"fullName": "o/old"}, "branch": "main"}],
                     "automationSnapshotId": "server snapshot", "latestSnapshotVersion": 7,
@@ -481,11 +529,11 @@ class BackendTest(unittest.TestCase):
             ("https://backend.test/air-automations-backend/api/v1/automations", "POST")])
         self.assertEqual(post_req.get_header("Authorization"), "Bearer access-token")
         body = json.loads(post_req.data)
-        expected = {key: existing[key] for key in deploy.Backend.SPEC_FIELDS}
+        expected = {key: existing[key] for key in deploy.Backend.SPEC_FIELDS if key != "outputDescription"}
         expected["triggers"] = [{key: value for key, value in trigger.items()
                                   if key not in ("triggerId", "automationSnapshotId")}
                                  for trigger in existing["triggers"]]
-        expected.update({"automationId": "a1", "additionalRepositories": target})
+        expected.update({"id": "a1", "additionalRepositories": target})
         self.assertEqual(body, expected)
         self.assertEqual(runner.call_args.args[0][1:], ["token", "--env", "prod", "--audience",
                                                         "air-automations-backend"])
@@ -595,6 +643,14 @@ class PlanTest(unittest.TestCase):
             self.assertEqual(e["variables"], {"FACTORY_ENV": e["variables"]["FACTORY_ENV"]})
         plain = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": ""})
         self.assertTrue(all("FACTORY_TEAM_REPOSITORY" not in e["variables"] for e in plain["environments"]))
+
+    def test_every_automation_runs_in_an_environment_of_its_repository(self):
+        plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
+        env_repos = {e["name"]: e["repository"] for e in plan["environments"]}
+        mismatched = [a["name"] for a in plan["automations"]
+                      if env_repos[a["environmentConfigId"]] != a["repository"]["browseUrl"]]
+        self.assertEqual(mismatched, [])
+        self.assertTrue(any(a["repository"]["fullName"] == "o/team" for a in plan["automations"]))
 
     def test_non_team_automations_use_team_repository_as_additional_repository(self):
         team = {"repository": deploy.repository({"url": "https://github.com/o/team"}), "branch": "main"}
