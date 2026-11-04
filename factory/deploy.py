@@ -198,6 +198,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
     air, roles = config["targets"]["air"]["models"], config["roles"]
     repos = {r["name"]: r for r in config["repositories"]}
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
+    team = {"name": "team", "url": config.get("team_repository") or primary["url"]}
+    repos["team"] = team
     envs_def = nodes.get("environments") or {}
     scheds = nodes.get("schedules") or {}
     bot = config["targets"]["air"]["bot_login"]
@@ -224,7 +226,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "triggerVcs": [{"outputBehaviour": n.get("output", "read-only")} for _ in trig],
                 "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
-                "repository": repository(repos.get(envs_def[env]["repository"]) or primary),
+                "repository": repository(team if focus == "knowledge" else repos.get(envs_def[env]["repository"]) or primary),
                 "environmentConfigId": f"{prefix}{env}",
                 "prompt": script_prompt(name) if n["role"] == "script" else agent_prompt(name, n, config, aname, focus),
             })

@@ -142,7 +142,10 @@ class RecordedTest(unittest.TestCase):
         plan = {"prefix": plan["prefix"], "environments": plan["environments"], "automations": []}
         envs = [deploy.environment_detail(json.loads(responses[f"get_environment:{name}"]["content"][0]["text"]))
                 for name in ("read", "write", "ops")]
-        self.assertEqual(deploy.diff(plan, [], envs), [])
+        changes = deploy.diff(plan, [], envs)
+        self.assertEqual([(kind, resource, name) for kind, resource, name, *_ in changes],
+                         [("update", "environment", "[Slop factory] ops")])
+        self.assertEqual(changes[0][3]["repository"], "https://github.com/zaharchenko-evgeny/slop-eval-factory")
 
     def read_recorded(self):
         tmp = Path(tempfile.mkdtemp())
@@ -373,6 +376,16 @@ class ProjectPlanTest(unittest.TestCase):
 
 
 class PlanTest(unittest.TestCase):
+    def test_routines_target_team_repository(self):
+        url = "https://github.com/o/team"
+        plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": url})
+        automations = {a["name"]: a for a in plan["automations"]}
+        environments = {e["name"]: e for e in plan["environments"]}
+        for name in ("retro", "distill"):
+            self.assertEqual(automations[f"[Slop factory] {name}"]["repository"]["browseUrl"], url)
+        self.assertEqual(environments["[Slop factory] ops"]["repository"], url)
+        self.assertEqual(automations["[Slop factory] review-knowledge"]["repository"]["browseUrl"], url)
+
     def test_air_matches_fixture(self):
         plan = deploy.plan_air(yaml.safe_load((FIX / "nodes.yaml").read_text()),
                                yaml.safe_load((FIX / "factory.yaml").read_text()))

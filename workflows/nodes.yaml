@@ -22,7 +22,7 @@ environments:
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, '*.blob.core.windows.net', pypi.org, files.pythonhosted.org, registry.npmjs.org]
     vm: default
   ops:
-    repository: primary
+    repository: team
     startup: .air/cloud/startup.sh
     secrets: []
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org]

@@ -57,7 +57,7 @@ environments:
     vm: default
   ops:
     repositories:
-    - '{{REPOSITORY_NAME}}'
+    - team
     startup: .air/cloud/startup.sh
     secrets: []
     domains:

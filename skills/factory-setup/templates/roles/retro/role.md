@@ -5,7 +5,7 @@ and record what the runs taught. For each ticket that reached `done` since the
 last run, take its run facts from `uv run factory/retro.py facts --since <24 hours ago>`
 (fix and update rounds, reviews, stops, operator interventions, wall time, size; you never count)
 and its thread, and write one entry to `knowledge.branch` of
-`factory.descriptor.yaml` under `<knowledge.dir>/<repo>/`; `factory/knowledge.py`
+`factory.descriptor.yaml` under `$FACTORY_TEAM/<knowledge.dir>/<repo>/`; `factory/knowledge.py`
 `retro_entries` is the shape, and a ticket with an entry is skipped. Tag each lesson line
 `- [project|factory|engine|noise] <path>: <text>` (see `factory/knowledge.py`).
 Push the entries to the reusable source branch `knowledge.inbox_pr_action` prints, never a new

@@ -462,7 +462,7 @@ its own prompts, policies or config without that (ADR-0007). The auto-approve po
 
 | Loop | Signal | Produced by | Lands as | Human step |
 |---|---|---|---|---|
-| Knowledge | every merged ticket | retro in `merged` | inbox entry, then the weekly `distill` PR into `knowledge/` | merge the distill PR |
+| Knowledge | every merged ticket | retro in `merged` | inbox entry, then the weekly `distill` PR into the settings repository's knowledge base | merge the distill PR |
 | Code gaps | fix rounds ≥ 2, a tier climb, or `failed` | gap check in `merged` | a `draft` ticket naming the comment, test or boundary to add | set it `ready` |
 | Harness | the week's run log and failures | `improve` routine: propose, probe on evals, adopt | one PR with the surviving prompt and config changes | merge it |
 | Calibration | approver dry-run verdicts vs your merges; complexity grades vs attempts and cost | `collect` routine | a labelled set; a PR raising a judge threshold or changing the tier map | merge it |
