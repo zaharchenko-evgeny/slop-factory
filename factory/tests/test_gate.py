@@ -1174,6 +1174,22 @@ class ConflictTest(unittest.TestCase):
         code, out = gate.check("fix", {"id": "e", "ticket": 7}, tr, NODES, CONFIG)
         self.assertEqual((code, out["merge_main"]), (gate.GO, True))
 
+    def test_conflict_only_fix_done_applies_with_incomplete_round(self):
+        tr = MemoryTracker({7: {"stage": "changes-requested", "head": "abc", "pr": 42,
+                                "conflict": True, "round_complete": False}})
+        with patch.object(gate, "local_head", return_value="def"):  # the merge commit is not pushed yet
+            code, out = gate.apply("fix", "done", {"ticket": 7, "event": "e"}, tr, NODES)
+        self.assertEqual((code, out["applied"]), (gate.GO, True))
+        self.assertEqual(tr.tickets[7]["stage"], "in-review")
+
+    def test_fix_done_without_conflict_still_needs_complete_round(self):
+        tr = MemoryTracker({7: {"stage": "changes-requested", "head": "abc", "pr": 42,
+                                "conflict": False, "round_complete": False}})
+        with patch.object(gate, "local_head", return_value="def"):
+            code, out = gate.apply("fix", "done", {"ticket": 7, "event": "e"}, tr, NODES)
+        self.assertEqual((code, out), (gate.NO_GO, {"applied": False, "reason": "condition does not hold"}))
+        self.assertEqual(tr.tickets[7]["stage"], "changes-requested")
+
     def test_dispute_rereview_sweep_approves_or_starts_a_new_fix_round(self):
         original = {"agent": True, "focus": "full", "verdict": "changes", "commit_id": "abc",
                     "findings": ["B1"]}
