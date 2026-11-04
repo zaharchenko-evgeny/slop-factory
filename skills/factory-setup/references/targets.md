@@ -23,8 +23,10 @@ Selected by `targets.<name>` in the team's effective configuration (`factory.pro
   supply their own workflow file.
 - Runtime roles, skills and `.air/cloud/startup.sh` come from the team
   repository. The engine is installed separately and is not a runtime fallback.
-- When the main project is another repository, deploy adds the team repository
-  as an additional repository for automation prompts and role content.
+- Repository roles (ADR-0017): a project automation's main repository is the
+  `role: primary` repository; the team repository is a read-only additional
+  repository for automation prompts and role content. Retro, distill, the
+  knowledge review and the ops nodes run in the team repository.
 - Reviewer, approver, auditor and ops automations use `outputBehaviour:
   read-only`; roles are not a security boundary inside one Air account.
 - Plan output: automations, workflows and environment diff.

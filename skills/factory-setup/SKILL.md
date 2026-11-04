@@ -24,7 +24,7 @@ user approves a plan.
 
 Ask, one round at a time, with a recommended answer for each question:
 
-1. Repositories: name, URL, default branch, role (primary or supporting).
+1. Repositories: name, URL, default branch, role (`primary` for exactly one, `project` for the others; ADR-0017).
 2. Tracker and project; stage mapping (see `references/trackers.md`).
 3. Channels: Slack Air Mate, local, Air session (`references/channels.md`).
 4. Targets: Air (project id, environment) and/or local harnesses.

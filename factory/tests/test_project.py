@@ -57,6 +57,34 @@ class ProjectTest(unittest.TestCase):
             errors = project.validate(write_project(tmp, descriptor))
         self.assertTrue(any(error.startswith("factory.project.yaml.tracker") for error in errors), errors)
 
+    def errors(self, change):
+        descriptor = self.descriptor()
+        change(descriptor)
+        with tempfile.TemporaryDirectory() as tmp:
+            return project.validate(write_project(tmp, descriptor))
+
+    def test_repository_role_is_primary_or_project(self):
+        other = {"name": "other", "url": "https://github.com/example/other", "default_branch": "main"}
+        self.assertEqual(self.errors(lambda d: d["repositories"].append({**other, "role": "project"})), [])
+        errors = self.errors(lambda d: d["repositories"].append({**other, "role": "team"}))
+        self.assertTrue(any("repositories[1].role" in e and "'team'" in e for e in errors), errors)
+
+    def test_exactly_one_primary_repository(self):
+        other = {"name": "other", "url": "https://github.com/example/other", "default_branch": "main", "role": "primary"}
+        for change in (lambda d: d["repositories"].append(other), lambda d: d["repositories"][0].pop("role")):
+            errors = self.errors(change)
+            self.assertTrue(any("exactly one repository needs role primary" in e for e in errors), errors)
+
+    def test_local_target(self):
+        def local(value):
+            return lambda d: d.setdefault("targets", {}).update({"local": value})
+        self.assertEqual(self.errors(local({"harness": "pi", "poll_seconds": 60, "workspace": "~/factory"})), [])
+        cases = {"harness": {"harness": "vim"}, "poll_seconds: must be at least 10": {"poll_seconds": 5},
+                 "unknown-key": {"model": "x"}}
+        for words, value in cases.items():
+            errors = self.errors(local(value))
+            self.assertTrue(any(words in e for e in errors), (words, errors))
+
     def test_defaults_merged(self):
         loaded = project.load(FIXTURE)
         self.assertEqual(loaded["branch_pattern"], "ez/{ticket}-{slug}")

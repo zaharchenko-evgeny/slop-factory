@@ -8,6 +8,7 @@ repositories:
   - name: project
     url: https://github.com/example/project
     default_branch: main
+    role: primary
     environment: read
     domains: [factory]
 environments:
