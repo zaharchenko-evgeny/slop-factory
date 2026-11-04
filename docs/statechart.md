@@ -390,6 +390,14 @@ flowchart LR
     N_finish -- "child-blocked" --> S_blocked
     S_approved --> N_finish
     N_finish -- "conflict +factory:update-cheap" --> S_changes_requested
+    S_draft --> N_finish
+    S_triage --> N_finish
+    S_ready --> N_finish
+    S_in_dev --> N_finish
+    S_in_review --> N_finish
+    S_changes_requested --> N_finish
+    S_blocked --> N_finish
+    S_investigating --> N_finish
     N_finish -- "merged" --> S_done
     S_blocked --> N_notify
     S_needs_answers --> N_notify
