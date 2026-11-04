@@ -46,6 +46,14 @@ class DistillTest(unittest.TestCase):
 
 
 class RoutineNodesTest(unittest.TestCase):
+    def test_knowledge_paths_under_team_root(self):
+        roles = ROOT / "roles"
+        for name in ("retro/role.md", "distill/role.md"):
+            self.assertIn("$FACTORY_TEAM/", (roles / name).read_text())
+        self.assertIn("knowledge` directory under `$FACTORY_TEAM", (roles / "_common.md").read_text())
+        self.assertIn("knowledge` directory under `$FACTORY_TEAM", (roles / "reviewer/role.md").read_text())
+        self.assertIn("relative to the team root (`FACTORY_TEAM`)", (ROOT / "factory/knowledge.py").read_text())
+
     def test_both_schedules_run_on_ops(self):
         n = nodes.load()
         crons = {k: v["cron"] for k, v in n["schedules"].items()}

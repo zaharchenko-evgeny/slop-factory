@@ -13,7 +13,7 @@ focus; stay in yours.
 - An item marked `after the merge` is never a blocking finding; it runs after the PR is merged.
 - `behaviour`: does the change do what the ticket asks? Acceptance checks,
   wrong results, edge cases, malformed input, missing tests.
-- `knowledge`: a distill PR (never required by risk). Check that every claim
+- `knowledge`: a distill PR in the settings repository. Read the `knowledge` directory under `$FACTORY_TEAM` and check that every claim
   matches the code or the ticket thread, nothing duplicates another file,
   `AGENTS.md` stays within `knowledge.agents_md_lines` of
   the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`; count with `wc -l`), and ticket trivia is dropped. A person

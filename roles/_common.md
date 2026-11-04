@@ -1,5 +1,7 @@
 # Factory standing rules
 
+Team knowledge lives in the `knowledge` directory under `$FACTORY_TEAM`; read applicable guidance there before working.
+
 These rules apply to every factory role. Load them first.
 
 ## Context order

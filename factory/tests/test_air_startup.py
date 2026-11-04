@@ -29,7 +29,7 @@ SCRIPT = ROOT / ".air/cloud/startup.sh"
 STUBS = {
     "curl": 'echo curl >> "$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\ncat "$STUB_TAR" > "$out"\n',
     "gh": "",
-    "git": 'echo git "$@" >> "$LOG"\ncase "$*" in\n  "fetch --depth 1 origin "*) [ "${GIT_FAIL:-}" != fetch ] ;;\n  "clone --depth 1 "*) mkdir -p "$5"; echo "engine: ${TEAM_ENGINE:-v0.1.0}" > "$5/${TEAM_FILE:-factory.descriptor.yaml}" ;;\n  "worktree add --detach "*) [ "${GIT_FAIL:-}" != worktree-add ] ;;\n  *) exit 0 ;;\nesac\n',
+    "git": 'echo git "$@" >> "$LOG"\ncase "$*" in\n  "fetch --depth 1 origin "*) [ "${GIT_FAIL:-}" != fetch ] ;;\n  "clone --depth 1 "*) mkdir -p "$5"; echo "engine: ${TEAM_ENGINE:-v0.1.0}" > "$5/${TEAM_FILE:-factory.descriptor.yaml}" ;;\n  "worktree add --detach "*) mkdir -p "$4/factory"; [ "${GIT_FAIL:-}" != worktree-add ] ;;\n  *) exit 0 ;;\nesac\n',
     "uv": 'echo uv "$@" >> "$LOG"\nprintf "#!/bin/sh\\n" > "$HOME/.local/bin/decide"; chmod +x "$HOME/.local/bin/decide"\n',
 }
 
@@ -93,6 +93,12 @@ class StartupTest(unittest.TestCase):
         self.assertIn(f"git clone --depth 1 https://github.com/o/team {team}", log)
         self.assertIn("git fetch --depth 1 origin refs/tags/v0.1.0", log)
         self.assertIn(f'export FACTORY_TEAM="{team}"', (self.home / ".bashrc").read_text())
+
+    def test_team_checkout_exposes_engine_scripts_at_factory_path(self):
+        self.env["FACTORY_TEAM_REPOSITORY"] = "https://github.com/o/team"
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.repo / "factory").resolve(), (self.home / "factory-main/factory").resolve())
 
     def test_environment_setup_hook_runs_common_then_env(self):
         hooks = self.repo / "environments"

@@ -7,6 +7,7 @@
 
 `retro_entries(tracker, tickets, inbox)` writes one entry per `done` ticket not yet in the inbox.
 `distill_plan(entries)` sorts the lessons of inbox entries into one plan.
+Paths in the plan are relative to the team root (`FACTORY_TEAM`), never the engine checkout.
 An entry line is `- [project|factory|engine|noise] <path>: <text>`; `<path>` is the file a project fact or a
 factory lesson belongs in, and is absent for `engine` and `noise`.
 """
