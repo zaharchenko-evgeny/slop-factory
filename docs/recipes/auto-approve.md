@@ -20,6 +20,11 @@ and before the PR is published. It has three layers:
 | 2. Judge | `judgments/auto-approve.yaml` | decisions-kit questions answered by an LLM, with a confidence threshold and an abstain option | no |
 | 3. Combine rule | `factory.descriptor.yaml` `roles.approver` | which layers must pass before a merge, per risk level (#91) | yes |
 
+The rule files are team content: the approver reads them from the team
+repository's root (`$FACTORY_TEAM`; on Air the startup script checks it out
+from `team_repository`). `factory-setup` writes a starting copy into a new
+team repository.
+
 Any `deny` message, any judge answer other than `yes`, a missing tool, or an
 unavailable engine is a reason. The verdict is `auto-approve` only when there
 are no reasons. Otherwise it is `needs-human`.
@@ -164,3 +169,4 @@ The `merge` action:
 - **Kill switches.** The `factory:hold` label on a ticket, or `enabled: false`, sends every PR to a person.
 - **Fail closed.** A missing `conftest` or `decide`, an unavailable engine, or unreadable output is a reason, never an approval.
 - **Two human gates** (ADR-0001) are amended (#91): gate 2 is a human merge unless this policy passes.
+ge unless this policy passes.
