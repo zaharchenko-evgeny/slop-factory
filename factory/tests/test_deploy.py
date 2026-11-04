@@ -71,6 +71,8 @@ for line in sys.stdin:
         db["calls"].append([tool, a])
         if tool not in TOOLS[kind]:
             raise ValueError(f"unexpected {kind} tool: {tool}")
+        if kind == "environment" and tool in ("create_environment", "edit_environment") and "variables" in a:
+            assert isinstance(a["variables"], list), a
         if tool == "list_automations":
             assert a == {"privacy": "private"}, a
             out = {"personal": [{"automationId": i["id"], "name": i["name"]} for i in db["items"]],
@@ -371,6 +373,18 @@ class ApplyTest(unittest.TestCase):
                   [{"id": "e1", "name": "[F] read", "startup": "old", "repository": "https://github.com/o/r"}])
         self.assertEqual(self.run_deploy("--apply"), 0)
         self.assertEqual(self.calls("environment"), [["edit_environment", {"startup": "x", "id": "e1"}]])
+
+    def test_apply_serializes_variables_and_clears_legacy_team_repository(self):
+        self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                       "variables": {"FACTORY_ENV": "read", "FACTORY_TEAM_REPOSITORY": "https://github.com/o/team"}}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual(self.calls("environment"), [["edit_environment", {
+            "variables": [{"key": "FACTORY_ENV", "value": "read"},
+                          {"key": "FACTORY_TEAM_REPOSITORY", "value": ""}],
+            "id": "e1"}]])
+        live = json.loads(self.state["environment"].read_text())["items"][0]
+        self.assertEqual(deploy.environment_detail(live)["variables"], {"FACTORY_ENV": "read"})
 
     def test_environment_update_preserves_unplanned_live_domains(self):
         self.plan["environments"][0]["vm"] = "new"

@@ -34,6 +34,7 @@ import nodes as nodes_mod
 import vocab
 
 ROOT = Path(__file__).resolve().parents[1]
+LEGACY_ENVIRONMENT_VARIABLES = {"FACTORY_TEAM_REPOSITORY"}
 PR_TRIGGERED_NODES = {"review", "join", "fix", "update", "finish", "reopen"}
 BOT_FILTERED = ("review-", "join", "reopen")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
@@ -471,7 +472,10 @@ def environment_detail(x: dict) -> dict:
     if "instanceTypeKey" in x:
         x["vm"] = x.pop("instanceTypeKey") or "default"
     if isinstance(x.get("variables"), list):
-        x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
+        x["variables"] = {v["key"]: v["value"] for v in x["variables"]
+                           if not v.get("isSecret") and v.get("value") not in ("", None)}
+    elif isinstance(x.get("variables"), dict):
+        x["variables"] = {k: v for k, v in x["variables"].items() if v not in ("", None)}
     if "personalSecrets" in x:
         x["secrets"] = [s["name"] for s in x.pop("personalSecrets")]
     return x
@@ -537,6 +541,12 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url: str
         p = {k: v for k, v in (p or {}).items() if k not in ("spec", "additionalRepositories")}
         if action == "update":
             p = {k: v for k, v in p.items() if k in changed}
+        if kind == "environment" and isinstance(p.get("variables"), dict):
+            live_variables = (x or {}).get("variables") or {}
+            variables = [{"key": key, "value": value} for key, value in p["variables"].items()]
+            variables.extend({"key": key, "value": ""} for key in sorted(LEGACY_ENVIRONMENT_VARIABLES)
+                             if key in live_variables and key not in p["variables"])
+            p["variables"] = variables
         tool_action = ("edit" if kind == "environment" else "update") if action == "update" else action
         id_key = "automationId" if kind == "automation" else "id"
         if action == "update":
