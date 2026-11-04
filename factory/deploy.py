@@ -34,6 +34,7 @@ import nodes as nodes_mod
 import vocab
 
 ROOT = Path(__file__).resolve().parents[1]
+# Air cannot delete an environment variable or set it to an empty value: deploy ignores the ones it no longer uses.
 LEGACY_ENVIRONMENT_VARIABLES = {"FACTORY_TEAM_REPOSITORY"}
 PR_TRIGGERED_NODES = {"review", "join", "fix", "update", "finish", "reopen"}
 BOT_FILTERED = ("review-", "join", "reopen")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
@@ -472,10 +473,9 @@ def environment_detail(x: dict) -> dict:
     if "instanceTypeKey" in x:
         x["vm"] = x.pop("instanceTypeKey") or "default"
     if isinstance(x.get("variables"), list):
-        x["variables"] = {v["key"]: v["value"] for v in x["variables"]
-                           if not v.get("isSecret") and v.get("value") not in ("", None)}
-    elif isinstance(x.get("variables"), dict):
-        x["variables"] = {k: v for k, v in x["variables"].items() if v not in ("", None)}
+        x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
+    if isinstance(x.get("variables"), dict):
+        x["variables"] = {k: v for k, v in x["variables"].items() if k not in LEGACY_ENVIRONMENT_VARIABLES}
     if "personalSecrets" in x:
         x["secrets"] = [s["name"] for s in x.pop("personalSecrets")]
     return x
@@ -486,6 +486,10 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
     `plan["renames"]` ({old name: new name}) matches an existing item under its old name, so the update keeps its id."""
     new_to_old = {new: old for old, new in (plan.get("renames") or {}).items()}
     env_ids = {e["name"]: e.get("id") for e in envs}
+    # Air cannot move an environment to another repository: it is replaced, and its automations follow the new one.
+    replaced = {e["name"] for e in plan["environments"] for x in envs
+                if x["name"] == e["name"] and "repository" in x and x["repository"] != e["repository"]}
+    env_ids.update({name: f"(replaced) {name}" for name in replaced})
     out = []
     for kind, planned, have in (("environment", plan["environments"], envs), ("automation", plan["automations"], automations)):
         have = {x["name"]: x for x in have if x["name"].startswith(plan["prefix"])}
@@ -495,7 +499,9 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
             want = {**p, "environmentConfigId": env_ids.get(p.get("environmentConfigId"), p.get("environmentConfigId"))}
             changed = [k for k in p if x is not None and (kind != "environment" or k in x)
                        and not same(k, x.get(k), want[k])]
-            if x is None or changed:
+            if kind == "environment" and p["name"] in replaced:
+                out.append(("replace", kind, p["name"], p, x, ["repository"]))
+            elif x is None or changed:
                 out.append(("create" if x is None else "update", kind, p["name"], p, x, changed))
         out += [("delete", kind, n, None, x, []) for n, x in have.items()]
     return out
@@ -511,7 +517,24 @@ def automation_detail(x: dict) -> dict:
     return x
 
 
-def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url: str, *, backend=None,
+def env_url(x: dict) -> str | None:
+    if {"serviceHost", "organization", "repositoryName"} <= x.keys():
+        return f"https://{x['serviceHost']}/{x['organization']}/{x['repositoryName']}"
+    return x.get("repository") or x.get("repositoryUrl")
+
+
+def list_envs(cloud: Mcp, repository_urls) -> list[dict]:
+    """The environments of every repository in `repository_urls` (one URL or a list), each once."""
+    seen, out = set(), []
+    for url in [repository_urls] if isinstance(repository_urls, str) else repository_urls:
+        for x in _items(cloud.call("list_environments", {"repositoryUrl": url})):
+            if x["id"] not in seen:
+                seen.add(x["id"])
+                out.append(x)
+    return out
+
+
+def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, backend=None,
                additional_names=()) -> tuple[list[dict], list[dict]]:
     listed = automations.call("list_automations", {"privacy": "private"})
     automation_items = listed if isinstance(listed, list) else listed["personal"]
@@ -522,31 +545,42 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url: str, *
             if item["name"] in additional_names:
                 record = backend.get_automation(item["id"])
                 item["additionalRepositories"] = record.get("additionalRepositories") or []
-    env_items = _items(cloud.call("list_environments", {"repositoryUrl": repository_url}))
+    env_items = list_envs(cloud, repository_url)
     env_items = [environment_detail(cloud.call("get_environment", {"id": x["id"]}))
                  for x in env_items if x["name"].startswith(prefix)]
     return automation_items, env_items
 
 
-def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url: str = "", *, backend=None) -> None:
-    """Environments before automations on create and update, after them on delete."""
-    order = {"create": 0, "update": 0, "delete": 1}
-    env_ids = None
+def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", *, backend=None,
+               env_repositories=None) -> None:
+    """Environments before automations on create, update and replace, after them on delete. A replaced environment
+    is created under its new repository, and the old one is deleted once its automations point at the new one.
+    `env_repositories` ({environment name: planned repository URL}) picks the right one of two same-named environments."""
+    order = {"create": 0, "update": 0, "replace": 0, "delete": 1}
+    env_repositories = env_repositories or {}
+    env_ids, retired = None, []
     for action, kind, name, p, x, changed in sorted(changes, key=lambda c: (order[c[0]], (c[1] == "automation") == (c[0] != "delete"))):
         client, noun = (cloud, "environment") if kind == "environment" else (automations, "automation")
         additional = (p or {}).get("additionalRepositories") if kind == "automation" else None
+        if action == "replace":
+            live_domains = x.get("domains") or []
+            args = {"name": p["name"], "repositoryUrl": p["repository"],
+                    "allowedDomains": live_domains + [d for d in p.get("domains") or [] if d not in live_domains],
+                    "variables": [{"key": key, "value": value} for key, value in (p.get("variables") or {}).items()]}
+            args.update({k: x[k] for k in ("networkAccess", "predefinedDomainLists") if x.get(k)})
+            client.call("create_environment", args)
+            retired.append(x["id"])
+            continue
         if p and kind == "automation":  # the environment id exists only after its create
-            env_ids = env_ids or {e["name"]: e["id"] for e in _items(cloud.call("list_environments", {"repositoryUrl": repo_url}))}
+            env_ids = env_ids or {e["name"]: e["id"] for e in list_envs(cloud, repo_url)
+                                  if e["id"] not in retired and (env_url(e) is None or e["name"] not in env_repositories
+                                                                 or env_url(e) == env_repositories[e["name"]])}
             p = {**p, "environmentConfigId": env_ids[p["environmentConfigId"]]}
         p = {k: v for k, v in (p or {}).items() if k not in ("spec", "additionalRepositories")}
         if action == "update":
             p = {k: v for k, v in p.items() if k in changed}
         if kind == "environment" and isinstance(p.get("variables"), dict):
-            live_variables = (x or {}).get("variables") or {}
-            variables = [{"key": key, "value": value} for key, value in p["variables"].items()]
-            variables.extend({"key": key, "value": ""} for key in sorted(LEGACY_ENVIRONMENT_VARIABLES)
-                             if key in live_variables and key not in p["variables"])
-            p["variables"] = variables
+            p["variables"] = [{"key": key, "value": value} for key, value in p["variables"].items()]
         tool_action = ("edit" if kind == "environment" else "update") if action == "update" else action
         id_key = "automationId" if kind == "automation" else "id"
         if action == "update":
@@ -567,6 +601,8 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url: str
                 backend.set_additional(automation_id, additional)
         else:
             client.call(f"delete_{noun}", {id_key: x["id"]})
+    for env_id in retired:
+        cloud.call("delete_environment", {"id": env_id})
 
 
 def canary_body(deploy_id: str) -> str:
@@ -631,10 +667,14 @@ def create_canary(tracker, deploy_id, *, sleep=time.sleep, clock=time.monotonic,
 
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, tracker=None,
            deploy_id=None, sleep=time.sleep, clock=time.monotonic) -> int:
-    repo_url = plan["environments"][0]["repository"] if plan["environments"] else ""
+    # The automations' repositories too: an environment moved off a repository is found there, then replaced.
+    repo_urls = list(dict.fromkeys([e["repository"] for e in plan["environments"]] +
+                                   [a["repository"]["browseUrl"] for a in plan["automations"]
+                                    if isinstance(a.get("repository"), dict) and a["repository"].get("browseUrl")])) or [""]
+    env_repositories = {e["name"]: e["repository"] for e in plan["environments"]}
     additional_names = {a["name"] for a in plan["automations"] if "additionalRepositories" in a}
     backend = backend or (Backend() if additional_names else None)
-    state = read_state(automations, cloud, plan["prefix"], repo_url, backend=backend,
+    state = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                        additional_names=additional_names)
     changes = diff(plan, *state)
     for action, kind, name, _, _, changed in changes:
@@ -647,8 +687,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
     if changes:
-        apply_diff(changes, automations, cloud, repo_url, backend=backend)
-        left = diff(plan, *read_state(automations, cloud, plan["prefix"], repo_url, backend=backend,
+        apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories)
+        left = diff(plan, *read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                                       additional_names=additional_names))
         for action, kind, name, *_ in left:
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
