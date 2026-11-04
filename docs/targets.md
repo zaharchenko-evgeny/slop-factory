@@ -22,6 +22,20 @@ by hand, see the `factory-delivery` skill.
 | Overlap | Duplicate trigger firings are expected; the gate refuses a stale or duplicate event (exit 10) |
 | Logs | Run page in Air plus the run files in the run's workspace |
 
+## Local target (ADR-0017)
+
+The same nodes run on a laptop with no Air account. `targets.local` in `factory.project.yaml` takes
+`harness` (`claude-code`, `codex` or `pi`), `poll_seconds` and `workspace` (default: the directory that holds
+the factory repository checkout).
+
+- `factory --team <factory repo> deploy --target local` checks the harness CLI on `PATH`, a `gh` login, the
+  factory repository checkout, and a checkout of every descriptor repository at `<workspace>/<name>` whose
+  `origin` is that repository. It names each missing item and exits 1. `--apply` writes `.factory/local.json`
+  (harness, login, checkouts, the automations the loop serves).
+- `factory run --local [--once]` (#465) polls GitHub for the events the node triggers name and runs each node
+  through `gate check`, the harness in a worktree, push and `gh pr create` for write nodes, then `gate apply`.
+  Scheduled nodes stay on Air or GitHub Actions.
+
 ## Known Air limits that shape the design
 
 - Trigger filters are exact key/value matches with no OR or NOT; YouTrack values are case-sensitive.

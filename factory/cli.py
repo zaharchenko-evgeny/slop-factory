@@ -197,6 +197,9 @@ def main(argv=None):
         config.set_team(team)
     if cmd in ("check", "apply", "sweep"):
         return gate.main([cmd, *rest])
+    if cmd == "deploy" and rest[:2] == ["--target", "local"]:
+        from local import deploy as local_deploy
+        return local_deploy(rest[2:])
     if cmd == "deploy":
         return deploy.main(rest)
     if cmd == "contracts":

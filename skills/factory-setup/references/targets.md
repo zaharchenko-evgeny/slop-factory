@@ -33,10 +33,11 @@ Selected by `targets.<name>` in the team's effective configuration (`factory.pro
 
 ## Local (`local`)
 
-- Config: `harness`, `skill` (the delivery skill path), `run_dir` and
-  `worktree_dir` (both git-ignored).
-- Apply reads roles and skills from the team repository through the harness adapter
-  (`harnesses.md`) and runs each `roles/<role>/setup.sh`; a failing script is a
-  preflight failure.
-- Each ticket runs in its own worktree and branch; one agent process per role.
-- Plan output: links to create or change, and missing tools or skills.
+- Config (ADR-0017): `targets.local.harness` (`claude-code`, `codex` or `pi`),
+  `poll_seconds` and `workspace`, the directory with a checkout per descriptor
+  repository at `<workspace>/<name>`.
+- Plan: `factory deploy --target local` names each missing item (harness CLI,
+  `gh` login, factory repository checkout, project checkouts) and exits 1.
+- Apply: `--apply` writes `.factory/local.json` (git-ignored) for
+  `factory run --local`, which runs the same nodes and gate as Air.
+- Each ticket runs in its own worktree per repository and the ticket's branch.
