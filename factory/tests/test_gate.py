@@ -1631,5 +1631,92 @@ class RecalibratedBlocksTest(unittest.TestCase):
         self.assertEqual(tr.tickets["7"]["stage"], "needs-answers")
 
 
+class MultiRepositoryTest(unittest.TestCase):
+    """One ticket with a PR in each of two repositories (ADR-0017): the PR facts combine."""
+    ON = {"enabled": True, "max_risk": "high"}
+
+    def pr(self, repo, head, **kw):
+        return {"repo": repo, "pr": len(repo), "head": head, "branch": "ez/7-x", "pr_state": "open", "ci": "green",
+                "round_complete": True, "round_verdict": "approve", "round_head": head, "mergeable": True, **kw}
+
+    def facts(self, *prs, stage="approved"):
+        return MemoryTracker({7: {"stage": stage, "risk": "low", "prs": list(prs)}}).facts(7)
+
+    def test_one_pr_is_unchanged(self):
+        from gate_port import combine_prs
+        one = self.pr("a", "h1", reviews=[{"x": 1}])
+        self.assertEqual(combine_prs([one]), one)
+
+    def test_ticket_repositories_default_listed_and_unknown(self):
+        from gate_port import ticket_repositories
+        self.assertEqual(ticket_repositories("Affected repositories: a.", ["a", "b"], "a"), ["a"])
+        self.assertEqual(ticket_repositories("repositories: a, b\n\n## Scope", ["a", "b"], "a"), ["a", "b"])
+        with self.assertRaisesRegex(ValueError, "unknown repositories: c"):
+            ticket_repositories("repositories: a c", ["a", "b"], "a")
+        with self.assertRaisesRegex(ValueError, "start with the primary repository a"):
+            ticket_repositories("repositories: b, a", ["a", "b"], "a")
+
+    def test_both_approved_and_green_merge(self):
+        facts = self.facts(self.pr("a", "h1"), self.pr("b", "h2"))
+        self.assertEqual((facts["ci"], facts["round_head"], facts["heads"]), ("green", "h1", {"a": "h1", "b": "h2"}))
+        self.assertEqual(gate.sweep_plan(facts, self.ON), ("merge", "merged", {}))
+
+    def test_one_red_pr_makes_the_ticket_red_and_reopens_it(self):
+        facts = self.facts(self.pr("a", "h1"), self.pr("b", "h2", ci="red"))
+        self.assertEqual(facts["ci"], "red")
+        self.assertEqual(gate.sweep_plan(facts, self.ON)[:2], ("reopen", "reopened"))
+
+    def test_a_pr_pushed_after_its_review_reopens_and_never_merges(self):
+        facts = self.facts(self.pr("a", "h1"), self.pr("b", "h3", round_head="h2"))
+        self.assertIsNone(gate.merge_decision(facts, self.ON))
+        self.assertEqual(gate.sweep_plan(facts, self.ON)[:2], ("reopen", "reopened"))
+
+    def test_join_waits_for_every_pr_and_one_change_request_completes_the_round(self):
+        open_round = self.facts(self.pr("a", "h1"), self.pr("b", "h2", round_complete=False, round_verdict=None,
+                                                           round_head=None), stage="in-review")
+        self.assertIsNone(gate.join_decision(open_round))
+        changes = self.facts(self.pr("a", "h1"), self.pr("b", "h2", round_verdict="changes"), stage="in-review")
+        self.assertEqual(gate.join_decision(changes)[0], "changes")
+
+    def test_finish_waits_until_every_pr_merged(self):
+        partly = self.facts(self.pr("a", "h1", pr_state="merged"), self.pr("b", "h2"))
+        self.assertEqual(partly["pr_state"], "open")
+        self.assertNotEqual(gate.sweep_plan(partly, self.ON)[:2], ("finish", "merged"))
+        both = self.facts(self.pr("a", "h1", pr_state="merged"), self.pr("b", "h2", pr_state="merged"))
+        self.assertEqual(gate.sweep_plan(both, self.ON), ("finish", "merged", {}))
+
+    def test_sweep_merges_the_other_repository_first_then_finishes(self):
+        tr = MemoryTracker({7: {"stage": "approved", "risk": "low", "prs": [self.pr("a", "h1"), self.pr("b", "h2")]}})
+        tr.sweep_tickets = lambda stages: [7]
+        gate.sweep(tr, NODES, auto_merge=self.ON)
+        merged = [json.loads(v) for k, v in tr.tickets[7]["log"] if k == "merge"]
+        self.assertEqual(merged, [{"repo": "b", "head": "h2"}, {"repo": "a", "head": "h1"}])
+        self.assertEqual(tr.tickets[7]["stage"], "approved")  # the primary's merge event runs `finish`
+        gate.sweep(tr, NODES, auto_merge=self.ON)
+        self.assertEqual(tr.tickets[7]["stage"], "done")
+
+    def test_a_partly_merged_ticket_merges_only_the_rest_on_the_next_sweep(self):
+        tr = MemoryTracker({7: {"stage": "approved", "risk": "low",
+                                "prs": [self.pr("a", "h1"), self.pr("b", "h2", pr_state="merged")]}})
+        tr.sweep_tickets = lambda stages: [7]
+        gate.sweep(tr, NODES, auto_merge=self.ON)
+        merged = [json.loads(v) for k, v in tr.tickets[7]["log"] if k == "merge"]
+        self.assertEqual(merged, [{"repo": "a", "head": "h1"}])
+
+    def test_ticket_for_pr_finds_single_and_multi_repository_tickets(self):
+        tr = MemoryTracker({7: {"pr": 9}, 8: {"prs": [self.pr("a", "h1"), self.pr("bb", "h2")]}})
+        self.assertEqual([tr.ticket_for_pr(9), tr.ticket_for_pr(9, "o/primary")], [7, 7])
+        self.assertEqual([tr.ticket_for_pr(2, "bb"), tr.ticket_for_pr(2), tr.ticket_for_pr(2, "a")], [8, 8, None])
+
+    def test_check_lists_checkouts_and_refuses_a_stale_head_in_any_repository(self):
+        tr = MemoryTracker({7: {"stage": "approved", "risk": "low",
+                                "prs": [self.pr("a", "h1"), self.pr("b", "h2")]}})
+        code, out = gate.check("merge", {"id": "e1", "ticket": 7, "heads": {"a": "h1", "b": "h2"}}, tr, NODES, CONFIG)
+        self.assertEqual((code, out["checkouts"]), (gate.GO, [{"repo": "a", "branch": "ez/7-x"},
+                                                              {"repo": "b", "branch": "ez/7-x"}]))
+        code, out = gate.check("merge", {"id": "e2", "ticket": 7, "heads": {"a": "h1", "b": "old"}}, tr, NODES, CONFIG)
+        self.assertEqual((code, out["reason"]), (gate.NO_GO, "stale head"))
+
+
 if __name__ == "__main__":
     unittest.main()
