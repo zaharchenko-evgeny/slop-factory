@@ -19,7 +19,8 @@ def ticket_from_ref(ref):
 
 
 def ticket_repositories(body, names, primary):
-    """The repositories a ticket changes (ADR-0017): its `repositories: a, b` body line, else the primary one."""
+    """The repositories a ticket changes (ADR-0017): its `repositories: a, b` body line, else the primary one. The
+    primary comes first: Air wakes a ticket's runs only from its PR, and its merge, the last, wakes `finish`."""
     m = re.search(r"(?m)^repositories:[ \t]*(.+)$", body or "")
     if not m:
         return [primary]
@@ -27,6 +28,8 @@ def ticket_repositories(body, names, primary):
     unknown = [x for x in want if x not in names]
     if unknown or not want:
         raise ValueError(f"ticket names unknown repositories: {', '.join(unknown) or m[1]}")
+    if want[0] != primary:
+        raise ValueError(f"ticket repositories must start with the primary repository {primary}")
     return want
 
 
@@ -171,7 +174,7 @@ class DescriptorPort:
 
 class CodeHost(Protocol):
     """Where the pull requests live; a tracker's tickets need not be on the same host."""
-    def ticket_for_pr(self, number): ...
+    def ticket_for_pr(self, number, repository=None): ...
 
 
 class MemoryTracker(DescriptorPort):
@@ -183,8 +186,9 @@ class MemoryTracker(DescriptorPort):
     def _t(self, ticket):
         return self.tickets[ticket] if ticket in self.tickets else self.tickets[str(ticket)]  # JSON files key by string
 
-    def ticket_for_pr(self, number):
-        return next((int(k) for k, t in self.tickets.items() if t.get("pr") == number), None)
+    def ticket_for_pr(self, number, repository=None):
+        return next((int(k) for k, t in self.tickets.items() if (t.get("pr") == number and (repository is None or not t.get("prs")))
+                     or any(p.get("pr") == number and repository in (None, p.get("repo")) for p in t.get("prs") or [])), None)
 
     def get_stage(self, t):
         return t.get("stage", "none")
@@ -269,6 +273,13 @@ class MemoryTracker(DescriptorPort):
             t["assignees"] = []
             t.setdefault("log", []).append([kind, json.dumps(people, sort_keys=True)])
             return True
+        if kind == "merge" and len(t.get("prs") or []) > 1:  # the other repositories first, the primary last
+            todo = [p for p in t["prs"][1:] + t["prs"][:1] if p.get("pr_state") != "merged"]
+            for p in todo:
+                p["pr_state"] = "merged"
+                t.setdefault("log", []).append([kind, json.dumps({"repo": p["repo"], "head": (effect.get("heads") or {}).get(p["repo"])},
+                                                                  sort_keys=True)])
+            return bool(todo)
         # label, unlabel, comment, review, create-issues, merge, join: a set of applied values
         log = t.setdefault("log", [])
         entry = [kind, json.dumps(value, sort_keys=True)]

@@ -115,6 +115,12 @@ class MissingNumber(Exception):
     pass
 
 
+def pr_ticket(code_host, number, repository=None):
+    """The ticket of PR `number`, looked up in the payload's repository when it names one (ADR-0017)."""
+    name = repository.get("full_name") if isinstance(repository, dict) else None
+    return code_host.ticket_for_pr(number, name) if name else code_host.ticket_for_pr(number)
+
+
 def from_trigger(d, code_host=None):
     """Extract the event kind and ticket number; tracker facts supply mutable metadata."""
     event_name = d.get("eventType") or d.get("event_name")
@@ -131,7 +137,7 @@ def from_trigger(d, code_host=None):
         raise MissingNumber("payload has no issue or PR number")
     name = "pull_request_review" if review and is_pr else "pull_request" if is_pr else "issues"
     if is_pr:
-        ticket = code_host.ticket_for_pr(number) if code_host else None
+        ticket = pr_ticket(code_host, number, d.get("repository")) if code_host else None
         if ticket is None and not isinstance(code_host, GitHubCodeHost):  # a live lookup is the only source for GitHub
             ticket = ticket_from_ref(((pr or {}).get("head") or {}).get("ref")) or ticket_from_ref((pr or {}).get("title"))
         if ticket is None:
@@ -554,6 +560,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             e["tier"] = payload.get("tier")
         if e["kind"] in ("merge", "update-branch"):
             e["head"] = facts.get("head")  # the head the gates judged
+            if facts.get("heads"):
+                e["heads"] = facts["heads"]  # one per repository of a multi-repository ticket
         if e["kind"] == "comment" and payload.get("run_id"):
             e["run_id"] = payload["run_id"]
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
@@ -1024,7 +1032,7 @@ def main(argv):
                             closed_ticket = issue
                     else:
                         pr_number = (pr_payload or raw).get("number")
-                        ref_ticket = code_host.ticket_for_pr(pr_number) if code_host else None
+                        ref_ticket = pr_ticket(code_host, pr_number, raw.get("repository")) if code_host else None
                         if ref_ticket is None:
                             raise ValueError("PR head ref does not identify an ez/<ticket> branch")
                         issue = ref_ticket
