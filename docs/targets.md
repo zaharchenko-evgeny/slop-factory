@@ -41,6 +41,9 @@ the factory repository checkout).
 - Seen events are kept in `.factory/local/seen.json`. The first run takes earlier merges, closes and pushes as
   history and acts only on the labels that are set now. `--dry-run` lists the events without running or
   recording them.
+- A run that fails before the harness starts (checkout, `factory begin`, a script's sweep) is tried again on
+  the next polls, three runs in all. A run whose harness started is not repeated, as on Air; a failed push or
+  `gh pr create` is printed in the run's result. A GitHub read that fails skips the poll (`--once` exits 1).
 - Not polled: scheduled nodes (they stay on Air or GitHub Actions), `pull_request_review.submitted` and
   `issues.comment`. The reconcile sweep catches what those would have woken.
 

@@ -33,6 +33,7 @@ from gate_port import ticket_from_ref  # noqa: E402
 
 HARNESS_CLI = {"claude-code": "claude", "codex": "codex", "pi": "pi"}
 STATE, SEEN, WORKTREES = Path(".factory/local.json"), Path(".factory/local/seen.json"), Path(".factory/worktrees")
+TRIES_FILE = Path(".factory/local/tries.json")  # failed runs per event that are tried again
 FACTORY = ["uv", "run", "--quiet", str(Path(__file__).resolve().parent / "cli.py")]
 WRITE_OUTPUTS = ("create-pr", "push-to-source")
 
@@ -161,8 +162,9 @@ def harness_argv(harness, model, write, prompt):
     if harness == "claude-code":
         tools = "Bash,Read,Edit,Write,Grep,Glob" if write else \
             "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(factory:*)"
-        return ["claude", "-p", "--output-format", "json", "--model", model.split("/")[-1], "--allowedTools", tools,
-                *(["--permission-mode", "acceptEdits"] if write else []), prompt]
+        # the prompt comes first: `--allowedTools` takes every following word that is not an option
+        return ["claude", "-p", prompt, "--output-format", "json", "--model", model.split("/")[-1], "--allowedTools", tools,
+                *(["--permission-mode", "acceptEdits"] if write else [])]
     if harness == "codex":  # `factory begin` and `end` call GitHub, so even a reviewer's sandbox needs the network
         return ["codex", "exec", "--json", "-m", model.split("/")[-1], "--sandbox", "workspace-write",
                 "-c", "sandbox_workspace_write.network_access=true", prompt]
@@ -170,10 +172,14 @@ def harness_argv(harness, model, write, prompt):
 
 
 def worktree(run, checkout, path, start, branch=None):
-    """A worktree of `checkout` at `path` on `branch` (from `start`), or detached at `start` for a read-only node."""
+    """A worktree of `checkout` at `path` on `branch` (from `start`), or detached at `start` for a read-only node.
+    Returns git's error, or "" when the worktree is ready."""
     if not path.exists():
-        sh(run, ["git", "-C", str(checkout), "worktree", "add", "--detach", str(path), start])
-    sh(run, ["git", "-C", str(path), "checkout", "--quiet", *(["-B", branch] if branch else ["--detach"]), start])
+        done = sh(run, ["git", "-C", str(checkout), "worktree", "add", "--detach", str(path), start])
+        if done.returncode:
+            return done.stderr.strip() or "git worktree add failed"
+    done = sh(run, ["git", "-C", str(path), "checkout", "--quiet", *(["-B", branch] if branch else ["--detach"]), start])
+    return done.stderr.strip() or "git checkout failed" if done.returncode else ""
 
 
 def run_event(entry, payload, state, config, graph, run):
@@ -191,7 +197,9 @@ def run_event(entry, payload, state, config, graph, run):
     ticket = ticket_from_ref((pr.get("head") or {}).get("ref")) or issue.get("number") or pr.get("number")
     trees = {primary: (WORKTREES / str(ticket) / primary).resolve()}
     sh(run, ["git", "-C", state["checkouts"][primary], "fetch", "--quiet", "origin"])
-    worktree(run, state["checkouts"][primary], trees[primary], f"origin/{repos[primary]['default_branch']}")
+    error = worktree(run, state["checkouts"][primary], trees[primary], f"origin/{repos[primary]['default_branch']}")
+    if error:
+        return f"checkout failed: {error[-300:]}"
     begin = sh(run, [*FACTORY, *team, "begin", entry["automation"], str(event.resolve())], cwd=trees[primary])
     if begin.returncode == 10:
         return "no-go"
@@ -204,9 +212,11 @@ def run_event(entry, payload, state, config, graph, run):
     for name, path in trees.items():
         checkout = state["checkouts"][name]
         sh(run, ["git", "-C", checkout, "fetch", "--quiet", "origin"])
-        remote = sh(run, ["git", "-C", checkout, "ls-remote", "--heads", "origin", branch]).stdout.strip()
-        worktree(run, checkout, path, f"origin/{branch}" if remote else f"origin/{repos[name]['default_branch']}",
-                 branch if write else None)
+        remote = sh(run, ["git", "-C", checkout, "ls-remote", "--heads", "origin", "--", branch]).stdout.strip()
+        error = worktree(run, checkout, path, f"origin/{branch}" if remote else f"origin/{repos[name]['default_branch']}",
+                         branch if write else None)
+        if error:
+            return f"checkout failed: {error[-300:]}"
     others = "".join(f"\n- `{name}`: `{path}`" for name, path in trees.items() if name != primary)
     prompt = deploy_mod.agent_prompt(entry["node"], node, config, entry["automation"], entry["focus"]) + (
         f"\n\nThe ticket's other repositories are checked out on its branch:{others}" if others else "")
@@ -221,14 +231,31 @@ def run_event(entry, payload, state, config, graph, run):
         base = repos[name]["default_branch"]
         if sh(run, ["git", "-C", str(path), "rev-list", "--count", f"origin/{base}..HEAD"]).stdout.strip() in ("", "0"):
             continue  # nothing committed in this repository
-        sh(run, ["git", "-C", str(path), "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}"])
+        push = sh(run, ["git", "-C", str(path), "push", "--quiet", "origin", f"HEAD:refs/heads/{branch}"])
+        if push.returncode:
+            return f"push failed: {push.stderr.strip()[-300:]}"
         full = "/".join(repos[name]["url"].rstrip("/").split("/")[-2:])
         if entry["output"] == "create-pr" and not lines(run, "pr", "list", "-R", full, "--head", branch, "--state", "open",
                                                          "--json", "number", "--jq", ".[]"):
             closes = f"Closes #{ticket}" if full == config["tracker"]["repository"] else f"Refs {config['tracker']['repository']}#{ticket}"
-            sh(run, ["gh", "pr", "create", "-R", full, "--head", branch, "--base", base,
-                     "--title", f"#{ticket} {out['context'].get('title', '')}".strip(), "--body", closes])
+            create = sh(run, ["gh", "pr", "create", "-R", full, "--head", branch, "--base", base,
+                              "--title", f"#{ticket} {out['context'].get('title', '')}".strip(), "--body", closes])
+            if create.returncode:
+                return f"pr create failed: {create.stderr.strip()[-300:]}"
     return "pushed"
+
+
+# Failures before any harness started are tried on the next polls, up to TRIES runs in all; a run that started
+# is not repeated, as on Air (reconcile adds the label again, which is a new event).
+RETRIED, TRIES = ("begin failed", "checkout failed", "sweep failed", "error"), 3
+
+
+def save(path, value):
+    """Write a JSON file atomically, so a crash never leaves a broken one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(value))
+    os.replace(tmp, path)
 
 
 def main(argv, run=subprocess.run, sleep=time.sleep):
@@ -241,8 +268,17 @@ def main(argv, run=subprocess.run, sleep=time.sleep):
     state, config, graph = json.loads(STATE.read_text()), config_mod.load(), nodes_mod.load()
     plan = plan_local(graph, config)
     seen, first = (set(json.loads(SEEN.read_text())), False) if SEEN.exists() else (set(), True)
+    tries = json.loads(TRIES_FILE.read_text()) if TRIES_FILE.exists() else {}
     while True:
-        for event_id, entry, payload in poll(plan, config["tracker"]["repository"], run):
+        try:
+            events = poll(plan, config["tracker"]["repository"], run)
+        except (RuntimeError, ValueError) as e:  # GitHub unreachable or rate limited: try again next poll
+            print(json.dumps({"poll failed": str(e)[-300:]}), flush=True)
+            if "--once" in argv:
+                return 1
+            sleep(state.get("poll_seconds", 60))
+            continue
+        for event_id, entry, payload in events:
             key = f"{entry['automation']}:{event_id}"
             if key in seen:
                 continue
@@ -252,14 +288,21 @@ def main(argv, run=subprocess.run, sleep=time.sleep):
             if "--dry-run" in argv:
                 print(json.dumps({"would_run": entry["automation"], "event": event_id}))
                 continue
-            result = run_event(entry, payload, state, config, graph, run)
+            try:
+                result = run_event(entry, payload, state, config, graph, run)
+            except (RuntimeError, ValueError, KeyError, OSError) as e:
+                result = f"error: {e}"[-300:]
             print(json.dumps({"ran": entry["automation"], "event": event_id, "result": result}), flush=True)
+            tries[key] = tries.pop(key, 0) + 1
+            if result.startswith(RETRIED) and tries[key] < TRIES:
+                save(TRIES_FILE, tries)
+                continue
+            tries.pop(key)
             seen.add(key)
-            SEEN.parent.mkdir(parents=True, exist_ok=True)
-            SEEN.write_text(json.dumps(sorted(seen)))
+            save(TRIES_FILE, tries)
+            save(SEEN, sorted(seen))
         if first and "--dry-run" not in argv:  # the baseline holds even when no label event ran
-            SEEN.parent.mkdir(parents=True, exist_ok=True)
-            SEEN.write_text(json.dumps(sorted(seen)))
+            save(SEEN, sorted(seen))
         first = False
         if "--once" in argv:
             return 0

@@ -128,8 +128,9 @@ class PlanLocalTest(unittest.TestCase):
 class GitHub:
     """The `gh`, `git`, `factory` and harness calls of one `factory run --local` pass; records them in order."""
 
-    def __init__(self, issues=None, prs=None, merged=(), begin_code=0):
+    def __init__(self, issues=None, prs=None, merged=(), begin_code=0, push_code=0, gh_down=False):
         self.issues, self.prs, self.merged, self.begin_code, self.calls = issues or {}, prs or {}, list(merged), begin_code, []
+        self.push_code, self.gh_down = push_code, gh_down
 
     def kind(self, argv):
         if argv[:2] == ["gh", "pr"] and argv[2] == "create":
@@ -152,6 +153,10 @@ class GitHub:
         self.calls.append((self.kind(argv), argv))
         ok = lambda out="": subprocess.CompletedProcess(argv, 0, out, "")  # noqa: E731
         rows = lambda items: ok("\n".join(json.dumps(x) for x in items))  # noqa: E731
+        if self.gh_down and argv[0] == "gh":
+            return subprocess.CompletedProcess(argv, 1, "", "API rate limit exceeded")
+        if argv[0] == "git" and "push" in argv and self.push_code:
+            return subprocess.CompletedProcess(argv, self.push_code, "", "rejected")
         if argv[:3] in (["gh", "issue", "list"], ["gh", "pr", "list"]):
             if "--label" in argv:
                 return rows((self.issues if argv[1] == "issue" else self.prs).get(argv[argv.index("--label") + 1], []))
@@ -197,7 +202,7 @@ class RunLocalTest(unittest.TestCase):
         self.assertEqual(kinds, ["begin", "harness", "push", "pr-create"])
         harness = next(a for k, a in gh.calls if k == "harness")
         self.assertIn("acceptEdits", harness)
-        self.assertIn("`factory begin implement-mid --issue <the issue number>`", harness[-1])  # the Air prompt
+        self.assertIn("`factory begin implement-mid --issue <the issue number>`", harness[2])  # the Air prompt
         self.assertIn(["-B", "ez/7-add-x"], [a[a.index("-B"):a.index("-B") + 2] for k, a in gh.calls if k == "checkout" and "-B" in a])
         create = next(a for k, a in gh.calls if k == "pr-create")
         self.assertEqual(create[create.index("--head") + 1], "ez/7-add-x")
@@ -217,6 +222,28 @@ class RunLocalTest(unittest.TestCase):
         self.assertNotIn("push", gh.kinds())
         self.assertNotIn("acceptEdits", next(a for k, a in gh.calls if k == "harness"))
         self.assertTrue(all("--detach" in a for k, a in gh.calls if k == "checkout"))
+
+    def test_the_claude_prompt_is_not_taken_as_an_allowed_tool(self):
+        for write in (False, True):
+            argv = local.harness_argv("claude-code", "anthropic/claude-x", write, "PROMPT")
+            self.assertEqual(argv[:3], ["claude", "-p", "PROMPT"])
+            self.assertEqual(argv.count("PROMPT"), 1)
+
+    def test_a_failed_push_is_reported_and_opens_no_pr(self):
+        gh = GitHub(issues={"factory:implement-mid": [{"number": 7}]}, push_code=1)
+        self.assertTrue(self.run_local(gh)[1][0]["result"].startswith("push failed: rejected"))
+        self.assertNotIn("pr-create", gh.kinds())
+
+    def test_a_failed_begin_is_tried_again_up_to_three_runs(self):
+        results = []
+        for _ in range(4):
+            results += [o["result"][:12] for o in self.run_local(GitHub(issues={"factory:implement-mid": [{"number": 7}]}, begin_code=2))[1]]
+        self.assertEqual(results, ["begin failed"] * 3)
+
+    def test_github_down_fails_the_poll_and_records_nothing(self):
+        code, out = self.run_local(GitHub(gh_down=True))
+        self.assertEqual((code, list(out[0])), (1, ["poll failed"]))
+        self.assertFalse(Path(".factory/local/seen.json").exists())
 
     def test_a_merged_pr_runs_the_finish_sweep_but_the_first_run_takes_old_merges_as_history(self):
         old = {"number": 4, "headRefName": "ez/6-old", "headRefOid": "h0"}
