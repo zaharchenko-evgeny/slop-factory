@@ -555,8 +555,8 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, bac
 def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", *, backend=None,
                env_repositories=None) -> None:
     """Environments before automations on create, update and replace, after them on delete. A replaced environment
-    is created under its new repository (the old one renamed aside first: Air names are unique), and the old one is
-    deleted once its automations point at the new one.
+    is created under its new repository; the old one is renamed `retired <name>` first (Air names are unique) and left
+    for a person to delete in the Air UI, since the Air MCP has no environment delete.
     `env_repositories` ({environment name: planned repository URL}) picks the right one of two same-named environments."""
     order = {"create": 0, "update": 0, "replace": 0, "delete": 1}
     env_repositories = env_repositories or {}
@@ -573,6 +573,8 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
             client.call("edit_environment", {"id": x["id"], "name": f"retired {x['name']}"})
             client.call("create_environment", args)
             retired.append(x["id"])
+            print(f"retired environment {x['name']} ({x['id']}) is renamed 'retired {x['name']}': delete it in the Air UI",
+                  file=sys.stderr)
             continue
         if p and kind == "automation":  # the environment id exists only after its create
             env_ids = env_ids or {e["name"]: e["id"] for e in list_envs(cloud, repo_url)
@@ -606,8 +608,6 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
                 backend.set_additional(automation_id, additional)
         else:
             client.call(f"delete_{noun}", {id_key: x["id"]})
-    for env_id in retired:
-        cloud.call("delete_environment", {"id": env_id})
 
 
 def canary_body(deploy_id: str) -> str:

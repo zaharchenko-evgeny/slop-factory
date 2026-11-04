@@ -413,8 +413,9 @@ class ApplyTest(unittest.TestCase):
             ["create_environment", {"name": "[F] read", "repositoryUrl": "https://github.com/o/team",
                                     "allowedDomains": ["github.com", "pypi.org"],
                                     "variables": [{"key": "FACTORY_ENV", "value": "read"}],
-                                    "networkAccess": "RESTRICTED"}],
-            ["delete_environment", {"id": "e1"}]])
+                                    "networkAccess": "RESTRICTED"}]])
+        live = {i["id"]: i["name"] for i in json.loads(self.state["environment"].read_text())["items"]}
+        self.assertEqual(live, {"e1": "retired [F] read", "environment-1": "[F] read"})
         self.assertEqual(self.calls("automation"), [["update_automation", {"environmentConfigId": "environment-1",
                                                                          "automationId": "a1"}]])
         self.assertEqual(self.run_deploy("--dry-run"), 0)
