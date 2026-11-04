@@ -5,7 +5,7 @@ description: Run one factory node by hand on a GitHub ticket or PR — the gate 
 
 # Factory delivery (one node by hand)
 
-On Air each node is a `[factory:<node>]` automation (`workflows/nodes.yaml`,
+On Air each node is a `[factory:<node>]` automation (`engine/nodes.yaml`,
 [ADR-0014](../../../docs/adr/0014-node-model.md)). This skill does the same
 steps yourself, for one node and one ticket. The gate alone changes labels,
 posts reviews and comments, and moves the stage; you never do.

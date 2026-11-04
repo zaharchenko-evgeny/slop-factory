@@ -141,7 +141,7 @@ jobs:
       - run: pipx install uv
       - name: Start the domain allowlist proxy
         run: |
-          domains=$(uv run --quiet --with pyyaml python -c "import yaml; print(*{d for e in yaml.safe_load(open('workflows/nodes.yaml'))['environments'].values() for d in e.get('domains', [])})")
+          domains=$(uv run --quiet --with pyyaml python -c "import yaml; print(*{d for e in yaml.safe_load(open('engine/nodes.yaml'))['environments'].values() for d in e.get('domains', [])})")
           touch "/tmp/air-like-denied.log"
           chmod 666 "/tmp/air-like-denied.log"
           # The proxy runs as `nobody`; the container user (uid 1500, not the runner's own uid) may reach only loopback, so direct downloads fail.

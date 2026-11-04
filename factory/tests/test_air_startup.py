@@ -207,7 +207,7 @@ class StartupTest(unittest.TestCase):
         self.assertNotIn("to-tickets", out)
 
     def test_every_node_role_is_installed_by_its_environment(self):
-        graph = yaml.safe_load((ROOT / "workflows/nodes.yaml").read_text())["nodes"]
+        graph = yaml.safe_load((ROOT / "engine/nodes.yaml").read_text())["nodes"]
         for env in ("read", "write", "ops"):
             out = self.dry_run(env).splitlines()[0]
             for n in graph.values():

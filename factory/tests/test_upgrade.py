@@ -77,7 +77,7 @@ class UpgradeTest(unittest.TestCase):
 
     def test_template_matches_migrate(self):
         """The generator check of template/: its generated parts equal a fresh `--generate-template`."""
-        nodes = yaml.safe_load((REPO / "workflows/nodes.yaml").read_text())
+        nodes = yaml.safe_load((REPO / config.NODES).read_text())
         descriptor, delivery = upgrade.generated((TEMPLATE / config.PROJECT_DESCRIPTOR).read_text(), nodes)
         self.assertEqual((TEMPLATE / config.PROJECT_DESCRIPTOR).read_text(), descriptor)
         self.assertEqual((TEMPLATE / workflow.WORKFLOW_PATH).read_text(), delivery)

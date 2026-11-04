@@ -29,7 +29,7 @@ change, whether you are a person, a pi session or a factory role.
    400 lines, or 3 repositories, split the ticket into linked sub-issues before
    starting. Deliver the first slice.
 4. **Deliver through the factory.** The factory is the node list in
-   [workflows/nodes.yaml](workflows/nodes.yaml) ([ADR-0014](docs/adr/0014-node-model.md)),
+   [engine/nodes.yaml](engine/nodes.yaml) ([ADR-0014](docs/adr/0014-node-model.md)),
    deployed as `[factory:<node>]` Air automations by the `factory-deploy` skill.
    Each automation's agent runs `uv run factory/gate.py check`, does its
    role's work, writes the handoff to the `handoff_path` that `check`

@@ -12,6 +12,7 @@ import yaml
 
 DESCRIPTOR = "factory.descriptor.yaml"
 PROJECT_DESCRIPTOR = "factory.project.yaml"
+NODES = "engine/nodes.yaml"
 _HERE = Path(__file__).resolve().parents[1]
 
 
@@ -20,7 +21,7 @@ def _find_engine():
     if os.environ.get("FACTORY_ENGINE"):
         return Path(os.environ["FACTORY_ENGINE"])
     installed = Path(sys.prefix) / "share/factory-engine"
-    return _HERE if (_HERE / "workflows/nodes.yaml").exists() or not installed.exists() else installed
+    return _HERE if (_HERE / NODES).exists() or not installed.exists() else installed
 
 
 ENGINE_ROOT = _find_engine()

@@ -8,7 +8,7 @@
 Usage: upgrade.py --diff [--from REF|DIR]   unified diff, template at REF (default: the project's `engine`) → installed,
                                             for the paths the project has; names each file the project changed
        upgrade.py --apply PATH              copy the installed template's PATH into the project
-       upgrade.py --generate-template       rewrite template/'s generated parts from workflows/nodes.yaml
+       upgrade.py --generate-template       rewrite template/'s generated parts from engine/nodes.yaml
 Nothing in the project is written without --apply.
 """
 import argparse
@@ -77,7 +77,7 @@ def generated(header_text, nodes):
 
 def generate_template():
     root = template_root()
-    nodes = yaml.safe_load((config.engine_root() / "workflows/nodes.yaml").read_text())
+    nodes = yaml.safe_load((config.engine_root() / config.NODES).read_text())
     descriptor, delivery = generated((root / config.PROJECT_DESCRIPTOR).read_text(), nodes)
     (root / config.PROJECT_DESCRIPTOR).write_text(descriptor)
     (root / workflow.WORKFLOW_PATH).parent.mkdir(parents=True, exist_ok=True)

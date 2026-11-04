@@ -1085,7 +1085,7 @@ class StaleSweepTest(unittest.TestCase):
 
 
 class SpecTest(unittest.TestCase):
-    """`--spec`: check and apply need the automation's spec, never workflows/nodes.yaml."""
+    """`--spec`: check and apply need the automation's spec, never engine/nodes.yaml."""
 
     def run_gate(self, d, *args, stage="in-dev"):
         import contextlib
@@ -1223,7 +1223,7 @@ class ConflictTest(unittest.TestCase):
 
     def test_unresolvable_update_blocks_with_files(self):
         tr = MemoryTracker({7: {"stage": "changes-requested", "attrs": ["factory:update-cheap"]}})
-        reason = "[factory] Blocked: merge conflict in factory/gate.py, workflows/nodes.yaml"
+        reason = "[factory] Blocked: merge conflict in factory/gate.py, engine/nodes.yaml"
         code, _ = gate.apply("update", "unresolvable", {"ticket": 7, "event": "e", "reason": reason}, tr, NODES)
         self.assertEqual((code, tr.tickets[7]["stage"]), (0, "blocked"))
         self.assertIn(["comment", json.dumps(reason)], tr.tickets[7]["log"])

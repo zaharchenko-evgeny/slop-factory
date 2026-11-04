@@ -55,6 +55,16 @@ class TeamRootTest(unittest.TestCase):
                     mock.patch.dict(config.os.environ, {"FACTORY_ENGINE": ""}):
                 self.assertEqual(config._find_engine(), Path(tmp) / "share/factory-engine")
 
+    def test_engine_root_is_discovered_from_engine_node_graph(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            root, prefix = Path(tmp) / "repo", Path(tmp) / "prefix"
+            (root / "engine").mkdir(parents=True)
+            (root / "engine/nodes.yaml").touch()
+            (prefix / "share/factory-engine").mkdir(parents=True)
+            with mock.patch.object(config, "_HERE", root), mock.patch.object(config.sys, "prefix", str(prefix)):
+                self.assertEqual(config._find_engine(), root)
+
     def test_factory_team_env_sets_team_root(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as tmp:
