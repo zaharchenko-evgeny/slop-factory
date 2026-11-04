@@ -382,8 +382,9 @@ class Mcp:
 class Backend:
     """The fields not yet exposed by air-automations MCP, through the Air automation REST API."""
 
-    SPEC_FIELDS = ("name", "repository", "branch", "prompt", "agentAndModel", "triggers", "triggerVcs",
-                   "outputDescription", "outboundWebhooks", "mcpConnectors", "environmentConfigId", "projectId")
+    SPEC_FIELDS = ("name", "repository", "branch", "prompt", "agentAndModel", "triggers", "triggerVcs", "kind",
+                   "executor", "botDevSettings", "paused", "outputDescription", "outboundWebhooks", "mcpConnectors",
+                   "environmentConfigId", "projectId")
 
     def __init__(self, base_url: str | None = None, token: str | None = None, run=subprocess.run):
         api_url = base_url or os.environ.get("FACTORY_AIR_AUTOMATIONS_API_URL")
@@ -423,7 +424,7 @@ class Backend:
         body = {key: current[key] for key in self.SPEC_FIELDS if key in current}
         if "triggers" in body:
             body["triggers"] = [{key: value for key, value in trigger.items()
-                                 if key not in ("triggerId", "isEnabled", "automationSnapshotId")}
+                                 if key not in ("triggerId", "automationSnapshotId")}
                                 for trigger in body["triggers"]]
         body.update({"automationId": current.get("automationId", automation_id),
                      "additionalRepositories": repositories})

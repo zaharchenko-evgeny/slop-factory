@@ -450,7 +450,9 @@ class BackendTest(unittest.TestCase):
         existing = {"automationId": "a1", "name": "[F] a", "repository": {"fullName": "o/project"},
                     "branch": "main", "prompt": "keep this", "environmentConfigId": "e1",
                     "agentAndModel": {"id": "model"}, "triggerVcs": [{"outputBehaviour": "create-pr"}],
-                    "triggers": [{"triggerId": "t1", "isEnabled": True, "automationSnapshotId": "snapshot",
+                    "kind": "automation", "executor": {"type": "agent"}, "botDevSettings": {"branch": "main"},
+                    "paused": False,
+                    "triggers": [{"triggerId": "t1", "isEnabled": False, "automationSnapshotId": "snapshot",
                                   "triggerType": "EVENT", "source": "github", "eventType": "issues.labeled",
                                   "filters": {"label": "factory:ready"}}],
                     "outboundWebhooks": [], "mcpConnectors": [], "outputDescription": "keep output",
@@ -477,7 +479,7 @@ class BackendTest(unittest.TestCase):
         body = json.loads(post_req.data)
         expected = {key: existing[key] for key in deploy.Backend.SPEC_FIELDS}
         expected["triggers"] = [{key: value for key, value in trigger.items()
-                                  if key not in ("triggerId", "isEnabled", "automationSnapshotId")}
+                                  if key not in ("triggerId", "automationSnapshotId")}
                                  for trigger in existing["triggers"]]
         expected.update({"automationId": "a1", "additionalRepositories": target})
         self.assertEqual(body, expected)
