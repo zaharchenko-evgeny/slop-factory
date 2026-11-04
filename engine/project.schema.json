@@ -46,7 +46,7 @@
           "name": {"type": "string"},
           "url": {"type": "string"},
           "default_branch": {"type": "string"},
-          "role": {"type": "string"},
+          "role": {"enum": ["primary", "project"]},
           "environment": {"type": "string"},
           "domains": {"type": "array", "items": {"type": "string"}},
           "secrets": {"type": "array", "items": {"type": "string"}}
@@ -95,7 +95,21 @@
     "commit_prefix": {"type": "string"},
     "notify": {"type": "object"},
     "reviews": {"type": "object"},
-    "targets": {"type": "object"},
+    "targets": {
+      "type": "object",
+      "properties": {
+        "air": {"type": "object"},
+        "local": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "harness": {"enum": ["claude-code", "codex", "pi"]},
+            "poll_seconds": {"type": "integer"},
+            "workspace": {"type": "string"}
+          }
+        }
+      }
+    },
     "defaults": {"type": "object"},
     "models": {"type": "object", "additionalProperties": {"type": "string"}},
     "roles": {"type": ["string", "object"]},

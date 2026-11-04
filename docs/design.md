@@ -110,7 +110,7 @@ selected in `factory.yaml`.
 | --- | --- | --- |
 | tracker | YouTrack (v1), GitHub Issues | Map stages `draft → ready → in-dev → in-review → changes-requested → approved → done`, plus `blocked` (needs a human answer) and `failed`, to fields, states, tags or labels |
 | channel | Slack Air Mate, local session, Air cloud session | Receive a request, load the router, hand off only through the tracker or a direct run |
-| target | Air, local | Plan (diff), apply after approval, prune factory-owned items only |
+| target | Air, local (ADR-0017) | Plan (diff), apply after approval, prune factory-owned items only; both read the same workflow and roles from the factory repository |
 | harness | Claude, Codex, pi | Render a role into the harness's agent or skill format |
 | checks | jscpd, accio, repository test commands, tools from [dev-quality-gates](https://github.com/mokevnin/dev-quality-gates) | Stage `design` or `pre-review`; mode `advisory` or `blocking`; non-zero exit on violation |
 
@@ -157,6 +157,12 @@ per repository.
 - A ticket names every affected repository. The developer runs in a
   multi-repo environment and opens one PR per repository, each linked to the
   ticket. The ticket reaches `done` when all its PRs are merged.
+- Repository roles (ADR-0017): `factory.project.yaml` marks exactly one
+  repository `role: primary`; the others are `role: project`. An Air project
+  automation runs in the primary repository and checks out the other project
+  repositories and the factory repository (read-only) as additional
+  repositories. Retro, distill, the knowledge review and the ops nodes run in
+  the factory repository.
 - Base branch: ticket override (`base:<branch>`) or the repository default in
   `factory.yaml`.
 - Branch name pattern from `factory.yaml`, default `ez/{ticket}-{slug}`.
@@ -319,7 +325,7 @@ See the [auto-approve and auto-merge recipe](recipes/auto-approve.md) for how to
 | Topic | What to verify |
 | --- | --- |
 | Workflows in projects | Whether an Air workflow can run in the project, or only in the personal workspace |
-| Multi-repo automations | Whether automations accept a multi-repo environment and push to additional repositories; fallback is one environment per repository with read-only clones |
+| Multi-repo automations | Whether automations push to additional repositories (#459 probes it); fallback is the developer pushing extra branches itself, or one repository per ticket |
 | Branch protection | Whether a bot approval can satisfy each repository's rules; own-PR approval is not allowed by GitHub |
 | Air Mate | Starting runs from Slack depends on AREX-148; until then the router creates a ticket |
 | Air GitHub app | Access to the personal factory repository |

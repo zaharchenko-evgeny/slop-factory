@@ -5,6 +5,7 @@ engine: "{{ENGINE_REF}}"
 project:
   name: "{{PROJECT_NAME}}"
 team_repository: "{{TEAM_REPOSITORY_URL}}"
+# Exactly one repository has role primary; list other project repositories with role project (ADR-0017).
 repositories:
   - name: "{{REPOSITORY_NAME}}"
     url: "{{REPOSITORY_URL}}"

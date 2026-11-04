@@ -1,6 +1,24 @@
 # Implementation plan
 
-## Current: project descriptor and workflow (ADR-0016)
+## Current: engine as dependency, several repositories and a local target (ADR-0017)
+
+[ADR-0017](adr/0017-engine-dependency-factory-source.md) makes the factory
+repository the source of truth and the engine a pinned dependency. Parent:
+#460. Each ticket's body is its spec. Blockers are GitHub issue dependencies.
+
+| Step | Ticket | Delivers | Blocked by |
+| --- | --- | --- | --- |
+| 1 | #458 | ADR-0017; repository roles and `targets.local` in the schema | — |
+| 2 | #459 | Air automations check out every project repository and the read-only factory repository | #458 |
+| 3a | #461 | The gate combines the facts of one ticket's PRs in several repositories | #458 |
+| 3b | #462 | Merge, update, labels and reviews act on every PR of a ticket | #461 |
+| 3c | #463 | Router names a ticket's repositories; developer commits in each checkout (slop-eval-factory) | #461 |
+| 4a | #464 | `factory deploy --target local` checks and records the laptop setup | #458 |
+| 4b | #465 | `factory run --local` delivers tickets through the same gate | #461, #464 |
+
+The YouTrack adapter stays deferred behind the tracker port.
+
+## History: project descriptor and workflow (ADR-0016)
 
 [ADR-0016](adr/0016-project-descriptor-and-workflow.md) defines the project
 descriptor and workflow contract. Tickets #408–#414 implement that decision;

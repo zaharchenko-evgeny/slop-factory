@@ -35,7 +35,7 @@
             "type": "string"
           },
           "role": {
-            "type": "string"
+            "enum": ["primary", "project"]
           }
         }
       }
@@ -116,6 +116,15 @@
                 "type": "string"
               }
             }
+          }
+        },
+        "local": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "harness": { "enum": ["claude-code", "codex", "pi"] },
+            "poll_seconds": { "type": "integer" },
+            "workspace": { "type": "string" }
           }
         }
       }

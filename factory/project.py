@@ -48,6 +48,17 @@ def validate(team_root):
     config._check(schema, descriptor, config.PROJECT_DESCRIPTOR, errors)
     if not isinstance(descriptor, dict):
         return errors
+    repositories = descriptor.get("repositories")
+    if isinstance(repositories, list):
+        primaries = [r.get("name") for r in repositories if isinstance(r, dict) and r.get("role") == "primary"]
+        if len(primaries) != 1:
+            errors.append(f"{config.PROJECT_DESCRIPTOR}.repositories: exactly one repository needs role primary, "
+                          f"found {len(primaries)}")
+    targets = descriptor.get("targets")
+    local = targets.get("local") if isinstance(targets, dict) else None
+    poll = local.get("poll_seconds") if isinstance(local, dict) else None
+    if isinstance(poll, int) and poll < 10:
+        errors.append(f"{config.PROJECT_DESCRIPTOR}.targets.local.poll_seconds: must be at least 10")
     for section in ("states", "commands"):
         entries = descriptor.get(section)
         if not isinstance(entries, dict):
