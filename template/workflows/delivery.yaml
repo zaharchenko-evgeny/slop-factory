@@ -396,7 +396,17 @@ nodes:
         - state: changes-requested
       merged:
         from:
+        - draft
+        - triage
+        - ready
+        - in-dev
+        - in-review
+        - changes-requested
         - approved
+        - blocked
+        - needs-answers
+        - split
+        - investigating
         effects:
         - state: done
   notify:
