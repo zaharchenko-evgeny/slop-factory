@@ -1518,5 +1518,61 @@ class SeparateCodeHostTest(unittest.TestCase):
         self.assertTrue(any(a[:2] == ["issue", "edit"] and a[a.index("-R") + 1] == REPO for a in seen))
 
 
+class TwoRepositoryGh(FakeGh):
+    """FakeGh plus repository o/other, whose PR #11 is on the same branch ez/7-x at head h9."""
+    OTHER = "o/other"
+
+    def __init__(self, other_checks=("success",), other_reviews=(), **kw):
+        super().__init__(**kw)
+        self.other_checks, self.other_reviews = list(other_checks), list(other_reviews)
+        self.issue_body = "repositories: primary, other\n\n## Scope"
+
+    def __call__(self, args, timeout=None):
+        a = next((x for x in args if x.startswith(f"repos/{self.OTHER}/")), "")[len(f"repos/{self.OTHER}/"):]
+        lines = lambda items: "\n".join(json.dumps(x) for x in items)  # noqa: E731
+        if a == "pulls?state=all&per_page=100":
+            return lines([{"number": 11, "state": "open", "head": {"ref": "ez/7-x", "repo": {"full_name": self.OTHER}}}])
+        if a == "pulls/11":
+            return json.dumps({"number": 11, "merged": False, "state": "open", "mergeable": True, "base": {"ref": "main"},
+                               "head": {"sha": "h9", "ref": "ez/7-x"}, "requested_reviewers": [], "labels": []})
+        if a.startswith("actions/runs?head_sha=h9"):
+            return lines([{"workflow_id": k, "name": "quality-gates", "event": "pull_request", "run_number": 1,
+                           "status": "completed", "conclusion": c} for k, c in enumerate(self.other_checks)])
+        if a == "pulls/11/reviews":
+            return lines(self.other_reviews)
+        if a.startswith("commits/"):
+            return json.dumps({"commit": {"committer": {"date": "2026-01-02T00:00:00Z"}}})
+        if a:
+            return ""  # the other PR's comments and events
+        return super().__call__(args, timeout)
+
+
+class TwoRepositoryFactsTest(unittest.TestCase):
+    def tracker(self, gh):
+        return GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh,
+                                 repositories={"primary": REPO, "other": TwoRepositoryGh.OTHER})
+
+    def test_both_prs_approved_at_their_heads(self):
+        gh = TwoRepositoryGh(reviews=[review(BOT, M)], other_reviews=[review(BOT, M, commit="h9")])
+        f = self.tracker(gh).facts(7)
+        self.assertEqual((f["pr"], f["head"], f["heads"]), (5, "h1", {"primary": "h1", "other": "h9"}))
+        self.assertEqual((f["ci"], f["round_complete"], f["round_verdict"], f["round_head"]), ("green", True, "approve", "h1"))
+        self.assertEqual([(p["repo"], p["pr"]) for p in f["prs"]], [("primary", 5), ("other", 11)])
+
+    def test_the_other_pr_unreviewed_or_red_holds_the_ticket(self):
+        f = self.tracker(TwoRepositoryGh(reviews=[review(BOT, M)])).facts(7)
+        self.assertEqual((f["round_complete"], f["round_head"], f["focus_missing"]), (False, None, ["full"]))
+        f = self.tracker(TwoRepositoryGh(reviews=[review(BOT, M)], other_checks=["failure"])).facts(7)
+        self.assertEqual((f["ci"], f["round_complete"], f["round_verdict"]), ("red", True, "changes"))
+
+    def test_a_ticket_without_the_line_reads_only_the_primary(self):
+        gh = TwoRepositoryGh(reviews=[review(BOT, M)])
+        gh.issue_body = ""
+        f = self.tracker(gh).facts(7)
+        self.assertEqual((f["pr"], f["round_complete"]), (5, True))
+        self.assertNotIn("heads", f)
+        self.assertFalse(any(TwoRepositoryGh.OTHER in " ".join(w) for w in gh.writes))
+
+
 if __name__ == "__main__":
     unittest.main()
