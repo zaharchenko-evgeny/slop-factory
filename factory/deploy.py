@@ -540,6 +540,8 @@ def same(key: str, have, want) -> bool:
         return sorted(have or []) == sorted(want or [])
     if key == "domains":
         return set(want or []) <= set(have or [])
+    if key == "variables":  # Air cannot delete a variable: an extra one is a by-hand removal, not a difference
+        return all(k in (have or {}) and have[k] == v for k, v in (want or {}).items())
     return have == want
 
 
@@ -699,6 +701,13 @@ def missing_secrets(plan: dict, envs: list[dict]) -> list[str]:
             for s in e.get("secrets") or [] if s not in have.get(e["name"], set())]
 
 
+def extra_variables(plan: dict, envs: list[dict]) -> list[str]:
+    """`remove by hand in Air: <env> variable <NAME>` for each variable in Air that the plan does not have."""
+    have = {x["name"]: x.get("variables") or {} for x in envs}
+    return [f"remove by hand in Air: {e['name']} variable {k}" for e in plan["environments"]
+            for k in have.get(e["name"], {}) if k not in (e.get("variables") or {})]
+
+
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None) -> int:
     """Write only to Air: deploy never creates, edits or closes a tracker ticket."""
     # The automations' repositories too: an environment moved off a repository is found there, then replaced.
@@ -716,6 +725,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     if not changes:
         print("unchanged")
     for line in missing_secrets(plan, state[1]):
+        print(line)
+    for line in extra_variables(plan, state[1]):
         print(line)
     if mode == "--dry-run":
         return 0
