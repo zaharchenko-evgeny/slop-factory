@@ -2,10 +2,12 @@
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 import config
+import vocab
 from github_tracker import gh
 from inbox import request as req
 from inbox import providers
@@ -30,7 +32,7 @@ def facts(request, settings, run=gh, summary=None):
     if issue:
         view = json.loads(run(["issue", "view", str(issue), "-R", repo, "--json", "title,url,labels"]))
         labels = {lb["name"] for lb in view["labels"]}
-        message.update(title=view["title"], url=view["url"],
+        message.update(title=view["title"], url=view["url"], labels=sorted(labels),
                        stage=next((s for s, lb in settings["tracker"]["stages"].items() if lb in labels), None),
                        latest=latest_comment(settings, issue, run))
         if not pr:
@@ -38,14 +40,30 @@ def facts(request, settings, run=gh, summary=None):
                        if (i := e.get("source", {}).get("issue", {})).get("pull_request")
                        and i.get("repository", {}).get("full_name", repo) == repo), None)
     if pr:
-        view = json.loads(run(["pr", "view", str(pr), "-R", repo, "--json", "url,state"]))
-        message.update(pr=pr, pr_url=view["url"], pr_state=view["state"])
+        view = json.loads(run(["pr", "view", str(pr), "-R", repo, "--json", "url,state,headRefName"]))
+        message.update(pr=pr, pr_url=view["url"], pr_state=view["state"], pr_branch=view["headRefName"])
     return message
 
 
+def skip_reason(message, settings):
+    """Why the inbox ignores `message` (the factory's own comment, its inbox issue, a foreign branch), or None."""
+    if message["kind"] == "pr-comment" and (message.get("author") == settings["targets"]["air"]["bot_login"]
+                                            or message.get("body", "").startswith("[factory]")):
+        return "factory comment"
+    if vocab.inbox() in message.get("labels", ()):
+        return "event on the inbox issue"
+    pattern = re.escape(settings["branch_pattern"]).replace(r"\{ticket\}", r"\d+").replace(r"\{slug\}", ".+")
+    if message.get("pr_branch") is not None and not re.fullmatch(pattern, message["pr_branch"]):
+        return f"branch {message['pr_branch']} is not a factory branch"
+    return None
+
+
 def check(request, settings, run=gh):
-    """The facts plus `duplicate`: true when every provider already has the key. Writes nothing."""
+    """The facts plus `skip` (the reason to ignore the request) or `duplicate`: true when every provider already
+    has the key. Writes nothing."""
     message = facts(request, settings, run)
+    if reason := skip_reason(message, settings):
+        return dict(message, skip=reason)
     pending = providers.build(settings["notify"]["providers"], settings, run)
     message["duplicate"] = all(p.seen(message["key"]) for _, p in pending)
     return message

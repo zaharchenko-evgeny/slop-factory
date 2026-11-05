@@ -27,7 +27,7 @@ class FakeGh:
 
     def __init__(self, labels=("factory:blocked", "factory:needs-human")):
         self.labels, self.comments, self.inbox, self.calls = list(labels), {562: [{"body": "[factory] Blocked: no creds."}]}, None, []
-        self.timeline = []
+        self.timeline, self.branch = [], "ez/562-inbox"
 
     def __call__(self, args):
         self.calls.append(args)
@@ -43,7 +43,7 @@ class FakeGh:
             self.comments[int(args[2])].append({"body": args[-1]})
             return ""
         if args[:2] == ["pr", "view"]:
-            return json.dumps({"url": "https://x/pull/7", "state": "OPEN"})
+            return json.dumps({"url": "https://x/pull/7", "state": "OPEN", "headRefName": self.branch})
         if args[0] == "api":
             n = int(args[-1].split("/")[-2])
             items = self.timeline if args[-1].endswith("/timeline") else self.comments[n]
@@ -125,6 +125,23 @@ class InboxTest(unittest.TestCase):
         body = gh.comments[900][0]["body"]
         self.assertIn("decision-needed", body)
         self.assertIn("Blocked: no creds", body)
+
+    def test_check_skips_factory_comment(self):
+        for extra in ({"author": "jetbrains-air[bot]"}, {"body": "[factory] Blocked"}):
+            got = inbox.check({"kind": "pr-comment", "issue": 562, "pr": 7, **extra}, SETTINGS, FakeGh())
+            self.assertEqual(got["skip"], "factory comment")
+        got = inbox.check({"kind": "pr-comment", "issue": 562, "pr": 7, "author": "alice", "body": "lgtm"}, SETTINGS, FakeGh())
+        self.assertNotIn("skip", got)
+
+    def test_check_skips_inbox_issue(self):
+        gh = FakeGh(labels=("factory:inbox",))
+        gh.comments[900] = []
+        self.assertEqual(inbox.check({"kind": "pr-comment", "issue": 900}, SETTINGS, gh)["skip"], "event on the inbox issue")
+
+    def test_check_skips_non_factory_branch(self):
+        gh = FakeGh()
+        gh.branch = "feature/x"
+        self.assertIn("not a factory branch", inbox.check({"kind": "pr-created", "issue": 562, "pr": 7}, SETTINGS, gh)["skip"])
 
     def test_cli_rejects_a_bad_request_file(self):
         with contextlib.redirect_stdout(io.StringIO()) as out:

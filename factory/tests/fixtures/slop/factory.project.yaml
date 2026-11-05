@@ -51,6 +51,8 @@ roles:
     tier: mid
   retro:
     tier: cheap
+  inbox:
+    tier: cheap
   distill:
     tier: mid
 knowledge:

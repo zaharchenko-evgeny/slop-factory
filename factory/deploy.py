@@ -193,6 +193,8 @@ def begin_arg(node: str, n: dict) -> str:
     """The number a node begins with; a scheduled routine has no ticket or PR, so it takes none."""
     if all(str(t).startswith("schedule ") for t in n["triggers"]):
         return ""
+    if n["role"] == "inbox":  # the payload is not a ticket: the role builds its own request
+        return ""
     if any(str(t).startswith("webhook ") for t in n["triggers"]):
         return "--issue <the `issue` field of the trigger payload>"
     return "--pr <the pull request number>" if node in PR_TRIGGERED_NODES else "--issue <the issue number>"
@@ -208,6 +210,13 @@ def mcp_connectors(n: dict, config: dict, focus: str | None) -> list[str]:
     return []
 
 
+INBOX_PAYLOAD = ("## Trigger event fields\n\n"
+                 "- `webhook notify`: the whole POST body is the request.\n"
+                 "- `pr opened`: `pull_request.number`, `pull_request.title`, `pull_request.body`, `pull_request.head.ref`.\n"
+                 "- `pr commented`: `issue.number` (the pull request), `issue.title`, `comment.user.login`, "
+                 "`comment.body`, `comment.html_url`.\n\n")
+
+
 def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None,
                  main_repository: dict | None = None) -> str:
     role = n["role"]
@@ -218,7 +227,8 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     checkout = checkout_instructions(main_repository, config)
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
-    return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
+    payload = INBOX_PAYLOAD if role == "inbox" else ""
+    return (f"{who}\n\n{checkout}{text}\n\n{payload}## Your skills\n\n{skill_lines(role)}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts and the branch or PR head. "
