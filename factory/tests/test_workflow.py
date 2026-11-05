@@ -6,6 +6,8 @@
 """Tests for factory/workflow.py. Run: uv run factory/tests/test_workflow.py"""
 import contextlib
 import io
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -105,6 +107,36 @@ class WorkflowTest(unittest.TestCase):
             proj = yaml.safe_load((Path(tmp) / config.PROJECT_DESCRIPTOR).read_text())
             self.assertEqual(proj["workflow"], workflow.WORKFLOW_PATH)
             self.assertEqual(yaml.safe_load((Path(tmp) / workflow.WORKFLOW_PATH).read_text())["format"], 2)
+
+    def test_migrate_project_copies_a_committed_team_with_its_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            team, out = Path(tmp) / "team", Path(tmp) / "out"
+            shutil.copytree(FIXTURE, team)
+            git = ["git", "-C", str(team), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+            for args in (["init", "-q"], ["add", "."], ["commit", "-qm", "team"]):
+                subprocess.run([*git, *args], check=True)
+            head = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(workflow.project_main([str(team), "--out", str(out)]), 0)
+            for rel in (config.PROJECT_DESCRIPTOR, workflow.WORKFLOW_PATH):
+                self.assertEqual((out / rel).read_bytes(), (FIXTURE / rel).read_bytes(), rel)
+            self.assertEqual((out / workflow.SOURCE).read_text(), head)
+            (team / workflow.WORKFLOW_PATH).write_text((FIXTURE / workflow.WORKFLOW_PATH).read_text() + "# edited\n")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(workflow.project_main([str(team), "--out", str(out)]), 1)
+            self.assertIn("uncommitted changes", err.getvalue())
+
+    def test_migrate_project_rejects_a_workflow_that_does_not_validate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(FIXTURE, tmp, dirs_exist_ok=True)
+            wf = yaml.safe_load((FIXTURE / workflow.WORKFLOW_PATH).read_text())
+            wf["nodes"]["start"]["when"]["state"] = "nope"
+            (Path(tmp) / workflow.WORKFLOW_PATH).write_text(workflow.dump(wf))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(workflow.project_main([tmp, "--out", str(Path(tmp) / "out")]), 1)
+            self.assertIn("unknown-state: start.when: nope", err.getvalue())
 
     def test_nodes_load_renders_project_workflow(self):
         config.set_team(FIXTURE)
