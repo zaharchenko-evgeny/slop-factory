@@ -17,6 +17,7 @@ outcome; the gate checks it and moves the work on.
 | Data | Option |
 | --- | --- |
 | reason, summary, size estimate | `--reason "…"`, `--summary "…"`, `--size-estimate "~120"` |
+| failing check on `origin/main` | `--failing-check "<check>"` with `env-broken` |
 | acceptance check result | `--pass "<check>"`, `--fail "<check>"`, `--not-run "<check> \| <why>"` |
 | finding | `--blocking "<id> <file:line> <finding> \| case: <repro>"`, `--minor "<id> <file:line> <finding>"` |
 | finding fixed or disputed | `--fixed "<id> <sha>"`, `--disputed "<id> <reason>"`, `--disputed-focuses a,b` |
@@ -28,3 +29,6 @@ Example: `factory end <outcome> --summary "…" --blocking "B1 src/x.py:10 crash
 
 If `factory end` refuses (non-zero exit, error printed), fix the data and run
 it again. Never change labels instead.
+
+When a required check fails the same way on `origin/main`, report
+`factory end env-broken --failing-check <check>`.
