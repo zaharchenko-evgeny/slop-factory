@@ -3,6 +3,8 @@
 # a cloud environment: the settings repository's .air/cloud/startup.sh per FACTORY_ENV, then the engine checks.
 set -euo pipefail
 cd "$REPO"
+# Every download in the startup (curl) retries transient failures.
+printf '%s\n' retry=3 retry-all-errors retry-delay=5 > "$HOME/.curlrc"
 git config --global --add safe.directory "$REPO"
 TEAM="$FACTORY_TEAM"
 git config --global --add safe.directory "$TEAM"

@@ -1427,7 +1427,8 @@ class GateTest(unittest.TestCase):
             ev = Path(d, "ev.json")
             ev.write_text('{"id":"e1","ticket":7}')
             p = subprocess.run([sys.executable, str(ROOT / "factory/gate.py"), "check", "--node", "intake", "--event", str(ev),
-                                "--tracker", "github"], capture_output=True, text=True, env={**os.environ, "FACTORY_GH": str(stub)})
+                                "--tracker", "github"], capture_output=True, text=True, env={**os.environ, "FACTORY_GH": str(stub),
+                                                              "FACTORY_TEAM": str(ROOT / "factory/tests/fixtures/team")})
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertEqual(json.loads(p.stdout)["context"]["stage"], "triage")
 
