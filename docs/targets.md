@@ -38,9 +38,9 @@ the automations MCP does not expose it.
 To change the team repository through the factory, list it in `repositories` with `role: project`; any other role
 is a `factory validate` error. It is then one project checkout like any other: write nodes change it on branch
 `ez/<issue>-<slug>`, and it gets no read-only entry in `additionalRepositories`. The factory still reads its roles
-and skills from `$HOME/factory-team`, a `git worktree` of the checkout's `origin/<default branch>` that the
+and skills from the `factory-team` directory in `$HOME`, a `git worktree` of the checkout's `origin/<default branch>` that the
 team's startup script creates (the template's `.air/cloud/startup.sh` shows how), and never from the checkout.
-With `FACTORY_TEAM` unset, the engine uses `$HOME/factory-team` when it exists. Otherwise nothing changes.
+With `FACTORY_TEAM` unset, the engine uses the `factory-team` directory in `$HOME` when it exists. Otherwise nothing changes.
 
 Open (#459): whether Air pushes a branch or opens a PR from an additional repository (`create-pr`,
 `push-to-source` act on the main repository). Until a probe answers it, a ticket that changes a second
