@@ -144,8 +144,15 @@ def additional_repositories(main_repository: dict, team: dict, config: dict) -> 
 def checkout_instructions(main_repository: dict | None, config: dict) -> str:
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     team = {"url": config.get("team_repository") or primary["url"]}
-    if not main_repository or main_repository["fullName"] == repository(team)["fullName"]:
+    if not main_repository:
         return ""
+    if main_repository["fullName"] == repository(team)["fullName"]:
+        # Air's gh picks its token from the working directory's origin: the tracker's checkout reaches the tracker.
+        tracker = (config.get("tracker") or {}).get("repository") or repository(primary)["fullName"]
+        if tracker == main_repository["fullName"]:
+            return ""
+        return (f"## Working directory\n\nRun every command from `/workspaces/{tracker.rsplit('/', 1)[-1]}`: "
+                "GitHub access there reaches the tracker. This automation's own checkout is the team repository.\n\n")
     project = main_repository["fullName"].rsplit("/", 1)[-1]
     others = ", ".join(f"`/workspaces/{repository(r)['fullName'].rsplit('/', 1)[-1]}`"
                        for r in other_projects(main_repository, team, config))
