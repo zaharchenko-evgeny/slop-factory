@@ -309,8 +309,8 @@ class RunLocalTest(unittest.TestCase):
         self.assertIn("factory deploy --target local --apply", out.getvalue())
 
     def test_a_due_schedule_runs_once_per_minute_key(self):
-        at = datetime.datetime(2026, 1, 1, 10, 17)
-        key = "schedule:reconcile:2026-01-01T10:17"
+        at = datetime.datetime(2026, 1, 1, 10, 15)
+        key = "schedule:reconcile:2026-01-01T10:15"
         code, out = self.run_local(GitHub(), at=at)
         self.assertEqual((code, [o["event"] for o in out]), (0, [key]))
         self.assertEqual(self.run_local(GitHub(), at=at), (0, []))
@@ -325,8 +325,8 @@ class RunLocalTest(unittest.TestCase):
         self.assertFalse(any(a[0] == "git" and "ls-remote" in a for _, a in gh.calls))
 
     def test_dry_run_lists_due_schedules_and_records_nothing(self):
-        out = self.run_local(GitHub(), "--dry-run", at=datetime.datetime(2026, 1, 1, 10, 17))[1]
-        self.assertEqual(out, [{"would_run": "reconcile", "event": "schedule:reconcile:2026-01-01T10:17"}])
+        out = self.run_local(GitHub(), "--dry-run", at=datetime.datetime(2026, 1, 1, 10, 15))[1]
+        self.assertEqual(out, [{"would_run": "reconcile", "event": "schedule:reconcile:2026-01-01T10:15"}])
         self.assertFalse(Path(".factory/local/seen.json").exists())
 
     def test_a_developer_worktree_gets_the_role_skills_excluded_from_git(self):
