@@ -23,6 +23,7 @@ import github_graphql
 from gate_port import PR_DEFAULTS, DescriptorPort, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
 from github_tracker import CountedRun, gh
 import vocab
+from youtrack_tracker import YouTrackTicketStore
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
 NOTE_FIELDS, NOTE_FOR, NOTE_MAX = ("for", "files", "repro", "hint", "context"), ("fixer", "reviewer", "developer", "any"), 2000
@@ -367,7 +368,7 @@ class GitHubTicketStore:
 
 class GitHubGateTracker(DescriptorPort):
     def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8,
-                 ci_workflows=("quality-gates",), pr_repo=None, project=None, repositories=None):
+                 ci_workflows=("quality-gates",), pr_repo=None, project=None, repositories=None, tickets=None):
         self.trusted, self.run_cap, self.ci_workflows = set(trusted_bots), run_cap, set(ci_workflows)
         self.project = project  # factory.project.yaml: the stores of states and commands (DescriptorPort)
         self.pr_repo = pr_repo or repo  # the code host: pull requests, CI, commits, merges
@@ -375,7 +376,11 @@ class GitHubGateTracker(DescriptorPort):
         self.repositories = dict(repositories or {"primary": None})
         self.repositories[next(iter(self.repositories))] = self.pr_repo
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, CountedRun(run)
-        self.tickets = GitHubTicketStore(repo, self.run)  # the ticket side: every ticket read and write goes through it
+        # the ticket side: every ticket read and write goes through it (GitHub issues unless a store is given)
+        self.tickets = tickets or GitHubTicketStore(repo, self.run)
+        self.github = self.tickets if tickets is None else GitHubTicketStore(repo, self.run)  # the code host's REST reads
+        if tickets:  # YouTrack: states are a field or tags, commands tags; its `repo` is the code host
+            self.state_kinds, self.command_kinds = ("field", "tag"), ("tag", "pr_label")
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
     @classmethod
@@ -384,20 +389,28 @@ class GitHubGateTracker(DescriptorPort):
         bot = ((c.get("targets") or {}).get("air") or {}).get("bot_login")
         if not bot:
             raise ValueError("descriptor: targets.air.bot_login is not set")
-        t = c["tracker"]
-        return cls(t["repository"], t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run,
+        t, code_repo = c["tracker"], (c.get("code_host") or {}).get("repository")
+        tickets, repo = None, t.get("repository")
+        if t.get("adapter", "github-issues") == "youtrack":
+            if not code_repo:
+                raise ValueError("descriptor: code_host.repository is required with tracker.adapter youtrack")
+            field = next((s["store"]["field"]["name"] for s in (c.get("states") or {}).values()
+                          if isinstance((s.get("store") or {}).get("field"), dict)), None)
+            tickets = YouTrackTicketStore.from_config(t, state_field=field, bots=t.get("bot_logins") or ())
+            repo = code_repo
+        return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run,
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
                    (c.get("ci") or {}).get("workflows") or ["quality-gates"],
                    (c.get("code_host") or {}).get("repository"),
                    {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,
-                   repository_names(c))
+                   repository_names(c), tickets)
 
     # --- reads
     def _api(self, path, *flags, repo=None):
-        return self.tickets.api(path, *flags, repo=repo)
+        return self.github.api(path, *flags, repo=repo)
 
     def _list(self, path, repo=None):
-        return self.tickets.read_list(path, repo=repo)
+        return self.github.read_list(path, repo=repo)
 
     def _labels(self, number, repo=None):
         """The labels of ticket `number`, or of the pull request `number` in `repo`."""
@@ -632,7 +645,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def _can_write(self, login):
         """Write access to the code host (see `GitHubTicketStore.can_write`)."""
-        return self.tickets.can_write(login, self.pr_repo)
+        return self.github.can_write(login, self.pr_repo)
 
     def _agent_runs(self, n, pr, issue_events=None):
         """Developer runs started for ticket `n` since a person last set `factory:ready`: each `labeled` event

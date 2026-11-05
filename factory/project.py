@@ -52,6 +52,7 @@ def validate(team_root):
     config._check(schema, descriptor, config.PROJECT_DESCRIPTOR, errors)
     if not isinstance(descriptor, dict):
         return errors
+    errors += config.tracker_errors(descriptor, config.PROJECT_DESCRIPTOR)
     repositories = descriptor.get("repositories")
     if isinstance(repositories, list):
         primaries = [r.get("name") for r in repositories if isinstance(r, dict) and r.get("role") == "primary"]

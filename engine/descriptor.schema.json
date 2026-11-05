@@ -65,6 +65,18 @@
         "repository": {
           "type": "string"
         },
+        "url": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "token_env": {
+          "type": "string"
+        },
+        "done_state": {
+          "type": "string"
+        },
         "stages": {
           "type": "object"
         },

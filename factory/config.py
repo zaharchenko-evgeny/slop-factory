@@ -141,6 +141,22 @@ def _check(schema, value, where, errs, root_schema=None):
             _check(schema["items"], v, f"{where}[{i}]", errs, root_schema)
 
 
+def tracker_errors(descriptor, where):
+    """Cross-field errors of `tracker` the schema cannot say: a youtrack tracker names its url and project and needs
+    `code_host.repository` for the pull requests; a github-issues tracker needs `repository`."""
+    t = descriptor.get("tracker") if isinstance(descriptor, dict) else None
+    if not isinstance(t, dict):
+        return []
+    if t.get("adapter") == "youtrack":
+        need = [f"{where}.tracker.{k}: required with adapter youtrack" for k in ("url", "project") if k not in t]
+        if not ((descriptor.get("code_host") or {}).get("repository")):
+            need.append(f"{where}.code_host.repository: required with tracker.adapter youtrack")
+        return need
+    if t.get("adapter") == "github-issues" and "repository" not in t:
+        return [f"{where}.tracker.repository: required with adapter github-issues"]
+    return []
+
+
 def mcp_errors(roles, connectors, nodes):
     """`unknown-mcp-connector` errors: a connector named by a role, a mode or a node and missing from
     `targets.air.mcp_connectors` (`connectors`)."""
@@ -164,4 +180,4 @@ def validate():
     schema = json.loads((engine_root() / "engine/descriptor.schema.json").read_text())
     errs = []
     _check(schema, descriptor(), DESCRIPTOR, errs)
-    return errs
+    return errs + tracker_errors(descriptor(), DESCRIPTOR)

@@ -50,6 +50,7 @@ class ProjectTest(unittest.TestCase):
     def test_tracker_url_and_project_accepted(self):
         descriptor = self.descriptor()
         descriptor["tracker"] = {"adapter": "youtrack", "url": "https://example.youtrack.cloud", "project": "EX"}
+        descriptor["code_host"] = {"repository": "example/project"}
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(project.validate(write_project(tmp, descriptor)), [])
         del descriptor["tracker"]["project"]
