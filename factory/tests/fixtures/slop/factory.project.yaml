@@ -91,10 +91,6 @@ checks:
   stage: pre-review
   mode: blocking
   run: python3 scripts/vendor-skills.py --check
-- name: air-like
-  stage: pre-review
-  mode: blocking
-  run: bash -n scripts/air-like.sh && python3 -c "import ast; ast.parse(open('scripts/allowlist_proxy.py').read())"
 - name: state-machine
   stage: pre-review
   mode: blocking

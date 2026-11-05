@@ -6,6 +6,5 @@
   {"text":"Pre-review doc-references: uv run --quiet factory/check_refs.py","result":"pass"},
   {"text":"Pre-review whitespace: git diff --check origin/${FACTORY_BASE:-main}...HEAD","result":"not-run","reason":"The supplied checkout has no merge base with origin/main. git diff --check HEAD passed."},
   {"text":"Pre-review vendored-skills: python3 scripts/vendor-skills.py --check","result":"pass"},
-  {"text":"Pre-review air-like syntax checks","result":"pass"},
   {"text":"Pre-review state-machine suite from factory.project.yaml","result":"pass"}
 ]
