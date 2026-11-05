@@ -6,26 +6,27 @@
 # Nodes marked `enabled: false` need a later slice. `pilot: true` = delivered by the pilot.
 environments:
   # `secrets` are names only; `domains` the network allow-list; `vm` the machine size (deploy.py plan).
+  # `air.jetbrains.cloud`: the inbox webhook (`notify.webhook`), posted to by the gate.
   # `FACTORY_ENV` (the key) tells .air/cloud/startup.sh which skills and tools to install.
   # `read`: intake, review, join, finish. `write`: implement, fix, update. `ops`: the routines.
   read:
     repository: primary
     startup: .air/cloud/startup.sh
     secrets: []   # gh is jetbrains-air[bot] through the platform's GH_TOKEN
-    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, '*.blob.core.windows.net', pypi.org, files.pythonhosted.org]
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, '*.blob.core.windows.net', pypi.org, files.pythonhosted.org, air.jetbrains.cloud]
     vm: default
   write:
     repository: primary
     startup: .air/cloud/startup.sh
     secrets: []
     # registry.npmjs.org: `npx agnix` of the acceptance checks
-    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, '*.blob.core.windows.net', pypi.org, files.pythonhosted.org, registry.npmjs.org]
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, '*.blob.core.windows.net', pypi.org, files.pythonhosted.org, registry.npmjs.org, air.jetbrains.cloud]
     vm: default
   ops:
     repository: team
     startup: .air/cloud/startup.sh
     secrets: []
-    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org]
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org, air.jetbrains.cloud]
     vm: default
 adapters:
   ticket: github-issues   # stage, fields, labels, blockers

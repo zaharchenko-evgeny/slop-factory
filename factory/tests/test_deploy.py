@@ -154,7 +154,7 @@ class RecordedTest(unittest.TestCase):
         self.assertEqual(by_name["[Slop factory] ops"][5], ["repository"])
         for name in ("read", "write"):
             change = by_name[f"[Slop factory] {name}"]
-            self.assertEqual((change[0], change[5]), ("update", ["variables"]))
+            self.assertEqual((change[0], change[5]), ("update", ["variables", "domains"]))
             self.assertEqual(change[3]["variables"], {"FACTORY_ENV": name})
             self.assertIn("FACTORY_TEAM_REPOSITORY", change[4]["variables"])
 
