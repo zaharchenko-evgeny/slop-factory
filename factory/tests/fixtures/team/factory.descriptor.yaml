@@ -122,11 +122,6 @@ checks:
     stage: pre-review
     mode: blocking
     run: python3 scripts/vendor-skills.py --check
-  # The full check is the air-like job of .github/workflows/quality-gates.yml (container, needs docker); this is its local part.
-  - name: air-like
-    stage: pre-review
-    mode: blocking
-    run: bash -n scripts/air-like.sh && python3 -c "import ast; ast.parse(open('scripts/allowlist_proxy.py').read())"
   - name: state-machine
     stage: pre-review
     mode: blocking
