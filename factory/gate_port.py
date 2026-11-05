@@ -8,7 +8,10 @@ outcome without a stage effect.
 """
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
+
+import github_graphql
 
 
 def ticket_from_ref(ref):
@@ -172,6 +175,33 @@ class DescriptorPort:
         return self.apply({"ticket": ticket, "kind": "unlabel", "value": value, **({"on": "pr"} if kind == "pr_label" else {})})
 
 
+class TicketStore(Protocol):
+    """The ticket side of a tracker: tickets by id, read and written with their own system. A GitHub tracker keeps
+    pull requests, CI, reviews and merges apart (CodeHost) so a second ticket system can supply the tickets.
+    `attrs` are the labels or tags of a ticket, stage ones included; `at` is an ISO time. Writes return True
+    when they wrote, the others nothing."""
+    def issue(self, n) -> dict: ...
+    """{title, body, state (open|closed), close_reason, author, updated_at, attrs, assignees}"""
+    def events(self, n) -> list: ...
+    """Oldest first: {kind: labeled|unlabeled|closed|reopened, value (the attr), actor, at}"""
+    def comments(self, n) -> list: ...
+    """Oldest first: {author, author_is_bot, body, at}"""
+    def add_attr(self, n, attr): ...
+    def remove_attr(self, n, *attrs): ...
+    def set_stage(self, n, stage, have): ...  # `stage` replaces the stage attrs `have`
+    def assign(self, n, people): ...  # the assignees become exactly `people`; [] unassigns
+    def comment(self, n, body): ...
+    def close(self, n): ...
+    def open_blockers(self, n) -> list: ...  # ids of the open tickets blocking `n`
+    def blocking(self, n) -> list: ...  # [{number, state}] of the tickets `n` blocks
+    def parent(self, n): ...  # the parent's id, else None
+    def children(self, n) -> list: ...  # [{number, state, not_planned, attrs}]
+    def tickets_by_stage(self, attrs, open_only=False, now=None) -> list: ...  # ids of tickets holding one of `attrs`
+    def create_children(self, n, children, ready) -> bool: ...  # sub-tickets {title, body}, chained, each given `ready`
+    def park(self, n, check, triage) -> bool: ...  # block `n` by the open `Main is red in Air: <check>` ticket
+    def can_answer(self, login) -> bool: ...  # whether `login` may answer a question the factory asked
+
+
 class CodeHost(Protocol):
     """Where the pull requests live; a tracker's tickets need not be on the same host."""
     def ticket_for_pr(self, number, repository=None): ...
@@ -327,3 +357,119 @@ class TagTracker(MemoryTracker):
 
     def set_stage(self, t, stage):
         t["tags"] = [x for x in t.get("tags", []) if not x.startswith("stage:")] + [f"stage:{stage}"]
+
+
+class MemoryTicketStore:
+    """A TicketStore in memory, the contract's reference (factory/tests/test_gate_github.py). Ids are ints."""
+
+    def __init__(self, can_write=()):
+        self.tickets, self.writers, self.actor = {}, set(can_write), "factory"
+
+    def add(self, title="", body="", attrs=(), author="author", assignees=(), comments=(), events=(), parent=None):
+        n = max(self.tickets, default=0) + 1
+        self.tickets[n] = {"title": title, "body": body, "state": "open", "close_reason": None, "author": author,
+                           "updated_at": None, "attrs": list(attrs), "assignees": list(assignees),
+                           "events": list(events), "comments": list(comments), "blocked_by": [], "parent": parent}
+        return n
+
+    def issue(self, n):
+        t = self.tickets[n]
+        return {k: (list(t[k]) if isinstance(t[k], list) else t[k]) for k in (
+            "title", "body", "state", "close_reason", "author", "updated_at", "attrs", "assignees")}
+
+    def events(self, n):
+        return list(self.tickets[n]["events"])
+
+    def comments(self, n):
+        return list(self.tickets[n]["comments"])
+
+    def edit_attrs(self, n, add=(), remove=()):
+        t = self.tickets[n]
+        for a in remove:
+            t["attrs"] = [x for x in t["attrs"] if x != a]
+            t["events"].append({"kind": "unlabeled", "value": a, "actor": self.actor, "at": None})
+        for a in add:
+            if a not in t["attrs"]:
+                t["attrs"].append(a)
+            t["events"].append({"kind": "labeled", "value": a, "actor": self.actor, "at": None})
+        return True
+
+    def add_attr(self, n, attr):
+        return self.edit_attrs(n, [attr])
+
+    def remove_attr(self, n, *attrs):
+        return self.edit_attrs(n, remove=attrs)
+
+    def set_stage(self, n, stage, have):
+        return self.edit_attrs(n, [stage] if stage not in have else [], [x for x in have if x != stage])
+
+    def assign(self, n, people):
+        t = self.tickets[n]
+        if set(t["assignees"]) == set(people):
+            return False
+        t["assignees"] = sorted(people)
+        return True
+
+    def comment(self, n, body):
+        self.tickets[n]["comments"].append({"author": self.actor, "author_is_bot": True, "body": body, "at": None})
+
+    def close(self, n, at=None):
+        t = self.tickets[n]
+        t["state"], t["close_reason"] = "closed", "completed"
+        t["closed_at"] = at or datetime.now(timezone.utc)
+        t["events"].append({"kind": "closed", "value": None, "actor": self.actor, "at": None})
+
+    def _open(self, ids):
+        return [i for i in ids if self.tickets[i]["state"] == "open"]
+
+    def open_blockers(self, n):
+        return self._open(self.tickets[n]["blocked_by"])
+
+    def blocking(self, n):
+        return [{"number": i, "state": t["state"]} for i, t in self.tickets.items() if n in t["blocked_by"]]
+
+    def parent(self, n):
+        return self.tickets[n]["parent"]
+
+    def children(self, n):
+        return [{"number": i, "state": t["state"], "not_planned": t["state"] == "closed" and t["close_reason"] == "not_planned",
+                 "attrs": list(t["attrs"])} for i, t in self.tickets.items() if t["parent"] == n]
+
+    def tickets_by_stage(self, attrs, open_only=False, now=None):
+        """Open tickets and, unless `open_only`, those closed within `github_graphql.CLOSED_HOURS` of `now`."""
+        since = (now or datetime.now(timezone.utc)) - timedelta(hours=github_graphql.CLOSED_HOURS)
+
+        def listed(t):
+            if t["state"] == "open":
+                return True
+            return not open_only and (t.get("closed_at") or since) >= since
+
+        return sorted(i for i, t in self.tickets.items() if set(attrs) & set(t["attrs"]) and listed(t))
+
+    def create_children(self, n, children, ready):
+        wrote, prev = False, None
+        for c in children:
+            c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
+            old = next((i for i, t in self.tickets.items() if t["parent"] == n and t["title"] == c["title"]), None)
+            if old is None:
+                old = self.add(c["title"], c.get("body", ""), [ready], parent=n)
+                self.tickets[n]["blocked_by"].append(old)
+                wrote = True
+            if prev is not None and prev not in self.tickets[old]["blocked_by"]:
+                self.tickets[old]["blocked_by"].append(prev)
+                wrote = True
+            prev = old
+        return wrote
+
+    def park(self, n, check, triage):
+        title = f"Main is red in Air: {check}"
+        red = next((i for i, t in self.tickets.items() if t["title"] == title and t["state"] == "open"), None)
+        if red is None:
+            red = self.add(title, attrs=[triage])
+        if red in self.tickets[n]["blocked_by"]:
+            return False
+        self.tickets[n]["blocked_by"].append(red)
+        return True
+
+    def can_answer(self, login):
+        return login in self.writers

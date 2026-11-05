@@ -24,6 +24,7 @@ import project_mode  # noqa: E402
 cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"))
 import gate  # noqa: E402
 import gate_github as M_GH  # noqa: E402
+import gate_port as M_PORT  # noqa: E402
 import nodes  # noqa: E402
 from gate_github import GitHubGateTracker  # noqa: E402
 
@@ -1695,6 +1696,82 @@ class TwoRepositoryFactsTest(unittest.TestCase):
             return run
         self.assertFalse(GitHubGateTracker(REPO, STAGES, BOT, run=gh("old")).main_green())
         self.assertTrue(GitHubGateTracker(REPO, STAGES, BOT, run=gh("new")).main_green())
+
+
+class StoreGh(FakeGh):
+    """FakeGh that also keeps the comments written with `gh issue comment`."""
+
+    def __call__(self, args, timeout=None):
+        if args[:2] == ["issue", "comment"]:
+            self.comments.append({"user": {"login": "factory[bot]", "type": "Bot"}, "body": args[-1],
+                                  "created_at": "2026-01-03T00:00:00Z"})
+            return ""
+        return super().__call__(args, timeout)
+
+
+def ticket_store_contract(test, make):
+    """What every TicketStore does (factory/gate_port.py). `make(attrs, body, assignees, comments, events)` returns
+    (store, ticket id) over a ticket seeded so: `alice` can write, `eve` cannot, one open and one closed blocker."""
+    attrs, at = ["factory:in-review", "risk:low"], "2026-01-01T00:00:00Z"
+    comments = [{"author": "alice", "author_is_bot": False, "body": "hi", "at": at},
+                {"author": "ci[bot]", "author_is_bot": True, "body": "built", "at": at}]
+    events = [{"kind": "labeled", "value": "factory:in-review", "actor": "alice", "at": at},
+              {"kind": "closed", "value": None, "actor": "alice", "at": at}]
+    store, n = make(attrs, "scope", ["alice"], comments, events)
+    issue = store.issue(n)
+    test.assertEqual((issue["body"], issue["state"], issue["author"], sorted(issue["attrs"]), issue["assignees"]),
+                     ("scope", "open", "author", sorted(attrs), ["alice"]))
+    test.assertEqual(store.events(n), events)
+    test.assertEqual(store.comments(n), comments)
+    test.assertEqual(len(store.open_blockers(n)), 1)
+    test.assertEqual([store.can_answer(x) for x in ("alice", "eve", "nobody")], [True, False, False])
+    store.add_attr(n, "docs")
+    test.assertEqual(sorted(store.issue(n)["attrs"]), ["docs", "factory:in-review", "risk:low"])
+    store.set_stage(n, "factory:approved", ["factory:in-review"])
+    test.assertEqual(sorted(store.issue(n)["attrs"]), ["docs", "factory:approved", "risk:low"])
+    store.remove_attr(n, "docs")
+    test.assertEqual(sorted(store.issue(n)["attrs"]), ["factory:approved", "risk:low"])
+    test.assertEqual([store.assign(n, ["bob"]), store.assign(n, ["bob"]), store.assign(n, [])], [True, False, True])
+    test.assertEqual(store.issue(n)["assignees"], [])
+    store.comment(n, "[factory] done")
+    test.assertEqual(store.comments(n)[-1]["body"], "[factory] done")
+    store.close(n)
+    test.assertEqual(store.issue(n)["state"], "closed")
+
+
+class TicketStoreContractTest(unittest.TestCase):
+    def test_ticket_store_contract(self):
+        def github(attrs, body, assignees, comments, events):
+            gh = StoreGh(labels=attrs, comments=[
+                {"user": {"login": c["author"], "type": "Bot" if c["author_is_bot"] else "User"}, "body": c["body"],
+                 "created_at": c["at"]} for c in comments])
+            gh.issue_body, gh.assignees = body, list(assignees)
+            gh.issue_events = [{"event": e["kind"], "label": {"name": e["value"]} if e["value"] else None,
+                                "actor": {"login": e["actor"]}, "created_at": e["at"]} for e in events]
+            return tr(gh).tickets, 7
+
+        def memory(attrs, body, assignees, comments, events):
+            store = M_PORT.MemoryTicketStore(can_write=["alice"])
+            n = store.add("t", body, attrs, assignees=assignees, comments=comments, events=events)
+            gone, live = store.add(), store.add()
+            store.close(gone)
+            store.tickets[n]["blocked_by"] = [gone, live]
+            return store, n
+
+        for make in (github, memory):
+            with self.subTest(store=make.__name__):
+                ticket_store_contract(self, make)
+
+    def test_memory_store_creates_chained_children_once_and_parks_behind_red_main(self):
+        store = M_PORT.MemoryTicketStore()
+        n = store.add("parent")
+        self.assertTrue(store.create_children(n, [{"title": "A", "body": "a"}, "B"], "factory:ready"))
+        self.assertFalse(store.create_children(n, [{"title": "A", "body": "a"}, "B"], "factory:ready"))
+        a, b = (k["number"] for k in store.children(n))
+        self.assertEqual((store.open_blockers(b), store.parent(a)), ([a], n))
+        self.assertEqual(store.tickets_by_stage(["factory:ready"]), [a, b])
+        self.assertTrue(store.park(n, "tests", "factory:triage"))
+        self.assertFalse(store.park(n, "tests", "factory:triage"))
 
 
 if __name__ == "__main__":
