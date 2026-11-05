@@ -96,7 +96,16 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "github_user": { "type": "string" }
+        "github_user": { "type": "string" },
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind"],
+            "properties": {"kind": {"enum": ["github-inbox", "log"]}}
+          }
+        }
       }
     },
     "targets": {

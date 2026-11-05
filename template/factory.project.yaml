@@ -16,6 +16,7 @@ tracker:
   repository: "{{TRACKER_REPOSITORY}}"
 notify:
   github_user: "{{GITHUB_USER}}"
+  providers: [{ kind: github-inbox }]
 targets:
   air:
     bot_login: jetbrains-air[bot]

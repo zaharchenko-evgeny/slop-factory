@@ -52,6 +52,11 @@ tracker:
     rereview-<focus>: { pr_label: factory:rereview-<focus> }
   # Set while a ticket or PR waits for a person.
   needs_human_label: factory:needs-human
+  # The one open issue the github-inbox provider comments on.
+  inbox_label: factory:inbox
+# Where notifications go (factory inbox); `github_user` comes from the team.
+notify:
+  providers: [{ kind: github-inbox }]
 # The tier `start` gives a ticket without a `complexity:<size>` label.
 defaults: { tier: mid }
 gates:
