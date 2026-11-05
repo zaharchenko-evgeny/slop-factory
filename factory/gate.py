@@ -1028,8 +1028,9 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
             elif kind == "rerun-ci":
                 head = facts.get("head")
                 r["applied"] = tracker.apply({"ticket": n, "kind": "rerun-ci", "value": head, "branch": facts.get("branch")})
-                tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
-                               "value": f"{RECOVER} stage={stage} head={head} re-ran CI ({why})"})
+                if r["applied"]:  # the marker only after a re-run started: a no-op (run still in progress) stays retryable
+                    tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
+                                   "value": f"{RECOVER} stage={stage} head={head} re-ran CI ({why})"})
             elif kind == "comment":
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
                                               "value": f"{RECOVER} stage={stage} {why}"})

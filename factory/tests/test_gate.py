@@ -1093,6 +1093,28 @@ class StaleSweepTest(unittest.TestCase):
         self.assertEqual([r["recover"] for r in gate.sweep_stale(tr, NODES, 2, self.NOW)[0]], ["comment"])  # not again at this head
         self.assertEqual([e[0] for e in tr.tickets[3]["log"]].count("rerun-ci"), 1)
 
+    def test_ci_rerun_noop_leaves_no_marker_so_next_sweep_retries(self):
+        class Tr(MemoryTracker):
+            rerun_result = False  # the workflow is still in progress: nothing re-ran
+
+            def sweep_tickets(self, stages):
+                return [n for n, t in self.tickets.items() if self.get_stage(t) in stages]
+
+            def apply(self, effect):
+                if effect["kind"] == "rerun-ci":
+                    self._t(effect["ticket"]).setdefault("log", []).append(["rerun-ci", json.dumps(effect["value"])])
+                    return self.rerun_result
+                return super().apply(effect)
+        tr = Tr({3: {"stage": "in-review", "since": "2026-11-01T11:20:00Z", "pr": 9, "head": "abc",
+                     "branch": "ez/3-x", "ci_label": None}})
+        res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
+        self.assertEqual([(r["recover"], r["applied"]) for r in res], [("rerun-ci", False)])
+        self.assertNotIn("re-ran CI", json.dumps(tr.tickets[3]["log"]))
+        tr.rerun_result = True  # it later failed without a CI label: the next sweep re-runs it
+        res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
+        self.assertEqual([(r["recover"], r["applied"]) for r in res], [("rerun-ci", True)])
+        self.assertEqual([r["recover"] for r in gate.sweep_stale(tr, NODES, 2, self.NOW)[0]], ["comment"])
+
     def test_in_review_without_ci_label_within_30_minutes_is_left_alone(self):
         tr, res = self.sweep({3: {"stage": "in-review", "since": self.FRESH, "pr": 9, "head": "abc", "ci_label": None}})
         self.assertEqual(res, [])
