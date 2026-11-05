@@ -57,6 +57,11 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn('"factory:implement-mid"', logged(t, "label"))
         self.assertTrue(logged(t, "comment")[0].startswith(f'"{reconcile.PREFIX} stage=in-dev head= re-fired'))
 
+    def test_pending_ci_on_an_approved_pr_is_not_an_error(self):
+        _, results, failed = run({"stage": "approved", "pr": 5, "ci": "pending", "since": OLD})
+        self.assertFalse(failed)
+        self.assertFalse([r for r in results if "error" in r])
+
     def test_conflicting_unapproved_pr_goes_to_fix(self):
         t, results, _ = run({"stage": "in-review", "pr": 5, "conflict": True, "since": OLD,
                              "round_complete": False})
