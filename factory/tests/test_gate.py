@@ -1777,6 +1777,60 @@ class MultiRepositoryTest(unittest.TestCase):
         self.assertEqual((code, out["reason"]), (gate.NO_GO, "stale head"))
 
 
+class RepoSplitTest(unittest.TestCase):
+    """Triage splits a ticket over repositories into one ready child each, in dependency order (ADR-0017)."""
+    SLICES = [{"title": "API", "body": "api part", "repo": "api", "subsystem": "core"},
+              {"title": "Client", "body": "client part", "repo": "client", "subsystem": "core", "after": ["api"]},
+              {"title": "Deploy", "body": "deploy part", "repo": "deploy", "subsystem": "core", "after": ["api"]}]
+
+    def split(self, slices):
+        from gate_port import MemoryTicketStore
+        store = MemoryTicketStore()
+        n = store.add("parent")
+        store.create_children(n, gate.slices(slices), "factory:ready")
+        return store, n, {c["title"]: c["number"] for c in store.children(n) for c in [{**c, "title": store.tickets[c["number"]]["title"]}]}
+
+    def test_split_creates_repo_children_in_dependency_order(self):
+        store, n, ids = self.split(self.SLICES)
+        self.assertEqual([store.tickets[i]["attrs"] for i in ids.values()],
+                         [["factory:ready", f"repo:{r}", "subsystem:core"] for r in ("api", "client", "deploy")])
+        self.assertEqual([store.open_blockers(ids[t]) for t in ("API", "Client", "Deploy")],
+                         [[], [ids["API"]], [ids["API"]]])  # client and deploy wait for api only
+        self.assertFalse(store.create_children(n, gate.slices(self.SLICES), "factory:ready"))  # a retry changes nothing
+
+    def test_child_pr_in_its_repository(self):
+        from gate_port import MemoryCodeHost
+        store, n, ids = self.split(self.SLICES)
+        pr = lambda number, ticket: {"number": number, "branch": f"ez/{ticket}-x", "head": "h", "labels": []}  # noqa: E731
+        hosts = {"o/api": MemoryCodeHost({"o/api": [pr(5, ids["API"])]}),
+                 "o/client": MemoryCodeHost({"o/client": [pr(5, ids["Client"])]})}
+        found = {r: h.ticket_for_pr(5, r) for r, h in hosts.items()}
+        self.assertEqual(found, {"o/api": ids["API"], "o/client": ids["Client"]})  # same PR number, own repository
+        self.assertIn("repo:client", store.tickets[found["o/client"]]["attrs"])
+        self.assertIsNone(hosts["o/api"].ticket_for_pr(5, "o/client"))
+
+    def test_parent_done_when_all_children_done(self):
+        store, n, ids = self.split(self.SLICES)
+
+        def plan():
+            kids = [{**c, "blocked": False} for c in store.children(n)]
+            return gate.sweep_plan({"stage": "split", "children": kids, "comments": []}, None)
+
+        for t in ("API", "Client"):
+            store.close(ids[t])
+        self.assertIsNone(plan())
+        store.close(ids["Deploy"])
+        self.assertEqual(plan()[:2], ("finish", "children-done"))
+
+    def test_one_repository_ticket_continues_without_children(self):
+        h = {"outcome": "proceed", "size_estimate": "~100"}
+        self.assertEqual(gate.intake_fields(h)["children"], [])
+        tr = MemoryTracker({7: {"stage": "triage"}})
+        code, _ = gate.apply("intake", "proceed", {"ticket": 7, **PAYLOAD, **gate.intake_fields(h)}, tr, NODES)
+        self.assertEqual((code, tr.tickets[7]["stage"]), (gate.GO, "ready"))
+        self.assertNotIn("create-issues", [k for k, _ in tr.tickets[7].get("log", [])])
+
+
 class CiSyncTest(unittest.TestCase):
     """The scheduled CI label sync of the project repositories' factory PRs (gate.ci_sync)."""
     GREEN, RED = "factory:ci-green", "factory:ci-red"

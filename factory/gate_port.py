@@ -211,6 +211,21 @@ class CodeHost(Protocol):
     def ticket_for_pr(self, number, repository=None): ...
 
 
+def child_links(children):
+    """Each child's prerequisite indexes: the children of the repositories it is `after`, else (no `repo` anywhere)
+    the previous child, which chains a plain split."""
+    kids = [c if isinstance(c, dict) else {"title": str(c)} for c in children]
+    if not any(c.get("repo") for c in kids):
+        return [[i - 1] if i else [] for i in range(len(kids))]
+    return [[j for j, d in enumerate(kids) if d.get("repo") in (c.get("after") or [])] for c in kids]
+
+
+def child_attrs(child):
+    """The labels a per-repository child carries: its repository and the project subsystem."""
+    return ([f"repo:{child['repo']}"] if child.get("repo") else []) + (
+        [f"subsystem:{child['subsystem']}"] if child.get("subsystem") else [])
+
+
 class MemoryCodeHost:
     """The CI label sync's code host (gate.ci_sync) in memory: `prs` {owner/repo: [{number, branch, head, labels,
     labeled_at: {label: at}}]}, `checks` {sha: [{conclusion, at}]}; `edits` records each label write, added at `now`."""
@@ -221,6 +236,11 @@ class MemoryCodeHost:
 
     def _pr(self, repository, number):
         return next(p for p in self.prs[repository] if p["number"] == number)
+
+    def ticket_for_pr(self, number, repository=None):
+        """The ticket of the factory branch of PR `number` in `repository` (None: no such PR here)."""
+        pr = next((p for p in self.prs.get(repository, []) if p["number"] == number), None)
+        return ticket_from_ref(pr.get("branch")) if pr else None
 
     def factory_prs(self, repository):
         return [{k: p[k] for k in ("number", "head", "labels")} for p in self.prs[repository]
@@ -479,18 +499,20 @@ class MemoryTicketStore:
         return sorted(i for i, t in self.tickets.items() if set(attrs) & set(t["attrs"]) and listed(t))
 
     def create_children(self, n, children, ready):
-        wrote, prev = False, None
-        for c in children:
+        wrote, ids, links = False, [], child_links(children)
+        for c, after in zip(children, links):
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
             old = next((i for i, t in self.tickets.items() if t["parent"] == n and t["title"] == c["title"]), None)
             if old is None:
-                old = self.add(c["title"], c.get("body", ""), [ready], parent=n)
+                old = self.add(c["title"], c.get("body", ""), [ready, *child_attrs(c)], parent=n)
                 self.tickets[n]["blocked_by"].append(old)
                 wrote = True
-            if prev is not None and prev not in self.tickets[old]["blocked_by"]:
-                self.tickets[old]["blocked_by"].append(prev)
-                wrote = True
-            prev = old
+            ids.append(old)
+        for i, after in zip(ids, links):  # link once every child exists: `after` may name a later child
+            for j in after:
+                if ids[j] not in self.tickets[i]["blocked_by"]:
+                    self.tickets[i]["blocked_by"].append(ids[j])
+                    wrote = True
         return wrote
 
     def park(self, n, check, triage):
