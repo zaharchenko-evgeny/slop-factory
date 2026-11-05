@@ -7,10 +7,12 @@
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -101,6 +103,26 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(got["tool:gh"]["result"], "ok")
         self.assertEqual(got["skill:ponytail"]["result"], "ok")  # a developer skill, only in `write`
         self.assertNotIn("skill:ponytail", run(FakeGh(), "ops", which=lambda t: "/bin/" + t))
+
+    def test_declared_variables_and_secrets_are_probed(self):
+        data = nodes.load()
+        data["environments"]["write"] = {**data["environments"]["write"], "variables": {"YOUTRACK_URL": "u"},
+                                         "secrets": ["YOUTRACK_TOKEN", "OTHER"]}
+        got = {r["probe"]: r for r in doctor.run_probes(REPO, "write", data, FakeGh(), "risk:low",
+                                                        environ={"YOUTRACK_URL": "u", "OTHER": ""})}
+        self.assertEqual([got[f"env:{n}"]["result"] for n in ("YOUTRACK_URL", "YOUTRACK_TOKEN", "OTHER")],
+                         ["ok", "missing", "missing"])
+
+    def test_main_exits_1_for_unset_declared_secret(self):
+        data = nodes.load()
+        data["environments"]["write"] = {**data["environments"]["write"], "secrets": ["YOUTRACK_TOKEN"]}
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"FACTORY_ENV": "write"}), mock.patch.object(doctor.nodes_mod, "load", return_value=data), \
+                contextlib.redirect_stdout(out):
+            os.environ.pop("YOUTRACK_TOKEN", None)
+            self.assertEqual(doctor.main(run=FakeGh()), 1)
+        lines = [json.loads(line) for line in out.getvalue().splitlines()]
+        self.assertTrue(any(r["probe"] == "env:YOUTRACK_TOKEN" and r["result"] == "missing" for r in lines), lines)
 
     def test_no_role_needs_a_local_agent_harness(self):
         """Air runs every agent (#523): no role's need_tools names a harness CLI."""
