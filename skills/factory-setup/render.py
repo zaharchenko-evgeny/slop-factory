@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Fill the setup skill templates: render.py ANSWERS.json OUT_DIR.
-With --project, fill the engine's template/ instead: render.py --project ANSWERS.json OUT_DIR (ADR-0016).
+Fills the engine's template/ (factory.project.yaml, workflows/, roles/, .air/cloud/startup.sh; ADR-0016).
+With --extras, fill templates/ (AGENTS.md workflow section, policies, docs) instead.
 
 ANSWERS.json maps each `{{NAME}}` placeholder to a string (or a list of lines).
 Every template file is written to OUT_DIR at the same relative path;
-`roles/setup.sh` is written once per role in answers["ROLES"] ({role: tools}).
+with --extras, `roles/setup.sh` is written once per role in answers["ROLES"] ({role: tools}).
 A placeholder without an answer is an error.
 """
 import json
@@ -45,9 +46,9 @@ def render_project(a):
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    project = args[:1] == ["--project"]
-    answers = json.loads(Path(args[project]).read_text())
-    for rel, text in (render_project if project else render)(answers).items():
-        dest = Path(args[project + 1]) / rel
+    extras = args[:1] == ["--extras"]
+    answers = json.loads(Path(args[extras]).read_text())
+    for rel, text in (render if extras else render_project)(answers).items():
+        dest = Path(args[extras + 1]) / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text)
