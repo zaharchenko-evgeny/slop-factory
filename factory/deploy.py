@@ -112,6 +112,8 @@ SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no f
                  "itself. Run `factory sweep{args}` in the foreground with no time limit; "
                  "wait until it exits, "
                  "and report its JSON output.")
+INSTALLED_FACTORY = (" Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path "
+                     "into the engine checkout.")
 PR_NUMBER = " --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>"
 SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>", "finish": PR_NUMBER,
                "reopen": PR_NUMBER, "merge": PR_NUMBER,
@@ -163,7 +165,7 @@ def script_prompt(name: str, main_repository: dict | None = None, config: dict |
         prompt = SCRIPT_PROMPT.format(args=args)
         if "--issue" in args:
             prompt += " Copy only that one number; never write the payload or any JSON."
-    return checkout + prompt
+    return checkout + prompt + INSTALLED_FACTORY
 
 
 def skill_lines(role: str) -> str:
