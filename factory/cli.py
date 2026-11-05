@@ -7,10 +7,13 @@
 
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> --issue N | --pr N | [payload file]   (payload on stdin by default; exit 10: the node must not act)
-       factory end <outcome> [--findings F.json] [--slices S.json] [--checks C.json] [--reason TEXT]
-                   [--summary TEXT] [--size-estimate N] [--addressed A.json] [--disputed-focuses a,b]
-                   [--notes notes.json]
-                   (the outcome and the data its effects use)
+       factory end <outcome> [--reason TEXT] [--summary TEXT] [--size-estimate N] [--disputed-focuses a,b]
+                   [--pass CHECK] [--fail CHECK] [--not-run 'CHECK | REASON'] [--propose-check CHECK]
+                   [--blocking 'ID FILE FINDING | case: REPRO'] [--minor 'ID FILE FINDING']
+                   [--fixed 'ID SHA'] [--disputed 'ID REASON'] [--slice FILE.md]
+                   [--note-for ROLE] [--note-hint TEXT] [--note-repro CMD] [--note-file PATH]
+                   (the outcome and the data its effects use; repeat a list option once per item;
+                    skills/factory-step/SKILL.md describes them per role)
        factory sweep --main ...                    (the gate's sweep from main's graph)
        factory deploy --target local [--apply] | factory run --local [--once] [--dry-run]   (the local target, ADR-0017)
 """
@@ -112,29 +115,88 @@ def begin(argv, team=None):
     return code
 
 
+def parted(text, sep, what):
+    """`<head><sep><tail>` split once; ValueError naming `what` when the separator is missing."""
+    head, found, tail = text.partition(sep)
+    if not found or not head.strip() or not tail.strip():
+        raise ValueError(f"{what} needs `{sep.strip()}`: {text!r}")
+    return head.strip(), tail.strip()
+
+
+def id_and(text, form):
+    """`<id> <rest>` as a pair; ValueError naming the option's `form` when either is missing."""
+    parts = text.split(None, 1)
+    if len(parts) < 2:
+        raise ValueError(f"expected {form}: {text!r}")
+    return parts[0], parts[1].strip()
+
+
+def finding(text, severity):
+    """`<id> <file> <finding> [| case: <repro>]`; a blocking finding needs its case."""
+    text, case = parted(text, " | case:", "finding case") if " | case:" in text else (text, None)
+    parts = text.split(None, 2)
+    if len(parts) < 3:
+        raise ValueError(f"a finding is `<id> <file> <finding>`: {text!r}")
+    if severity == "blocking" and not case:
+        raise ValueError(f"a blocking finding needs `| case: <repro>`: {text!r}")
+    return {"id": parts[0], "file": parts[1], "finding": parts[2], "severity": severity, **({"case": case} if case else {})}
+
+
+def slice_of(path):
+    """A slice file: its first line is the title (a leading `#` is dropped), the rest is the ticket body."""
+    title, _, body = Path(path).read_text().strip().partition("\n")
+    title = title.lstrip("#").strip()
+    if not title:
+        raise ValueError(f"slice {path} has no title line")
+    return {"title": title, "body": body.strip() or title}
+
+
 def handoff_of(a):
-    """The handoff the options name: the outcome, plus the data file or text each option carries."""
+    """The handoff the options name: the outcome, plus the data each option carries. Plain-text options repeat;
+    the JSON-file options (`--checks`, `--findings`, `--slices`, `--addressed`, `--notes`) are the older form."""
     data = {"outcome": a.outcome}
     for key, path in (("findings", a.findings), ("slices", a.slices), ("checks", a.checks)):
         if path:
             data[key] = json.loads(Path(path).read_text())
+    checks = [{"text": t, "result": "pass"} for t in a.passed] + [{"text": t, "result": "fail"} for t in a.failed]
+    checks += [dict(zip(("text", "reason"), parted(t, " | ", "a not-run check's reason")), result="not-run")
+               for t in a.not_run]
+    found = [finding(t, "blocking") for t in a.blocking] + [finding(t, "minor") for t in a.minor]
+    for key, items in (("checks", checks), ("findings", found), ("slices", [slice_of(f) for f in a.slice]),
+                       ("proposed_checks", a.propose_check)):
+        if items:
+            data[key] = data.get(key, []) + items
     data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate)) if v})
-    if a.addressed:
-        data["findings_addressed"] = json.loads(Path(a.addressed).read_text())
+    addressed = json.loads(Path(a.addressed).read_text()) if a.addressed else []
+    addressed += ["{}: fixed in {}".format(*id_and(t, "--fixed 'ID SHA'")) for t in a.fixed]
+    addressed += ["{}: disputed — {}".format(*id_and(t, "--disputed 'ID REASON'")) for t in a.disputed]
+    if addressed:
+        data["findings_addressed"] = addressed
     if a.notes:
         data["agent_notes"] = json.loads(Path(a.notes).read_text())
+    elif a.note_hint or a.note_repro or a.note_file:
+        data["agent_notes"] = {"for": a.note_for or "any", **({"files": a.note_file} if a.note_file else {}),
+                               **{k: v for k, v in (("repro", a.note_repro), ("hint", a.note_hint)) if v}}
     if a.disputed_focuses:
         data["disputed_focuses"] = a.disputed_focuses.split(",")
     return data
 
 
-def end(argv, team=None):
-    p = argparse.ArgumentParser(prog="factory end")
+def end_parser():
+    p = argparse.ArgumentParser(prog="factory end", allow_abbrev=False)
     p.add_argument("outcome")
-    for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "addressed", "disputed-focuses", "notes"):
+    for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "addressed", "disputed-focuses", "notes",
+                "note-for", "note-hint", "note-repro"):
         p.add_argument(f"--{opt}")
+    for opt, dest in (("pass", "passed"), ("fail", "failed"), ("not-run", "not_run"), ("blocking", None), ("minor", None),
+                      ("fixed", None), ("disputed", None), ("slice", None), ("propose-check", None), ("note-file", None)):
+        p.add_argument(f"--{opt}", action="append", default=[], **({"dest": dest} if dest else {}))
+    return p
+
+
+def end(argv, team=None):
     try:
-        a = p.parse_args(argv)
+        a = end_parser().parse_args(argv)
     except SystemExit:
         return 2
     if not STATE.exists():
@@ -146,7 +208,7 @@ def end(argv, team=None):
     try:
         data = handoff_of(a)
     except (OSError, ValueError) as e:
-        print(json.dumps({"error": f"malformed option file: {e}"}))
+        print(json.dumps({"error": f"malformed option: {e}"}))
         return 2
     handoff.parent.mkdir(parents=True, exist_ok=True)
     handoff.write_text(json.dumps(data))
