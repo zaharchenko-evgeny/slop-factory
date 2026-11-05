@@ -32,8 +32,6 @@ import nodes as nodes_mod
 import vocab
 
 ROOT = Path(__file__).resolve().parents[1]
-# Air cannot delete an environment variable or set it to an empty value: deploy ignores the ones it no longer uses.
-LEGACY_ENVIRONMENT_VARIABLES = {"FACTORY_TEAM_REPOSITORY"}
 PR_TRIGGERED_NODES = {"review", "join", "fix", "update", "finish", "reopen"}
 BOT_FILTERED = ("review-", "join", "reopen")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
@@ -514,8 +512,6 @@ def environment_detail(x: dict) -> dict:
         x["vm"] = x.pop("instanceTypeKey") or "default"
     if isinstance(x.get("variables"), list):
         x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
-    if isinstance(x.get("variables"), dict):
-        x["variables"] = {k: v for k, v in x["variables"].items() if k not in LEGACY_ENVIRONMENT_VARIABLES}
     if "personalSecrets" in x:
         x["secrets"] = [s["name"] for s in x.pop("personalSecrets")]
     return x
