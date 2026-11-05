@@ -28,10 +28,10 @@ the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`). Never
 
 ## Output
 
-Run `factory end <outcome>` to apply it, with a JSON file only for the data the
-outcome needs (`--findings`, `--slices`, `--checks`, `--reason`). The platform pushes the branch after the run.
-Hand off facts (commands,
-results), not your reasoning.
+Finish by reporting one outcome of your step with the data it needs, as the
+`factory-step` skill describes; the gate moves the work on. The platform
+pushes the branch after the run. Report facts (commands, results), not your
+reasoning.
 
 ## Notes and process gaps
 

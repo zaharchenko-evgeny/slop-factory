@@ -20,9 +20,8 @@ Input: a request (free text or a tracker issue).
    excludes. If it does not, or uses a judgement word such as "history",
    "clean" or "appropriate" instead of a command or test name, choose `grill`:
    mark the ticket not ready and ask which paths the check should cover or
-   exclude, and what command or test should verify it. Put the proposed
-   replacement checks in the handoff's `proposed_checks` (a list: named tests,
-   paths and commands), so a person accepts by editing the ticket or by
+   exclude, and what command or test should verify it. Propose the
+   replacement checks (named tests, paths and commands) with the outcome, so a person accepts by editing the ticket or by
    `factory:triage` with the proposal pasted.
    Every Operator check must become a test or be rewritten as `Operator check after the merge (not part of the PR): …`.
 3. The gate derives the risk path from the issue's risk label; do not state it.
@@ -34,29 +33,26 @@ Input: a request (free text or a tracker issue).
    lines removed from a file that remains count as modified. Keep
    `size_estimate` to the changed-line count only, for example `~40`; mention
    deletion volume in the ticket body's prose when useful. Above about 400
-   lines, propose slices in `split:`, each
+   lines, split it into slices, each
    one a ticket that delivers on its own. For example, deleting 12 files
    (2,000 lines) and editing 40 lines is about 52 lines, so do not split.
-5. Run `factory end <outcome>` (see the end of this file) to apply it.
+5. Report the outcome (see the end of this file).
 
 
 ### Slices
 
-`--slices` names a JSON file with an array of `{"title", "body"}` objects, in delivery order. The workflow creates each
-as a sub-issue with that body, the parent's `risk:` label, and a blocked-by link on the slice before it. The body
-is a whole ticket (it must pass intake by itself): its part of the scope, acceptance checks, affected repositories
-and `Size: about N lines with tests`. A bare line `<title> — <scope> (~<lines>)` stays accepted but gives a
-one-line ticket that fails intake.
+Write each slice to a markdown file: its first line is the title, the rest the
+body, a whole ticket that must pass intake by itself (its part of the scope,
+acceptance checks, affected repositories and `Size: about N lines with tests`).
+In delivery order, the workflow creates each as a sub-issue with the parent's
+`risk:` label and a blocked-by link on the slice before it.
 
+## Outcomes
 
+Report one, as the last thing you do; all but `not-actionable` carry the size
+estimate:
 
-## Ending the run
-
-Run `factory end <outcome>` with the data the outcome needs; the gate already knows the ticket, PR, branch and head. Write it as the last thing you do.
-
-```
-factory end proceed --size-estimate "~120"
-factory end grill --size-estimate "~120" --reason "acceptance check 2"
-factory end split --size-estimate "~900" --slices slices.json
-factory end not-actionable --reason "duplicate of #12"
-```
+- `proceed`.
+- `grill`: the reason (what to answer), and any proposed acceptance checks.
+- `split`: the slices, in delivery order.
+- `not-actionable`: the reason.

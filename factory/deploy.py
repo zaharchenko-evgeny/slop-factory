@@ -204,9 +204,10 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
-            "It prints the ticket, the facts, the branch or PR head and the handoff path. "
+            "It prints the ticket, the facts and the branch or PR head. "
             "If it exits 10 the node must not act: report the reason and stop.\n"
-            "2. Do the role's work, write the handoff to the handoff path, then run `factory end <handoff_path>`.")
+            "2. Do the role's work. As the last thing you do, report one outcome above with `factory end <outcome>` "
+            "and the data it needs, as the `factory-step` skill describes.")
 
 
 def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str, str | None]]:
