@@ -131,6 +131,21 @@ def _check(schema, value, where, errs, root_schema=None):
             _check(schema["items"], v, f"{where}[{i}]", errs, root_schema)
 
 
+def mcp_errors(roles, connectors, nodes):
+    """`unknown-mcp-connector` errors: a connector named by a role, a mode or a node and missing from
+    `targets.air.mcp_connectors` (`connectors`)."""
+    known, errs = set(connectors or []), []
+    named = []
+    for role, r in (roles or {}).items():
+        r = r if isinstance(r, dict) else {}
+        named.append((f"roles.{role}", r.get("mcp")))
+        named += [(f"roles.{role}.modes.{m}", (v or {}).get("mcp")) for m, v in (r.get("modes") or {}).items()]
+    named += [(f"nodes.{n}", (v or {}).get("mcp")) for n, v in ((nodes or {}).get("nodes") or {}).items()]
+    for where, names in named:
+        errs += [f"unknown-mcp-connector: {where}: {c}" for c in names or [] if c not in known]
+    return errs
+
+
 def validate():
     """Error lines for the team descriptor against engine/descriptor.schema.json."""
     if (team_root() / PROJECT_DESCRIPTOR).is_file():
