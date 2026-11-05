@@ -296,7 +296,8 @@ class ImportTimeBoundaryTest(unittest.TestCase):
             shared.mkdir(parents=True)
             (shared / "gate.py").write_text(
                 'import json\nif __name__ == "__main__":\n    print(json.dumps({"gate": "outer-home"}))\n')
-            env = {**os.environ, "HOME": str(tmp / "isolated-home")}
+            env = {**os.environ, "HOME": str(tmp / "isolated-home"),
+                   "FACTORY_TEAM": str(ROOT / "factory/tests/fixtures/team")}
             with mock.patch.dict(os.environ, {"HOME": str(outer_home)}):
                 done = subprocess.run([sys.executable, str(pr / "factory/cli.py"), "begin", "fix-mid", "event.json"], cwd=pr,
                                       capture_output=True, text=True, env=env)
