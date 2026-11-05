@@ -39,6 +39,13 @@ jobs:
         run: git -c user.name=ci -c user.email=ci@example.invalid merge --no-edit origin/main
       - name: Check documentation references
         run: uv run --quiet factory/check_refs.py
+      # test_slop_fixture_is_migrate_project_output regenerates fixtures/slop from the team commit in its SOURCE file.
+      - name: Check out the slop fixture's team commit
+        run: |
+          fixture=factory/tests/fixtures/slop
+          git clone --quiet "$(sed -n 's/^team_repository: //p' "$fixture/factory.project.yaml")" "$RUNNER_TEMP/slop-team"
+          git -C "$RUNNER_TEMP/slop-team" checkout --quiet --detach "$(cat "$fixture/SOURCE")"
+          echo "FACTORY_SLOP_TEAM=$RUNNER_TEMP/slop-team" >> "$GITHUB_ENV"
       - id: checks
         run: |
           set -o pipefail
