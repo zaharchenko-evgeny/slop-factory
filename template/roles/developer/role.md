@@ -92,21 +92,16 @@ Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
 
 `factory begin` lists `agent_notes` left by earlier agents for you (`for`: `developer`, `fixer` in `fix` and `update`
 mode, or `any`). Read them before exploring, as you read a ticket comment: helpful, not authoritative. To leave one
-for the next agent (for instance what you could not finish or verify), pass `--notes notes.json` with
-`{"for": "fixer", "files": [...], "repro": "...", "hint": "..."}` to `factory end` (at most 2,000 characters; no secrets).
+for the next agent (for instance what you could not finish or verify), add a note with its reader
+(`fixer`), the files, a repro command and a hint to your outcome (at most 2,000 characters; no secrets).
 
-## Ending the run
+## Outcomes
 
-Run `factory end <outcome>` with the data the outcome needs; the gate already knows the ticket, PR, branch and head. Write it as the last thing you do.
+Report one, as the last thing you do:
 
-```
-factory end done --checks checks.json
-factory end error
-factory end blocked --reason "ambiguous acceptance"
-factory end failed --reason "the check cannot run"
-```
-
-`checks.json` is an array of `{"text": "acceptance check text", "result": "pass"}` (`fail`, or `not-run` with a
-`"reason"`). `done` with a failed check is refused. A `fix` run passes `--addressed addressed.json` (an array of
-`"<finding id>: fixed in <sha>"` or `"<finding id>: disputed — <reason>"`) and, when every finding is
-disputed, `--disputed-focuses behaviour,structure-security`.
+- `done`: every acceptance check, each passed, failed or not run with the
+  reason; `done` with a failed check is refused. A `fix` run also lists each
+  finding as fixed (with its commit) or disputed (with the reason) and, when
+  it disputes every finding, the focuses it disputes.
+- `error`: nothing else; the next tier retries.
+- `blocked`, `failed` and the other outcomes `factory begin` lists: the reason.

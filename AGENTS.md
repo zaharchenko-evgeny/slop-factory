@@ -38,9 +38,8 @@ change, whether you are a person, a pi session or a factory role.
 4. **Deliver through the factory.** The factory is the node list in
    [engine/nodes.yaml](engine/nodes.yaml) ([ADR-0014](docs/adr/0014-node-model.md)),
    deployed as `[factory:<node>]` Air automations by the `factory-deploy` skill.
-   Each automation's agent runs `uv run factory/gate.py check`, does its
-   role's work, writes the handoff to the `handoff_path` that `check`
-   printed, and runs `gate.py apply`. The gate alone changes labels, posts
+   Each automation's agent runs `factory begin`, does its role's work,
+   and reports one outcome with `factory end` (the `factory-step` skill). The gate alone changes labels, posts
    reviews and comments, and moves the stage. An agent never edits labels,
    never approves, and never merges. On Air the platform pushes the branch
    (`create-pr` for implement, `push-to-source` for fix); work on the
