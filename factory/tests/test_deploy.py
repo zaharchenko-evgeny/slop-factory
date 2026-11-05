@@ -479,6 +479,27 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(workflow.validate(project, wf), [])
         self.assertEqual(workflow.to_nodes(project, wf), yaml.safe_load((ROOT / cfg.NODES).read_text()))
 
+    def test_mcp_connectors_come_from_node_then_mode_then_role(self):
+        project, wf = this_repository()
+        project["roles"]["developer"]["mcp"] = ["youtrack"]
+        project["roles"]["reviewer"]["modes"]["behaviour"]["mcp"] = ["slack"]
+        wf["nodes"]["fix"]["mcp"] = ["slack"]
+        a = {x["name"]: x for x in project_plan(project, wf)["automations"]}
+        self.assertEqual(a["[Slop factory] implement-mid"]["mcpConnectors"], ["youtrack"])
+        self.assertIn("## Your MCP servers\n\n- youtrack\n", a["[Slop factory] implement-mid"]["prompt"])
+        self.assertEqual(a["[Slop factory] fix-mid"]["mcpConnectors"], ["slack"])  # the node's list replaces the role's
+        self.assertEqual(a["[Slop factory] review-behaviour"]["mcpConnectors"], ["slack"])
+        self.assertEqual(a["[Slop factory] review-full"]["mcpConnectors"], [])
+        self.assertNotIn("Your MCP servers", a["[Slop factory] review-full"]["prompt"])
+
+    def test_hand_added_connector_is_a_removal(self):
+        planned = {"name": "[F] a", "mcpConnectors": []}
+        plan = {"prefix": "[F] ", "environments": [], "automations": [planned]}
+        self.assertEqual(deploy.diff(plan, [{"id": "a1", "name": "[F] a", "mcpConnectors": ["slack"]}], []),
+                         [("update", "automation", "[F] a", planned, {"id": "a1", "name": "[F] a", "mcpConnectors": ["slack"]},
+                           ["mcpConnectors"])])
+        self.assertEqual(deploy.diff(plan, [{"id": "a1", "name": "[F] a"}], []), [])  # a record without the field has none
+
     def test_triggers_from_command_store(self):
         project, wf = this_repository()
         project["commands"]["implement-<tier>"] = {"store": {"label": "work:implement-<tier>"}}

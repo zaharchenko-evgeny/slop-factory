@@ -16,6 +16,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
+import config as config_mod  # noqa: E402  (`validate` takes a `config` dict)
 import vocab  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +65,7 @@ def validate(nodes, config):
     errs += [f"stage-without-kind: {s}" for s in sorted(set(stages) - set(kinds))]
     errs += [f"bad-stage-kind: {s}: {k}" for s, k in kinds.items() if k not in ("active", "waiting", "final")]
     roles = config["roles"]
+    errs += config_mod.mcp_errors(roles, ((config.get("targets") or {}).get("air") or {}).get("mcp_connectors"), nodes)
     envs, scheds = nodes.get("environments") or {}, nodes.get("schedules") or {}
 
     def stage(where, s):

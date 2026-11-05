@@ -193,15 +193,27 @@ def begin_arg(node: str, n: dict) -> str:
     return "--pr <the pull request number>" if node in PR_TRIGGERED_NODES else "--issue <the issue number>"
 
 
+def mcp_connectors(n: dict, config: dict, focus: str | None) -> list[str]:
+    """The Air MCP connectors of an automation: its node's list, else its mode's, else its role's, else none."""
+    role = (config["roles"].get(n["role"]) or {}) if isinstance(config["roles"], dict) else {}
+    mode = ((role.get("modes") or {}).get(focus) or {}) if focus else {}
+    for source in (n, mode, role):
+        if source.get("mcp") is not None:
+            return list(source["mcp"])
+    return []
+
+
 def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None,
                  main_repository: dict | None = None) -> str:
     role = n["role"]
+    servers = mcp_connectors(n, config, focus)
+    mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
     text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
     checkout = checkout_instructions(main_repository, config)
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
-    return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n## This step\n\n{this_step(n, focus)}\n\n"
+    return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts and the branch or PR head. "
@@ -270,6 +282,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
                 "environmentConfigId": f"{prefix}{env}",
+                "mcpConnectors": mcp_connectors(n, config, focus),
                 "prompt": script_prompt(name, automation_repository, config) if n["role"] == "script" else agent_prompt(
                     name, n, config, aname, focus, automation_repository),
             }
@@ -481,6 +494,8 @@ def same(key: str, have, want) -> bool:
             return sorted((item.get("repository", {}).get("fullName") if isinstance(item.get("repository"), dict)
                            else item.get("repository"), item.get("branch")) for item in (items or []))
         return identities(have) == identities(want)
+    if key == "mcpConnectors":
+        return sorted(have or []) == sorted(want or [])
     if key == "domains":
         return set(want or []) <= set(have or [])
     return have == want
