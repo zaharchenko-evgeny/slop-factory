@@ -408,7 +408,17 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--apply"), 1)
         self.assertEqual(self.calls("automation"), [])
         self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
-        self.assertEqual(self.calls("automation"), [["delete_automation", {"automationId": "a2"}]])
+        self.assertEqual(self.calls("automation"), [["delete_automation", {"automationId": "a2", "confirmName": "[F] gone"}]])
+
+    def test_apply_leaves_an_environment_delete_to_a_person(self):
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"},
+                       {"id": "e9", "name": "[F] gone", "startup": "x", "repository": "https://github.com/o/r"}])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = self.run_deploy("--apply", allow_delete=True)
+        self.assertNotIn("delete_environment", [c[0] for c in self.calls("environment")])
+        self.assertIn("remove by hand in Air: environment [F] gone", err.getvalue())
+        self.assertEqual(code, 0)
 
     def test_team_repository_automation_runs_from_the_tracker_checkout(self):
         slop, before = HERE / "fixtures/slop", cfg.team_root()
