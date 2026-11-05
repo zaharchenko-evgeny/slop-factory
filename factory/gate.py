@@ -179,10 +179,12 @@ FIX_TIERS = ("cheap", "mid", "strong")
 
 
 def slices(split):
-    """The proposed slices of a router `split` as {title, body} children: a list of {title, body} objects, else
+    """The proposed slices of a router `split` as {title, body} children: a list of {title, body} objects (a
+    per-repository child also names its `repo`, `subsystem` and the repositories it is `after`), else
     lines (a string, or a list of strings) whose text is both title and body."""
     if isinstance(split, list) and all(isinstance(x, dict) for x in split):
-        return [{"title": str(x["title"]).strip(), "body": str(x.get("body") or x["title"]).strip()} for x in split]
+        return [{"title": str(x["title"]).strip(), "body": str(x.get("body") or x["title"]).strip(),
+                 **{k: x[k] for k in ("repo", "subsystem", "after") if x.get(k)}} for x in split]
     lines = split.splitlines() if isinstance(split, str) else [str(x) for x in split or []]
     out = [x.strip().lstrip("-").strip() for x in lines]
     return [{"title": x.split(" — ")[0].strip(), "body": x} for x in out if x and x != "none"]

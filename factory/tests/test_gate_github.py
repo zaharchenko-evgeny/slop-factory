@@ -811,6 +811,14 @@ class EffectsTest(unittest.TestCase):
         self.assertGreater(ready[0], flat.index(next(w for w in flat if "/dependencies/blocked_by" in w)))  # no ready before a link
         self.assertGreater(ready[-1], last_link)
 
+    def test_create_children_links_dependent_listed_before_prerequisite(self):
+        gh = FakeGh(labels=("factory:split", "risk:low"))
+        kids = [{"title": "Web", "repo": "web", "after": ["api"]}, {"title": "Api", "repo": "api"}]
+        tr(gh).apply(eff("create-issues", kids))
+        titles = [x for w in gh.writes for x in w if x.startswith("title=")]
+        self.assertEqual(titles, ["title=Api", "title=Web"])  # prerequisite first
+        self.assertEqual(len([w for w in gh.writes if "issues/999/dependencies/blocked_by" in " ".join(w)]), 1)
+
     def test_create_children_falls_back_to_blocked_by_line(self):
         gh = FakeGh(labels=("factory:split", "risk:low"))
         gh.blocked, gh.fail_blocked_by = [], True
