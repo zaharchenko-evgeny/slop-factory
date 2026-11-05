@@ -1032,7 +1032,7 @@
       },
       "environmentConfigId": "[Slop factory] read",
       "name": "[Slop factory] doctor",
-      "prompt": "Run `factory doctor` once and report its JSON lines. It changes no ticket itself.",
+      "prompt": "Run the installed `factory doctor` command exactly once in the foreground with no arguments. Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -1165,7 +1165,7 @@
       },
       "environmentConfigId": "[Slop factory] write",
       "name": "[Slop factory] doctor-write",
-      "prompt": "Run `factory doctor` once and report its JSON lines. It changes no ticket itself.",
+      "prompt": "Run the installed `factory doctor` command exactly once in the foreground with no arguments. Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -1298,7 +1298,7 @@
       },
       "environmentConfigId": "[Slop factory] ops",
       "name": "[Slop factory] doctor-ops",
-      "prompt": "Run `factory doctor` once and report its JSON lines. It changes no ticket itself.",
+      "prompt": "Run the installed `factory doctor` command exactly once in the foreground with no arguments. Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",

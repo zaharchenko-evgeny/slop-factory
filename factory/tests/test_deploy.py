@@ -549,12 +549,16 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(mismatched, [])
         self.assertTrue(any(a["repository"]["fullName"] == "o/team" for a in plan["automations"]))
 
-    def test_non_team_automations_use_team_repository_as_additional_repository(self):
-        team = {"repository": deploy.repository({"url": "https://github.com/o/team"}), "branch": "main"}
-        plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
+    def test_team_and_project_automations_get_the_other_repositories(self):
+        config = {**cfg.load(), "team_repository": "https://github.com/o/team"}
+        team = {"repository": deploy.repository({"url": config["team_repository"]}), "branch": "main"}
+        project = config["repositories"][0]
+        project_repository = {"repository": deploy.repository(project), "branch": project["default_branch"]}
+        plan = deploy.plan_air(nodes.load(), config)
         team_automations = [a for a in plan["automations"] if a["repository"]["fullName"] == "o/team"]
         project_automations = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
-        self.assertTrue(team_automations and all("additionalRepositories" not in a for a in team_automations))
+        self.assertTrue(team_automations and all(a.get("additionalRepositories") == [project_repository]
+                                                for a in team_automations))
         self.assertTrue(project_automations and all(a.get("additionalRepositories") == [team] for a in project_automations))
         planned = [{"repository": {"fullName": "o/team"}, "branch": "main"}]
         live = [{"repository": {"fullName": "o/team", "id": "server-field"}, "branch": "main",
@@ -579,8 +583,10 @@ class PlanTest(unittest.TestCase):
         names = {a["name"] for a in team}
         for name in ("retro", "distill", "review-knowledge"):
             self.assertIn(f"[Slop factory] {name}", names)
-        self.assertTrue(all("additionalRepositories" not in a and a["environmentConfigId"] == "[Slop factory] ops"
-                            for a in team))
+        team_projects = [{"repository": deploy.repository(r), "branch": r["default_branch"]}
+                         for r in [*base["repositories"], other]]
+        self.assertTrue(all(a.get("additionalRepositories") == team_projects
+                            and a["environmentConfigId"] == "[Slop factory] ops" for a in team))
 
     def test_prompts_enter_the_main_project_checkout_only_when_it_is_not_the_team(self):
         plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
@@ -616,6 +622,20 @@ class PlanTest(unittest.TestCase):
         a = {x["name"]: x for x in plan["automations"]}
         self.assertIn("Run `factory sweep` in the foreground", a["[Slop factory] sweep"]["prompt"])
         self.assertIn("`factory begin intake --issue <the issue number>`", a["[Slop factory] intake"]["prompt"])
+
+    def test_doctor_prompts_use_the_installed_command_and_explain_ticket_effects(self):
+        plan = deploy.plan_air(nodes.load(), cfg.load())
+        automations = {a["name"]: a for a in plan["automations"]}
+        for name in ("doctor", "doctor-write", "doctor-ops"):
+            prompt = automations[f"[Slop factory] {name}"]["prompt"]
+            self.assertIn("Run the installed `factory doctor` command exactly once", prompt)
+            self.assertIn("in the foreground with no arguments", prompt)
+            self.assertIn("Do not use `uv run`, `--help` or add arguments", prompt)
+            self.assertIn("every JSON probe line", prompt)
+            self.assertIn("exit code", prompt)
+            self.assertIn("temporary probe issue", prompt)
+            self.assertIn("`Doctor: <probe> fails`", prompt)
+            self.assertIn("must not create, edit or close tickets yourself", prompt)
 
     def test_every_script_prompt_waits_for_command_exit(self):
         plans = (deploy.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
