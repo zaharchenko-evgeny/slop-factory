@@ -90,6 +90,10 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
     event, _, arg = str(text).partition(" ")
     arg = arg.replace("<tier>", tier or "")
     arg = arg.replace("<focus>", focus or "")
+    if event.startswith("youtrack."):  # the filter value is case-sensitive: pass it through unchanged
+        name, _, value = arg.partition("=")
+        filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
+        return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
     labeled = event.startswith("issues.") or event.startswith("pull_request.labeled")
     filters = {"label": arg} if labeled and arg else {}
     if pr_author and event.startswith("pull_request"):
