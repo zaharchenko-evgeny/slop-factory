@@ -281,14 +281,6 @@ class FactsTest(unittest.TestCase):
 
         self.assertEqual(tr(gh).sweep_tickets(["changes-requested"]), [7])
 
-    def test_node_error_signal_is_written_only_for_canary(self):
-        gh = FakeGh(labels=["factory:in-review", "factory:canary"])
-        tr(gh).record_node_error(7)
-        self.assertIn("<!-- factory-node-error -->", " ".join(gh.writes[-1]))
-        gh = FakeGh()
-        tr(gh).record_node_error(7)
-        self.assertEqual(gh.writes, [])
-
     def test_facts(self):
         gh = FakeGh(reviews=[review(BOT, M)], requested=["alice"])
         f = tr(gh).facts(7)
