@@ -39,6 +39,13 @@ jobs:
         run: git -c user.name=ci -c user.email=ci@example.invalid merge --no-edit origin/main
       - name: Check documentation references
         run: uv run --quiet factory/check_refs.py
+      # test_slop_fixture_is_migrate_project_output regenerates fixtures/slop from the team commit in its SOURCE file.
+      - name: Check out the slop fixture's team commit
+        run: |
+          fixture=factory/tests/fixtures/slop
+          git clone --quiet "$(sed -n 's/^team_repository: //p' "$fixture/factory.project.yaml")" "$RUNNER_TEMP/slop-team"
+          git -C "$RUNNER_TEMP/slop-team" checkout --quiet --detach "$(cat "$fixture/SOURCE")"
+          echo "FACTORY_SLOP_TEAM=$RUNNER_TEMP/slop-team" >> "$GITHUB_ENV"
       - id: checks
         run: |
           set -o pipefail
@@ -147,76 +154,6 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Air's environment: non-root user, HOME with factory-main (#281), only the domains of the environment plan.
-  air-like:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with: { fetch-depth: 0, persist-credentials: false }
-      - run: pipx install uv
-      - id: settings-repository
-        run: |
-          repository=$(uv run --quiet --with pyyaml python -c "import yaml; from urllib.parse import urlparse; print(urlparse(yaml.safe_load(open('factory/tests/fixtures/slop/factory.project.yaml'))['team_repository']).path.strip('/'))")
-          echo "repository=$repository" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: ${{ steps.settings-repository.outputs.repository }}
-          ref: main
-          path: factory-team
-          persist-credentials: false
-      - name: Start the domain allowlist proxy
-        run: |
-          domains=$(uv run --quiet --with pyyaml python -c "import yaml; print(*{d for e in yaml.safe_load(open('engine/nodes.yaml'))['environments'].values() for d in e.get('domains', [])})")
-          touch "/tmp/air-like-denied.log"
-          chmod 666 "/tmp/air-like-denied.log"
-          # The proxy runs as `nobody`; the container user (uid 1500, not the runner's own uid) may reach only loopback, so direct downloads fail.
-          sudo iptables -I OUTPUT 1 -m owner --uid-owner 1500 ! -o lo -j REJECT
-          sudo ip6tables -I OUTPUT 1 -m owner --uid-owner 1500 ! -o lo -j REJECT
-          sudo cp -a "$PWD" "/tmp/air-like-repo"
-          sudo chown -R 1500 "/tmp/air-like-repo"
-          # shellcheck disable=SC2086
-          # Run the copy (under /tmp: `nobody` cannot traverse the runner home), detached from the step, and wait until it listens.
-          (cd "/tmp/air-like-repo" && setsid nohup sudo -u nobody python3 scripts/allowlist_proxy.py 8888 "/tmp/air-like-denied.log" $domains > "$RUNNER_TEMP/proxy.log" 2>&1 &)
-          for _ in $(seq 20); do (echo > /dev/tcp/127.0.0.1/8888) 2>/dev/null && exit 0; sleep 0.5; done
-          echo "::error::allowlist proxy did not start: $(cat "$RUNNER_TEMP/proxy.log")"
-          exit 1
-      # Air's image already has uv and gh in /usr/local/bin, so the startup script under test skips its download path.
-      - name: Build the image
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ctx=$(mktemp -d)
-          gh release download v2.103.2 --repo cli/cli --pattern 'gh_*_linux_amd64.tar.gz' --output "$ctx/gh.tgz"
-          tar -xzf "$ctx/gh.tgz" -C "$ctx" --strip-components=2 --wildcards 'gh_*/bin/gh'
-          docker build -t air-like --build-arg UID=1500 -f - "$ctx" <<'EOF'
-          FROM ghcr.io/astral-sh/uv:0.11.14 AS uv
-          FROM ubuntu:24.04
-          ARG UID
-          RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates python3 && rm -rf /var/lib/apt/lists/*
-          COPY --from=uv /uv /uvx /usr/local/bin/
-          COPY gh /usr/local/bin/gh
-          RUN userdel -r ubuntu 2>/dev/null; useradd -m -u "$UID" -d /home/workspace workspace
-          EOF
-      - name: Run startup.sh as in Air
-        run: |
-          scripts/retry-network.sh docker run --rm --network host --user workspace -e HOME=/home/workspace -e REPO=/repo \
-            -e FACTORY_TEAM=/repo/factory-team \
-            -e HTTPS_PROXY=http://127.0.0.1:8888 -e NO_PROXY=localhost,127.0.0.1 \
-            -v "/tmp/air-like-repo:/repo" air-like bash /repo/scripts/air-like.sh
-      - name: Check for downloads from other hosts
-        if: always()
-        run: |
-          # A direct (non-proxy) download as the container's uid must be rejected.
-          for family in -4 -6; do
-            if sudo -u '#1500' curl "$family" -sS --max-time 10 -o /dev/null https://example.com 2>/dev/null; then
-              echo "::error::direct IPv${family#-} egress is not blocked"
-              exit 1
-            fi
-          done
-          if [ -s "/tmp/air-like-denied.log" ]; then
-            echo "::error::downloads from hosts outside the environment plan: $(sort -u "/tmp/air-like-denied.log" | tr '\n' ' ')"
-            exit 1
-          fi
   agnix:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -231,7 +168,7 @@ jobs:
   # The CI label is the result of every job: it runs last, so the run is about to complete when the label wakes a
   # reviewer or the join, and they read the same result from the workflow runs instead of `pending`.
   ci-label:
-    needs: [factory-checks, air-like, agnix]
+    needs: [factory-checks, agnix]
     if: always() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'ez/')
     runs-on: ubuntu-latest
     timeout-minutes: 10

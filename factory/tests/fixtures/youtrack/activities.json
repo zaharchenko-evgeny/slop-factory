@@ -1,0 +1,8 @@
+[
+  {"timestamp": 1767225600000, "author": {"login": "alice"}, "category": {"id": "TagsCategory"}, "added": [{"name": "factory:ready"}], "removed": [], "field": null},
+  {"timestamp": 1767229200000, "author": {"login": "alice"}, "category": {"id": "TagsCategory"}, "added": [{"name": "factory:in-dev"}], "removed": [{"name": "factory:ready"}], "field": null},
+  {"timestamp": 1767232800000, "author": {"login": "bob"}, "category": {"id": "CustomFieldCategory"}, "added": [{"name": "In Progress"}], "removed": [{"name": "Open"}], "field": {"name": "State"}},
+  {"timestamp": 1767236400000, "author": {"login": "bob"}, "category": {"id": "CustomFieldCategory"}, "added": [{"name": "High"}], "removed": [], "field": {"name": "Priority"}},
+  {"timestamp": 1767240000000, "author": {"login": "bob"}, "category": {"id": "IssueResolvedCategory"}, "added": true, "removed": false, "field": null},
+  {"timestamp": 1767243600000, "author": {"login": "alice"}, "category": {"id": "IssueResolvedCategory"}, "added": false, "removed": true, "field": null}
+]

@@ -5,15 +5,19 @@
 # ///
 """Workflow files, format v2 (ADR-0016): nodes name states and commands from factory.project.yaml,
 never tracker labels or event names. `to_nodes` renders a v2 workflow into the node shape the gate
-and deploy read (ADR-0014); `migrate` converts a nodes.yaml and its team descriptor into v2.
+and deploy read (ADR-0014); `migrate` converts a nodes.yaml and its team descriptor into v2; `copy_project`
+copies a v2 team's descriptor and workflow (`factory migrate project`, how factory/tests/fixtures/slop/ is made).
 
 Usage: workflow.py migrate <nodes.yaml> <factory.descriptor.yaml> [--out DIR]
+       workflow.py project <team checkout> [--out DIR]
 Each validate error starts with a name: unknown-state, unknown-command, unknown-schedule, unknown-webhook, unknown-wake,
 unknown-effect, unknown-condition, uncovered-state.
 """
 import argparse
 import copy
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,11 +29,14 @@ import project as project_mod  # noqa: E402
 
 FORMAT = 2
 WORKFLOW_PATH = "workflows/delivery.yaml"
+# The team commit a `copy_project` output was copied from.
+SOURCE = "SOURCE"
 EFFECTS = {"state", "command", "uncommand", "comment", "review", "create-issues", "merge", "update-branch",
            "set-field", "join", "request-reviewers", "park-behind-main-red"}
 PLACEHOLDERS = ("<tier>", "<focus>")
 # GitHub adapter: wakes that are events, not a state entered or a command given.
 EVENTS = {"manual": "manual", "pr pushed": "pull_request.synchronize", "pr opened": "pull_request.opened",
+          "pr commented": "issue_comment.created",
           "pr reviewed": "pull_request_review.submitted", "ticket closed": "issues.closed",
           "ticket commented": "issues.comment", "ticket unlabeled": "issues.unlabeled"}
 # PR facts the GitHub adapter reads from an event; the others come from `tracker.pr_fact_labels`.
@@ -82,13 +89,22 @@ def resolve(commands, ref):
     return name, kind, value
 
 
-def _target(kind, what):
-    """`issue` or `pr`: where the GitHub adapter keeps a label store."""
-    if kind == "label":
+def _target(kind, what, youtrack=False):
+    """`issue` or `pr`: where the adapter keeps a label store (a YouTrack tag is on the ticket)."""
+    if kind == "label" or (youtrack and kind == "tag"):
         return "issue"
     if kind == "pr_label":
         return "pr"
     raise ValueError(f"the GitHub adapter cannot keep {what} in a {kind} store")
+
+
+def _youtrack_wake(kind, value):
+    """A YouTrack ticket event as a node trigger: `youtrack.tagAdded <tag>` or `youtrack.fieldChanged <field>=<value>`."""
+    if kind == "tag":
+        return f"youtrack.tagAdded {value}"
+    if kind == "field":
+        return f"youtrack.fieldChanged {value['name']}={value['value']}"
+    return None
 
 
 def render_wake(wake, project):
@@ -96,6 +112,7 @@ def render_wake(wake, project):
     if wake in EVENTS:
         return EVENTS[wake]
     verb, _, arg = wake.partition(" ")
+    youtrack = (project.get("tracker") or {}).get("adapter") == "youtrack"
     if verb in ("schedule", "webhook"):
         return wake
     if verb == "run":
@@ -103,6 +120,8 @@ def render_wake(wake, project):
     if verb == "state":
         store = project["states"][arg]["store"]
         kind = project_mod.store_kind(store)
+        if youtrack and _youtrack_wake(kind, store[kind]):
+            return _youtrack_wake(kind, store[kind])
         if kind == "label":
             return f"issues.labeled {store['label']}"
         if kind == "pr":
@@ -115,7 +134,9 @@ def render_wake(wake, project):
         raise ValueError(f"the GitHub adapter cannot wake on state {arg} ({kind}: {store[kind]})")
     if verb == "command":
         _, kind, value = resolve(project["commands"], arg)
-        return f"{'issues' if _target(kind, arg) == 'issue' else 'pull_request'}.labeled {value}"
+        if youtrack and kind == "tag":
+            return _youtrack_wake(kind, value)
+        return f"{'issues' if _target(kind, arg, youtrack) == 'issue' else 'pull_request'}.labeled {value}"
     raise ValueError(f"unknown wake: {wake}")
 
 
@@ -126,7 +147,7 @@ def render_effect(effect, project):
     if key in ("command", "uncommand"):
         _, kind, value = resolve(project["commands"], effect[key])
         out = {"label" if key == "command" else "unlabel": value}
-        if _target(kind, effect[key]) == "pr":
+        if _target(kind, effect[key], (project.get("tracker") or {}).get("adapter") == "youtrack") == "pr":
             out["on"] = "pr"
         return out
     return copy.deepcopy(effect)
@@ -340,6 +361,52 @@ def dump(data):
     return yaml.safe_dump(data, sort_keys=False, width=1000, allow_unicode=True)
 
 
+def copy_project(team, out):
+    """Copy a v2 team checkout's factory.project.yaml and the workflow it links into `out` byte for byte, after
+    validating them, and write the team's HEAD commit to SOURCE. Returns the written paths."""
+    team, out = Path(team), Path(out)
+    descriptor = project_mod.load(team)
+    wf = load(team, descriptor)
+    if wf.get("format") != FORMAT:
+        raise ValueError(f"{descriptor['workflow']}: not format {FORMAT}; convert it with `factory migrate workflow`")
+    errors = validate(descriptor, wf)
+    if errors:
+        raise ValueError("; ".join(errors))
+    files = [config.PROJECT_DESCRIPTOR, descriptor["workflow"]]
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(team), *args], capture_output=True, text=True, check=True).stdout.strip()
+    try:
+        if git("status", "--porcelain", "--", *files):
+            raise ValueError(f"{team}: uncommitted changes in {', '.join(files)}")
+        commit = git("rev-parse", "HEAD")
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise ValueError(f"{team}: not a git checkout ({e})") from e
+    written = []
+    for rel in files:
+        (out / rel).parent.mkdir(parents=True, exist_ok=True)
+        written.append(str(shutil.copyfile(team / rel, out / rel)))
+    (out / SOURCE).write_text(commit + "\n")
+    return [*written, str(out / SOURCE)]
+
+
+def project_main(argv):
+    p = argparse.ArgumentParser(prog="factory migrate project")
+    p.add_argument("team")
+    p.add_argument("--out", default=".factory/migrate")
+    try:
+        a = p.parse_args(argv)
+    except SystemExit:
+        return 2
+    try:
+        written = copy_project(a.team, a.out)
+    except (KeyError, ValueError, OSError, yaml.YAMLError) as e:
+        print(f"migrate project: {e}", file=sys.stderr)
+        return 1
+    print(json.dumps({"written": written}))
+    return 0
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="workflow.py")
     p.add_argument("cmd", choices=["migrate"])
@@ -366,4 +433,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(config.pop_team(sys.argv[1:])))
+    argv = config.pop_team(sys.argv[1:])
+    sys.exit(project_main(argv[1:]) if argv[:1] == ["project"] else main(argv))

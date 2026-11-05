@@ -57,6 +57,13 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn('"factory:implement-mid"', logged(t, "label"))
         self.assertTrue(logged(t, "comment")[0].startswith(f'"{reconcile.PREFIX} stage=in-dev head= re-fired'))
 
+    def test_pending_ci_does_not_wake_a_ci_label(self):
+        graph = {"nodes": {"merge": {"role": "script", "when": {"stage": "approved"},
+                                     "triggers": ["pull_request.labeled factory:ci-green"]}}}
+        self.assertEqual(list(reconcile.wakes(graph, {"stage": "approved", "pr": 5, "ci": "pending"})), [])
+        self.assertEqual([w[1] for w in reconcile.wakes(graph, {"stage": "approved", "pr": 5, "ci": "green"})],
+                         ["factory:ci-green"])
+
     def test_conflicting_unapproved_pr_goes_to_fix(self):
         t, results, _ = run({"stage": "in-review", "pr": 5, "conflict": True, "since": OLD,
                              "round_complete": False})
@@ -188,6 +195,19 @@ class ReconcileTest(unittest.TestCase):
         t, results, _ = run({"stage": "ready", "since": "2026-11-03T11:54:00Z"}, nodes)
         self.assertEqual(results[0]["node"], "custom")
         self.assertIn('"factory:custom"', logged(t, "label"))
+
+    def test_each_scheduled_pass_runs_the_ci_label_sync(self):
+        import contextlib
+        import io
+        import json
+        from unittest.mock import patch
+        out, synced = io.StringIO(), {"repo": "o/app", "pr": 1, "ci": "green"}
+        with patch("gate_github.GitHubGateTracker.from_config", return_value=MemoryTracker({})), \
+                patch.object(gate, "run_ci_sync", return_value=([synced], False)) as sync, \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(reconcile.main(["--dry-run"]), 0)
+        self.assertTrue(sync.call_args.args[0])  # the pass's --dry-run
+        self.assertEqual(json.loads(out.getvalue())["ci_sync"], [synced])
 
 
 if __name__ == "__main__":

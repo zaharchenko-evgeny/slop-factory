@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from unittest.mock import patch
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
+sys.path.insert(0, str(ROOT / "factory/tests"))
 import config as cfg  # noqa: E402
 import project_mode  # noqa: E402
 cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"))
@@ -85,6 +87,22 @@ class GateTest(unittest.TestCase):
         tr.facts = lambda ticket: {**facts(ticket), "reviews": [], "fix_rounds": 0}
         gate.sweep(tr, NODES)
         self.assertEqual(tr.deploy_ticket, {"title": "Deploy needed", "pr": 300})
+
+    def test_failed_plan_check_still_moves_the_parent(self):
+        class PlanTracker(MemoryTracker):
+            def config_change_merged(self, pr):
+                raise RuntimeError("git worktree add failed")
+        tr = PlanTracker({10: {"stage": "approved", "pr_state": "merged", "pr": 300}, 20: {"stage": "split"}})
+        tr.sweep_tickets = lambda stages: [10]
+        tr.parent = lambda n: 20 if n == 10 else None
+        seen = []
+        facts = tr.facts
+        tr.facts = lambda ticket: (seen.append(ticket), {**facts(ticket), "reviews": [], "fix_rounds": 0})[1]
+        results, failed = gate.sweep(tr, NODES, issue=10)
+        self.assertTrue(failed)
+        self.assertEqual(tr.tickets[10]["stage"], "done")
+        self.assertIn(20, seen)  # the parent was still read after the failed check
+        self.assertTrue(any("deploy check" in r.get("error", "") for r in results))
 
     def test_unchanged_plan_opens_nothing(self):
         class PlanTracker(MemoryTracker):
@@ -288,6 +306,34 @@ def tests_for(cls, tid):
 
 GateMemory = tests_for(MemoryTracker, 7)
 GateTag = tests_for(TagTracker, "PROJ-7")
+
+
+class YouTrackGateTest(unittest.TestCase):
+    """One implement step on LME-1701-shaped stub data (fixtures/project-youtrack): the ticket in a stubbed YouTrack,
+    its state a `field` store."""
+    FIXTURE = Path(__file__).resolve().parent / "fixtures/project-youtrack"
+
+    def setUp(self):
+        import project
+        from gate_github import GitHubGateTracker
+        from test_youtrack_tracker import FakeYouTrack
+        from youtrack_tracker import YouTrackTicketStore
+        self.addCleanup(cfg.set_team, cfg.team_root())  # importing the stub set a team of its own
+        cfg.set_team(self.FIXTURE)
+        self.fake = FakeYouTrack(json.loads((self.FIXTURE / "issue.json").read_text()), tags=("factory:implement-mid", "factory:needs-human"))
+        descriptor, self.config, self.nodes = project.load(self.FIXTURE), cfg.load(), nodes.load()
+        store = YouTrackTicketStore(self.fake, state_field="State")
+        self.tracker = GitHubGateTracker("example/project", self.config["tracker"]["stages"], "factory[bot]",
+                                         run=lambda *a, **k: "", project=descriptor, tickets=store)
+
+    def test_check_then_apply_blocked_moves_the_state_field_and_comments(self):
+        code, out = gate.check("implement", {"id": "e1", "ticket": "LME-1701"}, self.tracker, self.nodes, self.config)
+        self.assertEqual((code, out["context"]["stage"]), (gate.GO, "in-dev"))
+        code, _ = gate.apply("implement", "blocked", {"ticket": "LME-1701", "event": "e1", "reason": "[factory] stuck"},
+                             self.tracker, self.nodes)
+        self.assertEqual(code, gate.GO)
+        self.assertEqual(self.tracker.facts("LME-1701")["stage"], "blocked")
+        self.assertIn(("POST", "/api/issues/LME-1701/comments?fields=id", {"text": unittest.mock.ANY}), self.fake.calls)
 
 
 class CliAndValidate(unittest.TestCase):
@@ -1729,6 +1775,106 @@ class MultiRepositoryTest(unittest.TestCase):
                                                               {"repo": "b", "branch": "ez/7-x"}]))
         code, out = gate.check("merge", {"id": "e2", "ticket": 7, "heads": {"a": "h1", "b": "old"}}, tr, NODES, CONFIG)
         self.assertEqual((code, out["reason"]), (gate.NO_GO, "stale head"))
+
+
+class RepoSplitTest(unittest.TestCase):
+    """Triage splits a ticket over repositories into one ready child each, in dependency order (ADR-0017)."""
+    SLICES = [{"title": "API", "body": "api part", "repo": "api", "subsystem": "core"},
+              {"title": "Client", "body": "client part", "repo": "client", "subsystem": "core", "after": ["api"]},
+              {"title": "Deploy", "body": "deploy part", "repo": "deploy", "subsystem": "core", "after": ["api"]}]
+
+    def split(self, slices):
+        from gate_port import MemoryTicketStore
+        store = MemoryTicketStore()
+        n = store.add("parent")
+        store.create_children(n, gate.slices(slices), "factory:ready")
+        return store, n, {c["title"]: c["number"] for c in store.children(n) for c in [{**c, "title": store.tickets[c["number"]]["title"]}]}
+
+    def test_split_creates_repo_children_in_dependency_order(self):
+        store, n, ids = self.split(self.SLICES)
+        self.assertEqual([store.tickets[i]["attrs"] for i in ids.values()],
+                         [["factory:ready", f"repo:{r}", "subsystem:core"] for r in ("api", "client", "deploy")])
+        self.assertEqual([store.open_blockers(ids[t]) for t in ("API", "Client", "Deploy")],
+                         [[], [ids["API"]], [ids["API"]]])  # client and deploy wait for api only
+        self.assertFalse(store.create_children(n, gate.slices(self.SLICES), "factory:ready"))  # a retry changes nothing
+
+    def test_child_pr_in_its_repository(self):
+        from gate_port import MemoryCodeHost
+        store, n, ids = self.split(self.SLICES)
+        pr = lambda number, ticket: {"number": number, "branch": f"ez/{ticket}-x", "head": "h", "labels": []}  # noqa: E731
+        hosts = {"o/api": MemoryCodeHost({"o/api": [pr(5, ids["API"])]}),
+                 "o/client": MemoryCodeHost({"o/client": [pr(5, ids["Client"])]})}
+        found = {r: h.ticket_for_pr(5, r) for r, h in hosts.items()}
+        self.assertEqual(found, {"o/api": ids["API"], "o/client": ids["Client"]})  # same PR number, own repository
+        self.assertIn("repo:client", store.tickets[found["o/client"]]["attrs"])
+        self.assertIsNone(hosts["o/api"].ticket_for_pr(5, "o/client"))
+
+    def test_parent_done_when_all_children_done(self):
+        store, n, ids = self.split(self.SLICES)
+
+        def plan():
+            kids = [{**c, "blocked": False} for c in store.children(n)]
+            return gate.sweep_plan({"stage": "split", "children": kids, "comments": []}, None)
+
+        for t in ("API", "Client"):
+            store.close(ids[t])
+        self.assertIsNone(plan())
+        store.close(ids["Deploy"])
+        self.assertEqual(plan()[:2], ("finish", "children-done"))
+
+    def test_one_repository_ticket_continues_without_children(self):
+        h = {"outcome": "proceed", "size_estimate": "~100"}
+        self.assertEqual(gate.intake_fields(h)["children"], [])
+        tr = MemoryTracker({7: {"stage": "triage"}})
+        code, _ = gate.apply("intake", "proceed", {"ticket": 7, **PAYLOAD, **gate.intake_fields(h)}, tr, NODES)
+        self.assertEqual((code, tr.tickets[7]["stage"]), (gate.GO, "ready"))
+        self.assertNotIn("create-issues", [k for k, _ in tr.tickets[7].get("log", [])])
+
+
+class CiSyncTest(unittest.TestCase):
+    """The scheduled CI label sync of the project repositories' factory PRs (gate.ci_sync)."""
+    GREEN, RED = "factory:ci-green", "factory:ci-red"
+
+    def host(self):
+        from gate_port import MemoryCodeHost
+        pr = lambda n, head, labels=(), labeled_at=None, branch=None: {  # noqa: E731
+            "number": n, "branch": branch or f"ez/{n}-x", "head": head, "labels": list(labels), "labeled_at": labeled_at or {}}
+        ok = lambda at="2026-11-05T10:00:00Z": {"conclusion": "success", "at": at}  # noqa: E731
+        return MemoryCodeHost(
+            {"o/app": [pr(1, "a1"), pr(2, "a2", [self.GREEN]), pr(3, "a3", [self.GREEN]), pr(4, "a4", branch="feature")],
+             "o/web": [pr(5, "w5", [self.GREEN], {self.GREEN: "2026-11-05T10:05:00Z"}),
+                       pr(6, "w6", [self.GREEN], {self.GREEN: "2026-11-05T09:00:00Z"}), pr(7, "w7")]},
+            {"a1": [ok(), {"conclusion": "neutral", "at": None}],  # a check run and a commit status
+             "a2": [ok(), {"conclusion": "failure", "at": "2026-11-05T10:01:00Z"}],
+             "a3": [ok(), {"conclusion": None, "at": None}], "a4": [ok()],
+             "w5": [ok()], "w6": [ok()]}, now="2026-11-05T11:00:00Z")
+
+    def test_sync_sets_ci_label_from_head_checks(self):
+        repos = gate.project_repositories({"repositories": [
+            {"name": "main", "url": "https://github.com/o/main", "role": "primary"},
+            {"name": "app", "url": "https://github.com/o/app", "role": "project"},
+            {"name": "web", "url": "https://github.com/o/web/", "role": "project"}]})
+        self.assertEqual(repos, ["o/app", "o/web"])
+        host = self.host()
+        results, failed = gate.ci_sync(host, repos)
+        self.assertFalse(failed)
+        self.assertEqual([(r["repo"], r["pr"], r["ci"]) for r in results],  # PR 4 is no factory branch
+                         [("o/app", 1, "green"), ("o/app", 2, "red"), ("o/app", 3, "pending"),
+                          ("o/web", 5, "green"), ("o/web", 6, "green"), ("o/web", 7, "none")])
+        self.assertEqual(host.edits, [("o/app", 1, [self.GREEN], []), ("o/app", 2, [self.RED], [self.GREEN]),
+                                      # labelled before the head's result: an earlier head's label, set again
+                                      ("o/web", 6, [self.GREEN], [self.GREEN])])
+        labels = {(repo, p["number"]): p["labels"] for repo, prs in host.prs.items() for p in prs}
+        self.assertEqual(labels[("o/app", 3)], [self.GREEN])  # pending: no change
+        self.assertEqual(labels[("o/web", 5)], [self.GREEN])  # labelled after this head's result: no change
+        gate.ci_sync(host, repos)
+        self.assertEqual(len(host.edits), 3)  # a second pass writes nothing
+
+    def test_sync_dry_run_writes_nothing_and_one_failing_repository_does_not_stop_the_others(self):
+        host = self.host()
+        results, failed = gate.ci_sync(host, ["o/missing", "o/app"], dry_run=True)
+        self.assertTrue(failed)
+        self.assertEqual((results[0]["repo"], results[1]["added"], host.edits), ("o/missing", [self.GREEN], []))
 
 
 if __name__ == "__main__":

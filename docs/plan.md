@@ -16,7 +16,7 @@ repository the source of truth and the engine a pinned dependency. Parent:
 | 4a | #464 | `factory deploy --target local` checks and records the laptop setup | #458 |
 | 4b | #465 | `factory run --local` delivers tickets through the same gate | #461, #464 |
 
-The YouTrack adapter stays deferred behind the tracker port.
+The YouTrack adapter is delivered by #163 behind the tracker port.
 
 ## History: project descriptor and workflow (ADR-0016)
 
@@ -40,7 +40,7 @@ The build order of [ADR-0015](adr/0015-engine-package-and-descriptor.md). Each t
 | 6 | #162 | Knowledge routines: nightly retro, weekly distill, knowledge reviewer | #215 |
 | 7 | #216 | The first eval project repository | #215 |
 
-Follow-ups, not ticketed yet: several repositories per ticket as a draft set, the YouTrack adapter, Air Mate as the ticket front door (#11), and a local event loop.
+Follow-ups, not ticketed yet: several repositories per ticket as a draft set, Air Mate as the ticket front door (#11), and a local event loop.
 
 ## History: the first plan
 

@@ -9,6 +9,8 @@
     "issue": {"type": "integer"},
     "pr": {"type": "integer"},
     "result": {"type": "string"},
+    "author": {"type": "string"},
+    "body": {"type": "string"},
     "run": {"type": "string"},
     "source": {"enum": ["gate", "air", "github", "retro"]}
   }

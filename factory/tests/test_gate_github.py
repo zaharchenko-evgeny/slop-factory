@@ -24,6 +24,7 @@ import project_mode  # noqa: E402
 cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"))
 import gate  # noqa: E402
 import gate_github as M_GH  # noqa: E402
+import gate_port as M_PORT  # noqa: E402
 import nodes  # noqa: E402
 from gate_github import GitHubGateTracker  # noqa: E402
 
@@ -115,6 +116,14 @@ class FakeGh:
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
         a = a + " POST" if "POST" in args else a
         assert args[:2] != ["api", "user"], "gh api user must never be called"
+        if args[:2] == ["api", "graphql"]:  # the stage search (GraphQL); a batch read gets no answer: REST fallback
+            q = next((x[2:] for x in args if x.startswith("q=")), None)
+            if q is None:
+                return ""
+            wanted = re.findall(r'"([^"]+)"', q.split("label:", 1)[1])
+            on = any(x in self.labels for x in wanted) and ("is:open" in q) == (self.state == "open")
+            return json.dumps({"data": {"search": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                                                   "nodes": [{"number": 7}] if on else []}}})
         if args[0] == "api" and "-X" not in args and "-f" not in args and "-F" not in args and re.search(r"/issues(/|\?|$)", a) \
                 and "comments/" not in a and "/labels" not in a:
             recorded(a.split("/", 3)[-1], [] if a.endswith(("/events", "/comments", "/sub_issues", "blocked_by", "blocking")) else {})
@@ -275,6 +284,65 @@ def eff(kind, value, **kw):
 
 
 class FactsTest(unittest.TestCase):
+    def test_sweep_tickets_searches_open_and_recently_closed_tickets_once_each(self):
+        gh, calls = FakeGh(labels=["factory:changes-requested"]), []
+        t = tr(lambda args, timeout=None: (calls.append(args), gh(args, timeout))[1])
+        self.assertEqual(t.sweep_tickets(["changes-requested", "ready"]), [7])
+        searches = [next(x for x in c if x.startswith("q=")) for c in calls if c[:2] == ["api", "graphql"]]
+        self.assertEqual(len(searches), 2)
+        self.assertIn('label:"factory:changes-requested","factory:ready"', searches[0])
+        self.assertIn("is:closed closed:>=", searches[1])
+        self.assertFalse([c for c in calls if any("issues?state=" in x for x in c)])
+        calls.clear()
+        t.sweep_tickets(["ready"], open_only=True)
+        self.assertEqual(len(calls), 1)
+
+    def prefetched(self):
+        """A tracker over FakeGh whose batch query answers ticket 7 with its labels, one labeled event and no comment."""
+        gh, calls = FakeGh(labels=("factory:in-review", "risk:low")), []
+        node = {"number": 7, "databaseId": 7, "id": "I_7", "state": "OPEN", "stateReason": None, "title": "t",
+                "body": "", "updatedAt": "2026-11-05T10:00:00Z", "closedAt": None, "author": {"login": "ez", "__typename": "User"},
+                "assignees": {"nodes": []},
+                "labels": {"pageInfo": {"hasNextPage": False}, "nodes": [{"name": x} for x in gh.labels]},
+                "blockedBy": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+                "comments": {"pageInfo": {"hasPreviousPage": False}, "nodes": []},
+                "timelineItems": {"pageInfo": {"hasNextPage": False}, "nodes": [
+                    {"__typename": "LabeledEvent", "createdAt": "2026-11-05T09:00:00Z",
+                     "actor": {"login": "ez", "__typename": "User"}, "label": {"name": "factory:in-review"}}]}}
+
+        def run(args, timeout=None):
+            calls.append(args)
+            if args[:2] == ["api", "graphql"] and not any(x.startswith("q=") for x in args):
+                return json.dumps({"data": {"repository": {"i7": node}}})
+            return gh(args, timeout)
+        return tr(run), calls
+
+    @staticmethod
+    def issue_reads(calls):
+        return [x for c in calls for x in c if re.search(r"/issues/7(/events|/comments|/dependencies/blocked_by)?$", x)]
+
+    def test_prefetched_ticket_reads_no_issue_endpoint_over_rest(self):
+        t, calls = self.prefetched()
+        t.prefetch([7])
+        calls.clear()
+        self.assertEqual(t.facts(7)["stage"], "in-review")
+        self.assertEqual(self.issue_reads(calls), [])
+
+    def test_a_write_clears_the_prefetched_reads(self):
+        t, calls = self.prefetched()
+        t.prefetch([7])
+        t.run(["issue", "edit", "7", "--add-label", "x"])
+        calls.clear()
+        t.facts(7)
+        self.assertIn(f"repos/{REPO}/issues/7", self.issue_reads(calls))
+
+    def test_failed_prefetch_reads_over_rest(self):
+        gh = FakeGh(labels=("factory:in-review", "risk:low"))
+        t = tr(gh)  # FakeGh answers a batch query with nothing
+        t.prefetch([7])
+        self.assertEqual(t.run.cache, {})
+        self.assertEqual(t.facts(7)["stage"], "in-review")
+
     def test_sweep_tickets_includes_closed_changes_requested_issues(self):
         gh = FakeGh(labels=["factory:changes-requested"])
         gh.state = "closed"
@@ -742,6 +810,14 @@ class EffectsTest(unittest.TestCase):
         self.assertFalse(any("labels[]=factory:ready" in w for w in creates))  # created without a stage
         self.assertGreater(ready[0], flat.index(next(w for w in flat if "/dependencies/blocked_by" in w)))  # no ready before a link
         self.assertGreater(ready[-1], last_link)
+
+    def test_create_children_links_dependent_listed_before_prerequisite(self):
+        gh = FakeGh(labels=("factory:split", "risk:low"))
+        kids = [{"title": "Web", "repo": "web", "after": ["api"]}, {"title": "Api", "repo": "api"}]
+        tr(gh).apply(eff("create-issues", kids))
+        titles = [x for w in gh.writes for x in w if x.startswith("title=")]
+        self.assertEqual(titles, ["title=Api", "title=Web"])  # prerequisite first
+        self.assertEqual(len([w for w in gh.writes if "issues/999/dependencies/blocked_by" in " ".join(w)]), 1)
 
     def test_create_children_falls_back_to_blocked_by_line(self):
         gh = FakeGh(labels=("factory:split", "risk:low"))
@@ -1628,6 +1704,113 @@ class TwoRepositoryFactsTest(unittest.TestCase):
             return run
         self.assertFalse(GitHubGateTracker(REPO, STAGES, BOT, run=gh("old")).main_green())
         self.assertTrue(GitHubGateTracker(REPO, STAGES, BOT, run=gh("new")).main_green())
+
+
+class StoreGh(FakeGh):
+    """FakeGh that also keeps the comments written with `gh issue comment`."""
+
+    def __call__(self, args, timeout=None):
+        if args[:2] == ["issue", "comment"]:
+            self.comments.append({"user": {"login": "factory[bot]", "type": "Bot"}, "body": args[-1],
+                                  "created_at": "2026-01-03T00:00:00Z"})
+            return ""
+        return super().__call__(args, timeout)
+
+
+def ticket_store_contract(test, make):
+    """What every TicketStore does (factory/gate_port.py). `make(attrs, body, assignees, comments, events)` returns
+    (store, ticket id) over a ticket seeded so: `alice` can write, `eve` cannot, one open and one closed blocker."""
+    attrs, at = ["factory:in-review", "risk:low"], "2026-01-01T00:00:00Z"
+    comments = [{"author": "alice", "author_is_bot": False, "body": "hi", "at": at},
+                {"author": "ci[bot]", "author_is_bot": True, "body": "built", "at": at}]
+    events = [{"kind": "labeled", "value": "factory:in-review", "actor": "alice", "at": at},
+              {"kind": "closed", "value": None, "actor": "alice", "at": at}]
+    store, n = make(attrs, "scope", ["alice"], comments, events)
+    issue = store.issue(n)
+    test.assertEqual((issue["body"], issue["state"], issue["author"], sorted(issue["attrs"]), issue["assignees"]),
+                     ("scope", "open", "author", sorted(attrs), ["alice"]))
+    test.assertEqual(store.events(n), events)
+    test.assertEqual(store.comments(n), comments)
+    test.assertEqual(len(store.open_blockers(n)), 1)
+    test.assertEqual([store.can_answer(x) for x in ("alice", "eve", "nobody")], [True, False, False])
+    store.add_attr(n, "docs")
+    test.assertEqual(sorted(store.issue(n)["attrs"]), ["docs", "factory:in-review", "risk:low"])
+    store.set_stage(n, "factory:approved", ["factory:in-review"])
+    test.assertEqual(sorted(store.issue(n)["attrs"]), ["docs", "factory:approved", "risk:low"])
+    store.remove_attr(n, "docs")
+    test.assertEqual(sorted(store.issue(n)["attrs"]), ["factory:approved", "risk:low"])
+    test.assertEqual([store.assign(n, ["bob"]), store.assign(n, ["bob"]), store.assign(n, [])], [True, False, True])
+    test.assertEqual(store.issue(n)["assignees"], [])
+    store.comment(n, "[factory] done")
+    test.assertEqual(store.comments(n)[-1]["body"], "[factory] done")
+    store.close(n)
+    test.assertEqual(store.issue(n)["state"], "closed")
+
+
+class TicketStoreContractTest(unittest.TestCase):
+    def test_ticket_store_contract(self):
+        def github(attrs, body, assignees, comments, events):
+            gh = StoreGh(labels=attrs, comments=[
+                {"user": {"login": c["author"], "type": "Bot" if c["author_is_bot"] else "User"}, "body": c["body"],
+                 "created_at": c["at"]} for c in comments])
+            gh.issue_body, gh.assignees = body, list(assignees)
+            gh.issue_events = [{"event": e["kind"], "label": {"name": e["value"]} if e["value"] else None,
+                                "actor": {"login": e["actor"]}, "created_at": e["at"]} for e in events]
+            return tr(gh).tickets, 7
+
+        def memory(attrs, body, assignees, comments, events):
+            store = M_PORT.MemoryTicketStore(can_write=["alice"])
+            n = store.add("t", body, attrs, assignees=assignees, comments=comments, events=events)
+            gone, live = store.add(), store.add()
+            store.close(gone)
+            store.tickets[n]["blocked_by"] = [gone, live]
+            return store, n
+
+        for make in (github, memory):
+            with self.subTest(store=make.__name__):
+                ticket_store_contract(self, make)
+
+    def test_memory_store_creates_chained_children_once_and_parks_behind_red_main(self):
+        store = M_PORT.MemoryTicketStore()
+        n = store.add("parent")
+        self.assertTrue(store.create_children(n, [{"title": "A", "body": "a"}, "B"], "factory:ready"))
+        self.assertFalse(store.create_children(n, [{"title": "A", "body": "a"}, "B"], "factory:ready"))
+        a, b = (k["number"] for k in store.children(n))
+        self.assertEqual((store.open_blockers(b), store.parent(a)), ([a], n))
+        self.assertEqual(store.tickets_by_stage(["factory:ready"]), [a, b])
+        self.assertTrue(store.park(n, "tests", "factory:triage"))
+        self.assertFalse(store.park(n, "tests", "factory:triage"))
+
+
+class CiSyncCodeHostTest(unittest.TestCase):
+    """GitHubCodeHost's reads and writes for gate.ci_sync, on a recorded `gh`."""
+
+    def test_factory_prs_head_checks_label_time_and_two_write_edit(self):
+        calls, own = [], {"full_name": "o/app"}
+        pulls = [{"number": 1, "head": {"ref": "ez/7-x", "sha": "s1", "repo": own}, "labels": [{"name": "factory:ci-green"}]},
+                 {"number": 2, "head": {"ref": "feature", "sha": "s2", "repo": own}, "labels": []},
+                 {"number": 3, "head": {"ref": "ez/8-y", "sha": "s3", "repo": {"full_name": "fork/app"}}, "labels": []}]
+        events = [{"event": "labeled", "label": {"name": "factory:ci-green"}, "created_at": t} for t in ("T1", "T3")]
+        out = {"repos/o/app/pulls?state=open&per_page=100": "\n".join(map(json.dumps, pulls)),
+               "repos/o/app/commits/s1/check-runs?per_page=100": "\n".join(map(json.dumps, [
+                   {"status": "completed", "conclusion": "success", "completed_at": "T2"},
+                   {"status": "in_progress", "conclusion": None, "completed_at": None}])),
+               "repos/o/app/commits/s1/status": json.dumps({"statuses": [{"state": "error", "updated_at": "T4"},
+                                                                         {"state": "pending", "updated_at": "T5"}]}),
+               "repos/o/app/issues/1/events?per_page=100": "\n".join(map(json.dumps, events))}
+
+        def run(args):
+            calls.append(args)
+            return "" if args[0] == "pr" else out[next(a for a in args if a.startswith("repos/"))]
+        host = M_GH.GitHubCodeHost("o/main", run)
+        self.assertEqual(host.factory_prs("o/app"), [{"number": 1, "head": "s1", "labels": ["factory:ci-green"]}])
+        self.assertEqual(host.head_checks("o/app", "s1"), [{"conclusion": "success", "at": "T2"}, {"conclusion": None, "at": None},
+                                                            {"conclusion": "failure", "at": "T4"}, {"conclusion": None, "at": "T5"}])
+        self.assertEqual(host.label_added_at("o/app", 1, "factory:ci-green"), "T3")
+        self.assertIsNone(host.label_added_at("o/app", 1, "factory:ci-red"))
+        host.edit_pr_labels("o/app", 1, add=["factory:ci-green"], remove=["factory:ci-green"])
+        self.assertEqual(calls[-2:], [["pr", "edit", "1", "-R", "o/app", "--remove-label", "factory:ci-green"],
+                                      ["pr", "edit", "1", "-R", "o/app", "--add-label", "factory:ci-green"]])
 
 
 if __name__ == "__main__":

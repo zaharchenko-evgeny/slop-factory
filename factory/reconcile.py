@@ -11,6 +11,7 @@ No model and no Air quota: the expected next step of each ticket comes from engi
 (a node's `timeout_minutes` overrides it) gets its label once; a second miss sets `blocked` and `factory:needs-human`.
 A closed ticket in a PR stage with a merged PR is finished (its `finish` run was lost).
 A ticket in a waiting stage, closed, or already marked `factory:needs-human` is left alone.
+Each pass also runs the CI label sync (`gate.py ci-sync`) over the `role: project` repositories (not with memory:FILE).
 """
 import json
 import re
@@ -57,7 +58,8 @@ def wakes(nodes, facts):
                 cmd = facts.get("command")
                 if cmd and re.fullmatch(label.replace("<tier>", "[a-z]+"), cmd):
                     yield name, cmd, on, "no outcome after the command label"
-            elif label not in (vocab.ci("ci-green"), vocab.ci("ci-red")) or label == vocab.ci(f"ci-{facts.get('ci')}"):
+            elif label not in (vocab.ci("ci-green"), vocab.ci("ci-red")) or (
+                    facts.get("ci") in ("green", "red") and label == vocab.ci(f"ci-{facts['ci']}")):  # pending: CI's job
                 yield name, label, on, f"no {name} outcome"
 
 
@@ -69,6 +71,8 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
     # Open tickets in an active or waiting stage only: each listed ticket costs a dozen API reads, and a closed or
     # done one is never re-fired, so listing them spent the hourly GitHub budget for nothing.
     listed = tracker.sweep_tickets([s for s in stages if stage_kinds.get(s) != "final"], open_only=True)
+    import gate  # lazily, as finish_lost does
+    gate.prefetch(tracker, listed)
     finish_lost(tracker, nodes, [s for s in LOST_FINISH if s in stages], listed, dry_run, results, progress)
     for n in listed:
         try:
@@ -153,7 +157,9 @@ def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress)
     """GitHub closes a ticket on merge; when the `finish` run was lost the ticket is closed but still in a PR stage.
     A closed ticket there whose PR is merged gets the `finish` outcome, as `gate.py sweep --issue <n>` would."""
     import gate
-    for n in sorted(set(tracker.sweep_tickets(stages)) - set(open_listed)):
+    closed = sorted(set(tracker.sweep_tickets(stages)) - set(open_listed))
+    gate.prefetch(tracker, closed)
+    for n in closed:
         try:
             if tracker.facts(n).get("pr_state") != "merged":
                 continue
@@ -195,10 +201,19 @@ def main(argv):
         from gate_github import GitHubGateTracker
         tracker = GitHubGateTracker.from_config()
     config = config_mod.load()
+    progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
     results, failed = reconcile(tracker, nodes_mod.load(), list(config["tracker"]["stages"]), config["limits"],
                                 stage_kinds=config["tracker"].get("stage_kinds", {}),
-                                dry_run=dry_run, progress=lambda r: print(json.dumps(r), file=sys.stderr, flush=True))
-    print(json.dumps({"dry_run": dry_run, "reconcile": results}))
+                                dry_run=dry_run, progress=progress)
+    out = {"dry_run": dry_run, "reconcile": results}
+    if not spec:
+        import gate
+        try:
+            out["ci_sync"], sync_failed = gate.run_ci_sync(dry_run, progress)
+        except Exception as e:  # the reconcile results above are still reported
+            out["ci_sync"], sync_failed = [{"error": f"{type(e).__name__}: {e}"}], True
+        failed = failed or sync_failed
+    print(json.dumps(out))
     return 1 if failed else 0
 
 

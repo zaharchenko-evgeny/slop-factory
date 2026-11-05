@@ -7,12 +7,23 @@
   "properties": {
     "engine": {"type": ["integer", "string"]},
     "team_repository": {"type": "string"},
+    "write_mode": {"enum": ["per-repo", "token"], "default": "per-repo"},
     "engine_repository": {"type": "string", "default": "https://github.com/zaharchenko-evgeny/slop-factory.git"},
     "project": {
       "type": "object",
       "additionalProperties": false,
       "required": ["name"],
       "properties": {"name": {"type": "string"}}
+    },
+    "code_host": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {"enum": ["github", "space"]},
+        "repository": {"type": "string"},
+        "project": {"type": "string"},
+        "url": {"type": "string"}
+      }
     },
     "tracker": {
       "type": "object",
@@ -27,6 +38,8 @@
         "repository": {"type": "string"},
         "url": {"type": "string"},
         "project": {"type": "string"},
+        "token_env": {"type": "string"},
+        "done_state": {"type": "string"},
         "map_label": {"type": "string"},
         "review_trigger": {"type": "string"},
         "risk_labels": {"type": "object"},

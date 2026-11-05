@@ -1,4 +1,5 @@
 engine: 1
+engine_repository: https://github.com/zaharchenko-evgeny/slop-factory.git
 project:
   name: Slop factory
 team_repository: https://github.com/zaharchenko-evgeny/slop-eval-factory
@@ -7,6 +8,10 @@ repositories:
   url: https://github.com/zaharchenko-evgeny/slop-factory
   default_branch: main
   role: primary
+- name: slop-eval-factory
+  url: https://github.com/zaharchenko-evgeny/slop-eval-factory
+  default_branch: main
+  role: project
 branch_pattern: ez/{ticket}-{slug}
 commit_prefix: '#{ticket} '
 tracker:
@@ -89,10 +94,6 @@ checks:
   stage: pre-review
   mode: blocking
   run: python3 scripts/vendor-skills.py --check
-- name: air-like
-  stage: pre-review
-  mode: blocking
-  run: bash -n scripts/air-like.sh && python3 -c "import ast; ast.parse(open('scripts/allowlist_proxy.py').read())"
 - name: state-machine
   stage: pre-review
   mode: blocking
@@ -111,11 +112,11 @@ environments:
     - '*.blob.core.windows.net'
     - pypi.org
     - files.pythonhosted.org
-    - air.jetbrains.cloud
     vm: default
   write:
     repositories:
     - slop-factory
+    - slop-eval-factory
     startup: .air/cloud/startup.sh
     secrets: []
     domains:
@@ -127,7 +128,6 @@ environments:
     - pypi.org
     - files.pythonhosted.org
     - registry.npmjs.org
-    - air.jetbrains.cloud
     vm: default
   ops:
     repositories:
@@ -141,7 +141,6 @@ environments:
     - release-assets.githubusercontent.com
     - pypi.org
     - files.pythonhosted.org
-    - air.jetbrains.cloud
     vm: default
 workflow: workflows/delivery.yaml
 states:

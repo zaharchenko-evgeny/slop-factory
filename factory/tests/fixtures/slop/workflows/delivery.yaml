@@ -8,7 +8,7 @@ schedules:
   distill:
     cron: 0 3 * * 1
   reconcile:
-    cron: 17 * * * *
+    cron: '*/15 * * * *'
   doctor:
     cron: 0 5 * * *
 nodes:

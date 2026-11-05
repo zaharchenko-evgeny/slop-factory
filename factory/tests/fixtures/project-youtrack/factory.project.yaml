@@ -1,0 +1,57 @@
+engine: 1
+project:
+  name: YouTrack fixture
+tracker:
+  adapter: youtrack
+  url: https://example.youtrack.cloud
+  project: LME
+  token_env: YOUTRACK_TOKEN
+  done_state: Done
+code_host:
+  repository: example/project
+repositories:
+  - name: project
+    url: https://github.com/example/project
+    default_branch: main
+    role: primary
+    environment: read
+    domains: [factory]
+environments:
+  read:
+    repositories: [project]
+    domains: [factory]
+    secrets: []
+    vm: standard
+targets:
+  air:
+    bot_login: factory[bot]
+notify:
+  github_user: alice
+models:
+  mid: anthropic/claude-sonnet-5-5
+roles:
+  developer:
+    tier: mid
+limits:
+  fix_rounds: 3
+  agent_runs_per_ticket: 8
+workflow: workflows/delivery.yaml
+states:
+  in-dev:
+    kind: active
+    store: {field: {name: State, value: In Progress}}
+  blocked:
+    kind: waiting
+    store: {field: {name: State, value: Blocked}}
+  done:
+    kind: final
+    store: {field: {name: State, value: Done}}
+commands:
+  implement-<tier>:
+    store: {tag: "factory:implement-<tier>"}
+  close:
+    store: {tag: close}
+  fix-<tier>:
+    store: {pr_label: "factory:fix-<tier>"}
+  update-<tier>:
+    store: {pr_label: "factory:update-<tier>"}

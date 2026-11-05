@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import sys
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -22,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 import github_tracker  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
+import youtrack_tracker  # noqa: E402
 
 BASE_TOOLS = ("gh", "uv")
 
@@ -37,6 +39,10 @@ def env_needs(env, nodes, resolve=config.resolve):
         tools |= {t for line in setup.read_text().splitlines() if line.startswith("need_tools ") for t in line.split()[1:]}
         skills |= set(names.read_text().split()) if names.exists() else set()
     return sorted(tools), sorted(skills)
+
+
+def env_needs_tiers(nodes):
+    return sorted({t for n in nodes["nodes"].values() for t in n.get("tiers") or []})
 
 
 def run_log(api, run, repo):
@@ -103,6 +109,48 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
     return results
 
 
+def youtrack_wanted(settings, tiers):
+    """(tags, {field: values}) the descriptor's state and command stores name, `<tier>` expanded."""
+    tags, fields = set(), {}
+    stores = [x["store"] for x in [*(settings.get("states") or {}).values(), *(settings.get("commands") or {}).values()]]
+    for store in stores:
+        if isinstance(store.get("tag"), str):
+            tags |= {store["tag"].replace("<tier>", t) for t in tiers} if "<tier>" in store["tag"] else {store["tag"]}
+        if isinstance(store.get("field"), dict):
+            fields.setdefault(store["field"]["name"], set()).add(store["field"]["value"])
+    return sorted(tags), {k: sorted(v) for k, v in fields.items()}
+
+
+def youtrack_probes(settings, tiers, environ=os.environ, yt_run=None):
+    """Read-only probes of a YouTrack tracker: the token variable, the project, and every mapped tag and field value.
+    A missing one is reported, never created."""
+    t = settings["tracker"]
+    token_env = t.get("token_env", "YOUTRACK_TOKEN")
+    results = [{"probe": f"youtrack:token:{token_env}", "result": "ok" if environ.get(token_env) else "missing", "detail": ""}]
+    if not environ.get(token_env) and yt_run is None:
+        return results
+    yt_run = yt_run or youtrack_tracker.urllib_runner(t["url"], environ[token_env])
+    q = urllib.parse.quote
+    try:
+        projects = yt_run("GET", f"/api/admin/projects?fields=id,shortName&query={q(t['project'])}&{youtrack_tracker.TOP}")
+        project = next((p for p in projects if p["shortName"] == t["project"]), None)
+        results.append({"probe": f"youtrack:project:{t['project']}", "result": "ok" if project else "missing", "detail": ""})
+        tags, fields = youtrack_wanted(settings, tiers)
+        have = {x["name"] for x in yt_run("GET", f"/api/tags?fields=name&{youtrack_tracker.TOP}")}
+        results += [{"probe": f"youtrack:tag:{x}", "result": "ok" if x in have else "missing", "detail": ""} for x in tags]
+        values = {}
+        if project and fields:
+            for c in yt_run("GET", f"/api/admin/projects/{project['id']}/customFields?fields=field(name),bundle(values(name))&{youtrack_tracker.TOP}"):
+                values[c["field"]["name"]] = {v["name"] for v in (c.get("bundle") or {}).get("values") or []}
+        for name, wanted in fields.items():
+            for v in wanted:
+                results.append({"probe": f"youtrack:field:{name}={v}", "result": "ok" if v in values.get(name, ()) else "missing",
+                                "detail": "" if name in values else "field not in project"})
+    except Exception as e:  # an unreadable YouTrack is a denied probe
+        results.append({"probe": "youtrack:read", "result": "denied", "detail": str(e)[:200]})
+    return results
+
+
 def cleanup(repo, made, run):
     """Delete the probe objects (an issue the token cannot delete is closed); report a `cleanup` failure."""
     out = []
@@ -147,9 +195,11 @@ def main(argv=None, run=github_tracker.gh):
         print(json.dumps({"error": "FACTORY_ENV must name an environment of nodes.yaml"}))
         return 2
     settings = config.load()
-    repo = settings["tracker"]["repository"]
+    repo = settings["tracker"].get("repository") or settings["code_host"]["repository"]
     run_id = f"doctor:{env}"
     results = run_probes(repo, env, nodes_mod.load(), run, (settings["tracker"].get("risk_labels") or {"low": "risk:low"})["low"], run_id=run_id)
+    if settings["tracker"].get("adapter") == "youtrack":
+        results += youtrack_probes(settings, env_needs_tiers(nodes_mod.load()))
     for r in results:
         print(json.dumps(r))
     failed = [r for r in results if r["result"] != "ok"]

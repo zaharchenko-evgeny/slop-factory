@@ -33,6 +33,15 @@ The prompt's "Project checkout" section names each checkout under `/workspaces/<
 `deploy.py` writes `additionalRepositories` through the Air REST API (`Backend.set_additional`), because
 the automations MCP does not expose it.
 
+### Delivering to the team repository (ADR-0019)
+
+To change the team repository through the factory, list it in `repositories` with `role: project`; any other role
+is a `factory validate` error. It is then one project checkout like any other: write nodes change it on branch
+`ez/<issue>-<slug>`, and it gets no read-only entry in `additionalRepositories`. The factory still reads its roles
+and skills from the `factory-team` directory in `$HOME`, a `git worktree` of the checkout's `origin/<default branch>` that the
+team's startup script creates (the template's `.air/cloud/startup.sh` shows how), and never from the checkout.
+With `FACTORY_TEAM` unset, the engine uses the `factory-team` directory in `$HOME` when it exists. Otherwise nothing changes.
+
 Open (#459): whether Air pushes a branch or opens a PR from an additional repository (`create-pr`,
 `push-to-source` act on the main repository). Until a probe answers it, a ticket that changes a second
 project repository needs its developer to push that branch itself, or it is split into one ticket per
@@ -111,7 +120,7 @@ Probed on 31 October with personal probe automations on `ez/152-probes` (model c
 | # | Question | Answer | Run link |
 | --- | --- | --- | --- |
 | 1 | A label added by `jetbrains-air[bot]` fires `issues.labeled` and `pull_request.labeled` | Yes, both, within 2 s (labels on #164, #165, #167) | [12a95b1b](https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/4fd6cfca-9ffd-4569-89b1-04f593cbc223?run=12a95b1b-5aec-4ffe-a26b-0ee487f0aa89), [bb1ac000](https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/4fd6cfca-9ffd-4569-89b1-04f593cbc223?run=bb1ac000-a636-44b5-9b33-11ab1af51611), [aee758ee](https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/766d62c3-0f85-4dc4-b464-79e44bb664e6?run=aee758ee-ecdc-45d1-85ee-d29d64e1f9cd) |
-| 2 | A YouTrack tag added by a run fires `tagAdded` | Not probed: no YouTrack project for this repository; moved to #163 | none |
+| 2 | A YouTrack tag added by a run fires `tagAdded` | Not probed in a run: no YouTrack project for this repository. `scripts/youtrack_probe.py LME-1701` (#615) reads an issue read-only; its result is pasted on #163 after the merge | none |
 | 3 | `push-to-source` accepts a merge commit from `main` | Yes: merge commit pushed by push-to-source, run 23839ea7 (#152) | run 23839ea7 |
 | 4 | `.air/cloud/startup.sh` runs and `FACTORY_ENV` reaches it | Yes: `startup ran 2026-10-31T09:44:22Z FACTORY_ENV=probe`; the script is read from the automation's branch | [12a95b1b](https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/4fd6cfca-9ffd-4569-89b1-04f593cbc223?run=12a95b1b-5aec-4ffe-a26b-0ee487f0aa89) |
 | 5 | `pull_request.opened` fires for a PR the platform opens after `create-pr` | Yes: PR #167 opened by `app/jetbrains-air`; filter `pr_author: jetbrains-air[bot]` works | [69343c6a](https://air.jetbrains.cloud/org/05cf1a7f-6ab5-713b-abd3-29d0c8a05e2d/automations/9a76d1d9-e6d2-4d1b-a856-bc9242caeaf9?run=69343c6a-cf87-441a-9b8a-27474dbd1a25) |

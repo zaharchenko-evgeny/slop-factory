@@ -1,0 +1,13 @@
+format: 2
+webhooks:
+  notify: { description: A notification request }
+nodes:
+  implement:
+    env: read
+    tiers: [cheap, mid, strong]
+    wakes_on: ["webhook notify"]
+    when: { state: in-dev }
+    role: developer
+    output: create-pr
+    outcomes:
+      blocked: { effects: [{ comment: reason }, { state: blocked }] }
