@@ -58,6 +58,35 @@ roles:
     tier: cheap
   distill:
     tier: mid
+agents:
+  dev:
+    persona: dev
+    role: developer
+    tier: mid
+    tier_high_risk: strong
+    fallback: mid
+    effort: high
+  rex:
+    persona: rex
+    role: reviewer
+    tools: read-only
+    modes:
+      full:
+        tier: review_strong
+        fallback: cheap
+      behaviour:
+        tier: review
+        fallback: cheap
+      structure-security:
+        tier: review_strong
+        fallback: cheap
+      knowledge:
+        tier: review_strong
+        fallback: cheap
+  ria:
+    persona: ria
+    role: router
+    tier: cheap
 knowledge:
   branch: knowledge-inbox
   dir: knowledge
@@ -97,7 +126,7 @@ checks:
 - name: state-machine
   stage: pre-review
   mode: blocking
-  run: export FACTORY_TEAM=factory/tests/fixtures/team && uv run --quiet factory/nodes.py validate && uv run --quiet factory/tests/test_nodes.py && uv run --quiet factory/tests/test_gate.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_gate_github.py && uv run --quiet factory/tests/test_vendor_skills.py && uv run --quiet factory/tests/test_deploy.py && uv run --quiet factory/tests/test_cli.py && uv run --quiet factory/tests/test_config.py && uv run --quiet factory/tests/test_knowledge.py && uv run --quiet factory/tests/test_retro.py && uv run --quiet factory/tests/test_doctor.py && uv run --quiet factory/cli.py validate && uv run --quiet factory/tests/test_project.py && uv run --quiet factory/tests/test_workflow.py && uv run --quiet factory/tests/test_project_ports.py && FACTORY_TEAM=factory/tests/fixtures/slop uv run --quiet factory/cli.py validate && FACTORY_TEST_PROJECT=1 uv run --quiet factory/tests/test_gate.py && FACTORY_TEST_PROJECT=1 uv run --quiet factory/tests/test_gate_github.py && FACTORY_TEST_PROJECT=1 uv run --quiet factory/tests/test_reconcile.py && uv run --quiet factory/tests/test_upgrade.py && FACTORY_TEAM=template uv run --quiet factory/cli.py validate && uv run --quiet skills/factory-setup/tests/test_templates.py
+  run: export FACTORY_TEAM=factory/tests/fixtures/team && uv run --quiet factory/nodes.py validate && uv run --quiet factory/tests/test_nodes.py && uv run --quiet factory/tests/test_gate.py && uv run --quiet factory/tests/test_github_tracker.py && uv run --quiet factory/tests/test_gate_github.py && uv run --quiet factory/tests/test_vendor_skills.py && uv run --quiet factory/tests/test_deploy.py && uv run --quiet factory/tests/test_cli.py && uv run --quiet factory/tests/test_config.py && uv run --quiet factory/tests/test_knowledge.py && uv run --quiet factory/tests/test_retro.py && uv run --quiet factory/tests/test_doctor.py && uv run --quiet factory/cli.py validate && uv run --quiet factory/tests/test_project.py && uv run --quiet factory/tests/test_workflow.py && uv run --quiet factory/tests/test_agents.py && uv run --quiet factory/tests/test_project_ports.py && FACTORY_TEAM=factory/tests/fixtures/slop uv run --quiet factory/cli.py validate && FACTORY_TEST_PROJECT=1 uv run --quiet factory/tests/test_gate.py && FACTORY_TEST_PROJECT=1 uv run --quiet factory/tests/test_gate_github.py && FACTORY_TEST_PROJECT=1 uv run --quiet factory/tests/test_reconcile.py && uv run --quiet factory/tests/test_upgrade.py && FACTORY_TEAM=template uv run --quiet factory/cli.py validate && uv run --quiet skills/factory-setup/tests/test_templates.py
 environments:
   read:
     repositories:
