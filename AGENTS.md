@@ -11,8 +11,7 @@ This repository is built by its own factory. Follow this process for every
 change, whether you are a person, a pi session or a factory role.
 
 1. **Ticket first.** Every change starts as a GitHub issue in this
-   repository, added as a sub-issue of the map
-   ([#21](https://github.com/zaharchenko-evgeny/slop-factory/issues/21)).
+   repository.
    The body has the scope, acceptance checks, affected repositories and a size
    estimate that counts tests and fixtures. Each acceptance check that searches
    files names the paths it covers or excludes, and uses a command or test name
