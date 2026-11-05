@@ -7,12 +7,14 @@
 
 Writes run on a probe issue, a child issue and a probe PR that the doctor creates and then deletes. Output: one JSON
 line per probe, `{"probe", "result": ok|denied|missing, "detail"}`; exit 1 on any failure. A failed probe opens or
-updates the ticket `Doctor: <probe> fails`. Needs `FACTORY_ENV` (read, write, ops) for the tool check.
+updates the ticket `Doctor: <probe> fails`; if filing that ticket is denied, a `report` probe line records the failure.
+Needs `FACTORY_ENV` (read, write, ops) for the tool check.
 """
 import json
 import os
 import shutil
 import sys
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -65,13 +67,13 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
             n = int(run(["issue", "create", "-R", repo, "--title", title, "--body", note("doctor probe, deleted at once.")]).strip().rsplit("/", 1)[-1])
             made["issues"].append(n)
             return n
-        issue, child = create_issue("Doctor probe"), create_issue("Doctor probe child")
-        child_id = json.loads(api(f"repos/{repo}/issues/{child}"))["id"]
         head = json.loads(api(f"repos/{repo}/commits/main"))
         old = head["parents"][0]["sha"] if head.get("parents") else head["sha"]  # a branch behind main: update-branch has work
-        branch = f"factory/doctor-probe-{issue}"
+        branch = f"factory/doctor-probe-{uuid.uuid4().hex[:12]}"
         api("-X", "POST", f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{branch}", "-f", f"sha={old}")
         made["branch"] = branch
+        issue, child = create_issue("Doctor probe"), create_issue("Doctor probe child")
+        child_id = json.loads(api(f"repos/{repo}/issues/{child}"))["id"]
         api("-X", "PUT", f"repos/{repo}/contents/.factory-doctor-{issue}", "-f", "message=doctor probe", "-f", "content=eA==", "-f", f"branch={branch}")
         made["pr"] = int(run(["pr", "create", "-R", repo, "--head", branch, "--base", "main", "--title", "Doctor probe", "--body", note("doctor probe, closed at once.")]).strip().rsplit("/", 1)[-1])
         pr = made["pr"]
@@ -125,12 +127,16 @@ def file_tickets(repo, failed, run, run_id="doctor"):
     for r in failed:
         title = f"Doctor: {r['probe']} fails"
         body = f"[factory] `factory doctor` probe `{r['probe']}`: {r['result']}. {r['detail']}\n\nFactory-Run: {run_id}"
-        found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--search", f'"{title}" in:title', "--json", "number,title"]))
-        match = next((i["number"] for i in found if i["title"] == title), None)
-        if match:
-            run(["issue", "comment", str(match), "-R", repo, "--body", body])
-        else:
-            run(["issue", "create", "-R", repo, "--title", title, "--body", body])
+        try:
+            found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--search",
+                                    f'"{title}" in:title', "--json", "number,title"]))
+            match = next((i["number"] for i in found if i["title"] == title), None)
+            if match:
+                run(["issue", "comment", str(match), "-R", repo, "--body", body])
+            else:
+                run(["issue", "create", "-R", repo, "--title", title, "--body", body])
+        except Exception as e:
+            print(json.dumps({"probe": "report", "result": "denied", "detail": f"{title}: {e}"[:200]}))
 
 
 def main(argv=None, run=github_tracker.gh):
