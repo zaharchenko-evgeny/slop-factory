@@ -154,8 +154,7 @@ class RecordedTest(unittest.TestCase):
         self.assertEqual(by_name["[Slop factory] ops"][5], ["repository"])
         for name in ("read", "write"):
             change = by_name[f"[Slop factory] {name}"]
-            self.assertEqual((change[0], change[5]), ("update", ["variables", "domains"]))
-            self.assertEqual(change[3]["variables"], {"FACTORY_ENV": name})
+            self.assertEqual((change[0], change[5]), ("update", ["domains"]))
             self.assertIn("FACTORY_TEAM_REPOSITORY", change[4]["variables"])
 
     def read_recorded(self):
@@ -204,6 +203,17 @@ class ApplyTest(unittest.TestCase):
             self.assertEqual(self.run_deploy("--dry-run"), 0)
         self.assertIn("set by a person: read secret YOUTRACK_TOKEN", out.getvalue())
         self.assertNotIn("secret HAVE", out.getvalue())
+
+    def test_apply_leaves_variable_air_cannot_delete_to_a_person_and_succeeds(self):
+        self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                        "variables": [{"key": "FACTORY_ENV", "value": "read"},
+                                      {"key": "FACTORY_TEAM_REPOSITORY", "value": "o/r"}]}])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertIn("remove by hand in Air: [F] read variable FACTORY_TEAM_REPOSITORY", out.getvalue())
+        self.assertEqual(self.calls("environment"), [])
 
     def backend(self):
         path, backend = self.state["automation"], mock.Mock()
@@ -307,13 +317,12 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(deploy.environment_detail(live)["variables"], {"FACTORY_ENV": "read"})
         self.assertEqual(self.run_deploy("--dry-run"), 0)
 
-    def test_air_environment_with_team_repository_plans_its_removal(self):
+    def test_air_environment_with_team_repository_is_not_a_change(self):
         self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
         live = {"name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
                 "variables": {"FACTORY_ENV": "read", "FACTORY_TEAM_REPOSITORY": "https://github.com/o/team"}}
         changes = deploy.diff(self.plan, [], [live])
-        self.assertEqual([(c[0], c[2], c[5]) for c in changes if c[1] == "environment"],
-                         [("update", "[F] read", ["variables"])])
+        self.assertEqual([c for c in changes if c[1] == "environment"], [])
 
     def test_slop_fixture_environments_have_only_factory_env(self):
         slop = HERE / "fixtures/slop"
