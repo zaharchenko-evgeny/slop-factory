@@ -4,6 +4,12 @@
 A merge request is `{number, title, state: open|merged|closed, branch, head, ci: success|failed|running|none,
 labels: [str], reviews: [{author, verdict: approve|changes, commit_id, submitted_at}]}`.
 
+Optional keys: `dry_run: {state: success|failed|running}` (the TeamCity dry run; it decides `ci` when present, else
+`ci` is used) and `role: owner|qa` on a review. They surface as the facts `dry_run` and, per review, `role`.
+
+Events: `space_event(payload)` reads a Space webhook payload `{eventType: "space.merge_request.<action>", data:
+{action, merge_request: {number, title, branch}, project: {key}}}` into `{number, action, project, ticket}`.
+
 Write side: `write(method, path, body)` performs the request and returns the decoded JSON; it raises on an HTTP error.
 `SpaceCodeHost.apply(effect)` carries out the effects `review`, `label`, `unlabel`, `update-branch` and `merge` on the
 ticket's open merge request, reading first and writing only on a difference; it returns True when it wrote, and
@@ -12,6 +18,17 @@ raises RuntimeError(`<kind>: ...`) when there is no merge request or the API fai
 from gate_port import PR_DEFAULTS, ticket_from_ref
 
 CI = {"success": "green", "failed": "red", "running": "pending"}
+
+
+def space_event(d):
+    """The merge request an event names: `{number, action, project, ticket}`; ticket is None when no branch or title names one."""
+    data = d.get("data") if isinstance(d.get("data"), dict) else d
+    mr = data.get("merge_request")
+    if not isinstance(mr, dict) or not isinstance(mr.get("number"), int) or mr["number"] < 1:
+        raise ValueError("payload has no merge request number")
+    action = data.get("action") or str(d.get("eventType") or "").rpartition(".")[2] or "event"
+    return {"number": mr["number"], "action": action, "project": (data.get("project") or {}).get("key"),
+            "ticket": ticket_from_ref(mr.get("branch")) or ticket_from_ref(mr.get("title"))}
 
 
 class SpaceCodeHost:
@@ -35,9 +52,11 @@ class SpaceCodeHost:
         if mr is None:
             return dict(PR_DEFAULTS)
         reviews = [{"author": r["author"], "verdict": r["verdict"], "commit_id": r["commit_id"],
-                    "submitted_at": r.get("submitted_at")} for r in mr.get("reviews") or []]
+                    "submitted_at": r.get("submitted_at"), **({"role": r["role"]} if r.get("role") else {})}
+                   for r in mr.get("reviews") or []]
+        dry_run = (mr.get("dry_run") or {}).get("state")
         return {**PR_DEFAULTS, "pr": mr["number"], "head": mr["head"], "branch": mr.get("branch"), "pr_state": mr["state"],
-                "ci": CI.get(mr.get("ci"), "none"), "pr_labels": list(mr.get("labels") or []), "reviews": reviews}
+                "ci": CI.get(dry_run or mr.get("ci"), "none"), "dry_run": dry_run, "pr_labels": list(mr.get("labels") or []), "reviews": reviews}
 
     def _mr_path(self, number):
         return f"projects/key:{self.project}/code-reviews/number:{number}"

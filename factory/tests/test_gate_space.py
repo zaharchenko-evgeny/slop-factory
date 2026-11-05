@@ -10,7 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gate_port import PR_DEFAULTS  # noqa: E402
-from gate_space import SpaceCodeHost  # noqa: E402
+from gate_space import SpaceCodeHost, space_event  # noqa: E402
+import gate  # noqa: E402
 
 
 def mr(number, branch, **kw):
@@ -71,6 +72,34 @@ class SpaceFacts(unittest.TestCase):
         r = {"author": "bob", "verdict": "changes", "commit_id": "sha2", "submitted_at": "2026-01-01T00:00:00Z", "extra": 1}
         f = self.host(mr(2, "ez/5-a", reviews=[r])).facts(5)
         self.assertEqual(f["reviews"], [{k: r[k] for k in ("author", "verdict", "commit_id", "submitted_at")}])
+
+
+class SpaceEvents(unittest.TestCase):
+    def payload(self, **mr):
+        return {"eventType": "space.merge_request.opened", "data": {"action": "opened", "project": {"key": "IJ"},
+                "merge_request": {"number": 7, "title": "t", "branch": "ez/5-thing", **mr}}}
+
+    def test_event_resolves_ticket(self):
+        self.assertEqual(space_event(self.payload()), {"number": 7, "action": "opened", "project": "IJ", "ticket": 5})
+        self.assertEqual(gate.from_trigger(self.payload()),
+                         {"id": "merge_request:5:opened", "ticket": 5, "event_name": "pull_request", "action": "opened"})
+
+    def test_event_falls_back_to_title_then_host(self):
+        self.assertEqual(gate.from_trigger(self.payload(branch="x", title="6 Fix"))["ticket"], 6)
+        host = SpaceCodeHost("IJ", FakeSpace(mr(7, "ez/8-a")))
+        self.assertEqual(gate.from_trigger(self.payload(branch="x"), host)["ticket"], 8)
+
+    def test_bad_events(self):
+        with self.assertRaises(gate.NoTicket):
+            gate.from_trigger(self.payload(branch="x"))
+        with self.assertRaises(ValueError):
+            space_event({"eventType": "space.merge_request.opened", "data": {}})
+
+    def test_dry_run_and_review_roles_in_facts(self):
+        r = {"author": "bob", "verdict": "approve", "commit_id": "sha2", "role": "qa"}
+        f = SpaceCodeHost("IJ", FakeSpace(mr(2, "ez/5-a", ci="success", dry_run={"state": "failed"}, reviews=[r]))).facts(5)
+        self.assertEqual((f["ci"], f["dry_run"], f["reviews"][0]["role"]), ("red", "failed", "qa"))
+        self.assertIsNone(SpaceCodeHost("IJ", FakeSpace(mr(2, "ez/5-a", ci="success"))).facts(5)["dry_run"])
 
 
 class SpaceWrites(unittest.TestCase):

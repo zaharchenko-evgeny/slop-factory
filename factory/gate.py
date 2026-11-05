@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 from gate_github import GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
+from gate_space import space_event  # noqa: E402
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
 import vocab  # noqa: E402
 from inbox import send as inbox_send  # noqa: E402
@@ -125,6 +126,13 @@ def pr_ticket(code_host, number, repository=None):
 def from_trigger(d, code_host=None):
     """Extract the event kind and ticket number; tracker facts supply mutable metadata."""
     event_name = d.get("eventType") or d.get("event_name")
+    if str(event_name or "").startswith("space.") or isinstance(d.get("merge_request"), dict) \
+            or isinstance((d.get("data") or {}).get("merge_request"), dict):
+        ev = space_event(d)
+        ticket = ev["ticket"] or (code_host.ticket_for_pr(ev["number"], ev["project"]) if code_host and ev["project"] else None)
+        if ticket is None:
+            raise NoTicket(f"merge request {ev['number']} is not on an ez/<n>- branch")
+        return {"id": f"merge_request:{ticket}:{ev['action']}", "ticket": ticket, "event_name": "pull_request", "action": ev["action"]}
     if not any(isinstance(d.get(key), dict) for key in ("pull_request", "issue", "review")):
         if isinstance(d.get("data"), dict):
             wrapper = d
