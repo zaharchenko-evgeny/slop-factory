@@ -85,6 +85,19 @@ class ProjectTest(unittest.TestCase):
             errors = self.errors(local(value))
             self.assertTrue(any(words in e for e in errors), (words, errors))
 
+    def test_unknown_mcp_connector_fails_validation_naming_it(self):
+        import workflow
+        descriptor = self.descriptor()
+        wf = yaml.safe_load((FIXTURE / "workflows/delivery.yaml").read_text())
+        self.assertEqual(workflow.validate(descriptor, wf), [])
+        descriptor["targets"] = {"air": {"mcp_connectors": ["youtrack"]}}
+        descriptor["roles"] = {"developer": {"mcp": ["youtrack"], "modes": {"x": {"mcp": ["slack"]}}}}
+        wf["nodes"][next(iter(wf["nodes"]))]["mcp"] = ["github"]
+        errors = workflow.validate(descriptor, wf)
+        self.assertEqual(sorted(e.split(": ")[2] for e in errors), ["github", "slack"], errors)
+        self.assertTrue(all(e.startswith("unknown-mcp-connector: ") for e in errors), errors)
+        self.assertEqual(self.errors(lambda d: d.update(descriptor)), [])
+
     def test_defaults_merged(self):
         loaded = project.load(FIXTURE)
         self.assertEqual(loaded["branch_pattern"], "ez/{ticket}-{slug}")
