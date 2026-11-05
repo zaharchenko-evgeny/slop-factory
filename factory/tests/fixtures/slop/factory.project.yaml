@@ -111,6 +111,7 @@ environments:
     - '*.blob.core.windows.net'
     - pypi.org
     - files.pythonhosted.org
+    - air.jetbrains.cloud
     vm: default
   write:
     repositories:
@@ -126,6 +127,7 @@ environments:
     - pypi.org
     - files.pythonhosted.org
     - registry.npmjs.org
+    - air.jetbrains.cloud
     vm: default
   ops:
     repositories:
@@ -139,6 +141,7 @@ environments:
     - release-assets.githubusercontent.com
     - pypi.org
     - files.pythonhosted.org
+    - air.jetbrains.cloud
     vm: default
 workflow: workflows/delivery.yaml
 states:

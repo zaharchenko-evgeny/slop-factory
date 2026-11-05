@@ -76,6 +76,9 @@ def notify_request(issue, settings, run=gh):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="factory inbox")
+    if argv and argv[0] == "send":
+        from inbox import send
+        return send.main(argv[1:])
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name in ("check", "deliver"):
         p = sub.add_parser(name)
