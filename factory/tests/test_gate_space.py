@@ -73,5 +73,62 @@ class SpaceFacts(unittest.TestCase):
         self.assertEqual(f["reviews"], [{k: r[k] for k in ("author", "verdict", "commit_id", "submitted_at")}])
 
 
+class SpaceWrites(unittest.TestCase):
+    def setUp(self):
+        self.calls, self.fail = [], None
+        self.space = FakeSpace(mr(2, "ez/5-a", labels=["a", "x-1", "x-2"]))
+        self.host = SpaceCodeHost("IJ", self.space, self.write)
+
+    def write(self, method, path, body):
+        if self.fail:
+            raise OSError(self.fail)
+        self.calls.append((method, path.split("number:2")[1], body))
+        return {}
+
+    def apply(self, kind, value=None, **kw):
+        return self.host.apply({"ticket": 5, "kind": kind, "value": value, **kw})
+
+    def test_review_once_per_head(self):
+        e = dict(focus="behaviour", summary="s", findings=[{"id": "B1", "file": "f:1", "finding": "bad"}])
+        self.assertTrue(self.apply("review", "changes", **e))
+        method, path, body = self.calls[0]
+        self.assertEqual((method, path, body["commitId"], body["verdict"]), ("POST", "/reviews", "sha2", "changes"))
+        self.assertIn("**B1** f:1", body["body"])
+        self.space.mrs[0]["reviews"] = [{"commit_id": "sha2", "body": body["body"]}]
+        self.assertFalse(self.apply("review", "changes", **e))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_labels(self):
+        self.assertTrue(self.apply("label", "new"))
+        self.assertFalse(self.apply("label", "a"))
+        self.assertTrue(self.apply("unlabel", "x-*"))
+        self.assertFalse(self.apply("unlabel", "absent"))
+        self.assertEqual([(m, p) for m, p, _ in self.calls], [("POST", "/labels"), ("DELETE", "/labels/x-1"), ("DELETE", "/labels/x-2")])
+
+    def test_update_and_merge_pin_head(self):
+        self.assertTrue(self.apply("update-branch", head="sha2"))
+        self.assertTrue(self.apply("merge", head="sha2"))
+        self.assertEqual([(p, b["expectedHead"]) for _, p, b in self.calls], [("/update-branch", "sha2"), ("/merge", "sha2")])
+        self.assertFalse(self.apply("merge", head="old"))  # head moved: nothing written
+        self.assertEqual(len(self.calls), 2)
+
+    def test_merged_is_noop_and_no_mr_fails(self):
+        self.space.mrs[0]["state"] = "merged"
+        self.assertFalse(self.apply("merge", head="sha2"))
+        with self.assertRaisesRegex(RuntimeError, "label: no open merge request"):
+            self.apply("label", "a")
+        self.assertEqual(self.calls, [])
+
+    def test_api_error(self):
+        self.fail = "HTTP 500"
+        for kind in ("label", "update-branch", "merge", "review"):
+            with self.assertRaisesRegex(RuntimeError, f"{kind}: HTTP 500"):
+                self.apply(kind, "x", focus="f")
+
+    def test_unknown_effect(self):
+        with self.assertRaises(ValueError):
+            self.apply("explode")
+
+
 if __name__ == "__main__":
     unittest.main()
