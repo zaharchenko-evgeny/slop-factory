@@ -686,14 +686,15 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories)
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                            additional_names=additional_names)
-        for x in after[0]:  # a person registers each webhook with its sender
-            for w in x["webhooks"]:
-                print(f"webhook {x['name']}: trigger {w['id']}" + (f" {w['url']}" if w["url"] else ""))
+        state = after
         left = diff(plan, *after)
         for action, kind, name, *_ in left:
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:
             return 1
+    for x in state[0]:  # a person registers each webhook with its sender; also on an unchanged plan
+        for w in x["webhooks"]:
+            print(f"webhook {x['name']}: trigger {w['id']}" + (f" {w['url']}" if w["url"] else ""))
     return 0
 
 
