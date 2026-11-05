@@ -15,6 +15,7 @@ References (contract plus one section per adapter):
 - [`references/harnesses.md`](references/harnesses.md)
 - [`references/checks.md`](references/checks.md)
 - [`references/run-log.md`](references/run-log.md)
+- [`references/state-chart.md`](references/state-chart.md) (the delivery chart and its checks; `scripts/state_chart.py`)
 
 You build a software factory inside the current repository. The factory
 belongs to the team. Generate its files, then apply them to a target after the
@@ -63,8 +64,9 @@ without showing the diff.
 - `skills.lock`
 - `docs/automations/<name>.md` (one record per automation)
 
-Then run `sm.py validate` on the rendered `delivery.sm.yaml` with the rendered
-`factory.descriptor.yaml`.
+For a v2 project, check the workflow and its chart as described in "State chart" below. The
+`sm.py` and `delivery.sm.yaml` files under `templates/workflows/` come from the pre-v2 engine: the engine no
+longer ships `sm.py`, so do not generate or validate with them.
 
 Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 `tests/test_templates.py` checks that they reproduce its files):
@@ -107,6 +109,19 @@ writes `factory.project.yaml`, `workflows/delivery.yaml`, `knowledge/` and
 | `GITHUB_USER` | GitHub login assigned to tickets that wait for a person | `factory.project.yaml` |
 | `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG`, `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Air model ids per tier | `factory.project.yaml` |
 
+### State chart
+
+Every v2 project's `workflows/delivery.md` carries a state chart of its delivery workflow, generated from
+`factory.project.yaml` and `workflows/delivery.yaml` (details: [`references/state-chart.md`](references/state-chart.md)):
+
+1. `factory validate --team OUT_DIR` (the workflow matches the declared states and commands).
+2. `uv run scripts/state_chart.py write OUT_DIR` (fills the chart and node table between the markers).
+3. `uv run scripts/state_chart.py verify OUT_DIR` must print `state chart: ok`. It fails on a stale chart,
+   an unknown state, an unreachable state, or an active state with no way out.
+
+Show the chart block to the user with the verify result. The chart is generated: change the workflow and
+run `write` again, never edit the block by hand.
+
 ## 3. Plan and apply
 
 For each selected target, show a plan first:
@@ -120,7 +135,8 @@ For each selected target, show a plan first:
 
 ## 4. Verify
 
-Run one representative input within the limits. Report the actual outcome,
+Before any run, `scripts/state_chart.py verify` and `factory validate --team` pass on the team (step 2, "State
+chart"). Then run one representative input within the limits. Report the actual outcome,
 the run links and the remaining gaps. An accepted configuration is not a
 working one.
 
