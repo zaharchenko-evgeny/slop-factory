@@ -39,6 +39,7 @@ import nodes as nodes_mod  # noqa: E402
 from gate_github import GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
 import vocab  # noqa: E402
+from inbox import send as inbox_send  # noqa: E402
 
 ROOT = nodes_mod.ROOT
 GO, NO_GO, BAD, FAILED = 0, 10, 2, 1
@@ -370,7 +371,34 @@ def resolve(effect, payload, ticket):
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
-def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None, auto_merge=None):
+def notify(kind, ticket, result=None, pr=None):
+    """Send the operator a `kind` request; a failure only warns (the sender never raises)."""
+    try:
+        issue = int(ticket)
+    except (TypeError, ValueError):
+        return
+    inbox_send.send(inbox_send.build(kind, issue, pr, result), config_mod.load())
+
+
+def notification(name, outcome, effects):
+    """The request kinds for an applied outcome: what needs the operator."""
+    kinds = []
+    if name in ("implement", "fix") and outcome in ("failed", "blocked", "env-broken"):
+        kinds.append("automation-error")
+    if name == "join" and outcome == "waiting" and any(
+            e["kind"] == "comment" and str(e["value"]).startswith("[factory] Re-review PR") for e in effects):
+        kinds.append("review-needed")
+    if name in ("implement", "fix") and outcome in ("failed", "env-broken"):
+        return kinds  # the automation error alone; only a `blocked` outcome also asks the operator to decide
+    if (name, outcome) == ("merge", "waiting") or any(
+            e["kind"] == "stage" and e["value"] in ("blocked", "needs-answers")
+            or e.get("run_id") == "finish:after-merge" for e in effects):
+        kinds.append("decision-needed")
+    return kinds
+
+
+def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None, auto_merge=None,
+          notify_kind=None):
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
         raise Bad(f"unknown outcome: {outcome}")
@@ -569,7 +597,10 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     why = matches(gated(name, node, facts), facts, {**payload, "id": payload.get("event")}, out)
     if why:
         return NO_GO, {"applied": False, "reason": why}
-    return GO, {"applied": True, "written": [e["kind"] for e in effects + after if tracker.apply(e)]}
+    written = [e["kind"] for e in effects + after if tracker.apply(e)]
+    for kind in [notify_kind] if notify_kind else notification(name, outcome, effects):  # only after the effects were applied
+        notify(kind, ticket, next((e["value"] for e in effects if e["kind"] == "comment"), None), facts.get("pr"))
+    return GO, {"applied": True, "written": written}
 
 
 SWEEP_STAGES = ("ready", "approved", "split", "in-review", "needs-answers")
@@ -746,6 +777,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
     results, failed, done_tickets = [], False, []
     stages = config_mod.load()["tracker"]["stages"]
     queue, seen, merged = ([issue] if issue is not None else list(tracker.sweep_tickets(stages))), set(), False
+    prefetch(tracker, queue)
     while queue:
         n = queue.pop(0)
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
@@ -842,6 +874,12 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
     return results, failed
 
 
+def prefetch(tracker, numbers):
+    """Let a tracker that batches its reads (GitHub: GraphQL) read `numbers` at once; the others read per ticket."""
+    if numbers and hasattr(tracker, "prefetch"):
+        tracker.prefetch(numbers)
+
+
 STALE_STAGES = ("triage", "ready", "in-dev", "in-review", "changes-requested", "approved")
 RECOVER = "[factory] recover:"
 
@@ -902,7 +940,9 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
     """Recover tickets whose Air run died: one re-fire per ticket and stage, a second stale finding blocks it.
     Returns (results, failed)."""
     now, results, failed = now or datetime.now(timezone.utc), [], False
-    for n in tracker.sweep_tickets(STALE_STAGES):
+    stale = tracker.sweep_tickets(STALE_STAGES)
+    prefetch(tracker, stale)
+    for n in stale:
         try:
             facts = tracker.stale_facts(n)
             plan = stale_plan(facts, now, hours, command_minutes)
@@ -937,13 +977,14 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                 tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"]})
                 tracker.apply({"ticket": n, "kind": "label", "value": vocab.needs_human(), "on": "pr"})
                 tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"], "on": "pr"})
-                r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
-                                              "value": f"{RECOVER} stage={stage}: {why}. A person decides, then sets {vocab.stage('ready')}."})
+                text = f"{RECOVER} stage={stage}: {why}. A person decides, then sets {vocab.stage('ready')}."
+                r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run, "value": text})
+                notify("decision-needed", n, text, facts.get("pr"))
             elif recovered(facts, stage):
                 r["recover"] = "blocked"
                 _, out = apply("recover", "blocked", {"ticket": n, "run_id": run,
                                                           "reason": f"[factory] Stopped: the node did not respond twice in {stage}. A person decides, then sets {vocab.stage('ready')}."},
-                               tracker, nodes)
+                               tracker, nodes, notify_kind="automation-error")
                 r["applied"] = out["applied"]
             else:  # the comment last: for `ready` the re-added stage label starts the stage, and the comment must follow it
                 tracker.apply({"ticket": n, "kind": "unlabel", "value": label, "on": on})

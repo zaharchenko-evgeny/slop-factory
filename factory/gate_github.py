@@ -19,6 +19,7 @@ from pathlib import Path
 import yaml
 
 import config
+import github_graphql
 from gate_port import PR_DEFAULTS, DescriptorPort, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
 from github_tracker import CountedRun, gh
 import vocab
@@ -158,10 +159,19 @@ class GitHubGateTracker(DescriptorPort):
                    repository_names(c))
 
     # --- reads
+    def _cached(self, path, repo):
+        """A body `prefetch` read, until the first write (`CountedRun` drops them)."""
+        cache = getattr(self.run, "cache", {})
+        return copy.deepcopy(cache[path]) if (repo or self.repo) == self.repo and path in cache else None
+
     def _api(self, path, *flags, repo=None):
+        if not flags and (hit := self._cached(path, repo)) is not None:
+            return hit
         return json.loads(self.run(["api", f"repos/{repo or self.repo}/{path}", *flags]))
 
     def _list(self, path, repo=None):
+        if (hit := self._cached(path, repo)) is not None:
+            return hit
         out = self.run(["api", "--paginate", f"repos/{repo or self.repo}/{path}", "--jq", ".[]"])
         return [json.loads(x) for x in out.splitlines() if x.strip()]
 
@@ -175,14 +185,38 @@ class GitHubGateTracker(DescriptorPort):
         return (bool(runs) and runs[0]["conclusion"] == "success"
                 and runs[0].get("headSha") == self._api("commits/main")["sha"])
 
-    def sweep_tickets(self, stages, open_only=False):
-        """Issue numbers (open or closed) whose stage label is one of `stages`."""
+    def sweep_tickets(self, stages, open_only=False, now=None):
+        """Issue numbers whose stage label is one of `stages`: the open ones and, unless `open_only`, those closed in the
+        last `github_graphql.CLOSED_HOURS`, from one paged GraphQL search each."""
+        labels = [self.stages[st] for st in stages if st in self.stages]
         found = set()
-        for st in stages:
-            state = "open" if open_only else "all"
-            found |= {i["number"] for i in self._list(f"issues?state={state}&labels={self.stages[st]}&per_page=100")
-                      if "pull_request" not in i}
+        for q in github_graphql.search_query(self.repo, labels, now)[:1 if open_only else 2] if labels else []:
+            after = None
+            while True:
+                args = ["api", "graphql", "-f", f"query={github_graphql.SEARCH}", "-f", f"q={q}"]
+                page = json.loads(self.run(args + (["-f", f"after={after}"] if after else [])))["data"]["search"]
+                found |= {x["number"] for x in page["nodes"] if x}
+                if not page["pageInfo"]["hasNextPage"]:
+                    break
+                after = page["pageInfo"]["endCursor"]
         return sorted(found)
+
+    def prefetch(self, numbers):
+        """Read tickets `numbers` in batched GraphQL queries into the cache `_api` and `_list` serve. A failed batch
+        caches nothing: the gate then reads those tickets over REST."""
+        owner, name = self.repo.split("/")
+        numbers = sorted(set(numbers))
+        for i in range(0, len(numbers), github_graphql.BATCH):
+            batch = numbers[i:i + github_graphql.BATCH]
+            try:
+                data = json.loads(self.run(["api", "graphql", "-f", f"query={github_graphql.batch_query(owner, name, batch)}"]))
+                found = {}
+                for node in data["data"]["repository"].values():
+                    if node:
+                        found.update(github_graphql.to_rest(node, list(self.stages.values())))
+                self.run.cache.update(found)
+            except Exception as e:  # an optimisation only: any failure reads over REST
+                print(f"prefetch of {batch} failed, reading over REST: {e}", file=sys.stderr)
 
     def config_change_merged(self, pr):
         """Create a deployment reminder when this merge changes the rendered Air plan."""

@@ -135,3 +135,12 @@ Other findings and their consequences for the design (#150, #159):
 - `result.summary` was null for 2 of 5 finished runs: the node's handoff goes through `gate apply`, not the run summary.
 - On Air, `gate.py check --event <file>` also takes the raw trigger payload (`issues`, `pull_request` or `pull_request_review`); a PR whose head is not `ez/<n>-*` exits 10. Its output adds `branch` (the PR head, or `ez/<n>-<slug>` from the issue title) and `handoff_path` (`.factory/handoff/<node>.json`). The role works on `branch`, writes the handoff to `handoff_path`, then runs `gate.py apply --node <n> --handoff <handoff_path>`, which derives the outcome and payload (`--outcome` and `--payload` still work). The platform pushes.
 - No answer is "no", so no workaround is needed. Probe 2 is tracked in #163.
+
+## Inbox senders
+
+The gate sends `review-needed`, `decision-needed` and `automation-error` requests after it applies effects
+(`factory inbox send`). With `notify.webhook` (`url_secret`, `key_secret` env var names) it POSTs the request with
+`Authorization: ApiKey <key>`; without it, it delivers in-process to the configured providers. A failed send only warns.
+Run crashes are not sent through Air `outboundWebhooks`: Air signs those with an HMAC secret and sends no
+`Authorization: ApiKey` header (AIRA-627), so they cannot wake another automation's webhook. `recover --stale`
+sends `automation-error` instead.
