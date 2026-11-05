@@ -1497,6 +1497,7 @@
     "factory:implement-cheap",
     "factory:implement-mid",
     "factory:implement-strong",
+    "factory:inbox",
     "factory:needs-answers",
     "factory:needs-human",
     "factory:ready",
