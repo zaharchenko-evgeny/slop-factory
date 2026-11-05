@@ -20,7 +20,7 @@ import yaml
 
 import config
 import github_graphql
-from gate_port import PR_DEFAULTS, DescriptorPort, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
+from gate_port import PR_DEFAULTS, DescriptorPort, child_attrs, child_links, child_order, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
 from github_tracker import CountedRun, gh
 import vocab
 from youtrack_tracker import YouTrackTicketStore
@@ -317,21 +317,22 @@ class GitHubTicketStore:
         open_issues = {i["title"]: i for i in reversed(self.read_list("issues?state=open&per_page=100"))
                        if "pull_request" not in i and mark in (i.get("body") or "")}
         risk = [x for x in self.issue(n)["attrs"] if x.startswith("risk:")]  # a slice keeps its parent's risk path
-        wrote, prev, prev_number = False, None, None  # prior slice blocks the next
+        wrote, made, links = False, {}, child_links(children)  # made: child index -> (id, number); prerequisites go first
         parent_body = self.issue(n)["body"]
-        for c in children:
+        for k in child_order(links):
+            c, after = children[k], links[k]
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
             new = open_issues.get(c["title"])
             if c["title"] in subs and new is None:  # not created by this ticket: leave it alone
-                prev = subs[c["title"]].get("id")
-                prev_number = subs[c["title"]].get("number")
+                made[k] = (subs[c["title"]].get("id"), subs[c["title"]].get("number"))
                 continue
+            prereqs = [made[j] for j in after if j in made]
             want = f"{c.get('body', '')}\n\n{mark}"
             if new is None:
                 new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
                                            "-f", f"body={want}",
-                                           *[x for r in risk for x in ("-f", f"labels[]={r}")]]))  # no stage yet: not runnable
-                chained, have = False, set()
+                                           *[x for r in [*risk, *child_attrs(c)] for x in ("-f", f"labels[]={r}")]]))  # no stage yet: not runnable
+                chained, have = set(), set()
             else:  # a reused child converges too: body, risk labels, chain
                 path = f"repos/{self.repo}/issues/{new['number']}"
                 if (new.get("body") or "") != want:
@@ -341,12 +342,14 @@ class GitHubTicketStore:
                 stale = [x for x in have if x.startswith("risk:") and x not in risk] if risk else []
                 for x in stale:  # an opposing risk label would pick the wrong review path
                     self.run(["api", "-X", "DELETE", f"{path}/labels/{x}"])
-                missing = [r for r in risk if r not in have]
+                missing = [r for r in [*risk, *child_attrs(c)] if r not in have]
                 if missing:
-                    self.run(["api", "-X", "POST", f"{path}/labels", *[x for r in risk for x in ("-f", f"labels[]={r}")]])
+                    self.run(["api", "-X", "POST", f"{path}/labels", *[x for r in [*risk, *child_attrs(c)] for x in ("-f", f"labels[]={r}")]])
                 wrote = wrote or bool(stale or missing)
-                chained = bool(prev) and prev in {b["id"] for b in self.read_list(f"issues/{new['number']}/dependencies/blocked_by")}
-            if prev and not chained:
+                chained = {b["id"] for b in self.read_list(f"issues/{new['number']}/dependencies/blocked_by")} if prereqs else set()
+            for prev, prev_number in prereqs:
+                if prev in chained:
+                    continue
                 try:
                     self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/dependencies/blocked_by", "-F", f"issue_id={prev}"])
                 except RuntimeError as e:
@@ -374,8 +377,7 @@ class GitHubTicketStore:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/labels", "-f", f"labels[]={ready}"])
                 wrote = True
             wrote = wrote or c["title"] not in subs or new["id"] not in blockers
-            prev = new["id"]
-            prev_number = new["number"]
+            made[k] = (new["id"], new["number"])
         return wrote
 
     def park(self, n, check, triage):
