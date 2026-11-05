@@ -11,7 +11,7 @@ copies a v2 team's descriptor and workflow (`factory migrate project`, how facto
 Usage: workflow.py migrate <nodes.yaml> <factory.descriptor.yaml> [--out DIR]
        workflow.py project <team checkout> [--out DIR]
 Each validate error starts with a name: unknown-state, unknown-command, unknown-schedule, unknown-webhook, unknown-wake,
-unknown-effect, unknown-condition, uncovered-state.
+unknown-effect, unknown-condition, uncovered-state, and the agent errors of `project.node_agents`.
 """
 import argparse
 import copy
@@ -207,6 +207,7 @@ def validate(project, wf):
     if not isinstance(wf, dict) or not isinstance(wf.get("nodes"), dict):
         return errs
     errs += config.mcp_errors(project.get("roles"), ((project.get("targets") or {}).get("air") or {}).get("mcp_connectors"), wf)
+    errs += project_mod.node_agents(project, wf["nodes"])[1]
     states, commands = project.get("states") or {}, project.get("commands") or {}
     schedules, webhooks, covered = wf.get("schedules") or {}, wf.get("webhooks") or {}, set()
 

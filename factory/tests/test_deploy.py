@@ -51,6 +51,21 @@ def project_plan(project, wf):
             cfg.set_team(before)
 
 
+def slop_with_agents():
+    """(project, workflow) of fixtures/slop with slop-eval-factory's agents (#589), until the fixture is regenerated."""
+    slop = HERE / "fixtures/slop"
+    project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
+    wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
+    roles = project["roles"]
+    project["agents"] = {"dev": {"persona": "dev", "role": "developer", "tier": roles["developer"]["tier"]},
+                         "rex": {"persona": "rex", "role": "reviewer", "modes": roles["reviewer"]["modes"]},
+                         "ria": {"persona": "ria", "role": "router", "tier": roles["router"]["tier"]}}
+    for node, agent in {"intake": "ria", "investigate": "dev", "implement": "dev", "review": "rex", "fix": "dev",
+                        "update": "dev"}.items():
+        wf["nodes"][node]["agent"] = agent
+    return project, wf
+
+
 FAKE_SERVER = r"""
 import json, sys
 state, kind = sys.argv[1], sys.argv[2]  # state file: {"items": [...], "calls": [...]}
@@ -578,6 +593,23 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(sorted(str(p.relative_to(slop)) for p in slop.rglob("*") if p.is_file()),
                          sorted(str(Path(p).relative_to(tmp)) for p in written))
 
+    def test_mention_allowlist(self):
+        """fixtures/slop's agents (ADR-0020): dev, rex and ria, and whom each may mention on which subject."""
+        project, wf = slop_with_agents()
+        specs = {a["spec"]["node"]: a["spec"] for a in project_plan(project, wf)["automations"]}
+        for node, spec in specs.items():
+            self.assertEqual(spec["role"] != "script", {"agent", "persona", "mentions"} <= set(spec), node)
+        self.assertEqual((specs["fix"]["mentions_on"]["rex"], specs["review"]["mentions_on"]["dev"]), (["pr"], ["pr"]))
+        self.assertEqual((specs["implement"]["mentions_on"]["ria"], specs["intake"]["mentions_on"]["dev"]),
+                         (["ticket"], ["ticket"]))
+        listed = {p for spec in specs.values() for p in spec.get("mentions", [])}
+        self.assertFalse(listed & {"merge", "finish", "join", "script"}, listed)
+        self.assertFalse({"persona", "mentions"} & (set(specs["merge"]) | set(specs["finish"]) | set(specs["join"])))
+        wf["nodes"]["intake"]["mention"] = False  # ria's only node
+        specs = {a["spec"]["node"]: a["spec"] for a in project_plan(project, wf)["automations"]}
+        self.assertEqual(specs["intake"]["mentions"], [])
+        self.assertFalse([n for n, spec in specs.items() if "ria" in spec.get("mentions", [])])
+
     def test_youtrack_tracker_renders_ticket_triggers_as_youtrack_events(self):
         project, wf = this_repository()
         project["tracker"] = {"adapter": "youtrack", "url": "https://y.example", "project": "LME"}
@@ -664,6 +696,14 @@ class PlanTest(unittest.TestCase):
         if os.environ.get("UPDATE_FIXTURE"):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
+
+    def test_plan_unchanged_without_agents(self):
+        """Without `agents:` and `agent:` keys the plan is the committed one: no spec names an agent (ADR-0020)."""
+        config = yaml.safe_load((FIX / "factory.yaml").read_text())
+        self.assertNotIn("agents", config)
+        plan = deploy.plan_air(yaml.safe_load((FIX / "nodes.yaml").read_text()), config)
+        self.assertEqual(json.dumps(plan, indent=2, sort_keys=True) + "\n", (FIX / "air-plan.json").read_text())
+        self.assertFalse([a["name"] for a in plan["automations"] if {"agent", "persona", "mentions"} & set(a["spec"])])
 
     def test_environments_only_export_the_environment_name(self):
         url = "https://github.com/o/team"

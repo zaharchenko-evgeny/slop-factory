@@ -1,5 +1,6 @@
 """Project descriptor loading and compatibility with the engine's legacy config shape."""
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -7,6 +8,8 @@ import yaml
 import config
 
 STORE_KINDS = ("label", "pr_label", "field", "tag", "pr")
+PERSONA = re.compile(r"[a-z][a-z0-9-]*")  # the handle in `@factory:<persona>`
+NO_AGENT_ROLES = ("script", "human")
 
 
 def _read(team_root):
@@ -88,6 +91,37 @@ def validate(team_root):
             except ValueError as exc:
                 errors.append(f"{config.PROJECT_DESCRIPTOR}.{section}.{name}.store: {exc}")
     return errors
+
+
+def node_agents(descriptor, nodes):
+    """({node: agent}, errors) for every node that runs an agent (ADR-0020). An agent is its `agents:` entry with
+    its `id`; a node without `agent:` gets its role's implicit agent: the `roles:` entry, its id and persona the role."""
+    agents = descriptor.get("agents") or {}
+    roles = descriptor.get("roles") if isinstance(descriptor.get("roles"), dict) else {}
+    out, errors = {}, []
+    for aid, agent in agents.items():
+        if not PERSONA.fullmatch(str(agent.get("persona"))):
+            errors.append(f"bad-persona: agents.{aid}: {agent.get('persona')!r} is not a lowercase slug")
+    for name, n in ((k, v) for k, v in nodes.items() if isinstance(v, dict)):
+        aid, role = n.get("agent"), n.get("role")
+        if role in NO_AGENT_ROLES:
+            if aid is not None:
+                errors.append(f"agent-on-{role}: {name}: a {role} node runs no agent")
+        elif aid is None:
+            out[name] = {**(roles.get(role) or {}), "id": role, "persona": role, "role": role}
+        elif aid not in agents:
+            errors.append(f"unknown-agent: {name}: {aid}")
+        elif agents[aid].get("role") != role:
+            errors.append(f"agent-role: {name}: agent {aid} is a {agents[aid].get('role')}, the node a {role}")
+        else:
+            out[name] = {**agents[aid], "id": aid}
+            errors += [f"unknown-mode: {name}: agent {aid} has no mode {f}" for f in n.get("focuses") or []
+                       if f not in (agents[aid].get("modes") or {})]
+    owners = {}
+    for agent in [*({**a, "id": aid} for aid, a in agents.items()), *out.values()]:
+        owners.setdefault(agent.get("persona"), set()).add(agent["id"])
+    errors += [f"duplicate-persona: {p}: agents {', '.join(sorted(ids))}" for p, ids in owners.items() if len(ids) > 1]
+    return out, errors
 
 
 def legacy_config(descriptor=None):
