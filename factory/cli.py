@@ -14,6 +14,7 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
                    [--note-for ROLE] [--note-hint TEXT] [--note-repro CMD] [--note-file PATH]
                    (the outcome and the data its effects use; repeat a list option once per item;
                     skills/factory-step/SKILL.md describes them per role)
+       factory env roles ENV                       (the roles of the enabled agent nodes that run in ENV, one per line)
        factory sweep --main ...                    (the gate's sweep from main's graph)
        factory deploy --target local [--apply] | factory run --local [--once] [--dry-run]   (the local target, ADR-0017)
 """
@@ -264,6 +265,17 @@ def validate():
     return 1 if errs else 0
 
 
+def env_roles(env):
+    """Sorted roles of the enabled agent nodes (not human or script) whose `env` is `env`, from the project's workflow."""
+    import project
+    import workflow
+    root = config.team_root()
+    wf = workflow.load(root, project.load(root))
+    roles = {n["role"] for n in (wf.get("nodes") or {}).values()
+             if n.get("env") == env and n.get("enabled") is not False and n.get("role") not in (None, "human", "script")}
+    return sorted(roles)
+
+
 def pop_team(argv):
     """Strip `--team DIR` without the engine modules; returns (DIR or None, the remaining arguments)."""
     argv = list(argv)
@@ -314,6 +326,9 @@ def main(argv=None):
         return upgrade_main(rest)
     if cmd == "validate" and not rest:
         return validate()
+    if cmd == "env" and len(rest) == 2 and rest[0] == "roles":
+        print("\n".join(env_roles(rest[1])))
+        return 0
     if cmd == "doctor":
         from doctor import main as doctor_main
         return doctor_main(rest)

@@ -18,6 +18,7 @@ import sys
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 
 import yaml
@@ -37,12 +38,54 @@ class ClaimError(Exception):
 MARKER = re.compile(r"<!-- factory-state (\{.*?\}) -->", re.S)
 
 
+class RateLimited(RuntimeError):
+    kind = "rate-limited"  # `reconcile` re-fires a step that failed this way (#577)
+
+
+RATE_LIMIT = re.compile(r"rate limit|x-ratelimit-remaining:\s*0", re.I)
+RESET = re.compile(r"x-ratelimit-reset:\s*(\d+)", re.I)
+MAX_WAIT, DEFAULT_WAIT = 300, 60  # seconds: the longest wait for a reset, and the wait when none is given
+
+
 def gh(args, timeout=None):
-    """Run `gh` (or $FACTORY_GH) with an argument list (no shell); return stdout."""
-    p = subprocess.run([os.environ.get("FACTORY_GH", "gh"), *args], capture_output=True, text=True, timeout=timeout)
-    if p.returncode:
-        raise RuntimeError(f"gh {' '.join(args[:3])}: {p.stderr.strip()}")
-    return p.stdout
+    """Run `gh` (or $FACTORY_GH) with an argument list (no shell); return stdout. On a rate-limit answer
+    (HTTP 403 or 429), wait until `x-ratelimit-reset` (at most MAX_WAIT), retry once, then raise RateLimited."""
+    for attempt in (1, 2):
+        p = subprocess.run([os.environ.get("FACTORY_GH", "gh"), *args], capture_output=True, text=True, timeout=timeout)
+        if not p.returncode:
+            return p.stdout
+        text = f"{p.stderr}\n{p.stdout}"
+        msg = f"gh {' '.join(args[:3])}: {p.stderr.strip()}"
+        if not (re.search(r"HTTP (403|429)", text) and RATE_LIMIT.search(text)):
+            raise RuntimeError(msg)
+        if attempt == 2:
+            raise RateLimited(msg)
+        m = RESET.search(text)
+        time.sleep(min(max(int(m[1]) - time.time(), 0), MAX_WAIT) if m else DEFAULT_WAIT)
+
+
+class CountedRun:
+    """Wrap a `gh` runner: count the calls that reach it and answer a repeated read of one issue's record,
+    timeline, labels or blockers from memory. Any write may change them, so it drops the memory."""
+    READ = re.compile(r"repos/[^/]+/[^/]+/issues/\d+(/timeline|/events|/labels|/dependencies/blocked_by)?")
+
+    def __init__(self, run):
+        self.run, self.calls, self.memo = run, 0, {}
+
+    def __call__(self, args, **kw):
+        read = args[:2] in (["issue", "view"], ["issue", "list"], ["pr", "view"], ["pr", "list"], ["run", "list"]) or (
+            args[0] == "api" and not {"-X", "--method", "-f", "-F"} & set(args))
+        path = next((x for x in args if x.startswith("repos/")), "")
+        key = tuple(args) if read and self.READ.fullmatch(path) else None
+        if not read:
+            self.memo.clear()
+        elif key in self.memo:
+            return self.memo[key]
+        self.calls += 1
+        out = self.run(args, **kw)
+        if key:
+            self.memo[key] = out
+        return out
 
 
 class GitHubTracker:

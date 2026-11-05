@@ -350,5 +350,16 @@ class ImportTimeBoundaryTest(unittest.TestCase):
             self.assertEqual(json.loads(done.stdout)["gate"], "main")
 
 
+class EnvRolesTest(unittest.TestCase):
+    def test_prints_roles_of_enabled_agent_nodes_in_the_environment(self):
+        cfg.set_team(ROOT / "factory/tests/fixtures/slop")
+        self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
+        for env, roles in {"read": "reviewer\nrouter\n", "write": "developer\n", "ops": "distill\nretro\n"}.items():
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cli.main(["env", "roles", env]), 0)
+            self.assertEqual(out.getvalue(), roles)
+
+
 if __name__ == "__main__":
     unittest.main()

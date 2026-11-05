@@ -132,6 +132,8 @@ class PlanLocalTest(unittest.TestCase):
         self.assertEqual([(p["automation"], p["output"]) for p in plan],
                          [("implement-cheap", "create-pr"), ("implement-mid", "create-pr"), ("retro", "read-only")])
         self.assertEqual(plan[2]["schedules"], ["retro"])
+        graph["nodes"]["hook"] = {"role": "retro", "env": "ops", "triggers": ["webhook dry-run-finished"]}
+        self.assertNotIn("hook", [p["automation"] for p in local.plan_local(graph, {"roles": {"developer": {"tier": "mid"}, "retro": {"tier": "cheap"}}})])
         self.assertEqual(plan[1]["triggers"][0]["filters"], {"label": "factory:implement-mid"})
 
     def test_the_team_graph_has_the_review_and_finish_automations(self):

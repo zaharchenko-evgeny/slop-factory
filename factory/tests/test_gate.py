@@ -588,7 +588,7 @@ class TriggerTest(unittest.TestCase):
                 patch.object(gate.GitHubCodeHost, "from_config", return_value=host), \
                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = gate.main(["sweep", *args])
-        return code, json.loads(stdout.getvalue()), stderr.getvalue()
+        return code, json.loads(stdout.getvalue().splitlines()[0]), stderr.getvalue()
 
     def test_sweep_invalid_event_warns_and_runs_full_sweep(self):
         from gate_port import MemoryTracker

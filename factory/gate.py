@@ -784,7 +784,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                     queue.append(p)
             except Exception as e:  # one ticket failing does not stop the others
                 failed = True
-                r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
+                r = {"ticket": n, "error": f"{type(e).__name__}: {e}", **({"kind": e.kind} if hasattr(e, "kind") else {})}
                 results.append(r)
                 if progress:
                     progress(r)
@@ -1038,7 +1038,8 @@ def main(argv):
     try:
         kind, _, path = (a.tracker or "github").partition(":")
         if kind == "github" and not path:
-            tracker, code_host = GitHubGateTracker.from_config(), GitHubCodeHost.from_config()
+            tracker = GitHubGateTracker.from_config()
+            code_host = GitHubCodeHost.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {}))  # one runner, so github_calls counts both
         elif kind == "memory" and path:
             try:
                 tracker = MemoryTracker(dict(json.loads(Path(path).read_text())))
@@ -1102,6 +1103,7 @@ def main(argv):
                                                          progress=progress)
                 failed = failed or stale_failed
             print(json.dumps(out))
+            print(json.dumps({"github_calls": getattr(getattr(tracker, "run", None), "calls", 0)}))  # last line: the load on the rate limit
             return FAILED if failed else GO
         if not a.node:
             raise Bad("--node is required")

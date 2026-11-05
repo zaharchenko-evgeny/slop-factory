@@ -54,6 +54,15 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("unknown-command: implement.wakes_on: deploy-<tier>", errors)
         self.assertTrue(any(e.startswith("unknown-effect: implement.done") for e in errors), errors)
 
+    def test_webhook_wake_renders_and_unknown_name_is_rejected(self):
+        proj, wf = self.migrated()
+        wf["webhooks"] = {"dry-run-finished": {"description": "TeamCity dry run done"}}
+        wf["nodes"]["intake"]["wakes_on"].append("webhook dry-run-finished")
+        self.assertEqual(workflow.validate(proj, wf), [])
+        self.assertIn("webhook dry-run-finished", workflow.to_nodes(proj, wf)["nodes"]["intake"]["triggers"])
+        wf["nodes"]["intake"]["wakes_on"].append("webhook nope")
+        self.assertIn("unknown-webhook: intake: nope", workflow.validate(proj, wf))
+
     def test_uncovered_active_state_rejected(self):
         proj, wf = self.migrated()
         proj["states"]["parked"] = {"kind": "active", "store": {"label": "factory:parked"}}

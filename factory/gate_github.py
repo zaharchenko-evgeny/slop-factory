@@ -20,7 +20,7 @@ import yaml
 
 import config
 from gate_port import PR_DEFAULTS, DescriptorPort, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
-from github_tracker import GitHubTracker, gh
+from github_tracker import CountedRun, GitHubTracker, gh
 import vocab
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
@@ -140,7 +140,7 @@ class GitHubGateTracker(DescriptorPort):
         # {name: owner/repo} of the descriptor's repositories, the primary first; the primary is the code host
         self.repositories = dict(repositories or {"primary": None})
         self.repositories[next(iter(self.repositories))] = self.pr_repo
-        self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, run
+        self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, CountedRun(run)
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
     @classmethod
