@@ -4,14 +4,35 @@
 A merge request is `{number, title, state: open|merged|closed, branch, head, ci: success|failed|running|none,
 labels: [str], reviews: [{author, verdict: approve|changes, commit_id, submitted_at}]}`.
 
+Optional keys: `dry_run: {state: success|failed|running}` (the TeamCity dry run; it decides `ci` when present, else
+`ci` is used) and `role: owner|qa` on a review. They surface as the facts `dry_run` and, per review, `role`.
+
+Events: `space_event(payload)` reads a Space webhook payload `{eventType: "space.merge_request.<action>", data:
+{action, merge_request: {number, title, branch}, project: {key}}}` into `{number, action, project, ticket}`.
+
 Write side: `write(method, path, body)` performs the request and returns the decoded JSON; it raises on an HTTP error.
 `SpaceCodeHost.apply(effect)` carries out the effects `review`, `label`, `unlabel`, `update-branch` and `merge` on the
 ticket's open merge request, reading first and writing only on a difference; it returns True when it wrote, and
 raises RuntimeError(`<kind>: ...`) when there is no merge request or the API fails.
 """
+import json
+import os
+import urllib.request
+
 from gate_port import PR_DEFAULTS, ticket_from_ref
 
 CI = {"success": "green", "failed": "red", "running": "pending"}
+
+
+def space_event(d):
+    """The merge request an event names: `{number, action, project, ticket}`; ticket is None when no branch or title names one."""
+    data = d.get("data") if isinstance(d.get("data"), dict) else d
+    mr = data.get("merge_request")
+    if not isinstance(mr, dict) or not isinstance(mr.get("number"), int) or mr["number"] < 1:
+        raise ValueError("payload has no merge request number")
+    action = data.get("action") or str(d.get("eventType") or "").rpartition(".")[2] or "event"
+    return {"number": mr["number"], "action": action, "project": (data.get("project") or {}).get("key"),
+            "ticket": ticket_from_ref(mr.get("branch")) or ticket_from_ref(mr.get("title"))}
 
 
 class SpaceCodeHost:
@@ -35,9 +56,17 @@ class SpaceCodeHost:
         if mr is None:
             return dict(PR_DEFAULTS)
         reviews = [{"author": r["author"], "verdict": r["verdict"], "commit_id": r["commit_id"],
-                    "submitted_at": r.get("submitted_at")} for r in mr.get("reviews") or []]
-        return {**PR_DEFAULTS, "pr": mr["number"], "head": mr["head"], "branch": mr.get("branch"), "pr_state": mr["state"],
-                "ci": CI.get(mr.get("ci"), "none"), "pr_labels": list(mr.get("labels") or []), "reviews": reviews}
+                    "submitted_at": r.get("submitted_at"), **({"role": r["role"]} if r.get("role") else {})}
+                   for r in mr.get("reviews") or []]
+        dry_run = (mr.get("dry_run") or {}).get("state")
+        latest = {}  # a reviewer's later review wins
+        for r in sorted(reviews, key=lambda r: r.get("submitted_at") or ""):
+            latest[r["author"]] = r
+        current = [r for r in latest.values() if r["commit_id"] == mr["head"]]
+        complete = bool(current)  # Space has no review focuses: any review of the head closes the round
+        verdict = None if not complete else "changes" if any(r["verdict"] == "changes" for r in current) else "approve"
+        return {**PR_DEFAULTS, "round_complete": complete, "round_verdict": verdict, "round_head": mr["head"] if complete else None, "pr": mr["number"], "head": mr["head"], "branch": mr.get("branch"), "pr_state": mr["state"],
+                "ci": CI.get(dry_run or mr.get("ci"), "none"), "dry_run": dry_run, "pr_labels": list(mr.get("labels") or []), "reviews": reviews}
 
     def _mr_path(self, number):
         return f"projects/key:{self.project}/code-reviews/number:{number}"
@@ -82,3 +111,21 @@ class SpaceCodeHost:
         self._send(kind, "POST", f"{path}/{'merge' if kind == 'merge' else 'update-branch'}",
                    {"expectedHead": head, **({"strategy": "merge"} if kind == "merge" else {})})
         return True
+
+
+def from_config(c, env=os.environ):
+    """The SpaceCodeHost of `code_host: {adapter: space, url, project}`; the bearer token is the env SPACE_TOKEN."""
+    h = c.get("code_host") or {}
+    if not h.get("url") or not h.get("project"):
+        raise ValueError("descriptor: code_host.adapter space needs code_host.url and code_host.project")
+    if not env.get("SPACE_TOKEN"):
+        raise ValueError("SPACE_TOKEN is not set")
+
+    def write(method, path, body=None):
+        req = urllib.request.Request(f"{h['url'].rstrip('/')}/api/http/{path}", method=method,
+                                     data=None if body is None else json.dumps(body).encode(),
+                                     headers={"Authorization": f"Bearer {env['SPACE_TOKEN']}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            raw = r.read()
+        return json.loads(raw) if raw else None
+    return SpaceCodeHost(h["project"], lambda path: write("GET", path), write)

@@ -10,7 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gate_port import PR_DEFAULTS  # noqa: E402
-from gate_space import SpaceCodeHost  # noqa: E402
+from gate_space import SpaceCodeHost, space_event  # noqa: E402
+import gate  # noqa: E402
 
 
 def mr(number, branch, **kw):
@@ -71,6 +72,69 @@ class SpaceFacts(unittest.TestCase):
         r = {"author": "bob", "verdict": "changes", "commit_id": "sha2", "submitted_at": "2026-01-01T00:00:00Z", "extra": 1}
         f = self.host(mr(2, "ez/5-a", reviews=[r])).facts(5)
         self.assertEqual(f["reviews"], [{k: r[k] for k in ("author", "verdict", "commit_id", "submitted_at")}])
+
+
+class SpaceEvents(unittest.TestCase):
+    def payload(self, **mr):
+        return {"eventType": "space.merge_request.opened", "data": {"action": "opened", "project": {"key": "IJ"},
+                "merge_request": {"number": 7, "title": "t", "branch": "ez/5-thing", **mr}}}
+
+    def test_event_resolves_ticket(self):
+        self.assertEqual(space_event(self.payload()), {"number": 7, "action": "opened", "project": "IJ", "ticket": 5})
+        self.assertEqual(gate.from_trigger(self.payload()),
+                         {"id": "merge_request:5:opened", "ticket": 5, "event_name": "pull_request", "action": "opened"})
+
+    def test_event_falls_back_to_title_then_host(self):
+        self.assertEqual(gate.from_trigger(self.payload(branch="x", title="6 Fix"))["ticket"], 6)
+        host = SpaceCodeHost("IJ", FakeSpace(mr(7, "ez/8-a")))
+        self.assertEqual(gate.from_trigger(self.payload(branch="x"), host)["ticket"], 8)
+
+    def test_bad_events(self):
+        with self.assertRaises(gate.NoTicket):
+            gate.from_trigger(self.payload(branch="x"))
+        with self.assertRaises(ValueError):
+            space_event({"eventType": "space.merge_request.opened", "data": {}})
+
+    def test_dry_run_and_review_roles_in_facts(self):
+        r = {"author": "bob", "verdict": "approve", "commit_id": "sha2", "role": "qa"}
+        f = SpaceCodeHost("IJ", FakeSpace(mr(2, "ez/5-a", ci="success", dry_run={"state": "failed"}, reviews=[r]))).facts(5)
+        self.assertEqual((f["ci"], f["dry_run"], f["reviews"][0]["role"]), ("red", "failed", "qa"))
+        self.assertIsNone(SpaceCodeHost("IJ", FakeSpace(mr(2, "ez/5-a", ci="success"))).facts(5)["dry_run"])
+
+
+class SpaceGateFacts(unittest.TestCase):
+    def test_check_reads_space_ci_and_roles_but_keeps_tracker_facts(self):
+        from gate_port import MemoryTracker
+        r = {"author": "bob", "verdict": "approve", "commit_id": "sha5", "role": "qa"}
+        host = SpaceCodeHost("IJ", FakeSpace(mr(5, "ez/5-a", ci="success", dry_run={"state": "failed"}, reviews=[r])))
+        tracker = MemoryTracker({"5": {"stage": "changes-requested", "head": "gh", "ci": "green", "pr": 9}})
+        _, out = gate.check("fix", {"id": "e", "ticket": 5}, tracker, gate.nodes_mod.load(), gate.config_mod.load(), host)
+        c = out["context"]
+        self.assertEqual((c["ci"], c["dry_run"], c["head"], c["pr"], c["stage"]), ("red", "failed", "sha5", 5, "changes-requested"))
+        self.assertEqual(c["reviews"][0]["role"], "qa")
+
+
+class SpaceRound(unittest.TestCase):
+    def facts(self, *reviews):
+        return SpaceCodeHost("IJ", FakeSpace(mr(5, "ez/5-a", reviews=list(reviews)))).facts(5)
+
+    def test_round_from_space_reviews(self):
+        self.assertEqual(self.facts()["round_complete"], False)
+        old = {"author": "a", "verdict": "approve", "commit_id": "old"}
+        self.assertEqual(self.facts(old)["round_complete"], False)
+        f = self.facts({"author": "a", "verdict": "approve", "commit_id": "sha5"})
+        self.assertEqual((f["round_complete"], f["round_verdict"], f["round_head"]), (True, "approve", "sha5"))
+        f = self.facts({"author": "a", "verdict": "approve", "commit_id": "sha5"}, {"author": "b", "verdict": "changes", "commit_id": "sha5"})
+        self.assertEqual(f["round_verdict"], "changes")
+
+    def test_check_uses_space_round(self):
+        from gate_port import MemoryTracker
+        r = {"author": "bob", "verdict": "approve", "commit_id": "sha5"}
+        host = SpaceCodeHost("IJ", FakeSpace(mr(5, "ez/5-a", reviews=[r])))
+        tracker = MemoryTracker({"5": {"stage": "in-review", "head": "gh", "pr": 9}})
+        _, out = gate.check("fix", {"id": "e", "ticket": 5}, tracker, gate.nodes_mod.load(), gate.config_mod.load(), host)
+        c = out["context"]
+        self.assertEqual((c["round_complete"], c["round_verdict"], c["round_head"]), (True, "approve", "sha5"))
 
 
 class SpaceWrites(unittest.TestCase):
