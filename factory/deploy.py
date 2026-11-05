@@ -147,7 +147,11 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
 def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None) -> str:
     checkout = checkout_instructions(main_repository, config) if config else ""
     if name.startswith("doctor"):
-        prompt = "Run `factory doctor` once and report its JSON lines. It changes no ticket itself."
+        prompt = ("Run the installed `factory doctor` command exactly once in the foreground with no arguments. "
+                  "Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. "
+                  "It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. "
+                  "A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a "
+                  "`report` probe line. You must not create, edit or close tickets yourself.")
     elif name == "reconcile":
         prompt = ("This step runs one command and judges nothing: it changes no file, label, comment or review itself. "
                   "Run `factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
@@ -270,6 +274,11 @@ def plan_air(nodes: dict, config: dict) -> dict:
             }
             if automation_repository["fullName"] != repository(team)["fullName"]:
                 automation["additionalRepositories"] = additional_repositories(automation_repository, team, config)
+            else:
+                projects = other_projects(automation_repository, team, config)
+                if projects:
+                    automation["additionalRepositories"] = [
+                        {"repository": repository(r), "branch": r["default_branch"]} for r in projects]
             automations.append(automation)
     envs = []
     for env in used:

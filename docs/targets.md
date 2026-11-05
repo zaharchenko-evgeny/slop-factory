@@ -27,7 +27,7 @@ by hand, see the `factory-delivery` skill.
 | Automation | Main repository | Additional repositories |
 | --- | --- | --- |
 | Project nodes (intake, review, implement, fix, join, merge, finish, …) | the `role: primary` repository | every other descriptor repository at its `default_branch`, then the factory repository at `main` (read-only) |
-| Retro, distill, knowledge review, ops nodes (notify, reconcile, doctor-ops) | the factory repository | none |
+| Retro, distill, knowledge review, ops nodes (notify, reconcile, doctor-ops) | the factory repository | every project repository in the descriptor, at its `default_branch` |
 
 The prompt's "Project checkout" section names each checkout under `/workspaces/<name>`.
 `deploy.py` writes `additionalRepositories` through the Air REST API (`Backend.set_additional`), because

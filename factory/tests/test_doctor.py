@@ -4,6 +4,8 @@
 # dependencies = ["pyyaml>=6"]
 # ///
 """Unit tests for factory/doctor.py with a stubbed gh. Run: uv run --quiet factory/tests/test_doctor.py"""
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -74,6 +76,24 @@ class DoctorTest(unittest.TestCase):
         gh.calls.clear()
         doctor.file_tickets(REPO, failed, gh)
         self.assertEqual([c[:3] for c in gh.calls if c[:2] in (["issue", "create"], ["issue", "comment"])], [["issue", "comment", "7"]])
+
+    def test_denied_failure_ticket_comment_is_reported(self):
+        title = "Doctor: write:comment fails"
+        gh = FakeGh(deny=("issue comment",), open_tickets=[(7, title)])
+        failed = [{"probe": "write:comment", "result": "denied", "detail": "forbidden"}]
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            doctor.file_tickets(REPO, failed, gh)
+        reports = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(len(reports), 1)
+        self.assertEqual((reports[0]["probe"], reports[0]["result"]), ("report", "denied"))
+        self.assertIn("write:comment", reports[0]["detail"])
+
+    def test_denied_probe_branch_creation_does_not_create_issues(self):
+        gh = FakeGh(deny=("git/refs",))
+        got = run(gh)
+        self.assertEqual(got["setup"]["result"], "denied")
+        self.assertFalse(any(call[:2] == ["issue", "create"] for call in gh.calls))
 
     def test_missing_tool_reported_for_env(self):
         got = run(FakeGh(), "write", which=lambda t: None if t == "git" else "/bin/" + t)
