@@ -27,6 +27,7 @@ class FakeGh:
 
     def __init__(self, labels=("factory:blocked", "factory:needs-human")):
         self.labels, self.comments, self.inbox, self.calls = list(labels), {562: [{"body": "[factory] Blocked: no creds."}]}, None, []
+        self.timeline = []
 
     def __call__(self, args):
         self.calls.append(args)
@@ -45,7 +46,7 @@ class FakeGh:
             return json.dumps({"url": "https://x/pull/7", "state": "OPEN"})
         if args[0] == "api":
             n = int(args[-1].split("/")[-2])
-            items = [] if args[-1].endswith("/timeline") else self.comments[n]
+            items = self.timeline if args[-1].endswith("/timeline") else self.comments[n]
             return json.dumps([items])
         raise AssertionError(args)
 
@@ -101,6 +102,12 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(result["sent"], ["log", "github-inbox"])
         self.assertEqual(result["failed"], [{"kind": "boom", "error": "down"}])
         self.assertEqual(json.loads(out.getvalue())["kind"], "pr-created")
+
+    def test_timeline_pr_from_another_repository_is_ignored(self):
+        gh = FakeGh()
+        ref = lambda n, repo: {"source": {"issue": {"number": n, "pull_request": {"url": "u"}, "repository": {"full_name": repo}}}}
+        gh.timeline = [ref(7, REPO), ref(99, "other/repo")]
+        self.assertEqual(inbox.facts({"kind": "pr-created", "issue": 562}, SETTINGS, gh)["pr"], 7)
 
     def test_check_reports_duplicate(self):
         gh, req = FakeGh(), {"kind": "pr-created", "issue": 562, "pr": 7}

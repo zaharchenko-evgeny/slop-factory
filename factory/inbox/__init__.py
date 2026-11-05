@@ -34,8 +34,9 @@ def facts(request, settings, run=gh, summary=None):
                        stage=next((s for s, lb in settings["tracker"]["stages"].items() if lb in labels), None),
                        latest=latest_comment(settings, issue, run))
         if not pr:
-            pr = next((e["source"]["issue"]["number"] for e in reversed(_paged(run, f"repos/{repo}/issues/{issue}/timeline"))
-                       if e.get("source", {}).get("issue", {}).get("pull_request")), None)
+            pr = next((i["number"] for e in reversed(_paged(run, f"repos/{repo}/issues/{issue}/timeline"))
+                       if (i := e.get("source", {}).get("issue", {})).get("pull_request")
+                       and i.get("repository", {}).get("full_name", repo) == repo), None)
     if pr:
         view = json.loads(run(["pr", "view", str(pr), "-R", repo, "--json", "url,state"]))
         message.update(pr=pr, pr_url=view["url"], pr_state=view["state"])
