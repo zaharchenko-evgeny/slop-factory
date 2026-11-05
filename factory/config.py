@@ -37,12 +37,12 @@ def team_root():
         return _team
     if os.environ.get("FACTORY_TEAM"):
         return Path(os.environ["FACTORY_TEAM"]).resolve()
+    home = Path.home() / "factory-team"  # ADR-0019: never a project checkout, which may be the team repository
+    if home.is_dir():
+        return home.resolve()
     cwd = Path.cwd()
     if any((d / f).exists() for d in (cwd, ENGINE_ROOT) for f in (PROJECT_DESCRIPTOR, DESCRIPTOR)):
         return cwd.resolve()
-    home = Path.home() / "factory-team"
-    if home.is_dir():
-        return home.resolve()
     raise SystemExit("factory: no team repository (set FACTORY_TEAM or run the installed factory)")
 
 

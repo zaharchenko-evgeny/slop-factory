@@ -642,6 +642,19 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(all(a.get("additionalRepositories") == team_projects
                             and a["environmentConfigId"] == "[Slop factory] ops" for a in team))
 
+    def test_team_repository_listed_as_a_project_is_one_writable_checkout(self):
+        base = cfg.load()
+        teamrepo = {"name": "team", "url": "https://github.com/o/team", "default_branch": "trunk", "role": "project"}
+        plan = deploy.plan_air(nodes.load(), {**base, "team_repository": teamrepo["url"],
+                                              "repositories": [*base["repositories"], teamrepo]})
+        want = [{"repository": deploy.repository(teamrepo), "branch": "trunk"}]
+        project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
+        self.assertTrue(project and all(a["additionalRepositories"] == want for a in project))
+        for a in project:
+            self.assertIn("`/workspaces/team` is the team repository and a project repository", a["prompt"])
+            self.assertIn("`$HOME/factory-team`", a["prompt"])
+            self.assertNotIn("is read-only", a["prompt"])
+
     def test_prompts_enter_the_main_project_checkout_only_when_it_is_not_the_team(self):
         plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
         project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
