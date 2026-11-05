@@ -106,3 +106,5 @@ Models: Air tiers come from `targets.air.models` in the team repository’s `fac
   `SOURCE`. CI checks out that commit and
   `test_slop_fixture_is_migrate_project_output` diffs a fresh copy against the
   fixture; run it locally with `FACTORY_SLOP_TEAM=<checkout>`.
+- For Slop workflow changes, merge the team repository first, then the engine
+  PR that regenerates the fixture.
