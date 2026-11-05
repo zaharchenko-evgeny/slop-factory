@@ -154,7 +154,7 @@ class RecordedTest(unittest.TestCase):
         self.assertEqual(by_name["[Slop factory] ops"][5], ["repository"])
         for name in ("read", "write"):
             change = by_name[f"[Slop factory] {name}"]
-            self.assertEqual((change[0], change[5]), ("update", ["variables"]))
+            self.assertEqual((change[0], change[5]), ("update", ["variables", "domains"]))
             self.assertEqual(change[3]["variables"], {"FACTORY_ENV": name})
             self.assertIn("FACTORY_TEAM_REPOSITORY", change[4]["variables"])
 
@@ -194,6 +194,16 @@ class ApplyTest(unittest.TestCase):
         finally:
             for s in servers:
                 s.close()
+
+    def test_dry_run_lists_declared_secret_missing_in_air_and_succeeds(self):
+        self.plan["environments"][0]["secrets"] = ["HAVE", "YOUTRACK_TOKEN"]
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                        "personalSecrets": [{"name": "HAVE"}]}])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.run_deploy("--dry-run"), 0)
+        self.assertIn("set by a person: read secret YOUTRACK_TOKEN", out.getvalue())
+        self.assertNotIn("secret HAVE", out.getvalue())
 
     def backend(self):
         path, backend = self.state["automation"], mock.Mock()
@@ -317,6 +327,14 @@ class ApplyTest(unittest.TestCase):
         self.assertTrue(plan["environments"])
         for e in plan["environments"]:
             self.assertEqual(set(e["variables"]), {"FACTORY_ENV"})
+
+    def test_declared_variable_is_planned_beside_factory_env(self):
+        data = nodes.load()
+        data["environments"]["read"] = {**data["environments"]["read"], "variables": {"YOUTRACK_URL": "https://y.example"},
+                                        "secrets": ["YOUTRACK_TOKEN"]}
+        env = next(e for e in deploy.plan_air(data, cfg.load())["environments"] if e["name"].endswith(" read"))
+        self.assertEqual(env["variables"], {"YOUTRACK_URL": "https://y.example", "FACTORY_ENV": "read"})
+        self.assertEqual(env["secrets"], ["YOUTRACK_TOKEN"])
 
     def test_apply_sends_trigger_destinations_with_changed_triggers(self):
         manual = {"triggerType": "WEBHOOK"}
@@ -641,6 +659,19 @@ class PlanTest(unittest.TestCase):
                          for r in [*base["repositories"], other]]
         self.assertTrue(all(a.get("additionalRepositories") == team_projects
                             and a["environmentConfigId"] == "[Slop factory] ops" for a in team))
+
+    def test_team_repository_listed_as_a_project_is_one_writable_checkout(self):
+        base = cfg.load()
+        teamrepo = {"name": "team", "url": "https://github.com/o/team", "default_branch": "trunk", "role": "project"}
+        plan = deploy.plan_air(nodes.load(), {**base, "team_repository": teamrepo["url"],
+                                              "repositories": [*base["repositories"], teamrepo]})
+        want = [{"repository": deploy.repository(teamrepo), "branch": "trunk"}]
+        project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
+        self.assertTrue(project and all(a["additionalRepositories"] == want for a in project))
+        for a in project:
+            self.assertIn("`/workspaces/team` is the team repository and a project repository", a["prompt"])
+            self.assertIn("`$HOME/factory-team`", a["prompt"])
+            self.assertNotIn("is read-only", a["prompt"])
 
     def test_prompts_enter_the_main_project_checkout_only_when_it_is_not_the_team(self):
         plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})

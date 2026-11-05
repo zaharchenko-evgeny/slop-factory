@@ -9,13 +9,14 @@ import io
 import json
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config  # noqa: E402
 import inbox  # noqa: E402
-from inbox import providers, request  # noqa: E402
+from inbox import providers, request, send  # noqa: E402
 
 config.set_team(ROOT / "factory/tests/fixtures/team")
 SETTINGS = config.load()
@@ -147,6 +148,68 @@ class InboxTest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(inbox.main(["check", "--request", "/nonexistent.json"]), 1)
         self.assertIn("error", out.getvalue())
+
+    WEBHOOK = {"url_secret": "TEST_INBOX_URL", "key_secret": "TEST_INBOX_KEY"}
+
+    def settings_with_webhook(self):
+        return {**SETTINGS, "notify": {**SETTINGS["notify"], "webhook": self.WEBHOOK}}
+
+    def test_send_posts_request_with_key(self):
+        seen = []
+        opener = lambda http, timeout: seen.append(http) or contextlib.nullcontext()
+        env = {"TEST_INBOX_URL": "https://hook.example/in", "TEST_INBOX_KEY": "k3y"}
+        with unittest.mock.patch.dict("os.environ", env):
+            ok = send.send({"kind": "decision-needed", "issue": 562, "result": "r"}, self.settings_with_webhook(), opener)
+        self.assertTrue(ok)
+        http, = seen
+        self.assertEqual((http.full_url, http.get_method()), ("https://hook.example/in", "POST"))
+        self.assertEqual(http.get_header("Authorization"), "ApiKey k3y")
+        self.assertEqual(json.loads(http.data), {"kind": "decision-needed", "issue": 562, "result": "r"})
+
+    def test_send_does_not_follow_redirect_with_key(self):
+        import http.server
+        import threading
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen.append((self.server.name, self.headers.get("Authorization")))
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{other.server_port}/x")
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+        first, other = (http.server.HTTPServer(("127.0.0.1", 0), Handler) for _ in range(2))
+        first.name, other.name = "first", "other"
+        for s in (first, other):
+            threading.Thread(target=s.serve_forever, daemon=True).start()
+        env = {"TEST_INBOX_URL": f"http://127.0.0.1:{first.server_port}/in", "TEST_INBOX_KEY": "k3y"}
+        try:
+            with unittest.mock.patch.dict("os.environ", env), contextlib.redirect_stderr(io.StringIO()):
+                ok = send.send({"kind": "decision-needed", "issue": 1}, self.settings_with_webhook())
+        finally:
+            for s in (first, other):
+                s.shutdown()
+        self.assertFalse(ok)
+        self.assertEqual(seen, [("first", "ApiKey k3y")])
+
+    def test_send_failure_exits_zero(self):
+        def down(http, timeout):
+            raise OSError("down")
+        env = {"TEST_INBOX_URL": "https://hook.example/in", "TEST_INBOX_KEY": "k"}
+        with unittest.mock.patch.dict("os.environ", env), contextlib.redirect_stderr(io.StringIO()) as err, \
+                unittest.mock.patch.object(config, "load", return_value=self.settings_with_webhook()), \
+                unittest.mock.patch.object(send.urllib.request, "urlopen", down):
+            self.assertEqual(inbox.main(["send", "--kind", "decision-needed", "--issue", "562"]), 0)
+        self.assertIn("warning", err.getvalue())
+        self.assertFalse(send.send({"kind": "nope"}, SETTINGS))  # an invalid request warns too
+
+    def test_send_without_webhook_delivers_in_process(self):
+        got = []
+        deliver = lambda r, s: got.append(r) or {"sent": ["log"], "skipped": [], "failed": []}
+        self.assertTrue(send.send({"kind": "automation-error", "issue": 562}, SETTINGS, deliver=deliver))
+        self.assertEqual(got, [{"kind": "automation-error", "issue": 562}])
 
 
 if __name__ == "__main__":
