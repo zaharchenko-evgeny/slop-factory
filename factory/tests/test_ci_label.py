@@ -56,5 +56,28 @@ class CiLabelTest(unittest.TestCase):
         self.assertIn("::error title=ci-state-label::", result.stderr)
 
 
+CLOSE_SCRIPT = ROOT / "scripts" / "close-main-red.sh"
+ISSUES = [(1, "Main is red: agnix"), (2, "Main is red in Air: tests"), (3, "Main is red"), (4, "Fix Main is red: x")]
+
+
+class CloseMainRedTest(unittest.TestCase):
+    def test_closes_only_main_is_red_tickets(self):
+        gh_stub = """#!/usr/bin/env bash
+echo "$*" >> "$(dirname "$0")/calls"
+if [ "$1 $2" = "issue list" ]; then cat "$(dirname "$0")/issues.json"; fi
+"""
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "gh").write_text(gh_stub)
+            Path(tmp, "gh").chmod(0o755)
+            Path(tmp, "issues.json").write_text(json.dumps([{"number": n, "title": t} for n, t in ISSUES]))
+            env = {**os.environ, "PATH": f"{tmp}:{os.environ['PATH']}", "SHA": "abc", "RUN_URL": "https://x/runs/9"}
+            result = subprocess.run([str(CLOSE_SCRIPT)], env=env, capture_output=True, text=True)
+            calls = Path(tmp, "calls").read_text().splitlines()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([c for c in calls if c.startswith("issue close")], ["issue close 1", "issue close 2"])
+        self.assertTrue(all("abc" in c for c in calls if c.startswith("issue comment")))
+
+
 if __name__ == "__main__":
     unittest.main()

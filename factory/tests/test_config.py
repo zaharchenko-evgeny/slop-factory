@@ -67,6 +67,18 @@ class TeamRootTest(unittest.TestCase):
             with mock.patch.dict(config.os.environ, {"FACTORY_TEAM": tmp}):
                 self.assertEqual(config.team_root(), Path(tmp).resolve())
 
+    def test_unset_team_uses_home_factory_team_or_fails(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cwd, \
+                mock.patch.object(config, "ENGINE_ROOT", Path(tmp) / "engine"), \
+                mock.patch.dict(config.os.environ, {"FACTORY_TEAM": "", "HOME": tmp}), \
+                mock.patch.object(config, "_team", None), mock.patch.object(config.Path, "cwd", return_value=Path(cwd)):
+            with self.assertRaises(SystemExit) as e:
+                config.team_root()
+            self.assertEqual(e.exception.code, "factory: no team repository (set FACTORY_TEAM or run the installed factory)")
+            (Path(tmp) / "factory-team").mkdir()
+            self.assertEqual(config.team_root(), (Path(tmp) / "factory-team").resolve())
+
     def test_team_role_overrides_engine_role(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = team(tmp, files={"roles/developer/role.md": "# mine\n"})

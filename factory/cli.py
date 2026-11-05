@@ -155,6 +155,10 @@ def handoff_of(a):
     """The handoff the options name: the outcome, plus the data each option carries. Plain-text options repeat;
     the JSON-file options (`--checks`, `--findings`, `--slices`, `--addressed`, `--notes`) are the older form."""
     data = {"outcome": a.outcome}
+    if a.outcome == "env-broken" and not a.failing_check:
+        raise ValueError("env-broken requires --failing-check")
+    if a.failing_check:
+        data["failing_check"] = a.failing_check
     for key, path in (("findings", a.findings), ("slices", a.slices), ("checks", a.checks)):
         if path:
             data[key] = json.loads(Path(path).read_text())
@@ -188,6 +192,7 @@ def end_parser():
     for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "addressed", "disputed-focuses", "notes",
                 "note-for", "note-hint", "note-repro"):
         p.add_argument(f"--{opt}")
+    p.add_argument("--failing-check")
     for opt, dest in (("pass", "passed"), ("fail", "failed"), ("not-run", "not_run"), ("blocking", None), ("minor", None),
                       ("fixed", None), ("disputed", None), ("slice", None), ("propose-check", None), ("note-file", None)):
         p.add_argument(f"--{opt}", action="append", default=[], **({"dest": dest} if dest else {}))

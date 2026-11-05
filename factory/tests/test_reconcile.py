@@ -148,6 +148,16 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(asked, [(sorted(s for s in STAGES if s not in finals), True)])
         self.assertEqual(read, [1])  # no facts reads for a done or closed ticket
 
+    def test_open_main_red_with_green_main_reports_stale_red(self):
+        tracker = MemoryTracker({1: {"stage": "ready", "since": FRESH, "title": "Main is red: agnix"},
+                                 2: {"stage": "ready", "since": FRESH, "title": "Other ticket"}})
+        tracker.green_main = True
+        results, _ = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
+        self.assertEqual([(r["ticket"], r["reconcile"]) for r in results], [(1, "stale-red")])
+        tracker.green_main = False
+        results, _ = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
+        self.assertEqual(results, [])
+
     def test_fresh_step_waits_for_the_timeout(self):
         _, results, _ = run({"stage": "in-dev", "since": FRESH, "command": "factory:implement-mid"})
         self.assertEqual(results, [])
