@@ -131,11 +131,45 @@ class BeginEndTest(unittest.TestCase):
 
     def test_end_carries_dispute_data(self):
         Path("a.json").write_text(json.dumps(["B1: disputed — intended"]))
-        a = argparse.Namespace(outcome="done", findings=None, slices=None, checks=None, reason=None, summary=None,
-                               size_estimate=None, addressed="a.json", disputed_focuses="behaviour,full", notes=None)
-        data = cli.handoff_of(a)
+        data = cli.handoff_of(cli.end_parser().parse_args(["done", "--addressed", "a.json", "--disputed-focuses", "behaviour,full"]))
         self.assertEqual(data["findings_addressed"], ["B1: disputed — intended"])
         self.assertEqual(data["disputed_focuses"], ["behaviour", "full"])
+
+    def handoff(self, *argv):
+        return cli.handoff_of(cli.end_parser().parse_args(list(argv)))
+
+    def test_end_plain_text_checks(self):
+        data = self.handoff("done", "--pass", "tests pass", "--fail", "lint", "--not-run", "e2e | no browser")
+        self.assertEqual(data["checks"], [{"text": "tests pass", "result": "pass"}, {"text": "lint", "result": "fail"},
+                                          {"text": "e2e", "reason": "no browser", "result": "not-run"}])
+        with self.assertRaisesRegex(ValueError, "reason"):
+            self.handoff("done", "--not-run", "e2e")
+
+    def test_end_plain_text_findings(self):
+        data = self.handoff("changes", "--blocking", "B1 src/x.py:10 the empty input crashes | case: x.run('') raises",
+                            "--minor", "M1 src/y.py:3 name is vague")
+        self.assertEqual(data["findings"], [
+            {"id": "B1", "file": "src/x.py:10", "finding": "the empty input crashes", "severity": "blocking",
+             "case": "x.run('') raises"},
+            {"id": "M1", "file": "src/y.py:3", "finding": "name is vague", "severity": "minor"}])
+        with self.assertRaisesRegex(ValueError, "case"):
+            self.handoff("changes", "--blocking", "B1 src/x.py:10 crashes")
+
+    def test_end_plain_text_addressed_match_the_gate_forms(self):
+        data = self.handoff("done", "--fixed", "B1 abc123", "--disputed", "B2 the spec asks for it")
+        self.assertEqual(data["findings_addressed"], ["B1: fixed in abc123", "B2: disputed — the spec asks for it"])
+
+    def test_end_slice_file_and_proposed_checks(self):
+        Path("s1.md").write_text("# Part one\n\nScope: a.\nSize: about 40 lines with tests\n")
+        data = self.handoff("split", "--slice", "s1.md", "--propose-check", "uv run t.py passes")
+        self.assertEqual(data["slices"], [{"title": "Part one", "body": "Scope: a.\nSize: about 40 lines with tests"}])
+        self.assertEqual(data["proposed_checks"], ["uv run t.py passes"])
+
+    def test_end_note_options_build_agent_notes(self):
+        data = self.handoff("changes", "--note-for", "fixer", "--note-repro", "uv run t.py", "--note-file", "a.py",
+                            "--note-file", "b.py")
+        self.assertEqual(data["agent_notes"], {"for": "fixer", "files": ["a.py", "b.py"], "repro": "uv run t.py"})
+        self.assertNotIn("agent_notes", self.handoff("approve"))
 
     def test_begin_fix_prints_ci_failure(self):
         failure = [{"job": "tests", "step": "Run tests", "log_tail": "assert False"}]

@@ -746,7 +746,9 @@ class PlanTest(unittest.TestCase):
             self.assertTrue(prompt.startswith(f"You are the {role} of Slop factory"))
             self.assertIn((ROOT / f"template/roles/{role}/role.md").read_text().strip(), prompt)
             self.assertIn(f"`factory begin {name} --", prompt)
-            self.assertIn("`factory end <handoff_path>`", prompt)
+            self.assertIn("`factory end <outcome>`", prompt)
+            self.assertIn("`factory-step` skill", prompt)
+            self.assertNotIn("handoff_path", prompt)
             for word in ("gate.py", "--node", "--tier", "--focus", "read `role_file`"):
                 self.assertNotIn(word, prompt)
         self.assertIn("(behaviour focus)", a["[Slop factory] review-behaviour"])
