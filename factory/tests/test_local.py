@@ -101,6 +101,15 @@ class LocalDeployTest(unittest.TestCase):
         self.assertEqual(state["checkouts"], {"slop-factory": str(self.base / "slop-factory")})
         self.assertIn("implement-mid", state["automations"])
 
+    def test_role_connectors_are_warned_as_not_provided(self):
+        path = self.team / "factory.descriptor.yaml"
+        d = yaml.safe_load(path.read_text())
+        d["roles"]["developer"]["mcp"] = ["youtrack"]
+        path.write_text(yaml.safe_dump(d))
+        code, out = self.deploy(Machine(origins={"slop-factory": URL}))
+        self.assertEqual(code, 0, out)
+        self.assertIn("warning: role developer: MCP connectors not provided locally: youtrack", out)
+
     def test_dry_run_writes_nothing(self):
         code, _ = self.deploy(Machine(origins={"slop-factory": URL}))
         self.assertEqual(code, 0)

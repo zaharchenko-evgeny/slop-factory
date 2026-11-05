@@ -110,6 +110,7 @@
             "bot_login": {
               "type": "string"
             },
+            "mcp_connectors": { "type": "array", "items": { "type": "string" } },
             "models": {
               "type": "object",
               "additionalProperties": {
@@ -152,6 +153,7 @@
             "type": "string"
           },
           "harness": { "enum": ["claude-code", "codex", "junie", "pi"], "description": "local target only" },
+          "mcp": { "type": "array", "items": { "type": "string" }, "description": "Air MCP connectors" },
           "tools": {
             "type": "string"
           },
@@ -183,7 +185,8 @@
                 "fallback": {
                   "type": "string"
                 },
-                "harness": { "enum": ["claude-code", "codex", "junie", "pi"], "description": "local target only" }
+                "harness": { "enum": ["claude-code", "codex", "junie", "pi"], "description": "local target only" },
+                "mcp": { "type": "array", "items": { "type": "string" }, "description": "Air MCP connectors" }
               }
             }
           }

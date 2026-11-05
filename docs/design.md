@@ -163,6 +163,11 @@ per repository.
   repositories and the factory repository (read-only) as additional
   repositories. Retro, distill, the knowledge review and the ops nodes run in
   the factory repository.
+- The team repository may also be listed as a `role: project` repository, so
+  the factory delivers tickets that change it (ADR-0019,
+  [0019-team-repository-is-a-project](adr/0019-team-repository-is-a-project.md)).
+  Agents read team files from a pristine copy of its default branch, never
+  from the checkout they edit.
 - Base branch: ticket override (`base:<branch>`) or the repository default in
   `factory.yaml`.
 - Branch name pattern from `factory.yaml`, default `ez/{ticket}-{slug}`.

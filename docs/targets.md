@@ -38,6 +38,21 @@ Open (#459): whether Air pushes a branch or opens a PR from an additional reposi
 project repository needs its developer to push that branch itself, or it is split into one ticket per
 repository.
 
+## MCP connectors
+
+An Air automation takes `mcpConnectors`, the MCP servers its agent gets (for example `youtrack`, `slack`).
+`targets.air.mcp_connectors` lists the connector names the Air org has. A role (`roles.<role>.mcp`), a reviewer
+mode (`roles.<role>.modes.<focus>.mcp`) or a workflow node (`mcp`) names the ones its agents get; a node's list
+replaces its mode's, and a mode's replaces its role's. No list means no connectors.
+
+- `factory validate` reports `unknown-mcp-connector: <where>: <name>` for a name missing from
+  `targets.air.mcp_connectors`.
+- `deploy.py` writes each automation's `mcpConnectors` and adds a "Your MCP servers" section to its prompt. The
+  diff compares the field, so a connector added by hand in Air shows as a removal in `--dry-run`.
+- `factory deploy --target local` prints a warning for each role whose connectors are not provided locally.
+- A change of the create call needs a refreshed Air contract recording: the operator runs
+  `factory contracts refresh`.
+
 ## Local target (ADR-0017)
 
 The same nodes run on a laptop with no Air account. `targets.local` in `factory.project.yaml` takes

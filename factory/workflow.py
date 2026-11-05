@@ -185,6 +185,7 @@ def validate(project, wf):
     config._check(schema, wf, "workflow", errs)
     if not isinstance(wf, dict) or not isinstance(wf.get("nodes"), dict):
         return errs
+    errs += config.mcp_errors(project.get("roles"), ((project.get("targets") or {}).get("air") or {}).get("mcp_connectors"), wf)
     states, commands = project.get("states") or {}, project.get("commands") or {}
     schedules, covered = wf.get("schedules") or {}, set()
 

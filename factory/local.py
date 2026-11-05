@@ -174,6 +174,11 @@ def deploy(argv, run=subprocess.run, which=shutil.which):
     if missing:
         return 1
     plan = plan_local(nodes_mod.load(), config)
+    for role, r in (config.get("roles") or {}).items():
+        r = r if isinstance(r, dict) else {}
+        names = list(r.get("mcp") or []) + [c for m in (r.get("modes") or {}).values() for c in (m or {}).get("mcp") or []]
+        if names:
+            print(f"warning: role {role}: MCP connectors not provided locally: {', '.join(dict.fromkeys(names))}")
     print(f"local: {len(plan)} automations, harnesses {', '.join(state['harnesses'])}, checkouts {', '.join(state['checkouts'])}")
     if "--apply" in argv:
         STATE.parent.mkdir(parents=True, exist_ok=True)
