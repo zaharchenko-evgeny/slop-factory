@@ -987,7 +987,7 @@ def main(argv):
         kind, _, path = (a.tracker or "github").partition(":")
         if kind == "github" and not path:
             tracker = GitHubGateTracker.from_config()
-            code_host = GitHubCodeHost.from_config(run=tracker.run)  # one runner, so github_calls counts both
+            code_host = GitHubCodeHost.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {}))  # one runner, so github_calls counts both
         elif kind == "memory" and path:
             try:
                 tracker = MemoryTracker(dict(json.loads(Path(path).read_text())))
