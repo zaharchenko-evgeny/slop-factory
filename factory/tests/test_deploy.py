@@ -401,6 +401,19 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
         self.assertEqual(self.calls("automation"), [["delete_automation", {"automationId": "a2"}]])
 
+    def test_team_repository_automation_runs_from_the_tracker_checkout(self):
+        slop, before = HERE / "fixtures/slop", cfg.team_root()
+        try:
+            with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
+                cfg.set_team(project_team(slop))
+            plan = deploy.plan_air(nodes.load(), cfg.load())
+        finally:
+            cfg.set_team(before)
+        ops = [a for a in plan["automations"] if a["repository"]["fullName"].endswith("/slop-eval-factory")]
+        self.assertTrue(ops)
+        for a in ops:
+            self.assertIn("Run every command from `/workspaces/slop-factory`", a["prompt"], a["name"])
+
     def test_apply_prints_webhook_registration_when_unchanged(self):
         state = ([{"name": "[F] hook", "webhooks": [{"id": "t1", "url": "https://air/hook/t1"}]}], [])
         out = io.StringIO()
