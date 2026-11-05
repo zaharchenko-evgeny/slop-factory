@@ -57,7 +57,8 @@ def wakes(nodes, facts):
                 cmd = facts.get("command")
                 if cmd and re.fullmatch(label.replace("<tier>", "[a-z]+"), cmd):
                     yield name, cmd, on, "no outcome after the command label"
-            elif label not in (vocab.ci("ci-green"), vocab.ci("ci-red")) or label == vocab.ci(f"ci-{facts.get('ci')}"):
+            elif label not in (vocab.ci("ci-green"), vocab.ci("ci-red")) or (
+                    facts.get("ci") in ("green", "red") and label == vocab.ci(f"ci-{facts['ci']}")):  # pending: CI's job
                 yield name, label, on, f"no {name} outcome"
 
 
