@@ -1632,3 +1632,14 @@ class TwoRepositoryFactsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_code_host_shares_the_trackers_counted_runner(self):
+        import contextlib
+        import io
+        from unittest.mock import patch
+        tracker = tr(FakeGh(labels=("factory:in-review", "risk:low")))
+        with patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), \
+                patch.object(gate.GitHubCodeHost, "from_config", return_value=None) as host, \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            gate.main(["sweep", "--issue", "7", "--dry-run"])
+        self.assertIs(host.call_args.kwargs["run"], tracker.run)
