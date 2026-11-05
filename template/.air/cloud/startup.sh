@@ -14,7 +14,7 @@ BIN="$HOME/.local/bin"
 export PATH="$BIN:$PATH"
 # The first value of a top-level key of factory.project.yaml.
 descriptor_value() {
-  sed -n "s/^$1: *\"\{0,1\}\([^\" #]*\).*/\1/p" "$TEAM/factory.project.yaml" 2>/dev/null | head -n 1
+  sed -n "s/^$1: *[\"']\{0,1\}\([^\"' #]*\).*/\1/p" "$TEAM/factory.project.yaml" 2>/dev/null | head -n 1
 }
 # A role's file: the team's own, else the engine's template.
 role_file() {

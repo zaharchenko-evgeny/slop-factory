@@ -48,6 +48,17 @@ class StartupTemplateTest(unittest.TestCase):
                     self.assertEqual(set(line.split()), expected)
                     self.assertIn(f"roles={' '.join(roles)} ", done.stdout)
 
+    def test_descriptor_values_are_unquoted(self):
+        text = SCRIPT.read_text()
+        func = text[text.index("descriptor_value() {"):]
+        func = func[:func.index("\n}\n") + 3]
+        for raw, want in (("'v1'", "v1"), ('"v1"', "v1"), ("v1  # c", "v1"), ("'https://h/r.git'", "https://h/r.git")):
+            with self.subTest(raw=raw), tempfile.TemporaryDirectory() as team:
+                (Path(team) / "factory.project.yaml").write_text(f"engine: {raw}\n")
+                done = subprocess.run(["sh", "-c", f'TEAM="{team}"\n{func}\ndescriptor_value engine'],
+                                      capture_output=True, text=True)
+                self.assertEqual(done.stdout.strip(), want)
+
 
 if __name__ == "__main__":
     unittest.main()
