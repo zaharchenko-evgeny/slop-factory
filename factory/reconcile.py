@@ -24,6 +24,7 @@ import vocab
 
 PREFIX = "[factory] reconcile:"
 RUN = "reconcile"
+RED_TITLE = re.compile(r"Main is red(?: in Air)?: (.+)")
 
 
 def wakes(nodes, facts):
@@ -89,6 +90,13 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                         progress(r)
                 continue
             if stage_kinds.get(stage) == "final":
+                continue
+            red = RED_TITLE.match(facts.get("title") or "")
+            if red and facts.get("issue_state", "open") == "open" and tracker.main_green():
+                r = {"ticket": n, "stage": stage, "reconcile": "stale-red", "why": f"{red[1]} is green on the main head"}
+                results.append(r)  # reported only: the quality-gates workflow closes it on the next green push
+                if progress:
+                    progress(r)
                 continue
             if (facts.get("issue_state", "open") != "open" or not since
                     or vocab.needs_human() in facts.get("attrs", [])):

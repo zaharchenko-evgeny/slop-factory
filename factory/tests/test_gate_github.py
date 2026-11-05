@@ -1601,6 +1601,15 @@ class TwoRepositoryFactsTest(unittest.TestCase):
         self.assertEqual((f["pr"], f["round_complete"]), (5, True))
         self.assertNotIn("heads", f)
         self.assertFalse(any(TwoRepositoryGh.OTHER in " ".join(w) for w in gh.writes))
+    def test_main_green_requires_the_current_main_head(self):
+        def gh(sha):
+            def run(args):
+                if args[0] == "run":
+                    return json.dumps([{"conclusion": "success", "headSha": sha}])
+                return json.dumps({"sha": "new"})
+            return run
+        self.assertFalse(GitHubGateTracker(REPO, STAGES, BOT, run=gh("old")).main_green())
+        self.assertTrue(GitHubGateTracker(REPO, STAGES, BOT, run=gh("new")).main_green())
 
 
 if __name__ == "__main__":

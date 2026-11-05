@@ -182,6 +182,10 @@ class MemoryTracker(DescriptorPort):
 
     def __init__(self, tickets=None, fail_on=None, project=None):
         self.tickets, self.fail_on, self.project = tickets or {}, fail_on, project
+        self.green_main = False  # the latest quality-gates run on the main head passed
+
+    def main_green(self):
+        return self.green_main
 
     def _t(self, ticket):
         return self.tickets[ticket] if ticket in self.tickets else self.tickets[str(ticket)]  # JSON files key by string
