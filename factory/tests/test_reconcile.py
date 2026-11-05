@@ -196,6 +196,19 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(results[0]["node"], "custom")
         self.assertIn('"factory:custom"', logged(t, "label"))
 
+    def test_each_scheduled_pass_runs_the_ci_label_sync(self):
+        import contextlib
+        import io
+        import json
+        from unittest.mock import patch
+        out, synced = io.StringIO(), {"repo": "o/app", "pr": 1, "ci": "green"}
+        with patch("gate_github.GitHubGateTracker.from_config", return_value=MemoryTracker({})), \
+                patch.object(gate, "run_ci_sync", return_value=([synced], False)) as sync, \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(reconcile.main(["--dry-run"]), 0)
+        self.assertTrue(sync.call_args.args[0])  # the pass's --dry-run
+        self.assertEqual(json.loads(out.getvalue())["ci_sync"], [synced])
+
 
 if __name__ == "__main__":
     unittest.main()
