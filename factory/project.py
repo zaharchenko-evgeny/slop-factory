@@ -63,6 +63,13 @@ def validate(team_root):
             if team and isinstance(r, dict) and _repo_key(r.get("url")) == team and r.get("role") != "project":
                 errors.append(f"{config.PROJECT_DESCRIPTOR}.repositories[{i}].role: the team repository "
                               f"{r.get('name')} must have role project, found {r.get('role')}")
+    environments = descriptor.get("environments")
+    for env, entry in (environments.items() if isinstance(environments, dict) else ()):
+        variables = entry.get("variables") if isinstance(entry, dict) else None
+        for name in (variables if isinstance(variables, dict) else ()):
+            if str(name).startswith("FACTORY_"):
+                errors.append(f"{config.PROJECT_DESCRIPTOR}.environments.{env}.variables.{name}: "
+                              "names starting with FACTORY_ are reserved for the factory")
     targets = descriptor.get("targets")
     local = targets.get("local") if isinstance(targets, dict) else None
     poll = local.get("poll_seconds") if isinstance(local, dict) else None
