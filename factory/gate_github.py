@@ -168,14 +168,6 @@ class GitHubGateTracker(DescriptorPort):
     def _labels(self, n, repo=None):
         return [x["name"] for x in self._api(f"issues/{n}", repo=repo)["labels"]]
 
-    def record_node_error(self, n):
-        """Leave a durable canary signal when a sweep catches a node exception."""
-        import vocab
-        if vocab.issue_label("canary") in self._labels(n):
-            self.run(["api", f"repos/{self.repo}/issues/{n}/comments", "-f",
-                      "body=[factory] A factory node reported an execution error.\n\n"
-                           "<!-- factory-node-error -->\n\nFactory-Run: sweep:node-error"])
-
     def sweep_tickets(self, stages, open_only=False):
         """Issue numbers (open or closed) whose stage label is one of `stages`."""
         found = set()
@@ -249,16 +241,6 @@ class GitHubGateTracker(DescriptorPort):
             labels = [x["name"] for x in self._api(f"issues/{other['number']}", repo=self.pr_repo)["labels"]]
             if vocab.cmd("update-<tier>", "cheap") not in labels:
                 self._edit(other["number"], [vocab.cmd("update-<tier>", "cheap")], on="pr")
-
-    def deploy_applied(self, plan):
-        """Close the reminder after an operator confirms the deployed plan is unchanged."""
-        issue = next((i for i in self._list("issues?state=open&per_page=100")
-                      if "pull_request" not in i and i.get("title") == "Deploy needed"), None)
-        if not issue:
-            return
-        self.run(["issue", "comment", str(issue["number"]), "-R", self.repo, "--body",
-                  "[factory] `factory deploy --apply` confirmed the current plan is applied. <!-- factory:deploy-applied -->\n\nFactory-Run: deploy:apply"])
-        self.run(["issue", "close", str(issue["number"]), "-R", self.repo])
 
     def _pr(self, n):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""

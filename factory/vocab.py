@@ -50,11 +50,6 @@ def ci(fact):
     return _tracker()["pr_fact_labels"][fact]
 
 
-def issue_label(name):
-    """The configured issue marker label, such as the deploy canary marker."""
-    return _tracker()["issue_labels"][name]
-
-
 def needs_human():
     return _tracker()["needs_human_label"]
 

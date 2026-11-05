@@ -314,42 +314,6 @@ class MemoryTracker(DescriptorPort):
             t["pr_labels"] = [x for x in t["pr_labels"] if x != value]
         return present or len(t["attrs"]) != len(attrs)
 
-    # Small issue operations used by deploy's end-to-end canary. They keep the
-    # deploy tests on the same in-memory ticket records as the gate tests.
-    def canary_tickets(self):
-        import vocab
-        return [n for n, t in self.tickets.items()
-                if vocab.issue_label("canary") in t.get("labels", []) and t.get("state", "open") != "closed"]
-
-    def close_issue(self, ticket, reason):
-        self._t(ticket)["state"] = "closed"
-
-    def add_label(self, ticket, label):
-        labels = self._t(ticket).setdefault("labels", [])
-        if label not in labels:
-            labels.append(label)
-
-    def create_issue(self, title, body, risk="low", stage="triage"):
-        number = max((int(n) for n in self.tickets), default=0) + 1
-        self.tickets[number] = {"title": title, "body": body, "risk": risk, "stage": stage,
-                                "labels": [f"risk:{risk}", f"factory:{stage}"], "state": "open"}
-        return number
-
-    def add_to_map(self, ticket):
-        self._t(ticket)["parent"] = "map"
-
-    def canary_status(self, ticket):
-        t = self._t(ticket)
-        return {"stage": t.get("stage", "none"), "summary": t.get("last_summary", ""),
-                "error": bool(t.get("node_error"))}
-
-    def record_node_error(self, ticket):
-        import vocab
-        t = self._t(ticket)
-        if vocab.issue_label("canary") in t.get("labels", []):
-            t["node_error"] = True
-            t["last_summary"] = "[factory] A factory node reported an execution error."
-
 
 class TagTracker(MemoryTracker):
     """String ids (PROJ-1), stage held as a `stage:<name>` tag among the other tags, as in YouTrack."""

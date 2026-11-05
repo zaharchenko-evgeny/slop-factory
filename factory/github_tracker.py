@@ -188,50 +188,6 @@ class GitHubTracker:
         """The number of the open issue with exactly this title, or None."""
         return next((i["number"] for i in self._open_titled(title) if i["title"] == title), None)
 
-    def create_issue(self, title, body, risk="low", stage="ready"):
-        """Open an issue with the risk and stage labels; returns its number."""
-        url = self.run(["issue", "create", "-R", self.repo, "--title", title, "--body", body,
-                        "--label", self.risk_labels[risk], "--label", self.stages[stage]]).strip()
-        return int(url.rsplit("/", 1)[1])
-
-    def add_to_map(self, ticket):
-        """Attach a generated issue to the configured factory map."""
-        maps = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
-                                   self.map_label, "--json", "number", "--limit", "100"]))
-        if not maps:
-            raise RuntimeError(f"no open factory map labelled {self.map_label}")
-        map_ticket = min(i["number"] for i in maps)
-        issue_id = self.run(["api", f"repos/{self.repo}/issues/{ticket}", "--jq", ".id"]).strip()
-        self.run(["api", "--method", "POST", f"repos/{self.repo}/issues/{map_ticket}/sub_issues",
-                  "-F", f"sub_issue_id={issue_id}"])
-
-    def canary_tickets(self):
-        found = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
-                                     vocab.issue_label("canary"), "--json", "number", "--limit", "1000"]))
-        return [i["number"] for i in found]
-
-    def close_issue(self, n, reason):
-        self.run(["issue", "close", str(n), "-R", self.repo, "--comment", reason])
-
-    def add_label(self, n, label):
-        self._edit(n, "--add-label", label)
-
-    def canary_status(self, n):
-        issue = self.issue(n)
-        comments = self.comments(n)
-        summary = next((c["body"] for c in reversed(comments) if c["body"].startswith("[factory]")), "")
-        return {"stage": self.get_state(n) or "none", "summary": summary,
-                "error": vocab.issue_label("failed") in issue["labels"] or any(
-                    "<!-- factory-node-error -->" in c["body"] for c in comments)}
-
-    def record_node_error(self, n):
-        """Leave a durable canary signal when a sweep catches a node exception."""
-        if vocab.issue_label("canary") not in self.issue(n)["labels"]:
-            return
-        self.run(["api", f"repos/{self.repo}/issues/{n}/comments", "-f",
-                  "body=[factory] A factory node reported an execution error.\n\n"
-                       "<!-- factory-node-error -->\n\nFactory-Run: sweep:node-error"])
-
     def add_blocker(self, n, blocker):
         """Native dependency: issue `n` is blocked by `blocker`."""
         bid = self.run(["api", f"repos/{self.repo}/issues/{blocker}", "--jq", ".id"]).strip()
