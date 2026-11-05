@@ -59,12 +59,12 @@ SKILL_DIR = {"claude-code": ".claude/skills", "codex": ".agents/skills", "pi": "
 
 def plan_local(nodes, config):
     """Each automation the local loop serves, named and triggered as on Air; a manual-only node is not. A scheduled node
-    carries its `schedules` (names) beside its event `triggers`."""
+    carries its `schedules` (names) beside its event `triggers`. A node woken only by webhooks is not served."""
     out = []
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
-        events = [t for t in n["triggers"] if not str(t).startswith("schedule ") and str(t) != "manual"]
+        events = [t for t in n["triggers"] if not str(t).startswith(("schedule ", "webhook ")) and str(t) != "manual"]
         scheds = [str(t)[9:] for t in n["triggers"] if str(t).startswith("schedule ")]
         for automation, tier_arg, tier, focus in deploy_mod.variants(name, n, config["roles"]):
             if events or scheds:

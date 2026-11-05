@@ -789,6 +789,14 @@ class PlanTest(unittest.TestCase):
         self.assertIn("- `grill`:", intake)
         self.assertNotIn("- `bug`:", intake)
 
+    def test_webhook_node_plans_a_webhook_trigger_with_the_node_output(self):
+        graph = nodes.load()
+        graph["nodes"]["hook"] = {**graph["nodes"]["intake"], "triggers": ["webhook dry-run-finished"], "output": "create-pr"}
+        a = next(x for x in deploy.plan_air(graph, cfg.load())["automations"] if x["name"] == "[Slop factory] hook")
+        self.assertEqual(a["triggers"], [{"triggerType": "WEBHOOK"}])
+        self.assertEqual(a["triggerVcs"], [{"outputBehaviour": "create-pr"}])
+        self.assertIn("`factory begin hook --issue <the `issue` field of the trigger payload>`", a["prompt"])
+
     def test_scheduled_routine_prompts_take_no_number(self):
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
         for name in ("retro", "distill"):
