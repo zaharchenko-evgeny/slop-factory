@@ -31,4 +31,14 @@ Selected by `targets.<name>` in the team's effective configuration (`factory.pro
   read-only`; roles are not a security boundary inside one Air account.
 - Plan output: automations, workflows and environment diff.
 
-Air is the only target (ADR-0018): there is no local harness target.
+## Local (`local`)
+
+- Config (ADR-0017, ADR-0018): `targets.local.harness` (`claude-code`, `codex`, `junie` or `pi`;
+  a role or mode may set its own `harness`), `targets.local.models`,
+  `poll_seconds` and `workspace`, the directory with a checkout per descriptor
+  repository at `<workspace>/<name>`.
+- Plan: `factory deploy --target local` names each missing item (harness CLI,
+  `gh` login, factory repository checkout, project checkouts) and exits 1.
+- Apply: `--apply` writes `.factory/local.json` (git-ignored) for
+  `factory run --local`, which runs the same nodes and gate as Air.
+- Each ticket runs in its own worktree per repository and the ticket's branch.

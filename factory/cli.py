@@ -15,6 +15,7 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
                    (the outcome and the data its effects use; repeat a list option once per item;
                     skills/factory-step/SKILL.md describes them per role)
        factory sweep --main ...                    (the gate's sweep from main's graph)
+       factory deploy --target local [--apply] | factory run --local [--once] [--dry-run]   (the local target, ADR-0017)
 """
 import argparse
 import contextlib
@@ -259,6 +260,12 @@ def main(argv=None):
         config.set_team(team)
     if cmd in ("check", "apply", "sweep"):
         return gate.main([cmd, *rest])
+    if cmd == "deploy" and rest[:2] == ["--target", "local"]:
+        from local import deploy as local_deploy
+        return local_deploy(rest[2:])
+    if cmd == "run":
+        from local import main as local_main
+        return local_main(rest)
     if cmd == "deploy":
         return deploy.main(rest)
     if cmd == "contracts":

@@ -98,9 +98,18 @@
     "targets": {
       "type": "object",
       "properties": {
-        "air": {"type": "object"}
-      },
-      "additionalProperties": false
+        "air": {"type": "object"},
+        "local": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "harness": {"enum": ["claude-code", "codex", "junie", "pi"]},
+            "models": {"type": "object", "additionalProperties": {"type": "string"}},
+            "poll_seconds": {"type": "integer"},
+            "workspace": {"type": "string"}
+          }
+        }
+      }
     },
     "defaults": {"type": "object"},
     "models": {"type": "object", "additionalProperties": {"type": "string"}},

@@ -38,7 +38,32 @@ Open (#459): whether Air pushes a branch or opens a PR from an additional reposi
 project repository needs its developer to push that branch itself, or it is split into one ticket per
 repository.
 
-Air is the only target: it runs every role and every model call (ADR-0018).
+## Local target (ADR-0017)
+
+The same nodes run on a laptop with no Air account. `targets.local` in `factory.project.yaml` takes
+`harness` (`claude-code`, `codex`, `junie` or `pi`), `models` (tier to model), `poll_seconds` and `workspace`
+(default: the directory that holds the factory repository checkout). A role or reviewer mode may set its own
+`harness` (`roles.<role>.harness`, `roles.<role>.modes.<focus>.harness`). Harnesses and `targets.local.models`
+apply to this target only: on Air the platform runs every agent with `targets.air.models` (ADR-0018).
+
+- `factory --team <factory repo> deploy --target local` checks the harness CLI on `PATH`, a `gh` login, the
+  factory repository checkout, and a checkout of every descriptor repository at `<workspace>/<name>` whose
+  `origin` is that repository. It names each missing item and exits 1. `--apply` writes `.factory/local.json`
+  (harness, login, checkouts, the automations the loop serves).
+- `factory run --local [--once] [--dry-run]` does Air's part and nothing else. It polls GitHub for the events
+  the node triggers name: a label added to an issue or PR, a PR merged or pushed, an issue closed. For each new
+  event it makes a worktree per repository in `.factory/worktrees/<n>/<repo>` and runs `factory begin` there; on
+  exit 10 nothing runs. It then starts the harness with the node's Air prompt, so the agent runs `factory begin`
+  and `factory end` and the gate alone moves the stage. For a write node it pushes the `ez/` branch, and for
+  `create-pr` it runs `gh pr create`. Script nodes run `factory sweep --event`.
+- Seen events are kept in `.factory/local/seen.json`. The first run takes earlier merges, closes and pushes as
+  history and acts only on the labels that are set now. `--dry-run` lists the events without running or
+  recording them.
+- A run that fails before the harness starts (checkout, `factory begin`, a script's sweep) is tried again on
+  the next polls, three runs in all. A run whose harness started is not repeated, as on Air; a failed push or
+  `gh pr create` is printed in the run's result. A GitHub read that fails skips the poll (`--once` exits 1).
+- Not polled: scheduled nodes (they stay on Air or GitHub Actions), `pull_request_review.submitted` and
+  `issues.comment`. The reconcile sweep catches what those would have woken.
 
 ## Known Air limits that shape the design
 

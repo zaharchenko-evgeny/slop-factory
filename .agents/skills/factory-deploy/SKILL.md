@@ -36,3 +36,7 @@ applies the plan and changes no code.
 6. Run each `[Slop factory] doctor*` automation once (air-automations MCP) and report its probe lines. A failed probe has opened or updated its `Doctor: <probe> fails` ticket.
 
 The one-time rename of legacy `[factory:<node>]` items is not automated: apply it with `update_automation` or `edit_environment` (recorded ID, planned name) before step 3.
+
+## Local target
+
+`factory --team <team-repo> deploy --target local` checks the harness CLI, the `gh` login and the repository checkouts and names what is missing; `--apply` writes `.factory/local.json` for `factory run --local` (ADR-0017, `docs/targets.md`).

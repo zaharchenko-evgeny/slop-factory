@@ -232,9 +232,18 @@ class BeginEndTest(unittest.TestCase):
     def test_pr_nodes_match_deploy(self):
         self.assertEqual(cli.PR_NODES, cli.deploy.PR_TRIGGERED_NODES)
 
-    def test_local_target_is_gone(self):
-        self.assertNotEqual(self.run_cli("run", "--local", "--once")[0], 0)
-        self.assertNotEqual(self.run_cli("deploy", "--target", "local")[0], 0)
+    def test_deploy_target_local_goes_to_the_local_target(self):
+        with mock.patch("local.deploy", return_value=0) as local_deploy, \
+                mock.patch.object(cli.deploy, "main", side_effect=AssertionError("the Air deploy ran")):
+            code, _ = self.run_cli("deploy", "--target", "local", "--apply")
+        self.assertEqual(code, 0)
+        local_deploy.assert_called_once_with(["--apply"])
+
+    def test_run_local_goes_to_the_local_loop(self):
+        with mock.patch("local.main", return_value=0) as local_main:
+            code, _ = self.run_cli("run", "--local", "--once")
+        self.assertEqual(code, 0)
+        local_main.assert_called_once_with(["--local", "--once"])
 
 
 class PackagingTest(unittest.TestCase):

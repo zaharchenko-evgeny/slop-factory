@@ -1,6 +1,6 @@
 # ADR-0017: The engine is a dependency, the factory repository is the source of truth
 
-Status: accepted, decided by the operator on 4 November 2026. The local target is superseded by ADR-0018. Builds on ADR-0015
+Status: accepted, decided by the operator on 4 November 2026; the harness choice is refined by ADR-0018. Builds on ADR-0015
 (the engine package) and ADR-0016 (the project descriptor and workflow). It
 replaces ADR-0015's "a local event loop is a follow-up" with the local target
 below.

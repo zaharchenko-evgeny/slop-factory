@@ -75,9 +75,15 @@ class ProjectTest(unittest.TestCase):
             errors = self.errors(change)
             self.assertTrue(any("exactly one repository needs role primary" in e for e in errors), errors)
 
-    def test_local_target_is_rejected(self):
-        errors = self.errors(lambda d: d.setdefault("targets", {}).update({"local": {"harness": "pi"}}))
-        self.assertTrue(any("local" in e for e in errors), errors)
+    def test_local_target(self):
+        def local(value):
+            return lambda d: d.setdefault("targets", {}).update({"local": value})
+        self.assertEqual(self.errors(local({"harness": "pi", "poll_seconds": 60, "workspace": "~/factory"})), [])
+        cases = {"harness": {"harness": "vim"}, "poll_seconds: must be at least 10": {"poll_seconds": 5},
+                 "unknown-key": {"model": "x"}}
+        for words, value in cases.items():
+            errors = self.errors(local(value))
+            self.assertTrue(any(words in e for e in errors), (words, errors))
 
     def test_defaults_merged(self):
         loaded = project.load(FIXTURE)
