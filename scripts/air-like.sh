@@ -3,6 +3,8 @@
 # a cloud environment: the settings repository's .air/cloud/startup.sh per FACTORY_ENV, then the engine checks.
 set -euo pipefail
 cd "$REPO"
+# gh sends sampled telemetry to cafe.github.com, a host outside every environment plan: off, as in Air (#602).
+export GH_TELEMETRY=false
 # Every download in the startup (curl) retries transient failures.
 printf '%s\n' retry=3 retry-all-errors retry-delay=5 > "$HOME/.curlrc"
 git config --global --add safe.directory "$REPO"
