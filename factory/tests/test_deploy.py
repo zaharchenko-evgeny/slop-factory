@@ -908,6 +908,15 @@ class PlanTest(unittest.TestCase):
         envs = {e["name"]: e["repository"] for e in plan["environments"]}
         self.assertEqual(envs["[Slop factory] write api"], "https://github.com/o/api")
 
+    def test_scoped_knowledge_review_uses_team_environment(self):
+        plan = self.three_repositories(team_repository="https://github.com/o/team")
+        envs = {e["name"]: e["repository"] for e in plan["environments"]}
+        for a in plan["automations"]:  # Air: the automation repository must be its environment's repository
+            self.assertEqual(a["repository"]["browseUrl"], envs[a["environmentConfigId"]], a["name"])
+        knowledge = [a for a in plan["automations"] if "review-knowledge" in a["name"]]
+        self.assertTrue(knowledge)
+        self.assertTrue(all(a["repository"]["browseUrl"] == "https://github.com/o/team" for a in knowledge))
+
     def test_token_write_mode_deploys_one_node_set(self):
         plan = self.three_repositories(write_mode="token")
         names = {a["name"] for a in plan["automations"]}

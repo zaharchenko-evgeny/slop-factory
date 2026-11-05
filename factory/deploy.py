@@ -390,7 +390,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
             scope_name = scope["name"] if scope else None
-            if scope_name:
+            env_scope = None if focus == "knowledge" else scope_name  # a knowledge review runs in the team's own environment
+            if env_scope:
                 if (env, scope_name) not in scoped:
                     scoped.append((env, scope_name))
             else:
@@ -402,7 +403,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
-                "environmentConfigId": f"{prefix}{env}" + (f" {scope_name}" if scope_name else ""),
+                "environmentConfigId": f"{prefix}{env}" + (f" {env_scope}" if env_scope else ""),
                 "mcpConnectors": mcp_connectors(n, config, focus),
                 "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
                     name, n, config, aname, focus, automation_repository),
