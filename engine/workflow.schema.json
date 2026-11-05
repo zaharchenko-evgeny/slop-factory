@@ -17,6 +17,14 @@
         "properties": {"cron": {"type": "string"}}
       }
     },
+    "webhooks": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {"description": {"type": "string"}}
+      }
+    },
     "nodes": {
       "type": "object",
       "additionalProperties": {
