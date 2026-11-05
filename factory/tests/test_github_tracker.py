@@ -5,9 +5,13 @@
 # ///
 """Unit tests for factory/github_tracker.py with a stubbed gh. Run: uv run factory/tests/test_github_tracker.py"""
 import json
+import os
 import re
+import stat
 import sys
+import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import yaml
@@ -16,7 +20,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
-from github_tracker import ClaimError, GitHubTracker  # noqa: E402
+import github_tracker  # noqa: E402
+from github_tracker import ClaimError, CountedRun, GitHubTracker, RateLimited  # noqa: E402
 
 STAGES = cfg.load()["tracker"]["stages"]
 REPO = "o/r"
@@ -185,6 +190,77 @@ class GitHub(unittest.TestCase):
         fake.issues[2]["state"] = "CLOSED"
         self.assertEqual(tracker(fake).frontier(), [1])
 
+
+
+class RateLimit(unittest.TestCase):
+    def stub(self, d, script):
+        path = Path(d, "gh")
+        path.write_text("#!/bin/sh\n" + script)
+        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        return {**os.environ, "FACTORY_GH": str(path)}
+
+    LIMITED = ('echo "gh: API rate limit exceeded (HTTP 403)" >&2; '
+               'echo "x-ratelimit-remaining: 0" >&2; echo "x-ratelimit-reset: 1000" >&2; exit 1\n')
+
+    def test_403_with_no_calls_left_waits_for_the_reset_and_retries_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = self.stub(d, f'if [ -e "{d}/hit" ]; then echo ok; exit 0; fi; touch "{d}/hit"; ' + self.LIMITED)
+            with mock.patch.dict(os.environ, env), mock.patch.object(github_tracker.time, "time", return_value=940), \
+                    mock.patch.object(github_tracker.time, "sleep") as sleep:
+                self.assertEqual(github_tracker.gh(["api", "x"]), "ok\n")
+            sleep.assert_called_once_with(60)
+
+    def test_wait_is_capped_and_a_second_limit_fails_as_rate_limited(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = self.stub(d, f'echo x >> "{d}/n"; ' + self.LIMITED)
+            with mock.patch.dict(os.environ, env), mock.patch.object(github_tracker.time, "time", return_value=0), \
+                    mock.patch.object(github_tracker.time, "sleep") as sleep:
+                with self.assertRaises(RateLimited) as cm:
+                    github_tracker.gh(["api", "x"])
+            sleep.assert_called_once_with(300)
+            self.assertEqual(cm.exception.kind, "rate-limited")
+            self.assertEqual(len(Path(d, "n").read_text().split()), 2)
+
+    def test_other_failures_are_not_retried(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = self.stub(d, 'echo "HTTP 403 forbidden" >&2; exit 1\n')
+            with mock.patch.dict(os.environ, env), mock.patch.object(github_tracker.time, "sleep") as sleep:
+                with self.assertRaises(RuntimeError) as cm:
+                    github_tracker.gh(["api", "x"])
+            self.assertNotIsInstance(cm.exception, RateLimited)
+            sleep.assert_not_called()
+
+
+class Counted(unittest.TestCase):
+    def test_a_repeated_read_of_an_issue_timeline_calls_gh_once(self):
+        calls = []
+        run = CountedRun(lambda args: calls.append(args) or "[]")
+        for _ in range(3):
+            run(["api", "--paginate", "repos/o/r/issues/7/events", "--jq", ".[]"])
+        self.assertEqual((len(calls), run.calls), (1, 1))
+
+    def test_a_write_drops_the_remembered_reads(self):
+        run = CountedRun(lambda args: "[]")
+        run(["api", "repos/o/r/issues/7"])
+        run(["issue", "edit", "7", "-R", "o/r", "--add-label", "x"])
+        run(["api", "repos/o/r/issues/7"])
+        self.assertEqual(run.calls, 3)
+
+    def test_sweep_of_one_issue_reads_only_issues_linked_to_it(self):
+        import gate_github, gate
+        seen = []  # 20 other open ready tickets exist, but the gh calls below answer for #7 only
+
+        def run(args):
+            seen.append(args)
+            if args[0] == "api" and re.search(r"issues/(\d+)(/|$)", " ".join(args)):
+                return "[]" if "--paginate" in args else json.dumps({"labels": [], "number": 7})
+            raise AssertionError(args)
+        t = gate_github.GitHubGateTracker(REPO, STAGES, "bot", run=run)
+        t.parent = lambda n: None
+        t.facts = lambda n: {"stage": "", "blockers_open": 0}
+        gate.sweep(t, {}, issue=7, closed_ticket=7)
+        touched = {int(m[1]) for a in seen if (m := re.search(r"issues/(\d+)", " ".join(a)))}
+        self.assertLessEqual(touched, {7})
 
 
 if __name__ == "__main__":

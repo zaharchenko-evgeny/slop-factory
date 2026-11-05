@@ -8,7 +8,7 @@ never tracker labels or event names. `to_nodes` renders a v2 workflow into the n
 and deploy read (ADR-0014); `migrate` converts a nodes.yaml and its team descriptor into v2.
 
 Usage: workflow.py migrate <nodes.yaml> <factory.descriptor.yaml> [--out DIR]
-Each validate error starts with a name: unknown-state, unknown-command, unknown-schedule, unknown-wake,
+Each validate error starts with a name: unknown-state, unknown-command, unknown-schedule, unknown-webhook, unknown-wake,
 unknown-effect, unknown-condition, uncovered-state.
 """
 import argparse
@@ -92,11 +92,11 @@ def _target(kind, what):
 
 
 def render_wake(wake, project):
-    """A wake (`state ready`, `command implement-<tier>`, `pr pushed`, `schedule retro`) as a node trigger."""
+    """A wake (`state ready`, `command implement-<tier>`, `pr pushed`, `schedule retro`, `webhook dry-run-finished`) as a node trigger."""
     if wake in EVENTS:
         return EVENTS[wake]
     verb, _, arg = wake.partition(" ")
-    if verb == "schedule":
+    if verb in ("schedule", "webhook"):
         return wake
     if verb == "run":
         return f"workflow_run {arg}"
@@ -187,7 +187,7 @@ def validate(project, wf):
         return errs
     errs += config.mcp_errors(project.get("roles"), ((project.get("targets") or {}).get("air") or {}).get("mcp_connectors"), wf)
     states, commands = project.get("states") or {}, project.get("commands") or {}
-    schedules, covered = wf.get("schedules") or {}, set()
+    schedules, webhooks, covered = wf.get("schedules") or {}, wf.get("webhooks") or {}, set()
 
     def state(where, s):
         if s != "none" and s not in states:
@@ -214,6 +214,9 @@ def validate(project, wf):
             elif verb == "schedule":
                 if arg not in schedules:
                     errs.append(f"unknown-schedule: {name}: {arg}")
+            elif verb == "webhook":
+                if arg not in webhooks:
+                    errs.append(f"unknown-webhook: {name}: {arg}")
             else:
                 errs.append(f"unknown-wake: {name}: {wake}")
         when = n.get("when") if isinstance(n.get("when"), dict) else {}
@@ -265,7 +268,7 @@ def migrate(nodes, descriptor):
         if trigger in by_event:
             return by_event[trigger]
         event, _, arg = trigger.partition(" ")
-        if event == "schedule":
+        if event in ("schedule", "webhook"):
             return trigger
         if event == "workflow_run":
             return f"run {arg}"

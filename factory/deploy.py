@@ -32,8 +32,6 @@ import nodes as nodes_mod
 import vocab
 
 ROOT = Path(__file__).resolve().parents[1]
-# Air cannot delete an environment variable or set it to an empty value: deploy ignores the ones it no longer uses.
-LEGACY_ENVIRONMENT_VARIABLES = {"FACTORY_TEAM_REPOSITORY"}
 PR_TRIGGERED_NODES = {"review", "join", "fix", "update", "finish", "reopen"}
 BOT_FILTERED = ("review-", "join", "reopen")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
@@ -146,7 +144,8 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
             + "The factory repository is checked out beside it and is read-only.\n\n")
 
 
-def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None) -> str:
+def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None,
+                  webhook: bool = False) -> str:
     checkout = checkout_instructions(main_repository, config) if config else ""
     if name.startswith("doctor"):
         prompt = ("Run the installed `factory doctor` command exactly once in the foreground with no arguments. "
@@ -165,6 +164,8 @@ def script_prompt(name: str, main_repository: dict | None = None, config: dict |
         prompt = SCRIPT_PROMPT.format(args=args)
         if "--issue" in args:
             prompt += " Copy only that one number; never write the payload or any JSON."
+        if webhook:
+            prompt = prompt.replace("<the issue number>", "<the `issue` field of the trigger payload>")
     return checkout + prompt + INSTALLED_FACTORY
 
 
@@ -192,6 +193,8 @@ def begin_arg(node: str, n: dict) -> str:
     """The number a node begins with; a scheduled routine has no ticket or PR, so it takes none."""
     if all(str(t).startswith("schedule ") for t in n["triggers"]):
         return ""
+    if any(str(t).startswith("webhook ") for t in n["triggers"]):
+        return "--issue <the `issue` field of the trigger payload>"
     return "--pr <the pull request number>" if node in PR_TRIGGERED_NODES else "--issue <the issue number>"
 
 
@@ -266,11 +269,14 @@ def plan_air(nodes: dict, config: dict) -> dict:
         for aname, tier_arg, tier, focus in variants(name, n, roles):
             agent, _, model = air[tier].partition("/")
             trig = []
+            webhook = any(str(t).startswith("webhook ") for t in n["triggers"])
             spec = node_spec(name, n, config, tier_arg or tier, focus, nodes)
             for t in n["triggers"]:
                 if str(t).startswith("schedule "):
                     trig.append({"triggerType": "SCHEDULED", "cronExpression": scheds[str(t)[9:]]["cron"],
                                  "timezone": "UTC"})
+                elif str(t).startswith("webhook "):
+                    trig.append({"triggerType": "WEBHOOK"})
                 elif str(t) != "manual":
                     trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus))
             automation_repository = repository(team if focus == "knowledge" else repos.get(envs_def[env]["repository"]) or primary)
@@ -285,7 +291,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "repository": automation_repository,
                 "environmentConfigId": f"{prefix}{env}",
                 "mcpConnectors": mcp_connectors(n, config, focus),
-                "prompt": script_prompt(name, automation_repository, config) if n["role"] == "script" else agent_prompt(
+                "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
                     name, n, config, aname, focus, automation_repository),
             }
             if automation_repository["fullName"] != repository(team)["fullName"]:
@@ -515,8 +521,6 @@ def environment_detail(x: dict) -> dict:
         x["vm"] = x.pop("instanceTypeKey") or "default"
     if isinstance(x.get("variables"), list):
         x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
-    if isinstance(x.get("variables"), dict):
-        x["variables"] = {k: v for k, v in x["variables"].items() if k not in LEGACY_ENVIRONMENT_VARIABLES}
     if "personalSecrets" in x:
         x["secrets"] = [s["name"] for s in x.pop("personalSecrets")]
     return x
@@ -551,8 +555,12 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
 def automation_detail(x: dict) -> dict:
     """A get_automation result as the plan's shape: `id` for `automationId`, no per-trigger server fields."""
     x = {**x, "id": x["automationId"]}
-    x["triggers"] = [{k: v for k, v in t.items() if k not in ("triggerId", "isEnabled", "automationSnapshotId")}
+    raw = x.get("triggers") or []
+    x["triggers"] = [{k: v for k, v in t.items() if k not in ("triggerId", "isEnabled", "automationSnapshotId")
+                                          and not (t.get("triggerType") == "WEBHOOK" and k in ("url", "webhookUrl"))}
                      for t in x.get("triggers") or []]
+    x["webhooks"] = [{"id": t.get("triggerId"), "url": t.get("url") or t.get("webhookUrl")}
+                     for t in (y for y in raw if y.get("triggerType") == "WEBHOOK")]
     if isinstance(x.get("repository"), str):  # "owner/repo" stands for the planned repository object
         x["repository"] = {"fullName": x["repository"]}
     return x
@@ -673,12 +681,17 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         return 1
     if changes:
         apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories)
-        left = diff(plan, *read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
-                                      additional_names=additional_names))
+        after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
+                           additional_names=additional_names)
+        state = after
+        left = diff(plan, *after)
         for action, kind, name, *_ in left:
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:
             return 1
+    for x in state[0]:  # a person registers each webhook with its sender; also on an unchanged plan
+        for w in x["webhooks"]:
+            print(f"webhook {x['name']}: trigger {w['id']}" + (f" {w['url']}" if w["url"] else ""))
     return 0
 
 

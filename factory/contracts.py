@@ -116,6 +116,7 @@ def serve(recording, server):
 
 
 def refresh(path=DIR / "air-mcp.json"):
+    import config
     import deploy
     rec = json.loads(Path(path).read_text())
     clients = {"air-automations": deploy.Mcp(os.environ["FACTORY_MCP_AIR_AUTOMATIONS"]),
@@ -127,7 +128,7 @@ def refresh(path=DIR / "air-mcp.json"):
         auto, cloud = clients["air-automations"], clients["air-cloud"]
         auto_r, cloud_r = rec["servers"]["air-automations"]["responses"], rec["servers"]["air-cloud"]["responses"]
         auto_r["list_automations"] = redact(raw(auto, "list_automations", {"privacy": "private"}))
-        repo = "https://github.com/" + os.environ.get("FACTORY_REPOSITORY", "zaharchenko-evgeny/slop-factory")
+        repo = "https://github.com/" + config.load()["tracker"]["repository"]
         cloud_r["list_environments"] = redact(raw(cloud, "list_environments", {"repositoryUrl": repo}))
         auto_id = json.loads(auto_r["get_automation"]["content"][0]["text"])["automationId"]
         auto_r["get_automation"] = redact(raw(auto, "get_automation", {"automationId": auto_id}))
