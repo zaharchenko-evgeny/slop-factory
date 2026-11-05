@@ -1023,6 +1023,9 @@ class StaleSweepTest(unittest.TestCase):
         tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "head": "abc", "ci_label": "green",
                                   "focus_missing": [], "reviews": [{"agent": True, "commit_id": "abc"}]}})
         self.assertEqual([r["recover"] for r in res], ["refire-join"])
+        self.assertEqual([r["recover"] for r in gate.sweep_stale(tr, NODES, 2, self.NOW)[0]], ["refire-join"])  # the join did not apply: retry
+        with patch.object(gate, "sweep", return_value=([{"applied": True}], False)):
+            self.assertEqual([r["recover"] for r in gate.sweep_stale(tr, NODES, 2, self.NOW)[0]], ["refire-join"])
         self.assertEqual([r["recover"] for r in gate.sweep_stale(tr, NODES, 2, self.NOW)[0]], ["human"])  # once per head
 
     def test_red_ci_without_fix_label_refires_join(self):
