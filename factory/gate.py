@@ -42,6 +42,7 @@ import nodes as nodes_mod  # noqa: E402
 from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
 from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
+from github_tracker import project_repositories  # noqa: E402
 import vocab  # noqa: E402
 from inbox import send as inbox_send  # noqa: E402
 
@@ -1023,12 +1024,6 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
             if progress:
                 progress(r)
     return results, failed
-
-
-def project_repositories(config):
-    """owner/repo of each `role: project` repository of the descriptor: the CI label sync's repositories."""
-    return ["/".join(r["url"].rstrip("/").split("/")[-2:]) for r in config.get("repositories") or []
-            if r.get("role") == "project"]
 
 
 def head_ci(checks):
