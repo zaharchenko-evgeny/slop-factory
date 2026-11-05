@@ -20,7 +20,7 @@ import yaml
 
 import config
 import github_graphql
-from gate_port import PR_DEFAULTS, DescriptorPort, child_attrs, child_links, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
+from gate_port import PR_DEFAULTS, DescriptorPort, child_attrs, child_links, child_order, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
 from github_tracker import CountedRun, gh
 import vocab
 from youtrack_tracker import YouTrackTicketStore
@@ -317,15 +317,16 @@ class GitHubTicketStore:
         open_issues = {i["title"]: i for i in reversed(self.read_list("issues?state=open&per_page=100"))
                        if "pull_request" not in i and mark in (i.get("body") or "")}
         risk = [x for x in self.issue(n)["attrs"] if x.startswith("risk:")]  # a slice keeps its parent's risk path
-        wrote, made, links = False, [], child_links(children)  # made: (id, number) per child; slices come in dependency order
+        wrote, made, links = False, {}, child_links(children)  # made: child index -> (id, number); prerequisites go first
         parent_body = self.issue(n)["body"]
-        for c, after in zip(children, links):
+        for k in child_order(links):
+            c, after = children[k], links[k]
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
             new = open_issues.get(c["title"])
             if c["title"] in subs and new is None:  # not created by this ticket: leave it alone
-                made.append((subs[c["title"]].get("id"), subs[c["title"]].get("number")))
+                made[k] = (subs[c["title"]].get("id"), subs[c["title"]].get("number"))
                 continue
-            prereqs = [made[j] for j in after if j < len(made)]
+            prereqs = [made[j] for j in after if j in made]
             want = f"{c.get('body', '')}\n\n{mark}"
             if new is None:
                 new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
@@ -376,7 +377,7 @@ class GitHubTicketStore:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/labels", "-f", f"labels[]={ready}"])
                 wrote = True
             wrote = wrote or c["title"] not in subs or new["id"] not in blockers
-            made.append((new["id"], new["number"]))
+            made[k] = (new["id"], new["number"])
         return wrote
 
     def park(self, n, check, triage):

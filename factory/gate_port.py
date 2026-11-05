@@ -220,6 +220,15 @@ def child_links(children):
     return [[j for j, d in enumerate(kids) if d.get("repo") in (c.get("after") or [])] for c in kids]
 
 
+def child_order(links):
+    """Child indexes with each prerequisite before the children that follow it (a cycle keeps its listed order)."""
+    order = []
+    while len(order) < len(links):
+        ready = [i for i, after in enumerate(links) if i not in order and all(j in order for j in after)]
+        order += ready or [i for i in range(len(links)) if i not in order][:1]
+    return order
+
+
 def child_attrs(child):
     """The labels a per-repository child carries: its repository and the project subsystem."""
     return ([f"repo:{child['repo']}"] if child.get("repo") else []) + (
