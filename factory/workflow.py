@@ -83,13 +83,22 @@ def resolve(commands, ref):
     return name, kind, value
 
 
-def _target(kind, what):
-    """`issue` or `pr`: where the GitHub adapter keeps a label store."""
-    if kind == "label":
+def _target(kind, what, youtrack=False):
+    """`issue` or `pr`: where the adapter keeps a label store (a YouTrack tag is on the ticket)."""
+    if kind == "label" or (youtrack and kind == "tag"):
         return "issue"
     if kind == "pr_label":
         return "pr"
     raise ValueError(f"the GitHub adapter cannot keep {what} in a {kind} store")
+
+
+def _youtrack_wake(kind, value):
+    """A YouTrack ticket event as a node trigger: `youtrack.tagAdded <tag>` or `youtrack.fieldChanged <field>=<value>`."""
+    if kind == "tag":
+        return f"youtrack.tagAdded {value}"
+    if kind == "field":
+        return f"youtrack.fieldChanged {value['name']}={value['value']}"
+    return None
 
 
 def render_wake(wake, project):
@@ -97,6 +106,7 @@ def render_wake(wake, project):
     if wake in EVENTS:
         return EVENTS[wake]
     verb, _, arg = wake.partition(" ")
+    youtrack = (project.get("tracker") or {}).get("adapter") == "youtrack"
     if verb in ("schedule", "webhook"):
         return wake
     if verb == "run":
@@ -104,6 +114,8 @@ def render_wake(wake, project):
     if verb == "state":
         store = project["states"][arg]["store"]
         kind = project_mod.store_kind(store)
+        if youtrack and _youtrack_wake(kind, store[kind]):
+            return _youtrack_wake(kind, store[kind])
         if kind == "label":
             return f"issues.labeled {store['label']}"
         if kind == "pr":
@@ -116,7 +128,9 @@ def render_wake(wake, project):
         raise ValueError(f"the GitHub adapter cannot wake on state {arg} ({kind}: {store[kind]})")
     if verb == "command":
         _, kind, value = resolve(project["commands"], arg)
-        return f"{'issues' if _target(kind, arg) == 'issue' else 'pull_request'}.labeled {value}"
+        if youtrack and kind == "tag":
+            return _youtrack_wake(kind, value)
+        return f"{'issues' if _target(kind, arg, youtrack) == 'issue' else 'pull_request'}.labeled {value}"
     raise ValueError(f"unknown wake: {wake}")
 
 
@@ -127,7 +141,7 @@ def render_effect(effect, project):
     if key in ("command", "uncommand"):
         _, kind, value = resolve(project["commands"], effect[key])
         out = {"label" if key == "command" else "unlabel": value}
-        if _target(kind, effect[key]) == "pr":
+        if _target(kind, effect[key], (project.get("tracker") or {}).get("adapter") == "youtrack") == "pr":
             out["on"] = "pr"
         return out
     return copy.deepcopy(effect)

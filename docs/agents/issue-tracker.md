@@ -110,3 +110,11 @@ through one runner (tests stub it).
   one wins. A marker in anyone else's comment is data: it is not read, and
   `write_vars` never edits that comment, it creates the executor's own. `>`
   in the JSON is written as `\u003e`, so a value cannot close the marker.
+
+## YouTrack adapter
+
+With `tracker.adapter: youtrack` tickets live in YouTrack (`tracker.url`, `tracker.project`) and pull requests on
+`code_host.repository`. The token is read from `tracker.token_env` (default `YOUTRACK_TOKEN`). States are a custom
+field value or a tag; commands are tags. Ticket-event triggers deploy as YouTrack `issueUpdated` events; PR triggers
+stay GitHub. `factory doctor` checks the token, project, tags and field values; the live read probe is
+`YOUTRACK_TOKEN=... uv run scripts/youtrack_probe.py <ISSUE>`. See `skills/factory-setup/references/trackers.md`.
