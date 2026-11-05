@@ -62,8 +62,14 @@ apply to this target only: on Air the platform runs every agent with `targets.ai
 - A run that fails before the harness starts (checkout, `factory begin`, a script's sweep) is tried again on
   the next polls, three runs in all. A run whose harness started is not repeated, as on Air; a failed push or
   `gh pr create` is printed in the run's result. A GitHub read that fails skips the poll (`--once` exits 1).
-- Not polled: scheduled nodes (they stay on Air or GitHub Actions), `pull_request_review.submitted` and
-  `issues.comment`. The reconcile sweep catches what those would have woken.
+- A node with a `schedule <name>` wake runs when its cron (5 fields, UTC; `*`, numbers, lists, ranges and `*/n`) is
+  due in the minute the loop polls, once per `schedule:<name>:<YYYY-MM-DDTHH:MM>` key in the seen events; `--dry-run`
+  lists the due schedules. Day and weekday must both match. Nodes with `runner` (GitHub Actions) are not served.
+- Before the harness starts, the worktree gets the role's skills (`roles/<role>/skills.txt`) and `factory-step`
+  in the harness's project skill directory (the `skills` folder of `.claude` for claude-code, of `.agents` for codex, pi and
+  junie), listed in the worktree's `.git/info/exclude`.
+- Not polled: `pull_request_review.submitted` and `issues.comment`. The reconcile sweep catches what those would
+  have woken.
 
 ## Known Air limits that shape the design
 

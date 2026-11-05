@@ -5,6 +5,7 @@
 # ///
 """Tests for factory/local.py, the local target. Run: uv run factory/tests/test_local.py"""
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -119,7 +120,9 @@ class PlanLocalTest(unittest.TestCase):
             "off": {"role": "script", "env": "read", "enabled": False, "triggers": ["pull_request.merged"]},
             "retro": {"role": "retro", "env": "ops", "triggers": ["schedule retro"]}}}
         plan = local.plan_local(graph, {"roles": {"developer": {"tier": "mid"}, "retro": {"tier": "cheap"}}})
-        self.assertEqual([(p["automation"], p["output"]) for p in plan], [("implement-cheap", "create-pr"), ("implement-mid", "create-pr")])
+        self.assertEqual([(p["automation"], p["output"]) for p in plan],
+                         [("implement-cheap", "create-pr"), ("implement-mid", "create-pr"), ("retro", "read-only")])
+        self.assertEqual(plan[2]["schedules"], ["retro"])
         self.assertEqual(plan[1]["triggers"][0]["filters"], {"label": "factory:implement-mid"})
 
     def test_the_team_graph_has_the_review_and_finish_automations(self):
@@ -200,10 +203,10 @@ class RunLocalTest(unittest.TestCase):
         Path(".factory/local.json").write_text(json.dumps(
             {"harness": "claude-code", "factory": str(FIXTURE), "checkouts": {"slop-factory": str(Path(self.tmp.name))}}))
 
-    def run_local(self, gh, *argv):
+    def run_local(self, gh, *argv, at=datetime.datetime(2026, 1, 1, 10, 18)):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = local.main(["--local", "--once", *argv], run=gh)
+            code = local.main(["--local", "--once", *argv], run=gh, now=lambda: at)
         return code, [json.loads(x) for x in out.getvalue().splitlines()]
 
     def test_implement_label_runs_begin_harness_push_and_pr_then_never_again(self):
@@ -294,6 +297,44 @@ class RunLocalTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             self.assertEqual(local.main(["--local", "--once"], run=GitHub()), 2)
         self.assertIn("factory deploy --target local --apply", out.getvalue())
+
+    def test_a_due_schedule_runs_once_per_minute_key(self):
+        at = datetime.datetime(2026, 1, 1, 10, 17)
+        key = "schedule:reconcile:2026-01-01T10:17"
+        code, out = self.run_local(GitHub(), at=at)
+        self.assertEqual((code, [o["event"] for o in out]), (0, [key]))
+        self.assertEqual(self.run_local(GitHub(), at=at), (0, []))
+        self.assertIn(f"reconcile:{key}", json.loads(Path(".factory/local/seen.json").read_text()))
+
+    def test_dry_run_lists_due_schedules_and_records_nothing(self):
+        out = self.run_local(GitHub(), "--dry-run", at=datetime.datetime(2026, 1, 1, 10, 17))[1]
+        self.assertEqual(out, [{"would_run": "reconcile", "event": "schedule:reconcile:2026-01-01T10:17"}])
+        self.assertFalse(Path(".factory/local/seen.json").exists())
+
+    def test_a_developer_worktree_gets_the_role_skills_excluded_from_git(self):
+        tree = Path(self.tmp.name) / "tree"
+        subprocess.run(["git", "init", "-q", str(tree)], check=True)
+        local.install_skills(subprocess.run, "developer", "claude-code", tree)
+        local.install_skills(subprocess.run, "developer", "claude-code", tree)
+        for skill in (FIXTURE / "roles/developer/skills.txt").read_text().split():
+            self.assertTrue((tree / ".claude/skills" / skill / "SKILL.md").is_file(), skill)
+        self.assertTrue((tree / ".claude/skills/factory-step/SKILL.md").is_file())
+        self.assertEqual((tree / ".git/info/exclude").read_text().split().count(".claude/skills/"), 1)
+        self.assertEqual(subprocess.run(["git", "-C", str(tree), "status", "--porcelain"], capture_output=True, text=True).stdout, "")
+
+
+class CronTest(unittest.TestCase):
+    def test_minute_17_is_due_at_10_17_and_not_at_10_18(self):
+        at = lambda m: datetime.datetime(2026, 1, 1, 10, m)  # noqa: E731
+        self.assertTrue(local.cron_due("17 * * * *", at(17)))
+        self.assertFalse(local.cron_due("17 * * * *", at(18)))
+
+    def test_lists_ranges_and_steps(self):
+        t = datetime.datetime(2026, 1, 5, 6, 30)  # a Monday
+        for cron in ("*/10 * * * *", "0,30 6,18 * * *", "25-35 6 * * 1-5", "30 6 5 1 1"):
+            self.assertTrue(local.cron_due(cron, t), cron)
+        for cron in ("*/7 * * * *", "30 7 * * *", "30 6 * * 0", "30 6 6 * *"):
+            self.assertFalse(local.cron_due(cron, t), cron)
 
 
 if __name__ == "__main__":
