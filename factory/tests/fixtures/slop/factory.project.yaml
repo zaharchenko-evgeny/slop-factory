@@ -3,6 +3,8 @@ engine_repository: https://github.com/zaharchenko-evgeny/slop-factory.git
 project:
   name: Slop factory
 team_repository: https://github.com/zaharchenko-evgeny/slop-eval-factory
+# Air writes only the factory repository: writes to project repositories use the FACTORY_WRITE_TOKEN secret (slop-factory#639)
+write_mode: token
 repositories:
 - name: slop-factory
   url: https://github.com/zaharchenko-evgeny/slop-factory
