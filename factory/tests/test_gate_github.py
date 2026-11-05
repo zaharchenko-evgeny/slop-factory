@@ -1427,9 +1427,27 @@ class GateTest(unittest.TestCase):
             ev = Path(d, "ev.json")
             ev.write_text('{"id":"e1","ticket":7}')
             p = subprocess.run([sys.executable, str(ROOT / "factory/gate.py"), "check", "--node", "intake", "--event", str(ev),
-                                "--tracker", "github"], capture_output=True, text=True, env={**os.environ, "FACTORY_GH": str(stub)})
+                                "--tracker", "github"], capture_output=True, text=True, env={**os.environ, "FACTORY_GH": str(stub),
+                                                              "FACTORY_TEAM": str(ROOT / "factory/tests/fixtures/team")})
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertEqual(json.loads(p.stdout)["context"]["stage"], "triage")
+
+
+class SweepCallCountTest(unittest.TestCase):
+    def test_last_line_of_a_sweep_counts_the_gh_calls(self):
+        import contextlib
+        import io
+        from unittest.mock import patch
+        calls = []
+        gh = FakeGh(labels=("factory:in-review", "risk:low"))
+        tracker = tr(lambda args, **kw: calls.append(args) or gh(args, **kw))
+        out = io.StringIO()
+        with patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), \
+                patch.object(gate.GitHubCodeHost, "from_config", return_value=None), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            gate.main(["sweep", "--issue", "7", "--dry-run"])
+        self.assertEqual(json.loads(out.getvalue().splitlines()[-1]), {"github_calls": len(calls)})
+        self.assertGreater(len(calls), 0)
 
 
 class StaleFactsTest(unittest.TestCase):
@@ -1601,7 +1619,27 @@ class TwoRepositoryFactsTest(unittest.TestCase):
         self.assertEqual((f["pr"], f["round_complete"]), (5, True))
         self.assertNotIn("heads", f)
         self.assertFalse(any(TwoRepositoryGh.OTHER in " ".join(w) for w in gh.writes))
+    def test_main_green_requires_the_current_main_head(self):
+        def gh(sha):
+            def run(args):
+                if args[0] == "run":
+                    return json.dumps([{"conclusion": "success", "headSha": sha}])
+                return json.dumps({"sha": "new"})
+            return run
+        self.assertFalse(GitHubGateTracker(REPO, STAGES, BOT, run=gh("old")).main_green())
+        self.assertTrue(GitHubGateTracker(REPO, STAGES, BOT, run=gh("new")).main_green())
 
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_code_host_shares_the_trackers_counted_runner(self):
+        import contextlib
+        import io
+        from unittest.mock import patch
+        tracker = tr(FakeGh(labels=("factory:in-review", "risk:low")))
+        with patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), \
+                patch.object(gate.GitHubCodeHost, "from_config", return_value=None) as host, \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            gate.main(["sweep", "--issue", "7", "--dry-run"])
+        self.assertIs(host.call_args.kwargs["run"], tracker.run)

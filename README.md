@@ -69,6 +69,7 @@ a change to its workflow, states, roles or skills goes there. CI checks the
 migrated copy in `factory/tests/fixtures/slop/` (`test_slop_plan_unchanged`).
 
 See [factory setup](skills/factory-setup/SKILL.md), [design](docs/design.md),
+[environment variables](docs/environment.md),
 and the [delivery template](template/workflows/delivery.md) for more detail.
 
 ## Attention

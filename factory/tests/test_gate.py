@@ -588,7 +588,7 @@ class TriggerTest(unittest.TestCase):
                 patch.object(gate.GitHubCodeHost, "from_config", return_value=host), \
                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = gate.main(["sweep", *args])
-        return code, json.loads(stdout.getvalue()), stderr.getvalue()
+        return code, json.loads(stdout.getvalue().splitlines()[0]), stderr.getvalue()
 
     def test_sweep_invalid_event_warns_and_runs_full_sweep(self):
         from gate_port import MemoryTracker
@@ -1573,9 +1573,9 @@ class RecalibratedBlocksTest(unittest.TestCase):
         tr = MemoryTracker({"7": {"stage": "in-dev", "attrs": ["factory:implement-mid"]},
                             "8": {"stage": "in-dev", "attrs": ["factory:implement-mid"]}})
         for n in ("7", "8"):
-            code, out = gate.apply("implement", "env-broken", {"ticket": n, "failing_check": "shellcheck"}, tr, NODES)
+            code, out = gate.apply("implement", "env-broken", {"ticket": n, "failing_check": "doc-references"}, tr, NODES)
             self.assertEqual(code, gate.GO)
-        red = [k for k, t in tr.tickets.items() if t.get("title") == "Main is red in Air: shellcheck"]
+        red = [k for k, t in tr.tickets.items() if t.get("title") == "Main is red in Air: doc-references"]
         self.assertEqual(len(red), 1)  # reused, not duplicated
         for n in ("7", "8"):
             t = tr.tickets[n]

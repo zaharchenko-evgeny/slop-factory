@@ -20,7 +20,7 @@ import yaml
 
 import config
 from gate_port import PR_DEFAULTS, DescriptorPort, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
-from github_tracker import gh
+from github_tracker import CountedRun, gh
 import vocab
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
@@ -140,7 +140,7 @@ class GitHubGateTracker(DescriptorPort):
         # {name: owner/repo} of the descriptor's repositories, the primary first; the primary is the code host
         self.repositories = dict(repositories or {"primary": None})
         self.repositories[next(iter(self.repositories))] = self.pr_repo
-        self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, run
+        self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, CountedRun(run)
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
     @classmethod
@@ -167,6 +167,13 @@ class GitHubGateTracker(DescriptorPort):
 
     def _labels(self, n, repo=None):
         return [x["name"] for x in self._api(f"issues/{n}", repo=repo)["labels"]]
+
+    def main_green(self):
+        """The latest completed quality-gates run on main succeeded and tested the current main head."""
+        runs = json.loads(self.run(["run", "list", "-R", self.repo, "--workflow", "quality-gates.yml", "--branch", "main",
+                                    "--event", "push", "--status", "completed", "--limit", "1", "--json", "conclusion,headSha"]))
+        return (bool(runs) and runs[0]["conclusion"] == "success"
+                and runs[0].get("headSha") == self._api("commits/main")["sha"])
 
     def sweep_tickets(self, stages, open_only=False):
         """Issue numbers (open or closed) whose stage label is one of `stages`."""

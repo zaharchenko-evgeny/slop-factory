@@ -3,7 +3,7 @@
 The factory is the node list in `engine/nodes.yaml`
 ([ADR-0014](adr/0014-node-model.md)). Each node is deployed as a `[factory:<node>]`
 Air automation by the `factory-deploy` skill. A node starts on a label or a pull
-request event, never on a schedule; its agent runs `gate.py check`, does its role's
+request event, a schedule or an Air webhook; its agent runs `gate.py check`, does its role's
 work, writes the handoff and runs `gate.py apply`. The gate alone changes labels,
 posts reviews and comments, and moves the stage. Scripted nodes (join, finish)
 run only `gate.py sweep`. Automations carry the `[factory]` name prefix, so only
@@ -77,8 +77,23 @@ apply to this target only: on Air the platform runs every agent with `targets.ai
 - A run that fails before the harness starts (checkout, `factory begin`, a script's sweep) is tried again on
   the next polls, three runs in all. A run whose harness started is not repeated, as on Air; a failed push or
   `gh pr create` is printed in the run's result. A GitHub read that fails skips the poll (`--once` exits 1).
-- Not polled: scheduled nodes (they stay on Air or GitHub Actions), `pull_request_review.submitted` and
-  `issues.comment`. The reconcile sweep catches what those would have woken.
+- A node with a `schedule <name>` wake runs when its cron (5 fields, UTC; `*`, numbers, lists, ranges and `*/n`) is
+  due in the minute the loop polls, once per `schedule:<name>:<YYYY-MM-DDTHH:MM>` key in the seen events; `--dry-run`
+  lists the due schedules. Day and weekday must both match. Nodes with `runner` (GitHub Actions) are not served.
+- A node whose only wakes are `webhook <name>` is not served: a webhook comes from an Air sender, not the poll.
+- Before the harness starts, the worktree gets the role's skills (`roles/<role>/skills.txt`) and `factory-step`
+  in the harness's project skill directory (the `skills` folder of `.claude` for claude-code, of `.agents` for codex, pi and
+  junie), listed in the worktree's `.git/info/exclude`.
+- Not polled: `pull_request_review.submitted` and `issues.comment`. The reconcile sweep catches what those would
+  have woken.
+
+## Webhooks
+
+A workflow declares `webhooks: {<name>: {description}}` and a node wakes on `webhook <name>`. Deploy plans the trigger
+`{"triggerType": "WEBHOOK"}` with the node's `output` in `triggerVcs`; the agent takes the ticket number from the
+`issue` field of the trigger payload. After `--apply`, deploy prints each webhook automation's name and trigger id (and
+its URL when Air returns one) so a person can register it with the sender. The operator refreshes the Air contract
+recording for a `WEBHOOK` create with `factory contracts refresh`.
 
 ## Known Air limits that shape the design
 

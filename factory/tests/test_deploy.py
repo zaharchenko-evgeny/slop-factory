@@ -141,7 +141,7 @@ class RecordedTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"WRAP_STRUCTURED": "1"}):
             self.read_recorded()
 
-    def test_settings_environments_ignore_legacy_variable_and_replace_moved_ops(self):
+    def test_settings_environments_remove_team_repository_variable_and_replace_moved_ops(self):
         contract = json.loads((HERE / "contracts/air-mcp.json").read_text())
         responses = contract["servers"]["air-cloud"]["responses"]
         plan = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository":
@@ -150,10 +150,13 @@ class RecordedTest(unittest.TestCase):
         envs = [deploy.environment_detail(json.loads(responses[f"get_environment:{name}"]["content"][0]["text"]))
                 for name in ("read", "write", "ops")]
         changes = deploy.diff(plan, [], envs)
-        self.assertEqual([change[:3] + (change[5],) for change in changes],
-                         [("replace", "environment", "[Slop factory] ops", ["repository"])])
-        self.assertEqual(changes[0][3]["repository"], "https://github.com/zaharchenko-evgeny/slop-eval-factory")
-        self.assertTrue(all("FACTORY_TEAM_REPOSITORY" not in env["variables"] for env in envs))
+        by_name = {change[2]: change for change in changes}
+        self.assertEqual(by_name["[Slop factory] ops"][5], ["repository"])
+        for name in ("read", "write"):
+            change = by_name[f"[Slop factory] {name}"]
+            self.assertEqual((change[0], change[5]), ("update", ["variables"]))
+            self.assertEqual(change[3]["variables"], {"FACTORY_ENV": name})
+            self.assertIn("FACTORY_TEAM_REPOSITORY", change[4]["variables"])
 
     def read_recorded(self):
         tmp = Path(tempfile.mkdtemp())
@@ -283,7 +286,7 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--apply"), 0)
         self.assertEqual(self.calls("environment"), [["edit_environment", {"startup": "x", "id": "e1"}]])
 
-    def test_apply_serializes_variables_and_ignores_legacy_team_repository(self):
+    def test_apply_serializes_variables_and_removes_team_repository(self):
         self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
         self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
                        "variables": {"FACTORY_ENV": "write", "FACTORY_TEAM_REPOSITORY": "https://github.com/o/team"}}])
@@ -293,6 +296,27 @@ class ApplyTest(unittest.TestCase):
         live = json.loads(self.state["environment"].read_text())["items"][0]
         self.assertEqual(deploy.environment_detail(live)["variables"], {"FACTORY_ENV": "read"})
         self.assertEqual(self.run_deploy("--dry-run"), 0)
+
+    def test_air_environment_with_team_repository_plans_its_removal(self):
+        self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
+        live = {"name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                "variables": {"FACTORY_ENV": "read", "FACTORY_TEAM_REPOSITORY": "https://github.com/o/team"}}
+        changes = deploy.diff(self.plan, [], [live])
+        self.assertEqual([(c[0], c[2], c[5]) for c in changes if c[1] == "environment"],
+                         [("update", "[F] read", ["variables"])])
+
+    def test_slop_fixture_environments_have_only_factory_env(self):
+        slop = HERE / "fixtures/slop"
+        before = cfg.team_root()
+        try:
+            with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
+                cfg.set_team(project_team(slop))
+            plan = deploy.plan_air(nodes.load(), cfg.load())
+        finally:
+            cfg.set_team(before)
+        self.assertTrue(plan["environments"])
+        for e in plan["environments"]:
+            self.assertEqual(set(e["variables"]), {"FACTORY_ENV"})
 
     def test_apply_sends_trigger_destinations_with_changed_triggers(self):
         manual = {"triggerType": "WEBHOOK"}
@@ -358,6 +382,15 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.calls("automation"), [])
         self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
         self.assertEqual(self.calls("automation"), [["delete_automation", {"automationId": "a2"}]])
+
+    def test_apply_prints_webhook_registration_when_unchanged(self):
+        state = ([{"name": "[F] hook", "webhooks": [{"id": "t1", "url": "https://air/hook/t1"}]}], [])
+        out = io.StringIO()
+        with mock.patch.object(deploy, "read_state", return_value=state), mock.patch.object(deploy, "diff", return_value=[]), \
+                contextlib.redirect_stdout(out):
+            code = deploy.deploy("--apply", False, {"prefix": "[F]", "environments": [], "automations": []}, None, None)
+        self.assertEqual(code, 0)
+        self.assertIn("webhook [F] hook: trigger t1 https://air/hook/t1", out.getvalue())
 
     def test_apply_verifies_after_write(self):
         self.seed([], [])
@@ -668,6 +701,17 @@ class PlanTest(unittest.TestCase):
                                                    "[Slop factory] notify")):
                     self.assertIn("wait until it exits", automation["prompt"])
 
+    def test_every_script_prompt_forbids_uv_run(self):
+        plans = (deploy.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
+        for plan in plans:
+            for automation in plan["automations"]:
+                if automation["name"].startswith(("[Slop factory] sweep", "[Slop factory] join",
+                                                   "[Slop factory] finish", "[Slop factory] merge",
+                                                   "[Slop factory] reopen", "[Slop factory] start",
+                                                   "[Slop factory] notify", "[Slop factory] reconcile",
+                                                   "[Slop factory] doctor")):
+                    self.assertIn("never `uv run`", automation["prompt"], automation["name"])
+
     def test_no_prompt_asks_for_json(self):
         plans = (deploy.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
         for plan in plans:
@@ -777,6 +821,14 @@ class PlanTest(unittest.TestCase):
         intake = a["[Slop factory] intake"]  # `bug` is disabled in the graph
         self.assertIn("- `grill`:", intake)
         self.assertNotIn("- `bug`:", intake)
+
+    def test_webhook_node_plans_a_webhook_trigger_with_the_node_output(self):
+        graph = nodes.load()
+        graph["nodes"]["hook"] = {**graph["nodes"]["intake"], "triggers": ["webhook dry-run-finished"], "output": "create-pr"}
+        a = next(x for x in deploy.plan_air(graph, cfg.load())["automations"] if x["name"] == "[Slop factory] hook")
+        self.assertEqual(a["triggers"], [{"triggerType": "WEBHOOK"}])
+        self.assertEqual(a["triggerVcs"], [{"outputBehaviour": "create-pr"}])
+        self.assertIn("`factory begin hook --issue <the `issue` field of the trigger payload>`", a["prompt"])
 
     def test_scheduled_routine_prompts_take_no_number(self):
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}

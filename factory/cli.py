@@ -14,6 +14,7 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
                    [--note-for ROLE] [--note-hint TEXT] [--note-repro CMD] [--note-file PATH]
                    (the outcome and the data its effects use; repeat a list option once per item;
                     skills/factory-step/SKILL.md describes them per role)
+       factory env roles ENV                       (the roles of the enabled agent nodes that run in ENV, one per line)
        factory sweep --main ...                    (the gate's sweep from main's graph)
        factory deploy --target local [--apply] | factory run --local [--once] [--dry-run]   (the local target, ADR-0017)
 """
@@ -155,6 +156,10 @@ def handoff_of(a):
     """The handoff the options name: the outcome, plus the data each option carries. Plain-text options repeat;
     the JSON-file options (`--checks`, `--findings`, `--slices`, `--addressed`, `--notes`) are the older form."""
     data = {"outcome": a.outcome}
+    if a.outcome == "env-broken" and not a.failing_check:
+        raise ValueError("env-broken requires --failing-check")
+    if a.failing_check:
+        data["failing_check"] = a.failing_check
     for key, path in (("findings", a.findings), ("slices", a.slices), ("checks", a.checks)):
         if path:
             data[key] = json.loads(Path(path).read_text())
@@ -188,6 +193,7 @@ def end_parser():
     for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "addressed", "disputed-focuses", "notes",
                 "note-for", "note-hint", "note-repro"):
         p.add_argument(f"--{opt}")
+    p.add_argument("--failing-check")
     for opt, dest in (("pass", "passed"), ("fail", "failed"), ("not-run", "not_run"), ("blocking", None), ("minor", None),
                       ("fixed", None), ("disputed", None), ("slice", None), ("propose-check", None), ("note-file", None)):
         p.add_argument(f"--{opt}", action="append", default=[], **({"dest": dest} if dest else {}))
@@ -229,6 +235,17 @@ def validate():
         errs = nodes.validate(nodes.load(), config.load())
     print("\n".join(errs) or "factory: ok")
     return 1 if errs else 0
+
+
+def env_roles(env):
+    """Sorted roles of the enabled agent nodes (not human or script) whose `env` is `env`, from the project's workflow."""
+    import project
+    import workflow
+    root = config.team_root()
+    wf = workflow.load(root, project.load(root))
+    roles = {n["role"] for n in (wf.get("nodes") or {}).values()
+             if n.get("env") == env and n.get("enabled") is not False and n.get("role") not in (None, "human", "script")}
+    return sorted(roles)
 
 
 def pop_team(argv):
@@ -281,6 +298,9 @@ def main(argv=None):
         return upgrade_main(rest)
     if cmd == "validate" and not rest:
         return validate()
+    if cmd == "env" and len(rest) == 2 and rest[0] == "roles":
+        print("\n".join(env_roles(rest[1])))
+        return 0
     if cmd == "doctor":
         from doctor import main as doctor_main
         return doctor_main(rest)

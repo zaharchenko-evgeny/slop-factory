@@ -144,7 +144,7 @@ def main(argv=None, run=github_tracker.gh):
         return 2
     settings = config.load()
     repo = settings["tracker"]["repository"]
-    run_id = os.environ.get("FACTORY_RUN_ID") or f"doctor:{env}"
+    run_id = f"doctor:{env}"
     results = run_probes(repo, env, nodes_mod.load(), run, (settings["tracker"].get("risk_labels") or {"low": "risk:low"})["low"], run_id=run_id)
     for r in results:
         print(json.dumps(r))
