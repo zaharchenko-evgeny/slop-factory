@@ -143,7 +143,8 @@ class PlanLocalTest(unittest.TestCase):
 class GitHub:
     """The `gh`, `git`, `factory` and harness calls of one `factory run --local` pass; records them in order."""
 
-    def __init__(self, issues=None, prs=None, merged=(), begin_code=0, push_code=0, gh_down=False):
+    def __init__(self, issues=None, prs=None, merged=(), begin_code=0, push_code=0, gh_down=False, branch="ez/7-add-x"):
+        self.branch = branch
         self.issues, self.prs, self.merged, self.begin_code, self.calls = issues or {}, prs or {}, list(merged), begin_code, []
         self.push_code, self.gh_down = push_code, gh_down
 
@@ -182,7 +183,7 @@ class GitHub:
             return rows([{"id": 100 + n, "name": label} for label, items in labels.items() if any(i["number"] == n for i in items)])
         if argv[0] == "uv" and "begin" in argv:
             return subprocess.CompletedProcess(argv, self.begin_code, json.dumps(
-                {"go": True, "branch": "ez/7-add-x", "checkouts": [], "context": {"title": "Add x"}}), "")
+                {"go": True, "branch": self.branch, "checkouts": [], "context": {"title": "Add x"}}), "")
         if argv[0] == "git" and "rev-list" in argv:
             return ok("1\n")
         return ok()
@@ -305,6 +306,14 @@ class RunLocalTest(unittest.TestCase):
         self.assertEqual((code, [o["event"] for o in out]), (0, [key]))
         self.assertEqual(self.run_local(GitHub(), at=at), (0, []))
         self.assertIn(f"reconcile:{key}", json.loads(Path(".factory/local/seen.json").read_text()))
+
+    def test_a_scheduled_agent_without_a_branch_still_reaches_the_harness(self):
+        gh = GitHub(branch=None)
+        code, out = self.run_local(gh, at=datetime.datetime(2026, 1, 1, 2, 0))  # retro, an agent node
+        self.assertEqual((code, [o["result"] for o in out if o["event"].startswith("schedule:retro")]), (0, ["ran"]))
+        self.assertIn("harness", gh.kinds())
+        self.assertNotIn("push", gh.kinds())
+        self.assertFalse(any(a[0] == "git" and "ls-remote" in a for _, a in gh.calls))
 
     def test_dry_run_lists_due_schedules_and_records_nothing(self):
         out = self.run_local(GitHub(), "--dry-run", at=datetime.datetime(2026, 1, 1, 10, 17))[1]

@@ -282,10 +282,10 @@ def run_event(entry, payload, state, config, graph, run):
     if begin.returncode:
         return f"begin failed: {(begin.stdout + begin.stderr).strip()[-300:]}"
     out, write = json.loads(begin.stdout), entry["output"] in WRITE_OUTPUTS
-    branch = out["branch"]
+    branch = out.get("branch")  # a scheduled routine has no ticket branch
     for c in out.get("checkouts") or []:
         trees.setdefault(c["repo"], (WORKTREES / str(ticket) / c["repo"]).resolve())
-    for name, path in trees.items():
+    for name, path in trees.items() if branch else ():
         checkout = state["checkouts"][name]
         sh(run, ["git", "-C", checkout, "fetch", "--quiet", "origin"])
         remote = sh(run, ["git", "-C", checkout, "ls-remote", "--heads", "origin", "--", branch]).stdout.strip()
@@ -303,7 +303,7 @@ def run_event(entry, payload, state, config, graph, run):
               env={**os.environ, "FACTORY_TEAM": state["factory"]})
     if done.returncode:
         return f"harness failed: {(done.stdout + done.stderr).strip()[-300:]}"
-    if not write:
+    if not write or not branch:
         return "ran"
     for name, path in trees.items():
         base = repos[name]["default_branch"]
