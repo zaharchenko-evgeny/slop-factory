@@ -5,6 +5,8 @@
 # ///
 """Templates reproduce this repository's files. Run: uv run skills/factory-setup/tests/test_templates.py"""
 import json
+import os
+import subprocess
 import re
 import sys
 import tempfile
@@ -24,14 +26,18 @@ OUT = render.render(ANSWERS)
 PROJECT = ["offline-eval", "zaharchenko", "Offline Evaluation", "hetzner", "Qwen", "claude-", "ez/"]
 
 
+def project_names():
+    return {m for f in render.PROJECT_T.rglob("*") if f.is_file() for m in render.PH.findall(f.read_text())}
+
+
 class Templates(unittest.TestCase):
     def test_reproduces_current_files(self):
         for rel, text in OUT.items():
             if rel == "AGENTS.workflow.md":
                 cur = (ROOT / "AGENTS.md").read_text()
                 want = cur[cur.index("## Development workflow"):cur.index("## Tracker and git")]
-            elif rel in {"workflows/delivery.sm.yaml", "factory.descriptor.yaml"}:
-                continue  # the engine has no local team descriptor; validate the team fixture separately
+            elif rel == "workflows/delivery.sm.yaml":
+                continue  # the engine no longer ships sm.py
             elif rel.startswith("roles/") and rel.endswith("/setup.sh"):
                 role = Path(rel).parts[1]
                 want = render.fill((render.T / "roles/setup.sh.tmpl").read_text(),
@@ -51,7 +57,7 @@ class Templates(unittest.TestCase):
         used = {m for f in render.T.rglob("*") if f.is_file() for m in render.PH.findall(f.read_text())}
         for name in used:
             self.assertIn(f"`{name}`", doc, name)
-        self.assertEqual(used - {"ROLE", "TOOLS"}, set(ANSWERS) - {"ROLES"})
+        self.assertEqual(used - {"ROLE", "TOOLS"}, set(ANSWERS) - {"ROLES"} - project_names())
 
     def test_project_render_validates(self):
         import project
@@ -77,6 +83,16 @@ class Templates(unittest.TestCase):
             self.assertEqual(descriptor["tracker"]["repository"], "example-tracker_repository")
             self.assertEqual(workflow.validate(descriptor, workflow.load(tmp, descriptor)), [])
             self.assertTrue({"roles", "skills"} <= {Path(rel).parts[0] for rel in out})
+
+    def test_cli_writes_valid_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run([sys.executable, str(SKILL / "render.py"), str(HERE / "this-repo.answers.json"), tmp], check=True)
+            self.assertTrue((Path(tmp) / "factory.project.yaml").is_file())
+            self.assertTrue((Path(tmp) / ".air/cloud/startup.sh").is_file())
+            self.assertFalse((SKILL / "templates/factory.descriptor.yaml").exists())
+            run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "factory/cli.py"), "validate"], capture_output=True,
+                                 text=True, env={**os.environ, "FACTORY_TEAM": tmp})
+            self.assertEqual(run.stdout.strip(), "factory: ok", run.stderr)
 
 
 if __name__ == "__main__":
