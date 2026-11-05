@@ -416,6 +416,7 @@ nodes:
     env: ops
     pilot: true
     ci-independent: true
+    routine: true
     wakes_on:
     - webhook notify
     - pr opened

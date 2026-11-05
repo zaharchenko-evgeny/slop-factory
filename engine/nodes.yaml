@@ -215,6 +215,7 @@ nodes:
   inbox:
     env: ops
     pilot: true
+    routine: true  # outside any ticket: the role reads its own trigger event, `factory begin` needs no payload
     ci-independent: true  # acts on a PR event, not on a head
     triggers: ["webhook notify", "pull_request.opened", "issue_comment.created"]
     when: { always: true }
