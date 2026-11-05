@@ -7,6 +7,7 @@
   "properties": {
     "engine": {"type": ["integer", "string"]},
     "team_repository": {"type": "string"},
+    "write_mode": {"enum": ["per-repo", "token"], "default": "per-repo"},
     "engine_repository": {"type": "string", "default": "https://github.com/zaharchenko-evgeny/slop-factory.git"},
     "project": {
       "type": "object",
