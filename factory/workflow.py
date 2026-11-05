@@ -30,6 +30,7 @@ EFFECTS = {"state", "command", "uncommand", "comment", "review", "create-issues"
 PLACEHOLDERS = ("<tier>", "<focus>")
 # GitHub adapter: wakes that are events, not a state entered or a command given.
 EVENTS = {"manual": "manual", "pr pushed": "pull_request.synchronize", "pr opened": "pull_request.opened",
+          "pr commented": "issue_comment.created",
           "pr reviewed": "pull_request_review.submitted", "ticket closed": "issues.closed",
           "ticket commented": "issues.comment", "ticket unlabeled": "issues.unlabeled"}
 # PR facts the GitHub adapter reads from an event; the others come from `tracker.pr_fact_labels`.

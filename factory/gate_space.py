@@ -3,6 +3,11 @@
 `api(path)` returns the decoded JSON of `GET <path>` on the Space instance (project `code_host.project`).
 A merge request is `{number, title, state: open|merged|closed, branch, head, ci: success|failed|running|none,
 labels: [str], reviews: [{author, verdict: approve|changes, commit_id, submitted_at}]}`.
+
+Write side: `write(method, path, body)` performs the request and returns the decoded JSON; it raises on an HTTP error.
+`SpaceCodeHost.apply(effect)` carries out the effects `review`, `label`, `unlabel`, `update-branch` and `merge` on the
+ticket's open merge request, reading first and writing only on a difference; it returns True when it wrote, and
+raises RuntimeError(`<kind>: ...`) when there is no merge request or the API fails.
 """
 from gate_port import PR_DEFAULTS, ticket_from_ref
 
@@ -10,8 +15,8 @@ CI = {"success": "green", "failed": "red", "running": "pending"}
 
 
 class SpaceCodeHost:
-    def __init__(self, project, api):
-        self.project, self.api = project, api
+    def __init__(self, project, api, write=None):
+        self.project, self.api, self.write = project, api, write
 
     def _merge_requests(self):
         return self.api(f"projects/key:{self.project}/code-reviews")["data"]
@@ -33,3 +38,47 @@ class SpaceCodeHost:
                     "submitted_at": r.get("submitted_at")} for r in mr.get("reviews") or []]
         return {**PR_DEFAULTS, "pr": mr["number"], "head": mr["head"], "branch": mr.get("branch"), "pr_state": mr["state"],
                 "ci": CI.get(mr.get("ci"), "none"), "pr_labels": list(mr.get("labels") or []), "reviews": reviews}
+
+    def _mr_path(self, number):
+        return f"projects/key:{self.project}/code-reviews/number:{number}"
+
+    def _send(self, kind, method, path, body=None):
+        try:
+            return self.write(method, path, body)
+        except Exception as err:
+            raise RuntimeError(f"{kind}: {err}") from err
+
+    def apply(self, e):
+        kind, value, mr = e["kind"], e.get("value"), None
+        if kind not in ("review", "label", "unlabel", "update-branch", "merge"):
+            raise ValueError(f"unknown effect: {kind}")
+        mr = self.merge_request(e["ticket"])
+        if mr is None or mr["state"] != "open":
+            if kind == "merge" and mr is not None and mr["state"] == "merged":
+                return False
+            raise RuntimeError(f"{kind}: no open merge request for ticket {e['ticket']}")
+        path, head = self._mr_path(mr["number"]), e.get("head") or mr["head"]
+        if kind in ("label", "unlabel"):
+            labels = list(mr.get("labels") or [])
+            gone = [x for x in labels if x.startswith(value[:-1])] if value.endswith("*") else [x for x in labels if x == value]
+            if kind == "label" and value not in labels:
+                self._send(kind, "POST", f"{path}/labels", {"label": value})
+                return True
+            for x in gone if kind == "unlabel" else []:
+                self._send(kind, "DELETE", f"{path}/labels/{x}")
+            return bool(gone) and kind == "unlabel"
+        if head != mr["head"]:
+            return False  # the head moved since the gates judged it: the next sweep reads it again
+        if kind == "review":
+            verdict = "approve" if str(value).startswith("approve") else "changes"
+            focus = e.get("focus")
+            marker = f"<!-- factory:review focus={focus} round={e.get('round') or 1} verdict={verdict} -->"
+            if any(r["commit_id"] == head and marker in (r.get("body") or "") for r in mr.get("reviews") or []):
+                return False
+            lines = [f"**{x['id']}** {x['file']} \u2014 {x['finding']}" for x in e.get("findings") or []]
+            body = "\n\n".join(x for x in (f"[factory] {e.get('summary') or ''}".strip(), "\n".join(lines), marker) if x)
+            self._send(kind, "POST", f"{path}/reviews", {"commitId": head, "verdict": verdict, "body": body})
+            return True
+        self._send(kind, "POST", f"{path}/{'merge' if kind == 'merge' else 'update-branch'}",
+                   {"expectedHead": head, **({"strategy": "merge"} if kind == "merge" else {})})
+        return True

@@ -69,6 +69,23 @@ class ProjectTest(unittest.TestCase):
         errors = self.errors(lambda d: d["repositories"].append({**other, "role": "team"}))
         self.assertTrue(any("repositories[1].role" in e and "'team'" in e for e in errors), errors)
 
+    def test_team_repository_in_repositories_must_be_a_project(self):
+        def team(role):
+            def change(d):
+                d["team_repository"] = d["repositories"][0]["url"] + ".git"
+                if role:
+                    d["repositories"][0]["role"] = role
+            return change
+        errors = self.errors(team("primary"))
+        self.assertTrue(any("repositories[0].role" in e and "must have role project" in e and "found primary" in e
+                            for e in errors), errors)
+        other = {"name": "team", "url": "https://github.com/example/team", "default_branch": "main", "role": "project"}
+        self.assertEqual(self.errors(lambda d: (d["repositories"].append(other),
+                                                d.update(team_repository=other["url"]))), [])
+        errors = self.errors(lambda d: (d["repositories"].append({**other, "role": "primary"}),
+                                        d.update(team_repository=other["url"])))
+        self.assertTrue(any("repositories[1].role" in e and "must have role project" in e for e in errors), errors)
+
     def test_exactly_one_primary_repository(self):
         other = {"name": "other", "url": "https://github.com/example/other", "default_branch": "main", "role": "primary"}
         for change in (lambda d: d["repositories"].append(other), lambda d: d["repositories"][0].pop("role")):

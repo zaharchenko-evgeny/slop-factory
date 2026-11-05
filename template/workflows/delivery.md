@@ -121,7 +121,7 @@ stateDiagram-v2
 | `reopen` | `pr pushed`<br>`state ci-red` | script | read |
 | `merge` | `state approved`<br>`state ci-green` | script | read |
 | `finish` | `state pr-merged`<br>`ticket closed`<br>`state blocked`<br>`ticket commented` | script | read |
-| `notify` | `state blocked`<br>`state needs-answers` | script | ops |
+| `inbox` | `webhook notify`<br>`pr opened`<br>`pr commented` | inbox | ops |
 | `recover` | `manual` | script | read |
 | `reconcile` | `schedule reconcile` | script | ops |
 | `doctor` | `schedule doctor` | script | read |

@@ -119,16 +119,26 @@ SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>",
                "notify": " notify --issue <the issue number>"}
 
 
+def team_is_project(team: dict, config: dict) -> bool:
+    """True when the team repository is also a descriptor project repository (ADR-0019)."""
+    return bool(config.get("team_repository")) and any(
+        repository(r)["fullName"] == repository(team)["fullName"] for r in config["repositories"])
+
+
 def other_projects(main_repository: dict, team: dict, config: dict) -> list[dict]:
-    """The descriptor's repositories other than the automation's main one and the team repository, in order."""
-    return [r for r in config["repositories"]
-            if repository(r)["fullName"] not in (main_repository["fullName"], repository(team)["fullName"])]
+    """The descriptor's repositories other than the automation's main one, in order.
+
+    The team repository is left out, unless it is a project repository (ADR-0019): then it is one project checkout."""
+    skip = {main_repository["fullName"]} | (set() if team_is_project(team, config) else {repository(team)["fullName"]})
+    return [r for r in config["repositories"] if repository(r)["fullName"] not in skip]
 
 
 def additional_repositories(main_repository: dict, team: dict, config: dict) -> list[dict]:
-    """Air's extra checkouts (ADR-0017): the other project repositories, then the read-only team repository."""
-    return ([{"repository": repository(r), "branch": r["default_branch"]} for r in other_projects(main_repository, team, config)]
-            + [{"repository": repository(team), "branch": "main"}])
+    """Air's extra checkouts (ADR-0017): the other project repositories, then the read-only team repository
+    unless it is itself a project repository (ADR-0019)."""
+    projects = [{"repository": repository(r), "branch": r["default_branch"]}
+                for r in other_projects(main_repository, team, config)]
+    return projects if team_is_project(team, config) else projects + [{"repository": repository(team), "branch": "main"}]
 
 
 def checkout_instructions(main_repository: dict | None, config: dict) -> str:
@@ -139,9 +149,15 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
     project = main_repository["fullName"].rsplit("/", 1)[-1]
     others = ", ".join(f"`/workspaces/{repository(r)['fullName'].rsplit('/', 1)[-1]}`"
                        for r in other_projects(main_repository, team, config))
+    if team_is_project(team, config):
+        name = repository(team)["fullName"].rsplit("/", 1)[-1]
+        tail = (f"`/workspaces/{name}` is the team repository and a project repository: change it like any other. "
+                "The factory reads its roles and skills from `$HOME/factory-team`, never from that checkout.\n\n")
+    else:
+        tail = "The factory repository is checked out beside it and is read-only.\n\n"
     return (f"## Project checkout\n\nBefore running project commands, `cd /workspaces/{project}`. "
             + (f"The other project repositories are checked out beside it: {others}. " if others else "")
-            + "The factory repository is checked out beside it and is read-only.\n\n")
+            + tail)
 
 
 def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None,
@@ -193,6 +209,8 @@ def begin_arg(node: str, n: dict) -> str:
     """The number a node begins with; a scheduled routine has no ticket or PR, so it takes none."""
     if all(str(t).startswith("schedule ") for t in n["triggers"]):
         return ""
+    if n["role"] == "inbox":  # the payload is not a ticket: the role builds its own request
+        return ""
     if any(str(t).startswith("webhook ") for t in n["triggers"]):
         return "--issue <the `issue` field of the trigger payload>"
     return "--pr <the pull request number>" if node in PR_TRIGGERED_NODES else "--issue <the issue number>"
@@ -208,6 +226,13 @@ def mcp_connectors(n: dict, config: dict, focus: str | None) -> list[str]:
     return []
 
 
+INBOX_PAYLOAD = ("## Trigger event fields\n\n"
+                 "- `webhook notify`: the whole POST body is the request.\n"
+                 "- `pr opened`: `pull_request.number`, `pull_request.title`, `pull_request.body`, `pull_request.head.ref`.\n"
+                 "- `pr commented`: `issue.number` (the pull request), `issue.title`, `comment.user.login`, "
+                 "`comment.body`, `comment.html_url`.\n\n")
+
+
 def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None,
                  main_repository: dict | None = None) -> str:
     role = n["role"]
@@ -218,7 +243,8 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     checkout = checkout_instructions(main_repository, config)
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
-    return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
+    payload = INBOX_PAYLOAD if role == "inbox" else ""
+    return (f"{who}\n\n{checkout}{text}\n\n{payload}## Your skills\n\n{skill_lines(role)}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts and the branch or PR head. "
