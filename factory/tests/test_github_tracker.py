@@ -263,5 +263,25 @@ class Counted(unittest.TestCase):
         self.assertLessEqual(touched, {7})
 
 
+
+class MemoTest(unittest.TestCase):
+    def test_reads_by_sha_and_the_pr_list_reach_gh_once_and_a_write_drops_them(self):
+        import github_tracker
+        calls = []
+        run = github_tracker.CountedRun(lambda args, **kw: (calls.append(args), "{}")[1])
+        sha = "a" * 40
+        reads = [["api", f"repos/o/r/commits/{sha}"], ["api", f"repos/o/r/compare/main...{sha}"],
+                 ["api", "--paginate", "repos/o/r/pulls?state=all&per_page=100", "--jq", ".[]"]]
+        for _ in range(2):
+            for r in reads:
+                run(r)
+        self.assertEqual(len(calls), 3)
+        run(["api", "repos/o/r/pulls/5"])
+        run(["api", "repos/o/r/pulls/5"])
+        self.assertEqual(len(calls), 5)  # a PR itself is read fresh: a merge checks its head
+        run(["issue", "edit", "7", "--add-label", "x"])
+        run(reads[0])
+        self.assertEqual(len(calls), 7)
+
 if __name__ == "__main__":
     unittest.main()

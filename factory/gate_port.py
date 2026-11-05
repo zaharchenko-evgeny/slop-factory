@@ -8,7 +8,10 @@ outcome without a stage effect.
 """
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
+
+import github_graphql
 
 
 def ticket_from_ref(ref):
@@ -86,7 +89,7 @@ def fix_round_count(reviews, since=""):
 
 
 class UnsupportedStore(ValueError):
-    """A descriptor store this tracker cannot read or write (a `field` or `tag` store before YouTrack, #163)."""
+    """A descriptor store this tracker cannot read or write (a `field` or `tag` store on a GitHub tracker, a `label` store on YouTrack)."""
 
 
 # The facts a PR-fact state store (`store: {pr: <fact>}`) holds on.
@@ -100,6 +103,8 @@ class DescriptorPort:
     """States and commands by name, through the `store` each has in factory.project.yaml (ADR-0016). A tracker
     mixes it in and sets `project`; reads go through its `facts`, writes through its `apply`."""
     project = None
+    state_kinds = ("label",)  # the store kinds this tracker holds states (ticket side) and commands in
+    command_kinds = ("label", "pr_label")
 
     def _entries(self, section):
         if not isinstance(self.project, dict):
@@ -117,15 +122,15 @@ class DescriptorPort:
     def _command(self, name):
         import workflow
         _, kind, value = workflow.resolve(self._entries("commands"), name)
-        if kind not in ("label", "pr_label"):
+        if kind not in self.command_kinds:
             raise UnsupportedStore(f"command {name}: this tracker has no {kind} store")
         return kind, value
 
     def state(self, ticket):
-        """The ticket's state held in a label store, else `none`."""
+        """The ticket's state held in a ticket store (label, field or tag), else `none`."""
         stage = self.facts(ticket)["stage"]
         states = self._entries("states")
-        return stage if stage in states and "label" in (states[stage].get("store") or {}) else "none"
+        return stage if stage in states and any(k in (states[stage].get("store") or {}) for k in self.state_kinds) else "none"
 
     def pr_states(self, ticket):
         """The PR-fact states (`store: {pr: ...}`) that hold for the ticket's PR."""
@@ -137,7 +142,7 @@ class DescriptorPort:
         kind, store = self._state_store(name)
         if kind == "pr":
             raise ValueError(f"state {name} is a PR fact ({store['pr']}): the code host sets it, not the gate")
-        if kind != "label":
+        if kind not in self.state_kinds:
             raise UnsupportedStore(f"state {name}: this tracker has no {kind} store")
         return self.apply({"ticket": ticket, "kind": "stage", "value": name,
                            **({"event": event} if event is not None else {})})
@@ -147,7 +152,9 @@ class DescriptorPort:
         `implement-mid` for the template `implement-<tier>`."""
         import workflow
         facts, found = self.facts(ticket), []
-        held = {"label": facts.get("attrs") or [], "pr_label": facts.get("pr_labels") or []}
+        attrs = facts.get("attrs") or []
+        held = {"label": attrs, "tag": attrs, "pr_label": facts.get("pr_labels") or []}
+        held = {k: v for k, v in held.items() if k in self.command_kinds}
         for name, entry in self._entries("commands").items():
             store = entry.get("store") or {}
             kind = next(iter(store), None)
@@ -172,9 +179,93 @@ class DescriptorPort:
         return self.apply({"ticket": ticket, "kind": "unlabel", "value": value, **({"on": "pr"} if kind == "pr_label" else {})})
 
 
+class TicketStore(Protocol):
+    """The ticket side of a tracker: tickets by id, read and written with their own system. A GitHub tracker keeps
+    pull requests, CI, reviews and merges apart (CodeHost) so a second ticket system can supply the tickets.
+    `attrs` are the labels or tags of a ticket, stage ones included; `at` is an ISO time. Writes return True
+    when they wrote, the others nothing."""
+    def issue(self, n) -> dict: ...
+    """{title, body, state (open|closed), close_reason, author, updated_at, attrs, assignees}"""
+    def events(self, n) -> list: ...
+    """Oldest first: {kind: labeled|unlabeled|closed|reopened, value (the attr), actor, at}"""
+    def comments(self, n) -> list: ...
+    """Oldest first: {author, author_is_bot, body, at}"""
+    def add_attr(self, n, attr): ...
+    def remove_attr(self, n, *attrs): ...
+    def set_stage(self, n, stage, have): ...  # `stage` replaces the stage attrs `have`
+    def assign(self, n, people): ...  # the assignees become exactly `people`; [] unassigns
+    def comment(self, n, body): ...
+    def close(self, n): ...
+    def open_blockers(self, n) -> list: ...  # ids of the open tickets blocking `n`
+    def blocking(self, n) -> list: ...  # [{number, state}] of the tickets `n` blocks
+    def parent(self, n): ...  # the parent's id, else None
+    def children(self, n) -> list: ...  # [{number, state, not_planned, attrs}]
+    def tickets_by_stage(self, attrs, open_only=False, now=None) -> list: ...  # ids of tickets holding one of `attrs`
+    def create_children(self, n, children, ready) -> bool: ...  # sub-tickets {title, body}, chained, each given `ready`
+    def park(self, n, check, triage) -> bool: ...  # block `n` by the open `Main is red in Air: <check>` ticket
+    def can_answer(self, login) -> bool: ...  # whether `login` may answer a question the factory asked
+
+
 class CodeHost(Protocol):
     """Where the pull requests live; a tracker's tickets need not be on the same host."""
     def ticket_for_pr(self, number, repository=None): ...
+
+
+def child_links(children):
+    """Each child's prerequisite indexes: the children of the repositories it is `after`, else (no `repo` anywhere)
+    the previous child, which chains a plain split."""
+    kids = [c if isinstance(c, dict) else {"title": str(c)} for c in children]
+    if not any(c.get("repo") for c in kids):
+        return [[i - 1] if i else [] for i in range(len(kids))]
+    return [[j for j, d in enumerate(kids) if d.get("repo") in (c.get("after") or [])] for c in kids]
+
+
+def child_order(links):
+    """Child indexes with each prerequisite before the children that follow it (a cycle keeps its listed order)."""
+    order = []
+    while len(order) < len(links):
+        ready = [i for i, after in enumerate(links) if i not in order and all(j in order for j in after)]
+        order += ready or [i for i in range(len(links)) if i not in order][:1]
+    return order
+
+
+def child_attrs(child):
+    """The labels a per-repository child carries: its repository and the project subsystem."""
+    return ([f"repo:{child['repo']}"] if child.get("repo") else []) + (
+        [f"subsystem:{child['subsystem']}"] if child.get("subsystem") else [])
+
+
+class MemoryCodeHost:
+    """The CI label sync's code host (gate.ci_sync) in memory: `prs` {owner/repo: [{number, branch, head, labels,
+    labeled_at: {label: at}}]}, `checks` {sha: [{conclusion, at}]}; `edits` records each label write, added at `now`."""
+
+    def __init__(self, prs=None, checks=None, now=None):
+        self.prs, self.checks, self.edits = prs or {}, checks or {}, []
+        self.now = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _pr(self, repository, number):
+        return next(p for p in self.prs[repository] if p["number"] == number)
+
+    def ticket_for_pr(self, number, repository=None):
+        """The ticket of the factory branch of PR `number` in `repository` (None: no such PR here)."""
+        pr = next((p for p in self.prs.get(repository, []) if p["number"] == number), None)
+        return ticket_from_ref(pr.get("branch")) if pr else None
+
+    def factory_prs(self, repository):
+        return [{k: p[k] for k in ("number", "head", "labels")} for p in self.prs[repository]
+                if ticket_from_ref(p.get("branch")) is not None]
+
+    def head_checks(self, repository, sha):
+        return list(self.checks.get(sha, []))
+
+    def label_added_at(self, repository, number, label):
+        return (self._pr(repository, number).get("labeled_at") or {}).get(label)
+
+    def edit_pr_labels(self, repository, number, add=(), remove=()):
+        pr = self._pr(repository, number)
+        pr["labels"] = [x for x in pr["labels"] if x not in remove] + list(add)
+        pr.setdefault("labeled_at", {}).update(dict.fromkeys(add, self.now))
+        self.edits.append((repository, number, list(add), list(remove)))
 
 
 class MemoryTracker(DescriptorPort):
@@ -334,3 +425,121 @@ class TagTracker(MemoryTracker):
 
     def set_stage(self, t, stage):
         t["tags"] = [x for x in t.get("tags", []) if not x.startswith("stage:")] + [f"stage:{stage}"]
+
+
+class MemoryTicketStore:
+    """A TicketStore in memory, the contract's reference (factory/tests/test_gate_github.py). Ids are ints."""
+
+    def __init__(self, can_write=()):
+        self.tickets, self.writers, self.actor = {}, set(can_write), "factory"
+
+    def add(self, title="", body="", attrs=(), author="author", assignees=(), comments=(), events=(), parent=None):
+        n = max(self.tickets, default=0) + 1
+        self.tickets[n] = {"title": title, "body": body, "state": "open", "close_reason": None, "author": author,
+                           "updated_at": None, "attrs": list(attrs), "assignees": list(assignees),
+                           "events": list(events), "comments": list(comments), "blocked_by": [], "parent": parent}
+        return n
+
+    def issue(self, n):
+        t = self.tickets[n]
+        return {k: (list(t[k]) if isinstance(t[k], list) else t[k]) for k in (
+            "title", "body", "state", "close_reason", "author", "updated_at", "attrs", "assignees")}
+
+    def events(self, n):
+        return list(self.tickets[n]["events"])
+
+    def comments(self, n):
+        return list(self.tickets[n]["comments"])
+
+    def edit_attrs(self, n, add=(), remove=()):
+        t = self.tickets[n]
+        for a in remove:
+            t["attrs"] = [x for x in t["attrs"] if x != a]
+            t["events"].append({"kind": "unlabeled", "value": a, "actor": self.actor, "at": None})
+        for a in add:
+            if a not in t["attrs"]:
+                t["attrs"].append(a)
+            t["events"].append({"kind": "labeled", "value": a, "actor": self.actor, "at": None})
+        return True
+
+    def add_attr(self, n, attr):
+        return self.edit_attrs(n, [attr])
+
+    def remove_attr(self, n, *attrs):
+        return self.edit_attrs(n, remove=attrs)
+
+    def set_stage(self, n, stage, have):
+        return self.edit_attrs(n, [stage] if stage not in have else [], [x for x in have if x != stage])
+
+    def assign(self, n, people):
+        t = self.tickets[n]
+        if set(t["assignees"]) == set(people):
+            return False
+        t["assignees"] = sorted(people)
+        return True
+
+    def comment(self, n, body):
+        self.tickets[n]["comments"].append({"author": self.actor, "author_is_bot": True, "body": body, "at": None})
+
+    def close(self, n, at=None):
+        t = self.tickets[n]
+        t["state"], t["close_reason"] = "closed", "completed"
+        t["closed_at"] = at or datetime.now(timezone.utc)
+        t["events"].append({"kind": "closed", "value": None, "actor": self.actor, "at": None})
+
+    def _open(self, ids):
+        return [i for i in ids if self.tickets[i]["state"] == "open"]
+
+    def open_blockers(self, n):
+        return self._open(self.tickets[n]["blocked_by"])
+
+    def blocking(self, n):
+        return [{"number": i, "state": t["state"]} for i, t in self.tickets.items() if n in t["blocked_by"]]
+
+    def parent(self, n):
+        return self.tickets[n]["parent"]
+
+    def children(self, n):
+        return [{"number": i, "state": t["state"], "not_planned": t["state"] == "closed" and t["close_reason"] == "not_planned",
+                 "attrs": list(t["attrs"])} for i, t in self.tickets.items() if t["parent"] == n]
+
+    def tickets_by_stage(self, attrs, open_only=False, now=None):
+        """Open tickets and, unless `open_only`, those closed within `github_graphql.CLOSED_HOURS` of `now`."""
+        since = (now or datetime.now(timezone.utc)) - timedelta(hours=github_graphql.CLOSED_HOURS)
+
+        def listed(t):
+            if t["state"] == "open":
+                return True
+            return not open_only and (t.get("closed_at") or since) >= since
+
+        return sorted(i for i, t in self.tickets.items() if set(attrs) & set(t["attrs"]) and listed(t))
+
+    def create_children(self, n, children, ready):
+        wrote, ids, links = False, [], child_links(children)
+        for c, after in zip(children, links):
+            c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
+            old = next((i for i, t in self.tickets.items() if t["parent"] == n and t["title"] == c["title"]), None)
+            if old is None:
+                old = self.add(c["title"], c.get("body", ""), [ready, *child_attrs(c)], parent=n)
+                self.tickets[n]["blocked_by"].append(old)
+                wrote = True
+            ids.append(old)
+        for i, after in zip(ids, links):  # link once every child exists: `after` may name a later child
+            for j in after:
+                if ids[j] not in self.tickets[i]["blocked_by"]:
+                    self.tickets[i]["blocked_by"].append(ids[j])
+                    wrote = True
+        return wrote
+
+    def park(self, n, check, triage):
+        title = f"Main is red in Air: {check}"
+        red = next((i for i, t in self.tickets.items() if t["title"] == title and t["state"] == "open"), None)
+        if red is None:
+            red = self.add(title, attrs=[triage])
+        if red in self.tickets[n]["blocked_by"]:
+            return False
+        self.tickets[n]["blocked_by"].append(red)
+        return True
+
+    def can_answer(self, login):
+        return login in self.writers

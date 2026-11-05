@@ -51,9 +51,9 @@ only: it polls GitHub for the events the node triggers name, runs `gate check`,
 runs the role's harness in a worktree, pushes the `ez/` branch and opens the PR
 for write nodes, then runs `gate apply`.
 
-**Trackers.** GitHub Issues stays the only tracker adapter. YouTrack is
-deferred; the tracker port (`factory/gate_port.py`) stays pluggable so it can
-be added without changing the workflow.
+**Trackers.** GitHub Issues is the default tracker adapter. The YouTrack
+adapter is delivered by #163 behind the tracker port (`factory/gate_port.py`),
+without changing the workflow.
 
 ## Consequences
 

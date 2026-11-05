@@ -12,6 +12,9 @@ Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py sweep [--tracker github] [--dry-run] [--stale] [--event FILE | --issue N] (no agent: lists the tickets itself,
                                                                  one stage per ticket;
                                                                  --stale also re-fires nodes whose run died silently)
+       gate.py ci-sync [--dry-run]   (factory:ci-green / factory:ci-red on the open factory PRs of every `role: project`
+                                      repository, from their head check runs and commit statuses; `factory reconcile`
+                                      runs it on its schedule)
 Exit 0 go / done, 10 no go (stale, duplicate or the node no longer matches), 2 bad event, payload, node
 or outcome, 1 a failing effect (the stage is untouched: it is the last effect).
 An event is JSON {id, ticket, head?, actor?}. A payload is JSON {ticket, event?, head?, actor?, ...}
@@ -36,7 +39,8 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
-from gate_github import GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
+from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
+from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
 import vocab  # noqa: E402
 from inbox import send as inbox_send  # noqa: E402
@@ -125,6 +129,13 @@ def pr_ticket(code_host, number, repository=None):
 def from_trigger(d, code_host=None):
     """Extract the event kind and ticket number; tracker facts supply mutable metadata."""
     event_name = d.get("eventType") or d.get("event_name")
+    if str(event_name or "").startswith("space.") or isinstance(d.get("merge_request"), dict) \
+            or isinstance((d.get("data") or {}).get("merge_request"), dict):
+        ev = space_event(d)
+        ticket = ev["ticket"] or (code_host.ticket_for_pr(ev["number"], ev["project"]) if code_host and ev["project"] else None)
+        if ticket is None:
+            raise NoTicket(f"merge request {ev['number']} is not on an ez/<n>- branch")
+        return {"id": f"merge_request:{ticket}:{ev['action']}", "ticket": ticket, "event_name": "pull_request", "action": ev["action"]}
     if not any(isinstance(d.get(key), dict) for key in ("pull_request", "issue", "review")):
         if isinstance(d.get("data"), dict):
             wrapper = d
@@ -167,10 +178,12 @@ FIX_TIERS = ("cheap", "mid", "strong")
 
 
 def slices(split):
-    """The proposed slices of a router `split` as {title, body} children: a list of {title, body} objects, else
+    """The proposed slices of a router `split` as {title, body} children: a list of {title, body} objects (a
+    per-repository child also names its `repo`, `subsystem` and the repositories it is `after`), else
     lines (a string, or a list of strings) whose text is both title and body."""
     if isinstance(split, list) and all(isinstance(x, dict) for x in split):
-        return [{"title": str(x["title"]).strip(), "body": str(x.get("body") or x["title"]).strip()} for x in split]
+        return [{"title": str(x["title"]).strip(), "body": str(x.get("body") or x["title"]).strip(),
+                 **{k: x[k] for k in ("repo", "subsystem", "after") if x.get(k)}} for x in split]
     lines = split.splitlines() if isinstance(split, str) else [str(x) for x in split or []]
     out = [x.strip().lstrip("-").strip() for x in lines]
     return [{"title": x.split(" — ")[0].strip(), "body": x} for x in out if x and x != "none"]
@@ -257,11 +270,15 @@ def gated(name, node, facts):
     return node
 
 
-def check(name, event, tracker, nodes, config):
+def check(name, event, tracker, nodes, config, code_host=None):
     node = load_node(name, nodes)
     if "id" not in event:
         raise Bad("malformed event: needs `id`")
     facts = tracker.facts(event["ticket"])
+    if isinstance(code_host, SpaceCodeHost):  # Space owns the merge request: its CI and review facts replace the tracker's
+        space = code_host.facts(event["ticket"])
+        if space["pr"] is not None:
+            facts = {**facts, **{k: space[k] for k in ("pr", "head", "branch", "pr_state", "ci", "dry_run", "pr_labels", "reviews", "round_complete", "round_verdict", "round_head")}}
     if "event_name" in event:
         event["id"] = f"{event['event_name']}:{event['ticket']}:{event['action']}:{facts.get('updated_at', '')}"
         event["head"] = facts.get("head")
@@ -777,6 +794,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
     results, failed, done_tickets = [], False, []
     stages = config_mod.load()["tracker"]["stages"]
     queue, seen, merged = ([issue] if issue is not None else list(tracker.sweep_tickets(stages))), set(), False
+    prefetch(tracker, queue)
     while queue:
         n = queue.pop(0)
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
@@ -807,7 +825,11 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                 if not out["applied"]:
                     break
                 if node == "finish" and outcome == "merged" and hasattr(tracker, "config_change_merged"):
-                    tracker.config_change_merged(facts.get("pr"))
+                    try:  # a reminder only: its failure must not stop the parent's step below
+                        tracker.config_change_merged(facts.get("pr"))
+                    except Exception as e:
+                        failed = True
+                        results.append({"ticket": n, "error": f"deploy check: {type(e).__name__}: {e}"})
                 merged = merged or (node, outcome) == ("merge", "merged")
                 if node == "finish" and outcome in ("merged", "children-done"):
                     done_tickets.append(n)
@@ -871,6 +893,12 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                     if progress:
                         progress(r)
     return results, failed
+
+
+def prefetch(tracker, numbers):
+    """Let a tracker that batches its reads (GitHub: GraphQL) read `numbers` at once; the others read per ticket."""
+    if numbers and hasattr(tracker, "prefetch"):
+        tracker.prefetch(numbers)
 
 
 STALE_STAGES = ("triage", "ready", "in-dev", "in-review", "changes-requested", "approved")
@@ -965,7 +993,9 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
     A re-fire with no later `started` mark is a launch failure: it is re-fired again, not counted, up to `resume_cap`.
     Returns (results, failed)."""
     now, results, failed = now or datetime.now(timezone.utc), [], False
-    for n in tracker.sweep_tickets(STALE_STAGES):
+    stale = tracker.sweep_tickets(STALE_STAGES)
+    prefetch(tracker, stale)
+    for n in stale:
         try:
             facts = tracker.stale_facts(n)
             plan = stale_plan(facts, now, hours, command_minutes)
@@ -1046,9 +1076,78 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
     return results, failed
 
 
+def project_repositories(config):
+    """owner/repo of each `role: project` repository of the descriptor: the CI label sync's repositories."""
+    return ["/".join(r["url"].rstrip("/").split("/")[-2:]) for r in config.get("repositories") or []
+            if r.get("role") == "project"]
+
+
+def head_ci(checks):
+    """(green|red|pending|none, latest result time) of a head's check runs and commit statuses, each
+    {conclusion, at} with conclusion None while it runs. One failure is red, as the gate's `ci` fact reads it."""
+    done = [c["conclusion"] for c in checks]
+    at = max((c["at"] for c in checks if c.get("at")), default=None)
+    if not done:
+        return "none", at
+    if any(c in BAD_CI for c in done):
+        return "red", at
+    return ("green" if all(c in GOOD_CI for c in done) else "pending"), at
+
+
+def ci_sync_pr(code_host, repository, pr, dry_run=False):
+    """Set `factory:ci-green` or `factory:ci-red` on one factory PR {number, head, labels} from its head checks; a
+    head with no result yet (pending, or no checks) keeps its labels. A label added before the head's latest result
+    belongs to an earlier head: it is removed and added again, because re-adding a present label fires no event.
+    The scheduled `ci_sync` calls this per PR; the event path (a finished check, after the #365 probe) calls it for one PR."""
+    ci, at = head_ci(code_host.head_checks(repository, pr["head"]))
+    r = {"repo": repository, "pr": pr["number"], "head": pr["head"], "ci": ci, "added": [], "removed": []}
+    if ci not in ("green", "red"):
+        return r
+    want, other = vocab.ci(f"ci-{ci}"), vocab.ci("ci-red" if ci == "green" else "ci-green")
+    stale = want in pr["labels"] and bool(at) and (code_host.label_added_at(repository, pr["number"], want) or "") < at
+    if want in pr["labels"] and not stale:
+        r["removed"] = [other] if other in pr["labels"] else []
+    else:
+        r["removed"], r["added"] = [x for x in (other, want) if x in pr["labels"]], [want]
+    if not dry_run and (r["added"] or r["removed"]):
+        code_host.edit_pr_labels(repository, pr["number"], add=r["added"], remove=r["removed"])
+    return r
+
+
+def ci_sync(code_host, repositories, dry_run=False, progress=None):
+    """The CI label of every open factory PR in `repositories` (the `role: project` ones: the factory repository
+    labels its own PRs from quality-gates). Returns (results, failed); one PR failing does not stop the others."""
+    results, failed = [], False
+    for repository in repositories:
+        try:
+            prs = code_host.factory_prs(repository)
+        except Exception as e:
+            failed = True
+            results.append({"repo": repository, "error": f"{type(e).__name__}: {e}"})
+            continue
+        for pr in prs:
+            try:
+                r = ci_sync_pr(code_host, repository, pr, dry_run)
+            except Exception as e:
+                failed, r = True, {"repo": repository, "pr": pr["number"], "error": f"{type(e).__name__}: {e}"}
+            results.append(r)
+            if progress:
+                progress(r)
+    return results, failed
+
+
+def run_ci_sync(dry_run=False, progress=None):
+    """`ci-sync` (manual) and each `factory reconcile` pass (scheduled): the descriptor's project repositories on
+    GitHub. Another code host has no sync yet: nothing is read."""
+    config = config_mod.load()
+    if (config.get("code_host") or {}).get("adapter") == "space":
+        return [], False
+    return ci_sync(GitHubCodeHost.from_config(), project_repositories(config), dry_run, progress)
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers"])
+    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "ci-sync"])
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
@@ -1068,11 +1167,18 @@ def main(argv):
     except SystemExit:
         return BAD
     path = ""
+    if a.cmd == "ci-sync":
+        results, failed = run_ci_sync(a.dry_run, lambda r: print(json.dumps(r), file=sys.stderr, flush=True))
+        print(json.dumps({"dry_run": a.dry_run, "ci_sync": results}))
+        return FAILED if failed else GO
     try:
         kind, _, path = (a.tracker or "github").partition(":")
         if kind == "github" and not path:
             tracker = GitHubGateTracker.from_config()
-            code_host = GitHubCodeHost.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {}))  # one runner, so github_calls counts both
+            if (config_mod.load().get("code_host") or {}).get("adapter") == "space":
+                code_host = space_from_config(config_mod.load())
+            else:
+                code_host = GitHubCodeHost.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {}))  # one runner, so github_calls counts both
         elif kind == "memory" and path:
             try:
                 tracker = MemoryTracker(dict(json.loads(Path(path).read_text())))
@@ -1154,7 +1260,7 @@ def main(argv):
         elif a.cmd == "check":
             event = read(a.event or "", "event", raw=True, code_host=code_host)
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
-            code, out = check(a.node, event, tracker, nodes, config)
+            code, out = check(a.node, event, tracker, nodes, config, code_host)
             if a.node == "implement" and code == GO:
                 save_check_state(event["ticket"], out["context"].get("head"))
         else:

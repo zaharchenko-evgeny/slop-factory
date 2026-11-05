@@ -36,6 +36,10 @@ def _store_value(store):
     return store[kind]
 
 
+def _repo_key(url):
+    return url.rstrip("/").removesuffix(".git") if isinstance(url, str) else None
+
+
 def validate(team_root):
     """Return errors for a project's factory.project.yaml descriptor."""
     root = Path(team_root)
@@ -48,12 +52,18 @@ def validate(team_root):
     config._check(schema, descriptor, config.PROJECT_DESCRIPTOR, errors)
     if not isinstance(descriptor, dict):
         return errors
+    errors += config.tracker_errors(descriptor, config.PROJECT_DESCRIPTOR)
     repositories = descriptor.get("repositories")
     if isinstance(repositories, list):
         primaries = [r.get("name") for r in repositories if isinstance(r, dict) and r.get("role") == "primary"]
         if len(primaries) != 1:
             errors.append(f"{config.PROJECT_DESCRIPTOR}.repositories: exactly one repository needs role primary, "
                           f"found {len(primaries)}")
+        team = _repo_key(descriptor.get("team_repository"))
+        for i, r in enumerate(repositories):
+            if team and isinstance(r, dict) and _repo_key(r.get("url")) == team and r.get("role") != "project":
+                errors.append(f"{config.PROJECT_DESCRIPTOR}.repositories[{i}].role: the team repository "
+                              f"{r.get('name')} must have role project, found {r.get('role')}")
     environments = descriptor.get("environments")
     for env, entry in (environments.items() if isinstance(environments, dict) else ()):
         variables = entry.get("variables") if isinstance(entry, dict) else None

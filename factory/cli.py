@@ -14,8 +14,10 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
                    [--note-for ROLE] [--note-hint TEXT] [--note-repro CMD] [--note-file PATH]
                    (the outcome and the data its effects use; repeat a list option once per item;
                     skills/factory-step/SKILL.md describes them per role)
+       factory migrate project TEAM [--out DIR]    (copy a v2 team checkout's descriptor and workflow, with its commit in SOURCE)
        factory env roles ENV                       (the roles of the enabled agent nodes that run in ENV, one per line)
        factory sweep --main ...                    (the gate's sweep from main's graph)
+       factory ci-sync [--dry-run]                 (the CI labels of the project repositories' factory PRs; reconcile runs it)
        factory deploy --target local [--apply] | factory run --local [--once] [--dry-run]   (the local target, ADR-0017)
 """
 import argparse
@@ -303,7 +305,7 @@ def main(argv=None):
     load_engine(HERE)
     if team:
         config.set_team(team)
-    if cmd in ("check", "apply", "sweep"):
+    if cmd in ("check", "apply", "sweep", "ci-sync"):
         return gate.main([cmd, *rest])
     if cmd == "deploy" and rest[:2] == ["--target", "local"]:
         from local import deploy as local_deploy
@@ -321,6 +323,9 @@ def main(argv=None):
     if cmd == "migrate" and rest[:1] == ["workflow"]:
         from workflow import main as workflow_main
         return workflow_main(["migrate", *rest[1:]])
+    if cmd == "migrate" and rest[:1] == ["project"]:
+        from workflow import project_main
+        return project_main(rest[1:])
     if cmd == "upgrade":
         from upgrade import main as upgrade_main
         return upgrade_main(rest)

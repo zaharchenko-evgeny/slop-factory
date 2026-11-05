@@ -28,6 +28,8 @@ environments:
     secrets: []
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org, air.jetbrains.cloud]
     vm: default
+webhooks:
+  notify: { description: "A notification request for the factory inbox (engine/inbox.schema.json) as the JSON body" }
 adapters:
   ticket: github-issues   # stage, fields, labels, blockers
   pr: github              # state, head, CI, reviews by head SHA
@@ -211,17 +213,20 @@ nodes:
       child-blocked: { from: [split], effects: [{ comment: reason }, { stage: blocked }] }
       conflict: { from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [draft, triage, ready, in-dev, in-review, changes-requested, approved, blocked, needs-answers, split, investigating], effects: [{ stage: done }] }
-  notify:
+  inbox:
     env: ops
     pilot: true
-    triggers: ["issues.labeled factory:blocked", "issues.labeled factory:needs-answers"]
-    when: { stage: [blocked, needs-answers] }
-    role: script
+    routine: true  # outside any ticket: the role reads its own trigger event, `factory begin` needs no payload
+    ci-independent: true  # acts on a PR event, not on a head
+    triggers: ["webhook notify", "pull_request.opened", "issue_comment.created"]
+    when: { always: true }
+    role: inbox
     tier: cheap
-    run: uv run factory/cli.py notify --issue <issue number from the trigger payload>
     output: read-only
     outcomes:
-      notified: { from: [blocked, needs-answers] }
+      delivered: {}
+      skipped: {}
+      failed: {}
   recover:
     env: read
     # No automation: the hourly reconciler replaced it. Only `gate.py sweep --stale`, run by a person, still applies this outcome.

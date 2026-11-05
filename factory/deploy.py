@@ -85,15 +85,22 @@ def flow_triggers(node: dict) -> str:
     return " or ".join(words) or "manual invocation"
 
 
-def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: str | None = None) -> dict:
+def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: str | None = None,
+            repo: str | None = None) -> dict:
     """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations)."""
     event, _, arg = str(text).partition(" ")
     arg = arg.replace("<tier>", tier or "")
     arg = arg.replace("<focus>", focus or "")
+    if event.startswith("youtrack."):  # the filter value is case-sensitive: pass it through unchanged
+        name, _, value = arg.partition("=")
+        filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
+        return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
     labeled = event.startswith("issues.") or event.startswith("pull_request.labeled")
     filters = {"label": arg} if labeled and arg else {}
     if pr_author and event.startswith("pull_request"):
         filters["pr_author"] = pr_author
+    if repo:  # a per-repository automation answers only tickets and PRs tagged `repo:<name>`
+        filters["repo_label"] = f"repo:{repo}"
     return {"triggerType": "EVENT", "source": "github", "eventType": event, "filters": filters}
 
 
@@ -119,29 +126,52 @@ SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>",
                "notify": " notify --issue <the issue number>"}
 
 
+def team_is_project(team: dict, config: dict) -> bool:
+    """True when the team repository is also a descriptor project repository (ADR-0019)."""
+    return bool(config.get("team_repository")) and any(
+        repository(r)["fullName"] == repository(team)["fullName"] for r in config["repositories"])
+
+
 def other_projects(main_repository: dict, team: dict, config: dict) -> list[dict]:
-    """The descriptor's repositories other than the automation's main one and the team repository, in order."""
-    return [r for r in config["repositories"]
-            if repository(r)["fullName"] not in (main_repository["fullName"], repository(team)["fullName"])]
+    """The descriptor's repositories other than the automation's main one, in order.
+
+    The team repository is left out, unless it is a project repository (ADR-0019): then it is one project checkout."""
+    skip = {main_repository["fullName"]} | (set() if team_is_project(team, config) else {repository(team)["fullName"]})
+    return [r for r in config["repositories"] if repository(r)["fullName"] not in skip]
 
 
 def additional_repositories(main_repository: dict, team: dict, config: dict) -> list[dict]:
-    """Air's extra checkouts (ADR-0017): the other project repositories, then the read-only team repository."""
-    return ([{"repository": repository(r), "branch": r["default_branch"]} for r in other_projects(main_repository, team, config)]
-            + [{"repository": repository(team), "branch": "main"}])
+    """Air's extra checkouts (ADR-0017): the other project repositories, then the read-only team repository
+    unless it is itself a project repository (ADR-0019)."""
+    projects = [{"repository": repository(r), "branch": r["default_branch"]}
+                for r in other_projects(main_repository, team, config)]
+    return projects if team_is_project(team, config) else projects + [{"repository": repository(team), "branch": "main"}]
 
 
 def checkout_instructions(main_repository: dict | None, config: dict) -> str:
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     team = {"url": config.get("team_repository") or primary["url"]}
-    if not main_repository or main_repository["fullName"] == repository(team)["fullName"]:
+    if not main_repository:
         return ""
+    if main_repository["fullName"] == repository(team)["fullName"]:
+        # Air's gh picks its token from the working directory's origin: the tracker's checkout reaches the tracker.
+        tracker = (config.get("tracker") or {}).get("repository") or repository(primary)["fullName"]
+        if tracker == main_repository["fullName"]:
+            return ""
+        return (f"## Working directory\n\nRun every command from `/workspaces/{tracker.rsplit('/', 1)[-1]}`: "
+                "GitHub access there reaches the tracker. This automation's own checkout is the team repository.\n\n")
     project = main_repository["fullName"].rsplit("/", 1)[-1]
     others = ", ".join(f"`/workspaces/{repository(r)['fullName'].rsplit('/', 1)[-1]}`"
                        for r in other_projects(main_repository, team, config))
+    if team_is_project(team, config):
+        name = repository(team)["fullName"].rsplit("/", 1)[-1]
+        tail = (f"`/workspaces/{name}` is the team repository and a project repository: change it like any other. "
+                "The factory reads its roles and skills from `$HOME/factory-team`, never from that checkout.\n\n")
+    else:
+        tail = "The factory repository is checked out beside it and is read-only.\n\n"
     return (f"## Project checkout\n\nBefore running project commands, `cd /workspaces/{project}`. "
             + (f"The other project repositories are checked out beside it: {others}. " if others else "")
-            + "The factory repository is checked out beside it and is read-only.\n\n")
+            + tail)
 
 
 def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None,
@@ -193,6 +223,8 @@ def begin_arg(node: str, n: dict) -> str:
     """The number a node begins with; a scheduled routine has no ticket or PR, so it takes none."""
     if all(str(t).startswith("schedule ") for t in n["triggers"]):
         return ""
+    if n["role"] == "inbox":  # the payload is not a ticket: the role builds its own request
+        return ""
     if any(str(t).startswith("webhook ") for t in n["triggers"]):
         return "--issue <the `issue` field of the trigger payload>"
     return "--pr <the pull request number>" if node in PR_TRIGGERED_NODES else "--issue <the issue number>"
@@ -208,6 +240,13 @@ def mcp_connectors(n: dict, config: dict, focus: str | None) -> list[str]:
     return []
 
 
+INBOX_PAYLOAD = ("## Trigger event fields\n\n"
+                 "- `webhook notify`: the whole POST body is the request.\n"
+                 "- `pr opened`: `pull_request.number`, `pull_request.title`, `pull_request.body`, `pull_request.head.ref`.\n"
+                 "- `pr commented`: `issue.number` (the pull request), `issue.title`, `comment.user.login`, "
+                 "`comment.body`, `comment.html_url`.\n\n")
+
+
 def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None,
                  main_repository: dict | None = None) -> str:
     role = n["role"]
@@ -218,7 +257,8 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     checkout = checkout_instructions(main_repository, config)
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
-    return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skill_lines(role)}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
+    payload = INBOX_PAYLOAD if role == "inbox" else ""
+    return (f"{who}\n\n{checkout}{text}\n\n{payload}## Your skills\n\n{skill_lines(role)}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts and the branch or PR head. "
@@ -250,6 +290,12 @@ def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
     raise KeyError(f"unknown automation: {automation}")
 
 
+# Nodes planned once per project repository when `write_mode` is `per-repo` (default) and the project has several
+# repositories: Air pushes only to an automation's primary repository. Only triage sees every repository.
+PER_REPO = ("implement", "fix", "update", "review", "join", "merge", "finish")
+WRITE_TOKEN_SECRET = "FACTORY_WRITE_TOKEN"  # `write_mode: token`: the write environment's token, by name only
+
+
 def plan_air(nodes: dict, config: dict) -> dict:
     air, roles = config["targets"]["air"]["models"], config["roles"]
     repos = {r["name"]: r for r in config["repositories"]}
@@ -262,11 +308,15 @@ def plan_air(nodes: dict, config: dict) -> dict:
     prefix = f"[{project_name(config)}] "
     automations = []
     used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
+    per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(config["repositories"]) > 1
+    unscoped = set()  # environments some automation shares across the project
+    scoped = []  # (env, repository name) of the per-repository automations
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
-        env = n["env"]
-        for aname, tier_arg, tier, focus in variants(name, n, roles):
+        scopes = config["repositories"] if per_repo and name in PER_REPO else [None]
+        for scope, (aname, tier_arg, tier, focus) in [(sc, v) for sc in scopes for v in variants(name, n, roles)]:
+            env = n["env"]
             agent, _, model = air[tier].partition("/")
             trig = []
             webhook = any(str(t).startswith("webhook ") for t in n["triggers"])
@@ -278,18 +328,25 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 elif str(t).startswith("webhook "):
                     trig.append({"triggerType": "WEBHOOK"})
                 elif str(t) != "manual":
-                    trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus))
-            automation_repository = repository(team if focus == "knowledge" else repos.get(envs_def[env]["repository"]) or primary)
+                    trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus,
+                                        scope["name"] if scope else None))
+            automation_repository = repository(team if focus == "knowledge" else scope or repos.get(envs_def[env]["repository"]) or primary)
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
+            scope_name = scope["name"] if scope else None
+            if scope_name:
+                if (env, scope_name) not in scoped:
+                    scoped.append((env, scope_name))
+            else:
+                unscoped.add(env)
             automation = {
-                "name": f"{prefix}{aname}",
+                "name": f"{prefix}{aname}" + (f" {scope_name}" if scope_name else ""),
                 "triggers": trig,
                 "triggerVcs": [{"outputBehaviour": n.get("output", "read-only")} for _ in trig],
                 "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
-                "environmentConfigId": f"{prefix}{env}",
+                "environmentConfigId": f"{prefix}{env}" + (f" {scope_name}" if scope_name else ""),
                 "mcpConnectors": mcp_connectors(n, config, focus),
                 "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
                     name, n, config, aname, focus, automation_repository),
@@ -303,15 +360,16 @@ def plan_air(nodes: dict, config: dict) -> dict:
                         {"repository": repository(r), "branch": r["default_branch"]} for r in projects]
             automations.append(automation)
     envs = []
-    for env in used:
+    token = config.get("write_mode") == "token" and len(config["repositories"]) > 1
+    for env, scope_name in [(e, None) for e in used if e in unscoped] + scoped:
         d = envs_def[env]
-        repo = repos.get(d["repository"]) or primary
+        repo = repos[scope_name] if scope_name else repos.get(d["repository"]) or primary
         envs.append({
-            "name": f"{prefix}{env}",
+            "name": f"{prefix}{env}" + (f" {scope_name}" if scope_name else ""),
             "repository": repo["url"],
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env},
-            "secrets": d.get("secrets", []),
+            "secrets": [*d.get("secrets", []), *([WRITE_TOKEN_SECRET] if token and env == "write" else [])],
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
@@ -507,6 +565,8 @@ def same(key: str, have, want) -> bool:
         return sorted(have or []) == sorted(want or [])
     if key == "domains":
         return set(want or []) <= set(have or [])
+    if key == "variables":  # Air cannot delete a variable: an extra one is a by-hand removal, not a difference
+        return all(k in (have or {}) and have[k] == v for k, v in (want or {}).items())
     return have == want
 
 
@@ -666,6 +726,13 @@ def missing_secrets(plan: dict, envs: list[dict]) -> list[str]:
             for s in e.get("secrets") or [] if s not in have.get(e["name"], set())]
 
 
+def extra_variables(plan: dict, envs: list[dict]) -> list[str]:
+    """`remove by hand in Air: <env> variable <NAME>` for each variable in Air that the plan does not have."""
+    have = {x["name"]: x.get("variables") or {} for x in envs}
+    return [f"remove by hand in Air: {e['name']} variable {k}" for e in plan["environments"]
+            for k in have.get(e["name"], {}) if k not in (e.get("variables") or {})]
+
+
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None) -> int:
     """Write only to Air: deploy never creates, edits or closes a tracker ticket."""
     # The automations' repositories too: an environment moved off a repository is found there, then replaced.
@@ -683,6 +750,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     if not changes:
         print("unchanged")
     for line in missing_secrets(plan, state[1]):
+        print(line)
+    for line in extra_variables(plan, state[1]):
         print(line)
     if mode == "--dry-run":
         return 0

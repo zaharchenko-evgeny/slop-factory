@@ -5,10 +5,11 @@
 # FACTORY_DRY=1 prints the skills it would install and exits; `factory` must then be on PATH, and
 # FACTORY_ENGINE_DIR (default $HOME/factory-main) names an engine checkout; only its factory-step skill is used.
 # Roles and skills come from the team repository alone: a missing one is an error.
+# ADR-0019: the team repository may also be a project checkout that a write node changes, so the factory reads its
+# roles from $HOME/factory-team, a git worktree of the checkout's origin/<default branch>, never from the checkout.
 set -e
-TEAM=$(pwd -P)
-FACTORY_TEAM=$TEAM
-export FACTORY_TEAM
+CHECKOUT=$(pwd -P)
+TEAM=$HOME/factory-team
 FACTORY_ENV=${FACTORY_ENV:-default}
 ENGINE=${FACTORY_ENGINE_DIR:-$HOME/factory-main}
 BIN="$HOME/.local/bin"
@@ -34,12 +35,27 @@ skill_names() {
   done | sort -u | tr '\n' ' '
 }
 if [ -n "${FACTORY_DRY:-}" ]; then
+  FACTORY_TEAM=$CHECKOUT  # no worktree in a dry run: read the checkout, report where a real run points
+  export FACTORY_TEAM
+  TEAM=$CHECKOUT
   ROLES=$(env_roles)
   check_roles
+  echo "startup: FACTORY_TEAM=\$HOME/factory-team"
   echo "startup: env=$FACTORY_ENV roles=$(echo "$ROLES" | tr '\n' ' ')"
   echo "startup: would install skills: $(skill_names)factory-step"
   exit 0
 fi
+# The team worktree: detached at the checkout's origin/<default branch>, refreshed on every launch.
+DEFAULT=$(git -C "$CHECKOUT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+DEFAULT=${DEFAULT:-main}
+git -C "$CHECKOUT" fetch origin "$DEFAULT"
+if [ -e "$TEAM/.git" ]; then
+  git -C "$TEAM" checkout --detach "origin/$DEFAULT"
+else
+  git -C "$CHECKOUT" worktree add --detach "$TEAM" "origin/$DEFAULT"
+fi
+FACTORY_TEAM=$TEAM
+export FACTORY_TEAM
 mkdir -p "$BIN"
 # shellcheck disable=SC2016
 grep -q '.local/bin' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"

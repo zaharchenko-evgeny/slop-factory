@@ -66,7 +66,19 @@ configuration and runtime files live in the separate settings repository.
 Slop factory's settings live in
 [slop-eval-factory](https://github.com/zaharchenko-evgeny/slop-eval-factory):
 a change to its workflow, states, roles or skills goes there. CI checks the
-migrated copy in `factory/tests/fixtures/slop/` (`test_slop_plan_unchanged`).
+copy of its `factory.project.yaml` and workflow in `factory/tests/fixtures/slop/`
+(`test_slop_plan_deploys_the_team_workflow`). The copy may differ from
+`engine/nodes.yaml`. To regenerate it, run this from a clean slop-eval-factory
+checkout at the commit to copy:
+
+```bash
+uv run factory/cli.py migrate project <checkout> --out factory/tests/fixtures/slop
+```
+
+The command validates both files, copies them byte for byte and writes the
+commit to `factory/tests/fixtures/slop/SOURCE`. CI checks out that commit and
+`test_slop_fixture_is_migrate_project_output` fails when the fixture differs
+from a fresh copy. To run that test locally, set `FACTORY_SLOP_TEAM=<checkout>`.
 
 See [factory setup](skills/factory-setup/SKILL.md), [design](docs/design.md),
 [environment variables](docs/environment.md),
