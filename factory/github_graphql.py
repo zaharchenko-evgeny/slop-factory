@@ -5,6 +5,7 @@ the last `CLOSED_HOURS`. `batch_query` reads, for up to `BATCH` tickets at once,
 and native blockers; `to_rest` turns one ticket of its answer into the bodies of `issues/{n}`, `issues/{n}/events`,
 `issues/{n}/comments` and `issues/{n}/dependencies/blocked_by`, or leaves out a part GraphQL did not return in full.
 """
+import base64
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -103,3 +104,48 @@ def to_rest(node, stage_labels=()):
         out[f"issues/{n}/dependencies/blocked_by"] = [{"number": b["number"], "id": b["databaseId"],
                                                        "state": b["state"].lower()} for b in node["blockedBy"]["nodes"]]
     return out
+
+
+SIZES = {0xcc: 1, 0xcd: 2, 0xce: 4, 0xcf: 8}  # msgpack unsigned int formats, big-endian after the tag
+POLL_ITEM = ("number __typename labels(first:100){nodes{name}} "
+             "timelineItems(last:100,itemTypes:[LABELED_EVENT]){pageInfo{hasPreviousPage} nodes{... on LabeledEvent{id label{name}}}}")
+POLL = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:10,after:$after){"
+        "pageInfo{hasNextPage endCursor} nodes{... on Issue{" + POLL_ITEM + "} ... on PullRequest{headRefName " + POLL_ITEM + "}}}}")
+
+
+def rest_id(node_id):
+    """The REST id of a GraphQL node id: `LE_lADO…` → 35260417313 is the last integer of the msgpack fixarray that
+    follows the `_`, base64url-encoded. None when the id does not decode."""
+    try:
+        body = node_id.split("_", 1)[1]
+        raw = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
+        count, i, values = raw[0] - 0x90, 1, []
+        if not 0 <= count <= 15:
+            return None
+        for _ in range(count):
+            tag = raw[i]
+            if tag <= 0x7f:
+                values.append(tag)
+                i += 1
+            elif tag in SIZES:
+                values.append(int.from_bytes(raw[i + 1:i + 1 + SIZES[tag]], "big"))
+                i += 1 + SIZES[tag]
+            else:
+                return None
+        return values[-1] if values and i == len(raw) else None
+    except Exception:  # not base64, too short, or not a msgpack array: the caller falls back to REST
+        return None
+
+
+def poll_query(repo, labels):
+    """The search string of open issues and PRs of `repo` with any of `labels`."""
+    return f"repo:{repo} is:open label:{','.join(f'\"{x}\"' for x in labels)}"
+
+
+def labeled_events(node):
+    """{label: REST id of its latest labeled event} of one poll node; None when its timeline has more labeled events
+    than were read. A label whose node id does not decode maps to None."""
+    tl = node["timelineItems"]
+    if tl["pageInfo"]["hasPreviousPage"]:
+        return None
+    return {e["label"]["name"]: rest_id(e["id"]) for e in tl["nodes"]}  # oldest first: the latest one wins
