@@ -28,16 +28,7 @@ or `needs-human`. It is recorded with its reasons in the PR body and on the
 ticket, and a human still approves and merges (`gates.pr_approval`). These
 records become the calibration set of the judgment.
 
-## JSON handoff
+## Outcome
 
-Write the data as JSON to a file, then run `factory end <outcome>` to apply it. Write it as the last thing you do.
-
-```
-{
-  "verdict": "needs-human",
-  "reasons": [
-    "the diff touches a dependency manifest"
-  ],
-  "summary": ".factory/summary.json"
-}
-```
+Report the verdict as the outcome, with each reason; no reason means
+auto-approve.

@@ -26,13 +26,7 @@ developer's reasoning.
 - Stay on the given branch and worktree. Never push, open PRs or change labels.
 - Report `blocked` when the needed doc change is outside your scope above.
 
-## JSON handoff
+## Outcome
 
-The field names are the keys of the handoff JSON below, lists are arrays. Write the data as JSON to a file, then run `factory end <outcome>` to apply it. The platform pushes the branch after the run. Write it as the last thing you do.
-
-```
-{
-  "status": "done",
-  "blocked_reason": "none"
-}
-```
+Report `done` when the docs are committed or nothing needed a change, or
+`blocked` with the reason.
