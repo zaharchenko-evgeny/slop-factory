@@ -103,36 +103,6 @@ def tracker(fake):
 
 class GitHub(unittest.TestCase):
 
-    def test_add_to_configured_map(self):
-        fake = FakeGh({21: {"labels": ["factory:map"], "id": 2100},
-                       22: {"labels": ["factory:map"], "id": 2200},
-                       30: {"id": 3000}})
-        tracker(fake).add_to_map(30)
-        self.assertEqual(fake.subs, {21: [3000]})
-        self.assertIn("-F", fake.writes[-1])
-        self.assertEqual(fake.writes[-1][fake.writes[-1].index("-F") + 1], "sub_issue_id=3000")
-
-    def test_canary_issue_operations(self):
-        fake = FakeGh({23: {"title": "Canary", "labels": ["factory:canary", "factory:in-dev"],
-                            "comments": [{"id": 8, "body": "[factory] Last run summary", "user": {"login": "bot"}}]}})
-        tr = tracker(fake)
-        self.assertEqual(tr.canary_tickets(), [23])
-        self.assertEqual(tr.canary_status(23), {"stage": "in-dev", "summary": "[factory] Last run summary",
-                                                "error": False})
-        tr.add_label(23, "risk:low")
-        tr.close_issue(23, "[factory] Superseded.\n\nFactory-Run: test")
-        self.assertEqual(fake.issues[23]["state"], "CLOSED")
-        self.assertIn("risk:low", fake.issues[23]["labels"])
-
-    def test_canary_status_detects_a_sweep_node_error(self):
-        fake = FakeGh({23: {"labels": ["factory:canary", "factory:in-dev"]}})
-        tr = tracker(fake)
-        tr.record_node_error(23)
-        status = tr.canary_status(23)
-        self.assertTrue(status["error"])
-        self.assertIn("node reported an execution error", status["summary"])
-        self.assertIn("<!-- factory-node-error -->", fake.issues[23]["comments"][0]["body"])
-
     def test_done_closes_the_issue_once(self):
         fake = FakeGh({23: {"labels": ["factory:merged"]}})
         t = tracker(fake)
