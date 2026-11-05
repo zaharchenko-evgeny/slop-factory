@@ -339,7 +339,7 @@ class FactsTest(unittest.TestCase):
         gh = FakeGh(labels=("factory:in-review", "risk:low"))
         t = tr(gh)  # FakeGh answers a batch query with nothing
         t.prefetch([7])
-        self.assertEqual(t.cache, {})
+        self.assertEqual(t.run.cache, {})
         self.assertEqual(t.facts(7)["stage"], "in-review")
 
     def test_sweep_tickets_includes_closed_changes_requested_issues(self):

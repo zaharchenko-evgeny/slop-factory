@@ -33,13 +33,6 @@ SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PR
                     r'|(?i:\b(?:api[_-]?key|secret|token|passw(?:or)?d)\b\s*[:=]\s*(?:"[^"]*"|[^\s",]+))', re.S)
 
 
-def is_read(args):
-    """A `gh` call that changes nothing: a plain `gh api` GET or a GraphQL query. Every other call may write."""
-    if args[:2] == ["api", "graphql"]:
-        return not any(str(a).lstrip().startswith("query=mutation") for a in args)
-    return args[:1] == ["api"] and not {"-X", "--method", "-f", "-F", "--field", "--raw-field", "--input"} & set(args)
-
-
 def redact(v):
     """`v` with secret-looking text redacted in every string, before any serialisation."""
     if isinstance(v, str):
@@ -150,19 +143,6 @@ class GitHubGateTracker(DescriptorPort):
         self.repositories[next(iter(self.repositories))] = self.pr_repo
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, CountedRun(run)
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
-        self.cache = {}  # {REST path: body} from `prefetch`, served by `_api` and `_list` until the first write
-
-    @property
-    def run(self):
-        return self._run
-
-    @run.setter
-    def run(self, raw):
-        def run(args, *a, **k):
-            if not is_read(args):
-                self.cache.clear()
-            return raw(args, *a, **k)
-        self._run = run
 
     @classmethod
     def from_config(cls, path=None, run=gh):
@@ -180,7 +160,9 @@ class GitHubGateTracker(DescriptorPort):
 
     # --- reads
     def _cached(self, path, repo):
-        return copy.deepcopy(self.cache[path]) if (repo or self.repo) == self.repo and path in self.cache else None
+        """A body `prefetch` read, until the first write (`CountedRun` drops them)."""
+        cache = getattr(self.run, "cache", {})
+        return copy.deepcopy(cache[path]) if (repo or self.repo) == self.repo and path in cache else None
 
     def _api(self, path, *flags, repo=None):
         if not flags and (hit := self._cached(path, repo)) is not None:
@@ -232,8 +214,8 @@ class GitHubGateTracker(DescriptorPort):
                 for node in data["data"]["repository"].values():
                     if node:
                         found.update(github_graphql.to_rest(node, list(self.stages.values())))
-                self.cache.update(found)
-            except (RuntimeError, ValueError, KeyError, TypeError, AttributeError) as e:
+                self.run.cache.update(found)
+            except Exception as e:  # an optimisation only: any failure reads over REST
                 print(f"prefetch of {batch} failed, reading over REST: {e}", file=sys.stderr)
 
     def config_change_merged(self, pr):
