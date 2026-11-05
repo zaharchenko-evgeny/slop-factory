@@ -541,7 +541,9 @@ class ProjectPlanTest(unittest.TestCase):
         finally:
             cfg.set_team(before)
         prefix = f"[{project['project']['name']}] "
-        names = {a["name"].removeprefix(prefix): a for a in plan["automations"]}
+        repo_names = [r["name"] for r in project["repositories"]]
+        names = {a["name"].removeprefix(prefix).removesuffix(next((f" {r}" for r in repo_names if a["name"].endswith(f" {r}")), "")): a
+                 for a in plan["automations"]}  # per-repository automations end with their repository's name
         deployed = [n for n, node in wf["nodes"].items()
                     if node.get("enabled") is not False and node["role"] != "human" and not node.get("runner")]
         self.assertTrue(deployed)
@@ -559,7 +561,8 @@ class ProjectPlanTest(unittest.TestCase):
         for a in plan["automations"]:
             used = {a["repository"]["fullName"], *(r["repository"]["fullName"] for r in a.get("additionalRepositories", []))}
             self.assertEqual(used, listed, a["name"])
-        self.assertEqual({e["name"] for e in plan["environments"]}, {prefix + e for e in project["environments"]})
+        self.assertEqual({e["name"].removeprefix(prefix).split(" ")[0] for e in plan["environments"]},
+                         set(project["environments"]))
 
     def test_slop_fixture_is_migrate_project_output(self):
         """The generator check of fixtures/slop: `factory migrate project` of the team commit in its SOURCE file
@@ -705,7 +708,7 @@ class PlanTest(unittest.TestCase):
         base = cfg.load()
         other = {"name": "other", "url": "https://github.com/o/other", "default_branch": "develop", "role": "project"}
         plan = deploy.plan_air(nodes.load(), {**base, "team_repository": "https://github.com/o/team",
-                                              "repositories": [*base["repositories"], other]})
+                                              "write_mode": "token", "repositories": [*base["repositories"], other]})
         want = [{"repository": deploy.repository(other), "branch": "develop"},
                 {"repository": deploy.repository({"url": "https://github.com/o/team"}), "branch": "main"}]
         project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
@@ -724,7 +727,7 @@ class PlanTest(unittest.TestCase):
     def test_team_repository_listed_as_a_project_is_one_writable_checkout(self):
         base = cfg.load()
         teamrepo = {"name": "team", "url": "https://github.com/o/team", "default_branch": "trunk", "role": "project"}
-        plan = deploy.plan_air(nodes.load(), {**base, "team_repository": teamrepo["url"],
+        plan = deploy.plan_air(nodes.load(), {**base, "team_repository": teamrepo["url"], "write_mode": "token",
                                               "repositories": [*base["repositories"], teamrepo]})
         want = [{"repository": deploy.repository(teamrepo), "branch": "trunk"}]
         project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
@@ -845,6 +848,37 @@ class PlanTest(unittest.TestCase):
         a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] reconcile")  # each pass runs gate.ci_sync
         self.assertEqual(a["repository"]["fullName"], "zaharchenko-evgeny/slop-factory")
         self.assertEqual(plan["files"], {})  # no workflow or check file under any repository's .github/
+
+    def three_repositories(self, **extra):
+        base = cfg.load()
+        repos = [*base["repositories"], *({"name": n, "url": f"https://github.com/o/{n}", "default_branch": "main",
+                                           "role": "project"} for n in ("api", "client"))]
+        return deploy.plan_air(nodes.load(), {**base, "team_repository": "", "repositories": repos, **extra})
+
+    def test_three_repositories_per_repo_automations_filter_on_repo_label(self):
+        plan = self.three_repositories()
+        by_name = {a["name"]: a for a in plan["automations"]}
+        triage = by_name["[Slop factory] intake"]
+        self.assertEqual({r["repository"]["fullName"] for r in triage["additionalRepositories"]},
+                         {"o/api", "o/client"})
+        self.assertNotIn("repo_label", triage["triggers"][0]["filters"])
+        for repo in ("api", "client"):
+            a = by_name[f"[Slop factory] implement-mid {repo}"]
+            self.assertEqual(a["repository"]["fullName"], f"o/{repo}")
+            self.assertEqual(a["triggers"][0]["filters"]["repo_label"], f"repo:{repo}")
+            self.assertEqual(a["environmentConfigId"], f"[Slop factory] write {repo}")
+        self.assertNotIn("[Slop factory] implement-mid", by_name)
+        envs = {e["name"]: e["repository"] for e in plan["environments"]}
+        self.assertEqual(envs["[Slop factory] write api"], "https://github.com/o/api")
+
+    def test_token_write_mode_deploys_one_node_set(self):
+        plan = self.three_repositories(write_mode="token")
+        names = {a["name"] for a in plan["automations"]}
+        self.assertIn("[Slop factory] implement-mid", names)
+        self.assertFalse([n for n in names if n.endswith((" api", " client"))])
+        write = next(e for e in plan["environments"] if e["name"] == "[Slop factory] write")
+        self.assertIn(deploy.WRITE_TOKEN_SECRET, write["secrets"])
+        self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(deploy.config_mod, "team_root", return_value=Path(d)):
