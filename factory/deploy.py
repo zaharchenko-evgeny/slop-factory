@@ -85,7 +85,8 @@ def flow_triggers(node: dict) -> str:
     return " or ".join(words) or "manual invocation"
 
 
-def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: str | None = None) -> dict:
+def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: str | None = None,
+            repo: str | None = None) -> dict:
     """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations)."""
     event, _, arg = str(text).partition(" ")
     arg = arg.replace("<tier>", tier or "")
@@ -98,6 +99,8 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
     filters = {"label": arg} if labeled and arg else {}
     if pr_author and event.startswith("pull_request"):
         filters["pr_author"] = pr_author
+    if repo:  # a per-repository automation answers only tickets and PRs tagged `repo:<name>`
+        filters["repo_label"] = f"repo:{repo}"
     return {"triggerType": "EVENT", "source": "github", "eventType": event, "filters": filters}
 
 
@@ -287,6 +290,12 @@ def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
     raise KeyError(f"unknown automation: {automation}")
 
 
+# Nodes planned once per project repository when `write_mode` is `per-repo` (default) and the project has several
+# repositories: Air pushes only to an automation's primary repository. Only triage sees every repository.
+PER_REPO = ("implement", "fix", "update", "review", "join", "merge", "finish")
+WRITE_TOKEN_SECRET = "FACTORY_WRITE_TOKEN"  # `write_mode: token`: the write environment's token, by name only
+
+
 def plan_air(nodes: dict, config: dict) -> dict:
     air, roles = config["targets"]["air"]["models"], config["roles"]
     repos = {r["name"]: r for r in config["repositories"]}
@@ -299,11 +308,15 @@ def plan_air(nodes: dict, config: dict) -> dict:
     prefix = f"[{project_name(config)}] "
     automations = []
     used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
+    per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(config["repositories"]) > 1
+    unscoped = set()  # environments some automation shares across the project
+    scoped = []  # (env, repository name) of the per-repository automations
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
-        env = n["env"]
-        for aname, tier_arg, tier, focus in variants(name, n, roles):
+        scopes = config["repositories"] if per_repo and name in PER_REPO else [None]
+        for scope, (aname, tier_arg, tier, focus) in [(sc, v) for sc in scopes for v in variants(name, n, roles)]:
+            env = n["env"]
             agent, _, model = air[tier].partition("/")
             trig = []
             webhook = any(str(t).startswith("webhook ") for t in n["triggers"])
@@ -315,18 +328,25 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 elif str(t).startswith("webhook "):
                     trig.append({"triggerType": "WEBHOOK"})
                 elif str(t) != "manual":
-                    trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus))
-            automation_repository = repository(team if focus == "knowledge" else repos.get(envs_def[env]["repository"]) or primary)
+                    trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus,
+                                        scope["name"] if scope else None))
+            automation_repository = repository(team if focus == "knowledge" else scope or repos.get(envs_def[env]["repository"]) or primary)
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
+            scope_name = scope["name"] if scope else None
+            if scope_name:
+                if (env, scope_name) not in scoped:
+                    scoped.append((env, scope_name))
+            else:
+                unscoped.add(env)
             automation = {
-                "name": f"{prefix}{aname}",
+                "name": f"{prefix}{aname}" + (f" {scope_name}" if scope_name else ""),
                 "triggers": trig,
                 "triggerVcs": [{"outputBehaviour": n.get("output", "read-only")} for _ in trig],
                 "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
-                "environmentConfigId": f"{prefix}{env}",
+                "environmentConfigId": f"{prefix}{env}" + (f" {scope_name}" if scope_name else ""),
                 "mcpConnectors": mcp_connectors(n, config, focus),
                 "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
                     name, n, config, aname, focus, automation_repository),
@@ -340,15 +360,16 @@ def plan_air(nodes: dict, config: dict) -> dict:
                         {"repository": repository(r), "branch": r["default_branch"]} for r in projects]
             automations.append(automation)
     envs = []
-    for env in used:
+    token = config.get("write_mode") == "token" and len(config["repositories"]) > 1
+    for env, scope_name in [(e, None) for e in used if e in unscoped] + scoped:
         d = envs_def[env]
-        repo = repos.get(d["repository"]) or primary
+        repo = repos[scope_name] if scope_name else repos.get(d["repository"]) or primary
         envs.append({
-            "name": f"{prefix}{env}",
+            "name": f"{prefix}{env}" + (f" {scope_name}" if scope_name else ""),
             "repository": repo["url"],
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env},
-            "secrets": d.get("secrets", []),
+            "secrets": [*d.get("secrets", []), *([WRITE_TOKEN_SECRET] if token and env == "write" else [])],
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
