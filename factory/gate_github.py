@@ -183,6 +183,24 @@ class GitHubTicketStore:
     def __init__(self, repo, run=gh):
         self.repo, self.run = repo, run
 
+    # --- mentions (ADR-0020): the comment, the thread and the vars of an issue or PR number
+    def comment_by_id(self, n, cid):
+        c = self.github.api(f"issues/comments/{cid}")
+        return {"id": c["id"], "author": (c.get("user") or {}).get("login") or "", "body": c["body"]}
+
+    def thread(self, n):
+        return [{"author": c["author"], "body": c["body"], "at": c["at"]} for c in self.github.comments(n)]
+
+    def _vars(self):
+        from github_tracker import GitHubTracker
+        return GitHubTracker(self.repo, self.stages, run=self.run)
+
+    def read_vars(self, n):
+        return self._vars().read_vars(n)
+
+    def write_vars(self, n, vars_):
+        self._vars().write_vars(n, vars_)
+
     # --- reads
     def _cached(self, path, repo):
         """A body `prefetch` read, until the first write (`CountedRun` drops them)."""

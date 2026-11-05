@@ -87,6 +87,20 @@ class BeginEndTest(unittest.TestCase):
             code, out = self.run_cli("begin", "fix-cheap", "--pr", "300", "--tracker", "memory:tickets.json")
         self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
 
+    def test_reply_mode_prints_the_thread_and_posts_the_answer_without_a_stage_check(self):
+        tracker = self.tracker(comments=[{"id": 5, "author": "ann", "body": "@factory:implement why?"}])
+        mention = {"subject": "ticket", "n": 7, "comment_id": 5, "from": "ann", "persona": "implement", "text": "why?"}
+        Path("mention.json").write_text(json.dumps(mention))
+        code, out = self.run_cli("begin", "implement-mid", "mention.json", "--mode", "reply", *tracker)
+        begun = json.loads(out)
+        self.assertEqual((code, begun["question"], begun["asked_by"], len(begun["thread"])), (0, "why?", "ann", 1), out)
+        code, out = self.run_cli("end", "reply", "--text", "because")
+        self.assertEqual(code, 0, out)
+        record = json.loads(Path("tickets.json").read_text())["7"]
+        self.assertEqual(record["stage"], "in-dev")
+        self.assertEqual([json.loads(v) for k, v in record["log"]],
+                         ["[factory] **implement (developer):** because\n\nFactory-Run: reply:5"])
+
     def test_end_applies_handoff_for_begun_node(self):
         tracker = self.tracker()
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)

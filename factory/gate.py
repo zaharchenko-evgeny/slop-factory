@@ -28,6 +28,7 @@ import argparse
 from collections import Counter
 import fnmatch
 import json
+import os
 import re
 import subprocess
 import sys
@@ -42,6 +43,7 @@ import nodes as nodes_mod  # noqa: E402
 from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
 from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
+import mentions as mentions_mod  # noqa: E402
 import vocab  # noqa: E402
 from inbox import send as inbox_send  # noqa: E402
 
@@ -1094,9 +1096,71 @@ def run_ci_sync(dry_run=False, progress=None):
     return ci_sync(GitHubCodeHost.from_config(), project_repositories(config), dry_run, progress)
 
 
+def mention_wake(node, payload):
+    """Wake `node` through its Air webhook: its URL is in the JSON map env `FACTORY_MENTION_URLS` {node: url}, the key in
+    `FACTORY_MENTION_KEY`."""
+    from inbox.send import post
+    url = json.loads(os.environ.get("FACTORY_MENTION_URLS") or "{}").get(node)
+    if not url:
+        raise RuntimeError(f"FACTORY_MENTION_URLS has no webhook URL for node {node}")
+    os.environ["FACTORY_MENTION_URL"] = url
+    post({"url_secret": "FACTORY_MENTION_URL", "key_secret": "FACTORY_MENTION_KEY"}, payload)
+
+
+def mention(tracker, subject, n, comment_id, nodes, config, wake=mention_wake):
+    """`@factory:<persona>` in comment `comment_id` of ticket or PR `n` (ADR-0020): wake the persona's node on that
+    subject with {subject, n, comment_id, from, persona, text}. A person may mention any persona; a `[factory]` comment
+    is checked against the deploy-time allowlist. An unknown persona or a disallowed pair gets one `[factory]` reply
+    and no wake; a comment and persona already handled (the vars) are skipped. Returns one result per mention."""
+    import deploy
+    comment = tracker.comment_by_id(n, comment_id)
+    body = comment["body"]
+    sender = None
+    if body.startswith("[factory]"):  # an agent's reply names its persona; any other gate comment never mentions
+        m = re.match(r"\[factory\] \*\*([a-z][a-z0-9-]*) \(", body)
+        if not m:
+            return []
+        sender = m[1]
+    agents = deploy.agents_of(nodes, config)
+    allowed = deploy.mention_allowlist(nodes, agents)
+    personas = {a["persona"] for a in agents.values()}
+    handled = tracker.read_vars(n).get("mentions", [])
+    out = []
+    for persona, text in mentions_mod.parse(body):
+        key = f"{comment_id}:{persona}"
+        if key in handled:
+            out.append({"persona": persona, "result": "duplicate"})
+            continue
+        node = next((k for k, a in agents.items() if a["persona"] == persona and deploy.subject(k) == subject
+                     and not nodes["nodes"][k].get("routine") and nodes["nodes"][k].get("mention") is not False), None)
+        why = (f"no agent has the persona `{persona}`" if persona not in personas
+               else f"`{persona}` does not act on a {subject}" if node is None
+               else f"`{sender}` may not mention `{persona}` on a {subject}"
+               if sender and subject not in allowed.get(sender, {}).get(persona, []) else None)
+        if why:
+            tracker.apply({"ticket": n, "kind": "comment", "value": f"[factory] Mention not delivered: {why}.",
+                           "run_id": f"mention:{comment_id}"})
+            out.append({"persona": persona, "result": "rejected", "reason": why})
+        else:
+            wake(node, {"subject": subject, "n": n, "comment_id": comment_id,
+                        "from": sender or comment["author"], "persona": persona, "text": text})
+            out.append({"persona": persona, "result": "woken", "node": node})
+        handled = [*handled, key][-200:]
+        tracker.write_vars(n, {**tracker.read_vars(n), "mentions": handled})
+    return out
+
+
+def reply(tracker, nodes, node, event, text):
+    """A reply to a mention (`factory end reply --text`): one `[factory] **<persona> (<role>):** <text>` comment with a
+    `Factory-Run:` trailer on the subject. It changes no stage, label or code."""
+    role = load_node(node, nodes)["role"]
+    tracker.apply({"ticket": event["n"], "kind": "comment", "value":
+                   f"[factory] **{event['persona']} ({role}):** {text}\n\nFactory-Run: reply:{event['comment_id']}"})
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "ci-sync"])
+    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "ci-sync", "mention", "thread", "reply"])
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
@@ -1110,6 +1174,9 @@ def main(argv):
     p.add_argument("--spec")
     p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
     p.add_argument("--tier")
+    p.add_argument("--subject", nargs=2, metavar=("KIND", "N"))  # mention: ticket|pr and its number
+    p.add_argument("--comment")  # mention: the comment id
+    p.add_argument("--text")  # reply
     p.add_argument("--completed-head")  # CI's terminal label step runs before Actions marks its workflow completed
     try:
         a = p.parse_args(config_mod.pop_team(argv))
@@ -1146,6 +1213,25 @@ def main(argv):
             for label in labels:
                 tracker.apply({"ticket": a.issue, "kind": "label", "value": label, "on": "pr"})
             print(json.dumps({"ticket": a.issue, "labels": labels}))
+            return GO
+        if a.cmd == "mention":
+            if not a.subject or a.subject[0] not in ("ticket", "pr") or not a.comment:
+                raise Bad("mention needs --subject <ticket|pr> N and --comment ID")
+            print(json.dumps({"mention": mention(tracker, a.subject[0], int(a.subject[1]), a.comment, nodes, config)}))
+            return GO
+        if a.cmd in ("thread", "reply"):
+            try:
+                event = json.loads(Path(a.event or "").read_text())
+            except (OSError, ValueError) as e:
+                raise Bad(f"malformed event: {e}")
+            if a.cmd == "thread":
+                print(json.dumps({"thread": tracker.thread(event["n"])}))
+            elif not (a.text or "").strip():
+                raise Bad("reply needs --text")
+            else:
+                reply(tracker, nodes, a.node, event, a.text.strip())
+                path and Path(path).write_text(json.dumps(tracker.tickets))
+                print(json.dumps({"outcome": "reply", "n": event["n"]}))
             return GO
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):

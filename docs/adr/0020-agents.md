@@ -56,5 +56,12 @@ Consequences:
 - Later slices add the mention parser and reply mode, the agent `ask`
   outcome, and resuming the agent's session in reply mode.
 
+Slice 2 (#590): `@factory:<persona> <text>` in a ticket or PR comment runs `gate.py mention`
+(`factory/mentions.py` parses it; code spans and fences are ignored). The gate checks the sender against the allowlist,
+dedupes by comment id and persona in the vars, and wakes the node through its Air webhook
+(`FACTORY_MENTION_URLS`, `FACTORY_MENTION_KEY`); a refused mention gets one `[factory]` reply. The woken agent runs
+`factory begin --mode reply` and `factory end reply --text`; the gate posts `[factory] **<persona> (<role>):** <text>`.
+Every mentionable node gets a read-only webhook trigger at deploy (the node's own `env` is not switched).
+
 Rejected: naming agents per node (one persona per automation). The same
 developer implements, fixes and updates; a person should talk to one `dev`.

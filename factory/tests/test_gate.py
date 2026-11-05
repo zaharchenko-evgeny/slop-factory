@@ -1877,5 +1877,53 @@ class CiSyncTest(unittest.TestCase):
         self.assertEqual((results[0]["repo"], results[1]["added"], host.edits), ("o/missing", [self.GREEN], []))
 
 
+class MentionTest(unittest.TestCase):
+    """`@factory:<persona>` (ADR-0020): the gate wakes the persona's node, or answers once and wakes nothing."""
+
+    def setUp(self):
+        self.nodes = copy.deepcopy(NODES)
+        self.nodes["nodes"]["implement"]["agent"], self.nodes["nodes"]["intake"]["agent"] = "dev", "ria"
+        self.config = {**CONFIG, "agents": {"dev": {"persona": "dev", "role": "developer", "tier": "mid"},
+                                            "ria": {"persona": "ria", "role": "router", "tier": "cheap"}}}
+        self.woken = []
+
+    def mention(self, body, comment_id=1):
+        tracker = self.tracker = getattr(self, "tracker", None) or MemoryTracker({"7": {"stage": "in-dev", "comments": []}})
+        tracker.tickets["7"]["comments"].append({"id": comment_id, "author": "ann", "body": body})
+        return gate.mention(tracker, "ticket", 7, comment_id, self.nodes, self.config, lambda node, p: self.woken.append((node, p)))
+
+    def replies(self):
+        return [json.loads(v) for k, v in self.tracker.tickets["7"].get("log", []) if k == "comment"]
+
+    def test_person_mentions_dev_wakes_its_node_on_that_subject(self):
+        self.mention("@factory:dev why is this slow?")
+        self.assertEqual(self.woken, [("implement", {"subject": "ticket", "n": 7, "comment_id": 1, "from": "ann",
+                                                      "persona": "dev", "text": "why is this slow?"})])
+
+    def test_unknown_persona_gets_one_reply_and_no_wake(self):
+        self.mention("@factory:nobody hi")
+        self.assertEqual(self.woken, [])
+        self.assertEqual(len(self.replies()), 1)
+        self.assertIn("nobody", self.replies()[0])
+        self.assertNotIn("@factory:", self.replies()[0])  # a reply must not mention anyone again
+
+    def test_disallowed_agent_pair_wakes_nothing(self):
+        self.mention("[factory] **ria (router):** @factory:rex look at this")  # rex acts on pull requests only
+        self.assertEqual(self.woken, [])
+
+    def test_same_comment_twice_wakes_once(self):
+        self.mention("@factory:dev hi")
+        self.tracker.tickets["7"]["comments"].clear()
+        self.mention("@factory:dev hi")
+        self.assertEqual(len(self.woken), 1)
+
+    def test_reply_posts_one_comment_with_persona_role_and_trailer_and_keeps_the_stage(self):
+        tracker = MemoryTracker({"7": {"stage": "in-dev"}})
+        gate.reply(tracker, self.nodes, "implement", {"n": 7, "persona": "dev", "comment_id": 1}, "because of X")
+        self.assertEqual([json.loads(v) for k, v in tracker.tickets["7"]["log"]],
+                         ["[factory] **dev (developer):** because of X\n\nFactory-Run: reply:1"])
+        self.assertEqual((tracker.tickets["7"]["stage"], tracker.tickets["7"].get("attrs", [])), ("in-dev", []))
+
+
 if __name__ == "__main__":
     unittest.main()

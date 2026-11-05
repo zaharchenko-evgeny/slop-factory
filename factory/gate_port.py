@@ -314,6 +314,18 @@ class MemoryTracker(DescriptorPort):
         return {**base, **{k: v for k, v in t.items() if k in base or k in ("title", "body", "branch", "reviews", "pr", "ci_failure", "author", "waiting_reviewers", "agent_notes", "pr_labels", "prs", "heads")}, "stage": self.get_stage(t),
                 "seen": list(t.get("seen", [])), "comments": t.get("comments", [])}
 
+    def comment_by_id(self, n, cid):
+        return next(c for c in self._t(n).get("comments", []) if str(c.get("id")) == str(cid))
+
+    def thread(self, n):
+        return self._t(n).get("comments", [])
+
+    def read_vars(self, n):
+        return dict(self._t(n).get("vars", {}))
+
+    def write_vars(self, n, vars_):
+        self._t(n)["vars"] = dict(vars_)
+
     def stale_facts(self, ticket):
         """facts plus the stale-sweep fields a record may set (since, command, command_at, commit_at, ci_label);
         the recover comments come from the log."""

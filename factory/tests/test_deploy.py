@@ -596,6 +596,14 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(sorted(str(p.relative_to(slop)) for p in slop.rglob("*") if p.is_file()),
                          sorted(str(Path(p).relative_to(tmp)) for p in written))
 
+    def test_every_node_with_a_persona_gets_a_read_only_webhook_and_script_nodes_none(self):
+        project, wf = slop_with_agents()
+        for a in project_plan(project, wf)["automations"]:
+            kinds = [t["triggerType"] for t in a["triggers"]]
+            self.assertEqual("WEBHOOK" in kinds, "persona" in a["spec"] and not a["spec"].get("routine"), a["name"])
+            if "WEBHOOK" in kinds:
+                self.assertEqual(a["triggerVcs"][kinds.index("WEBHOOK")], {"outputBehaviour": "read-only"})
+
     def test_mention_allowlist(self):
         """fixtures/slop's agents (ADR-0020): dev, rex and ria, and whom each may mention on which subject."""
         project, wf = slop_with_agents()

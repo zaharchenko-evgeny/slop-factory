@@ -1,0 +1,31 @@
+name: factory-mention
+
+# `@factory:<persona> <text>` in a ticket or PR comment wakes that agent in reply mode (ADR-0020).
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  mention:
+    if: contains(github.event.comment.body, '@factory:')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      FACTORY_MENTION_KEY: ${{ secrets.FACTORY_MENTION_KEY }}
+      # JSON {node: Air webhook URL} of the mentionable nodes
+      FACTORY_MENTION_URLS: ${{ secrets.FACTORY_MENTION_URLS }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - run: pipx install uv && uv tool install git+https://github.com/zaharchenko-evgeny/slop-factory@v0.1.0
+      - name: Wake the mentioned agents
+        env:
+          SUBJECT: ${{ github.event.issue.pull_request && 'pr' || 'ticket' }}
+          NUMBER: ${{ github.event.issue.number }}
+          COMMENT: ${{ github.event.comment.id }}
+        run: factory --team . mention --subject "$SUBJECT" "$NUMBER" --comment "$COMMENT"

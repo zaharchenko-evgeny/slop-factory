@@ -5,6 +5,9 @@ One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails whe
 | Variable | Set by | Read in | Required |
 |---|---|---|---|
 | `FACTORY_ENV` | Air deploy: the only variable of a planned environment (`factory deploy` owns an environment's whole variable set) | `factory/doctor.py`, `factory/deploy.py` (written to the plan) | required in an Air run (`read`, `write` or `ops`) |
+| `FACTORY_MENTION_URLS` | repository secret of `factory-mention.yaml`: JSON `{node: Air webhook URL}` of the mentionable nodes | `factory/gate.py` (`gate.py mention`) | required to wake a mentioned agent |
+| `FACTORY_MENTION_KEY` | repository secret of `factory-mention.yaml`: the API key of those webhooks | `factory/gate.py` (`gate.py mention`) | required to wake a mentioned agent |
+| `FACTORY_MENTION_URL` | `gate.py mention` (internal): the URL of the node it wakes, for `inbox.send.post` | `factory/gate.py` | internal |
 | `FACTORY_TEAM` | the startup wrapper of `factory` (internal) | `factory/config.py`, `factory/cli.py`, `factory/local.py`, `template/roles/` | optional; defaults to the `factory-team` directory in the home directory when it exists, else the working directory |
 | `FACTORY_ENGINE` | tests and development | `factory/config.py` | optional; defaults to this checkout |
 | `FACTORY_GH` | tests and development | `factory/github_tracker.py` | optional; defaults to `gh` |

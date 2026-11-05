@@ -7,6 +7,8 @@
 
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> --issue N | --pr N | [payload file]   (payload on stdin by default; exit 10: the node must not act)
+       factory begin <automation> --mode reply [payload file]   (a mention's reply: the payload is the webhook body)
+       factory end reply --text TEXT                            (post the answer; changes no stage, label or code)
        factory end <outcome> [--reason TEXT] [--summary TEXT] [--size-estimate N] [--disputed-focuses a,b]
                    [--pass CHECK] [--fail CHECK] [--not-run 'CHECK | REASON'] [--propose-check CHECK]
                    [--blocking 'ID FILE FINDING | case: REPRO'] [--minor 'ID FILE FINDING']
@@ -81,6 +83,7 @@ def begin(argv, team=None):
     p.add_argument("--issue", type=int)
     p.add_argument("--pr", type=int)
     p.add_argument("--main", action="store_true")
+    p.add_argument("--mode", choices=["reply"])  # reply: answer a mention (the payload is the webhook body)
     p.add_argument("--tracker")  # tests: a memory tracker
     a = p.parse_args(argv)
     engine = from_main() if a.main or a.automation.split("-")[0] in PR_NODES else None
@@ -96,7 +99,14 @@ def begin(argv, team=None):
     (base / "event").mkdir(parents=True, exist_ok=True)
     (base / "spec").mkdir(exist_ok=True)
     event, spec = base / "event" / f"{a.automation}.json", base / "spec" / f"{a.automation}.json"
-    if a.issue or a.pr:  # a number is all the gate needs: it reads every fact from the tracker
+    if a.mode == "reply":
+        text = Path(a.payload).read_text() if a.payload else sys.stdin.read()
+        mention = json.loads(text)
+        if not isinstance(mention, dict) or not {"n", "persona", "comment_id", "text"} <= set(mention):
+            print(json.dumps({"error": "reply mode needs the mention payload {subject, n, comment_id, from, persona, text}"}))
+            return 2
+        event.write_text(text)
+    elif a.issue or a.pr:  # a number is all the gate needs: it reads every fact from the tracker
         name, _, action = str(nodes.load()["nodes"][compiled["node"]]["triggers"][0]).split(" ")[0].partition(".")
         number = {"pull_request" if a.pr else "issue": {"number": a.pr or a.issue}}
         text = json.dumps({"eventType": f"{name}.{action}", "action": action, **number})
@@ -106,13 +116,24 @@ def begin(argv, team=None):
     spec.write_text(json.dumps(compiled["spec"], sort_keys=True))
     state = {**{k: compiled[k] for k in ("node", "focus", "tier")}, "spec": str(spec), "event": str(event),
              "tracker": ["--tracker", a.tracker] if a.tracker else [], "team": str(config.team_root()),
-             "engine": engine}
+             "engine": engine, "mode": a.mode}
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        code = run_gate(engine, ["check", "--node", state["node"], "--event", state["event"], *gate_args(state)],
-                        str(config.team_root()))
+        if a.mode == "reply":  # no stage check: print the thread, the question and who asked
+            code = run_gate(engine, ["thread", "--node", state["node"], "--event", state["event"], *gate_args(state)],
+                            str(config.team_root()))
+        else:
+            code = run_gate(engine, ["check", "--node", state["node"], "--event", state["event"], *gate_args(state)],
+                            str(config.team_root()))
+    if a.mode == "reply" and code == 0:
+        out = io.StringIO(json.dumps({"go": True, "mode": "reply", "node": state["node"], "role": compiled["spec"]["role"],
+                                      **{k: mention[k] for k in ("subject", "persona", "from", "text", "comment_id", "n")
+                                         if k in mention}, **json.loads(out.getvalue()),
+                                      "outcomes": ["reply"], "question": mention["text"], "asked_by": mention.get("from")}))
     print(out.getvalue(), end="")
-    if code == 0:
+    if code == 0 and a.mode == "reply":
+        STATE.write_text(json.dumps(state))
+    elif code == 0:
         state["handoff_path"] = json.loads(out.getvalue())["handoff_path"]
         STATE.write_text(json.dumps(state))
     return code
@@ -196,6 +217,7 @@ def end_parser():
                 "note-for", "note-hint", "note-repro"):
         p.add_argument(f"--{opt}")
     p.add_argument("--failing-check")
+    p.add_argument("--text")  # reply: the answer to a mention
     for opt, dest in (("pass", "passed"), ("fail", "failed"), ("not-run", "not_run"), ("blocking", None), ("minor", None),
                       ("fixed", None), ("disputed", None), ("slice", None), ("propose-check", None), ("note-file", None)):
         p.add_argument(f"--{opt}", action="append", default=[], **({"dest": dest} if dest else {}))
@@ -212,6 +234,13 @@ def end(argv, team=None):
         return 2
     state = json.loads(STATE.read_text())
     load_engine(Path(state["engine"]) / "factory" if state["engine"] else HERE)
+    if state.get("mode") == "reply":  # the gate posts the answer; no handoff, stage, label or code
+        if a.outcome != "reply" or not (a.text or "").strip():
+            print(json.dumps({"error": "a reply run ends with `factory end reply --text …`"}))
+            return 2
+        config.set_team(state["team"])
+        return run_gate(state["engine"], ["reply", "--node", state["node"], "--event", state["event"], "--text", a.text,
+                                          *gate_args(state)], state["team"])
     handoff = Path(state["handoff_path"])
     try:
         data = handoff_of(a)
@@ -277,7 +306,7 @@ def main(argv=None):
     load_engine(HERE)
     if team:
         config.set_team(team)
-    if cmd in ("check", "apply", "sweep", "ci-sync"):
+    if cmd in ("check", "apply", "sweep", "ci-sync", "mention"):
         return gate.main([cmd, *rest])
     if cmd == "deploy" and rest[:2] == ["--target", "local"]:
         from local import deploy as local_deploy

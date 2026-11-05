@@ -309,13 +309,19 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
     payload = INBOX_PAYLOAD if role == "inbox" else ""
+    reply = ("\n\n## When a mention woke you\n\n"
+             "A trigger payload with `comment_id` and `persona` is a mention, not a stage run: save the payload verbatim to a "
+             f"file, run `factory begin {aname} --mode reply <that file>`, read the thread and the question, answer it, "
+             "and report `factory end reply --text \"<answer>\"`. Change no file, label or stage.") if (
+        config.get("agents") and role not in project_mod.NO_AGENT_ROLES and not n.get("routine")
+        and n.get("mention") is not False) else ""
     return (f"{who}\n\n{checkout}{text}\n\n{payload}## Your skills\n\n{skill_lines(role)}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts and the branch or PR head. "
             "If it exits 10 the node must not act: report the reason and stop.\n"
             "2. Do the role's work. As the last thing you do, report one outcome above with `factory end <outcome>` "
-            "and the data it needs, as the `factory-step` skill describes.")
+            "and the data it needs, as the `factory-step` skill describes." + reply)
 
 
 def variants(name: str, n: dict, roles: dict, agent: dict | None = None) -> list[tuple[str, str | None, str, str | None]]:
@@ -385,6 +391,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 elif str(t) != "manual":
                     trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus,
                                         scope["name"] if scope else None))
+            if spec.get("persona") and not n.get("routine") and n.get("mention") is not False and not webhook:
+                trig.append({"triggerType": "WEBHOOK"})  # `@factory:<persona>` wakes the node in reply mode (read-only)
             automation_repository = repository(team if focus == "knowledge" else scope or repos.get(envs_def[env]["repository"]) or primary)
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
@@ -397,7 +405,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
             automation = {
                 "name": f"{prefix}{aname}" + (f" {scope_name}" if scope_name else ""),
                 "triggers": trig,
-                "triggerVcs": [{"outputBehaviour": n.get("output", "read-only")} for _ in trig],
+                "triggerVcs": [{"outputBehaviour": "read-only" if t["triggerType"] == "WEBHOOK" and not webhook
+                                else n.get("output", "read-only")} for t in trig],
                 "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
