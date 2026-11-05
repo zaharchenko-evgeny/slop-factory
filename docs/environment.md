@@ -27,6 +27,8 @@ environments:
 - `factory validate` rejects a variable whose name starts with `FACTORY_` (reserved for the factory).
 - `factory deploy` plans an environment's variables as the declared ones plus `FACTORY_ENV`. A person sets each secret's value in Air;
   `deploy --dry-run` lists one that is missing as `set by a person: <env> secret <NAME>` and does not fail.
+  Air's API cannot delete a variable: `deploy` prints `remove by hand in Air: <env> variable <NAME>` for one the plan lacks,
+  does not fail on it, and a person removes it in the environment's settings.
 - `factory doctor` probes `env:<NAME>` for every declared variable and secret of `FACTORY_ENV`: `ok` when set and non-empty,
   `missing` otherwise. A missing probe fails the doctor.
 
