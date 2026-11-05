@@ -231,6 +231,37 @@ class RateLimit(unittest.TestCase):
             sleep.assert_not_called()
 
 
+class ProjectWriteToken(unittest.TestCase):
+    def test_only_writes_to_project_repositories_use_the_write_token(self):
+        calls = []
+        run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", ["o/App"],
+                                             {"FACTORY_WRITE_TOKEN": "pat"})
+        run(["pr", "edit", "2", "-R", "o/app", "--add-label", "x"])
+        run(["api", "-X", "PUT", "repos/o/app/pulls/2/update-branch"])
+        run(["api", "repos/o/app/issues/2/labels", "-f", "labels[]=x"])  # a field: gh POSTs
+        run(["label", "create", "p", "-R", "o/app"])
+        run(["api", "--paginate", "repos/o/app/pulls?state=open", "--jq", ".[]"])  # a read
+        run(["pr", "view", "2", "-R", "o/app"])
+        run(["pr", "edit", "2", "-R", "o/r", "--add-label", "x"])  # not a project repository
+        self.assertEqual(calls, ["pat"] * 4 + [None] * 3)
+
+    def test_without_the_token_every_call_runs_as_before(self):
+        calls = []
+        run = github_tracker.ProjectWriteRun(lambda args, **kw: calls.append(kw) or "", ["o/app"], {})
+        run(["pr", "edit", "2", "-R", "o/app", "--add-label", "x"])
+        self.assertEqual(calls, [{}])
+
+    def test_gh_sets_gh_token_for_that_call_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, "gh")
+            path.write_text('#!/bin/sh\necho "$GH_TOKEN"\n')
+            path.chmod(path.stat().st_mode | stat.S_IXUSR)
+            with mock.patch.dict(os.environ, {"FACTORY_GH": str(path), "GH_TOKEN": "air"}):
+                self.assertEqual(github_tracker.gh(["api", "x"], token="pat"), "pat\n")
+                self.assertEqual(github_tracker.gh(["api", "x"]), "air\n")
+                self.assertEqual(os.environ["GH_TOKEN"], "air")
+
+
 class Counted(unittest.TestCase):
     def test_a_repeated_read_of_an_issue_timeline_calls_gh_once(self):
         calls = []

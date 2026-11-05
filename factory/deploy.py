@@ -29,6 +29,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
+import github_tracker
 import nodes as nodes_mod
 import project as project_mod
 import vocab
@@ -345,7 +346,7 @@ def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
 # Nodes planned once per project repository when `write_mode` is `per-repo` (default) and the project has several
 # repositories: Air pushes only to an automation's primary repository. Only triage sees every repository.
 PER_REPO = ("implement", "fix", "update", "review", "join", "merge", "finish")
-WRITE_TOKEN_SECRET = "FACTORY_WRITE_TOKEN"  # `write_mode: token`: the write environment's token, by name only
+WRITE_TOKEN_SECRET = github_tracker.WRITE_TOKEN  # `write_mode: token`: the project-repository write token, by name only
 
 
 def plan_air(nodes: dict, config: dict) -> dict:
@@ -424,7 +425,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "repository": repo["url"],
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env},
-            "secrets": [*d.get("secrets", []), *([WRITE_TOKEN_SECRET] if token and env == "write" else [])],
+            "secrets": [*d.get("secrets", []), *([WRITE_TOKEN_SECRET] if token and env in github_tracker.WRITE_TOKEN_ENVS else [])],
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })

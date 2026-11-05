@@ -913,8 +913,11 @@ class PlanTest(unittest.TestCase):
         names = {a["name"] for a in plan["automations"]}
         self.assertIn("[Slop factory] implement-mid", names)
         self.assertFalse([n for n in names if n.endswith((" api", " client"))])
-        write = next(e for e in plan["environments"] if e["name"] == "[Slop factory] write")
-        self.assertIn(deploy.WRITE_TOKEN_SECRET, write["secrets"])
+        envs = {e["name"]: e["secrets"] for e in plan["environments"]}
+        self.assertEqual(deploy.WRITE_TOKEN_SECRET, "FACTORY_WRITE_TOKEN")
+        self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] write"])
+        self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] ops"])  # reconcile's CI label sync
+        self.assertNotIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] read"])
         self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):

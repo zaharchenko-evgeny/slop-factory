@@ -21,7 +21,7 @@ import yaml
 import config
 import github_graphql
 from gate_port import PR_DEFAULTS, DescriptorPort, child_attrs, child_links, child_order, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
-from github_tracker import CountedRun, gh
+from github_tracker import CountedRun, ProjectWriteRun, gh, project_repositories
 import vocab
 from youtrack_tracker import YouTrackTicketStore
 
@@ -128,7 +128,8 @@ class GitHubCodeHost:
     @classmethod
     def from_config(cls, path=None, run=gh):
         c = yaml.safe_load(Path(path).read_text()) if path else config.load()
-        return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"], run)
+        return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"],
+                   ProjectWriteRun(run, project_repositories(c)))
 
     def ticket_for_pr(self, number, repository=None):
         """Resolve a PR number to its ticket from the live head ref, else the live title; `repository` (owner/repo)
@@ -432,7 +433,8 @@ class GitHubGateTracker(DescriptorPort):
                           if isinstance((s.get("store") or {}).get("field"), dict)), None)
             tickets = YouTrackTicketStore.from_config(t, state_field=field, bots=t.get("bot_logins") or ())
             repo = code_repo
-        return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run,
+        return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"],
+                   ProjectWriteRun(run, project_repositories(c)),
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
                    (c.get("ci") or {}).get("workflows") or ["quality-gates"],
                    (c.get("code_host") or {}).get("repository"),
