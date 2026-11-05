@@ -14,6 +14,7 @@ place (same id) to NEW instead of creating NEW and deleting OLD.
 air: {"automations": [...], "environments": [...]}: one automation per enabled node (per tier or focus
      where the node has them) and one environment per environment in use, for the factory-deploy skill.
 """
+import fnmatch
 import json
 import os
 import re
@@ -29,6 +30,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
 import nodes as nodes_mod
+import project as project_mod
 import vocab
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,7 +68,56 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
     if top and n["role"] == "script":  # a sweep applies the other script nodes (join, finish) too
         spec["runs"] = {k: node_spec(k, v, config, None, None, nodes, False) for k, v in nodes["nodes"].items()
                         if v["role"] == "script" and k != name and v.get("enabled") is not False and not v.get("routine")}
+    if config.get("agents") and n["role"] not in project_mod.NO_AGENT_ROLES:  # without `agents:` the plan is unchanged
+        agents = agents_of(nodes, config)
+        persona = agents[name]["persona"]
+        allowed = mention_allowlist(nodes, agents)[persona]
+        spec.update(agent=agents[name]["id"], persona=persona, mentions=sorted(allowed), mentions_on=allowed)
     return spec
+
+
+def agents_of(nodes: dict, config: dict) -> dict:
+    """{node: agent} of the graph's agent nodes (ADR-0020); a bad `agents:` entry or `agent:` key is rejected."""
+    agents, errors = project_mod.node_agents(config, nodes["nodes"])
+    if errors:
+        raise ValueError("; ".join(errors))
+    return agents
+
+
+def subject(name: str) -> str:
+    """What a node acts on: `pr` for a PR-triggered node, else `ticket`."""
+    return "pr" if name in PR_TRIGGERED_NODES else "ticket"
+
+
+def wakes(a: dict, b: dict) -> bool:
+    """True when an outcome effect of node `a` sets a stage in `b`'s `when.stage` or applies a label `b` triggers on."""
+    def glob(label):
+        return re.sub(r"<[^>]*>", "*", str(label))
+    stages = (b.get("when") or {}).get("stage")
+    stages = set(stages if isinstance(stages, list) else [stages]) - {None}
+    labels = [glob(t.partition(" ")[2]) for t in map(str, b.get("triggers") or [])
+              if t.partition(" ")[0] in ("issues.labeled", "pull_request.labeled", "youtrack.tagAdded")]
+    for outcome in a["outcomes"].values():
+        for e in (outcome or {}).get("effects") or []:
+            if e.get("stage") in stages:
+                return True
+            if "label" in e and any(fnmatch.fnmatchcase(glob(e["label"]), t) or fnmatch.fnmatchcase(t, glob(e["label"]))
+                                    for t in labels):
+                return True
+    return False
+
+
+def mention_allowlist(nodes: dict, agents: dict) -> dict:
+    """{persona: {persona: [subject]}} (ADR-0020): agent X may mention agent Y on a subject when a node of X and a node
+    of Y both act on it and one wakes the other. Routines and `mention: false` nodes are outside the graph."""
+    graph = {k: n for k, n in nodes["nodes"].items() if k in agents and not n.get("routine") and n.get("mention") is not False}
+    allowed = {a["persona"]: {} for a in agents.values()}
+    for x, nx in graph.items():
+        for y, ny in graph.items():
+            px, py = agents[x]["persona"], agents[y]["persona"]
+            if px != py and subject(x) == subject(y) and (wakes(nx, ny) or wakes(ny, nx)):
+                allowed[px].setdefault(py, set()).add(subject(x))
+    return {p: {q: sorted(on) for q, on in sorted(m.items())} for p, m in allowed.items()}
 
 
 def project_name(config: dict) -> str:
@@ -267,9 +318,10 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
             "and the data it needs, as the `factory-step` skill describes.")
 
 
-def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str, str | None]]:
-    """(automation suffix, tier of the node, model tier, focus) per tier or focus of the node."""
-    role = roles.get(n["role"], {})
+def variants(name: str, n: dict, roles: dict, agent: dict | None = None) -> list[tuple[str, str | None, str, str | None]]:
+    """(automation suffix, tier of the node, model tier, focus) per tier or focus of the node; the node's agent, when
+    given, replaces its role's tiers."""
+    role = agent or roles.get(n["role"], {})
     if n.get("tiers"):
         return [(f"{name}-{t}", t, t, None) for t in n["tiers"]]
     if n.get("focuses"):
@@ -279,11 +331,11 @@ def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str
 
 def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
     """The node, gate options and spec of one automation (`review-behaviour`, `fix-mid`) from the node graph."""
-    roles = config["roles"]
+    roles, agents = config["roles"], agents_of(nodes, config)
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] in ("human", "script"):
             continue
-        for aname, tier_arg, tier, focus in variants(name, n, roles):
+        for aname, tier_arg, tier, focus in variants(name, n, roles, agents.get(name)):
             if aname == automation:
                 return {"node": name, "focus": focus, "tier": tier_arg or (tier if focus else None),
                         "spec": node_spec(name, n, config, tier_arg or tier, focus, nodes)}
@@ -297,7 +349,9 @@ WRITE_TOKEN_SECRET = "FACTORY_WRITE_TOKEN"  # `write_mode: token`: the write env
 
 
 def plan_air(nodes: dict, config: dict) -> dict:
-    air, roles = config["targets"]["air"]["models"], config["roles"]
+    air, roles, agents = config["targets"]["air"]["models"], config["roles"], agents_of(nodes, config)
+    for aid in sorted({a["id"] for a in agents.values() if a.get("effort")}):
+        print(f"deploy: agent {aid}: effort ignored, Air automations take no reasoning setting", file=sys.stderr)
     repos = {r["name"]: r for r in config["repositories"]}
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     team = {"name": "team", "url": config.get("team_repository") or primary["url"]}
@@ -315,7 +369,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
         scopes = config["repositories"] if per_repo and name in PER_REPO else [None]
-        for scope, (aname, tier_arg, tier, focus) in [(sc, v) for sc in scopes for v in variants(name, n, roles)]:
+        for scope, (aname, tier_arg, tier, focus) in [(sc, v) for sc in scopes
+                                                      for v in variants(name, n, roles, agents.get(name))]:
             env = n["env"]
             agent, _, model = air[tier].partition("/")
             trig = []

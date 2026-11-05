@@ -34,6 +34,8 @@
           "wakes_on": {"type": "array", "items": {"type": "string"}},
           "when": {"type": "object"},
           "role": {"type": "string"},
+          "agent": {"type": "string"},
+          "mention": {"type": "boolean"},
           "env": {"type": "string"},
           "tier": {"type": "string"},
           "tiers": {"type": "array", "items": {"type": "string"}},
