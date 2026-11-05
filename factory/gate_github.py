@@ -136,6 +136,38 @@ class GitHubCodeHost:
         pr = json.loads(self.run(["api", f"repos/{repository or self.repo}/pulls/{number}"]))
         return ticket_from_ref((pr.get("head") or {}).get("ref")) or ticket_from_ref(pr.get("title"))
 
+    # --- the CI label sync (gate.ci_sync); `repository` is owner/repo
+    def _list(self, path):
+        return [json.loads(x) for x in self.run(["api", "--paginate", path, "--jq", ".[]"]).splitlines() if x.strip()]
+
+    def factory_prs(self, repository):
+        """[{number, head, labels}] of the open PRs from a factory branch `ez/<ticket>-*` of `repository`, never a fork's."""
+        return [{"number": p["number"], "head": p["head"]["sha"], "labels": [x["name"] for x in p.get("labels") or []]}
+                for p in self._list(f"repos/{repository}/pulls?state=open&per_page=100")
+                if ticket_from_ref(p["head"]["ref"]) is not None
+                and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == repository.lower()]
+
+    def head_checks(self, repository, sha):
+        """[{conclusion, at}] of the latest check runs and commit statuses at `sha`; conclusion None while one runs."""
+        runs = [json.loads(x) for x in self.run(["api", "--paginate", f"repos/{repository}/commits/{sha}/check-runs?per_page=100",
+                                                 "--jq", ".check_runs[]"]).splitlines() if x.strip()]
+        statuses = json.loads(self.run(["api", f"repos/{repository}/commits/{sha}/status"])).get("statuses") or []
+        return ([{"conclusion": r.get("conclusion") if r.get("status") == "completed" else None, "at": r.get("completed_at")}
+                 for r in runs]
+                + [{"conclusion": None if s["state"] == "pending" else "success" if s["state"] == "success" else "failure",
+                    "at": s.get("updated_at")} for s in statuses])
+
+    def label_added_at(self, repository, number, label):
+        """When `label` was last added to PR `number`, else None."""
+        return max((e["at"] for e in normalise_events(self._list(f"repos/{repository}/issues/{number}/events?per_page=100"))
+                    if e["kind"] == "labeled" and e["value"] == label), default=None)
+
+    def edit_pr_labels(self, repository, number, add=(), remove=()):
+        """Remove, then add, in two writes: a label removed and added in one edit fires no `labeled` event."""
+        for flag, labels in (("--remove-label", remove), ("--add-label", add)):
+            if labels:
+                self.run(["pr", "edit", str(number), "-R", repository, *[x for label in labels for x in (flag, label)]])
+
 
 def normalise_events(raw):
     """GitHub issue events as `{kind, value, actor, at}`: `kind` is the event name (`labeled`, `unlabeled`,

@@ -16,6 +16,7 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
                     skills/factory-step/SKILL.md describes them per role)
        factory env roles ENV                       (the roles of the enabled agent nodes that run in ENV, one per line)
        factory sweep --main ...                    (the gate's sweep from main's graph)
+       factory ci-sync [--dry-run]                 (the CI labels of the project repositories' factory PRs; reconcile runs it)
        factory deploy --target local [--apply] | factory run --local [--once] [--dry-run]   (the local target, ADR-0017)
 """
 import argparse
@@ -275,7 +276,7 @@ def main(argv=None):
     load_engine(HERE)
     if team:
         config.set_team(team)
-    if cmd in ("check", "apply", "sweep"):
+    if cmd in ("check", "apply", "sweep", "ci-sync"):
         return gate.main([cmd, *rest])
     if cmd == "deploy" and rest[:2] == ["--target", "local"]:
         from local import deploy as local_deploy

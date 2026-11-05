@@ -211,6 +211,34 @@ class CodeHost(Protocol):
     def ticket_for_pr(self, number, repository=None): ...
 
 
+class MemoryCodeHost:
+    """The CI label sync's code host (gate.ci_sync) in memory: `prs` {owner/repo: [{number, branch, head, labels,
+    labeled_at: {label: at}}]}, `checks` {sha: [{conclusion, at}]}; `edits` records each label write, added at `now`."""
+
+    def __init__(self, prs=None, checks=None, now=None):
+        self.prs, self.checks, self.edits = prs or {}, checks or {}, []
+        self.now = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _pr(self, repository, number):
+        return next(p for p in self.prs[repository] if p["number"] == number)
+
+    def factory_prs(self, repository):
+        return [{k: p[k] for k in ("number", "head", "labels")} for p in self.prs[repository]
+                if ticket_from_ref(p.get("branch")) is not None]
+
+    def head_checks(self, repository, sha):
+        return list(self.checks.get(sha, []))
+
+    def label_added_at(self, repository, number, label):
+        return (self._pr(repository, number).get("labeled_at") or {}).get(label)
+
+    def edit_pr_labels(self, repository, number, add=(), remove=()):
+        pr = self._pr(repository, number)
+        pr["labels"] = [x for x in pr["labels"] if x not in remove] + list(add)
+        pr.setdefault("labeled_at", {}).update(dict.fromkeys(add, self.now))
+        self.edits.append((repository, number, list(add), list(remove)))
+
+
 class MemoryTracker(DescriptorPort):
     """Integer ids, stage in its own field. `fail_on` makes the effect kind raise."""
 
