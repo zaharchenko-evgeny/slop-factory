@@ -668,6 +668,17 @@ class PlanTest(unittest.TestCase):
                                                    "[Slop factory] notify")):
                     self.assertIn("wait until it exits", automation["prompt"])
 
+    def test_every_script_prompt_forbids_uv_run(self):
+        plans = (deploy.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
+        for plan in plans:
+            for automation in plan["automations"]:
+                if automation["name"].startswith(("[Slop factory] sweep", "[Slop factory] join",
+                                                   "[Slop factory] finish", "[Slop factory] merge",
+                                                   "[Slop factory] reopen", "[Slop factory] start",
+                                                   "[Slop factory] notify", "[Slop factory] reconcile",
+                                                   "[Slop factory] doctor")):
+                    self.assertIn("never `uv run`", automation["prompt"], automation["name"])
+
     def test_no_prompt_asks_for_json(self):
         plans = (deploy.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
         for plan in plans:
