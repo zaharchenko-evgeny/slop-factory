@@ -75,6 +75,13 @@ class ProjectTest(unittest.TestCase):
             errors = self.errors(change)
             self.assertTrue(any("exactly one repository needs role primary" in e for e in errors), errors)
 
+    def test_team_variables(self):
+        def env(variables):
+            return lambda d: d["environments"].setdefault("write", {}).update({"variables": variables})
+        self.assertEqual(self.errors(env({"YOUTRACK_URL": "https://y.example"})), [])
+        errors = self.errors(env({"FACTORY_X": "1"}))
+        self.assertTrue(any("FACTORY_X" in e for e in errors), errors)
+
     def test_local_target(self):
         def local(value):
             return lambda d: d.setdefault("targets", {}).update({"local": value})

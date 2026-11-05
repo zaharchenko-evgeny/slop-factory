@@ -8,7 +8,8 @@
 Writes run on a probe issue, a child issue and a probe PR that the doctor creates and then deletes. Output: one JSON
 line per probe, `{"probe", "result": ok|denied|missing, "detail"}`; exit 1 on any failure. A failed probe opens or
 updates the ticket `Doctor: <probe> fails`; if filing that ticket is denied, a `report` probe line records the failure.
-Needs `FACTORY_ENV` (read, write, ops) for the tool check.
+Needs `FACTORY_ENV` (read, write, ops) for the tool check. Also one `env:<NAME>` probe per variable and secret that the
+environment declares: `ok` when set and non-empty, `missing` otherwise.
 """
 import json
 import os
@@ -54,7 +55,7 @@ def probe(results, name, fn):
         results.append({"probe": name, "result": "denied", "detail": str(e)[:200]})
 
 
-def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=None, run_id="doctor"):
+def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=None, run_id="doctor", environ=os.environ):
     """Every probe's result. Probe objects are removed at the end, also when a probe fails."""
     api = lambda *a: run(["api", *a])  # noqa: E731
     note = lambda text: f"[factory] {text}\n\nFactory-Run: {run_id}"  # noqa: E731
@@ -96,6 +97,9 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
     for s in skills:
         found = has_skill(s) if has_skill else config.resolve(f"skills/{s}/SKILL.md").is_file()
         results.append({"probe": f"skill:{s}", "result": "ok" if found else "missing", "detail": env})
+    declared = (nodes.get("environments") or {}).get(env) or {}
+    for name in [*(declared.get("variables") or {}), *(declared.get("secrets") or [])]:
+        results.append({"probe": f"env:{name}", "result": "ok" if environ.get(name) else "missing", "detail": env})
     return results
 
 
