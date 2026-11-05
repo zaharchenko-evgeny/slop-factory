@@ -4,6 +4,7 @@
 # dependencies = ["pyyaml>=6"]
 # ///
 """github_graphql: batched GraphQL answers in the REST shapes the gate reads."""
+import base64
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -27,6 +28,27 @@ def node(n=7, labels=("factory:ready", "risk:low"), events=None, timeline_paged=
             "comments": {"pageInfo": {"hasPreviousPage": comments_paged},
                          "nodes": [{"databaseId": 9, "body": "[factory] x", "createdAt": "2026-11-05T10:01:00Z", "author": BOT}]},
             "timelineItems": {"pageInfo": {"hasNextPage": timeline_paged}, "nodes": events}}
+
+
+def encoded(raw):
+    """A GraphQL node id `LE_…` whose body is the base64url of `raw`, as GitHub writes it."""
+    return "LE_" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+class RestIdTest(unittest.TestCase):
+    def test_the_sample_node_id_decodes_to_its_rest_id(self):
+        self.assertEqual(g.rest_id("LE_lADOVagZ7s8AAAABcwaHgM8AAAAINa9FIQ"), 35260417313)
+
+    def test_every_unsigned_int_format_decodes(self):
+        self.assertEqual(g.rest_id(encoded(bytes([0x92, 0x01, 0x07]))), 7)
+        self.assertEqual(g.rest_id(encoded(bytes([0x91, 0xcc, 0xff]))), 255)
+        self.assertEqual(g.rest_id(encoded(bytes([0x91, 0xcd, 0x01, 0x02]))), 258)
+        self.assertEqual(g.rest_id(encoded(bytes([0x91, 0xce, 0x00, 0x01, 0x00, 0x00]))), 65536)
+
+    def test_garbage_gives_none(self):
+        for bad in ("nope", "LE_", "LE_!!", encoded(bytes([0x91, 0xc0])), encoded(bytes([0x92, 0x01])),
+                    encoded(bytes([0x91, 0x01, 0x02]))):
+            self.assertIsNone(g.rest_id(bad), bad)
 
 
 class ToRestTest(unittest.TestCase):

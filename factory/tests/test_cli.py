@@ -50,6 +50,13 @@ class BeginEndTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             return cli.main(list(argv)), out.getvalue()
 
+    def test_inbox_begins_and_ends_without_a_ticket_or_payload(self):
+        with mock.patch("sys.stdin", io.StringIO("")):
+            code, out = self.run_cli("begin", "inbox")
+        self.assertEqual((code, json.loads(out)["go"], json.loads(out)["ticket"]), (0, True, None))
+        code, out = self.run_cli("end", "delivered")
+        self.assertEqual((code, json.loads(out)["applied"]), (0, True))
+
     def test_begin_exits_10_for_duplicate_event(self):
         tracker = self.tracker(seen=["issues:7:labeled:None"])
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
@@ -332,7 +339,7 @@ class EnvRolesTest(unittest.TestCase):
     def test_prints_roles_of_enabled_agent_nodes_in_the_environment(self):
         cfg.set_team(ROOT / "factory/tests/fixtures/slop")
         self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
-        for env, roles in {"read": "reviewer\nrouter\n", "write": "developer\n", "ops": "distill\nretro\n"}.items():
+        for env, roles in {"read": "reviewer\nrouter\n", "write": "developer\n", "ops": "distill\ninbox\nretro\n"}.items():
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 self.assertEqual(cli.main(["env", "roles", env]), 0)

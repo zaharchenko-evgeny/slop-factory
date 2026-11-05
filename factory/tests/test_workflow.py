@@ -56,12 +56,18 @@ class WorkflowTest(unittest.TestCase):
 
     def test_webhook_wake_renders_and_unknown_name_is_rejected(self):
         proj, wf = self.migrated()
-        wf["webhooks"] = {"dry-run-finished": {"description": "TeamCity dry run done"}}
+        wf["webhooks"] = {**wf.get("webhooks", {}), "dry-run-finished": {"description": "TeamCity dry run done"}}
         wf["nodes"]["intake"]["wakes_on"].append("webhook dry-run-finished")
         self.assertEqual(workflow.validate(proj, wf), [])
         self.assertIn("webhook dry-run-finished", workflow.to_nodes(proj, wf)["nodes"]["intake"]["triggers"])
         wf["nodes"]["intake"]["wakes_on"].append("webhook nope")
         self.assertIn("unknown-webhook: intake: nope", workflow.validate(proj, wf))
+
+    def test_pr_commented_wake_renders_to_issue_comment_created(self):
+        proj, wf = self.migrated()
+        wf["nodes"]["intake"]["wakes_on"].append("pr commented")
+        self.assertEqual(workflow.validate(proj, wf), [])
+        self.assertIn("issue_comment.created", workflow.to_nodes(proj, wf)["nodes"]["intake"]["triggers"])
 
     def test_uncovered_active_state_rejected(self):
         proj, wf = self.migrated()

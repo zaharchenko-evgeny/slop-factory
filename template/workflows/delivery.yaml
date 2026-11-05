@@ -1,4 +1,7 @@
 format: 2
+webhooks:
+  notify:
+    description: A notification request for the factory inbox (engine/inbox.schema.json) as the JSON body
 adapters:
   ticket: github-issues
   pr: github
@@ -409,25 +412,24 @@ nodes:
         - investigating
         effects:
         - state: done
-  notify:
+  inbox:
     env: ops
     pilot: true
+    routine: true
+    ci-independent: true
     wakes_on:
-    - state blocked
-    - state needs-answers
+    - webhook notify
+    - pr opened
+    - pr commented
     when:
-      state:
-      - blocked
-      - needs-answers
-    role: script
+      always: true
+    role: inbox
     tier: cheap
-    run: uv run factory/cli.py notify --issue <issue number from the trigger payload>
     output: read-only
     outcomes:
-      notified:
-        from:
-        - blocked
-        - needs-answers
+      delivered: {}
+      skipped: {}
+      failed: {}
   recover:
     env: read
     runner: manual

@@ -91,6 +91,10 @@ def gate_stop(f):
 def deploy_plan_at(revision):
     """Render the plan with the code and config at `revision`, not today's generator."""
     with tempfile.TemporaryDirectory(prefix="factory-plan-") as path:
+        # Air's checkout is shallow: a commit before the merge may be missing, so fetch it first.
+        if subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"], capture_output=True).returncode:
+            subprocess.run(["git", "fetch", "--quiet", "--depth", "1", "origin", revision], check=True,
+                           capture_output=True, text=True)
         subprocess.run(["git", "worktree", "add", "--detach", "--quiet", path, revision], check=True,
                        capture_output=True, text=True)
         try:

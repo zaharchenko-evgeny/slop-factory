@@ -32,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import deploy as deploy_mod  # noqa: E402
+import github_graphql as graphql  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 from gate_port import ticket_from_ref  # noqa: E402
 
@@ -198,10 +199,26 @@ def lines(run, *args):
     return [json.loads(x) for x in done.stdout.splitlines() if x.strip()]
 
 
+def label_items(run, repo, labels):
+    """Every open issue and PR of `repo` carrying one of `labels`, from the paged poll search (10 nodes a page)."""
+    items, after = [], None
+    while True:
+        args = ["api", "graphql", "-f", f"query={graphql.POLL}", "-f", f"q={graphql.poll_query(repo, labels)}"]
+        done = sh(run, ["gh", *args, *(["-f", f"after={after}"] if after else [])])
+        if done.returncode:
+            raise RuntimeError(f"gh api graphql: {done.stderr.strip()}")
+        page = json.loads(done.stdout)["data"]["search"]
+        items += page["nodes"]
+        if not page["pageInfo"]["hasNextPage"]:
+            return items
+        after = page["pageInfo"]["endCursor"]
+
+
 def poll(plan, repo, run):
     """(event id, plan entry, Air-like trigger payload) for each event the plan's triggers name, from GitHub reads.
-    A label event's id is GitHub's id of its latest `labeled` event, so a label added again is a new event."""
-    events, cache = [], {}
+    A label event's id is GitHub's id of its latest `labeled` event, so a label added again is a new event.
+    All watched labels are read by one search; the REST id comes from the node id, or from `/events` when it does not decode."""
+    events, cache, labeled, watch = [], {}, {}, {}
 
     def read(*args):
         if args not in cache:
@@ -211,16 +228,28 @@ def poll(plan, repo, run):
         for t in entry["triggers"]:
             kind, label = t["eventType"], t["filters"].get("label")
             if kind in ("issues.labeled", "pull_request.labeled") and label:
-                what = "issue" if kind.startswith("issues") else "pr"
-                for item in read(what, "list", "-R", repo, "--label", label, "--state", "open", "--json",
-                                 "number,headRefName" if what == "pr" else "number", "--jq", ".[]"):
-                    n = item["number"]
-                    ids = [e["id"] for e in read("api", "--paginate", f"repos/{repo}/issues/{n}/events", "--jq",
-                                                 '.[] | select(.event == "labeled") | {id, name: .label.name}')
-                           if e["name"] == label]
-                    body = {"issue": {"number": n}} if what == "issue" else {"pull_request": {"number": n, "head": {"ref": item["headRefName"]}}}
-                    if ids:
-                        events.append((f"labeled:{ids[-1]}", entry, {"eventType": kind, "action": "labeled", "label": {"name": label}, **body}))
+                watch[(kind, label)] = True
+    for item in label_items(run, repo, sorted({label for _, label in watch})) if watch else []:
+        n, pr = item["number"], item["__typename"] == "PullRequest"
+        ids = graphql.labeled_events(item)
+        for label in (x["name"] for x in item["labels"]["nodes"]):
+            key = ("pull_request.labeled" if pr else "issues.labeled", label)
+            if key not in watch:
+                continue
+            rid = ids.get(label) if ids is not None else None
+            if rid is None:  # an undecodable id, or a timeline paged past what was read: today's REST read
+                found = [e["id"] for e in read("api", "--paginate", f"repos/{repo}/issues/{n}/events", "--jq",
+                                              '.[] | select(.event == "labeled") | {id, name: .label.name}')
+                         if e["name"] == label]
+                rid = found[-1] if found else None
+            if rid is not None:
+                body = {"pull_request": {"number": n, "head": {"ref": item["headRefName"]}}} if pr else {"issue": {"number": n}}
+                labeled.setdefault(key, []).append((f"labeled:{rid}", {"eventType": key[0], "action": "labeled", "label": {"name": label}, **body}))
+    for entry in plan:
+        for t in entry["triggers"]:
+            kind, label = t["eventType"], t["filters"].get("label")
+            if kind in ("issues.labeled", "pull_request.labeled") and label:
+                events += [(eid, entry, payload) for eid, payload in labeled.get((kind, label), [])]
             elif kind in ("pull_request.merged", "pull_request.synchronize"):
                 merged = kind.endswith("merged")
                 for item in read("pr", "list", "-R", repo, "--state", "merged" if merged else "open", "--limit", "20",
