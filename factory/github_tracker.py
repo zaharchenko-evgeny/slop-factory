@@ -66,19 +66,25 @@ def gh(args, timeout=None):
 
 class CountedRun:
     """Wrap a `gh` runner: count the calls that reach it and answer a repeated read of one issue's record,
-    timeline, labels or blockers from memory. Any write may change them, so it drops the memory."""
-    READ = re.compile(r"repos/[^/]+/[^/]+/issues/\d+(/timeline|/events|/labels|/dependencies/blocked_by)?")
+    timeline, labels or blockers from memory. `cache` holds REST bodies a tracker prefetched with GraphQL
+    (`GitHubGateTracker.prefetch`). Any write may change them, so it drops both."""
+    # Issue reads; a commit or a comparison by SHA (fixed); the PR list (changed only by a write, which drops the memo).
+    # Not `pulls/{n}`: a merge re-reads it to check the head.
+    READ = re.compile(r"repos/[^/]+/[^/]+/(issues/\d+(/timeline|/events|/labels|/dependencies/blocked_by)?"
+                      r"|commits/[0-9a-f]{40}|compare/[^/?]+\.\.\.[0-9a-f]{40}|pulls\?state=all&per_page=100)")
 
     def __init__(self, run):
-        self.run, self.calls, self.memo = run, 0, {}
+        self.run, self.calls, self.memo, self.cache = run, 0, {}, {}
 
     def __call__(self, args, **kw):
         read = args[:2] in (["issue", "view"], ["issue", "list"], ["pr", "view"], ["pr", "list"], ["run", "list"]) or (
-            args[0] == "api" and not {"-X", "--method", "-f", "-F"} & set(args))
+            args[0] == "api" and not {"-X", "--method", "-f", "-F"} & set(args)) or (
+            args[:2] == ["api", "graphql"] and not any(str(a).startswith("query=mutation") for a in args))
         path = next((x for x in args if x.startswith("repos/")), "")
         key = tuple(args) if read and self.READ.fullmatch(path) else None
         if not read:
             self.memo.clear()
+            self.cache.clear()
         elif key in self.memo:
             return self.memo[key]
         self.calls += 1

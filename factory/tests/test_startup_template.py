@@ -60,6 +60,13 @@ class StartupTemplateTest(unittest.TestCase):
                     self.assertEqual(set(line.split()), expected)
                     self.assertIn(f"roles={' '.join(roles)} ", done.stdout)
 
+    def test_dry_run_points_the_factory_at_the_home_worktree(self):
+        team = team_fixture(TEAMS["template"], self.tmp)
+        done = subprocess.run(["sh", str(SCRIPT)], cwd=team, capture_output=True, text=True,
+                              env={**self.env, "FACTORY_ENV": "read"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("startup: FACTORY_TEAM=$HOME/factory-team", done.stdout)
+
     def test_missing_team_role_file_is_an_error(self):
         team = team_fixture(TEAMS["template"], self.tmp)
         role = self.factory(team, "env", "roles", "read").split()[0]

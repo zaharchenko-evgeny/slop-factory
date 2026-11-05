@@ -33,6 +33,15 @@ The prompt's "Project checkout" section names each checkout under `/workspaces/<
 `deploy.py` writes `additionalRepositories` through the Air REST API (`Backend.set_additional`), because
 the automations MCP does not expose it.
 
+### Delivering to the team repository (ADR-0019)
+
+To change the team repository through the factory, list it in `repositories` with `role: project`; any other role
+is a `factory validate` error. It is then one project checkout like any other: write nodes change it on branch
+`ez/<issue>-<slug>`, and it gets no read-only entry in `additionalRepositories`. The factory still reads its roles
+and skills from the `factory-team` directory in `$HOME`, a `git worktree` of the checkout's `origin/<default branch>` that the
+team's startup script creates (the template's `.air/cloud/startup.sh` shows how), and never from the checkout.
+With `FACTORY_TEAM` unset, the engine uses the `factory-team` directory in `$HOME` when it exists. Otherwise nothing changes.
+
 Open (#459): whether Air pushes a branch or opens a PR from an additional repository (`create-pr`,
 `push-to-source` act on the main repository). Until a probe answers it, a ticket that changes a second
 project repository needs its developer to push that branch itself, or it is split into one ticket per
@@ -126,3 +135,12 @@ Other findings and their consequences for the design (#150, #159):
 - `result.summary` was null for 2 of 5 finished runs: the node's handoff goes through `gate apply`, not the run summary.
 - On Air, `gate.py check --event <file>` also takes the raw trigger payload (`issues`, `pull_request` or `pull_request_review`); a PR whose head is not `ez/<n>-*` exits 10. Its output adds `branch` (the PR head, or `ez/<n>-<slug>` from the issue title) and `handoff_path` (`.factory/handoff/<node>.json`). The role works on `branch`, writes the handoff to `handoff_path`, then runs `gate.py apply --node <n> --handoff <handoff_path>`, which derives the outcome and payload (`--outcome` and `--payload` still work). The platform pushes.
 - No answer is "no", so no workaround is needed. Probe 2 is tracked in #163.
+
+## Inbox senders
+
+The gate sends `review-needed`, `decision-needed` and `automation-error` requests after it applies effects
+(`factory inbox send`). With `notify.webhook` (`url_secret`, `key_secret` env var names) it POSTs the request with
+`Authorization: ApiKey <key>`; without it, it delivers in-process to the configured providers. A failed send only warns.
+Run crashes are not sent through Air `outboundWebhooks`: Air signs those with an HMAC secret and sends no
+`Authorization: ApiKey` header (AIRA-627), so they cannot wake another automation's webhook. `recover --stale`
+sends `automation-error` instead.

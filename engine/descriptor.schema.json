@@ -96,6 +96,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "webhook": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url_secret", "key_secret"],
+          "properties": {"url_secret": {"type": "string"}, "key_secret": {"type": "string"}}
+        },
         "github_user": { "type": "string" },
         "providers": {
           "type": "array",

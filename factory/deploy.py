@@ -119,16 +119,26 @@ SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>",
                "notify": " notify --issue <the issue number>"}
 
 
+def team_is_project(team: dict, config: dict) -> bool:
+    """True when the team repository is also a descriptor project repository (ADR-0019)."""
+    return bool(config.get("team_repository")) and any(
+        repository(r)["fullName"] == repository(team)["fullName"] for r in config["repositories"])
+
+
 def other_projects(main_repository: dict, team: dict, config: dict) -> list[dict]:
-    """The descriptor's repositories other than the automation's main one and the team repository, in order."""
-    return [r for r in config["repositories"]
-            if repository(r)["fullName"] not in (main_repository["fullName"], repository(team)["fullName"])]
+    """The descriptor's repositories other than the automation's main one, in order.
+
+    The team repository is left out, unless it is a project repository (ADR-0019): then it is one project checkout."""
+    skip = {main_repository["fullName"]} | (set() if team_is_project(team, config) else {repository(team)["fullName"]})
+    return [r for r in config["repositories"] if repository(r)["fullName"] not in skip]
 
 
 def additional_repositories(main_repository: dict, team: dict, config: dict) -> list[dict]:
-    """Air's extra checkouts (ADR-0017): the other project repositories, then the read-only team repository."""
-    return ([{"repository": repository(r), "branch": r["default_branch"]} for r in other_projects(main_repository, team, config)]
-            + [{"repository": repository(team), "branch": "main"}])
+    """Air's extra checkouts (ADR-0017): the other project repositories, then the read-only team repository
+    unless it is itself a project repository (ADR-0019)."""
+    projects = [{"repository": repository(r), "branch": r["default_branch"]}
+                for r in other_projects(main_repository, team, config)]
+    return projects if team_is_project(team, config) else projects + [{"repository": repository(team), "branch": "main"}]
 
 
 def checkout_instructions(main_repository: dict | None, config: dict) -> str:
@@ -139,9 +149,15 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
     project = main_repository["fullName"].rsplit("/", 1)[-1]
     others = ", ".join(f"`/workspaces/{repository(r)['fullName'].rsplit('/', 1)[-1]}`"
                        for r in other_projects(main_repository, team, config))
+    if team_is_project(team, config):
+        name = repository(team)["fullName"].rsplit("/", 1)[-1]
+        tail = (f"`/workspaces/{name}` is the team repository and a project repository: change it like any other. "
+                "The factory reads its roles and skills from `$HOME/factory-team`, never from that checkout.\n\n")
+    else:
+        tail = "The factory repository is checked out beside it and is read-only.\n\n"
     return (f"## Project checkout\n\nBefore running project commands, `cd /workspaces/{project}`. "
             + (f"The other project repositories are checked out beside it: {others}. " if others else "")
-            + "The factory repository is checked out beside it and is read-only.\n\n")
+            + tail)
 
 
 def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None,
@@ -310,7 +326,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "name": f"{prefix}{env}",
             "repository": repo["url"],
             "startup": d["startup"],
-            "variables": {"FACTORY_ENV": env},
+            "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env},
             "secrets": d.get("secrets", []),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
@@ -658,6 +674,14 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
             client.call(f"delete_{noun}", {id_key: x["id"]})
 
 
+def missing_secrets(plan: dict, envs: list[dict]) -> list[str]:
+    """`set by a person: <env> secret <NAME>` for each declared secret the environment in Air does not have; the
+    deploy never sets a secret value and does not fail on it."""
+    have = {x["name"]: set(x.get("secrets") or []) for x in envs}
+    return [f"set by a person: {e['name'][len(plan['prefix']):]} secret {s}" for e in plan["environments"]
+            for s in e.get("secrets") or [] if s not in have.get(e["name"], set())]
+
+
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None) -> int:
     """Write only to Air: deploy never creates, edits or closes a tracker ticket."""
     # The automations' repositories too: an environment moved off a repository is found there, then replaced.
@@ -674,6 +698,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
     if not changes:
         print("unchanged")
+    for line in missing_secrets(plan, state[1]):
+        print(line)
     if mode == "--dry-run":
         return 0
     if any(c[0] == "delete" for c in changes) and not allow_delete:
