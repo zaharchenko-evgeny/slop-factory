@@ -5,15 +5,19 @@
 # ///
 """Workflow files, format v2 (ADR-0016): nodes name states and commands from factory.project.yaml,
 never tracker labels or event names. `to_nodes` renders a v2 workflow into the node shape the gate
-and deploy read (ADR-0014); `migrate` converts a nodes.yaml and its team descriptor into v2.
+and deploy read (ADR-0014); `migrate` converts a nodes.yaml and its team descriptor into v2; `copy_project`
+copies a v2 team's descriptor and workflow (`factory migrate project`, how factory/tests/fixtures/slop/ is made).
 
 Usage: workflow.py migrate <nodes.yaml> <factory.descriptor.yaml> [--out DIR]
+       workflow.py project <team checkout> [--out DIR]
 Each validate error starts with a name: unknown-state, unknown-command, unknown-schedule, unknown-webhook, unknown-wake,
 unknown-effect, unknown-condition, uncovered-state.
 """
 import argparse
 import copy
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +29,8 @@ import project as project_mod  # noqa: E402
 
 FORMAT = 2
 WORKFLOW_PATH = "workflows/delivery.yaml"
+# The team commit a `copy_project` output was copied from.
+SOURCE = "SOURCE"
 EFFECTS = {"state", "command", "uncommand", "comment", "review", "create-issues", "merge", "update-branch",
            "set-field", "join", "request-reviewers", "park-behind-main-red"}
 PLACEHOLDERS = ("<tier>", "<focus>")
@@ -355,6 +361,52 @@ def dump(data):
     return yaml.safe_dump(data, sort_keys=False, width=1000, allow_unicode=True)
 
 
+def copy_project(team, out):
+    """Copy a v2 team checkout's factory.project.yaml and the workflow it links into `out` byte for byte, after
+    validating them, and write the team's HEAD commit to SOURCE. Returns the written paths."""
+    team, out = Path(team), Path(out)
+    descriptor = project_mod.load(team)
+    wf = load(team, descriptor)
+    if wf.get("format") != FORMAT:
+        raise ValueError(f"{descriptor['workflow']}: not format {FORMAT}; convert it with `factory migrate workflow`")
+    errors = validate(descriptor, wf)
+    if errors:
+        raise ValueError("; ".join(errors))
+    files = [config.PROJECT_DESCRIPTOR, descriptor["workflow"]]
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(team), *args], capture_output=True, text=True, check=True).stdout.strip()
+    try:
+        if git("status", "--porcelain", "--", *files):
+            raise ValueError(f"{team}: uncommitted changes in {', '.join(files)}")
+        commit = git("rev-parse", "HEAD")
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise ValueError(f"{team}: not a git checkout ({e})") from e
+    written = []
+    for rel in files:
+        (out / rel).parent.mkdir(parents=True, exist_ok=True)
+        written.append(str(shutil.copyfile(team / rel, out / rel)))
+    (out / SOURCE).write_text(commit + "\n")
+    return [*written, str(out / SOURCE)]
+
+
+def project_main(argv):
+    p = argparse.ArgumentParser(prog="factory migrate project")
+    p.add_argument("team")
+    p.add_argument("--out", default=".factory/migrate")
+    try:
+        a = p.parse_args(argv)
+    except SystemExit:
+        return 2
+    try:
+        written = copy_project(a.team, a.out)
+    except (KeyError, ValueError, OSError, yaml.YAMLError) as e:
+        print(f"migrate project: {e}", file=sys.stderr)
+        return 1
+    print(json.dumps({"written": written}))
+    return 0
+
+
 def main(argv):
     p = argparse.ArgumentParser(prog="workflow.py")
     p.add_argument("cmd", choices=["migrate"])
@@ -381,4 +433,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(config.pop_team(sys.argv[1:])))
+    argv = config.pop_team(sys.argv[1:])
+    sys.exit(project_main(argv[1:]) if argv[:1] == ["project"] else main(argv))

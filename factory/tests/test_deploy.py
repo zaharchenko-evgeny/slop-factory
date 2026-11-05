@@ -528,29 +528,55 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(json.dumps(project_plan(*this_repository()), indent=2, sort_keys=True),
                          json.dumps(current, indent=2, sort_keys=True))
 
-    def test_slop_plan_unchanged(self):
-        """Slop factory's settings (fixtures/slop, `factory migrate` of slop-eval-factory) render today's plan: this
-        repository's nodes.yaml and descriptor with the settings repository as `team_repository`."""
-        slop = HERE / "fixtures/slop"
-        before = cfg.team_root()
-        try:
-            cfg.set_team(HERE / "fixtures/team")
-            current = deploy.plan_air(nodes.load(), {**cfg.load(), "team_repository":
-                                                     yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())["team_repository"]})
-            with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
-                cfg.set_team(project_team(slop))
-            migrated = deploy.plan_air(nodes.load(), cfg.load())
-        finally:
-            cfg.set_team(before)
-        self.assertEqual(json.dumps(migrated, indent=2, sort_keys=True), json.dumps(current, indent=2, sort_keys=True))
-
-    def test_slop_fixture_renders_this_repository_nodes(self):
-        """The generator check of the generated fixture: it validates and renders back to workflows/nodes.yaml."""
-        slop = HERE / "fixtures/slop"
+    def test_slop_plan_deploys_the_team_workflow(self):
+        """Slop factory's settings (fixtures/slop, slop-eval-factory's files) deploy every node of their own workflow,
+        on their schedules, with every repository they list; engine/nodes.yaml may differ from them."""
+        slop, before = HERE / "fixtures/slop", cfg.team_root()
         project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
         wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
-        self.assertEqual(workflow.validate(project, wf), [])
-        self.assertEqual(workflow.to_nodes(project, wf), yaml.safe_load((ROOT / cfg.NODES).read_text()))
+        try:
+            with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
+                cfg.set_team(project_team(slop))
+            plan = deploy.plan_air(nodes.load(), cfg.load())
+        finally:
+            cfg.set_team(before)
+        prefix = f"[{project['project']['name']}] "
+        names = {a["name"].removeprefix(prefix): a for a in plan["automations"]}
+        deployed = [n for n, node in wf["nodes"].items()
+                    if node.get("enabled") is not False and node["role"] != "human" and not node.get("runner")]
+        self.assertTrue(deployed)
+        for n in deployed:
+            self.assertTrue(any(a == n or a.startswith(f"{n}-") for a in names), n)
+        for a in names:
+            self.assertTrue(any(a == n or a.startswith(f"{n}-") for n in deployed), a)
+        for n in deployed:
+            for wake in wf["nodes"][n]["wakes_on"]:
+                if wake.startswith("schedule "):
+                    cron = wf["schedules"][wake.removeprefix("schedule ")]["cron"]
+                    self.assertIn(cron, [t.get("cronExpression") for t in names[n]["triggers"]], n)
+        listed = {u.removeprefix("https://github.com/").removesuffix(".git")
+                  for u in [project["team_repository"], *(r["url"] for r in project["repositories"])]}
+        for a in plan["automations"]:
+            used = {a["repository"]["fullName"], *(r["repository"]["fullName"] for r in a.get("additionalRepositories", []))}
+            self.assertEqual(used, listed, a["name"])
+        self.assertEqual({e["name"] for e in plan["environments"]}, {prefix + e for e in project["environments"]})
+
+    def test_slop_fixture_is_migrate_project_output(self):
+        """The generator check of fixtures/slop: `factory migrate project` of the team commit in its SOURCE file
+        reproduces it. CI checks that commit out into $FACTORY_SLOP_TEAM; locally, point it at a team checkout."""
+        team = os.environ.get("FACTORY_SLOP_TEAM")
+        if not team:
+            if os.environ.get("GITHUB_ACTIONS"):
+                self.fail("FACTORY_SLOP_TEAM is unset: CI must check out the commit in fixtures/slop/SOURCE")
+            self.skipTest("FACTORY_SLOP_TEAM is unset")
+        slop = HERE / "fixtures/slop"
+        with tempfile.TemporaryDirectory() as tmp:
+            written = workflow.copy_project(team, tmp)
+            for path in written:
+                rel = Path(path).relative_to(tmp)
+                self.assertEqual((slop / rel).read_text(), Path(path).read_text(), f"fixtures/slop/{rel}")
+        self.assertEqual(sorted(str(p.relative_to(slop)) for p in slop.rglob("*") if p.is_file()),
+                         sorted(str(Path(p).relative_to(tmp)) for p in written))
 
     def test_youtrack_tracker_renders_ticket_triggers_as_youtrack_events(self):
         project, wf = this_repository()

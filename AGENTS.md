@@ -98,5 +98,11 @@ Models: Air tiers come from `targets.air.models` in the team repository’s `fac
 - Run artefacts live in `.factory/` (git-ignored). Never commit them.
 - Slop factory's workflow, states, roles and skills live in `slop-eval-factory`
   (its `factory.project.yaml` and delivery workflow); change them there. The
-  engine's `factory/tests/fixtures/slop/` is its `factory migrate` copy for CI:
-  regenerate it, never edit it by hand.
+  engine's `factory/tests/fixtures/slop/` is its `factory migrate project` copy
+  for CI: regenerate it, never edit it by hand. From a clean slop-eval-factory
+  checkout at the commit to copy, run
+  `uv run factory/cli.py migrate project <checkout> --out factory/tests/fixtures/slop`.
+  It copies `factory.project.yaml` and its workflow and writes the commit to
+  `SOURCE`. CI checks out that commit and
+  `test_slop_fixture_is_migrate_project_output` diffs a fresh copy against the
+  fixture; run it locally with `FACTORY_SLOP_TEAM=<checkout>`.
