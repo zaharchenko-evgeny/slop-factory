@@ -959,9 +959,9 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                 r["applied"] = out["applied"]
             elif kind == "refire-join":
                 head = facts.get("head")
-                tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
-                               "value": f"{RECOVER} stage={stage} re-ran join head={head} ({why})"})
                 res, _ = sweep(tracker, nodes, issue=n, auto_merge=config_mod.load()["gates"].get("auto_merge"))
+                tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
+                               "value": f"{RECOVER} stage={stage} re-ran join head={head} ({why})"})  # the marker after the join: a failed join stays retryable
                 r["applied"] = bool(res and res[-1].get("applied"))
             elif kind == "rerun-ci":
                 head = facts.get("head")
