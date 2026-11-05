@@ -29,3 +29,7 @@ environments:
   `deploy --dry-run` lists one that is missing as `set by a person: <env> secret <NAME>` and does not fail.
 - `factory doctor` probes `env:<NAME>` for every declared variable and secret of `FACTORY_ENV`: `ok` when set and non-empty,
   `missing` otherwise. A missing probe fails the doctor.
+
+# What the Air image provides
+
+`uv`, `gh`, `git`, `python3`, `node`/`npx` and `curl` are installed; `conftest` and `shellcheck` are not. The startup script downloads `uv` and `gh` only when missing, so the CI `air-like` image installs both at Air's versions (`uv` 0.11.14, `gh` 2.103.2) in its build.
