@@ -408,7 +408,17 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--apply"), 1)
         self.assertEqual(self.calls("automation"), [])
         self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
-        self.assertEqual(self.calls("automation"), [["delete_automation", {"automationId": "a2"}]])
+        self.assertEqual(self.calls("automation"), [["delete_automation", {"automationId": "a2", "confirmName": "[F] gone"}]])
+
+    def test_apply_leaves_an_environment_delete_to_a_person(self):
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"},
+                       {"id": "e9", "name": "[F] gone", "startup": "x", "repository": "https://github.com/o/r"}])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = self.run_deploy("--apply", allow_delete=True)
+        self.assertNotIn("delete_environment", [c[0] for c in self.calls("environment")])
+        self.assertIn("remove by hand in Air: environment [F] gone", err.getvalue())
+        self.assertEqual(code, 0)
 
     def test_team_repository_automation_runs_from_the_tracker_checkout(self):
         slop, before = HERE / "fixtures/slop", cfg.team_root()
@@ -431,6 +441,16 @@ class ApplyTest(unittest.TestCase):
             code = deploy.deploy("--apply", False, {"prefix": "[F]", "environments": [], "automations": []}, None, None)
         self.assertEqual(code, 0)
         self.assertIn("webhook [F] hook: trigger t1 https://air/hook/t1", out.getvalue())
+
+    def test_apply_creates_environment_with_air_arguments(self):
+        self.plan["environments"][0].update({"repository": "https://github.com/o/r", "variables": {"FACTORY_ENV": "read"},
+                                            "domains": ["pypi.org"]})
+        self.seed([], [])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        created = [c for c in self.calls("environment") if c[0] == "create_environment"]
+        self.assertEqual(created, [["create_environment", {"name": "[F] read", "repositoryUrl": "https://github.com/o/r",
+                                                           "allowedDomains": ["pypi.org"],
+                                                           "variables": [{"key": "FACTORY_ENV", "value": "read"}]}]])
 
     def test_apply_verifies_after_write(self):
         self.seed([], [])
@@ -915,13 +935,25 @@ class PlanTest(unittest.TestCase):
         envs = {e["name"]: e["repository"] for e in plan["environments"]}
         self.assertEqual(envs["[Slop factory] write api"], "https://github.com/o/api")
 
+    def test_scoped_knowledge_review_uses_team_environment(self):
+        plan = self.three_repositories(team_repository="https://github.com/o/team")
+        envs = {e["name"]: e["repository"] for e in plan["environments"]}
+        for a in plan["automations"]:  # Air: the automation repository must be its environment's repository
+            self.assertEqual(a["repository"]["browseUrl"], envs[a["environmentConfigId"]], a["name"])
+        knowledge = [a for a in plan["automations"] if "review-knowledge" in a["name"]]
+        self.assertTrue(knowledge)
+        self.assertTrue(all(a["repository"]["browseUrl"] == "https://github.com/o/team" for a in knowledge))
+
     def test_token_write_mode_deploys_one_node_set(self):
         plan = self.three_repositories(write_mode="token")
         names = {a["name"] for a in plan["automations"]}
         self.assertIn("[Slop factory] implement-mid", names)
         self.assertFalse([n for n in names if n.endswith((" api", " client"))])
-        write = next(e for e in plan["environments"] if e["name"] == "[Slop factory] write")
-        self.assertIn(deploy.WRITE_TOKEN_SECRET, write["secrets"])
+        envs = {e["name"]: e["secrets"] for e in plan["environments"]}
+        self.assertEqual(deploy.WRITE_TOKEN_SECRET, "FACTORY_WRITE_TOKEN")
+        self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] write"])
+        self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] ops"])  # reconcile's CI label sync
+        self.assertNotIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] read"])
         self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):

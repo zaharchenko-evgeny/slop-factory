@@ -6,10 +6,11 @@
 """`factory doctor`: probe, in this Air environment, every write the gate makes, every read it needs and every tool.
 
 Writes run on a probe issue, a child issue and a probe PR that the doctor creates and then deletes. Output: one JSON
-line per probe, `{"probe", "result": ok|denied|missing, "detail"}`; exit 1 on any failure. A failed probe opens or
+line per probe, `{"probe", "result": ok|denied|missing|fail, "detail"}`; exit 1 on any failure. A failed probe opens or
 updates the ticket `Doctor: <probe> fails`; if filing that ticket is denied, a `report` probe line records the failure.
 Needs `FACTORY_ENV` (read, write, ops) for the tool check. Also one `env:<NAME>` probe per variable and secret that the
-environment declares: `ok` when set and non-empty, `missing` otherwise.
+environment declares: `ok` when set and non-empty, `missing` otherwise. In the environments that write to the
+`role: project` repositories, one `write:label:<owner/repo>` probe per such repository.
 """
 import json
 import os
@@ -109,6 +110,30 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
     return results
 
 
+def project_write_probes(settings, env, run, environ=os.environ):
+    """In github_tracker.WRITE_TOKEN_ENVS, one `write:label:<owner/repo>` probe per `role: project` repository: create
+    a probe label, then delete it, with $FACTORY_WRITE_TOKEN when it is set (github_tracker.ProjectWriteRun). In
+    `write_mode: token` a missing token is a `fail`, and nothing is written."""
+    if env not in github_tracker.WRITE_TOKEN_ENVS:
+        return []
+    repos = github_tracker.project_repositories(settings)
+    run = github_tracker.ProjectWriteRun(run, repos, environ)
+    results = []
+    for repo in repos:
+        name = f"write:label:{repo}"
+        if settings.get("write_mode") == "token" and not environ.get(github_tracker.WRITE_TOKEN):
+            results.append({"probe": name, "result": "fail", "detail": f"{github_tracker.WRITE_TOKEN} is not set (write_mode: token)"})
+            continue
+        label = f"factory-doctor-probe-{uuid.uuid4().hex[:12]}"
+        probe(results, name, lambda: run(["label", "create", label, "-R", repo, "--description", "doctor probe, deleted at once"]))
+        if results[-1]["result"] == "ok":
+            try:
+                run(["label", "delete", label, "-R", repo, "--yes"])
+            except Exception as e:
+                results.append({"probe": "cleanup", "result": "denied", "detail": f"label delete {repo}: {e}"[:200]})
+    return results
+
+
 def youtrack_wanted(settings, tiers):
     """(tags, {field: values}) the descriptor's state and command stores name, `<tier>` expanded."""
     tags, fields = set(), {}
@@ -198,6 +223,7 @@ def main(argv=None, run=github_tracker.gh):
     repo = settings["tracker"].get("repository") or settings["code_host"]["repository"]
     run_id = f"doctor:{env}"
     results = run_probes(repo, env, nodes_mod.load(), run, (settings["tracker"].get("risk_labels") or {"low": "risk:low"})["low"], run_id=run_id)
+    results += project_write_probes(settings, env, run)
     if settings["tracker"].get("adapter") == "youtrack":
         results += youtrack_probes(settings, env_needs_tiers(nodes_mod.load()))
     for r in results:

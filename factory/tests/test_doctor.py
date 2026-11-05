@@ -29,11 +29,12 @@ class FakeGh:
     """In-memory GitHub: creates issues and a PR, records every call, fails the calls matching `deny`."""
 
     def __init__(self, deny=(), open_tickets=()):
-        self.deny, self.calls, self.issues, self.prs = deny, [], {}, {}
+        self.deny, self.calls, self.issues, self.prs, self.tokens = deny, [], {}, {}, []
         self.open_tickets = list(open_tickets)
 
-    def __call__(self, args):
+    def __call__(self, args, token=None):
         self.calls.append(args)
+        self.tokens.append(token)
         text = " ".join(args)
         if any(d in text for d in self.deny):
             raise RuntimeError("HTTP 403: Resource not accessible by integration")
@@ -89,6 +90,35 @@ class YouTrackDoctorTest(unittest.TestCase):
     def test_unset_token_is_missing(self):
         got = doctor.youtrack_probes({"tracker": {"url": "u", "project": "LME"}}, [], {})
         self.assertEqual([r["result"] for r in got], ["missing"])
+
+
+class ProjectWriteProbeTest(unittest.TestCase):
+    SETTINGS = {"write_mode": "token", "repositories": [
+        {"name": "main", "url": "https://github.com/o/r", "role": "primary"},
+        {"name": "app", "url": "https://github.com/o/app", "role": "project"}]}
+
+    def test_missing_write_token_in_token_mode_fails_and_writes_nothing(self):
+        gh = FakeGh()
+        got = doctor.project_write_probes(self.SETTINGS, "ops", gh, {})
+        self.assertEqual(got, [{"probe": "write:label:o/app", "result": "fail",
+                                "detail": "FACTORY_WRITE_TOKEN is not set (write_mode: token)"}])
+        self.assertEqual(gh.calls, [])
+
+    def test_probe_label_is_created_and_deleted_with_the_write_token(self):
+        gh = FakeGh()
+        got = doctor.project_write_probes(self.SETTINGS, "write", gh, {"FACTORY_WRITE_TOKEN": "pat"})
+        self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])
+        self.assertEqual([c[:2] + c[3:5] for c in gh.calls], [["label", "create", "-R", "o/app"], ["label", "delete", "-R", "o/app"]])
+        self.assertEqual(gh.calls[0][2], gh.calls[1][2])
+        self.assertEqual(gh.tokens, ["pat", "pat"])
+
+    def test_denied_write_without_token_mode_is_reported_and_read_env_is_not_probed(self):
+        settings = {**self.SETTINGS, "write_mode": "per-repo"}
+        gh = FakeGh(deny=("label create",))
+        got = doctor.project_write_probes(settings, "ops", gh, {})
+        self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "denied")])
+        self.assertEqual(gh.tokens, [None])
+        self.assertEqual(doctor.project_write_probes(self.SETTINGS, "read", gh, {}), [])
 
 
 class DoctorTest(unittest.TestCase):

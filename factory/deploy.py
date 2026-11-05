@@ -29,6 +29,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
+import github_tracker
 import nodes as nodes_mod
 import project as project_mod
 import vocab
@@ -351,7 +352,7 @@ def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
 # Nodes planned once per project repository when `write_mode` is `per-repo` (default) and the project has several
 # repositories: Air pushes only to an automation's primary repository. Only triage sees every repository.
 PER_REPO = ("implement", "fix", "update", "review", "join", "merge", "finish")
-WRITE_TOKEN_SECRET = "FACTORY_WRITE_TOKEN"  # `write_mode: token`: the write environment's token, by name only
+WRITE_TOKEN_SECRET = github_tracker.WRITE_TOKEN  # `write_mode: token`: the project-repository write token, by name only
 
 
 def plan_air(nodes: dict, config: dict) -> dict:
@@ -404,7 +405,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
             if reply:
                 runs.append((f"{aname} reply", [{"triggerType": "WEBHOOK"}], "read"))
             for run_name, run_trig, run_env in runs:
-                if scope_name:
+                env_scope = None if focus == "knowledge" else scope_name  # a knowledge review runs in the team's own environment
+                if env_scope:
                     if (run_env, scope_name) not in scoped:
                         scoped.append((run_env, scope_name))
                 else:
@@ -413,11 +415,11 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     "name": f"{prefix}{run_name}" + (f" {scope_name}" if scope_name else ""),
                     "triggers": run_trig,
                     "triggerVcs": [{"outputBehaviour": "read-only" if run_name != aname else n.get("output", "read-only")}
-                                   for t in run_trig],
+                                   for _ in run_trig],
                     "spec": spec,
                     "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                     "repository": automation_repository,
-                    "environmentConfigId": f"{prefix}{run_env}" + (f" {scope_name}" if scope_name else ""),
+                    "environmentConfigId": f"{prefix}{run_env}" + (f" {env_scope}" if env_scope else ""),
                     "mcpConnectors": mcp_connectors(n, config, focus),
                     "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
                         name, n, config, aname, focus, automation_repository),
@@ -440,7 +442,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "repository": repo["url"],
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env},
-            "secrets": [*d.get("secrets", []), *([WRITE_TOKEN_SECRET] if token and env == "write" else [])],
+            "secrets": [*d.get("secrets", []), *([WRITE_TOKEN_SECRET] if token and env in github_tracker.WRITE_TOKEN_ENVS else [])],
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
@@ -641,6 +643,19 @@ def same(key: str, have, want) -> bool:
     return have == want
 
 
+def create_environment_args(p: dict, live: dict | None = None) -> dict:
+    """Air `create_environment` arguments for a planned environment; `live` is the record it replaces, whose domains and
+    network settings it keeps."""
+    live = live or {}
+    live_domains = live.get("domains") or []
+    variables = p.get("variables") or {}
+    args = {"name": p["name"], "repositoryUrl": p["repository"],
+            "allowedDomains": live_domains + [d for d in p.get("domains") or [] if d not in live_domains],
+            "variables": [{"key": k, "value": v} for k, v in variables.items()] if isinstance(variables, dict) else variables}
+    args.update({k: live[k] for k in ("networkAccess", "predefinedDomainLists") if live.get(k)})
+    return args
+
+
 def environment_detail(x: dict) -> dict:
     """Normalize get_environment's cloud fields to the deploy plan's environment shape."""
     x = dict(x)
@@ -744,13 +759,8 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
         client, noun = (cloud, "environment") if kind == "environment" else (automations, "automation")
         additional = (p or {}).get("additionalRepositories") if kind == "automation" else None
         if action == "replace":
-            live_domains = x.get("domains") or []
-            args = {"name": p["name"], "repositoryUrl": p["repository"],
-                    "allowedDomains": live_domains + [d for d in p.get("domains") or [] if d not in live_domains],
-                    "variables": [{"key": key, "value": value} for key, value in (p.get("variables") or {}).items()]}
-            args.update({k: x[k] for k in ("networkAccess", "predefinedDomainLists") if x.get(k)})
             client.call("edit_environment", {"id": x["id"], "name": f"retired {x['name']}"})
-            client.call("create_environment", args)
+            client.call("create_environment", create_environment_args(p, x))
             retired.append(x["id"])
             print(f"retired environment {x['name']} ({x['id']}) is renamed 'retired {x['name']}': delete it in the Air UI",
                   file=sys.stderr)
@@ -777,7 +787,7 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
                     raise RuntimeError("Air automation backend is required to set additionalRepositories")
                 backend.set_additional(x["id"], additional)
         elif action == "create":
-            result = client.call(f"create_{noun}", p)
+            result = client.call(f"create_{noun}", create_environment_args(p) if kind == "environment" else p)
             if additional is not None:
                 if backend is None:
                     raise RuntimeError("Air automation backend is required to set additionalRepositories")
@@ -785,8 +795,10 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
                 if not automation_id:
                     raise RuntimeError(f"create_automation returned no automation id for {name}")
                 backend.set_additional(automation_id, additional)
-        else:
-            client.call(f"delete_{noun}", {id_key: x["id"]})
+        elif kind == "environment":  # air-cloud has no delete_environment
+            print(f"remove by hand in Air: environment {name}", file=sys.stderr)
+        else:  # confirmName guards against deleting the wrong automation
+            client.call("delete_automation", {id_key: x["id"], "confirmName": x["name"]})
 
 
 def missing_secrets(plan: dict, envs: list[dict]) -> list[str]:
@@ -834,7 +846,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                            additional_names=additional_names)
         state = after
-        left = diff(plan, *after)
+        left = [c for c in diff(plan, *after) if not (c[0] == "delete" and c[1] == "environment")]
         for action, kind, name, *_ in left:
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:

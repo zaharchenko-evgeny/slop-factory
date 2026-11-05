@@ -47,6 +47,18 @@ converts the old pair. `repositories[]` marks exactly one repository
 in it since the project's `engine` version, and `factory upgrade --apply PATH`
 takes one file.
 
+`write_mode` says how the factory writes to the `role: project` repositories.
+`per-repo` (the default) deploys the write nodes once per repository. With
+`token`, `factory deploy` keeps one node set and adds the secret
+`FACTORY_WRITE_TOKEN` to the `write` and `ops` environments, never to `read`.
+A person sets it in Air to a fine-grained personal access token with Contents,
+Pull requests and Issues write on every project repository. Air's own token
+can write only the factory repository. While the token is set, each `gh` write
+that names a project repository runs with it as `GH_TOKEN`, for example a CI
+label or a merge. In `write` and `ops`, `factory doctor` runs one
+`write:label:<owner/repo>` probe per project repository and reports `fail`
+when the token is missing in `token` mode.
+
 ### Team-owned runtime files
 
 Runtime `roles/`, `skills/`, workflows, policies, and judgments come only from
