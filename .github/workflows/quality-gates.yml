@@ -62,9 +62,11 @@ jobs:
                   print(result.stdout + result.stderr, file=sys.stderr)
                   sys.exit(1)
           PY
+      - uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with: { path: ~/.npm, key: agnix-npm-cache }
       - id: agnix
         name: agnix
-        run: npx --yes agnix@0.59.3 .
+        run: scripts/retry-network.sh npx --yes agnix@0.59.3 .
       - id: shellcheck
         name: shellcheck
         run: find . -name setup.sh -not -path './.factory/*' -exec shellcheck -x {} +
@@ -76,7 +78,7 @@ jobs:
         shell: bash
         env:
           BETTERLEAKS_VERSION: 1.9.0
-        run: curl -sSfL "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz" | tar xz betterleaks
+        run: curl --retry 3 --retry-all-errors --retry-delay 5 -sSfL "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz" | tar xz betterleaks
       - id: betterleaks_repository
         name: Betterleaks repository
         run: ./betterleaks dir . --no-banner
@@ -188,7 +190,7 @@ jobs:
           EOF
       - name: Run startup.sh as in Air
         run: |
-          docker run --rm --network host --user workspace -e HOME=/home/workspace -e REPO=/repo \
+          scripts/retry-network.sh docker run --rm --network host --user workspace -e HOME=/home/workspace -e REPO=/repo \
             -e FACTORY_TEAM=/repo/factory-team \
             -e HTTPS_PROXY=http://127.0.0.1:8888 -e NO_PROXY=localhost,127.0.0.1 \
             -v "/tmp/air-like-repo:/repo" air-like bash /repo/scripts/air-like.sh
@@ -212,8 +214,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { persist-credentials: false }
+      - uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with: { path: ~/.npm, key: agnix-npm-cache }
       # Scans the whole tree; it picks up AGENTS.md, SKILL.md and roles/**/*.md.
-      - run: npx --yes agnix@0.59.3 .
+      - run: scripts/retry-network.sh npx --yes agnix@0.59.3 .
 
   # The CI label is the result of every job: it runs last, so the run is about to complete when the label wakes a
   # reviewer or the join, and they read the same result from the workflow runs instead of `pending`.
