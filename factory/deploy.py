@@ -625,6 +625,19 @@ def same(key: str, have, want) -> bool:
     return have == want
 
 
+def create_environment_args(p: dict, live: dict | None = None) -> dict:
+    """Air `create_environment` arguments for a planned environment; `live` is the record it replaces, whose domains and
+    network settings it keeps."""
+    live = live or {}
+    live_domains = live.get("domains") or []
+    variables = p.get("variables") or {}
+    args = {"name": p["name"], "repositoryUrl": p["repository"],
+            "allowedDomains": live_domains + [d for d in p.get("domains") or [] if d not in live_domains],
+            "variables": [{"key": k, "value": v} for k, v in variables.items()] if isinstance(variables, dict) else variables}
+    args.update({k: live[k] for k in ("networkAccess", "predefinedDomainLists") if live.get(k)})
+    return args
+
+
 def environment_detail(x: dict) -> dict:
     """Normalize get_environment's cloud fields to the deploy plan's environment shape."""
     x = dict(x)
@@ -728,13 +741,8 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
         client, noun = (cloud, "environment") if kind == "environment" else (automations, "automation")
         additional = (p or {}).get("additionalRepositories") if kind == "automation" else None
         if action == "replace":
-            live_domains = x.get("domains") or []
-            args = {"name": p["name"], "repositoryUrl": p["repository"],
-                    "allowedDomains": live_domains + [d for d in p.get("domains") or [] if d not in live_domains],
-                    "variables": [{"key": key, "value": value} for key, value in (p.get("variables") or {}).items()]}
-            args.update({k: x[k] for k in ("networkAccess", "predefinedDomainLists") if x.get(k)})
             client.call("edit_environment", {"id": x["id"], "name": f"retired {x['name']}"})
-            client.call("create_environment", args)
+            client.call("create_environment", create_environment_args(p, x))
             retired.append(x["id"])
             print(f"retired environment {x['name']} ({x['id']}) is renamed 'retired {x['name']}': delete it in the Air UI",
                   file=sys.stderr)
@@ -761,7 +769,7 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
                     raise RuntimeError("Air automation backend is required to set additionalRepositories")
                 backend.set_additional(x["id"], additional)
         elif action == "create":
-            result = client.call(f"create_{noun}", p)
+            result = client.call(f"create_{noun}", create_environment_args(p) if kind == "environment" else p)
             if additional is not None:
                 if backend is None:
                     raise RuntimeError("Air automation backend is required to set additionalRepositories")

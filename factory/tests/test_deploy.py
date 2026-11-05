@@ -432,6 +432,16 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("webhook [F] hook: trigger t1 https://air/hook/t1", out.getvalue())
 
+    def test_apply_creates_environment_with_air_arguments(self):
+        self.plan["environments"][0].update({"repository": "https://github.com/o/r", "variables": {"FACTORY_ENV": "read"},
+                                            "domains": ["pypi.org"]})
+        self.seed([], [])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        created = [c for c in self.calls("environment") if c[0] == "create_environment"]
+        self.assertEqual(created, [["create_environment", {"name": "[F] read", "repositoryUrl": "https://github.com/o/r",
+                                                           "allowedDomains": ["pypi.org"],
+                                                           "variables": [{"key": "FACTORY_ENV", "value": "read"}]}]])
+
     def test_apply_verifies_after_write(self):
         self.seed([], [])
         self.assertEqual(self.run_deploy("--dry-run"), 0)
