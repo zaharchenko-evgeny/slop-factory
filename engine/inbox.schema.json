@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Factory inbox notification request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind"],
+  "properties": {
+    "kind": {"enum": ["review-needed", "pr-created", "decision-needed", "automation-error", "pr-comment", "retro-result"]},
+    "issue": {"type": "integer"},
+    "pr": {"type": "integer"},
+    "result": {"type": "string"},
+    "run": {"type": "string"},
+    "source": {"enum": ["gate", "air", "github", "retro"]}
+  }
+}

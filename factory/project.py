@@ -54,6 +54,13 @@ def validate(team_root):
         if len(primaries) != 1:
             errors.append(f"{config.PROJECT_DESCRIPTOR}.repositories: exactly one repository needs role primary, "
                           f"found {len(primaries)}")
+    environments = descriptor.get("environments")
+    for env, entry in (environments.items() if isinstance(environments, dict) else ()):
+        variables = entry.get("variables") if isinstance(entry, dict) else None
+        for name in (variables if isinstance(variables, dict) else ()):
+            if str(name).startswith("FACTORY_"):
+                errors.append(f"{config.PROJECT_DESCRIPTOR}.environments.{env}.variables.{name}: "
+                              "names starting with FACTORY_ are reserved for the factory")
     targets = descriptor.get("targets")
     local = targets.get("local") if isinstance(targets, dict) else None
     poll = local.get("poll_seconds") if isinstance(local, dict) else None

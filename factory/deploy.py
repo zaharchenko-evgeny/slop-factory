@@ -310,7 +310,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "name": f"{prefix}{env}",
             "repository": repo["url"],
             "startup": d["startup"],
-            "variables": {"FACTORY_ENV": env},
+            "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env},
             "secrets": d.get("secrets", []),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
@@ -379,6 +379,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     t = config.get("tracker") or {}
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
     out.add(vocab.needs_human())
+    out.add(vocab.inbox())
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
@@ -657,6 +658,14 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
             client.call(f"delete_{noun}", {id_key: x["id"]})
 
 
+def missing_secrets(plan: dict, envs: list[dict]) -> list[str]:
+    """`set by a person: <env> secret <NAME>` for each declared secret the environment in Air does not have; the
+    deploy never sets a secret value and does not fail on it."""
+    have = {x["name"]: set(x.get("secrets") or []) for x in envs}
+    return [f"set by a person: {e['name'][len(plan['prefix']):]} secret {s}" for e in plan["environments"]
+            for s in e.get("secrets") or [] if s not in have.get(e["name"], set())]
+
+
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None) -> int:
     """Write only to Air: deploy never creates, edits or closes a tracker ticket."""
     # The automations' repositories too: an environment moved off a repository is found there, then replaced.
@@ -673,6 +682,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
     if not changes:
         print("unchanged")
+    for line in missing_secrets(plan, state[1]):
+        print(line)
     if mode == "--dry-run":
         return 0
     if any(c[0] == "delete" for c in changes) and not allow_delete:

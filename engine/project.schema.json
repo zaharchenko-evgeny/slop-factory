@@ -34,7 +34,8 @@
         "bot_logins": {"type": "array", "items": {"type": "string"}},
         "hold_label": {"type": "string"},
         "pr_fact_labels": {"type": "object", "additionalProperties": {"type": "string"}},
-        "needs_human_label": {"type": "string"}
+        "needs_human_label": {"type": "string"},
+        "inbox_label": {"type": "string"}
       }
     },
     "repositories": {
@@ -63,6 +64,7 @@
           "repositories": {"type": "array", "items": {"type": "string"}},
           "domains": {"type": "array", "items": {"type": "string"}},
           "secrets": {"type": "array", "items": {"type": "string"}},
+          "variables": {"type": "object", "additionalProperties": {"type": "string"}},
           "vm": {"type": "string"},
           "startup": {"type": "string"}
         }
@@ -94,7 +96,21 @@
     },
     "branch_pattern": {"type": "string"},
     "commit_prefix": {"type": "string"},
-    "notify": {"type": "object"},
+    "notify": {
+      "type": "object",
+      "properties": {
+        "github_user": {"type": "string"},
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind"],
+            "properties": {"kind": {"enum": ["github-inbox", "log"]}}
+          }
+        }
+      }
+    },
     "reviews": {"type": "object"},
     "targets": {
       "type": "object",

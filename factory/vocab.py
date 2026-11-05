@@ -54,5 +54,9 @@ def needs_human():
     return _tracker()["needs_human_label"]
 
 
+def inbox():
+    return _tracker()["inbox_label"]
+
+
 def map_label():
     return _tracker()["map_label"]

@@ -195,6 +195,16 @@ class ApplyTest(unittest.TestCase):
             for s in servers:
                 s.close()
 
+    def test_dry_run_lists_declared_secret_missing_in_air_and_succeeds(self):
+        self.plan["environments"][0]["secrets"] = ["HAVE", "YOUTRACK_TOKEN"]
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                        "personalSecrets": [{"name": "HAVE"}]}])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.run_deploy("--dry-run"), 0)
+        self.assertIn("set by a person: read secret YOUTRACK_TOKEN", out.getvalue())
+        self.assertNotIn("secret HAVE", out.getvalue())
+
     def backend(self):
         path, backend = self.state["automation"], mock.Mock()
         backend.calls = []
@@ -317,6 +327,14 @@ class ApplyTest(unittest.TestCase):
         self.assertTrue(plan["environments"])
         for e in plan["environments"]:
             self.assertEqual(set(e["variables"]), {"FACTORY_ENV"})
+
+    def test_declared_variable_is_planned_beside_factory_env(self):
+        data = nodes.load()
+        data["environments"]["read"] = {**data["environments"]["read"], "variables": {"YOUTRACK_URL": "https://y.example"},
+                                        "secrets": ["YOUTRACK_TOKEN"]}
+        env = next(e for e in deploy.plan_air(data, cfg.load())["environments"] if e["name"].endswith(" read"))
+        self.assertEqual(env["variables"], {"YOUTRACK_URL": "https://y.example", "FACTORY_ENV": "read"})
+        self.assertEqual(env["secrets"], ["YOUTRACK_TOKEN"])
 
     def test_apply_sends_trigger_destinations_with_changed_triggers(self):
         manual = {"triggerType": "WEBHOOK"}
