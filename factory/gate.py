@@ -273,7 +273,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
     if isinstance(code_host, SpaceCodeHost):  # Space owns the merge request: its CI and review facts replace the tracker's
         space = code_host.facts(event["ticket"])
         if space["pr"] is not None:
-            facts = {**facts, **{k: space[k] for k in ("pr", "head", "branch", "pr_state", "ci", "dry_run", "pr_labels", "reviews")}}
+            facts = {**facts, **{k: space[k] for k in ("pr", "head", "branch", "pr_state", "ci", "dry_run", "pr_labels", "reviews", "round_complete", "round_verdict", "round_head")}}
     if "event_name" in event:
         event["id"] = f"{event['event_name']}:{event['ticket']}:{event['action']}:{facts.get('updated_at', '')}"
         event["head"] = facts.get("head")
