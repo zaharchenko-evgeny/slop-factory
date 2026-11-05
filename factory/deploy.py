@@ -368,6 +368,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
     prefix = f"[{project_name(config)}] "
     automations = []
     used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
+    if config.get("agents") and "read" in envs_def and "read" not in used:
+        used.append("read")  # the mention replies' environment
     per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(config["repositories"]) > 1
     unscoped = set()  # environments some automation shares across the project
     scoped = []  # (env, repository name) of the per-repository automations
@@ -391,38 +393,43 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 elif str(t) != "manual":
                     trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus,
                                         scope["name"] if scope else None))
-            if spec.get("persona") and not n.get("routine") and n.get("mention") is not False and not webhook:
-                trig.append({"triggerType": "WEBHOOK"})  # `@factory:<persona>` wakes the node in reply mode (read-only)
+            # `@factory:<persona>` wakes the node in reply mode: its own automation, since only the automation's
+            # environment decides what the run can reach, and that environment is always `read`
+            reply = bool(spec.get("persona") and not n.get("routine") and n.get("mention") is not False and not webhook)
             automation_repository = repository(team if focus == "knowledge" else scope or repos.get(envs_def[env]["repository"]) or primary)
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
             scope_name = scope["name"] if scope else None
-            if scope_name:
-                if (env, scope_name) not in scoped:
-                    scoped.append((env, scope_name))
-            else:
-                unscoped.add(env)
-            automation = {
-                "name": f"{prefix}{aname}" + (f" {scope_name}" if scope_name else ""),
-                "triggers": trig,
-                "triggerVcs": [{"outputBehaviour": "read-only" if t["triggerType"] == "WEBHOOK" and not webhook
-                                else n.get("output", "read-only")} for t in trig],
-                "spec": spec,
-                "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
-                "repository": automation_repository,
-                "environmentConfigId": f"{prefix}{env}" + (f" {scope_name}" if scope_name else ""),
-                "mcpConnectors": mcp_connectors(n, config, focus),
-                "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
-                    name, n, config, aname, focus, automation_repository),
-            }
-            if automation_repository["fullName"] != repository(team)["fullName"]:
-                automation["additionalRepositories"] = additional_repositories(automation_repository, team, config)
-            else:
-                projects = other_projects(automation_repository, team, config)
-                if projects:
-                    automation["additionalRepositories"] = [
-                        {"repository": repository(r), "branch": r["default_branch"]} for r in projects]
-            automations.append(automation)
+            runs = [(aname, trig, env)]
+            if reply:
+                runs.append((f"{aname} reply", [{"triggerType": "WEBHOOK"}], "read"))
+            for run_name, run_trig, run_env in runs:
+                if scope_name:
+                    if (run_env, scope_name) not in scoped:
+                        scoped.append((run_env, scope_name))
+                else:
+                    unscoped.add(run_env)
+                automation = {
+                    "name": f"{prefix}{run_name}" + (f" {scope_name}" if scope_name else ""),
+                    "triggers": run_trig,
+                    "triggerVcs": [{"outputBehaviour": "read-only" if run_name != aname else n.get("output", "read-only")}
+                                   for t in run_trig],
+                    "spec": spec,
+                    "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
+                    "repository": automation_repository,
+                    "environmentConfigId": f"{prefix}{run_env}" + (f" {scope_name}" if scope_name else ""),
+                    "mcpConnectors": mcp_connectors(n, config, focus),
+                    "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
+                        name, n, config, aname, focus, automation_repository),
+                }
+                if automation_repository["fullName"] != repository(team)["fullName"]:
+                    automation["additionalRepositories"] = additional_repositories(automation_repository, team, config)
+                else:
+                    projects = other_projects(automation_repository, team, config)
+                    if projects:
+                        automation["additionalRepositories"] = [
+                            {"repository": repository(r), "branch": r["default_branch"]} for r in projects]
+                automations.append(automation)
     envs = []
     token = config.get("write_mode") == "token" and len(config["repositories"]) > 1
     for env, scope_name in [(e, None) for e in used if e in unscoped] + scoped:

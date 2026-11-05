@@ -542,8 +542,8 @@ class ProjectPlanTest(unittest.TestCase):
             cfg.set_team(before)
         prefix = f"[{project['project']['name']}] "
         repo_names = [r["name"] for r in project["repositories"]]
-        names = {a["name"].removeprefix(prefix).removesuffix(next((f" {r}" for r in repo_names if a["name"].endswith(f" {r}")), "")): a
-                 for a in plan["automations"]}  # per-repository automations end with their repository's name
+        names = {a["name"].removeprefix(prefix).removesuffix(next((f" {r}" for r in repo_names if a["name"].endswith(f" {r}")), "")).removesuffix(" reply"): a
+                 for a in plan["automations"]}  # a mention reply shares its node's name; per-repository automations end with their repository's name
         deployed = [n for n, node in wf["nodes"].items()
                     if node.get("enabled") is not False and node["role"] != "human" and not node.get("runner")]
         self.assertTrue(deployed)
@@ -581,15 +581,22 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(sorted(str(p.relative_to(slop)) for p in slop.rglob("*") if p.is_file()),
                          sorted(str(Path(p).relative_to(tmp)) for p in written))
 
-    def test_every_node_with_a_persona_gets_a_read_only_webhook_and_script_nodes_none(self):
+    def test_every_node_with_a_persona_gets_a_read_env_reply_automation_and_script_nodes_none(self):
         slop = HERE / "fixtures/slop"
         project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
         wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
-        for a in project_plan(project, wf)["automations"]:
+        plan = project_plan(project, wf)
+        is_reply = lambda a: " reply" in a["name"]
+        replied = {a["name"].replace(" reply", "") for a in plan["automations"] if is_reply(a)}
+        for a in plan["automations"]:
             kinds = [t["triggerType"] for t in a["triggers"]]
-            self.assertEqual("WEBHOOK" in kinds, "persona" in a["spec"] and not a["spec"].get("routine"), a["name"])
-            if "WEBHOOK" in kinds:
-                self.assertEqual(a["triggerVcs"][kinds.index("WEBHOOK")], {"outputBehaviour": "read-only"})
+            if is_reply(a):
+                self.assertEqual(kinds, ["WEBHOOK"], a["name"])
+                self.assertEqual(a["triggerVcs"], [{"outputBehaviour": "read-only"}])
+                self.assertTrue(a["environmentConfigId"].endswith(" read") or " read " in a["environmentConfigId"], a["name"])
+            else:
+                self.assertNotIn("WEBHOOK", kinds, a["name"])
+                self.assertEqual(a["name"] in replied, "persona" in a["spec"] and not a["spec"].get("routine"), a["name"])
 
     def test_mention_allowlist(self):
         """fixtures/slop's agents (ADR-0020): dev, rex and ria, and whom each may mention on which subject."""

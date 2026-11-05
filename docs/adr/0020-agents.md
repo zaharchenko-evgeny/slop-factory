@@ -61,7 +61,7 @@ Slice 2 (#590): `@factory:<persona> <text>` in a ticket or PR comment runs `gate
 dedupes by comment id and persona in the vars, and wakes the node through its Air webhook
 (`FACTORY_MENTION_URLS`, `FACTORY_MENTION_KEY`); a refused mention gets one `[factory]` reply. The woken agent runs
 `factory begin --mode reply` and `factory end reply --text`; the gate posts `[factory] **<persona> (<role>):** <text>`.
-Every mentionable node gets a read-only webhook trigger at deploy (the node's own `env` is not switched).
+Every mentionable node gets a separate `<automation> reply` automation at deploy: a read-only webhook trigger bound to the `read` environment, whatever the node's own `env`.
 
 Rejected: naming agents per node (one persona per automation). The same
 developer implements, fixes and updates; a person should talk to one `dev`.
