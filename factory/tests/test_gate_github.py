@@ -1774,6 +1774,37 @@ class TicketStoreContractTest(unittest.TestCase):
         self.assertFalse(store.park(n, "tests", "factory:triage"))
 
 
+class CiSyncCodeHostTest(unittest.TestCase):
+    """GitHubCodeHost's reads and writes for gate.ci_sync, on a recorded `gh`."""
+
+    def test_factory_prs_head_checks_label_time_and_two_write_edit(self):
+        calls, own = [], {"full_name": "o/app"}
+        pulls = [{"number": 1, "head": {"ref": "ez/7-x", "sha": "s1", "repo": own}, "labels": [{"name": "factory:ci-green"}]},
+                 {"number": 2, "head": {"ref": "feature", "sha": "s2", "repo": own}, "labels": []},
+                 {"number": 3, "head": {"ref": "ez/8-y", "sha": "s3", "repo": {"full_name": "fork/app"}}, "labels": []}]
+        events = [{"event": "labeled", "label": {"name": "factory:ci-green"}, "created_at": t} for t in ("T1", "T3")]
+        out = {"repos/o/app/pulls?state=open&per_page=100": "\n".join(map(json.dumps, pulls)),
+               "repos/o/app/commits/s1/check-runs?per_page=100": "\n".join(map(json.dumps, [
+                   {"status": "completed", "conclusion": "success", "completed_at": "T2"},
+                   {"status": "in_progress", "conclusion": None, "completed_at": None}])),
+               "repos/o/app/commits/s1/status": json.dumps({"statuses": [{"state": "error", "updated_at": "T4"},
+                                                                         {"state": "pending", "updated_at": "T5"}]}),
+               "repos/o/app/issues/1/events?per_page=100": "\n".join(map(json.dumps, events))}
+
+        def run(args):
+            calls.append(args)
+            return "" if args[0] == "pr" else out[next(a for a in args if a.startswith("repos/"))]
+        host = M_GH.GitHubCodeHost("o/main", run)
+        self.assertEqual(host.factory_prs("o/app"), [{"number": 1, "head": "s1", "labels": ["factory:ci-green"]}])
+        self.assertEqual(host.head_checks("o/app", "s1"), [{"conclusion": "success", "at": "T2"}, {"conclusion": None, "at": None},
+                                                            {"conclusion": "failure", "at": "T4"}, {"conclusion": None, "at": "T5"}])
+        self.assertEqual(host.label_added_at("o/app", 1, "factory:ci-green"), "T3")
+        self.assertIsNone(host.label_added_at("o/app", 1, "factory:ci-red"))
+        host.edit_pr_labels("o/app", 1, add=["factory:ci-green"], remove=["factory:ci-green"])
+        self.assertEqual(calls[-2:], [["pr", "edit", "1", "-R", "o/app", "--remove-label", "factory:ci-green"],
+                                      ["pr", "edit", "1", "-R", "o/app", "--add-label", "factory:ci-green"]])
+
+
 if __name__ == "__main__":
     unittest.main()
 

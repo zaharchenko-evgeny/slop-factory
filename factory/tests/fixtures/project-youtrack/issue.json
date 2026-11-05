@@ -1,0 +1,15 @@
+{
+  "idReadable": "LME-1701", "summary": "Store tickets in YouTrack", "description": "scope", "resolved": null, "updated": 1767243600000,
+  "reporter": {"login": "alice"},
+  "tags": [{"id": "6-1", "name": "factory:implement-mid"}, {"id": "6-2", "name": "risk:low"}],
+  "customFields": [
+    {"name": "State", "value": {"name": "In Progress"}},
+    {"name": "Assignee", "value": {"login": "bob"}}
+  ],
+  "links": [
+    {"direction": "INWARD", "linkType": {"name": "Depend"}, "issues": [{"idReadable": "LME-1700", "resolved": null, "tags": []}, {"idReadable": "LME-1699", "resolved": 1767240000000, "tags": []}]},
+    {"direction": "OUTWARD", "linkType": {"name": "Depend"}, "issues": [{"idReadable": "LME-1702", "resolved": null, "tags": []}]},
+    {"direction": "INWARD", "linkType": {"name": "Subtask"}, "issues": [{"idReadable": "LME-1600", "resolved": null, "tags": []}]},
+    {"direction": "OUTWARD", "linkType": {"name": "Subtask"}, "issues": [{"idReadable": "LME-1703", "resolved": 1767240000000, "tags": [{"name": "factory:done"}]}]}
+  ]
+}

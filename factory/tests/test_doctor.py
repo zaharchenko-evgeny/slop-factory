@@ -65,6 +65,32 @@ def run(gh, env="read", **kw):
     return {r["probe"]: r for r in doctor.run_probes(REPO, env, nodes.load(), gh, "risk:low", **kw)}
 
 
+class YouTrackDoctorTest(unittest.TestCase):
+    def test_missing_tag_is_reported_and_nothing_is_written(self):
+        calls = []
+
+        def yt(method, path, body=None):
+            calls.append(method)
+            if path.startswith("/api/admin/projects?"):
+                return [{"id": "0-1", "shortName": "LME"}]
+            if path.startswith("/api/tags"):
+                return [{"name": "factory:implement-mid"}]
+            return [{"field": {"name": "State"}, "bundle": {"values": [{"name": "In Progress"}]}}]
+        settings = {"tracker": {"url": "u", "project": "LME"},
+                    "states": {"in-dev": {"store": {"field": {"name": "State", "value": "In Progress"}}}},
+                    "commands": {"implement-<tier>": {"store": {"tag": "factory:implement-<tier>"}},
+                                 "close": {"store": {"tag": "close"}}}}
+        got = {r["probe"]: r["result"] for r in doctor.youtrack_probes(settings, ["mid"], {"YOUTRACK_TOKEN": "x"}, yt)}
+        self.assertEqual(got, {"youtrack:token:YOUTRACK_TOKEN": "ok", "youtrack:project:LME": "ok",
+                               "youtrack:tag:close": "missing", "youtrack:tag:factory:implement-mid": "ok",
+                               "youtrack:field:State=In Progress": "ok"})
+        self.assertEqual(set(calls), {"GET"})
+
+    def test_unset_token_is_missing(self):
+        got = doctor.youtrack_probes({"tracker": {"url": "u", "project": "LME"}}, [], {})
+        self.assertEqual([r["result"] for r in got], ["missing"])
+
+
 class DoctorTest(unittest.TestCase):
     def test_denied_write_reported_and_ticket_opened(self):
         gh = FakeGh(deny=("dependencies/blocked_by",))

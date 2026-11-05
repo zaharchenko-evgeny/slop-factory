@@ -6,6 +6,7 @@
 """Tests for the descriptor-backed tracker port (factory/gate_port.py DescriptorPort) against the fixture project.
 Run: uv run factory/tests/test_project_ports.py"""
 import ast
+import json
 import re
 import sys
 import unittest
@@ -13,10 +14,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests"))
 import project  # noqa: E402
+from gate_github import GitHubGateTracker  # noqa: E402
 from gate_port import MemoryTracker, UnsupportedStore  # noqa: E402
+from test_youtrack_tracker import FakeYouTrack  # noqa: E402
+from youtrack_tracker import YouTrackTicketStore  # noqa: E402
 
 FIXTURE = ROOT / "tests/fixtures/project"
+YOUTRACK = ROOT / "tests/fixtures/project-youtrack"
+ISSUE = json.loads((YOUTRACK / "issue.json").read_text())
 
 
 def tracker(**ticket):
@@ -56,6 +63,34 @@ class ProjectPortsTest(unittest.TestCase):
             t.add_command(7, "close")
         with self.assertRaises(KeyError):
             t.add_command(7, "deploy")
+
+    def youtrack(self):
+        """A tracker over the fixture project-youtrack, its tickets in a stubbed YouTrack."""
+        fake = FakeYouTrack(ISSUE, tags=("factory:implement-mid", "factory:implement-cheap", "risk:low", "close"))
+        descriptor = project.load(YOUTRACK)
+        stages = {n: s["store"]["field"]["value"] for n, s in descriptor["states"].items()}
+        store = YouTrackTicketStore(fake, state_field="State")
+        return GitHubGateTracker("example/project", stages, "factory[bot]", run=lambda *a, **k: "", project=descriptor,
+                                 tickets=store), fake
+
+    def test_field_state_round_trip(self):
+        t, fake = self.youtrack()
+        self.assertEqual(t.state("LME-1701"), "in-dev")
+        self.assertTrue(t.set_state("LME-1701", "blocked"))
+        self.assertEqual(t.state("LME-1701"), "blocked")
+        self.assertFalse(t.set_state("LME-1701", "blocked"))
+        self.assertEqual([c for c in fake.calls if c[0] == "POST"][-1][2]["customFields"],
+                         [{"name": "State", "$type": "StateIssueCustomField", "value": {"name": "Blocked"}}])
+
+    def test_tag_command_round_trip(self):
+        t, fake = self.youtrack()
+        self.assertEqual(t.commands("LME-1701"), ["implement-mid"])
+        self.assertTrue(t.remove_command("LME-1701", "implement-*"))
+        self.assertEqual(t.commands("LME-1701"), [])
+        self.assertTrue(t.add_command("LME-1701", "close"))
+        self.assertFalse(t.add_command("LME-1701", "close"))
+        self.assertEqual(t.commands("LME-1701"), ["close"])
+        self.assertEqual(sorted(x["name"] for x in fake.issue["tags"]), ["close", "risk:low"])
 
     def test_command_templates_fill_their_placeholder(self):
         descriptor = project.load(FIXTURE)

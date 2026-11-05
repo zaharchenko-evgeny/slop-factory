@@ -552,6 +552,19 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(workflow.validate(project, wf), [])
         self.assertEqual(workflow.to_nodes(project, wf), yaml.safe_load((ROOT / cfg.NODES).read_text()))
 
+    def test_youtrack_tracker_renders_ticket_triggers_as_youtrack_events(self):
+        project, wf = this_repository()
+        project["tracker"] = {"adapter": "youtrack", "url": "https://y.example", "project": "LME"}
+        project["code_host"] = {"repository": "o/r"}
+        project["states"]["ready"] = {"kind": "active", "store": {"field": {"name": "State", "value": "Ready"}}}
+        project["commands"]["implement-<tier>"] = {"store": {"tag": "factory:implement-<tier>"}}
+        a = {x["name"]: x for x in project_plan(project, wf)["automations"]}
+        triggers = a["[Slop factory] implement-mid"]["triggers"]
+        self.assertIn({"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated",
+                       "filters": {"tagAdded": "factory:implement-mid"}}, triggers)
+        self.assertEqual({t["source"] for t in a["[Slop factory] fix-mid"]["triggers"]}, {"github"})
+        self.assertEqual(deploy.trigger("youtrack.fieldChanged State=In Progress", None)["filters"], {"State": "In Progress"})
+
     def test_mcp_connectors_come_from_node_then_mode_then_role(self):
         project, wf = this_repository()
         project["roles"]["developer"]["mcp"] = ["youtrack"]
@@ -798,6 +811,14 @@ class PlanTest(unittest.TestCase):
         self.assertIn("wait until it exits", a["prompt"])
         self.assertEqual(plan["files"], {})
         self.assertFalse((ROOT / ".github/workflows/factory-reconcile.yml").exists())
+
+    def test_ci_label_sync_runs_in_the_factory_repository_with_no_project_workflow(self):
+        base = cfg.load()
+        other = {"name": "other", "url": "https://github.com/o/other", "default_branch": "main", "role": "project"}
+        plan = deploy.plan_air(nodes.load(), {**base, "repositories": [*base["repositories"], other]})
+        a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] reconcile")  # each pass runs gate.ci_sync
+        self.assertEqual(a["repository"]["fullName"], "zaharchenko-evgeny/slop-factory")
+        self.assertEqual(plan["files"], {})  # no workflow or check file under any repository's .github/
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(deploy.config_mod, "team_root", return_value=Path(d)):
