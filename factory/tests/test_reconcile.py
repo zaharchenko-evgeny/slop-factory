@@ -189,6 +189,15 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(results[0]["node"], "custom")
         self.assertIn('"factory:custom"', logged(t, "label"))
 
+    def test_lost_join_is_run_through_sweep_stale(self):
+        tracker = MemoryTracker({1: {"stage": "in-review", "pr": 5, "pr_state": "open", "head": "abc", "since": "2026-11-03T08:00:00Z",
+                                     "ci": "green", "ci_label": "green", "round_complete": True, "round_verdict": "approve",
+                                     "focus_missing": [], "reviews": [{"agent": True, "commit_id": "abc"}]}})
+        tracker.sweep_tickets = lambda stages: [1]
+        results, failed = gate.sweep_stale(tracker, NODES, 2, NOW)
+        self.assertEqual((failed, [r["recover"] for r in results]), (False, ["refire-join"]))
+        self.assertEqual((results[0]["applied"], tracker.tickets[1]["stage"]), (True, "approved"))
+
 
 if __name__ == "__main__":
     unittest.main()

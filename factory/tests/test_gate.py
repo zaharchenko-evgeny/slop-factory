@@ -939,6 +939,7 @@ class TriageReadyTest(unittest.TestCase):
         res = gate.sweep_stale(tr, NODES, 2, now)[0]
         self.assertEqual([(r["recover"], r["stage"], r["why"]) for r in res], [("refire", "triage", "no intake outcome")])
         self.assertIn(["label", '"factory:triage"'], tr.tickets[1]["log"])
+        tr.tickets[1]["vars"] = {"started": "factory:triage@2026-11-01T12:00:05Z"}  # the agent ran, then died
         self.assertEqual([r["recover"] for r in gate.sweep_stale(tr, NODES, 2, now)[0]], ["blocked"])
 
 
@@ -1006,17 +1007,47 @@ class StaleSweepTest(unittest.TestCase):
         self.assertEqual([(r["recover"], r["stage"]) for r in res], [("refire", "in-review")])
         self.assertIn(["label", '"factory:review-behaviour"'], tr.tickets[3]["log"])
 
-    def test_in_review_without_ci_label_only_comments(self):
-        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": None}})
-        self.assertEqual([r["recover"] for r in res], ["comment"])
-        self.assertFalse([e for e in tr.tickets[3]["log"] if e[0] == "label"])
+    def test_in_review_without_ci_label_after_30_minutes_reruns_ci_once_per_head(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": "2026-11-01T11:20:00Z", "pr": 9, "head": "abc",
+                                  "branch": "ez/3-x", "ci_label": None}})
+        self.assertEqual([r["recover"] for r in res], ["rerun-ci"])
+        self.assertIn(["rerun-ci", '"abc"'], tr.tickets[3]["log"])
+        self.assertEqual([r["recover"] for r in gate.sweep_stale(tr, NODES, 2, self.NOW)[0]], ["comment"])  # not again at this head
+        self.assertEqual([e[0] for e in tr.tickets[3]["log"]].count("rerun-ci"), 1)
+
+    def test_in_review_without_ci_label_within_30_minutes_is_left_alone(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.FRESH, "pr": 9, "head": "abc", "ci_label": None}})
+        self.assertEqual(res, [])
+
+    def test_all_focuses_reviewed_at_head_refires_join(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "head": "abc", "ci_label": "green",
+                                  "focus_missing": [], "reviews": [{"agent": True, "commit_id": "abc"}]}})
+        self.assertEqual([r["recover"] for r in res], ["refire-join"])
+        self.assertEqual([r["recover"] for r in gate.sweep_stale(tr, NODES, 2, self.NOW)[0]], ["human"])  # once per head
+
+    def test_red_ci_without_fix_label_refires_join(self):
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "head": "abc", "ci_label": "red"}})
+        self.assertEqual([r["recover"] for r in res], ["refire-join"])
+
+    def test_launch_failures_are_not_counted_until_the_cap(self):
+        tr, res = self.sweep({1: {"stage": "ready", "since": self.OLD}, 2: {"stage": "in-dev", "since": self.OLD,
+                                                                           "command": "factory:implement-mid"}})
+        self.assertEqual(sorted(r["recover"] for r in res), ["refire", "refire"])
+        for minute in range(1, 4):  # no `started` mark: each re-fire is a launch failure, `resume_cap: 3`
+            res = gate.sweep_stale(tr, NODES, 2, self.NOW + timedelta(minutes=minute), resume_cap=3)[0]
+            self.assertEqual([(r["ticket"], r["recover"]) for r in res if r["ticket"] == 2], [(2, "refire")])
+        res = gate.sweep_stale(tr, NODES, 2, self.NOW + timedelta(minutes=4), resume_cap=3)[0]
+        self.assertEqual([(r["ticket"], r["recover"]) for r in res if r["ticket"] == 2], [(2, "human")])
+        self.assertIn(["label", '"factory:needs-human"'], tr.tickets[2]["log"])
+        self.assertIn("launch failure", json.dumps(tr.tickets[2]["log"]))
 
     def test_comment_only_note_does_not_use_the_retry(self):
-        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": None}})
+        tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "pr": 9, "ci_label": None, "conflict": True}})
         self.assertEqual([r["recover"] for r in res], ["comment"])
         tr.tickets[3].update(ci_label="green", reviews=[], focus_missing=["behaviour"])  # CI finished, the reviewer run then died
         res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
         self.assertEqual([r["recover"] for r in res], ["refire"])
+        tr.tickets[3]["vars"] = {"started": "factory:review-behaviour@2026-11-01T12:00:05Z"}
         self.assertEqual(gate.sweep_stale(tr, NODES, 2, self.NOW)[0][0]["recover"], "blocked")
 
     def test_in_dev_command_without_pr_and_fix_without_commit(self):
@@ -1033,6 +1064,7 @@ class StaleSweepTest(unittest.TestCase):
                                   "command": "factory:update-cheap", "command_at": self.FRESH,
                                   "commit_at": self.OLD}})
         self.assertEqual([r["recover"] for r in res], ["refire"])
+        tr.tickets[5]["vars"] = {"started": "factory:update-cheap@2026-11-01T12:00:05Z"}
         res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
         self.assertEqual([r["recover"] for r in res], ["blocked"])
         self.assertEqual(tr.tickets[5]["stage"], "blocked")

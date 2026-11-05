@@ -229,7 +229,14 @@ class MemoryTracker(DescriptorPort):
         t = self._t(ticket)
         sent = [json.loads(v) for k, v in t.get("log", []) if k == "comment"]
         return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "stage_at", "command", "command_at", "commit_at", "ci_label", "command_pending", "pr_state", "issue_state") if k in t},
+                "started": [t["vars"]["started"]] if (t.get("vars") or {}).get("started") else [],
                 "recover_comments": [c for c in sent if c.startswith(("[factory] recover:", "[factory] reconcile:"))]}
+
+    def read_vars(self, ticket, on="issue"):
+        return dict(self._t(ticket).get("vars") or {})
+
+    def write_vars(self, ticket, vars_, on="issue"):
+        self._t(ticket)["vars"] = dict(vars_)
 
     def apply(self, effect):
         if effect["kind"] == self.fail_on:

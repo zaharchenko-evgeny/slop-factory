@@ -922,6 +922,28 @@ def join(gh, **kw):
     return t.apply({"ticket": 7, "kind": "join", "value": "all-approve", **kw}), len(gh.writes)
 
 
+class RerunCiTest(unittest.TestCase):
+    def rerun(self, runs):
+        calls = []
+
+        def gh(args, **kw):
+            calls.append(args)
+            return json.dumps(runs) if args[:2] == ["run", "list"] else ""
+        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh)
+        return t.apply({"ticket": 1, "kind": "rerun-ci", "value": "abc", "branch": "ez/1-x"}), calls[1:]
+
+    def test_failed_run_is_rerun_failed_jobs_only(self):
+        done, calls = self.rerun([{"databaseId": 9, "status": "completed", "conclusion": "failure"}])
+        self.assertEqual((done, calls), (True, [["run", "rerun", "9", "--failed", "-R", REPO]]))
+
+    def test_head_without_a_run_is_dispatched(self):
+        done, calls = self.rerun([])
+        self.assertEqual((done, calls), (True, [["workflow", "run", "quality-gates.yml", "-R", REPO, "--ref", "ez/1-x"]]))
+
+    def test_run_in_progress_is_left_alone(self):
+        self.assertEqual(self.rerun([{"databaseId": 9, "status": "in_progress", "conclusion": None}]), (False, []))
+
+
 class JoinTest(unittest.TestCase):
     def arrive(self, order, human_state, agent_body):
         """Reviews arrive one by one; alice is requested until her review. Returns the joined gh."""

@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -71,6 +72,28 @@ def gate_args(state, *more):
     return [*sel, "--spec", state["spec"], *state["tracker"], *more]
 
 
+def mark_started(state, number, on, ticket, now=None):
+    """Write `started: <command label>@<ISO time>` into the factory-state vars of the ticket (the PR for a PR node).
+    A failure is printed and ignored: the mark only tells the stale sweep that an agent ran."""
+    try:
+        trigger = str(nodes.load()["nodes"][state["node"]]["triggers"][0])
+        label = trigger.partition(" ")[2].replace("<tier>", state["tier"] or "").replace("<focus>", state["focus"] or "")
+        mark = f"{label}@{(now or datetime.now(timezone.utc)).strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        spec = (state["tracker"] or ["", ""])[1]
+        if spec.startswith("memory:"):
+            path = Path(spec[7:])
+            tickets = json.loads(path.read_text())
+            record = tickets[str(ticket)]
+            record["vars"] = {**(record.get("vars") or {}), "started": mark}
+            path.write_text(json.dumps(tickets))
+        else:
+            from gate_github import GitHubGateTracker
+            tracker = GitHubGateTracker.from_config()
+            tracker.write_vars(number, {**tracker.read_vars(number, on), "started": mark}, on)
+    except Exception as e:
+        print(f"factory begin: started mark not written: {e}", file=sys.stderr)
+
+
 def begin(argv, team=None):
     p = argparse.ArgumentParser(prog="factory begin")
     p.add_argument("automation")
@@ -112,6 +135,11 @@ def begin(argv, team=None):
     if code == 0:
         state["handoff_path"] = json.loads(out.getvalue())["handoff_path"]
         STATE.write_text(json.dumps(state))
+        facts = json.loads(out.getvalue())
+        pr = bool(a.pr) or (not a.issue and "pull_request" in event.read_text())
+        number = (facts.get("context") or {}).get("pr") if pr else facts.get("ticket")
+        if number:
+            mark_started(state, number, "pr" if pr else "issue", facts["ticket"])
     return code
 
 

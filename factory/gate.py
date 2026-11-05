@@ -846,20 +846,42 @@ STALE_STAGES = ("triage", "ready", "in-dev", "in-review", "changes-requested", "
 RECOVER = "[factory] recover:"
 
 
+LAUNCH_FAILURE = "launch failure"
+
+
 def recovered(facts, stage):
-    """Re-fires already recorded for `stage` (the counter is the `[factory] recover: stage=<stage> re-fired ...` comment; comment-only notes do not count)."""
-    return sum(f"stage={stage} re-fired" in c for c in facts.get("recover_comments", []))
+    """Re-fires already recorded for `stage` (the counter is the `[factory] recover: stage=<stage> re-fired ...` comment;
+    comment-only notes do not count). A re-fire that was a launch failure (no agent ran) is not counted."""
+    found = [c for c in facts.get("recover_comments", []) if f"stage={stage} re-fired" in c]
+    return max(0, sum(LAUNCH_FAILURE not in c for c in found) - sum(LAUNCH_FAILURE in c for c in found))
+
+
+def launch_failures(facts, stage):
+    """(failed, count): whether the latest re-fire of `stage` has no later `started` mark, and the launch failures recorded."""
+    found = [c for c in facts.get("recover_comments", []) if f"stage={stage} re-fired" in c]
+    count = sum(LAUNCH_FAILURE in c for c in found)
+    m = re.search(r"re-fired (\S+) at=(\S+)", found[-1]) if found else None
+    if not m or m[1] == vocab.stage("ready"):  # `ready` wakes the scripted `start` node, which never begins
+        return False, count
+    label, at = m[1], datetime.fromisoformat(m[2].replace("Z", "+00:00"))
+    for mark in facts.get("started") or []:
+        started, _, when = str(mark).rpartition("@")
+        if started == label and datetime.fromisoformat(when.replace("Z", "+00:00")) >= at:
+            return False, count
+    return True, count
 
 
 def stale_plan(facts, now, hours, command_minutes=30):
     """(kind, label, on, text) when the ticket's waking event is visibly missing after `hours` in its stage:
     kind `refire` (remove, then add `label` on `on`), `comment` (no label to re-fire), `finish` (the PR merged)
-    or `conflict` (an approved PR conflicts: the sweep's update-cheap),
+    or `conflict` (an approved PR conflicts: the sweep's update-cheap), `refire-join` (every required focus reviewed
+    at the head, or CI red with no fix label: the join was lost) or `rerun-ci` (no CI label at the head, once per head),
     else None. `since` is the last label or commit event (ISO); an unknown one never makes a ticket stale."""
     stage, since = facts["stage"], facts.get("since")
     if facts.get("issue_state", "open") != "open" or not since:
         return None
-    age = timedelta(minutes=command_minutes) if facts.get("command_pending") else timedelta(hours=hours)
+    no_ci = stage == "in-review" and facts.get("pr") and not facts.get("ci_label") and not facts.get("conflict")
+    age = timedelta(minutes=command_minutes) if facts.get("command_pending") or no_ci else timedelta(hours=hours)
     if now - datetime.fromisoformat(since.replace("Z", "+00:00")) <= age:
         return None
     cmd, cmd_at, commit_at = facts.get("command"), facts.get("command_at") or "", facts.get("commit_at") or ""
@@ -881,7 +903,16 @@ def stale_plan(facts, now, hours, command_minutes=30):
             missing = facts.get("focus_missing", [])
             if missing:
                 return "refire", vocab.cmd("review-<focus>", missing[0]), "pr", "no review for this focus at the head"
+        notes = facts.get("recover_comments", [])
+        fixing = cmd and cmd.startswith(vocab.prefix("fix-<tier>"))
+        if (not facts.get("focus_missing") and facts.get("ci_label") == "green"
+                and any(r["agent"] and r["commit_id"] == head for r in facts.get("reviews", []))
+                or facts.get("ci_label") == "red" and not fixing) \
+                and not any(f"re-ran join head={head}" in c for c in notes):
+            return "refire-join", None, None, "every required focus reviewed the head or CI is red, and no join ran"
         if not facts.get("ci_label"):
+            if not facts.get("conflict") and not any(f"head={head} re-ran CI" in c for c in notes):
+                return "rerun-ci", None, None, f"no CI label at head {head}"
             if facts.get("conflict"):
                 return "comment", None, None, f"no CI label at head {head}: the PR conflicts with main (GitHub starts no CI on a conflict); the update runs after the join"
             return "comment", None, None, f"no CI label at head {head}: CI's job"
@@ -898,8 +929,9 @@ def stale_plan(facts, now, hours, command_minutes=30):
     return "human", None, None, f"no recovery rule re-fired after {hours} hours in {stage}"
 
 
-def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=30, progress=None):
+def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=30, progress=None, resume_cap=3):
     """Recover tickets whose Air run died: one re-fire per ticket and stage, a second stale finding blocks it.
+    A re-fire with no later `started` mark is a launch failure: it is re-fired again, not counted, up to `resume_cap`.
     Returns (results, failed)."""
     now, results, failed = now or datetime.now(timezone.utc), [], False
     for n in tracker.sweep_tickets(STALE_STAGES):
@@ -925,6 +957,17 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
             elif kind == "conflict":
                 _, out = apply("finish", "conflict", {"ticket": n}, tracker, nodes)
                 r["applied"] = out["applied"]
+            elif kind == "refire-join":
+                head = facts.get("head")
+                tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
+                               "value": f"{RECOVER} stage={stage} re-ran join head={head} ({why})"})
+                res, _ = sweep(tracker, nodes, issue=n, auto_merge=config_mod.load()["gates"].get("auto_merge"))
+                r["applied"] = bool(res and res[-1].get("applied"))
+            elif kind == "rerun-ci":
+                head = facts.get("head")
+                r["applied"] = tracker.apply({"ticket": n, "kind": "rerun-ci", "value": head, "branch": facts.get("branch")})
+                tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
+                               "value": f"{RECOVER} stage={stage} head={head} re-ran CI ({why})"})
             elif kind == "comment":
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
                                               "value": f"{RECOVER} stage={stage} {why}"})
@@ -939,7 +982,14 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                 tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"], "on": "pr"})
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
                                               "value": f"{RECOVER} stage={stage}: {why}. A person decides, then sets {vocab.stage('ready')}."})
-            elif recovered(facts, stage):
+            elif (lf := launch_failures(facts, stage))[0] and lf[1] >= resume_cap:
+                r["recover"] = "human"
+                for on in ("issue", "pr"):
+                    if on == "issue" or facts.get("pr"):
+                        tracker.apply({"ticket": n, "kind": "label", "value": vocab.needs_human(), "on": on})
+                r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
+                                              "value": f"{RECOVER} stage={stage}: {LAUNCH_FAILURE} {lf[1] + 1} times, no agent ran. A person decides, then sets {vocab.stage('ready')}."})
+            elif not lf[0] and recovered(facts, stage):
                 r["recover"] = "blocked"
                 _, out = apply("recover", "blocked", {"ticket": n, "run_id": run,
                                                           "reason": f"[factory] Stopped: the node did not respond twice in {stage}. A person decides, then sets {vocab.stage('ready')}."},
@@ -948,8 +998,10 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
             else:  # the comment last: for `ready` the re-added stage label starts the stage, and the comment must follow it
                 tracker.apply({"ticket": n, "kind": "unlabel", "value": label, "on": on})
                 r["applied"] = tracker.apply({"ticket": n, "kind": "label", "value": label, "on": on})
+                if lf[0]:
+                    why = f"{LAUNCH_FAILURE}: no agent started after the previous re-fire"
                 tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
-                               "value": f"{RECOVER} stage={stage} re-fired {label} ({why})"})
+                               "value": f"{RECOVER} stage={stage} re-fired {label} at={now.strftime('%Y-%m-%dT%H:%M:%SZ')} ({why})"})
             if progress:
                 progress(r)
         except Exception as e:  # one ticket failing does not stop the others
@@ -1046,6 +1098,7 @@ def main(argv):
                 out["stale"], stale_failed = sweep_stale(tracker, nodes, config["limits"].get("stale_hours", 2),
                                                          dry_run=a.dry_run,
                                                          command_minutes=config["limits"].get("stale_command_minutes", 30),
+                                                         resume_cap=config["limits"].get("resume_cap", 3),
                                                          progress=progress)
                 failed = failed or stale_failed
             print(json.dumps(out))

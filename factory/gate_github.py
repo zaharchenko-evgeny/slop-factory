@@ -20,7 +20,7 @@ import yaml
 
 import config
 from gate_port import PR_DEFAULTS, DescriptorPort, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
-from github_tracker import gh
+from github_tracker import GitHubTracker, gh
 import vocab
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
@@ -605,7 +605,13 @@ class GitHubGateTracker(DescriptorPort):
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
         comments = [c["body"] for c in self._list(f"issues/{n}/comments") if c["body"].startswith(("[factory] recover:", "[factory] reconcile:"))
                     and c["created_at"] >= stage_at]
-        return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
+        marks = []
+        for t, on in [(n, "issue")] + ([(pr, "pr")] if pr else []):
+            try:
+                marks.append(self.read_vars(t, on).get("started"))
+            except Exception:  # an unreadable mark only makes a re-fire look like a launch failure
+                pass
+        return {**f, "started": [m for m in marks if m], "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
                 "command_pending": bool(latest_command and latest_command == latest_event),
                 "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
                 "review_labels": review_labels,
@@ -624,6 +630,8 @@ class GitHubGateTracker(DescriptorPort):
             return False  # no hidden state: conditions catch a duplicate
         if kind == "join":
             return self._join(n, e.get("tier") or "mid")
+        if kind == "rerun-ci":
+            return self._rerun_ci(value, e.get("branch"))
         if kind == "stage":
             want, have = self.stages[value], [x for x in self._labels(n) if x in self.stages.values()]
             closed = False
@@ -806,6 +814,28 @@ class GitHubGateTracker(DescriptorPort):
             return True
         finally:
             self.run(["api", "-X", "DELETE", f"repos/{self.pr_repo}/git/refs/heads/{self.MERGE_LOCK}"])
+
+    def _rerun_ci(self, head, branch):
+        """Re-run the head's latest failed or cancelled `quality-gates` run, or dispatch it when the head has none.
+        A run still in progress, or one that succeeded, is left alone."""
+        runs = json.loads(self.run(["run", "list", "-R", self.pr_repo, "--workflow", "quality-gates.yml", "--commit", head,
+                                    "--limit", "1", "--json", "databaseId,status,conclusion"]))
+        if not runs:
+            self.run(["workflow", "run", "quality-gates.yml", "-R", self.pr_repo, "--ref", branch])
+            return True
+        if runs[0]["status"] == "completed" and runs[0]["conclusion"] in ("failure", "cancelled"):
+            self.run(["run", "rerun", str(runs[0]["databaseId"]), "--failed", "-R", self.pr_repo])
+            return True
+        return False
+
+    def _vars(self, on):
+        return GitHubTracker(self.pr_repo if on == "pr" else self.repo, self.stages, run=self.run)
+
+    def read_vars(self, n, on="issue"):
+        return self._vars(on).read_vars(n)
+
+    def write_vars(self, n, vars_, on="issue"):
+        self._vars(on).write_vars(n, vars_)
 
     def _join(self, n, tier):
         """Nothing while the round is open; else changes -> PR label fix-<tier> + stage changes-requested, approve -> approved."""

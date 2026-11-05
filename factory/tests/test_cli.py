@@ -74,6 +74,28 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.run_cli("begin", "implement-mid", "--issue", "7", "--tracker", "memory:tickets.json")
         self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
 
+    def test_begin_writes_started_into_the_factory_state_vars(self):
+        tracker = self.tracker()
+        code, _ = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0)
+        mark = json.loads(Path("tickets.json").read_text())["7"]["vars"]["started"]
+        self.assertRegex(mark, r"^factory:implement-mid@\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    def test_begin_still_exits_0_when_the_started_write_fails(self):
+        tracker = self.tracker()
+        real = Path.write_text
+
+        def write_text(path, *args, **kw):
+            if path.name == "tickets.json":
+                raise OSError("disk full")
+            return real(path, *args, **kw)
+        with mock.patch.object(Path, "write_text", write_text):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code, _ = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0)
+        self.assertIn("started mark not written", err.getvalue())
+
     def test_begin_with_pr_number_only(self):
         self.tracker(stage="changes-requested", pr=300, pr_state="open", round_complete=True)
         with mock.patch.object(cli, "from_main", return_value=str(ROOT)):

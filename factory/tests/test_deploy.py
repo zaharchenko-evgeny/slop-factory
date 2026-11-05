@@ -724,12 +724,12 @@ class PlanTest(unittest.TestCase):
                                "filters": {"label": f"factory:rereview-{a['name'].rsplit('-', 1)[1]}",
                                            "pr_author": "jetbrains-air[bot]"}}, a["triggers"])
 
-    def test_reconcile_is_an_hourly_air_schedule_only(self):
+    def test_reconcile_is_a_15_minute_air_schedule_only(self):
         plan = deploy.plan_air(nodes.load(), cfg.load())
         self.assertNotIn("[Slop factory] recover", {x["name"] for x in plan["automations"]})
         a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] reconcile")
         # no event wake: one pass reads every active ticket, so label bursts must not start it
-        self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "17 * * * *", "timezone": "UTC"}])
+        self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "*/15 * * * *", "timezone": "UTC"}])
         self.assertEqual(a["triggerVcs"], [{"outputBehaviour": "read-only"}])
         self.assertEqual(a["environmentConfigId"], "[Slop factory] ops")
         self.assertIn("Run `factory reconcile` in the foreground", a["prompt"])
