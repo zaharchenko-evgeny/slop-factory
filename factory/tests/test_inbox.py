@@ -149,6 +149,34 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(http.get_header("Authorization"), "ApiKey k3y")
         self.assertEqual(json.loads(http.data), {"kind": "decision-needed", "issue": 562, "result": "r"})
 
+    def test_send_does_not_follow_redirect_with_key(self):
+        import http.server
+        import threading
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen.append((self.server.name, self.headers.get("Authorization")))
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{other.server_port}/x")
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+        first, other = (http.server.HTTPServer(("127.0.0.1", 0), Handler) for _ in range(2))
+        first.name, other.name = "first", "other"
+        for s in (first, other):
+            threading.Thread(target=s.serve_forever, daemon=True).start()
+        env = {"TEST_INBOX_URL": f"http://127.0.0.1:{first.server_port}/in", "TEST_INBOX_KEY": "k3y"}
+        try:
+            with unittest.mock.patch.dict("os.environ", env), contextlib.redirect_stderr(io.StringIO()):
+                ok = send.send({"kind": "decision-needed", "issue": 1}, self.settings_with_webhook())
+        finally:
+            for s in (first, other):
+                s.shutdown()
+        self.assertFalse(ok)
+        self.assertEqual(seen, [("first", "ApiKey k3y")])
+
     def test_send_failure_exits_zero(self):
         def down(http, timeout):
             raise OSError("down")

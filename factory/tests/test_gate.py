@@ -50,7 +50,7 @@ class GateTest(unittest.TestCase):
 
     def test_blocked_sends_one_decision_needed(self):
         gate.apply("implement", "blocked", {"ticket": "7", "reason": "[factory] blocked"}, MemoryTracker({"7": {"stage": "in-dev"}}), NODES)
-        self.assertEqual(SENT, [("automation-error", "7")])  # an implement outcome is an automation error
+        self.assertEqual(SENT, [("automation-error", "7"), ("decision-needed", "7")])  # both: error and entering blocked
         SENT.clear()
         gate.apply("intake", "grill", {"ticket": "7", "questions": "[factory] Which API?"}, MemoryTracker({"7": {"stage": "triage"}}), NODES)
         self.assertEqual(SENT, [("decision-needed", "7")])

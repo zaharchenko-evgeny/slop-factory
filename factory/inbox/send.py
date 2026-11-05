@@ -8,7 +8,15 @@ import config
 from inbox import request as req
 
 
-def post(webhook, request, opener=urllib.request.urlopen):
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None  # a redirect surfaces as HTTPError, so the key never leaves the configured origin
+
+
+_open = urllib.request.build_opener(_NoRedirect).open
+
+
+def post(webhook, request, opener=_open):
     """POST `request` to the URL in env var `webhook['url_secret']` with `Authorization: ApiKey <key>`."""
     url, key = os.environ.get(webhook["url_secret"]), os.environ.get(webhook["key_secret"])
     if not url or not key:
@@ -19,7 +27,7 @@ def post(webhook, request, opener=urllib.request.urlopen):
         pass
 
 
-def send(request, settings, opener=urllib.request.urlopen, deliver=None):
+def send(request, settings, opener=_open, deliver=None):
     """Validate and send `request`; a failure prints a warning and returns False, never raises."""
     try:
         errs = req.validate(request)

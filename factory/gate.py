@@ -381,17 +381,20 @@ def notify(kind, ticket, result=None, pr=None):
 
 
 def notification(name, outcome, effects):
-    """The request kind for an applied outcome, or None: what needs the operator."""
+    """The request kinds for an applied outcome: what needs the operator."""
+    kinds = []
     if name in ("implement", "fix") and outcome in ("failed", "blocked", "env-broken"):
-        return "automation-error"
+        kinds.append("automation-error")
     if name == "join" and outcome == "waiting" and any(
             e["kind"] == "comment" and str(e["value"]).startswith("[factory] Re-review PR") for e in effects):
-        return "review-needed"
+        kinds.append("review-needed")
+    if name in ("implement", "fix") and outcome in ("failed", "env-broken"):
+        return kinds  # the automation error alone; only a `blocked` outcome also asks the operator to decide
     if (name, outcome) == ("merge", "waiting") or any(
             e["kind"] == "stage" and e["value"] in ("blocked", "needs-answers")
             or e.get("run_id") == "finish:after-merge" for e in effects):
-        return "decision-needed"
-    return None
+        kinds.append("decision-needed")
+    return kinds
 
 
 def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None, auto_merge=None,
@@ -595,7 +598,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     if why:
         return NO_GO, {"applied": False, "reason": why}
     written = [e["kind"] for e in effects + after if tracker.apply(e)]
-    if kind := notify_kind or notification(name, outcome, effects):  # only after the effects were applied
+    for kind in [notify_kind] if notify_kind else notification(name, outcome, effects):  # only after the effects were applied
         notify(kind, ticket, next((e["value"] for e in effects if e["kind"] == "comment"), None), facts.get("pr"))
     return GO, {"applied": True, "written": written}
 
