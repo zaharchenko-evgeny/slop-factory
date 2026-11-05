@@ -415,8 +415,8 @@ nodes:
   inbox:
     env: ops
     pilot: true
-    ci-independent: true
     routine: true
+    ci-independent: true
     wakes_on:
     - webhook notify
     - pr opened
