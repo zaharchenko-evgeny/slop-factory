@@ -15,9 +15,9 @@ need_tools() {
   return "$missing"
 }
 
-# Skill directories searched, in pi's discovery order.
+# Skill directories searched, in order.
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-skill_dirs=(".agents/skills" "$HOME/.agents/skills" "$HOME/.pi/agent/skills" "$HOME/.pi/agent/npm/node_modules")
+skill_dirs=(".agents/skills" "$HOME/.agents/skills")
 
 need_skills() {
   local file=$1 missing=0 s d found

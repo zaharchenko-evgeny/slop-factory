@@ -4,6 +4,6 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=template/roles/_setup-common.sh
 . "$here/../_setup-common.sh"
-need_tools git pi
+need_tools git
 need_skills "$here/skills.txt"
 echo "reviewer: ready"

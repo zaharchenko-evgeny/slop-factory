@@ -12,7 +12,6 @@ References (contract plus one section per adapter):
 - [`references/trackers.md`](references/trackers.md)
 - [`references/channels.md`](references/channels.md)
 - [`references/targets.md`](references/targets.md)
-- [`references/harnesses.md`](references/harnesses.md)
 - [`references/checks.md`](references/checks.md)
 - [`references/run-log.md`](references/run-log.md)
 
@@ -27,7 +26,7 @@ Ask, one round at a time, with a recommended answer for each question:
 1. Repositories: name, URL, default branch, role (`primary` for exactly one, `project` for the others; ADR-0017).
 2. Tracker and project; stage mapping (see `references/trackers.md`).
 3. Channels: Slack Air Mate, local, Air session (`references/channels.md`).
-4. Targets: Air (project id, environment) and/or local harnesses.
+4. Target: Air (project id, environment); Air runs every model call (ADR-0018).
 5. Models per role.
 6. Gates and auto-approval rules.
 7. Limits (concurrency, fix rounds, daily runs, paid runs).
@@ -115,8 +114,6 @@ For each selected target, show a plan first:
   and the environment, using the air-automations and air-cloud MCPs. List
   creates, updates and prunes. Apply only after the user approves. Never touch
   an automation without the `[factory]` prefix.
-- **local** — link roles and skills for each harness (`references/harnesses.md`)
-  and run each role's `setup.sh`.
 
 ## 4. Verify
 

@@ -4,6 +4,6 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=template/roles/_setup-common.sh
 . "$here/../_setup-common.sh"
-need_tools git gh pi
+need_tools git gh
 need_skills "$here/skills.txt"
 echo "router: ready"

@@ -117,15 +117,6 @@
               }
             }
           }
-        },
-        "local": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "harness": { "enum": ["claude-code", "codex", "pi"] },
-            "poll_seconds": { "type": "integer" },
-            "workspace": { "type": "string" }
-          }
         }
       }
     },

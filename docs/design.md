@@ -110,8 +110,7 @@ selected in `factory.yaml`.
 | --- | --- | --- |
 | tracker | YouTrack (v1), GitHub Issues | Map stages `draft → ready → in-dev → in-review → changes-requested → approved → done`, plus `blocked` (needs a human answer) and `failed`, to fields, states, tags or labels |
 | channel | Slack Air Mate, local session, Air cloud session | Receive a request, load the router, hand off only through the tracker or a direct run |
-| target | Air, local (ADR-0017) | Plan (diff), apply after approval, prune factory-owned items only; both read the same workflow and roles from the factory repository |
-| harness | Claude, Codex, pi | Render a role into the harness's agent or skill format |
+| target | Air (ADR-0018) | Plan (diff), apply after approval, prune factory-owned items only; reads the workflow and roles from the factory repository |
 | checks | jscpd, accio, repository test commands, tools from [dev-quality-gates](https://github.com/mokevnin/dev-quality-gates) | Stage `design` or `pre-review`; mode `advisory` or `blocking`; non-zero exit on violation |
 
 ## 8. Auto-approval (ADR-0005)

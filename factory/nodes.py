@@ -59,7 +59,7 @@ def validate(nodes, config):
     project = config.get("project")
     if not isinstance(project, dict) or not isinstance(project.get("name"), str) or not project["name"].strip():
         errs.append("project-name: project.name must be a non-empty string")
-    stages, tiers = config["tracker"]["stages"], config["models"]
+    stages, tiers = config["tracker"]["stages"], ((config.get("targets") or {}).get("air") or {}).get("models") or {}
     kinds = config["tracker"].get("stage_kinds", {})
     errs += [f"stage-without-kind: {s}" for s in sorted(set(stages) - set(kinds))]
     errs += [f"bad-stage-kind: {s}: {k}" for s, k in kinds.items() if k not in ("active", "waiting", "final")]
