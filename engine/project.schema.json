@@ -98,7 +98,10 @@
     "targets": {
       "type": "object",
       "properties": {
-        "air": {"type": "object"},
+        "air": {
+          "type": "object",
+          "properties": {"mcp_connectors": {"type": "array", "items": {"type": "string"}}}
+        },
         "local": {
           "type": "object",
           "additionalProperties": false,
@@ -113,7 +116,22 @@
     },
     "defaults": {"type": "object"},
     "models": {"type": "object", "additionalProperties": {"type": "string"}},
-    "roles": {"type": ["string", "object"]},
+    "roles": {
+      "type": ["string", "object"],
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "mcp": {"type": "array", "items": {"type": "string"}},
+          "modes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {"mcp": {"type": "array", "items": {"type": "string"}}}
+            }
+          }
+        }
+      }
+    },
     "limits": {"type": "object"},
     "gates": {"type": "object"},
     "checks": {"type": "array", "items": {"type": "object"}},
