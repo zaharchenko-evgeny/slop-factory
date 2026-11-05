@@ -27,12 +27,22 @@ class MissingTag(RuntimeError):
     """The tag does not exist in YouTrack: setup creates tags, the gate never does."""
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """The token must not follow a redirect to another origin: a redirect is an error."""
+
+    def redirect_request(self, *args, **kw):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def urllib_runner(base_url, token):
     def run(method, path, body=None):
         req = urllib.request.Request(base_url.rstrip("/") + path, method=method, headers={
             "Authorization": f"Bearer {token}", "Accept": "application/json", "Content-Type": "application/json"},
             data=None if body is None else json.dumps(body).encode())
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with _OPENER.open(req, timeout=60) as r:
             raw = r.read()
         return json.loads(raw) if raw.strip() else None
     return run
@@ -213,7 +223,7 @@ class YouTrackTicketStore:
             if child not in blockers:
                 self._command(n, f"depends on {child}")
                 wrote = True
-            wrote = self.edit_attrs(child, [ready]) or wrote
+            wrote = self.set_stage(child, ready, []) or wrote
             prev = child
         return wrote
 

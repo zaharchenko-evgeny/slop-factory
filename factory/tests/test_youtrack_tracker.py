@@ -150,11 +150,53 @@ class StoreTest(unittest.TestCase):
         resp = MagicMock()
         resp.__enter__.return_value.read.return_value = b"[]"
         with patch.dict(os.environ, {"MY_TOKEN": "secret"}), \
-                patch("urllib.request.urlopen", side_effect=lambda req, timeout=None: (sent.append(req), resp)[1]):
+                patch("urllib.request.OpenerDirector.open", side_effect=lambda req, timeout=None: (sent.append(req), resp)[1]):
             store = yt.YouTrackTicketStore.from_config({"url": "https://yt.example/", "token_env": "MY_TOKEN"})
             store.comments("T-1")
         self.assertEqual((sent[0].full_url.startswith("https://yt.example/api/issues/T-1/comments?fields="),
                           sent[0].get_header("Authorization")), (True, "Bearer secret"))
+
+    def test_redirect_does_not_forward_the_token(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        seen = []
+
+        class Target(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append(self.headers.get("Authorization"))
+                self.send_response(200), self.end_headers(), self.wfile.write(b"[]")
+
+            log_message = lambda *a: None
+
+        target = HTTPServer(("127.0.0.1", 0), Target)
+
+        class Redirect(Target):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{target.server_port}/api/issues")
+                self.end_headers()
+
+        origin = HTTPServer(("127.0.0.1", 0), Redirect)
+        for s in (origin, target):
+            threading.Thread(target=s.serve_forever, daemon=True).start()
+        try:
+            run = yt.urllib_runner(f"http://127.0.0.1:{origin.server_port}", "secret")
+            with self.assertRaises(Exception):
+                run("GET", "/api/issues")
+        finally:
+            origin.shutdown(), target.shutdown(), origin.server_close(), target.server_close()
+        self.assertEqual(seen, [])
+
+    def test_field_stage_child_gets_ready_in_the_state_field(self):
+        fake = FakeYouTrack()
+        store = yt.YouTrackTicketStore(fake, state_field="State")
+        store._create = lambda title, body: "T-1"
+        store._command = lambda *a: None
+        store.open_blockers_all = lambda n: ["T-1"]
+        store.create_children("T-9", [{"title": "c"}], "factory:ready")
+        writes = [(m, b) for m, p, b in fake.calls if m == "POST"]
+        self.assertEqual(writes, [("POST", {"customFields": [{"name": "State", "$type": "StateIssueCustomField",
+                                                              "value": {"name": "factory:ready"}}]})])
 
 
 if __name__ == "__main__":
