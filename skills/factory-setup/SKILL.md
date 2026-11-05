@@ -79,7 +79,6 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | Placeholder | Meaning | Used in |
 | --- | --- | --- |
 | `DESIGN_REF` | Pointer to the design document, e.g. `(design §5)` | `workflows/delivery.md` |
-| `MAP_ISSUE_LINK` | Markdown link to the map issue | `AGENTS.workflow.md` |
 | `MODEL_POLICY` | One line on which models may be used | `AGENTS.workflow.md` |
 | `ROLE`, `TOOLS` | Role name and the tools its `setup.sh` needs; filled once per role from `ROLES` | `roles/setup.sh.tmpl` |
 
