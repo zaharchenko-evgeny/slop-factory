@@ -14,7 +14,7 @@ import config
 def repository_name():
     try:
         return config.load()["tracker"]["repository"]
-    except FileNotFoundError:
+    except (FileNotFoundError, SystemExit):
         remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT,
                                 capture_output=True, text=True)
         if remote.returncode:

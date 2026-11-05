@@ -33,7 +33,17 @@ def set_team(path):
 
 
 def team_root():
-    return _team or Path(os.environ.get("FACTORY_TEAM") or Path.cwd()).resolve()
+    if _team:
+        return _team
+    if os.environ.get("FACTORY_TEAM"):
+        return Path(os.environ["FACTORY_TEAM"]).resolve()
+    cwd = Path.cwd()
+    if any((d / f).exists() for d in (cwd, ENGINE_ROOT) for f in (PROJECT_DESCRIPTOR, DESCRIPTOR)):
+        return cwd.resolve()
+    home = Path.home() / "factory-team"
+    if home.is_dir():
+        return home.resolve()
+    raise SystemExit("factory: no team repository (set FACTORY_TEAM or run the installed factory)")
 
 
 def engine_root():

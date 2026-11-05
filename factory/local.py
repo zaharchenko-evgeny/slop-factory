@@ -15,6 +15,9 @@ repository. It names each missing item and exits 1. `--apply` records the result
 (the agent runs `factory begin` and `factory end` itself), then for a write node the push of its `ez/` branch and,
 for `create-pr`, `gh pr create`. Script nodes run `factory sweep --event`. Seen events are kept in
 `.factory/local/seen.json`; `--dry-run` lists the events without running or recording them.
+A node with a `schedule <name>` wake runs when its cron (5 fields, UTC) is due in the loop's current minute; that
+run is keyed `schedule:<name>:<YYYY-MM-DDTHH:MM>`. Before the harness starts, the worktree gets the role's skills
+and `factory-step` in the harness's project skill directory, excluded from git.
 """
 import json
 import os
@@ -23,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -50,21 +54,75 @@ STATE, SEEN, WORKTREES = Path(".factory/local.json"), Path(".factory/local/seen.
 TRIES_FILE = Path(".factory/local/tries.json")  # failed runs per event that are tried again
 FACTORY = ["uv", "run", "--quiet", str(Path(__file__).resolve().parent / "cli.py")]
 WRITE_OUTPUTS = ("create-pr", "push-to-source")
+SKILL_DIR = {"claude-code": ".claude/skills", "codex": ".agents/skills", "pi": ".agents/skills", "junie": ".agents/skills"}
 
 
 def plan_local(nodes, config):
-    """Each automation the local loop serves, named and triggered as on Air; scheduled and manual-only nodes are not."""
+    """Each automation the local loop serves, named and triggered as on Air; a manual-only node is not. A scheduled node
+    carries its `schedules` (names) beside its event `triggers`."""
     out = []
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
         events = [t for t in n["triggers"] if not str(t).startswith("schedule ") and str(t) != "manual"]
+        scheds = [str(t)[9:] for t in n["triggers"] if str(t).startswith("schedule ")]
         for automation, tier_arg, tier, focus in deploy_mod.variants(name, n, config["roles"]):
-            if events:
+            if events or scheds:
                 out.append({"automation": automation, "node": name, "role": n["role"], "tier": tier, "focus": focus,
+                            "schedules": scheds,
                             "triggers": [deploy_mod.trigger(t, tier_arg, None, focus) for t in events],
                             "output": n.get("output", "read-only")})
     return out
+
+
+def field_matches(field, value, low):
+    """True when `value` is in one cron field: `*`, numbers, ranges, lists and `*/n` (also `a-b/n`, `a/n`)."""
+    for part in field.split(","):
+        rng, _, step = part.partition("/")
+        a, _, b = rng.partition("-")
+        if rng == "*":
+            start, end = low, None
+        else:
+            start, end = int(a), int(b) if b else (None if step else int(a))
+        if value >= start and (end is None or value <= end) and (not step or (value - start) % int(step) == 0):
+            return True
+    return False
+
+
+def cron_due(cron, when):
+    """True when the 5-field cron (minute hour day month weekday, UTC) matches the minute of `when`.
+    Day and weekday must both match; weekday 0 or 7 is Sunday."""
+    minute, hour, day, month, weekday = cron.split()
+    wd = (when.weekday() + 1) % 7
+    return (field_matches(minute, when.minute, 0) and field_matches(hour, when.hour, 0)
+            and field_matches(day, when.day, 1) and field_matches(month, when.month, 1)
+            and (field_matches(weekday, wd, 0) or (wd == 0 and field_matches(weekday, 7, 0))))
+
+
+def due_schedules(plan, crons, when):
+    """(event id, plan entry, payload) for each scheduled automation whose cron is due in the minute of `when`."""
+    stamp = when.strftime("%Y-%m-%dT%H:%M")
+    return [(f"schedule:{name}:{stamp}", entry, {"eventType": "schedule", "schedule": name})
+            for entry in plan for name in entry.get("schedules") or []
+            if cron_due(crons[name]["cron"], when)]
+
+
+def install_skills(run, role, harness, tree):
+    """Copy the role's skills (`roles/<role>/skills.txt`) and `factory-step` into the harness's project skill
+    directory of the worktree `tree`, and keep that directory out of git."""
+    listed = config_mod.resolve(f"roles/{role}/skills.txt")
+    target = tree / SKILL_DIR[harness]
+    sources = [config_mod.resolve(f"skills/{x}") for x in (listed.read_text().split() if listed.exists() else [])]
+    for src in [*sources, config_mod.engine_root() / "skills/factory-step"]:
+        shutil.copytree(src, target / src.name, dirs_exist_ok=True)
+    path = sh(run, ["git", "-C", str(tree), "rev-parse", "--git-path", "info/exclude"]).stdout.strip()
+    if path:
+        exclude = tree / path
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        text = exclude.read_text() if exclude.exists() else ""
+        line = SKILL_DIR[harness].split("/")[0] + "/skills/"
+        if line not in text.split():
+            exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + line + "\n")
 
 
 def same_repository(url, origin):
@@ -217,7 +275,7 @@ def run_event(entry, payload, state, config, graph, run):
     repos = {r["name"]: r for r in config["repositories"]}
     primary = next(r["name"] for r in config["repositories"] if r.get("role") == "primary")
     pr, issue = payload.get("pull_request") or {}, payload.get("issue") or {}
-    ticket = ticket_from_ref((pr.get("head") or {}).get("ref")) or issue.get("number") or pr.get("number")
+    ticket = ticket_from_ref((pr.get("head") or {}).get("ref")) or issue.get("number") or pr.get("number") or "schedule"
     trees = {primary: (WORKTREES / str(ticket) / primary).resolve()}
     sh(run, ["git", "-C", state["checkouts"][primary], "fetch", "--quiet", "origin"])
     error = worktree(run, state["checkouts"][primary], trees[primary], f"origin/{repos[primary]['default_branch']}")
@@ -229,10 +287,10 @@ def run_event(entry, payload, state, config, graph, run):
     if begin.returncode:
         return f"begin failed: {(begin.stdout + begin.stderr).strip()[-300:]}"
     out, write = json.loads(begin.stdout), entry["output"] in WRITE_OUTPUTS
-    branch = out["branch"]
+    branch = out.get("branch")  # a scheduled routine has no ticket branch
     for c in out.get("checkouts") or []:
         trees.setdefault(c["repo"], (WORKTREES / str(ticket) / c["repo"]).resolve())
-    for name, path in trees.items():
+    for name, path in trees.items() if branch else ():
         checkout = state["checkouts"][name]
         sh(run, ["git", "-C", checkout, "fetch", "--quiet", "origin"])
         remote = sh(run, ["git", "-C", checkout, "ls-remote", "--heads", "origin", "--", branch]).stdout.strip()
@@ -245,11 +303,12 @@ def run_event(entry, payload, state, config, graph, run):
         f"\n\nThe ticket's other repositories are checked out on its branch:{others}" if others else "")
     model = local_models(config)[entry["tier"]]
     harness = role_harness(config, node["role"], entry["focus"])
+    install_skills(run, node["role"], harness, trees[primary])
     done = sh(run, harness_argv(harness, model, write, prompt), cwd=trees[primary],
               env={**os.environ, "FACTORY_TEAM": state["factory"]})
     if done.returncode:
         return f"harness failed: {(done.stdout + done.stderr).strip()[-300:]}"
-    if not write:
+    if not write or not branch:
         return "ran"
     for name, path in trees.items():
         base = repos[name]["default_branch"]
@@ -282,7 +341,7 @@ def save(path, value):
     os.replace(tmp, path)
 
 
-def main(argv, run=subprocess.run, sleep=time.sleep):
+def main(argv, run=subprocess.run, sleep=time.sleep, now=lambda: datetime.now(timezone.utc)):
     if "--local" not in argv or set(argv) - {"--local", "--once", "--dry-run"}:
         print(__doc__)
         return 2
@@ -302,11 +361,12 @@ def main(argv, run=subprocess.run, sleep=time.sleep):
                 return 1
             sleep(state.get("poll_seconds", 60))
             continue
+        events += due_schedules(plan, graph.get("schedules") or {}, now())
         for event_id, entry, payload in events:
             key = f"{entry['automation']}:{event_id}"
             if key in seen:
                 continue
-            if first and not event_id.startswith("labeled:"):  # a merge, close or push before the first run is history
+            if first and not event_id.startswith(("labeled:", "schedule:")):  # a merge, close or push before the first run is history
                 seen.add(key)
                 continue
             if "--dry-run" in argv:

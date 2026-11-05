@@ -1573,9 +1573,9 @@ class RecalibratedBlocksTest(unittest.TestCase):
         tr = MemoryTracker({"7": {"stage": "in-dev", "attrs": ["factory:implement-mid"]},
                             "8": {"stage": "in-dev", "attrs": ["factory:implement-mid"]}})
         for n in ("7", "8"):
-            code, out = gate.apply("implement", "env-broken", {"ticket": n, "failing_check": "shellcheck"}, tr, NODES)
+            code, out = gate.apply("implement", "env-broken", {"ticket": n, "failing_check": "doc-references"}, tr, NODES)
             self.assertEqual(code, gate.GO)
-        red = [k for k, t in tr.tickets.items() if t.get("title") == "Main is red in Air: shellcheck"]
+        red = [k for k, t in tr.tickets.items() if t.get("title") == "Main is red in Air: doc-references"]
         self.assertEqual(len(red), 1)  # reused, not duplicated
         for n in ("7", "8"):
             t = tr.tickets[n]

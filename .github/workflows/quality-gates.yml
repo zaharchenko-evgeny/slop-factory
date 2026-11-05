@@ -91,7 +91,14 @@ jobs:
       # No branch protection (private repository): a red main is owned by one ticket.
       - name: Open or reuse the Main is red ticket
         if: failure() && github.event_name == 'push'
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
+          # A flaky check gets one re-run of the failed jobs; the ticket opens only when the re-run fails too.
+          if [ "$RUN_ATTEMPT" -lt 2 ] && gh run rerun "$GITHUB_RUN_ID" --failed; then
+            echo "re-running the failed jobs once before opening a ticket"
+            exit 0
+          fi
           check=$(grep -m1 -E '^[A-Za-z0-9_.-]+: fail$' checks.log | cut -d: -f1)
           title="Main is red: ${check:-factory-checks}"
           n=$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title==\"$title\"))[0].number // empty")
@@ -101,6 +108,12 @@ jobs:
 
           Factory-Run: ${GITHUB_RUN_ID}"
           fi
+      - name: Close the Main is red tickets
+        if: success() && github.event_name == 'push'
+        env:
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: scripts/close-main-red.sh
       # Re-test only approved PRs before merge; other branches are updated on their next push.
       - name: Re-run on approved factory PRs
         if: github.event_name == 'push'

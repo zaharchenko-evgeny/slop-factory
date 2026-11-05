@@ -32,8 +32,6 @@ import nodes as nodes_mod
 import vocab
 
 ROOT = Path(__file__).resolve().parents[1]
-# Air cannot delete an environment variable or set it to an empty value: deploy ignores the ones it no longer uses.
-LEGACY_ENVIRONMENT_VARIABLES = {"FACTORY_TEAM_REPOSITORY"}
 PR_TRIGGERED_NODES = {"review", "join", "fix", "update", "finish", "reopen"}
 BOT_FILTERED = ("review-", "join", "reopen")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
@@ -112,6 +110,8 @@ SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no f
                  "itself. Run `factory sweep{args}` in the foreground with no time limit; "
                  "wait until it exits, "
                  "and report its JSON output.")
+INSTALLED_FACTORY = (" Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path "
+                     "into the engine checkout.")
 PR_NUMBER = " --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>"
 SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>", "finish": PR_NUMBER,
                "reopen": PR_NUMBER, "merge": PR_NUMBER,
@@ -163,7 +163,7 @@ def script_prompt(name: str, main_repository: dict | None = None, config: dict |
         prompt = SCRIPT_PROMPT.format(args=args)
         if "--issue" in args:
             prompt += " Copy only that one number; never write the payload or any JSON."
-    return checkout + prompt
+    return checkout + prompt + INSTALLED_FACTORY
 
 
 def skill_lines(role: str) -> str:
@@ -512,8 +512,6 @@ def environment_detail(x: dict) -> dict:
         x["vm"] = x.pop("instanceTypeKey") or "default"
     if isinstance(x.get("variables"), list):
         x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
-    if isinstance(x.get("variables"), dict):
-        x["variables"] = {k: v for k, v in x["variables"].items() if k not in LEGACY_ENVIRONMENT_VARIABLES}
     if "personalSecrets" in x:
         x["secrets"] = [s["name"] for s in x.pop("personalSecrets")]
     return x

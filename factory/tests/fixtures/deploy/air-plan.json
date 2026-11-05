@@ -52,7 +52,7 @@
       "environmentConfigId": "[Slop factory] read",
       "mcpConnectors": [],
       "name": "[Slop factory] start",
-      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --main --issue <the issue number>` in the foreground with no time limit; wait until it exits, and report its JSON output. Copy only that one number; never write the payload or any JSON.",
+      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --main --issue <the issue number>` in the foreground with no time limit; wait until it exits, and report its JSON output. Copy only that one number; never write the payload or any JSON. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -538,7 +538,7 @@
       "environmentConfigId": "[Slop factory] read",
       "mcpConnectors": [],
       "name": "[Slop factory] sweep",
-      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep` in the foreground with no time limit; wait until it exits, and report its JSON output.",
+      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep` in the foreground with no time limit; wait until it exits, and report its JSON output. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -658,7 +658,7 @@
       "environmentConfigId": "[Slop factory] read",
       "mcpConnectors": [],
       "name": "[Slop factory] recover",
-      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep` in the foreground with no time limit; wait until it exits, and report its JSON output.",
+      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep` in the foreground with no time limit; wait until it exits, and report its JSON output. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -778,7 +778,7 @@
       "environmentConfigId": "[Slop factory] read",
       "mcpConnectors": [],
       "name": "[Slop factory] merge",
-      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>` in the foreground with no time limit; wait until it exits, and report its JSON output. Copy only that one number; never write the payload or any JSON.",
+      "prompt": "This step runs one command and judges nothing: it changes no file, label, comment or review itself. Run `factory sweep --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>` in the foreground with no time limit; wait until it exits, and report its JSON output. Copy only that one number; never write the payload or any JSON. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -912,7 +912,7 @@
       "environmentConfigId": "[Slop factory] read",
       "mcpConnectors": [],
       "name": "[Slop factory] notify",
-      "prompt": "Run `factory notify --issue <the issue number>` in the foreground with no time limit, wait until it exits, and report its output.",
+      "prompt": "Run `factory notify --issue <the issue number>` in the foreground with no time limit, wait until it exits, and report its output. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -1046,7 +1046,7 @@
       "environmentConfigId": "[Slop factory] read",
       "mcpConnectors": [],
       "name": "[Slop factory] doctor",
-      "prompt": "Run the installed `factory doctor` command exactly once in the foreground with no arguments. Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself.",
+      "prompt": "Run the installed `factory doctor` command exactly once in the foreground with no arguments. Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -1180,7 +1180,7 @@
       "environmentConfigId": "[Slop factory] write",
       "mcpConnectors": [],
       "name": "[Slop factory] doctor-write",
-      "prompt": "Run the installed `factory doctor` command exactly once in the foreground with no arguments. Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself.",
+      "prompt": "Run the installed `factory doctor` command exactly once in the foreground with no arguments. Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -1314,7 +1314,7 @@
       "environmentConfigId": "[Slop factory] ops",
       "mcpConnectors": [],
       "name": "[Slop factory] doctor-ops",
-      "prompt": "Run the installed `factory doctor` command exactly once in the foreground with no arguments. Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself.",
+      "prompt": "Run the installed `factory doctor` command exactly once in the foreground with no arguments. Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",

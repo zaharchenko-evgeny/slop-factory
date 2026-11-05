@@ -89,6 +89,28 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-review")
 
+    def test_end_env_broken_records_check_and_parks_ticket(self):
+        tracker = self.tracker()
+        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        code, out = self.run_cli("end", "env-broken", "--failing-check", "doc-references")
+        self.assertEqual(code, 0, out)
+        handoff = json.loads(Path(".factory/handoff/implement.json").read_text())
+        self.assertEqual(handoff["failing_check"], "doc-references")
+        ticket = json.loads(Path("tickets.json").read_text())["7"]
+        self.assertEqual(ticket["stage"], "ready")
+        self.assertEqual(ticket["blocked_by"], ["red-doc-references"])
+        self.assertEqual(json.loads(Path("tickets.json").read_text())["red-doc-references"]["title"],
+                         "Main is red in Air: doc-references")
+
+    def test_end_env_broken_requires_failing_check(self):
+        self.tracker()
+        code, out = self.run_cli("begin", "implement-mid", "event.json", "--tracker", "memory:tickets.json")
+        self.assertEqual(code, 0, out)
+        code, out = self.run_cli("end", "env-broken")
+        self.assertNotEqual(code, 0)
+        self.assertIn("--failing-check", out)
+
     def test_begin_lists_notes_for_role(self):
         mine, theirs = {"for": "developer", "hint": "see a.py"}, {"for": "reviewer", "hint": "skip"}
         tracker = self.tracker(agent_notes=[theirs, mine, {"for": "any", "hint": "all"}])
@@ -296,7 +318,8 @@ class ImportTimeBoundaryTest(unittest.TestCase):
             shared.mkdir(parents=True)
             (shared / "gate.py").write_text(
                 'import json\nif __name__ == "__main__":\n    print(json.dumps({"gate": "outer-home"}))\n')
-            env = {**os.environ, "HOME": str(tmp / "isolated-home")}
+            env = {**os.environ, "HOME": str(tmp / "isolated-home"),
+                   "FACTORY_TEAM": str(ROOT / "factory/tests/fixtures/team")}
             with mock.patch.dict(os.environ, {"HOME": str(outer_home)}):
                 done = subprocess.run([sys.executable, str(pr / "factory/cli.py"), "begin", "fix-mid", "event.json"], cwd=pr,
                                       capture_output=True, text=True, env=env)
