@@ -784,7 +784,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                     queue.append(p)
             except Exception as e:  # one ticket failing does not stop the others
                 failed = True
-                r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
+                r = {"ticket": n, "error": f"{type(e).__name__}: {e}", **({"kind": e.kind} if hasattr(e, "kind") else {})}
                 results.append(r)
                 if progress:
                     progress(r)
@@ -1049,6 +1049,7 @@ def main(argv):
                                                          progress=progress)
                 failed = failed or stale_failed
             print(json.dumps(out))
+            print(json.dumps({"github_calls": getattr(getattr(tracker, "run", None), "calls", 0)}))  # last line: the load on the rate limit
             return FAILED if failed else GO
         if not a.node:
             raise Bad("--node is required")

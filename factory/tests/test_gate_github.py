@@ -1433,6 +1433,23 @@ class GateTest(unittest.TestCase):
             self.assertEqual(json.loads(p.stdout)["context"]["stage"], "triage")
 
 
+class SweepCallCountTest(unittest.TestCase):
+    def test_last_line_of_a_sweep_counts_the_gh_calls(self):
+        import contextlib
+        import io
+        from unittest.mock import patch
+        calls = []
+        gh = FakeGh(labels=("factory:in-review", "risk:low"))
+        tracker = tr(lambda args, **kw: calls.append(args) or gh(args, **kw))
+        out = io.StringIO()
+        with patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), \
+                patch.object(gate.GitHubCodeHost, "from_config", return_value=None), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            gate.main(["sweep", "--issue", "7", "--dry-run"])
+        self.assertEqual(json.loads(out.getvalue().splitlines()[-1]), {"github_calls": len(calls)})
+        self.assertGreater(len(calls), 0)
+
+
 class StaleFactsTest(unittest.TestCase):
     def test_update_command_reaches_stale_planner(self):
         gh = FakeGh(labels=("factory:changes-requested", "risk:low", "factory:update-cheap"))
