@@ -4,6 +4,7 @@
 # dependencies = ["pyyaml>=6"]
 # ///
 """Tests for factory/local.py, the local target. Run: uv run factory/tests/test_local.py"""
+import base64
 import contextlib
 import datetime
 import io
@@ -151,11 +152,18 @@ class PlanLocalTest(unittest.TestCase):
         self.assertFalse(local.same_repository(URL, "https://github.com/zaharchenko-evgeny/slop-eval-factory"))
 
 
-class GitHub:
-    """The `gh`, `git`, `factory` and harness calls of one `factory run --local` pass; records them in order."""
+def node_id(rest):
+    """The GraphQL node id of a labeled event whose REST id is `rest` (msgpack [0, uint64], as GitHub writes them)."""
+    return "LE_" + base64.urlsafe_b64encode(bytes([0x92, 0x00, 0xcf]) + rest.to_bytes(8, "big")).decode().rstrip("=")
 
-    def __init__(self, issues=None, prs=None, merged=(), begin_code=0, push_code=0, gh_down=False, branch="ez/7-add-x"):
-        self.branch = branch
+
+class GitHub:
+    """The `gh`, `git`, `factory` and harness calls of one `factory run --local` pass; records them in order.
+    The poll search answers with each issue and PR of `issues`/`prs`; its labeled event of issue n has REST id 100 + n."""
+
+    def __init__(self, issues=None, prs=None, merged=(), begin_code=0, push_code=0, gh_down=False, branch="ez/7-add-x",
+                 bad_ids=False):
+        self.branch, self.bad_ids = branch, bad_ids
         self.issues, self.prs, self.merged, self.begin_code, self.calls = issues or {}, prs or {}, list(merged), begin_code, []
         self.push_code, self.gh_down = push_code, gh_down
 
@@ -188,6 +196,8 @@ class GitHub:
             if "--label" in argv:
                 return rows((self.issues if argv[1] == "issue" else self.prs).get(argv[argv.index("--label") + 1], []))
             return rows(self.merged if "merged" in argv else [])
+        if argv[:3] == ["gh", "api", "graphql"]:
+            return ok(json.dumps({"data": {"search": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": self.search_nodes()}}}))
         if argv[:2] == ["gh", "api"]:
             n = int(argv[3].split("/")[-2])
             labels = {**{k: v for k, v in self.issues.items()}, **{k: v for k, v in self.prs.items()}}
@@ -198,6 +208,19 @@ class GitHub:
         if argv[0] == "git" and "rev-list" in argv:
             return ok("1\n")
         return ok()
+
+    def search_nodes(self):
+        nodes = {}
+        for pr, table in ((False, self.issues), (True, self.prs)):
+            for label, items in table.items():
+                for item in items:
+                    n = item["number"]
+                    node = nodes.setdefault((pr, n), {"number": n, "__typename": "PullRequest" if pr else "Issue",
+                                                    "headRefName": item.get("headRefName"), "labels": {"nodes": []},
+                                                    "timelineItems": {"pageInfo": {"hasPreviousPage": False}, "nodes": []}})
+                    node["labels"]["nodes"].append({"name": label})
+                    node["timelineItems"]["nodes"].append({"id": "LE_?" if self.bad_ids else node_id(100 + n), "label": {"name": label}})
+        return list(nodes.values())
 
     def kinds(self):
         return [k for k, _ in self.calls if k]
@@ -355,6 +378,33 @@ class CronTest(unittest.TestCase):
             self.assertTrue(local.cron_due(cron, t), cron)
         for cron in ("*/7 * * * *", "30 7 * * *", "30 6 * * 0", "30 6 6 * *"):
             self.assertFalse(local.cron_due(cron, t), cron)
+
+
+class PollTest(unittest.TestCase):
+    def labeled(self, *labels):
+        return [{"eventType": kind, "filters": {"label": label}} for kind, label in labels]
+
+    def test_three_watched_labels_read_one_search_and_no_events(self):
+        gh = GitHub(issues={"factory:a": [{"number": 7}], "factory:b": [{"number": 7}], "factory:c": [{"number": 8}]})
+        plan = [{"triggers": self.labeled(("issues.labeled", "factory:a"), ("issues.labeled", "factory:b"), ("issues.labeled", "factory:c"))}]
+        events = local.poll(plan, "zaharchenko-evgeny/slop-factory", gh)
+        self.assertEqual(len([x for x in gh.calls if "graphql" in x[1]]), 1)
+        self.assertFalse([x for x in gh.calls if any("/events" in a for a in x[1])])
+        self.assertEqual([(eid, p["label"]["name"], p["issue"]["number"]) for eid, _, p in events],
+                         [("labeled:107", "factory:a", 7), ("labeled:107", "factory:b", 7), ("labeled:108", "factory:c", 8)])
+
+    def test_the_event_id_is_the_rest_id_decoded_from_the_node_id(self):
+        gh = GitHub(prs={"factory:review-full": [{"number": 5, "headRefName": "ez/7-add-x"}]})
+        plan = [{"triggers": self.labeled(("pull_request.labeled", "factory:review-full"))}]
+        [(eid, _, payload)] = local.poll(plan, "zaharchenko-evgeny/slop-factory", gh)
+        self.assertEqual(eid, f"labeled:{local.graphql.rest_id(node_id(105))}")
+        self.assertEqual(payload["pull_request"], {"number": 5, "head": {"ref": "ez/7-add-x"}})
+
+    def test_an_undecodable_node_id_falls_back_to_events(self):
+        gh = GitHub(issues={"factory:a": [{"number": 7}]}, bad_ids=True)
+        plan = [{"triggers": self.labeled(("issues.labeled", "factory:a"))}]
+        self.assertEqual([eid for eid, _, _ in local.poll(plan, "zaharchenko-evgeny/slop-factory", gh)], ["labeled:107"])
+        self.assertEqual(len([x for x in gh.calls if any("/events" in a for a in x[1])]), 1)
 
 
 if __name__ == "__main__":
