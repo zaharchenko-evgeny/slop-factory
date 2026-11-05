@@ -44,7 +44,7 @@ change, whether you are a person, a pi session or a factory role.
    never approves, and never merges. On Air the platform pushes the branch
    (`create-pr` for implement, `push-to-source` for fix); work on the
    `branch` that `check` prints. Every automation starts on a label or a PR
-   event, never on a schedule: CI labels the PR `factory:ci-green` or
+   event, a schedule or a webhook: CI labels the PR `factory:ci-green` or
    `factory:ci-red` when it finishes (`.github/workflows/quality-gates.yml`).
    Scripted steps (join, finish) run only `gate.py sweep`. Agent reviews are `COMMENT` reviews pinned to the head,
    with the verdict in a `<!-- factory:review ... -->` marker.

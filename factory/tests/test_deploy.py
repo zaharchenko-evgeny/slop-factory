@@ -401,6 +401,15 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
         self.assertEqual(self.calls("automation"), [["delete_automation", {"automationId": "a2"}]])
 
+    def test_apply_prints_webhook_registration_when_unchanged(self):
+        state = ([{"name": "[F] hook", "webhooks": [{"id": "t1", "url": "https://air/hook/t1"}]}], [])
+        out = io.StringIO()
+        with mock.patch.object(deploy, "read_state", return_value=state), mock.patch.object(deploy, "diff", return_value=[]), \
+                contextlib.redirect_stdout(out):
+            code = deploy.deploy("--apply", False, {"prefix": "[F]", "environments": [], "automations": []}, None, None)
+        self.assertEqual(code, 0)
+        self.assertIn("webhook [F] hook: trigger t1 https://air/hook/t1", out.getvalue())
+
     def test_apply_verifies_after_write(self):
         self.seed([], [])
         self.assertEqual(self.run_deploy("--dry-run"), 0)
@@ -830,6 +839,14 @@ class PlanTest(unittest.TestCase):
         intake = a["[Slop factory] intake"]  # `bug` is disabled in the graph
         self.assertIn("- `grill`:", intake)
         self.assertNotIn("- `bug`:", intake)
+
+    def test_webhook_node_plans_a_webhook_trigger_with_the_node_output(self):
+        graph = nodes.load()
+        graph["nodes"]["hook"] = {**graph["nodes"]["intake"], "triggers": ["webhook dry-run-finished"], "output": "create-pr"}
+        a = next(x for x in deploy.plan_air(graph, cfg.load())["automations"] if x["name"] == "[Slop factory] hook")
+        self.assertEqual(a["triggers"], [{"triggerType": "WEBHOOK"}])
+        self.assertEqual(a["triggerVcs"], [{"outputBehaviour": "create-pr"}])
+        self.assertIn("`factory begin hook --issue <the `issue` field of the trigger payload>`", a["prompt"])
 
     def test_scheduled_routine_prompts_take_no_number(self):
         a = {x["name"]: x["prompt"] for x in deploy.plan_air(nodes.load(), cfg.load())["automations"]}
