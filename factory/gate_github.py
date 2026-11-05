@@ -168,6 +168,13 @@ class GitHubGateTracker(DescriptorPort):
     def _labels(self, n, repo=None):
         return [x["name"] for x in self._api(f"issues/{n}", repo=repo)["labels"]]
 
+    def main_green(self):
+        """The latest completed quality-gates run on main succeeded and tested the current main head."""
+        runs = json.loads(self.run(["run", "list", "-R", self.repo, "--workflow", "quality-gates.yml", "--branch", "main",
+                                    "--event", "push", "--status", "completed", "--limit", "1", "--json", "conclusion,headSha"]))
+        return (bool(runs) and runs[0]["conclusion"] == "success"
+                and runs[0].get("headSha") == self._api("commits/main")["sha"])
+
     def sweep_tickets(self, stages, open_only=False):
         """Issue numbers (open or closed) whose stage label is one of `stages`."""
         found = set()
