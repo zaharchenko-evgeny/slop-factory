@@ -150,7 +150,10 @@ def trigger_text(t, n, schedules):
     event, _, label = t.partition(" ")
     names = {"issues.labeled": "issue +", "pull_request.labeled": "PR +", "pull_request.merged": "PR merged", "issues.closed": "issue closed", "issues.unlabeled": "issue label removed",
              "pull_request.synchronize": "PR push", "pull_request.opened": "PR opened",
+             "issue_comment.created": "comment on a PR",
              "pull_request_review.submitted": "PR review submitted", "workflow_run": "run of ", "manual": "a person"}
+    if event == "webhook":
+        return f"webhook {label}"
     if event == "schedule":
         return f"cron {schedules.get(label, {}).get('cron', label)}"
     return names.get(event, event) + label

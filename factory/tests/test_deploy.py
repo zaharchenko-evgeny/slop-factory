@@ -819,10 +819,16 @@ class PlanTest(unittest.TestCase):
         self.assertEqual((spec["node"], spec["tier"], spec["engine"]), ("implement", "mid", cfg.load()["engine"]))
         self.assertEqual(set(spec["outcomes"]), {"done", "error", "blocked", "failed", "env-broken"})
         self.assertIn("- `error`: the work needs the next tier", a["[Slop factory] implement-mid"]["prompt"])
-        self.assertEqual(set(a["[Slop factory] join"]["spec"]["runs"]), {"finish", "reopen", "merge", "start", "notify"})
-        notify = a["[Slop factory] notify"]
-        self.assertEqual({t["filters"]["label"] for t in notify["triggers"]}, {"factory:blocked", "factory:needs-answers"})
-        self.assertIn("factory notify --issue", notify["prompt"])
+        self.assertEqual(set(a["[Slop factory] join"]["spec"]["runs"]), {"finish", "reopen", "merge", "start"})
+
+    def test_inbox_node_plans_a_webhook_and_two_event_triggers_on_the_cheap_model(self):
+        config = cfg.load()
+        a = next(x for x in deploy.plan_air(nodes.load(), config)["automations"] if x["name"] == "[Slop factory] inbox")
+        self.assertEqual([t["triggerType"] for t in a["triggers"]], ["WEBHOOK", "EVENT", "EVENT"])
+        self.assertEqual([t["eventType"] for t in a["triggers"][1:]], ["pull_request.opened", "issue_comment.created"])
+        self.assertEqual(a["agentAndModel"]["id"], config["targets"]["air"]["models"]["cheap"].partition("/")[2])
+        self.assertIn("`comment.html_url`", a["prompt"])
+        self.assertIn("`factory begin inbox`", a["prompt"])
 
     def test_compile_automation_gives_the_gate_options(self):
         config, graph = cfg.load(), nodes.load()
@@ -899,13 +905,13 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["prefix"], "[Slop factory] ")
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
-            "intake", "start", "join", "finish", "reopen", "merge", "notify", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
+            "intake", "start", "join", "finish", "reopen", "merge", "inbox", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
             "reconcile",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}
         self.assertEqual(names, pilot)
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
-                         {"intake", "start", "implement", "review", "join", "fix", "update", "finish", "reopen", "merge", "notify"})
+                         {"intake", "start", "implement", "review", "join", "fix", "update", "finish", "reopen", "merge", "inbox"})
         self.assertEqual(deploy.plan_air(n, config), plan)
 
 
