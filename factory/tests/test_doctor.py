@@ -102,12 +102,10 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(got["skill:ponytail"]["result"], "ok")  # a developer skill, only in `write`
         self.assertNotIn("skill:ponytail", run(FakeGh(), "ops", which=lambda t: "/bin/" + t))
 
-    def test_local_harness_is_not_probed_on_air(self):
-        """Air runs the agent itself; `pi` in a role's need_tools is the local harness (#438)."""
+    def test_no_role_needs_a_local_agent_harness(self):
+        """Air runs every agent (#523): no role's need_tools names a harness CLI."""
         for env in ("read", "write", "ops"):
-            got = run(FakeGh(), env, which=lambda t: None if t == "pi" else "/bin/" + t)
-            self.assertNotIn("tool:pi", got)
-            self.assertEqual([p for p, r in got.items() if r["result"] != "ok"], [])
+            self.assertFalse({"pi", "claude", "codex"} & set(doctor.env_needs(env, nodes.load())[0]), env)
         self.assertIn("git", doctor.env_needs("write", nodes.load())[0])
 
     def test_missing_team_skill_does_not_fall_back_to_engine_template(self):

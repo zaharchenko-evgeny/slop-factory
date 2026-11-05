@@ -1,10 +1,13 @@
 # Harnesses
 
-Selected per role by `roles.<role>.harness` (a reviewer mode may set its own) in
-`factory.descriptor.yaml`, defaulting to `pi`. Values: `pi`,
-`claude-code`, `codex`, `junie`; an unknown value fails `sm.py validate`. Model ids
-stay per role. On the local target (ADR-0017), `targets.local.harness` picks the
-CLI that `factory deploy --target local` checks and `factory run --local` starts.
+A harness applies to the local target only (ADR-0017, ADR-0018): on Air the
+platform runs every agent with `targets.air.models`, and no role needs a harness
+CLI. Locally, a role runs in `roles.<role>.modes.<focus>.harness`, else
+`roles.<role>.harness`, else `targets.local.harness`, else `claude-code`.
+Values: `claude-code`, `codex`, `junie`, `pi`; an unknown value fails
+`factory validate`. The model is `targets.local.models[<tier>]`.
+`factory deploy --target local` checks the CLI of every harness the roles use;
+`factory run --local` starts each role in its own.
 
 ## Adapter contract (local target)
 
@@ -19,7 +22,6 @@ CLI that `factory deploy --target local` checks and `factory run --local` starts
   `claude --session-id` then `--resume`, `codex exec resume <thread>`).
 - `claude-code` and `codex` get the role files and each skill's `SKILL.md` as
   text (system prompt, resp. head of the prompt).
-- `junie`: stub. Preflight fails with one line until it is implemented.
 
 ## Role contract
 
@@ -45,6 +47,12 @@ CLI that `factory deploy --target local` checks and `factory run --local` starts
   sandbox for read-only roles. The developer gets `workspace-write` plus the
   worktree's git dir as a writable root, and resumes with `codex exec resume`.
 - Role files and skills are the head of the prompt.
+
+## Junie (`junie`)
+
+- Headless run: `junie --task <prompt> --model <model> --output-format json`.
+- Junie keeps its terminal tools, so a read-only role is held by the gate and
+  by the loop pushing nothing for a `read-only` node.
 
 ## pi (`pi`)
 

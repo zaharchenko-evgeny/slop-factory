@@ -33,7 +33,8 @@ Selected by `targets.<name>` in the team's effective configuration (`factory.pro
 
 ## Local (`local`)
 
-- Config (ADR-0017): `targets.local.harness` (`claude-code`, `codex` or `pi`),
+- Config (ADR-0017, ADR-0018): `targets.local.harness` (`claude-code`, `codex`, `junie` or `pi`;
+  a role or mode may set its own `harness`), `targets.local.models`,
   `poll_seconds` and `workspace`, the directory with a checkout per descriptor
   repository at `<workspace>/<name>`.
 - Plan: `factory deploy --target local` names each missing item (harness CLI,

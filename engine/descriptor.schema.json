@@ -122,7 +122,8 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "harness": { "enum": ["claude-code", "codex", "pi"] },
+            "harness": { "enum": ["claude-code", "codex", "junie", "pi"] },
+            "models": { "type": "object", "additionalProperties": { "type": "string" } },
             "poll_seconds": { "type": "integer" },
             "workspace": { "type": "string" }
           }
@@ -150,6 +151,7 @@
           "fallback": {
             "type": "string"
           },
+          "harness": { "enum": ["claude-code", "codex", "junie", "pi"], "description": "local target only" },
           "tools": {
             "type": "string"
           },
@@ -180,7 +182,8 @@
                 },
                 "fallback": {
                   "type": "string"
-                }
+                },
+                "harness": { "enum": ["claude-code", "codex", "junie", "pi"], "description": "local target only" }
               }
             }
           }

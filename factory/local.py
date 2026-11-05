@@ -31,7 +31,21 @@ import deploy as deploy_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 from gate_port import ticket_from_ref  # noqa: E402
 
-HARNESS_CLI = {"claude-code": "claude", "codex": "codex", "pi": "pi"}
+HARNESS_CLI = {"claude-code": "claude", "codex": "codex", "junie": "junie", "pi": "pi"}
+
+
+def role_harness(config, role, focus=None):
+    """The harness a role runs in on the local target: its mode's, else the role's, else `targets.local.harness`.
+    Air ignores it: there the platform runs the agent with `targets.air.models`."""
+    r = (config.get("roles") or {}).get(role) or {}
+    mode = ((r.get("modes") or {}).get(focus) or {}) if focus else {}
+    local = (config.get("targets") or {}).get("local") or {}
+    return mode.get("harness") or r.get("harness") or local.get("harness") or "claude-code"
+
+
+def local_models(config):
+    """Tier -> model on the local target: `targets.local.models` (the older top-level `models` still works)."""
+    return ((config.get("targets") or {}).get("local") or {}).get("models") or config.get("models") or {}
 STATE, SEEN, WORKTREES = Path(".factory/local.json"), Path(".factory/local/seen.json"), Path(".factory/worktrees")
 TRIES_FILE = Path(".factory/local/tries.json")  # failed runs per event that are tried again
 FACTORY = ["uv", "run", "--quiet", str(Path(__file__).resolve().parent / "cli.py")]
@@ -47,7 +61,7 @@ def plan_local(nodes, config):
         events = [t for t in n["triggers"] if not str(t).startswith("schedule ") and str(t) != "manual"]
         for automation, tier_arg, tier, focus in deploy_mod.variants(name, n, config["roles"]):
             if events:
-                out.append({"automation": automation, "node": name, "tier": tier, "focus": focus,
+                out.append({"automation": automation, "node": name, "role": n["role"], "tier": tier, "focus": focus,
                             "triggers": [deploy_mod.trigger(t, tier_arg, None, focus) for t in events],
                             "output": n.get("output", "read-only")})
     return out
@@ -62,12 +76,14 @@ def same_repository(url, origin):
 def checks(config, run=subprocess.run, which=shutil.which):
     """(missing items, the state `--apply` records)."""
     local = (config.get("targets") or {}).get("local") or {}
-    harness = local.get("harness") or "claude-code"
+    harnesses = sorted({role_harness(config, e["role"], e["focus"]) for e in plan_local(nodes_mod.load(), config)
+                        if e["role"] != "script"} or {role_harness(config, None)})
     team = config_mod.team_root()
     workspace = Path(os.path.expanduser(local.get("workspace") or str(team.parent)))
     missing, login, checkouts = [], None, {}
-    if not which(HARNESS_CLI[harness]):
-        missing.append(f"harness: `{HARNESS_CLI[harness]}` ({harness}) is not on PATH")
+    for harness in harnesses:
+        if not which(HARNESS_CLI[harness]):
+            missing.append(f"harness: `{HARNESS_CLI[harness]}` ({harness}) is not on PATH")
     if not which("factory"):
         missing.append("factory: not on PATH (the agent runs `factory begin` and `factory end`; `uv tool install` the engine)")
     if not which("gh"):
@@ -85,7 +101,7 @@ def checks(config, run=subprocess.run, which=shutil.which):
             missing.append(f"checkout: {r['name']} at {path} with origin {r['url']}")
         else:
             checkouts[r["name"]] = str(path)
-    return missing, {"harness": harness, "login": login, "poll_seconds": local.get("poll_seconds", 60),
+    return missing, {"harnesses": harnesses, "login": login, "poll_seconds": local.get("poll_seconds", 60),
                      "factory": str(team), "workspace": str(workspace), "checkouts": checkouts}
 
 
@@ -100,7 +116,7 @@ def deploy(argv, run=subprocess.run, which=shutil.which):
     if missing:
         return 1
     plan = plan_local(nodes_mod.load(), config)
-    print(f"local: {len(plan)} automations, harness {state['harness']}, checkouts {', '.join(state['checkouts'])}")
+    print(f"local: {len(plan)} automations, harnesses {', '.join(state['harnesses'])}, checkouts {', '.join(state['checkouts'])}")
     if "--apply" in argv:
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps({**state, "automations": [p["automation"] for p in plan]}, indent=2) + "\n")
@@ -168,6 +184,8 @@ def harness_argv(harness, model, write, prompt):
     if harness == "codex":  # `factory begin` and `end` call GitHub, so even a reviewer's sandbox needs the network
         return ["codex", "exec", "--json", "-m", model.split("/")[-1], "--sandbox", "workspace-write",
                 "-c", "sandbox_workspace_write.network_access=true", prompt]
+    if harness == "junie":  # Junie keeps its terminal tools; a read-only node is held by the gate and by no push
+        return ["junie", "--task", prompt, "--model", model.split("/")[-1], "--output-format", "json"]
     return ["pi", "-p", "--model", model, prompt]
 
 
@@ -220,8 +238,9 @@ def run_event(entry, payload, state, config, graph, run):
     others = "".join(f"\n- `{name}`: `{path}`" for name, path in trees.items() if name != primary)
     prompt = deploy_mod.agent_prompt(entry["node"], node, config, entry["automation"], entry["focus"]) + (
         f"\n\nThe ticket's other repositories are checked out on its branch:{others}" if others else "")
-    model = config["models"][entry["tier"]]
-    done = sh(run, harness_argv(state["harness"], model, write, prompt), cwd=trees[primary],
+    model = local_models(config)[entry["tier"]]
+    harness = role_harness(config, node["role"], entry["focus"])
+    done = sh(run, harness_argv(harness, model, write, prompt), cwd=trees[primary],
               env={**os.environ, "FACTORY_TEAM": state["factory"]})
     if done.returncode:
         return f"harness failed: {(done.stdout + done.stderr).strip()[-300:]}"

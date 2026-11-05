@@ -25,12 +25,6 @@ targets:
       strong: claude/claude-sonnet-5-5[1m]
       review: codex/gpt-6-luna
       review_strong: codex/gpt-6.1-sol
-models:
-  cheap: anthropic/claude-haiku-5-5
-  mid: anthropic/claude-sonnet-5-5
-  strong: anthropic/claude-sonnet-5-5
-  review: anthropic/claude-haiku-5-5
-  review_strong: anthropic/claude-sonnet-5-5
 roles:
   router:
     tier: cheap

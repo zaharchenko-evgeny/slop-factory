@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+import yaml
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -70,6 +72,16 @@ class LocalDeployTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("missing harness: `claude` (claude-code) is not on PATH", out)
 
+    def test_every_role_harness_is_checked(self):
+        path = self.team / "factory.descriptor.yaml"
+        d = yaml.safe_load(path.read_text())
+        d["roles"]["reviewer"]["harness"] = "junie"
+        path.write_text(yaml.safe_dump(d))
+        code, out = self.deploy(Machine(tools=("gh", "factory", "claude"), origins={"slop-factory": URL}))
+        self.assertEqual(code, 1)
+        self.assertIn("missing harness: `junie` (junie) is not on PATH", out)
+        self.assertNotIn("`claude`", out)
+
     def test_gh_not_logged_in_refuses(self):
         code, out = self.deploy(Machine(logged_in=False, origins={"slop-factory": URL}))
         self.assertEqual(code, 1)
@@ -84,7 +96,7 @@ class LocalDeployTest(unittest.TestCase):
         code, out = self.deploy(Machine(origins={"slop-factory": "git@github.com:zaharchenko-evgeny/slop-factory.git"}), "--apply")
         self.assertEqual(code, 0, out)
         state = json.loads((Path(self.tmp.name) / ".factory/local.json").read_text())
-        self.assertEqual((state["harness"], state["login"]), ("claude-code", "alice"))
+        self.assertEqual((state["harnesses"], state["login"]), (["claude-code"], "alice"))
         self.assertEqual(state["checkouts"], {"slop-factory": str(self.base / "slop-factory")})
         self.assertIn("implement-mid", state["automations"])
 
@@ -222,6 +234,23 @@ class RunLocalTest(unittest.TestCase):
         self.assertNotIn("push", gh.kinds())
         self.assertNotIn("acceptEdits", next(a for k, a in gh.calls if k == "harness"))
         self.assertTrue(all("--detach" in a for k, a in gh.calls if k == "checkout"))
+
+    def test_role_harness_mode_then_role_then_target(self):
+        config = {"targets": {"local": {"harness": "codex"}},
+                  "roles": {"reviewer": {"harness": "pi", "modes": {"full": {"harness": "junie"}}}, "router": {}}}
+        self.assertEqual(local.role_harness(config, "reviewer", "full"), "junie")
+        self.assertEqual(local.role_harness(config, "reviewer", "behaviour"), "pi")
+        self.assertEqual(local.role_harness(config, "router"), "codex")
+        self.assertEqual(local.role_harness({}, "router"), "claude-code")
+
+    def test_local_models_prefer_the_local_target(self):
+        self.assertEqual(local.local_models({"targets": {"local": {"models": {"mid": "a"}}}, "models": {"mid": "b"}}),
+                         {"mid": "a"})
+        self.assertEqual(local.local_models({"models": {"mid": "b"}}), {"mid": "b"})
+
+    def test_junie_runs_the_task_headless(self):
+        argv = local.harness_argv("junie", "anthropic/claude-x", True, "PROMPT")
+        self.assertEqual(argv, ["junie", "--task", "PROMPT", "--model", "claude-x", "--output-format", "json"])
 
     def test_the_claude_prompt_is_not_taken_as_an_allowed_tool(self):
         for write in (False, True):

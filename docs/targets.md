@@ -41,8 +41,10 @@ repository.
 ## Local target (ADR-0017)
 
 The same nodes run on a laptop with no Air account. `targets.local` in `factory.project.yaml` takes
-`harness` (`claude-code`, `codex` or `pi`), `poll_seconds` and `workspace` (default: the directory that holds
-the factory repository checkout).
+`harness` (`claude-code`, `codex`, `junie` or `pi`), `models` (tier to model), `poll_seconds` and `workspace`
+(default: the directory that holds the factory repository checkout). A role or reviewer mode may set its own
+`harness` (`roles.<role>.harness`, `roles.<role>.modes.<focus>.harness`). Harnesses and `targets.local.models`
+apply to this target only: on Air the platform runs every agent with `targets.air.models` (ADR-0018).
 
 - `factory --team <factory repo> deploy --target local` checks the harness CLI on `PATH`, a `gh` login, the
   factory repository checkout, and a checkout of every descriptor repository at `<workspace>/<name>` whose
