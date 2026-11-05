@@ -24,4 +24,7 @@ skills of the roles that `factory env roles "$FACTORY_ENV"` prints, plus
 `factory-step`, runs each role's `setup.sh`, and runs `environments/setup.sh`
 and `environments/$FACTORY_ENV/setup.sh` when present. It installs nothing
 specific to one team: put team tools in `environments/<env>/setup.sh`.
+The script is an example the factory-setup skill copies into a new team
+repository; the engine never runs it and a team owns and edits its copy. A role
+file or skill missing from the team repository makes it exit 1.
 `FACTORY_DRY=1` prints the skills it would install and exits.
