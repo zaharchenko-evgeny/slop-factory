@@ -110,6 +110,11 @@ class TeamRootTest(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertIn("unknown-key", out.getvalue())
 
+    def test_unknown_notify_provider_fails_validate_naming_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config.set_team(team(tmp, {**DESCRIPTOR, "notify": {**DESCRIPTOR["notify"], "providers": [{"kind": "nope"}]}}))
+            self.assertTrue([e for e in config.validate() if "nope" in e])
+
     def test_validate_passes_for_this_repository(self):
         config.set_team(ROOT / "factory/tests/fixtures/team")
         with contextlib.redirect_stdout(io.StringIO()) as out:
