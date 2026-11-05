@@ -808,7 +808,11 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                 if not out["applied"]:
                     break
                 if node == "finish" and outcome == "merged" and hasattr(tracker, "config_change_merged"):
-                    tracker.config_change_merged(facts.get("pr"))
+                    try:  # a reminder only: its failure must not stop the parent's step below
+                        tracker.config_change_merged(facts.get("pr"))
+                    except Exception as e:
+                        failed = True
+                        results.append({"ticket": n, "error": f"deploy check: {type(e).__name__}: {e}"})
                 merged = merged or (node, outcome) == ("merge", "merged")
                 if node == "finish" and outcome in ("merged", "children-done"):
                     done_tickets.append(n)

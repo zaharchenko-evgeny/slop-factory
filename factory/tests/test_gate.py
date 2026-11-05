@@ -86,6 +86,22 @@ class GateTest(unittest.TestCase):
         gate.sweep(tr, NODES)
         self.assertEqual(tr.deploy_ticket, {"title": "Deploy needed", "pr": 300})
 
+    def test_failed_plan_check_still_moves_the_parent(self):
+        class PlanTracker(MemoryTracker):
+            def config_change_merged(self, pr):
+                raise RuntimeError("git worktree add failed")
+        tr = PlanTracker({10: {"stage": "approved", "pr_state": "merged", "pr": 300}, 20: {"stage": "split"}})
+        tr.sweep_tickets = lambda stages: [10]
+        tr.parent = lambda n: 20 if n == 10 else None
+        seen = []
+        facts = tr.facts
+        tr.facts = lambda ticket: (seen.append(ticket), {**facts(ticket), "reviews": [], "fix_rounds": 0})[1]
+        results, failed = gate.sweep(tr, NODES, issue=10)
+        self.assertTrue(failed)
+        self.assertEqual(tr.tickets[10]["stage"], "done")
+        self.assertIn(20, seen)  # the parent was still read after the failed check
+        self.assertTrue(any("deploy check" in r.get("error", "") for r in results))
+
     def test_unchanged_plan_opens_nothing(self):
         class PlanTracker(MemoryTracker):
             def config_change_merged(self, pr):
