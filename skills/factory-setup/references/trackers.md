@@ -23,7 +23,14 @@ Selected by `tracker.adapter` in `factory.descriptor.yaml`.
   named secret (for example `YOUTRACK_TOKEN`).
 - Ticket id is the issue id (`PROJ-123`); branch and commit patterns use it.
 - Setup creates missing state values or tags only after the user approves.
-- Event trigger for Air: state changed to the `ready` value.
+- Stores (`factory.project.yaml`): a state or command is a `tag` store (`{tag: "factory:implement-<tier>"}`) or a
+  `field` store (`{field: {name: State, value: Ready}}`); pull-request commands stay `pr_label` on GitHub.
+- Token: the env var `tracker.token_env` (default `YOUTRACK_TOKEN`), set as an environment secret.
+- Event triggers for Air: ticket events render as `source: youtrack`, `eventType: issueUpdated`, with filter
+  `tagAdded: <tag>` for a tag store, or `<field name>: <value>` for a field store (exact, case-sensitive). PR triggers
+  stay `source: github`.
+- `factory doctor` checks the token variable, the project and every mapped tag and field value (read-only; it reports
+  a missing one and never creates it). `uv run scripts/youtrack_probe.py <ISSUE>` loads one issue read-only.
 
 ## GitHub Issues (`github-issues`)
 
