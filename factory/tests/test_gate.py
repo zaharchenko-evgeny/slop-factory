@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from unittest.mock import patch
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
+sys.path.insert(0, str(ROOT / "factory/tests"))
 import config as cfg  # noqa: E402
 import project_mode  # noqa: E402
 cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"))
@@ -304,6 +306,34 @@ def tests_for(cls, tid):
 
 GateMemory = tests_for(MemoryTracker, 7)
 GateTag = tests_for(TagTracker, "PROJ-7")
+
+
+class YouTrackGateTest(unittest.TestCase):
+    """One implement step on LME-1701-shaped stub data (fixtures/project-youtrack): the ticket in a stubbed YouTrack,
+    its state a `field` store."""
+    FIXTURE = Path(__file__).resolve().parent / "fixtures/project-youtrack"
+
+    def setUp(self):
+        import project
+        from gate_github import GitHubGateTracker
+        from test_youtrack_tracker import FakeYouTrack
+        from youtrack_tracker import YouTrackTicketStore
+        self.addCleanup(cfg.set_team, cfg.team_root())  # importing the stub set a team of its own
+        cfg.set_team(self.FIXTURE)
+        self.fake = FakeYouTrack(json.loads((self.FIXTURE / "issue.json").read_text()), tags=("factory:implement-mid", "factory:needs-human"))
+        descriptor, self.config, self.nodes = project.load(self.FIXTURE), cfg.load(), nodes.load()
+        store = YouTrackTicketStore(self.fake, state_field="State")
+        self.tracker = GitHubGateTracker("example/project", self.config["tracker"]["stages"], "factory[bot]",
+                                         run=lambda *a, **k: "", project=descriptor, tickets=store)
+
+    def test_check_then_apply_blocked_moves_the_state_field_and_comments(self):
+        code, out = gate.check("implement", {"id": "e1", "ticket": "LME-1701"}, self.tracker, self.nodes, self.config)
+        self.assertEqual((code, out["context"]["stage"]), (gate.GO, "in-dev"))
+        code, _ = gate.apply("implement", "blocked", {"ticket": "LME-1701", "event": "e1", "reason": "[factory] stuck"},
+                             self.tracker, self.nodes)
+        self.assertEqual(code, gate.GO)
+        self.assertEqual(self.tracker.facts("LME-1701")["stage"], "blocked")
+        self.assertIn(("POST", "/api/issues/LME-1701/comments?fields=id", {"text": unittest.mock.ANY}), self.fake.calls)
 
 
 class CliAndValidate(unittest.TestCase):

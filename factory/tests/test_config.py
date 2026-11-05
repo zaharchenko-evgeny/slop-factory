@@ -119,6 +119,16 @@ class TeamRootTest(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertIn("unknown-key", out.getvalue())
 
+    def test_youtrack_tracker_needs_a_code_host_repository(self):
+        tracker = {"adapter": "youtrack", "url": "https://x.youtrack.cloud", "project": "LME", "token_env": "YT", "done_state": "Done"}
+        for host, ok in (({"repository": "o/r"}, True), ({}, False)):
+            with self.subTest(code_host=host), tempfile.TemporaryDirectory() as tmp:
+                config.set_team(team(tmp, {**DESCRIPTOR, "tracker": tracker, "code_host": host}))
+                errors = config.validate()
+                self.assertEqual(errors == [], ok, errors)
+                if not ok:
+                    self.assertIn("code_host.repository: required", errors[0])
+
     def test_unknown_notify_provider_fails_validate_naming_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             config.set_team(team(tmp, {**DESCRIPTOR, "notify": {**DESCRIPTOR["notify"], "providers": [{"kind": "nope"}]}}))

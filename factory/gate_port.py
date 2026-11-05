@@ -89,7 +89,7 @@ def fix_round_count(reviews, since=""):
 
 
 class UnsupportedStore(ValueError):
-    """A descriptor store this tracker cannot read or write (a `field` or `tag` store before YouTrack, #163)."""
+    """A descriptor store this tracker cannot read or write (a `field` or `tag` store on a GitHub tracker, a `label` store on YouTrack)."""
 
 
 # The facts a PR-fact state store (`store: {pr: <fact>}`) holds on.
@@ -103,6 +103,8 @@ class DescriptorPort:
     """States and commands by name, through the `store` each has in factory.project.yaml (ADR-0016). A tracker
     mixes it in and sets `project`; reads go through its `facts`, writes through its `apply`."""
     project = None
+    state_kinds = ("label",)  # the store kinds this tracker holds states (ticket side) and commands in
+    command_kinds = ("label", "pr_label")
 
     def _entries(self, section):
         if not isinstance(self.project, dict):
@@ -120,15 +122,15 @@ class DescriptorPort:
     def _command(self, name):
         import workflow
         _, kind, value = workflow.resolve(self._entries("commands"), name)
-        if kind not in ("label", "pr_label"):
+        if kind not in self.command_kinds:
             raise UnsupportedStore(f"command {name}: this tracker has no {kind} store")
         return kind, value
 
     def state(self, ticket):
-        """The ticket's state held in a label store, else `none`."""
+        """The ticket's state held in a ticket store (label, field or tag), else `none`."""
         stage = self.facts(ticket)["stage"]
         states = self._entries("states")
-        return stage if stage in states and "label" in (states[stage].get("store") or {}) else "none"
+        return stage if stage in states and any(k in (states[stage].get("store") or {}) for k in self.state_kinds) else "none"
 
     def pr_states(self, ticket):
         """The PR-fact states (`store: {pr: ...}`) that hold for the ticket's PR."""
@@ -140,7 +142,7 @@ class DescriptorPort:
         kind, store = self._state_store(name)
         if kind == "pr":
             raise ValueError(f"state {name} is a PR fact ({store['pr']}): the code host sets it, not the gate")
-        if kind != "label":
+        if kind not in self.state_kinds:
             raise UnsupportedStore(f"state {name}: this tracker has no {kind} store")
         return self.apply({"ticket": ticket, "kind": "stage", "value": name,
                            **({"event": event} if event is not None else {})})
@@ -150,7 +152,9 @@ class DescriptorPort:
         `implement-mid` for the template `implement-<tier>`."""
         import workflow
         facts, found = self.facts(ticket), []
-        held = {"label": facts.get("attrs") or [], "pr_label": facts.get("pr_labels") or []}
+        attrs = facts.get("attrs") or []
+        held = {"label": attrs, "tag": attrs, "pr_label": facts.get("pr_labels") or []}
+        held = {k: v for k, v in held.items() if k in self.command_kinds}
         for name, entry in self._entries("commands").items():
             store = entry.get("store") or {}
             kind = next(iter(store), None)
