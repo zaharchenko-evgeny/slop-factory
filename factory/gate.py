@@ -777,6 +777,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
     results, failed, done_tickets = [], False, []
     stages = config_mod.load()["tracker"]["stages"]
     queue, seen, merged = ([issue] if issue is not None else list(tracker.sweep_tickets(stages))), set(), False
+    prefetch(tracker, queue)
     while queue:
         n = queue.pop(0)
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
@@ -873,6 +874,12 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
     return results, failed
 
 
+def prefetch(tracker, numbers):
+    """Let a tracker that batches its reads (GitHub: GraphQL) read `numbers` at once; the others read per ticket."""
+    if numbers and hasattr(tracker, "prefetch"):
+        tracker.prefetch(numbers)
+
+
 STALE_STAGES = ("triage", "ready", "in-dev", "in-review", "changes-requested", "approved")
 RECOVER = "[factory] recover:"
 
@@ -933,7 +940,9 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
     """Recover tickets whose Air run died: one re-fire per ticket and stage, a second stale finding blocks it.
     Returns (results, failed)."""
     now, results, failed = now or datetime.now(timezone.utc), [], False
-    for n in tracker.sweep_tickets(STALE_STAGES):
+    stale = tracker.sweep_tickets(STALE_STAGES)
+    prefetch(tracker, stale)
+    for n in stale:
         try:
             facts = tracker.stale_facts(n)
             plan = stale_plan(facts, now, hours, command_minutes)

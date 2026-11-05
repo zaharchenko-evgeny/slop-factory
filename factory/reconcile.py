@@ -69,6 +69,8 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
     # Open tickets in an active or waiting stage only: each listed ticket costs a dozen API reads, and a closed or
     # done one is never re-fired, so listing them spent the hourly GitHub budget for nothing.
     listed = tracker.sweep_tickets([s for s in stages if stage_kinds.get(s) != "final"], open_only=True)
+    import gate  # lazily, as finish_lost does
+    gate.prefetch(tracker, listed)
     finish_lost(tracker, nodes, [s for s in LOST_FINISH if s in stages], listed, dry_run, results, progress)
     for n in listed:
         try:
@@ -153,7 +155,9 @@ def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress)
     """GitHub closes a ticket on merge; when the `finish` run was lost the ticket is closed but still in a PR stage.
     A closed ticket there whose PR is merged gets the `finish` outcome, as `gate.py sweep --issue <n>` would."""
     import gate
-    for n in sorted(set(tracker.sweep_tickets(stages)) - set(open_listed)):
+    closed = sorted(set(tracker.sweep_tickets(stages)) - set(open_listed))
+    gate.prefetch(tracker, closed)
+    for n in closed:
         try:
             if tracker.facts(n).get("pr_state") != "merged":
                 continue

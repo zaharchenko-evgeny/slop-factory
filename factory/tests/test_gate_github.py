@@ -115,6 +115,14 @@ class FakeGh:
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
         a = a + " POST" if "POST" in args else a
         assert args[:2] != ["api", "user"], "gh api user must never be called"
+        if args[:2] == ["api", "graphql"]:  # the stage search (GraphQL); a batch read gets no answer: REST fallback
+            q = next((x[2:] for x in args if x.startswith("q=")), None)
+            if q is None:
+                return ""
+            wanted = re.findall(r'"([^"]+)"', q.split("label:", 1)[1])
+            on = any(x in self.labels for x in wanted) and ("is:open" in q) == (self.state == "open")
+            return json.dumps({"data": {"search": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                                                   "nodes": [{"number": 7}] if on else []}}})
         if args[0] == "api" and "-X" not in args and "-f" not in args and "-F" not in args and re.search(r"/issues(/|\?|$)", a) \
                 and "comments/" not in a and "/labels" not in a:
             recorded(a.split("/", 3)[-1], [] if a.endswith(("/events", "/comments", "/sub_issues", "blocked_by", "blocking")) else {})
@@ -275,6 +283,65 @@ def eff(kind, value, **kw):
 
 
 class FactsTest(unittest.TestCase):
+    def test_sweep_tickets_searches_open_and_recently_closed_tickets_once_each(self):
+        gh, calls = FakeGh(labels=["factory:changes-requested"]), []
+        t = tr(lambda args, timeout=None: (calls.append(args), gh(args, timeout))[1])
+        self.assertEqual(t.sweep_tickets(["changes-requested", "ready"]), [7])
+        searches = [next(x for x in c if x.startswith("q=")) for c in calls if c[:2] == ["api", "graphql"]]
+        self.assertEqual(len(searches), 2)
+        self.assertIn('label:"factory:changes-requested","factory:ready"', searches[0])
+        self.assertIn("is:closed closed:>=", searches[1])
+        self.assertFalse([c for c in calls if any("issues?state=" in x for x in c)])
+        calls.clear()
+        t.sweep_tickets(["ready"], open_only=True)
+        self.assertEqual(len(calls), 1)
+
+    def prefetched(self):
+        """A tracker over FakeGh whose batch query answers ticket 7 with its labels, one labeled event and no comment."""
+        gh, calls = FakeGh(labels=("factory:in-review", "risk:low")), []
+        node = {"number": 7, "databaseId": 7, "id": "I_7", "state": "OPEN", "stateReason": None, "title": "t",
+                "body": "", "updatedAt": "2026-11-05T10:00:00Z", "closedAt": None, "author": {"login": "ez", "__typename": "User"},
+                "assignees": {"nodes": []},
+                "labels": {"pageInfo": {"hasNextPage": False}, "nodes": [{"name": x} for x in gh.labels]},
+                "blockedBy": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+                "comments": {"pageInfo": {"hasPreviousPage": False}, "nodes": []},
+                "timelineItems": {"pageInfo": {"hasNextPage": False}, "nodes": [
+                    {"__typename": "LabeledEvent", "createdAt": "2026-11-05T09:00:00Z",
+                     "actor": {"login": "ez", "__typename": "User"}, "label": {"name": "factory:in-review"}}]}}
+
+        def run(args, timeout=None):
+            calls.append(args)
+            if args[:2] == ["api", "graphql"] and not any(x.startswith("q=") for x in args):
+                return json.dumps({"data": {"repository": {"i7": node}}})
+            return gh(args, timeout)
+        return tr(run), calls
+
+    @staticmethod
+    def issue_reads(calls):
+        return [x for c in calls for x in c if re.search(r"/issues/7(/events|/comments|/dependencies/blocked_by)?$", x)]
+
+    def test_prefetched_ticket_reads_no_issue_endpoint_over_rest(self):
+        t, calls = self.prefetched()
+        t.prefetch([7])
+        calls.clear()
+        self.assertEqual(t.facts(7)["stage"], "in-review")
+        self.assertEqual(self.issue_reads(calls), [])
+
+    def test_a_write_clears_the_prefetched_reads(self):
+        t, calls = self.prefetched()
+        t.prefetch([7])
+        t.run(["issue", "edit", "7", "--add-label", "x"])
+        calls.clear()
+        t.facts(7)
+        self.assertIn(f"repos/{REPO}/issues/7", self.issue_reads(calls))
+
+    def test_failed_prefetch_reads_over_rest(self):
+        gh = FakeGh(labels=("factory:in-review", "risk:low"))
+        t = tr(gh)  # FakeGh answers a batch query with nothing
+        t.prefetch([7])
+        self.assertEqual(t.cache, {})
+        self.assertEqual(t.facts(7)["stage"], "in-review")
+
     def test_sweep_tickets_includes_closed_changes_requested_issues(self):
         gh = FakeGh(labels=["factory:changes-requested"])
         gh.state = "closed"
