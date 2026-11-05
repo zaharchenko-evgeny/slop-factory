@@ -9,6 +9,7 @@ Usage: reconcile.py [--dry-run] [--tracker memory:FILE]
 No model and no Air quota: the expected next step of each ticket comes from engine/nodes.yaml (the node whose
 `when` matches the ticket's state and whose trigger is a label). A step with no outcome after `limits.run_timeout_minutes`
 (a node's `timeout_minutes` overrides it) gets its label once; a second miss sets `blocked` and `factory:needs-human`.
+A closed ticket in a PR stage with a merged PR is finished (its `finish` run was lost).
 A ticket in a waiting stage, closed, or already marked `factory:needs-human` is left alone.
 """
 import json
@@ -24,6 +25,7 @@ import vocab
 
 PREFIX = "[factory] reconcile:"
 RUN = "reconcile"
+LOST_FINISH = ("approved", "in-review", "changes-requested")
 RED_TITLE = re.compile(r"Main is red(?: in Air)?: (.+)")
 
 
@@ -67,6 +69,7 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
     # Open tickets in an active or waiting stage only: each listed ticket costs a dozen API reads, and a closed or
     # done one is never re-fired, so listing them spent the hourly GitHub budget for nothing.
     listed = tracker.sweep_tickets([s for s in stages if stage_kinds.get(s) != "final"], open_only=True)
+    finish_lost(tracker, nodes, [s for s in LOST_FINISH if s in stages], listed, dry_run, results, progress)
     for n in listed:
         try:
             facts, stage = tracker.stale_facts(n), None
@@ -144,6 +147,25 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
             if progress:
                 progress(results[-1])
     return results, failed
+
+
+def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress):
+    """GitHub closes a ticket on merge; when the `finish` run was lost the ticket is closed but still in a PR stage.
+    A closed ticket there whose PR is merged gets the `finish` outcome, as `gate.py sweep --issue <n>` would."""
+    import gate
+    for n in sorted(set(tracker.sweep_tickets(stages)) - set(open_listed)):
+        try:
+            if tracker.facts(n).get("pr_state") != "merged":
+                continue
+            r = {"ticket": n, "reconcile": "finish", "why": "closed on merge with no finish outcome"}
+            results.append(r)
+            if not dry_run:
+                gate.sweep(tracker, nodes, issue=n)
+        except Exception as e:  # one ticket failing does not stop the others
+            r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
+            results.append(r)
+        if progress:
+            progress(r)
 
 
 def send(tracker, n, nodes, stage, head, kind, label, on, why):

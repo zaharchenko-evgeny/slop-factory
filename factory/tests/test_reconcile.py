@@ -145,8 +145,23 @@ class ReconcileTest(unittest.TestCase):
                             3: {"stage": "blocked", "since": OLD, "issue_state": "closed"}})
         reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
         finals = {s for s, k in CONFIG["tracker"]["stage_kinds"].items() if k == "final"}
-        self.assertEqual(asked, [(sorted(s for s in STAGES if s not in finals), True)])
+        self.assertEqual(asked[0], (sorted(s for s in STAGES if s not in finals), True))
         self.assertEqual(read, [1])  # no facts reads for a done or closed ticket
+
+    def test_closed_approved_ticket_with_merged_pr_is_finished(self):
+        t, results, failed = run({"stage": "approved", "pr": 5, "pr_state": "merged", "issue_state": "closed",
+                                  "since": OLD})
+        self.assertFalse(failed)
+        self.assertEqual((results[0]["ticket"], results[0]["reconcile"]), (1, "finish"))
+        self.assertEqual(t.tickets[1]["stage"], "done")
+
+    def test_closed_done_ticket_is_left_alone(self):
+        t, results, _ = run({"stage": "done", "pr": 5, "pr_state": "merged", "issue_state": "closed", "since": OLD})
+        self.assertEqual((results, t.tickets[1]["stage"]), ([], "done"))
+
+    def test_closed_approved_ticket_with_open_pr_is_left_alone(self):
+        t, results, _ = run({"stage": "approved", "pr": 5, "pr_state": "open", "issue_state": "closed", "since": OLD})
+        self.assertEqual((results, t.tickets[1]["stage"]), ([], "approved"))
 
     def test_open_main_red_with_green_main_reports_stale_red(self):
         tracker = MemoryTracker({1: {"stage": "ready", "since": FRESH, "title": "Main is red: agnix"},
