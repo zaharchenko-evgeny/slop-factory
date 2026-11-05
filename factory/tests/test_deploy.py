@@ -51,21 +51,6 @@ def project_plan(project, wf):
             cfg.set_team(before)
 
 
-def slop_with_agents():
-    """(project, workflow) of fixtures/slop with slop-eval-factory's agents (#589), until the fixture is regenerated."""
-    slop = HERE / "fixtures/slop"
-    project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
-    wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
-    roles = project["roles"]
-    project["agents"] = {"dev": {"persona": "dev", "role": "developer", "tier": roles["developer"]["tier"]},
-                         "rex": {"persona": "rex", "role": "reviewer", "modes": roles["reviewer"]["modes"]},
-                         "ria": {"persona": "ria", "role": "router", "tier": roles["router"]["tier"]}}
-    for node, agent in {"intake": "ria", "investigate": "dev", "implement": "dev", "review": "rex", "fix": "dev",
-                        "update": "dev"}.items():
-        wf["nodes"][node]["agent"] = agent
-    return project, wf
-
-
 FAKE_SERVER = r"""
 import json, sys
 state, kind = sys.argv[1], sys.argv[2]  # state file: {"items": [...], "calls": [...]}
@@ -598,7 +583,9 @@ class ProjectPlanTest(unittest.TestCase):
 
     def test_mention_allowlist(self):
         """fixtures/slop's agents (ADR-0020): dev, rex and ria, and whom each may mention on which subject."""
-        project, wf = slop_with_agents()
+        slop = HERE / "fixtures/slop"
+        project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
+        wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
         specs = {a["spec"]["node"]: a["spec"] for a in project_plan(project, wf)["automations"]}
         for node, spec in specs.items():
             self.assertEqual(spec["role"] != "script", {"agent", "persona", "mentions"} <= set(spec), node)

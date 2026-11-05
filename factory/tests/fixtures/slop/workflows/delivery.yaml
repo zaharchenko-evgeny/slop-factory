@@ -57,6 +57,7 @@ nodes:
     when:
       state: triage
     role: router
+    agent: ria
     tier: cheap
     output: read-only
     outcomes:
@@ -110,6 +111,7 @@ nodes:
     when:
       state: investigating
     role: developer
+    agent: dev
     tier: mid
     output: read-only
     outcomes:
@@ -137,6 +139,7 @@ nodes:
     when:
       state: in-dev
     role: developer
+    agent: dev
     output: create-pr
     outcomes:
       done:
@@ -197,6 +200,7 @@ nodes:
       ci:
       - green
     role: reviewer
+    agent: rex
     output: read-only
     outcomes:
       approve:
@@ -252,6 +256,7 @@ nodes:
       round: complete
       fix-rounds: below-cap
     role: developer
+    agent: dev
     output: push-to-source
     outcomes:
       done:
@@ -292,6 +297,7 @@ nodes:
     when:
       state: changes-requested
     role: developer
+    agent: dev
     output: push-to-source
     outcomes:
       resolved:
