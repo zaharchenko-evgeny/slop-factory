@@ -12,3 +12,7 @@ One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails whe
 | `FACTORY_BASE` | CI (`.github/workflows/quality-gates.yml`) for the descriptor checks | the checks' `run` commands | optional; defaults to `main` |
 | `FACTORY_MCP_AIR_AUTOMATIONS` | the operator, for `factory deploy` and `factory contracts refresh` | `factory/deploy.py`, `factory/contracts.py` | required for those commands |
 | `FACTORY_MCP_AIR_CLOUD` | the operator, for `factory deploy` and `factory contracts refresh` | `factory/deploy.py`, `factory/contracts.py` | required for those commands |
+
+# What the Air image provides
+
+`uv`, `gh`, `git`, `python3`, `node`/`npx` and `curl` are installed; `conftest` and `shellcheck` are not. The startup script downloads `uv` and `gh` only when missing, so the CI `air-like` image installs both at Air's versions (`uv` 0.11.14, `gh` 2.103.2) in its build.

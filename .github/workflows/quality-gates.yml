@@ -178,12 +178,21 @@ jobs:
           for _ in $(seq 20); do (echo > /dev/tcp/127.0.0.1/8888) 2>/dev/null && exit 0; sleep 0.5; done
           echo "::error::allowlist proxy did not start: $(cat "$RUNNER_TEMP/proxy.log")"
           exit 1
+      # Air's image already has uv and gh in /usr/local/bin, so the startup script under test skips its download path.
       - name: Build the image
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          docker build -t air-like --build-arg UID=1500 - <<'EOF'
+          ctx=$(mktemp -d)
+          gh release download v2.103.2 --repo cli/cli --pattern 'gh_*_linux_amd64.tar.gz' --output "$ctx/gh.tgz"
+          tar -xzf "$ctx/gh.tgz" -C "$ctx" --strip-components=2 --wildcards 'gh_*/bin/gh'
+          docker build -t air-like --build-arg UID=1500 -f - "$ctx" <<'EOF'
+          FROM ghcr.io/astral-sh/uv:0.11.14 AS uv
           FROM ubuntu:24.04
           ARG UID
           RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates python3 && rm -rf /var/lib/apt/lists/*
+          COPY --from=uv /uv /uvx /usr/local/bin/
+          COPY gh /usr/local/bin/gh
           RUN userdel -r ubuntu 2>/dev/null; useradd -m -u "$UID" -d /home/workspace workspace
           EOF
       - name: Run startup.sh as in Air
