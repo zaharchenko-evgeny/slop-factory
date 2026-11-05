@@ -15,6 +15,10 @@ Write side: `write(method, path, body)` performs the request and returns the dec
 ticket's open merge request, reading first and writing only on a difference; it returns True when it wrote, and
 raises RuntimeError(`<kind>: ...`) when there is no merge request or the API fails.
 """
+import json
+import os
+import urllib.request
+
 from gate_port import PR_DEFAULTS, ticket_from_ref
 
 CI = {"success": "green", "failed": "red", "running": "pending"}
@@ -101,3 +105,21 @@ class SpaceCodeHost:
         self._send(kind, "POST", f"{path}/{'merge' if kind == 'merge' else 'update-branch'}",
                    {"expectedHead": head, **({"strategy": "merge"} if kind == "merge" else {})})
         return True
+
+
+def from_config(c, env=os.environ):
+    """The SpaceCodeHost of `code_host: {adapter: space, url, project}`; the bearer token is the env SPACE_TOKEN."""
+    h = c.get("code_host") or {}
+    if not h.get("url") or not h.get("project"):
+        raise ValueError("descriptor: code_host.adapter space needs code_host.url and code_host.project")
+    if not env.get("SPACE_TOKEN"):
+        raise ValueError("SPACE_TOKEN is not set")
+
+    def write(method, path, body=None):
+        req = urllib.request.Request(f"{h['url'].rstrip('/')}/api/http/{path}", method=method,
+                                     data=None if body is None else json.dumps(body).encode(),
+                                     headers={"Authorization": f"Bearer {env['SPACE_TOKEN']}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            raw = r.read()
+        return json.loads(raw) if raw else None
+    return SpaceCodeHost(h["project"], lambda path: write("GET", path), write)

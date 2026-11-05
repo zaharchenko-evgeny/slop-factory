@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 from gate_github import GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
-from gate_space import space_event  # noqa: E402
+from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
 import vocab  # noqa: E402
 from inbox import send as inbox_send  # noqa: E402
@@ -265,11 +265,15 @@ def gated(name, node, facts):
     return node
 
 
-def check(name, event, tracker, nodes, config):
+def check(name, event, tracker, nodes, config, code_host=None):
     node = load_node(name, nodes)
     if "id" not in event:
         raise Bad("malformed event: needs `id`")
     facts = tracker.facts(event["ticket"])
+    if isinstance(code_host, SpaceCodeHost):  # Space owns the merge request: its CI and review facts replace the tracker's
+        space = code_host.facts(event["ticket"])
+        if space["pr"] is not None:
+            facts = {**facts, **{k: space[k] for k in ("pr", "head", "branch", "pr_state", "ci", "dry_run", "pr_labels", "reviews")}}
     if "event_name" in event:
         event["id"] = f"{event['event_name']}:{event['ticket']}:{event['action']}:{facts.get('updated_at', '')}"
         event["head"] = facts.get("head")
@@ -1036,7 +1040,10 @@ def main(argv):
         kind, _, path = (a.tracker or "github").partition(":")
         if kind == "github" and not path:
             tracker = GitHubGateTracker.from_config()
-            code_host = GitHubCodeHost.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {}))  # one runner, so github_calls counts both
+            if (config_mod.load().get("code_host") or {}).get("adapter") == "space":
+                code_host = space_from_config(config_mod.load())
+            else:
+                code_host = GitHubCodeHost.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {}))  # one runner, so github_calls counts both
         elif kind == "memory" and path:
             try:
                 tracker = MemoryTracker(dict(json.loads(Path(path).read_text())))
@@ -1117,7 +1124,7 @@ def main(argv):
         elif a.cmd == "check":
             event = read(a.event or "", "event", raw=True, code_host=code_host)
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
-            code, out = check(a.node, event, tracker, nodes, config)
+            code, out = check(a.node, event, tracker, nodes, config, code_host)
             if a.node == "implement" and code == GO:
                 save_check_state(event["ticket"], out["context"].get("head"))
         else:
