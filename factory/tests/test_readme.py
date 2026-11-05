@@ -31,6 +31,15 @@ class ReadmeTest(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertIn(f"`{key}`", README)
 
+    def test_environment_doc_has_a_row_for_every_variable(self):
+        sources = [p for p in [*(ROOT / "factory").glob("*.py"), *(ROOT / "template").rglob("*")] if p.is_file()]
+        names = {n for p in sources for n in re.findall(r"FACTORY_[A-Z_]+", p.read_text())}
+        doc = (ROOT / "docs/environment.md").read_text()
+        for name in sorted(names):
+            with self.subTest(name=name):
+                self.assertIn(f"| `{name}` |", doc)
+        self.assertIn("(docs/environment.md)", README)
+
     def test_readme_documents_overrides(self):
         self.assertIn("## Team-owned runtime files", README)
         normalized = " ".join(README.split())
