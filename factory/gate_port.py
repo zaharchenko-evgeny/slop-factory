@@ -8,7 +8,10 @@ outcome without a stage effect.
 """
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
+
+import github_graphql
 
 
 def ticket_from_ref(ref):
@@ -410,9 +413,10 @@ class MemoryTicketStore:
     def comment(self, n, body):
         self.tickets[n]["comments"].append({"author": self.actor, "author_is_bot": True, "body": body, "at": None})
 
-    def close(self, n):
+    def close(self, n, at=None):
         t = self.tickets[n]
         t["state"], t["close_reason"] = "closed", "completed"
+        t["closed_at"] = at or datetime.now(timezone.utc)
         t["events"].append({"kind": "closed", "value": None, "actor": self.actor, "at": None})
 
     def _open(self, ids):
@@ -432,7 +436,15 @@ class MemoryTicketStore:
                  "attrs": list(t["attrs"])} for i, t in self.tickets.items() if t["parent"] == n]
 
     def tickets_by_stage(self, attrs, open_only=False, now=None):
-        return sorted(i for i, t in self.tickets.items() if set(attrs) & set(t["attrs"]) and (t["state"] == "open" or not open_only))
+        """Open tickets and, unless `open_only`, those closed within `github_graphql.CLOSED_HOURS` of `now`."""
+        since = (now or datetime.now(timezone.utc)) - timedelta(hours=github_graphql.CLOSED_HOURS)
+
+        def listed(t):
+            if t["state"] == "open":
+                return True
+            return not open_only and (t.get("closed_at") or since) >= since
+
+        return sorted(i for i, t in self.tickets.items() if set(attrs) & set(t["attrs"]) and listed(t))
 
     def create_children(self, n, children, ready):
         wrote, prev = False, None
