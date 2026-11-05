@@ -64,6 +64,7 @@
           "repositories": {"type": "array", "items": {"type": "string"}},
           "domains": {"type": "array", "items": {"type": "string"}},
           "secrets": {"type": "array", "items": {"type": "string"}},
+          "variables": {"type": "object", "additionalProperties": {"type": "string"}},
           "vm": {"type": "string"},
           "startup": {"type": "string"}
         }

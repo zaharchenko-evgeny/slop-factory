@@ -13,6 +13,23 @@ One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails whe
 | `FACTORY_MCP_AIR_AUTOMATIONS` | the operator, for `factory deploy` and `factory contracts refresh` | `factory/deploy.py`, `factory/contracts.py` | required for those commands |
 | `FACTORY_MCP_AIR_CLOUD` | the operator, for `factory deploy` and `factory contracts refresh` | `factory/deploy.py`, `factory/contracts.py` | required for those commands |
 
+## Team variables
+
+A team declares its own variables and secrets per environment in `factory.project.yaml`:
+
+```yaml
+environments:
+  write:
+    variables: {YOUTRACK_URL: https://example.youtrack.cloud}   # name: non-secret value
+    secrets: [YOUTRACK_TOKEN]                                   # names only, never values
+```
+
+- `factory validate` rejects a variable whose name starts with `FACTORY_` (reserved for the factory).
+- `factory deploy` plans an environment's variables as the declared ones plus `FACTORY_ENV`. A person sets each secret's value in Air;
+  `deploy --dry-run` lists one that is missing as `set by a person: <env> secret <NAME>` and does not fail.
+- `factory doctor` probes `env:<NAME>` for every declared variable and secret of `FACTORY_ENV`: `ok` when set and non-empty,
+  `missing` otherwise. A missing probe fails the doctor.
+
 # What the Air image provides
 
 `uv`, `gh`, `git`, `python3`, `node`/`npx` and `curl` are installed; `conftest` and `shellcheck` are not. The startup script downloads `uv` and `gh` only when missing, so the CI `air-like` image installs both at Air's versions (`uv` 0.11.14, `gh` 2.103.2) in its build.
