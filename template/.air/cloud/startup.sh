@@ -3,7 +3,8 @@
 # Idempotent: a launch from a snapshot already has the tools. It installs nothing specific to one team:
 # put team tools in environments/setup.sh (every environment) or environments/<env>/setup.sh.
 # FACTORY_DRY=1 prints the skills it would install and exits; `factory` must then be on PATH, and
-# FACTORY_ENGINE_DIR (default $HOME/factory-main) names an engine checkout for roles and skills the team does not own.
+# FACTORY_ENGINE_DIR (default $HOME/factory-main) names an engine checkout; only its factory-step skill is used.
+# Roles and skills come from the team repository alone: a missing one is an error.
 set -e
 TEAM=$(pwd -P)
 FACTORY_TEAM=$TEAM
@@ -16,27 +17,25 @@ export PATH="$BIN:$PATH"
 descriptor_value() {
   sed -n "s/^$1: *[\"']\{0,1\}\([^\"' #]*\).*/\1/p" "$TEAM/factory.project.yaml" 2>/dev/null | head -n 1
 }
-# A role's file: the team's own, else the engine's template.
-role_file() {
-  if [ -f "$TEAM/roles/$1/$2" ]; then
-    printf '%s\n' "$TEAM/roles/$1/$2"
-  elif [ -f "$ENGINE/template/roles/$1/$2" ]; then
-    printf '%s\n' "$ENGINE/template/roles/$1/$2"
-  else
-    echo "startup: missing file roles/$1/$2" >&2
-    return 1
-  fi
-}
 env_roles() {
   factory env roles "$FACTORY_ENV"
 }
+# Every role's skills.txt and setup.sh must be in the team repository.
+check_roles() {
+  for r in $ROLES; do
+    for f in skills.txt setup.sh; do
+      [ -f "$TEAM/roles/$r/$f" ] || { echo "startup: missing team file: roles/$r/$f" >&2; exit 1; }
+    done
+  done
+}
 skill_names() {
   for r in $ROLES; do
-    cat "$(role_file "$r" skills.txt)"
+    cat "$TEAM/roles/$r/skills.txt"
   done | sort -u | tr '\n' ' '
 }
 if [ -n "${FACTORY_DRY:-}" ]; then
   ROLES=$(env_roles)
+  check_roles
   echo "startup: env=$FACTORY_ENV roles=$(echo "$ROLES" | tr '\n' ' ')"
   echo "startup: would install skills: $(skill_names)factory-step"
   exit 0
@@ -100,6 +99,7 @@ exec "$BIN/.factory-engine" "\$@"
 WRAPPER
 chmod +x "$BIN/factory"
 ROLES=$(env_roles)
+check_roles
 install_skill() {
   for d in "$HOME/.agents/skills" "$HOME/.claude/skills"; do
     mkdir -p "$d"
@@ -107,17 +107,15 @@ install_skill() {
     cp -R "$1" "$d/$2"
   done
 }
-# A role's skills come from the team's skills/, else the engine's template.
+# A role's skills come from the team's skills/ only.
 for s in $(skill_names); do
   case "$s" in
     ""|.|..|*/*) echo "startup: invalid skill name: $s" >&2; exit 1 ;;
   esac
   if [ -f "$TEAM/skills/$s/SKILL.md" ]; then
     install_skill "$TEAM/skills/$s" "$s"
-  elif [ -f "$ENGINE/template/skills/$s/SKILL.md" ]; then
-    install_skill "$ENGINE/template/skills/$s" "$s"
   else
-    echo "startup: missing skill: $s" >&2
+    echo "startup: missing team skill: $s" >&2
     exit 1
   fi
 done
@@ -129,7 +127,7 @@ else
 fi
 echo "startup: installed skills: $(skill_names)factory-step"
 for r in $ROLES; do
-  bash "$(role_file "$r" setup.sh)" >&2 || echo "startup: tools of role $r are missing" >&2
+  bash "$TEAM/roles/$r/setup.sh" >&2 || echo "startup: tools of role $r are missing" >&2
 done
 for setup in "$TEAM/environments/setup.sh" "$TEAM/environments/$FACTORY_ENV/setup.sh"; do
   if [ -f "$setup" ]; then
