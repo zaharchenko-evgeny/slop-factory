@@ -368,7 +368,8 @@ def to_project(defn):
     states["pr-merged"] = {"kind": "final", "store": {"pr": "merged"}}
 
     # Commands: every label a trigger or an effect names; on the PR when an effect puts it there (`on: pr`).
-    on_pr = set()
+    # CI puts its result labels on the PR itself (quality-gates `ci-label`), so they are PR labels too (#790).
+    on_pr = {f"{prefix}ci-green", f"{prefix}ci-red"}
     for n in nodes.values():
         for oc in (n.get("outcomes") or {}).values():
             on_pr |= {e.get("label") or e.get("unlabel") for e in (oc or {}).get("effects") or []
