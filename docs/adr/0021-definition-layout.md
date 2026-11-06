@@ -32,8 +32,14 @@ Decision:
    with optional `model`, `settings`, `prompt` and `enabled: false`. Several
    triggers are OR. The agent reports one outcome; the gate applies its
    effects. An outcome's `if` is a guard on ticket and PR fields; when it
-   fails the gate applies `else`. Variants are separate nodes, chosen by the
-   labels earlier outcomes add; there is no matrix and no model router.
+   fails the gate applies `else` (guards: `stage`, `ci`, `risk`, `complexity`).
+   Variants are separate nodes; there is no matrix and no model router. The
+   engine's steps keep their names and outcomes: a node `<step>-<variant>`
+   (`implement-cheap`, `fix-strong`, `update-cheap`, `review-full`) is that
+   step for one variant, with its own agent and model, and the engine picks
+   the variant as before (tier from complexity, review focuses from risk via
+   the `join` node's `required` setting) and adds its label. They compile
+   into one engine node with `tiers` or `focuses` (`definition.to_project`).
 5. **An environment** lists its repositories; exactly one is `main` (branches,
    PRs and the node's output apply there). A writable repository that is not
    `main` needs `token_env`, declared in `env`. An optional `setup` script
