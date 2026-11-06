@@ -43,8 +43,8 @@ jobs:
       - name: Check out the slop fixture's team commit
         run: |
           fixture=factory/tests/fixtures/slop
-          git clone --quiet "$(sed -n 's/^team_repository: //p' "$fixture/factory.project.yaml")" "$RUNNER_TEMP/slop-team"
-          git -C "$RUNNER_TEMP/slop-team" checkout --quiet --detach "$(cat "$fixture/SOURCE")"
+          git clone --quiet "$(sed -n 2p "$fixture/SOURCE")" "$RUNNER_TEMP/slop-team"   # SOURCE: commit, then URL
+          git -C "$RUNNER_TEMP/slop-team" checkout --quiet --detach "$(sed -n 1p "$fixture/SOURCE")"
           echo "FACTORY_SLOP_TEAM=$RUNNER_TEMP/slop-team" >> "$GITHUB_ENV"
       - id: checks
         run: |

@@ -213,6 +213,19 @@ def check_fixture_drift(config: dict, team: Path | None = None) -> int:
     """Fail before contacting Air when this engine's Slop fixture differs from its deployed team."""
     if not SLOP_FIXTURE.is_dir():
         return 0
+    if (SLOP_FIXTURE / "factory.yaml").is_file():  # ADR-0021: the fixture is a copy of the team's files
+        team = Path(team or config_mod.team_root())
+        fixture = yaml.safe_load((SLOP_FIXTURE / "factory.yaml").read_text()) or {}
+        if not (team / "factory.yaml").is_file() or \
+                (yaml.safe_load((team / "factory.yaml").read_text()) or {}).get("name") != fixture.get("name"):
+            return 0
+        drift = [p.relative_to(SLOP_FIXTURE).as_posix() for p in sorted(SLOP_FIXTURE.rglob("*"))
+                 if p.is_file() and p.name != "SOURCE" and
+                 (not (team / p.relative_to(SLOP_FIXTURE)).is_file() or
+                  (team / p.relative_to(SLOP_FIXTURE)).read_bytes() != p.read_bytes())]
+        for item in drift:
+            print(f"fixture drift: {item}", file=sys.stderr)
+        return 1 if drift else 0
     fixture_project = yaml.safe_load((SLOP_FIXTURE / "factory.project.yaml").read_text())
     if config.get("team_repository", "").rstrip("/") != fixture_project.get("team_repository", "").rstrip("/"):
         return 0

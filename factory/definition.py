@@ -246,6 +246,24 @@ def _model_id(models, alias):
     return f"{m.get('harness')}/{m.get('model')}" if m else alias
 
 
+def team_url(root):
+    """The URL of the repository that holds the definition (ADR-0021: implicit): line 2 of a copy's SOURCE, else
+    the origin of a git checkout whose top level is `root`."""
+    import subprocess
+    root = Path(root)
+    source = root / "SOURCE"
+    if source.is_file() and len(source.read_text().split()) > 1:
+        return source.read_text().split()[1]
+    try:
+        top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+        if top.returncode or Path(top.stdout.strip()).resolve() != root.resolve():
+            return None
+        url = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"], capture_output=True, text=True)
+        return url.stdout.strip().removesuffix(".git") or None if url.returncode == 0 else None
+    except OSError:
+        return None
+
+
 def to_project(defn):
     """(project descriptor, format-2 workflow) of the definition, for `project.legacy_config` and
     `workflow.to_nodes`. The definition must have no `errors`."""
@@ -364,8 +382,10 @@ def to_project(defn):
     notify = (nodes.get("notify") or {}).get("settings") or {}
     fix_rounds = next((v["settings"]["fix_rounds"] for k, v in nodes.items()
                        if family(k)[0] == "fix" and "fix_rounds" in (v.get("settings") or {})), None)
+    team = team_url(defn["root"])
     descriptor = {
         "engine": 1,
+        **({"team_repository": team} if team else {}),
         "project": {"name": f.get("name")},
         "tracker": {**(f.get("tracker") or {}),
                     **({"lesson_label": (dset.get("knowledge") or {})["lesson_label"]}

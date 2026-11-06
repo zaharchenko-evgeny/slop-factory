@@ -1,0 +1,147 @@
+# Slop factory, definition v2. This file lists what the factory has: tracker, models, skills,
+# roles, agents, environments, webhooks. workflow.yaml says how they connect and run.
+name: Slop factory
+engine: "git+https://github.com/zaharchenko-evgeny/slop-factory@main"   # what the Air startup script installs
+tracker:
+  adapter: github-issues
+  repository: zaharchenko-evgeny/slop-factory
+
+# Model aliases: the only place a model ID appears.
+models:
+  luna:   { harness: codex,  model: gpt-6-luna }
+  sonnet: { harness: claude, model: "claude-sonnet-5-5[1m]" }
+  sol:    { harness: codex,  model: gpt-6.1-sol }
+
+# Inherited by every node. Merge order: these defaults -> environment -> role -> agent ->
+# workflow.yaml settings -> node; `null` clears a value.
+defaults:
+  model: luna
+  env:
+    GH_TOKEN: { required: true, secret: true, description: "gh as jetbrains-air[bot], set by Air" }
+  mcp: {}
+  skills: []                      # given to every role (the engine's factory-step always is)
+  settings:
+    branch_pattern: "ez/{ticket}-{slug}"
+    commit_prefix: "#{ticket} "
+    bot_login: "jetbrains-air[bot]"
+    confirm_external_writes: true
+    confirm_external_writes_scope: []
+    knowledge:                    # the knowledge base: an additional repository of the environments that read it
+      repo: zaharchenko-evgeny/slop-eval-factory
+      dir: lessons
+      lesson_label: "factory:lesson"
+
+# Skills. A skill is local (`path` in this repository) or from a source, pinned by commit or
+# version and checked by sha256 at setup. Roles and defaults name skills from here; a role can also
+# define a skill of its own inline (local under roles/<role>/skills/<name>, or from a source).
+skills:
+  ponytail:
+    source: "npm:@dietrichgebert/ponytail@5.3.2"
+    path: skills/ponytail
+    sha256: b40d655883ea462755ae12373b59833fce20ba256bc06b0bc4e08dc59ba2ca5d
+  ponytail-review:
+    source: "npm:@dietrichgebert/ponytail@5.3.2"
+    path: skills/ponytail-review
+    sha256: 0a56beb5b3b9b89b363ce5d0a9ae5263cd431a6ecc9b3f57d7e795a889d626fd
+  tdd:
+    source: "github:cursor/plugins@4dd1d05818d1"
+    path: pstack/skills/tdd
+    sha256: 5cb44876b687184a55d1e4355a830374ccd5e0e4c361d19e8f5928d3496704b1
+  diagnosing-bugs:
+    source: "github:mattpocock/skills@a496f5513d4a"
+    path: skills/engineering/diagnosing-bugs
+    sha256: 29faf0d352422aa58beb0ce4666a49bdfdd5d2cc065c9dfe9be7b7e89fbdf584
+  principle-test-behavior-not-implementation:
+    source: "github:cursor/plugins@4dd1d05818d1"
+    path: pstack/skills/principle-test-behavior-not-implementation
+    sha256: c8b25ca3336056109d6eaf5a973e676945b389ab3d03a12ae8c8ba360869ee21
+  to-tickets:
+    source: "github:mattpocock/skills@a496f5513d4a"
+    path: skills/engineering/to-tickets
+    sha256: 293c186d02cec4a4f502c4ffdc07a5c4c7e89745cd7f9fb90a7258cdf845fb9f
+  retro:
+    source: "github:mattpocock/skills@a496f5513d4a"
+    path: skills/engineering/retro
+    sha256: 09c4f9fe72fc5bc8e486a2bbb32dd785ca6264c56a53dd1bf9a334af72586efd
+  # repo-conventions: { path: skills/repo-conventions }   # a local shared skill: skills/<name>/SKILL.md here
+
+# Roles: what an agent of the role has. Instructions (role.md, Jinja), setup.sh (installs the
+# role's tools) and any other file a role needs stay in roles/<role>/. Agents in workflow.yaml pick a role, a model and settings.
+roles:
+  developer:
+    description: Implements a ticket, fixes review findings, resolves merge conflicts
+    skills: [ponytail, tdd, diagnosing-bugs, principle-test-behavior-not-implementation]
+    mcp: {}
+  inbox:
+    description: Posts factory notifications to the configured inbox provider
+    skills: []
+    mcp: {}
+  retro:
+    description: Collects lessons from tickets and merges them into the knowledge base
+    skills: [retro]
+    mcp: {}
+  reviewer:
+    description: Reviews a PR at its head and pins the verdict to that head
+    skills:
+      - ponytail-review           # a name from `skills`
+      # - adr-reading: { path: roles/reviewer/skills/adr-reading }      # a role-only local skill
+      # - security-review: { source: "github:owner/repo@<sha>", path: skills/security-review, sha256: ... }
+    mcp: {}
+  router:
+    description: Scopes a ticket, sets risk and complexity, or asks, splits, or rejects it
+    skills: [to-tickets]
+    mcp: {}
+
+# Agents: a role (above; roles/<role>/: role.md, setup.sh) + a model
+# + access + settings. `gate` and `human` have no role.
+agents:
+  gate:   { harness: script, model: luna, access: read-only }   # runs `run`, never judges
+  human:  { harness: human }                                     # a person; never deployed
+  router: { role: router, model: luna, access: read-only }
+  dev-cheap: { role: developer, model: luna, access: full }
+  dev:       { role: developer, model: sonnet, reasoning: high, access: full,
+               settings: { size_stop_factor: 1.5 } }             # stop and propose a split past 1.5x the estimate
+  dev-strong: { role: developer, model: sonnet, reasoning: max, access: full }
+  reviewer:       { role: reviewer, model: sol, access: read-only }
+  reviewer-cheap: { role: reviewer, model: luna, access: read-only }
+  retro:  { role: retro, model: sonnet, access: full }
+  inbox:  { role: inbox, model: luna, access: read-only, settings: { provider: github-inbox } }
+
+# Environments: where agents run. One repository is `main`; the others are additional.
+environments:
+  engine:                         # tickets and PRs of the engine
+    repositories:
+      - repo: zaharchenko-evgeny/slop-factory
+        main: true                # branches, PRs and the node's output apply here
+      - repo: zaharchenko-evgeny/slop-eval-factory   # the knowledge base; also writable for tickets that change it
+        write: true
+        token_env: FACTORY_WRITE_TOKEN
+    ci: { workflow: quality-gates }   # `ci: failed` = Air workflow_run.failed for this workflow
+    env:
+      FACTORY_WRITE_TOKEN: { required: true, secret: true, description: "push to slop-eval-factory" }
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
+              "*.blob.core.windows.net", pypi.org, files.pythonhosted.org, registry.npmjs.org, air.jetbrains.cloud]
+    vm: default
+    setup: null                   # optional script path, run after the engine's bootstrap; installs the environment's tools
+  knowledge:                      # retro: the knowledge base is main, the project is evidence
+    repositories:
+      - repo: zaharchenko-evgeny/slop-eval-factory
+        main: true
+      - repo: zaharchenko-evgeny/slop-factory
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
+              pypi.org, files.pythonhosted.org, air.jetbrains.cloud]
+    vm: default
+  team:                           # routines on the team repository
+    repositories:
+      - repo: zaharchenko-evgeny/slop-eval-factory
+        main: true
+    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
+              pypi.org, files.pythonhosted.org, air.jetbrains.cloud]
+    vm: default
+
+# Webhooks: endpoints that wake nodes.
+webhooks:
+  inbox:
+    description: A notification for the factory inbox, posted by the gate and by Air run-end senders
+    schema: inbox.schema.json     # the engine's payload schema
+    api_key_env: FACTORY_INBOX_KEY

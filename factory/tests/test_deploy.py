@@ -549,9 +549,9 @@ class ProjectPlanTest(unittest.TestCase):
                          json.dumps(current, indent=2, sort_keys=True))
 
     def test_slop_plan_deploys_the_team_workflow(self):
-        """Slop factory's settings (fixtures/slop, slop-eval-factory's files) deploy every node of their own workflow,
+        """Slop factory's old-layout settings (fixtures/slop-v1, frozen) deploy every node of their own workflow,
         on their schedules, with every repository they list; engine/nodes.yaml may differ from them."""
-        slop, before = HERE / "fixtures/slop", cfg.team_root()
+        slop, before = HERE / "fixtures/slop-v1", cfg.team_root()
         project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
         wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
         try:
@@ -602,8 +602,8 @@ class ProjectPlanTest(unittest.TestCase):
                          sorted(str(Path(p).relative_to(tmp)) for p in written))
 
     def test_mention_allowlist(self):
-        """fixtures/slop's agents (ADR-0020): dev, rex and ria, and whom each may mention on which subject."""
-        slop = HERE / "fixtures/slop"
+        """fixtures/slop-v1's agents (ADR-0020, the old layout): dev, rex and ria, and whom each may mention on which subject."""
+        slop = HERE / "fixtures/slop-v1"
         project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
         wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
         specs = {a["spec"]["node"]: a["spec"] for a in project_plan(project, wf)["automations"]}
