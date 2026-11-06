@@ -1,11 +1,11 @@
-[factory] Doctor finds a definition team's skills where factory setup installs them.
+[factory] PR-woken nodes begin on a definition team; deploy picks --pr/--issue from the triggers.
 
 ## Merge Danger
 
 **Door:** two-way.
 
-**Blast Radius:** doctor.
+**Blast Radius:** begin and prompts.
 
-Closes #724.
+Closes #738.
 
 Factory-Run: manual:pi-session-2026-11-06
