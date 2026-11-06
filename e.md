@@ -1,11 +1,11 @@
-[factory] PR-woken decide nodes find their ticket from the PR; decide --dry-run writes nothing.
+[factory] A definition team has no required review focuses (automerge refused PR #735 for a missing `full` focus).
 
 ## Merge Danger
 
 **Door:** two-way.
 
-**Blast Radius:** merge and finish prompts, gate decide.
+**Blast Radius:** GitHub tracker facts.
 
-Closes #742.
+Closes #744.
 
 Factory-Run: manual:pi-session-2026-11-06
