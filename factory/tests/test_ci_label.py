@@ -47,7 +47,7 @@ class CiLabelTest(unittest.TestCase):
         result, calls, uv_calls = self.run_script(fails=1)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("pr edit 7 --add-label factory:ci-green", calls)
-        self.assertIn("run --quiet factory/gate.py wake-reviewers --issue 1 --completed-head abc", uv_calls)
+        self.assertEqual(uv_calls, [])  # ADR-0021: review outcomes and the fix node wake reviewers, not CI
 
     def test_fails_after_third_attempt(self):
         result, calls, _ = self.run_script(fails=99)

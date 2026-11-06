@@ -1104,6 +1104,10 @@ class DefinitionPlanTest(unittest.TestCase):
         events = {t.get("eventType") for a in self.plan["automations"] for t in a["triggers"]}
         self.assertNotIn("workflow_run.failed", events)   # reviewers wait for CI themselves (factory ci --wait)
 
+    def test_ci_result_labels_are_kept(self):
+        plan = self.plan
+        self.assertTrue({"factory:ci-green", "factory:ci-red"} <= set(plan["labels"]))  # deploy never removes them
+
     def test_a_pr_woken_node_begins_with_its_pr(self):
         def arg(name):
             p = self.by[f"[Slop factory] {name}"]["prompt"]

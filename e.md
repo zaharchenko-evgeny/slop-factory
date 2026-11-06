@@ -1,11 +1,11 @@
-[factory] PR-woken decide nodes find their ticket from the PR; decide --dry-run writes nothing.
+[factory] CI labels only the CI result; no more `factory:review-full`.
 
 ## Merge Danger
 
 **Door:** two-way.
 
-**Blast Radius:** merge and finish prompts, gate decide.
+**Blast Radius:** ci-label job.
 
-Closes #742.
+Closes #746.
 
 Factory-Run: manual:pi-session-2026-11-06
