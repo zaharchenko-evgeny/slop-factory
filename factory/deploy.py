@@ -499,8 +499,12 @@ def plan_air(nodes: dict, config: dict) -> dict:
     tags = youtrack_tags(nodes, config)
     label_repos = list(dict.fromkeys(x for x in ((config.get("tracker") or {}).get("repository"),
                                                  repository(primary)["fullName"]) if x))
-    tag_plan = {"tags": tags, "owned_tag_prefixes": sorted({t.partition(":")[0] + ":" for t in tags if ":" in t}),
-                "tag_tracker": config["tracker"]} if tags else {}  # keeps a GitHub plan (and its fixture) unchanged
+    fields = youtrack_fields(config)
+    tag_plan = {"tags": tags, "owned_tag_prefixes": sorted({t.partition(":")[0] + ":" for t in tags if ":" in t})} if tags else {}
+    field_plan = {"fields": fields, "owned_field_prefixes": sorted(
+        {v.partition(":")[0] + ":" for f in fields.values() for v in f if ":" in v})} if fields else {}
+    if tags or fields:  # keeps a GitHub plan (and its fixture) unchanged
+        tag_plan = {**tag_plan, **field_plan, "tag_tracker": config["tracker"]}
     return {"prefix": prefix, "automations": automations, "environments": envs, "labels": labels(nodes, config),
             "label_repositories": label_repos, "label_specs": label_specs(config),
             "owned_label_prefixes": owned_label_prefixes(config),
@@ -610,6 +614,35 @@ def youtrack_tags(nodes: dict, config: dict) -> list[str]:
             out |= {tag.replace("<tier>", t) for t in tiers} if "<tier>" in tag else \
                 {tag.replace("<focus>", f) for f in focuses} if "<focus>" in tag else {tag}
     return sorted(out)
+
+
+def youtrack_fields(config: dict) -> dict:
+    """{field: {value: resolved}} the state and command stores of a YouTrack definition keep in custom fields;
+    a `final` state is resolved. Empty for other adapters."""
+    if (config.get("tracker") or {}).get("adapter") != "youtrack":
+        return {}
+    out = {}
+    for x in [*(config.get("states") or {}).values(), *(config.get("commands") or {}).values()]:
+        f = x["store"].get("field")
+        if isinstance(f, dict):
+            out.setdefault(f["name"], {})[f["value"]] = x.get("kind") == "final"
+    return out
+
+
+def reconcile_fields(plan: dict, run=None) -> list[tuple]:
+    """(action, field, value, resolved) per required field value to create, per one whose resolved flag differs
+    (`update`), and per factory-owned value no longer required (`remove`). Values outside the factory's namespaces are
+    never listed for removal. A missing field raises `youtrack_tracker.MissingField`."""
+    out, owned = [], tuple(plan.get("owned_field_prefixes") or [])
+    for name, want in (plan.get("fields") or {}).items():
+        have = tag_store(plan, run).list_field_values(name)
+        for value, resolved in want.items():
+            if value not in have:
+                out.append(("create", name, value, resolved))
+            elif have[value]["resolved"] is not None and have[value]["resolved"] != resolved:
+                out.append(("update", name, value, resolved))
+        out += [("remove", name, v, None) for v in sorted(have) if owned and v.startswith(owned) and v not in want]
+    return out
 
 
 def tag_store(plan: dict, run=None):
@@ -977,16 +1010,31 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print(line)
     label_changes = reconcile_labels(plan, run)
     tag_changes = reconcile_tags(plan, yt_run)
+    try:
+        field_changes = reconcile_fields(plan, yt_run)
+    except youtrack_tracker.MissingField as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     if mode == "--dry-run":
         for action, repo, label, *rest in label_changes:
             print(f"{action} label {label} in {repo}" + (f" ({', '.join(rest[1])})" if action == "update" else ""))
         for action, tag in tag_changes:
             print(f"{action} tag {tag} in YouTrack")
+        for action, name, value, _ in field_changes:
+            print(f"{action} {name} value {value} in YouTrack")
         return 0
     for action, tag in tag_changes:  # a missing tag fails every handoff that adds it
         if action == "create":
             tag_store(plan, yt_run).create_tag(tag)
             print(f"created tag {tag} in YouTrack")
+    for action, name, value, resolved in field_changes:
+        if action == "create":
+            tag_store(plan, yt_run).create_field_value(name, value, resolved)
+        elif action == "update":
+            tag_store(plan, yt_run).update_field_value(name, value, resolved)
+        else:
+            continue
+        print(f"{action}d {name} value {value} in YouTrack")
     for action, repo, label, want, *_ in label_changes:  # a missing label fails every handoff that adds it
         tracker = label_tracker(repo, run)
         if action == "create":
@@ -998,11 +1046,14 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print(f"{action}d label {label} in {repo}")
     removals = [c for c in label_changes if c[0] == "remove"]
     tag_removals = [t for a, t in tag_changes if a == "remove"]
-    if (removals or tag_removals or any(c[0] == "delete" for c in changes)) and not allow_delete:
+    value_removals = [c for c in field_changes if c[0] == "remove"]
+    if (removals or tag_removals or value_removals or any(c[0] == "delete" for c in changes)) and not allow_delete:
         for _, repo, label, _ in removals:
             print(f"refused: would remove label {label} in {repo}", file=sys.stderr)
         for tag in tag_removals:
             print(f"refused: would remove tag {tag} in YouTrack", file=sys.stderr)
+        for _, name, value, _ in value_removals:
+            print(f"refused: would remove {name} value {value} in YouTrack", file=sys.stderr)
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
     for _, repo, label, _ in removals:
@@ -1011,6 +1062,9 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     for tag in tag_removals:
         tag_store(plan, yt_run).delete_tag(tag, plan["owned_tag_prefixes"])
         print(f"removed tag {tag} in YouTrack")
+    for _, name, value, _ in value_removals:
+        tag_store(plan, yt_run).delete_field_value(name, value, plan["owned_field_prefixes"])
+        print(f"removed {name} value {value} in YouTrack")
     if changes:
         apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories)
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,

@@ -228,5 +228,43 @@ class TagInventoryTest(unittest.TestCase):
         self.assertFalse(yt.YouTrackTicketStore(lambda *a, **k: [], project="LME").used_outside_project("factory:old"))
 
 
+class FieldInventoryTest(unittest.TestCase):
+    BASE = "/api/admin/customFieldSettings/bundles/state/b1/values"
+
+    def store(self, field="State"):
+        calls = []
+
+        def run(method, path, body=None):
+            calls.append((method, path, body))
+            if path.startswith("/api/admin/projects?"):
+                return [{"id": "0-1", "shortName": "LME"}]
+            if method == "GET":
+                return [{"field": {"name": field}, "bundle": {"id": "b1", "values": [
+                    {"id": "1", "name": "factory:old", "isResolved": False}, {"id": "2", "name": "Open"}]}}]
+            return {}
+        return yt.YouTrackTicketStore(run, project="LME"), calls
+
+    def test_lists_creates_updates_and_deletes_factory_values_but_preserves_others(self):
+        store, calls = self.store()
+        self.assertEqual(store.list_field_values("State"), {"factory:old": {"id": "1", "resolved": False}, "Open": {"id": "2", "resolved": None}})
+        store.create_field_value("State", "factory:ready", False)
+        store.update_field_value("State", "factory:old", True)
+        store.delete_field_value("State", "factory:old", ["factory:"])
+        with self.assertRaises(ValueError):
+            store.delete_field_value("State", "Open", ["factory:"])
+        self.assertEqual([c for c in calls if c[0] != "GET"], [
+            ("POST", self.BASE + "?fields=id,name", {"name": "factory:ready", "isResolved": False}),
+            ("POST", self.BASE + "/1?fields=id,name", {"isResolved": True}),
+            ("DELETE", self.BASE + "/1", None)])
+
+    def test_missing_field_is_an_error_and_no_field_is_created(self):
+        store, calls = self.store(field="Other")
+        with self.assertRaises(yt.MissingField):
+            store.list_field_values("State")
+        with self.assertRaises(yt.MissingField):
+            store.create_field_value("State", "factory:ready")
+        self.assertEqual([c for c in calls if c[0] != "GET"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
