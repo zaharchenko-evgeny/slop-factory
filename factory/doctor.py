@@ -35,6 +35,13 @@ def env_needs(env, nodes, resolve=config.resolve):
     roles = sorted({n["role"] for n in nodes["nodes"].values()
                     if n.get("env") == env and n["role"] not in ("script", "human") and n.get("enabled") is not False})
     tools, skills = set(BASE_TOOLS), set()
+    import definition
+    if definition.present(config.team_root()):  # ADR-0021: skills from factory.yaml; setup.sh only installs tools
+        defn = definition.load(config.team_root())
+        known = defn["factory"].get("roles") or {}
+        for r in roles:
+            skills |= set(definition.role_skills(defn, r)) if r in known else set()
+        return sorted(tools), sorted(skills | {"factory-step"})
     for r in roles:
         setup, names = Path(resolve(f"roles/{r}/setup.sh")), Path(resolve(f"roles/{r}/skills.txt"))
         tools |= {t for line in setup.read_text().splitlines() if line.startswith("need_tools ") for t in line.split()[1:]}
