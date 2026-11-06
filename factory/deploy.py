@@ -326,7 +326,16 @@ def begin_arg(node: str, n: dict) -> str:
         return ""
     if any(str(t).startswith("webhook ") for t in n["triggers"]):
         return "--issue <the `issue` field of the trigger payload>"
-    return "--pr <the pull request number>" if node in PR_TRIGGERED_NODES else "--issue <the issue number>"
+    if node in PR_TRIGGERED_NODES:
+        return "--pr <the pull request number>"
+    events = [str(t) for t in n["triggers"] if str(t) != "manual"]
+    on_pr = [t.startswith(("pull_request", "issue_comment", "workflow_run")) for t in events]
+    if events and all(on_pr):  # ADR-0021: what wakes the node says what it begins with, not its name
+        return "--pr <the pull request number>"
+    if any(on_pr):
+        return ("--pr <the pull request number> when a pull request woke this run, else "
+                "--issue <the issue number>")
+    return "--issue <the issue number>"
 
 
 def mcp_connectors(n: dict, config: dict, focus: str | None) -> list[str]:

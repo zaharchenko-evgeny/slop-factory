@@ -1103,6 +1103,14 @@ class DefinitionPlanTest(unittest.TestCase):
         events = {t.get("eventType") for a in self.plan["automations"] for t in a["triggers"]}
         self.assertNotIn("workflow_run.failed", events)   # reviewers wait for CI themselves (factory ci --wait)
 
+    def test_a_pr_woken_node_begins_with_its_pr(self):
+        def arg(name):
+            p = self.by[f"[Slop factory] {name}"]["prompt"]
+            return p[p.find("factory begin"):].split("`")[0]
+        self.assertEqual(arg("review-low"), "factory begin review-low --pr <the pull request number>")
+        self.assertEqual(arg("automerge"), "factory begin automerge --pr <the pull request number>")
+        self.assertEqual(arg("intake"), "factory begin intake --issue <the issue number>")
+
     def test_a_decide_agent_only_runs_the_command(self):
         merge = self.by["[Slop factory] merge"]["prompt"]
         self.assertIn("You are the clerk of Slop factory.", merge)
