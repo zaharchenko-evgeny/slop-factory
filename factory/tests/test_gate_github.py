@@ -1833,6 +1833,15 @@ class CiSyncCodeHostTest(unittest.TestCase):
                                 (["pr", "merge"], "o/app", "pat"), (["pr", "edit"], "o/app", None)])
 
 
+
+class GateTrackerChildrenTest(unittest.TestCase):
+    def test_children_come_from_the_tickets(self):
+        from gate_github import GitHubGateTracker
+        g = GitHubGateTracker.__new__(GitHubGateTracker)
+        g.tickets = type("T", (), {"children": lambda self, n: [{"number": 2, "state": "closed"}]})()
+        self.assertEqual(g.children(1), [{"number": 2, "state": "closed"}])   # the children guard can hold
+
+
 if __name__ == "__main__":
     unittest.main()
 
