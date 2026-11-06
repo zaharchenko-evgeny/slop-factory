@@ -209,10 +209,13 @@ class DefinitionTest(unittest.TestCase):
         try:
             n = nodes_mod.load()
             t = MemoryTracker({"7": {"stage": "triage", "head": "h1", "pr": 5, "pr_state": "open", "ci": "green"}})
+            written, plain = [], t.apply
+            t.apply = lambda e: written.append(e) or plain(e)
             for node, outcome, extra in [("intake", "medium-high", {}), ("dispatch", "medium", {}),
                                          ("implement-medium", "done-low", {}),
                                          ("review-low", "approve", {"findings": [], "verdict": "approve"})]:
                 self.assertTrue(gate.apply(node, outcome, {"ticket": "7", **extra}, t, n)[1]["applied"], node)
+            self.assertEqual([e["focus"] for e in written if e["kind"] == "review"], ["review-low"])  # the node names it
             attrs = t.facts("7")["attrs"]
             self.assertIn("risk:low", attrs)
             self.assertNotIn("risk:high", attrs)                     # one value per group

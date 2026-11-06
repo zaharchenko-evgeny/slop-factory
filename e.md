@@ -1,11 +1,11 @@
-[factory] Reconcile wakes only once-blocked ready tickets; environments drop air.jetbrains.cloud; fixture from slop-eval-factory cf2a278.
+[factory] PR-woken nodes begin on a definition team; deploy picks --pr/--issue from the triggers.
 
 ## Merge Danger
 
 **Door:** two-way.
 
-**Blast Radius:** reconcile.
+**Blast Radius:** begin and prompts.
 
-Closes #736.
+Closes #738.
 
 Factory-Run: manual:pi-session-2026-11-06
