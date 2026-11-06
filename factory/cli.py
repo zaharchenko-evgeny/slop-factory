@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, contracts (operator-only), chart, validate, doctor.
 
@@ -226,6 +226,12 @@ def end(argv, team=None):
 
 
 def validate():
+    import definition
+    if definition.present(config.team_root()):  # ADR-0021: factory.yaml + workflow.yaml + roles/
+        defn = definition.load(config.team_root())
+        errs = definition.errors(defn)
+        print("\n".join([*errs, *(f"warning: {w}" for w in definition.warnings(defn)), *([] if errs else ["factory: ok"])]))
+        return 1 if errs else 0
     project_mode = (config.team_root() / config.PROJECT_DESCRIPTOR).is_file()
     errs = config.validate()
     if not errs and project_mode:

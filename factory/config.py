@@ -41,7 +41,8 @@ def team_root():
     if home.is_dir():
         return home.resolve()
     cwd = Path.cwd()
-    if any((d / f).exists() for d in (cwd, ENGINE_ROOT) for f in (PROJECT_DESCRIPTOR, DESCRIPTOR)):
+    if any((d / f).exists() for d in (cwd, ENGINE_ROOT) for f in (PROJECT_DESCRIPTOR, DESCRIPTOR)) \
+            or all((cwd / f).is_file() for f in ("factory.yaml", "workflow.yaml")):  # ADR-0021
         return cwd.resolve()
     raise SystemExit("factory: no team repository (set FACTORY_TEAM or run the installed factory)")
 
