@@ -16,6 +16,7 @@ nobody else who can comment can set the vars.
 import json
 import sys
 import os
+import random
 import re
 import subprocess
 import time
@@ -29,6 +30,11 @@ import vocab  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 RED = "Main is red"  # title prefix of the owner ticket of a red base branch
+
+
+def random_color():
+    """A random GitHub label color: the color of a label that has no mapped one."""
+    return f"{random.randrange(0x1000000):06x}"
 
 
 class ClaimError(Exception):

@@ -1211,15 +1211,12 @@
   ],
   "label_specs": {
     "complexity:large": {
-      "color": "fbca04",
       "description": "Size grade set by intake; chooses the developer tier"
     },
     "complexity:medium": {
-      "color": "fbca04",
       "description": "Size grade set by intake; chooses the developer tier"
     },
     "complexity:small": {
-      "color": "fbca04",
       "description": "Size grade set by intake; chooses the developer tier"
     }
   },

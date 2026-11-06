@@ -6,6 +6,7 @@
 """Tests for factory/deploy.py. Run: uv run factory/tests/test_deploy.py
 Regenerate the fixture: UPDATE_FIXTURE=1 uv run factory/tests/test_deploy.py"""
 import contextlib
+import copy
 import io
 import json
 import os
@@ -1160,9 +1161,11 @@ def fake_labels(by_repo):
 
 class LabelsTest(unittest.TestCase):
     PLAN = {"labels": ["complexity:medium", "factory:ready", "risk:low"], "label_repositories": ["o/tracker", "o/code"],
-            "owned_label_prefixes": ["complexity:", "factory:", "risk:"], "label_specs": deploy.label_specs({})}
-    HAVE = {"factory:ready": ("ededed", ""), "complexity:medium": ("fbca04", deploy.COMPLEXITY_SPEC["description"]),
-            "risk:low": ("ededed", ""), "factory:old": ("ededed", ""), "bug": ("ff0000", "")}
+            "owned_label_prefixes": ["complexity:", "factory:", "risk:"], "label_specs": {
+                "complexity:medium": {"color": "fbca04", "description": deploy.COMPLEXITY_DESCRIPTION},
+                "factory:ready": {"color": "c2e0c6"}, "risk:low": {"color": "e6f4ea"}}}
+    HAVE = {"factory:ready": ("c2e0c6", ""), "complexity:medium": ("fbca04", deploy.COMPLEXITY_DESCRIPTION),
+            "risk:low": ("e6f4ea", ""), "factory:old": ("ededed", ""), "bug": ("ff0000", "")}
 
     def test_each_repository_is_reconciled_independently(self):
         run = fake_labels({"o/tracker": self.HAVE, "o/code": {"factory:ready": ("00ff00", "x")}})
@@ -1214,6 +1217,59 @@ class LabelsTest(unittest.TestCase):
             deploy.deploy("--apply", False, plan, None, None, run=wrapped)
         creates = {(r, t) for v, r, t in tokens if v == "create"}
         self.assertEqual(creates, {("o/tracker", None), ("o/code", "t")})
+
+
+def slop_specs(edit=None):
+    """(labels, label_specs) of the slop fixture's config, after `edit` changed a copy of it."""
+    before = cfg.team_root()
+    try:
+        with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
+            cfg.set_team(project_team(HERE / "fixtures/slop"))
+        conf = copy.deepcopy(cfg.load())
+        if edit:
+            edit(conf)
+        return deploy.labels(nodes.load(), conf), deploy.label_specs(nodes.load(), conf)
+    finally:
+        cfg.set_team(before)
+
+
+class LabelColorTest(unittest.TestCase):
+    def test_label_specs_color_every_stage_and_command_label_by_role(self):
+        names, specs = slop_specs()
+        self.assertEqual([n for n in names if not (specs.get(n) or {}).get("color")], [])
+        self.assertEqual(specs["factory:in-dev"]["color"], "1d76db")
+        self.assertEqual(specs["factory:implement-medium"]["color"], "c5def5")
+        self.assertEqual(specs["factory:ci-red"]["color"], "d73a4a")
+        self.assertEqual(specs["risk:high"]["color"], "f9d0c4")
+        self.assertEqual(specs["complexity:small"]["description"], deploy.COMPLEXITY_DESCRIPTION)
+
+    def test_label_specs_color_a_renamed_stage_and_an_added_command_by_role(self):
+        def edit(conf):
+            conf["states"]["in-dev"]["store"]["label"] = conf["tracker"]["stages"]["in-dev"] = "team:coding"
+            conf["commands"]["build"] = {"store": {"label": "team:build"}}
+        names, specs = slop_specs(edit)
+        self.assertEqual(specs["team:coding"]["color"], "1d76db")  # stage `in-dev` keeps its color
+        self.assertEqual(specs["team:build"]["color"], "c5def5")
+        self.assertIn("team:build", names)
+        self.assertNotIn("factory:in-dev", names)
+
+    def test_label_color_override(self):
+        extra = yaml.safe_load((HERE / "fixtures/label_colors/factory.yaml").read_text())
+        _, specs = slop_specs(lambda conf: conf.update(cfg.merge(conf, extra)))
+        self.assertEqual(specs["factory:blocked"]["color"], "000000")
+        self.assertEqual(specs["factory:approved"]["color"], "0e8a16")  # the other defaults stay
+
+    def test_label_color_random(self):
+        plan = {"labels": ["team:odd"], "label_repositories": ["o/a", "o/b"], "owned_label_prefixes": ["team:"],
+                "label_specs": {}}
+        created = deploy.reconcile_labels(plan, run=fake_labels({"o/a": {}, "o/b": {}}))
+        self.assertEqual([c[0] for c in created], ["create", "create"])
+        colors = {c[3]["color"] for c in created}
+        self.assertEqual(len(colors), 1)  # one color per label, in every repository
+        self.assertRegex(colors.pop(), r"^[0-9a-f]{6}$")
+        for color in ("ededed", "123456"):  # an existing unmapped label of any color is left alone
+            have = fake_labels({"o/a": {"team:odd": (color, "")}, "o/b": {"team:odd": (color, "")}})
+            self.assertEqual(deploy.reconcile_labels(plan, run=have), [])
 
 
 class FakeTags:

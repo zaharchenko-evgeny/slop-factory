@@ -1,0 +1,4 @@
+# A team's override of one label color (the rest keeps the engine defaults).
+labels:
+  overrides:
+    "factory:blocked": "000000"

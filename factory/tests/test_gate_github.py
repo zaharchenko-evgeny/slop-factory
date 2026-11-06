@@ -748,6 +748,32 @@ class EffectsTest(unittest.TestCase):
             GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
         self.assertEqual(len(calls), 2)
 
+    def test_on_the_fly_label_color(self):
+        calls = []
+        def run(args):
+            calls.append(args)
+            path = next((x for x in args if x.startswith("repos/")), "")
+            if path.endswith("pulls/300"):
+                return json.dumps({"merge_commit_sha": "m1"})
+            if path.endswith("commits/m1"):
+                return json.dumps({"parents": [{"sha": "p1"}]})
+            if path.endswith("labels?per_page=100"):
+                return recorded_action(path, [{"name": "factory:old"}])
+            if path.endswith("issues?state=open&per_page=100"):
+                return ""
+            if args[:2] == ["issue", "create"]:
+                return "https://github.com/o/r/issues/99"
+            return "{}"
+        before = {"automations": [], "environments": [], "labels": [], "files": {}}
+        after = {"automations": [], "environments": [], "labels": ["factory:mapped", "team:unmapped"], "files": {},
+                 "label_specs": {"factory:mapped": {"color": "0e8a16"}}}
+        with patch("gate_github.deploy_plan_at", side_effect=[before, after]):
+            GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
+        colors = {c[c.index("-f") + 1][5:]: c[c.index("-f") + 3][6:] for c in calls
+                  if "-f" in c and c[c.index("-f") + 1].startswith("name=")}
+        self.assertEqual(colors["factory:mapped"], "0e8a16")
+        self.assertRegex(colors["team:unmapped"], r"^[0-9a-f]{6}$")
+
     def test_new_labels_created_at_merge(self):
         calls = []
         def run(args):
@@ -768,7 +794,7 @@ class EffectsTest(unittest.TestCase):
         after = {"automations": [{"name": "new"}], "environments": [], "labels": ["factory:new"], "files": {}}
         with patch("gate_github.deploy_plan_at", side_effect=[before, after]):
             GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
-        self.assertTrue(any("repos/o/r/labels" in c and "name=factory:new" in c for c in calls))
+        self.assertTrue(any("repos/o/r/labels" in c and "name=factory:new" in c and "color=ededed" not in c for c in calls))
         self.assertTrue(any(c[:2] == ["issue", "create"] and "Deploy needed" in c for c in calls))
         create = next(c for c in calls if c[:2] == ["issue", "create"])
         body = create[create.index("--body") + 1]
