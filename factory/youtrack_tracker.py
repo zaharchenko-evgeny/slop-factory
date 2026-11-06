@@ -27,6 +27,10 @@ class MissingTag(RuntimeError):
     """The tag does not exist in YouTrack: setup creates tags, the gate never does."""
 
 
+class MissingField(RuntimeError):
+    """The custom field does not exist in the project: an administrator creates fields, deploy never does."""
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """The token must not follow a redirect to another origin: a redirect is an error."""
 
@@ -163,6 +167,41 @@ class YouTrackTicketStore:
         if not name.startswith(tuple(owned_prefixes)):
             raise ValueError(f"tag {name!r} is not factory-owned")
         self.run("DELETE", f"/api/tags/{self.list_tags()[name]}")
+
+    # --- state field inventory (deploy)
+    def _field_bundle(self, name):
+        """The state bundle id and its values {value: {id, resolved}} of the project's field `name`; MissingField when absent."""
+        q = urllib.parse.quote
+        project = next((p for p in self.run("GET", f"/api/admin/projects?fields=id,shortName&query={q(self.project or '')}&{TOP}")
+                        if p["shortName"] == self.project), None)
+        if project is None:
+            raise MissingField(f"project {self.project!r} does not exist in YouTrack")
+        for c in self.run("GET", f"/api/admin/projects/{project['id']}/customFields?fields=field(name),bundle(id,values(id,name,isResolved))&{TOP}"):
+            if c["field"]["name"] == name:
+                bundle = c.get("bundle") or {}
+                return bundle.get("id"), {v["name"]: {"id": v["id"], "resolved": v.get("isResolved")} for v in bundle.get("values") or []}
+        raise MissingField(f"field {name!r} does not exist in project {self.project!r}: create it in YouTrack, deploy never does")
+
+    def list_field_values(self, name):
+        """{value: {id, resolved}} of the values the field `name` offers; `resolved` is None for a bundle without the flag."""
+        return self._field_bundle(name)[1]
+
+    def create_field_value(self, name, value, resolved=None):
+        bundle = self._field_bundle(name)[0]
+        self.run("POST", f"/api/admin/customFieldSettings/bundles/state/{bundle}/values?fields=id,name",
+                 {"name": value, **({} if resolved is None else {"isResolved": resolved})})
+
+    def update_field_value(self, name, value, resolved):
+        bundle, have = self._field_bundle(name)
+        self.run("POST", f"/api/admin/customFieldSettings/bundles/state/{bundle}/values/{have[value]['id']}?fields=id,name",
+                 {"isResolved": resolved})
+
+    def delete_field_value(self, name, value, owned_prefixes):
+        """Delete a value only inside the factory's namespaces; anything else is someone else's and never removed."""
+        if not value.startswith(tuple(owned_prefixes)):
+            raise ValueError(f"field value {value!r} is not factory-owned")
+        bundle, have = self._field_bundle(name)
+        self.run("DELETE", f"/api/admin/customFieldSettings/bundles/state/{bundle}/values/{have[value]['id']}")
 
     # --- writes
     def _tag_id(self, name):

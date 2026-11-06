@@ -1282,5 +1282,82 @@ class YouTrackTagsTest(unittest.TestCase):
         self.assertEqual([w[:2] for w in writes], [("POST", "/api/tags?fields=id,name")])
 
 
+class FakeFieldValues:
+    """A YouTrack runner over a project whose State bundle holds {value: [id, isResolved]}; records writes."""
+
+    def __init__(self, values, field="State"):
+        self.values, self.field, self.writes = dict(values), field, []
+
+    def __call__(self, method, path, body=None):
+        if method != "GET":
+            self.writes.append((method, path, body))
+            return {}
+        if path.startswith("/api/admin/projects?"):
+            return [{"id": "0-1", "shortName": "LME"}]
+        return [{"field": {"name": self.field}, "bundle": {"id": "b1", "values": [
+            {"id": i, "name": n, "isResolved": r} for n, (i, r) in self.values.items()]}}]
+
+
+class YouTrackFieldValuesTest(unittest.TestCase):
+    PLAN = {"fields": {"State": {"factory:ready": False, "factory:done": True}}, "owned_field_prefixes": ["factory:"],
+            "tag_tracker": {"url": "https://y.example", "project": "LME"},
+            "labels": [], "label_repositories": [], "owned_label_prefixes": []}
+
+    def run_deploy(self, mode, allow_delete, values, field="State"):
+        fake = FakeFieldValues(values, field)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(deploy, "read_state", return_value=([], [])):
+            code = deploy.deploy(mode, allow_delete, {**self.PLAN, "prefix": "p", "environments": [], "automations": []},
+                                 None, None, yt_run=fake)
+        return code, out.getvalue(), err.getvalue(), fake.writes
+
+    HAVE = {"factory:ready": ("1", False), "factory:done": ("2", False), "factory:old": ("3", False), "Open": ("4", False)}
+
+    def test_plan_collects_field_values_with_final_states_resolved(self):
+        project, wf = this_repository()
+        project["tracker"] = {"adapter": "youtrack", "url": "https://y.example", "project": "LME"}
+        project["code_host"] = {"repository": "o/r"}
+        project["states"]["ready"] = {"kind": "active", "store": {"field": {"name": "State", "value": "factory:ready"}}}
+        project["states"]["done"] = {"kind": "final", "store": {"field": {"name": "State", "value": "factory:done"}}}
+        plan = project_plan(project, wf)
+        self.assertEqual(plan["fields"], {"State": {"factory:ready": False, "factory:done": True}})
+        self.assertEqual(plan["owned_field_prefixes"], ["factory:"])
+
+    def test_dry_run_reports_missing_changed_and_obsolete_values_without_writing(self):
+        have = {k: v for k, v in self.HAVE.items() if k != "factory:ready"}
+        code, out, _, writes = self.run_deploy("--dry-run", False, have)
+        self.assertEqual(code, 0)
+        self.assertIn("create State value factory:ready in YouTrack", out)
+        self.assertIn("update State value factory:done in YouTrack", out)
+        self.assertIn("remove State value factory:old in YouTrack", out)
+        self.assertNotIn("Open", out)
+        self.assertEqual(writes, [])
+
+    def test_apply_writes_values_and_refuses_removal_without_allow_delete(self):
+        have = {k: v for k, v in self.HAVE.items() if k != "factory:ready"}
+        code, _, err, writes = self.run_deploy("--apply", False, have)
+        self.assertEqual(code, 1)
+        self.assertIn("refused: would remove State value factory:old in YouTrack", err)
+        self.assertEqual([w[:2] for w in writes], [
+            ("POST", "/api/admin/customFieldSettings/bundles/state/b1/values?fields=id,name"),
+            ("POST", "/api/admin/customFieldSettings/bundles/state/b1/values/2?fields=id,name")])
+        self.assertEqual(writes[0][2], {"name": "factory:ready", "isResolved": False})
+        self.assertEqual(writes[1][2], {"isResolved": True})
+
+    def test_apply_with_allow_delete_removes_owned_values_only(self):
+        code, _, _, writes = self.run_deploy("--apply", True, self.HAVE)
+        self.assertEqual(code, 0)
+        self.assertEqual([w[:2] for w in writes], [
+            ("POST", "/api/admin/customFieldSettings/bundles/state/b1/values/2?fields=id,name"),
+            ("DELETE", "/api/admin/customFieldSettings/bundles/state/b1/values/3")])
+
+    def test_missing_field_is_an_error_and_nothing_is_written(self):
+        code, _, err, writes = self.run_deploy("--apply", True, self.HAVE, field="Other")
+        self.assertEqual(code, 1)
+        self.assertIn("field 'State' does not exist", err)
+        self.assertEqual(writes, [])
+
+
 if __name__ == "__main__":
     unittest.main()
