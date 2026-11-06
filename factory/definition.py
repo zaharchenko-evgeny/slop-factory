@@ -182,6 +182,8 @@ def errors(defn):
     envs = f.get("environments") or {}
     hooks = f.get("webhooks") or {}
     nodes = w.get("nodes") or {}
+    if not f.get("owner"):
+        errs.append("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)")
     errs += [e for n, s in skills.items() for e in _skill_spec_errors(f"skills.{n}", s)]
     for s in (f.get("defaults") or {}).get("skills") or []:
         errs += _skill_errors("defaults.skills", s, skills)
@@ -392,8 +394,6 @@ def to_project(defn):
 
     merge_settings = next(((v.get("settings") or {}) for v in nodes.values()
                            if "max_risk" in (v.get("settings") or {})), {})
-    notify = next(((v.get("settings") or {}) for v in nodes.values()
-                   if "github_user" in (v.get("settings") or {})), {})
     fix_rounds = next((v["settings"]["fix_rounds"] for v in nodes.values() if "fix_rounds" in (v.get("settings") or {})), None)
     team = team_url(defn["root"])
     descriptor = {
@@ -418,7 +418,7 @@ def to_project(defn):
                   "confirm_external_writes": dset.get("confirm_external_writes", True),
                   "confirm_external_writes_scope": dset.get("confirm_external_writes_scope") or []},
         "reviews": {"trusted_bots": []},
-        **({"notify": {"github_user": notify["github_user"]}} if notify.get("github_user") else {}),
+        **({"owner": f["owner"]} if f.get("owner") else {}),
     }
     return descriptor, {"format": 2, "adapters": {"ticket": (f.get("tracker") or {}).get("adapter", "github-issues"),
                                                   "pr": "github"},

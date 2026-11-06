@@ -101,27 +101,6 @@
               "stage": "approved"
             }
           },
-          "notify": {
-            "engine": null,
-            "focus": null,
-            "node": "notify",
-            "outcomes": {
-              "notified": {
-                "from": [
-                  "blocked",
-                  "needs-answers"
-                ]
-              }
-            },
-            "role": "script",
-            "tier": null,
-            "when": {
-              "stage": [
-                "blocked",
-                "needs-answers"
-              ]
-            }
-          },
           "recover": {
             "engine": null,
             "focus": null,
@@ -576,27 +555,6 @@
               "stage": "approved"
             }
           },
-          "notify": {
-            "engine": null,
-            "focus": null,
-            "node": "notify",
-            "outcomes": {
-              "notified": {
-                "from": [
-                  "blocked",
-                  "needs-answers"
-                ]
-              }
-            },
-            "role": "script",
-            "tier": null,
-            "when": {
-              "stage": [
-                "blocked",
-                "needs-answers"
-              ]
-            }
-          },
           "recover": {
             "engine": null,
             "focus": null,
@@ -696,27 +654,6 @@
               "stage": "approved"
             }
           },
-          "notify": {
-            "engine": null,
-            "focus": null,
-            "node": "notify",
-            "outcomes": {
-              "notified": {
-                "from": [
-                  "blocked",
-                  "needs-answers"
-                ]
-              }
-            },
-            "role": "script",
-            "tier": null,
-            "when": {
-              "stage": [
-                "blocked",
-                "needs-answers"
-              ]
-            }
-          },
           "start": {
             "engine": null,
             "focus": null,
@@ -803,27 +740,6 @@
         },
         "role": "script",
         "runs": {
-          "notify": {
-            "engine": null,
-            "focus": null,
-            "node": "notify",
-            "outcomes": {
-              "notified": {
-                "from": [
-                  "blocked",
-                  "needs-answers"
-                ]
-              }
-            },
-            "role": "script",
-            "tier": null,
-            "when": {
-              "stage": [
-                "blocked",
-                "needs-answers"
-              ]
-            }
-          },
           "recover": {
             "engine": null,
             "focus": null,
@@ -911,140 +827,6 @@
       },
       "environmentConfigId": "[Slop factory] read",
       "mcpConnectors": [],
-      "name": "[Slop factory] notify",
-      "prompt": "Run `factory notify --issue <the issue number>` in the foreground with no time limit, wait until it exits, and report its output. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
-      "repository": {
-        "browseUrl": "https://example.com/o/main",
-        "cloneUrl": "https://example.com/o/main.git",
-        "fullName": "o/main",
-        "provider": "other"
-      },
-      "spec": {
-        "engine": null,
-        "focus": null,
-        "node": "notify",
-        "outcomes": {
-          "notified": {
-            "from": [
-              "blocked",
-              "needs-answers"
-            ]
-          }
-        },
-        "role": "script",
-        "runs": {
-          "merge": {
-            "engine": null,
-            "focus": null,
-            "node": "merge",
-            "outcomes": {
-              "merged": {
-                "effects": [
-                  {
-                    "merge": "match-head"
-                  }
-                ],
-                "from": [
-                  "approved"
-                ]
-              }
-            },
-            "role": "script",
-            "tier": null,
-            "when": {
-              "ci": "green",
-              "round": "complete-at-head",
-              "stage": "approved"
-            }
-          },
-          "recover": {
-            "engine": null,
-            "focus": null,
-            "node": "recover",
-            "outcomes": {},
-            "role": "script",
-            "tier": null,
-            "when": {
-              "always": true
-            }
-          },
-          "start": {
-            "engine": null,
-            "focus": null,
-            "node": "start",
-            "outcomes": {
-              "started": {
-                "effects": [
-                  {
-                    "stage": "in-dev"
-                  }
-                ],
-                "from": [
-                  "ready"
-                ]
-              }
-            },
-            "role": "script",
-            "tier": null,
-            "when": {
-              "blockers": "closed",
-              "stage": "ready"
-            }
-          },
-          "sweep": {
-            "engine": null,
-            "focus": null,
-            "node": "sweep",
-            "outcomes": {},
-            "role": "script",
-            "tier": null,
-            "when": null
-          }
-        },
-        "tier": "cheap",
-        "when": {
-          "stage": [
-            "blocked",
-            "needs-answers"
-          ]
-        }
-      },
-      "triggerVcs": [
-        {
-          "outputBehaviour": "read-only"
-        },
-        {
-          "outputBehaviour": "read-only"
-        }
-      ],
-      "triggers": [
-        {
-          "eventType": "issues.labeled",
-          "filters": {
-            "label": "factory:blocked"
-          },
-          "source": "github",
-          "triggerType": "EVENT"
-        },
-        {
-          "eventType": "issues.labeled",
-          "filters": {
-            "label": "factory:needs-answers"
-          },
-          "source": "github",
-          "triggerType": "EVENT"
-        }
-      ]
-    },
-    {
-      "agentAndModel": {
-        "agentId": "codex",
-        "id": "small",
-        "isDefault": false,
-        "name": "small"
-      },
-      "environmentConfigId": "[Slop factory] read",
-      "mcpConnectors": [],
       "name": "[Slop factory] doctor",
       "prompt": "Run the installed `factory doctor` command exactly once in the foreground with no arguments. Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
       "repository": {
@@ -1085,27 +867,6 @@
               "ci": "green",
               "round": "complete-at-head",
               "stage": "approved"
-            }
-          },
-          "notify": {
-            "engine": null,
-            "focus": null,
-            "node": "notify",
-            "outcomes": {
-              "notified": {
-                "from": [
-                  "blocked",
-                  "needs-answers"
-                ]
-              }
-            },
-            "role": "script",
-            "tier": null,
-            "when": {
-              "stage": [
-                "blocked",
-                "needs-answers"
-              ]
             }
           },
           "recover": {
@@ -1221,27 +982,6 @@
               "stage": "approved"
             }
           },
-          "notify": {
-            "engine": null,
-            "focus": null,
-            "node": "notify",
-            "outcomes": {
-              "notified": {
-                "from": [
-                  "blocked",
-                  "needs-answers"
-                ]
-              }
-            },
-            "role": "script",
-            "tier": null,
-            "when": {
-              "stage": [
-                "blocked",
-                "needs-answers"
-              ]
-            }
-          },
           "recover": {
             "engine": null,
             "focus": null,
@@ -1353,27 +1093,6 @@
               "ci": "green",
               "round": "complete-at-head",
               "stage": "approved"
-            }
-          },
-          "notify": {
-            "engine": null,
-            "focus": null,
-            "node": "notify",
-            "outcomes": {
-              "notified": {
-                "from": [
-                  "blocked",
-                  "needs-answers"
-                ]
-              }
-            },
-            "role": "script",
-            "tier": null,
-            "when": {
-              "stage": [
-                "blocked",
-                "needs-answers"
-              ]
             }
           },
           "recover": {
@@ -1492,14 +1211,11 @@
     "complexity:medium",
     "complexity:small",
     "factory:approved",
-    "factory:blocked",
     "factory:ci-green",
     "factory:implement-cheap",
     "factory:implement-mid",
     "factory:implement-strong",
-    "factory:inbox",
     "factory:lesson",
-    "factory:needs-answers",
     "factory:needs-human",
     "factory:ready",
     "factory:rereview-behaviour",

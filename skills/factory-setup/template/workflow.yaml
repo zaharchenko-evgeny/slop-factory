@@ -177,14 +177,14 @@ nodes:
       waiting:       {}
 
   # --- Notifications --------------------------------------------------------------------------
-  notify:
-    agent: inbox
+  notify:                         # a state that needs the owner: the agent writes one message, or skips
+    agent: notify
     environment: team
-    triggers: [{ stage: blocked }, { stage: needs-answers }, { label: "factory:needs-human" }, { webhook: inbox }]
+    triggers: [{ stage: blocked }, { stage: needs-answers }, { label: "factory:needs-human" }]
     output: read-only
-    settings: { github_user: {{GITHUB_USER}}, inbox_title: Factory inbox }
     outcomes:
-      notified: {}
+      notified: { effects: [{ comment: message }] }
+      skipped:  {}
 
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
   retro:

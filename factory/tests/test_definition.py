@@ -48,6 +48,15 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    def test_missing_owner_fails(self):
+        self.edit("factory.yaml", lambda f: f.pop("owner"))
+        self.assertIn("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)", self.errors())
+
+    def test_owner_reaches_the_descriptor(self):
+        descriptor, _ = definition.to_project(definition.load(self.root))
+        self.assertEqual(descriptor["owner"], "zaharchenko-evgeny")
+        self.assertNotIn("notify", descriptor)
+
     def test_fixture_warns_only_about_labels_a_person_adds(self):
         self.assertEqual(definition.warnings(definition.load(self.root)), [])
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"]["effects"]
@@ -162,7 +171,7 @@ class DefinitionTest(unittest.TestCase):
         wakes = {k: v["wakes_on"] for k, v in definition.to_project(definition.load(self.root))[1]["nodes"].items()}
         self.assertEqual(wakes["fix"], ["command fix"])   # red CI reaches it through the reviewer's verdict
         self.assertEqual(wakes["finish"], ["state pr-merged", "ticket closed"])
-        self.assertEqual(wakes["notify"], ["state blocked", "state needs-answers", "command needs-human", "webhook inbox"])
+        self.assertEqual(wakes["notify"], ["state blocked", "state needs-answers", "command needs-human"])
         self.assertEqual(wakes["retro"], ["schedule retro"])
         self.assertEqual(wakes["human"], ["manual"])
 

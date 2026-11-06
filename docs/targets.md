@@ -136,11 +136,10 @@ Other findings and their consequences for the design (#150, #159):
 - On Air, `gate.py check --event <file>` also takes the raw trigger payload (`issues`, `pull_request` or `pull_request_review`); a PR whose head is not `ez/<n>-*` exits 10. Its output adds `branch` (the PR head, or `ez/<n>-<slug>` from the issue title) and `handoff_path` (`.factory/handoff/<node>.json`). The role works on `branch`, writes the handoff to `handoff_path`, then runs `gate.py apply --node <n> --handoff <handoff_path>`, which derives the outcome and payload (`--outcome` and `--payload` still work). The platform pushes.
 - No answer is "no", so no workaround is needed. Probe 2 is tracked in #163.
 
-## Inbox senders
+## Notifications
 
-The gate sends `review-needed`, `decision-needed` and `automation-error` requests after it applies effects
-(`factory inbox send`). With `notify.webhook` (`url_secret`, `key_secret` env var names) it POSTs the request with
-`Authorization: ApiKey <key>`; without it, it delivers in-process to the configured providers. A failed send only warns.
-Run crashes are not sent through Air `outboundWebhooks`: Air signs those with an HMAC secret and sends no
-`Authorization: ApiKey` header (AIRA-627), so they cannot wake another automation's webhook. `recover --stale`
-sends `automation-error` instead.
+The engine sends no notifications of its own. A team's `notify` node wakes on the states that need the owner
+(stage `blocked` or `needs-answers`, label `factory:needs-human`); its cheap agent reports `notified` with a short
+`message`, which the gate posts as a comment on that ticket or PR, mentioning `owner` from `factory.yaml`, or
+`skipped`. Air run-end `outboundWebhooks` cannot wake an automation: Air signs them with an HMAC secret and sends no
+`Authorization: ApiKey` header (AIRA-627). `recover --stale` labels the ticket `factory:needs-human` and assigns the owner.

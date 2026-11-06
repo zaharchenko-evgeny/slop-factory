@@ -16,8 +16,6 @@ tracker:
   repository: "{{TRACKER_REPOSITORY}}"
 notify:
   github_user: "{{GITHUB_USER}}"
-  providers: [{ kind: github-inbox }]
-  # webhook: { url_secret: INBOX_WEBHOOK_URL, key_secret: INBOX_WEBHOOK_KEY }  # POST requests to the inbox webhook instead of delivering in-process
 targets:
   air:
     bot_login: jetbrains-air[bot]
