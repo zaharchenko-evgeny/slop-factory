@@ -411,6 +411,9 @@ class GitHubGateTracker(DescriptorPort):
                  required=None):
         self.trusted, self.run_cap, self.ci_workflows = set(trusted_bots), run_cap, set(ci_workflows)
         self.required = {**FOCUSES, **(required or {})}  # review focuses by risk; `reviews.required` overrides
+        import definition
+        if definition.present(config.team_root()):  # ADR-0021: no focuses; workflow.yaml names the reviews
+            self.required = {risk: [] for risk in self.required}
         self.project = project  # factory.project.yaml: the stores of states and commands (DescriptorPort)
         self.pr_repo = pr_repo or repo  # the code host: pull requests, CI, commits, merges
         # {name: owner/repo} of the descriptor's repositories, the primary first; the primary is the code host

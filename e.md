@@ -1,11 +1,11 @@
-[factory] A definition team's review is named after its node (review-low could not report on PR #735).
+[factory] PR-woken decide nodes find their ticket from the PR; decide --dry-run writes nothing.
 
 ## Merge Danger
 
 **Door:** two-way.
 
-**Blast Radius:** review effect.
+**Blast Radius:** merge and finish prompts, gate decide.
 
-Closes #740.
+Closes #742.
 
 Factory-Run: manual:pi-session-2026-11-06
