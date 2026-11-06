@@ -93,16 +93,16 @@ Models: Air tiers come from `targets.air.models` in the team repository’s `fac
 - Roles and workflows never name a repository, tracker project, model or
   harness. Put those in the team repository’s `factory.descriptor.yaml`.
 - `docs/design.md` and the ADRs change only with an issue that asks for it.
-- Keep `template/roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
+- Keep `engine/template-v1/roles/*/setup.sh` and `skills/factory-setup/template/roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
   ShellCheck.
 - Run artefacts live in `.factory/` (git-ignored). Never commit them.
-- Slop factory's workflow, states, roles and skills live in `slop-eval-factory`
-  (its `factory.project.yaml` and delivery workflow); change them there. The
+- Slop factory's definition lives in `slop-eval-factory` (its `factory.yaml`,
+  `workflow.yaml` and `roles/`; ADR-0021); change it there. The
   engine's `factory/tests/fixtures/slop/` is its `factory migrate project` copy
   for CI: regenerate it, never edit it by hand. From a clean slop-eval-factory
   checkout at the commit to copy, run
   `uv run factory/cli.py migrate project <checkout> --out factory/tests/fixtures/slop`.
-  It copies `factory.project.yaml` and its workflow and writes the commit to
+  It copies the definition's files and writes the commit and the team's URL to
   `SOURCE`. CI checks out that commit and
   `test_slop_fixture_is_migrate_project_output` diffs a fresh copy against the
   fixture; run it locally with `FACTORY_SLOP_TEAM=<checkout>`.

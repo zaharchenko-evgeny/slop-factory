@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Render the nodes of engine/nodes.yaml as deployable specs (ADR-0014). Output is JSON.
 
@@ -66,7 +66,8 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
     if n.get("tiers"):
         spec["tiers"] = n["tiers"]  # the ordered tiers the gate escalates through
     if any((o or {}).get("else") for o in n["outcomes"].values()):
-        spec["else_tier"] = nodes["nodes"]["fix"]["tiers"][0]  # the fix tier a red CI hands the ticket to
+        if (nodes["nodes"].get("fix") or {}).get("tiers"):  # old layout: the fix tier a red CI hands the ticket to
+            spec["else_tier"] = nodes["nodes"]["fix"]["tiers"][0]
     if top and n["role"] == "script":  # a sweep applies the other script nodes (join, finish) too
         spec["runs"] = {k: node_spec(k, v, config, None, None, nodes, False) for k, v in nodes["nodes"].items()
                         if v["role"] == "script" and k != name and v.get("enabled") is not False and not v.get("routine")}
@@ -148,6 +149,9 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
         name, _, value = arg.partition("=")
         filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
         return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
+    if event == "workflow_run":  # ADR-0021 `ci: failed`: Air fires only on a failed run (AIRA-725)
+        return {"triggerType": "EVENT", "source": "github", "eventType": "workflow_run.failed",
+                "filters": {"workflow_name": arg, **({"repo_label": f"repo:{repo}"} if repo else {})}}
     labeled = event.startswith("issues.") or event.startswith("pull_request.labeled")
     filters = {"label": arg} if labeled and arg else {}
     if pr_author and event.startswith("pull_request"):
@@ -210,6 +214,19 @@ def check_fixture_drift(config: dict, team: Path | None = None) -> int:
     """Fail before contacting Air when this engine's Slop fixture differs from its deployed team."""
     if not SLOP_FIXTURE.is_dir():
         return 0
+    if (SLOP_FIXTURE / "factory.yaml").is_file():  # ADR-0021: the fixture is a copy of the team's files
+        team = Path(team or config_mod.team_root())
+        fixture = yaml.safe_load((SLOP_FIXTURE / "factory.yaml").read_text()) or {}
+        if not (team / "factory.yaml").is_file() or \
+                (yaml.safe_load((team / "factory.yaml").read_text()) or {}).get("name") != fixture.get("name"):
+            return 0
+        drift = [p.relative_to(SLOP_FIXTURE).as_posix() for p in sorted(SLOP_FIXTURE.rglob("*"))
+                 if p.is_file() and p.name != "SOURCE" and
+                 (not (team / p.relative_to(SLOP_FIXTURE)).is_file() or
+                  (team / p.relative_to(SLOP_FIXTURE)).read_bytes() != p.read_bytes())]
+        for item in drift:
+            print(f"fixture drift: {item}", file=sys.stderr)
+        return 1 if drift else 0
     fixture_project = yaml.safe_load((SLOP_FIXTURE / "factory.project.yaml").read_text())
     if config.get("team_repository", "").rstrip("/") != fixture_project.get("team_repository", "").rstrip("/"):
         return 0
@@ -335,17 +352,31 @@ INBOX_PAYLOAD = ("## Trigger event fields\n\n"
 
 
 def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None,
-                 main_repository: dict | None = None) -> str:
+                 main_repository: dict | None = None, tier: str | None = None) -> str:
     role = n["role"]
     servers = mcp_connectors(n, config, focus)
     mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
-    text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
+    checkout = checkout_instructions(main_repository, config)
+    import definition
+    if definition.present(config_mod.team_root()):  # ADR-0021: the node's role body, rendered with its settings
+        defn = definition.load(config_mod.team_root())
+        agent = (defn["factory"].get("agents") or {}).get(((defn["workflow"].get("nodes") or {}).get(name) or {}).get("agent")) or {}
+        if agent.get("run"):  # ADR-0021: a step with no judgement: the agent only runs the engine command
+            return (f"{who}\n\n{checkout}Run `factory {agent['run']} --node {name} --issue <the ticket number from the "
+                    "trigger>` once, in the foreground, and wait until it exits. Copy only that one number. It applies "
+                    "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
+                    "Report its JSON output." + INSTALLED_FACTORY)
+        text = definition.render(defn, name).strip()
+        skills = definition.skill_lines(defn, role)
+    else:
+        text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
+        skills = skill_lines(role)
     checkout = checkout_instructions(main_repository, config)
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
     payload = INBOX_PAYLOAD if role == "inbox" else ""
-    return (f"{who}\n\n{checkout}{text}\n\n{payload}## Your skills\n\n{skill_lines(role)}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
+    return (f"{who}\n\n{checkout}{text}\n\n{payload}## Your skills\n\n{skills}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts and the branch or PR head. "
@@ -441,7 +472,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "environmentConfigId": f"{prefix}{env}" + (f" {env_scope}" if env_scope else ""),
                 "mcpConnectors": mcp_connectors(n, config, focus),
                 "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
-                    name, n, config, aname, focus, automation_repository),
+                    name, n, config, aname, focus, automation_repository, tier_arg or tier),
             }
             if automation_repository["fullName"] != repository(team)["fullName"]:
                 automation["additionalRepositories"] = additional_repositories(automation_repository, team, config)
@@ -530,6 +561,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
     out.add(vocab.needs_human())
     out.add(vocab.inbox())
+    out.add(vocab.lesson())  # ADR-0021: a ticket with uncollected lessons
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})

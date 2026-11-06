@@ -403,8 +403,10 @@ class GitHubTicketStore:
 
 class GitHubGateTracker(DescriptorPort):
     def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8,
-                 ci_workflows=("quality-gates",), pr_repo=None, project=None, repositories=None, tickets=None):
+                 ci_workflows=("quality-gates",), pr_repo=None, project=None, repositories=None, tickets=None,
+                 required=None):
         self.trusted, self.run_cap, self.ci_workflows = set(trusted_bots), run_cap, set(ci_workflows)
+        self.required = {**FOCUSES, **(required or {})}  # review focuses by risk; `reviews.required` overrides
         self.project = project  # factory.project.yaml: the stores of states and commands (DescriptorPort)
         self.pr_repo = pr_repo or repo  # the code host: pull requests, CI, commits, merges
         # {name: owner/repo} of the descriptor's repositories, the primary first; the primary is the code host
@@ -439,7 +441,7 @@ class GitHubGateTracker(DescriptorPort):
                    (c.get("ci") or {}).get("workflows") or ["quality-gates"],
                    (c.get("code_host") or {}).get("repository"),
                    {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,
-                   repository_names(c), tickets)
+                   repository_names(c), tickets, (c.get("reviews") or {}).get("required"))
 
     # --- reads
     def _api(self, path, *flags, repo=None):
@@ -772,7 +774,7 @@ class GitHubGateTracker(DescriptorPort):
         blockers = self.tickets.open_blockers(n)
         body = issue["body"]
         risk = "low" if self.risk_labels["low"] in labels else "high"
-        required, pr = FOCUSES[risk], self._pr(n)
+        required, pr = self.required[risk], self._pr(n)
         f = {"stage": stage, "attrs": [x for x in labels if x not in by_label],
              "assignees": issue["assignees"], "blockers_open": len(blockers),
              "head": None, "pr": None, "mergeable": None, "conflict": False, "ci": "none", "reviews": [], "requested_reviewers": [],

@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Tests for factory/upgrade.py and the engine's template/. Run: uv run factory/tests/test_upgrade.py"""
+"""Tests for factory/upgrade.py and the engine's engine/template-v1/. Run: uv run factory/tests/test_upgrade.py"""
 import contextlib
 import io
 import shutil
@@ -21,7 +21,7 @@ import config  # noqa: E402
 import upgrade  # noqa: E402
 import workflow  # noqa: E402
 
-TEMPLATE = REPO / "template"
+TEMPLATE = REPO / "engine/template-v1"
 
 
 def run(argv, team):
@@ -76,7 +76,7 @@ class UpgradeTest(unittest.TestCase):
         self.assertIn("no template at 'no-such-ref'", err.getvalue())
 
     def test_template_matches_migrate(self):
-        """The generator check of template/: its generated parts equal a fresh `--generate-template`."""
+        """The generator check of engine/template-v1/: its generated parts equal a fresh `--generate-template`."""
         nodes = yaml.safe_load((REPO / config.NODES).read_text())
         descriptor, delivery = upgrade.generated((TEMPLATE / config.PROJECT_DESCRIPTOR).read_text(), nodes)
         self.assertEqual((TEMPLATE / config.PROJECT_DESCRIPTOR).read_text(), descriptor)

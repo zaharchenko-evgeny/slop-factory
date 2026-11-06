@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/deploy.py. Run: uv run factory/tests/test_deploy.py
 Regenerate the fixture: UPDATE_FIXTURE=1 uv run factory/tests/test_deploy.py"""
@@ -549,9 +549,9 @@ class ProjectPlanTest(unittest.TestCase):
                          json.dumps(current, indent=2, sort_keys=True))
 
     def test_slop_plan_deploys_the_team_workflow(self):
-        """Slop factory's settings (fixtures/slop, slop-eval-factory's files) deploy every node of their own workflow,
+        """Slop factory's old-layout settings (fixtures/slop-v1, frozen) deploy every node of their own workflow,
         on their schedules, with every repository they list; engine/nodes.yaml may differ from them."""
-        slop, before = HERE / "fixtures/slop", cfg.team_root()
+        slop, before = HERE / "fixtures/slop-v1", cfg.team_root()
         project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
         wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
         try:
@@ -602,8 +602,8 @@ class ProjectPlanTest(unittest.TestCase):
                          sorted(str(Path(p).relative_to(tmp)) for p in written))
 
     def test_mention_allowlist(self):
-        """fixtures/slop's agents (ADR-0020): dev, rex and ria, and whom each may mention on which subject."""
-        slop = HERE / "fixtures/slop"
+        """fixtures/slop-v1's agents (ADR-0020, the old layout): dev, rex and ria, and whom each may mention on which subject."""
+        slop = HERE / "fixtures/slop-v1"
         project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
         wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
         specs = {a["spec"]["node"]: a["spec"] for a in project_plan(project, wf)["automations"]}
@@ -1008,7 +1008,7 @@ class PlanTest(unittest.TestCase):
             marks = [prompt.index(m) for m in (intro, "## Your skills", "## This step", "## How you start and finish")]
             self.assertEqual(marks, sorted(marks), name)
             self.assertTrue(prompt.startswith(f"You are the {role} of Slop factory"))
-            self.assertIn((ROOT / f"template/roles/{role}/role.md").read_text().strip(), prompt)
+            self.assertIn((ROOT / f"engine/template-v1/roles/{role}/role.md").read_text().strip(), prompt)
             self.assertIn(f"`factory begin {name} --", prompt)
             self.assertIn("`factory end <outcome>`", prompt)
             self.assertIn("`factory-step` skill", prompt)
@@ -1075,6 +1075,58 @@ class PlanTest(unittest.TestCase):
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
                          {"intake", "start", "implement", "review", "join", "fix", "update", "finish", "reopen", "merge", "inbox"})
         self.assertEqual(deploy.plan_air(n, config), plan)
+
+
+
+class DefinitionPlanTest(unittest.TestCase):
+    """A plan from the ADR-0021 layout (factory/tests/fixtures/v2)."""
+
+    @classmethod
+    def setUpClass(cls):
+        before = cfg._team
+        cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
+        try:
+            cls.plan = deploy.plan_air(nodes.load(), cfg.load())
+        finally:
+            cfg.set_team(before)
+        cls.by = {a["name"]: a for a in cls.plan["automations"]}
+        for a in cls.plan["automations"]:  # also by node name: a node's first automation (repository scopes aside)
+            cls.by.setdefault(" ".join(a["name"].split(" ")[:3]), a)
+
+    def test_each_variant_runs_its_agents_model(self):
+        model = {k: a["agentAndModel"]["id"] for k, a in self.by.items()}
+        self.assertEqual(model["[Slop factory] implement-small"], "gpt-6-luna")
+        self.assertEqual(model["[Slop factory] implement-medium"], "claude-sonnet-5-5[1m]")
+        self.assertEqual(model["[Slop factory] review-high"], "gpt-6.1-sol")
+        self.assertEqual(model["[Slop factory] review-low"], "gpt-6-luna")
+
+    def test_prompts_are_rendered(self):
+        for name, a in self.by.items():
+            self.assertNotIn("{{", a["prompt"], name)
+            self.assertNotIn("{%", a["prompt"], name)
+        intake = self.by["[Slop factory] intake"]["prompt"]
+        self.assertIn("Split it above 400 changed lines or\n3 repositories.", intake)
+        self.assertIn("- factory-step: `~/.agents/skills/factory-step/SKILL.md`\n- to-tickets:", intake)
+
+    def test_no_node_waits_for_a_ci_event(self):
+        events = {t.get("eventType") for a in self.plan["automations"] for t in a["triggers"]}
+        self.assertNotIn("workflow_run.failed", events)   # reviewers wait for CI themselves (factory ci --wait)
+
+    def test_a_decide_agent_only_runs_the_command(self):
+        merge = self.by["[Slop factory] merge"]["prompt"]
+        self.assertIn("You are the clerk of Slop factory.", merge)
+        self.assertIn("factory decide --node merge --issue", merge)
+        self.assertNotIn("factory begin clerk", merge)
+
+    def test_environments_and_labels(self):
+        envs = {e["name"]: e for e in self.plan["environments"]}
+        self.assertEqual(envs["[Slop factory] engine"]["secrets"], ["FACTORY_WRITE_TOKEN"])
+        self.assertEqual(envs["[Slop factory] knowledge"]["repository"],
+                         "https://github.com/zaharchenko-evgeny/slop-eval-factory")
+        for label in ("factory:implement-small", "factory:review-high", "factory:knowledge-review", "factory:done",
+                      "factory:automerge", "risk:low", "complexity:large",
+                      "factory:lesson"):
+            self.assertIn(label, self.plan["labels"])
 
 
 if __name__ == "__main__":

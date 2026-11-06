@@ -210,5 +210,17 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue())["ci_sync"], [synced])
 
 
+
+class WakeReadyTest(unittest.TestCase):
+    def test_refires_only_unblocked_ready_tickets_that_waited(self):
+        from datetime import datetime, timezone
+        old, new = "2026-11-06T10:00:00Z", "2026-11-06T11:55:00Z"
+        tr = MemoryTracker({"1": {"stage": "ready", "stage_at": old}, "2": {"stage": "ready", "stage_at": old, "blockers_open": 1},
+                            "3": {"stage": "ready", "stage_at": new}, "4": {"stage": "in-dev", "stage_at": old}})
+        now = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
+        got = reconcile.wake_ready(tr, 30, now=now)
+        self.assertEqual([r["ticket"] for r in got], ["1"])
+
+
 if __name__ == "__main__":
     unittest.main()

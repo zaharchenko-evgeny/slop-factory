@@ -190,6 +190,24 @@ def send(tracker, n, nodes, stage, head, kind, label, on, why):
         apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} re-fired {label} ({why})")
 
 
+def wake_ready(tracker, minutes, now=None, dry_run=False):
+    """ADR-0021: a `ready` ticket with no open blocker whose label is older than `minutes` was not started (its
+    blocker closed by hand, or the wake was lost): remove and re-add `ready` so its trigger fires again."""
+    now = now or datetime.now(timezone.utc)
+    label, out = vocab.stage("ready"), []
+    for n in tracker.sweep_tickets(["ready"], open_only=True):
+        facts = tracker.stale_facts(n)
+        since = facts.get("stage_at")
+        if facts["stage"] != "ready" or facts.get("blockers_open") or not since or \
+                now - datetime.fromisoformat(since.replace("Z", "+00:00")) < timedelta(minutes=minutes):
+            continue
+        if not dry_run:
+            tracker.apply({"kind": "unlabel", "ticket": n, "value": label})
+            tracker.apply({"kind": "label", "ticket": n, "value": label})
+        out.append({"ticket": n, "outcome": "refire", "label": label, "why": "ready, unblocked and not started"})
+    return out
+
+
 def main(argv):
     argv = config_mod.pop_team(argv)
     dry_run = "--dry-run" in argv
@@ -201,6 +219,11 @@ def main(argv):
         from gate_github import GitHubGateTracker
         tracker = GitHubGateTracker.from_config()
     config = config_mod.load()
+    import definition
+    if definition.present(config_mod.team_root()):  # ADR-0021: only the waits the gate cannot see happen
+        results = wake_ready(tracker, config["limits"].get("run_timeout_minutes", 30), dry_run=dry_run)
+        print(json.dumps({"dry_run": dry_run, "reconcile": results}))
+        return 0
     progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
     results, failed = reconcile(tracker, nodes_mod.load(), list(config["tracker"]["stages"]), config["limits"],
                                 stage_kinds=config["tracker"].get("stage_kinds", {}),

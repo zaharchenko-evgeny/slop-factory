@@ -6,6 +6,7 @@
 """Deterministic run facts for the nightly `retro` (ADR-0015): the agent writes lessons, it never counts.
 
 Usage: uv run factory/retro.py facts --since <ISO time>   (JSON: one object per ticket that reached `done` since)
+       uv run factory/retro.py collect                     (JSON: the uncollected lesson comments; marks them collected)
 `ticket_facts` is pure: it takes the ticket's and PR's events, reviews and comments as the GitHub API returns them.
 """
 import fnmatch
@@ -77,7 +78,7 @@ def changed_lines(files, generated_paths=()):
     total = 0
     for f in files:
         name = f["filename"]
-        if name.startswith("template/skills/") or any(fnmatch.fnmatchcase(name, g) for g in generated_paths):
+        if name.startswith("engine/template-v1/skills/") or any(fnmatch.fnmatchcase(name, g) for g in generated_paths):
             continue
         total += 1 if f.get("status") == "removed" else f.get("additions", 0) + f.get("deletions", 0)
     return total
@@ -110,11 +111,34 @@ def facts(tracker, since):
     return out
 
 
+LESSON, COLLECTED = "<!-- factory:lesson -->", "<!-- factory:lesson collected -->"
+
+
+def collect(tracker, label):
+    """ADR-0021: the uncollected lesson comments of every ticket labelled `label`, as [{ticket, url, body}]. The
+    label goes first, then each comment taken is marked collected, so a lesson posted meanwhile labels the ticket
+    again and the next run takes it; nothing is read twice."""
+    out = []
+    for i in tracker._list(f"issues?state=all&labels={label}&per_page=100"):
+        n = i["number"]
+        tracker._edit(n, remove=[label])
+        for c in tracker._list(f"issues/{n}/comments"):
+            body = c.get("body") or ""
+            if LESSON not in body:
+                continue
+            out.append({"ticket": n, "url": c.get("html_url"), "body": body.replace(LESSON, "").strip()})
+            tracker._api(f"issues/comments/{c['id']}", "-X", "PATCH", "-f", f"body={body.replace(LESSON, COLLECTED)}")
+    return out
+
+
 def main(argv):
+    from gate_github import GitHubGateTracker
+    if argv == ["collect"]:
+        print(json.dumps(collect(GitHubGateTracker.from_config(), vocab.lesson()), indent=2))
+        return 0
     if len(argv) != 3 or argv[0] != "facts" or argv[1] != "--since":
         print(__doc__)
         return 2
-    from gate_github import GitHubGateTracker
     print(json.dumps(facts(GitHubGateTracker.from_config(), argv[2]), indent=2))
     return 0
 

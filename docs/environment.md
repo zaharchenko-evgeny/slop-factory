@@ -1,11 +1,11 @@
 # Environment variables
 
-One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails when a `FACTORY_*` name in `factory/*.py` or `template/` has no row here.
+One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails when a `FACTORY_*` name in `factory/*.py` or `engine/template-v1/` has no row here.
 
 | Variable | Set by | Read in | Required |
 |---|---|---|---|
 | `FACTORY_ENV` | Air deploy: the only variable of a planned environment (`factory deploy` owns an environment's whole variable set) | `factory/doctor.py`, `factory/deploy.py` (written to the plan) | required in an Air run (`read`, `write` or `ops`) |
-| `FACTORY_TEAM` | the startup wrapper of `factory` (internal) | `factory/config.py`, `factory/cli.py`, `factory/local.py`, `template/roles/` | optional; defaults to the `factory-team` directory in the home directory when it exists, else the working directory |
+| `FACTORY_TEAM` | the startup wrapper of `factory` (internal) | `factory/config.py`, `factory/cli.py`, `factory/local.py`, `engine/template-v1/roles/` | optional; defaults to the `factory-team` directory in the home directory when it exists, else the working directory |
 | `FACTORY_ENGINE` | tests and development | `factory/config.py` | optional; defaults to this checkout |
 | `FACTORY_WRITE_TOKEN` | a person, in Air: a secret `factory deploy` adds to the `write` and `ops` environments with `write_mode: token` | `factory/github_tracker.py` (the GH_TOKEN of a write to a `role: project` repository), `factory/doctor.py`, `factory/deploy.py` (by name) | required with `write_mode: token`; else unused |
 | `FACTORY_GH` | tests and development | `factory/github_tracker.py` | optional; defaults to `gh` |

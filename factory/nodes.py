@@ -22,13 +22,14 @@ import vocab  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red"}
 OUTPUTS = {"read-only", "create-pr", "push-to-source", "push-to-new-branch", "as-instructed"}
-WHEN_KEYS = {"stage", "blockers", "focus", "round", "fix-rounds", "ci", "actor", "always", "due", "pr-state"}
+WHEN_KEYS = {"stage", "blockers", "focus", "round", "fix-rounds", "ci", "actor", "always", "due", "pr-state",
+             "label", "pr", "review", "children", "ticket"}  # the last five: ADR-0021 facts
 NO_ROLE = {"script", "human"}
 
 
 def load(path=None):
     """nodes.yaml, or the project's v2 workflow rendered into the same shape (ADR-0016)."""
-    if path is None and (config.team_root() / config.PROJECT_DESCRIPTOR).is_file():
+    if path is None and config.is_project():
         import project
         import workflow
         descriptor = project.load(config.team_root())

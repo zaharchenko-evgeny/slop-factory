@@ -189,7 +189,7 @@ class DoctorTest(unittest.TestCase):
     def test_missing_team_skill_does_not_fall_back_to_engine_template(self):
         before = cfg.team_root()
         with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / "roles").symlink_to(ROOT / "template/roles", target_is_directory=True)
+            (Path(tmp) / "roles").symlink_to(ROOT / "engine/template-v1/roles", target_is_directory=True)
             cfg.set_team(tmp)
             try:
                 got = run(FakeGh(), "write")

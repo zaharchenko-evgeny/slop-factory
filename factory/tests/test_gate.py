@@ -50,6 +50,120 @@ class GateTest(unittest.TestCase):
     def setUp(self):
         SENT.clear()
 
+    def test_label_guard_falls_back(self):
+        """ADR-0021: an outcome's `if` guard that fails applies its `else`; without one the outcome is refused."""
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["intake"]["outcomes"]["cheap"] = {
+            "if": {"label": "risk:low"}, "else": "proceed", "effects": [{"stage": "ready"}, {"label": "factory:cheap"}]}
+        high = MemoryTracker({"7": {"stage": "triage", "attrs": ["risk:high"]}})
+        gate.apply("intake", "cheap", {"ticket": "7", "risk": "high", "complexity": "small"}, high, graph)
+        self.assertNotIn("factory:cheap", high.facts("7")["attrs"])
+        low = MemoryTracker({"7": {"stage": "triage", "attrs": ["risk:low"]}})
+        gate.apply("intake", "cheap", {"ticket": "7"}, low, graph)
+        self.assertIn("factory:cheap", low.facts("7")["attrs"])
+        del graph["nodes"]["intake"]["outcomes"]["cheap"]["else"]
+        with self.assertRaises(gate.Bad):
+            gate.apply("intake", "cheap", {"ticket": "7"}, MemoryTracker({"7": {"stage": "triage"}}), graph)
+
+    def test_guard_facts(self):
+        f = {"attrs": ["risk:low"], "pr_state": "open", "behind": True, "conflict": False, "ci": "green",
+             "head": "h2", "blockers_open": 0, "stage": "in-review",
+             "reviews": [{"agent": True, "commit_id": "h1", "verdict": "changes"},
+                         {"agent": True, "commit_id": "h2", "verdict": "approve"}]}
+        for guard, want in [({"label": "risk:low"}, True), ({"label": ["risk:low", "x"]}, False),
+                            ({"pr": "behind"}, True), ({"pr": "conflicting"}, False), ({"pr": "open"}, True),
+                            ({"review": "approved-at-head"}, True), ({"review": "changes-at-head"}, False),
+                            ({"ci": "green", "stage": "in-review"}, True), ({"blockers": "closed"}, True)]:
+            self.assertEqual(gate.guard_holds(guard, f), want, guard)
+        with self.assertRaises(gate.Bad):
+            gate.guard_holds({"colour": "red"}, f)
+        self.assertTrue(gate.guard_holds({"children": "closed"}, {**f, "children_open": 0}))
+
+    def test_merge_effect_keeps_its_invariants(self):
+        """ADR-0021: for a definition team, `merge` is refused without an approval at head, with red CI, or behind."""
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["intake"]["outcomes"]["ship"] = {"effects": [{"merge": "match-head"}]}
+        ok = {"stage": "triage", "head": "h2", "ci": "green", "pr": 5, "pr_state": "open",
+              "reviews": [{"agent": True, "commit_id": "h2", "verdict": "approve"}]}
+        cases = [({}, True), ({"ci": "red"}, False), ({"behind": True}, False),
+                 ({"reviews": [{"agent": True, "commit_id": "h1", "verdict": "approve"}]}, False),   # an older head
+                 ({"reviews": [{"agent": True, "commit_id": "h2", "verdict": "approve"},
+                               {"agent": True, "commit_id": "h2", "verdict": "changes"}]}, False)]
+        with patch("gate.definition_team", return_value=True):
+            for change, applied in cases:
+                tr = MemoryTracker({"7": {**ok, **change}})
+                status, out = gate.apply("intake", "ship", {"ticket": "7"}, tr, graph)
+                self.assertEqual(out["applied"], applied, (change, out))
+                if not applied:
+                    self.assertTrue(out["reason"].startswith("merge refused"), out)
+
+    def test_decide_applies_the_first_outcome_whose_guards_hold(self):
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["finisher"] = {"role": "clerk", "when": {"always": True}, "triggers": ["manual"], "outcomes": {
+            "done": {"if": {"pr": "merged"}, "effects": [{"stage": "done"}]},
+            "children-done": {"from": ["split"], "if": {"children": "closed"}, "effects": [{"stage": "done"}]},
+            "waiting": {}}}
+        merged = MemoryTracker({"7": {"stage": "in-review", "pr_state": "merged"}})
+        status, out = gate.decide("finisher", "7", merged, graph)
+        self.assertEqual((out["outcome"], merged.get_stage(merged._t("7"))), ("done", "done"))
+        split = MemoryTracker({"8": {"stage": "split", "children": [{"state": "closed"}]}})
+        split.children = lambda n: [{"state": "closed"}]
+        self.assertEqual(gate.decide("finisher", "8", split, graph)[1]["outcome"], "children-done")
+        idle = MemoryTracker({"9": {"stage": "in-review"}})
+        self.assertEqual(gate.decide("finisher", "9", idle, graph)[1]["outcome"], "waiting")
+        del graph["nodes"]["finisher"]["outcomes"]["waiting"]
+        status, out = gate.decide("finisher", "9", idle, graph)
+        self.assertEqual((status, out["outcome"]), (gate.NO_GO, None))
+
+    def test_reaching_a_final_stage_wakes_unblocked_dependents(self):
+        """ADR-0021: automatic, no effect in the workflow: done re-adds `ready` to each fully unblocked dependent."""
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["intake"]["outcomes"]["closing"] = {"effects": [{"stage": "done"}]}
+        tr = MemoryTracker({"7": {"stage": "triage"}, "8": {"stage": "ready", "blockers_open": 1},
+                            "9": {"stage": "ready", "blockers_open": 2}, "10": {"stage": "in-dev", "blockers_open": 1}})
+        tr.blocking = lambda n: [{"number": "8"}, {"number": "9"}, {"number": "10"}] if str(n) == "7" else []
+        sent = []
+        apply = tr.apply
+        tr.apply = lambda e: sent.append(e) or apply(e)
+        with patch("gate.definition_team", return_value=True):
+            gate.apply("intake", "closing", {"ticket": "7"}, tr, graph)
+        woken = [(e["ticket"], e["kind"]) for e in sent if e["ticket"] != "7"]
+        self.assertEqual(woken, [("8", "unlabel"), ("8", "label")])   # 9 has another blocker; 10 is not ready
+
+    def test_ci_state_waits_until_ci_concludes(self):
+        states = iter(["pending", "pending", "red"])
+        tr = MemoryTracker({"7": {"stage": "in-review", "head": "h1", "ci": "pending"}})
+        facts = tr.facts
+        tr.facts = lambda n: {**facts(n), "ci": next(states)}
+        tr.ci_failure = lambda head: "lint: E501"
+        naps = []
+        out = gate.ci_state(tr, "7", wait_seconds=600, poll=30, sleep=naps.append)
+        self.assertEqual((out["ci"], out["failing"], len(naps)), ("red", "lint: E501", 2))
+        self.assertEqual(gate.ci_state(MemoryTracker({"7": {"ci": "pending"}}), "7")["ci"], "pending")   # no wait
+
+    def test_label_group_holds_one_value(self):
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["intake"]["outcomes"]["risky"] = {"effects": [{"label": "risk:high"}, {"stage": "ready"}]}
+        tr = MemoryTracker({"7": {"stage": "triage", "attrs": ["risk:low", "complexity:small"]}})
+        gate.apply("intake", "risky", {"ticket": "7"}, tr, graph)
+        attrs = tr.facts("7")["attrs"]
+        self.assertIn("risk:high", attrs)
+        self.assertNotIn("risk:low", attrs)
+        self.assertIn("complexity:small", attrs)   # another group stays
+
+    def test_lessons_comment_and_label(self):
+        tr = MemoryTracker({"7": {"stage": "triage"}})
+        gate.apply("intake", "not-actionable", {"ticket": "7", "reason": "[factory] no", "lessons": [
+            {"text": "The router  misses ADRs", "scope": "factory", "about": "router", "evidence": "#7"}]}, tr, NODES)
+        log = tr.tickets["7"]["log"]
+        lesson = [json.loads(v) for k, v in log if k == "comment" and "factory:lesson" in v]
+        self.assertEqual(lesson, ["[factory] Lessons from `intake`\n<!-- factory:lesson -->\n"
+                                  "- [factory] router: The router misses ADRs (evidence: #7)"])
+        self.assertIn("factory:lesson", tr.facts("7")["attrs"])
+        with self.assertRaises(gate.Bad):
+            gate.apply("intake", "not-actionable", {"ticket": "7", "reason": "r", "lessons": ["just text"]},
+                       MemoryTracker({"7": {"stage": "triage"}}), NODES)
+
     def test_blocked_sends_one_decision_needed(self):
         gate.apply("implement", "blocked", {"ticket": "7", "reason": "[factory] blocked"}, MemoryTracker({"7": {"stage": "in-dev"}}), NODES)
         self.assertEqual(SENT, [("automation-error", "7"), ("decision-needed", "7")])  # both: error and entering blocked
@@ -453,7 +567,7 @@ class CliAndValidate(unittest.TestCase):
             (Path(delivery) / "retained.txt").write_text("still here\n")
             result = type("Result", (), {
                 "returncode": 0,
-                "stdout": "5\t7\tretained.txt\n0\t9\tdeleted.txt\n4\t0\ttemplate/skills/copy.txt\n",
+                "stdout": "5\t7\tretained.txt\n0\t9\tdeleted.txt\n4\t0\tengine/template-v1/skills/copy.txt\n",
                 "stderr": "",
             })()
             with patch.object(gate, "ROOT", Path(engine)), \
@@ -469,7 +583,7 @@ class CliAndValidate(unittest.TestCase):
                 "stdout": "175\t0\tfactory/tests/fixtures/deploy/air-plan.json\n"
                           "12\t3\tdocs/statechart.md\n"
                           "9\t0\tskills/factory-setup/templates/roles/router/role.md\n"
-                          "9\t0\ttemplate/roles/router/role.md\n"
+                          "9\t0\tengine/template-v1/roles/router/role.md\n"
                           "4\t1\tfactory/gate.py\n",
                 "stderr": "",
             })()
@@ -478,7 +592,7 @@ class CliAndValidate(unittest.TestCase):
                     "origin/main", checkout=delivery,
                     generated_paths=["factory/tests/fixtures/deploy/air-plan.json",
                                      "docs/statechart.md", "docs/statechart-proposed.md",
-                                     "skills/factory-setup/templates/**", "template/roles/**"],
+                                     "skills/factory-setup/templates/**", "engine/template-v1/roles/**"],
                 ), (5, [("factory/gate.py", 5)]))
 
     def test_intake_size_uses_first_number(self):
