@@ -1,11 +1,11 @@
-[factory] PR-woken nodes begin on a definition team; deploy picks --pr/--issue from the triggers.
+[factory] A definition team's review is named after its node (review-low could not report on PR #735).
 
 ## Merge Danger
 
 **Door:** two-way.
 
-**Blast Radius:** begin and prompts.
+**Blast Radius:** review effect.
 
-Closes #738.
+Closes #740.
 
 Factory-Run: manual:pi-session-2026-11-06

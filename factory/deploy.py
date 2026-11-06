@@ -360,8 +360,8 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
         defn = definition.load(config_mod.team_root())
         agent = (defn["factory"].get("agents") or {}).get(((defn["workflow"].get("nodes") or {}).get(name) or {}).get("agent")) or {}
         if agent.get("run"):  # ADR-0021: a step with no judgement: the agent only runs the engine command
-            return (f"{who}\n\n{checkout}Run `factory {agent['run']} --node {name} --issue <the ticket number from the "
-                    "trigger>` once, in the foreground, and wait until it exits. Copy only that one number. It applies "
+            return (f"{who}\n\n{checkout}Run `factory {agent['run']} --node {name} {begin_arg(name, n)}` once, in the "
+                    "foreground, and wait until it exits. Copy only that one number. It applies "
                     "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
                     "Report its JSON output." + INSTALLED_FACTORY)
         text = definition.render(defn, name).strip()
