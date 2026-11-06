@@ -918,8 +918,8 @@ def extra_variables(plan: dict, envs: list[dict]) -> list[str]:
             for k in have.get(e["name"], {}) if k not in (e.get("variables") or {})]
 
 
-def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None) -> int:
-    """Write only to Air: deploy never creates, edits or closes a tracker ticket."""
+def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None) -> int:
+    """Write only to Air and to repository labels (through `run`, a `gh` runner): deploy never creates, edits or closes a tracker ticket."""
     # The automations' repositories too: an environment moved off a repository is found there, then replaced.
     repo_urls = list(dict.fromkeys([e["repository"] for e in plan["environments"]] +
                                    [a["repository"]["browseUrl"] for a in plan["automations"]
@@ -938,13 +938,13 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print(line)
     for line in extra_variables(plan, state[1]):
         print(line)
-    label_changes = reconcile_labels(plan)
+    label_changes = reconcile_labels(plan, run)
     if mode == "--dry-run":
         for action, repo, label, *rest in label_changes:
             print(f"{action} label {label} in {repo}" + (f" ({', '.join(rest[1])})" if action == "update" else ""))
         return 0
     for action, repo, label, want, *_ in label_changes:  # a missing label fails every handoff that adds it
-        tracker = label_tracker(repo)
+        tracker = label_tracker(repo, run)
         if action == "create":
             tracker.create_label(label, want["color"], want["description"])
         elif action == "update":
@@ -959,7 +959,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
     for _, repo, label, _ in removals:
-        label_tracker(repo).delete_label(label, plan["owned_label_prefixes"])
+        label_tracker(repo, run).delete_label(label, plan["owned_label_prefixes"])
         print(f"removed label {label} in {repo}")
     if changes:
         apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories)
@@ -1009,7 +1009,8 @@ def main(argv: list[str]) -> int:
         servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
-            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers)
+            run = github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config))
+            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run)
             return code or write_files(plan["files"], argv[0] == "--apply")
         finally:
             for server in servers:

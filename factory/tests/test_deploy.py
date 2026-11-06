@@ -1196,6 +1196,19 @@ class LabelsTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(writes, [("delete", "o/tracker", "factory:old"), ("delete", "o/code", "factory:old")])
 
+    def test_apply_writes_project_labels_with_the_write_token(self):
+        tokens = []
+
+        def run(args, **kw):
+            tokens.append((args[1], args[args.index("-R") + 1], kw.get("token")))
+            return "[]" if args[:2] == ["label", "list"] else ""
+        wrapped = deploy.github_tracker.ProjectWriteRun(run, ["o/code"], {"FACTORY_WRITE_TOKEN": "t"})
+        plan = {**self.PLAN, "label_repositories": ["o/tracker", "o/code"], "prefix": "p", "environments": [], "automations": []}
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(deploy, "read_state", return_value=([], [])):
+            deploy.deploy("--apply", False, plan, None, None, run=wrapped)
+        creates = {(r, t) for v, r, t in tokens if v == "create"}
+        self.assertEqual(creates, {("o/tracker", None), ("o/code", "t")})
+
 
 if __name__ == "__main__":
     unittest.main()
