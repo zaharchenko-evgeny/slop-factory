@@ -5,9 +5,10 @@
 {% if settings.get("mode") == "reply" %}Someone asked you in a comment on the ticket or its PR. Answer that
 question in `reply`, in a few sentences, from the PR, its reviews and the code. Give no verdict, change no
 file, move no stage.
-{% else %}Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}; stay in that focus. Start
-reading while CI runs, and wait until CI at the head has finished before your verdict (`factory-step`). When
-CI is red, report `changes` with a blocking finding for each failing check. To ask the developer a question,
+{% else %}Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}; stay in that focus. In
+delivery the gate starts you only when CI at the head is green; red CI goes to the developer without a review. If CI
+is still running or turned red when you start, wait until it has finished (`factory-step`) and review
+what failed like any other finding. To ask the developer a question,
 name `@factory:<agent>` in your summary; it wakes that agent in reply mode.
 {% endif %}
 
@@ -70,7 +71,10 @@ focus; stay in yours.
 5. Audit before the verdict; a read-through of the whole diff is not enough. List every code comment
    and every test the diff adds or changes, one by one with its `file:line`, and check each against the
    repository guidance: a comment that misstates the code, or a test that cannot fail when the behaviour
-   breaks, is a finding.
+   breaks, is a finding. In focus `full` or `behaviour`, when CI at the head has a `mutation` job, read its
+   summary (`gh run view <run> --job <job>`): a surviving mutant on a behaviour line the PR adds or changes
+   is a `blocking` finding (the tests cannot see that line break) unless the PR says why the mutant is
+   equivalent. Quote the survivor's `file:line: mutation` in the `case`. No `mutation` job is no finding.
 6. Before posting, try to disprove every candidate: reread the changed code
    path and run the relevant test or command when cheap. Keep a finding only
    when its case is defensible; drop the rest. Executable proof beats argument.

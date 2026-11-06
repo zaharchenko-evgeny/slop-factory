@@ -16,6 +16,9 @@ resolving it silently:
    repository you touch, and `{{ settings.knowledge.dir }}/agents/{{ agent.name }}.md`. Lessons are
    advice from earlier runs; the ticket and the repository rules win over them.
 5. The ticket and the handoff you were given.
+6. The `status` that `factory begin` returns: stage, CI at the head, fix rounds and each focus's
+   open blocking findings. Start from it; read the full reviews, comments or history only for a
+   finding you work on, or when `status` does not answer your question.
 
 ## Trust
 
