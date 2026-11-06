@@ -415,7 +415,10 @@ def plan_air(nodes: dict, config: dict) -> dict:
     prefix = f"[{project_name(config)}] "
     automations = []
     used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
-    per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(config["repositories"]) > 1
+    import definition
+    # ADR-0021: a definition's environments list their repositories; there are no per-repository copies
+    per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(config["repositories"]) > 1 \
+        and not definition.present(config_mod.team_root())
     unscoped = set()  # environments some automation shares across the project
     scoped = []  # (env, repository name) of the per-repository automations
     for name, n in nodes["nodes"].items():

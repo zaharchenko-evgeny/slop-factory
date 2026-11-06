@@ -126,12 +126,8 @@ environments:
     repositories:
       - repo: zaharchenko-evgeny/slop-factory
         main: true                # branches, PRs and the node's output apply here
-      - repo: zaharchenko-evgeny/slop-eval-factory   # the knowledge base; also writable for tickets that change it
-        write: true
-        token_env: FACTORY_WRITE_TOKEN
+      - repo: zaharchenko-evgeny/slop-eval-factory   # the knowledge base, read-only: no Air automation changes the factory
     ci: { workflow: quality-gates }   # `ci: failed` = Air workflow_run.failed for this workflow
-    env:
-      FACTORY_WRITE_TOKEN: { required: true, secret: true, description: "push to slop-eval-factory" }
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               "*.blob.core.windows.net", pypi.org, files.pythonhosted.org, registry.npmjs.org, air.jetbrains.cloud]
     vm: default

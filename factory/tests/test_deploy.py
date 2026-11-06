@@ -1111,7 +1111,11 @@ class DefinitionPlanTest(unittest.TestCase):
 
     def test_environments_and_labels(self):
         envs = {e["name"]: e for e in self.plan["environments"]}
-        self.assertEqual(envs["[Slop factory] engine"]["secrets"], ["FACTORY_WRITE_TOKEN"])
+        self.assertEqual(envs["[Slop factory] engine"]["secrets"], [])          # no Air automation writes the factory
+        self.assertEqual(sorted(envs), ["[Slop factory] engine", "[Slop factory] knowledge", "[Slop factory] team"])
+        names = {a["name"] for a in self.plan["automations"]}
+        self.assertIn("[Slop factory] fix", names)                                  # no per-repository copies
+        self.assertNotIn("[Slop factory] fix slop-eval-factory", names)
         self.assertEqual(envs["[Slop factory] knowledge"]["repository"],
                          "https://github.com/zaharchenko-evgeny/slop-eval-factory")
         for label in ("factory:implement-small", "factory:review-high", "factory:knowledge-review", "factory:done",
