@@ -208,6 +208,8 @@ def workflow_drift(fixture: Path, team: Path) -> list[str]:
 
 def check_fixture_drift(config: dict, team: Path | None = None) -> int:
     """Fail before contacting Air when this engine's Slop fixture differs from its deployed team."""
+    if not SLOP_FIXTURE.is_dir():
+        return 0
     fixture_project = yaml.safe_load((SLOP_FIXTURE / "factory.project.yaml").read_text())
     if config.get("team_repository", "").rstrip("/") != fixture_project.get("team_repository", "").rstrip("/"):
         return 0

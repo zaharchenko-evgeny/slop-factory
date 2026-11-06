@@ -53,6 +53,11 @@ class WorkflowDriftTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("fixture drift: workflows/delivery.yaml: finish.merged", output.getvalue())
 
+    def test_check_skips_when_fixture_is_absent(self):
+        absent_fixture = Path(self.tmp.name) / "absent"
+        with mock.patch.object(deploy, "SLOP_FIXTURE", absent_fixture):
+            self.assertEqual(deploy.check_fixture_drift({"team_repository": "https://github.com/example/other"}, self.team), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
