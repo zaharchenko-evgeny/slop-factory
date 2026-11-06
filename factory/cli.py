@@ -262,8 +262,12 @@ def env_roles(env):
     import workflow
     root = config.team_root()
     wf = workflow.load(root, project.load(root))
+    has_role_files = (root / "factory.yaml").is_file()
     roles = {n["role"] for n in (wf.get("nodes") or {}).values()
-             if n.get("env") == env and n.get("enabled") is not False and n.get("role") not in (None, "human", "script")}
+             if n.get("env") == env and n.get("enabled") is not False
+             and (not has_role_files or n.get("role") == "clerk"
+                  or (root / "roles" / n.get("role", "") / "role.md").is_file())
+             and n.get("role") not in (None, "human", "script")}
     return sorted(roles)
 
 
