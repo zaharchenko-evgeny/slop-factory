@@ -50,6 +50,23 @@ class GateTest(unittest.TestCase):
     def setUp(self):
         SENT.clear()
 
+    def test_risk_guard_falls_back(self):
+        """ADR-0021: an outcome's `if` guard that fails applies its `else` (a cheap path refused for high risk)."""
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["intake"]["outcomes"]["cheap"] = {
+            "if": {"risk": ["low"]}, "else": "proceed", "effects": [{"stage": "ready"}, {"label": "factory:cheap"}]}
+        high = MemoryTracker({"7": {"stage": "triage"}})
+        gate.apply("intake", "cheap", {"ticket": "7", "risk": "high", "complexity": "small"}, high, graph)
+        self.assertNotIn("factory:cheap", high.facts("7")["attrs"])
+        low = MemoryTracker({"7": {"stage": "triage", "risk": "low", "attrs": ["complexity:small"]}})
+        gate.apply("intake", "cheap", {"ticket": "7"}, low, graph)
+        self.assertIn("factory:cheap", low.facts("7")["attrs"])
+
+    def test_guard_names_known_fields(self):
+        with self.assertRaises(gate.Bad):
+            gate.guard_holds({"colour": "red"}, {})
+        self.assertTrue(gate.guard_holds({"complexity": ["small", "medium"]}, {"attrs": ["complexity:medium"]}))
+
     def test_blocked_sends_one_decision_needed(self):
         gate.apply("implement", "blocked", {"ticket": "7", "reason": "[factory] blocked"}, MemoryTracker({"7": {"stage": "in-dev"}}), NODES)
         self.assertEqual(SENT, [("automation-error", "7"), ("decision-needed", "7")])  # both: error and entering blocked

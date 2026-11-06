@@ -5,6 +5,7 @@ works) and `roles/<role>/role.md` (instructions).
 wrong; `settings(defn, node)` is a node's merged settings; `render(defn, node)` renders its role body and prompt.
 Nothing else in the engine reads this layout yet (#669 compiles it into the config and the node graph).
 """
+import re
 from pathlib import Path
 
 import yaml
@@ -21,10 +22,17 @@ def present(root):
     return (root / FACTORY).is_file() and (root / WORKFLOW).is_file()
 
 
+def _keys(x):
+    """YAML 1.1 reads the key `on` (an effect's `on: pr`) as True; give it back its name."""
+    if isinstance(x, dict):
+        return {("on" if k is True else k): _keys(v) for k, v in x.items()}
+    return [_keys(v) for v in x] if isinstance(x, list) else x
+
+
 def load(root):
     root = Path(root)
-    factory = yaml.safe_load((root / FACTORY).read_text()) or {}
-    workflow = yaml.safe_load((root / WORKFLOW).read_text()) or {}
+    factory = _keys(yaml.safe_load((root / FACTORY).read_text()) or {})
+    workflow = _keys(yaml.safe_load((root / WORKFLOW).read_text()) or {})
     bodies = {p.parent.name: p.read_text() for p in sorted((root / ROLES).glob("*/role.md"))}
     return {"root": root, "factory": factory, "workflow": workflow, "bodies": bodies}
 
@@ -171,4 +179,273 @@ def warnings(defn):
     triggered = {t["label"] for n in nodes for t in n.get("triggers") or [] if isinstance(t, dict) and "label" in t}
     added = {e["label"] for n in nodes for oc in (n.get("outcomes") or {}).values()
              for e in (oc or {}).get("effects") or [] if isinstance(e, dict) and "label" in e}
-    return [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added - triggered)]
+    def watched(label):  # `factory:fix-<tier>`, `factory:implement-<next tier>`: a variant the engine picks
+        prefix = re.split(r"<[a-z ]+>|\*", label)[0]
+        return label in triggered or (prefix != label and any(t.startswith(prefix) for t in triggered))
+    return [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added) if not watched(label)]
+
+
+# --- Compile into the shapes the engine reads (#669) ---------------------------------------------
+# The gate's delivery logic names its steps (`implement`, `fix`, `update`, `review`) and fills their variant
+# (`<tier>` from complexity, `<focus>` from risk). A node `<step>-<variant>` is that step for one variant;
+# the variants of a step compile into one engine node whose `tiers` or `focuses` are the variants.
+FAMILIES = {"implement": "tier", "fix": "tier", "update": "tier", "review": "focus"}
+TIER_ORDER = ["cheap", "mid", "strong"]
+PR_COMMANDS = {"fix", "update", "review", "rereview", "adopt"}  # labels the engine keeps on the PR
+TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed", ("pr", "opened"): "pr opened",
+                 ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed",
+                 ("ticket", "commented"): "ticket commented"}
+
+
+def family(name):
+    """(step, variant) of a node named `<step>-<variant>`, else (name, None)."""
+    step, _, variant = name.partition("-")
+    return (step, variant) if step in FAMILIES and variant else (name, None)
+
+
+def _command(label, prefix):
+    """The engine command a label is: (`implement-<tier>` with fill `cheap`) or a plain name."""
+    name = label[len(prefix):] if label.startswith(prefix) else label
+    step, _, variant = name.partition("-")
+    if step in FAMILIES or step == "rereview":
+        kind = "focus" if step in ("review", "rereview") else "tier"
+        return f"{step}-<{kind}>", variant
+    return name, None
+
+
+def _model_id(models, alias):
+    m = models.get(alias) or {}
+    return f"{m.get('harness')}/{m.get('model')}" if m else alias
+
+
+def to_project(defn):
+    """(project descriptor, format-2 workflow) of the definition, for `project.legacy_config` and
+    `workflow.to_nodes`. The definition must have no `errors`."""
+    f, w = defn["factory"], defn["workflow"]
+    nodes, agents, envs = w.get("nodes") or {}, f.get("agents") or {}, f.get("environments") or {}
+    models = f.get("models") or {}
+    defaults = f.get("defaults") or {}
+    dset, wset = defaults.get("settings") or {}, w.get("settings") or {}
+    stages = w.get("stages") or {}
+    prefix = stages.get("label_prefix", "factory:")
+    default_env = wset.get("environment")
+
+    # Repositories: every listed one; the primary is the main repository of the default environment.
+    primary = next(r["repo"] for r in envs[default_env]["repositories"] if r.get("main"))
+    names, repositories = {}, []
+    for e in envs.values():
+        for r in e.get("repositories") or []:
+            if r["repo"] not in names:
+                names[r["repo"]] = r["repo"].split("/")[-1]
+                repositories.append({"name": names[r["repo"]], "url": f"https://github.com/{r['repo']}",
+                                     "default_branch": r.get("default_branch", "main"),
+                                     "role": "primary" if r["repo"] == primary else "project"})
+    environments = {}
+    for en, e in envs.items():
+        repos = sorted(e.get("repositories") or [], key=lambda r: not r.get("main"))
+        secrets = sorted(k for k, v in {**(defaults.get("env") or {}), **(e.get("env") or {})}.items()
+                         if (v or {}).get("secret") and k != "GH_TOKEN")
+        environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": secrets,
+                            "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"),
+                            **({"startup": e["setup"]} if e.get("setup") else {})}
+
+    # Stages: every name the nodes use, plus the engine's PR facts.
+    used = set()
+    for n in nodes.values():
+        used |= {t["stage"] for t in n.get("triggers") or [] if isinstance(t, dict) and "stage" in t}
+        if (n.get("when") or {}).get("stage"):
+            used.add(n["when"]["stage"])
+        for oc in (n.get("outcomes") or {}).values():
+            used |= {e["stage"] for e in (oc or {}).get("effects") or [] if "stage" in e}
+            st = ((oc or {}).get("if") or {}).get("stage")
+            used |= set(st if isinstance(st, list) else [st] if st and not str(st).startswith("!") else [])
+    used.discard("none")
+    kind = {s: k for k in ("final", "waiting") for s in stages.get(k) or []}
+    states = {s: {"kind": kind.get(s, "active"), "store": {"label": f"{prefix}{s}"}} for s in sorted(used)}
+    states["pr-merged"] = {"kind": "final", "store": {"pr": "merged"}}
+
+    # Commands: every label a trigger or an effect names.
+    labels, on_pr = set(), set()
+    for n in nodes.values():
+        labels |= {t["label"] for t in n.get("triggers") or [] if isinstance(t, dict) and "label" in t}
+        for oc in (n.get("outcomes") or {}).values():
+            for e in (oc or {}).get("effects") or []:
+                if "label" in e or "unlabel" in e:
+                    labels.add(e.get("label") or e.get("unlabel"))
+                    if e.get("on") == "pr":
+                        on_pr.add(_command(e.get("label") or e.get("unlabel"), prefix)[0])
+    commands = {}
+    for label in labels:
+        cmd, _ = _command(label, prefix)
+        if cmd in commands:
+            continue
+        store = "pr_label" if cmd.partition("-")[0] in PR_COMMANDS or cmd in on_pr else "label"
+        commands[cmd] = {"store": {store: f"{prefix}{cmd}"}}
+    if "review-<focus>" in commands:
+        commands.setdefault("rereview-<focus>", {"store": {"pr_label": f"{prefix}rereview-<focus>"}})
+
+    # Models: a tier per implement/fix/update variant, the alias for everything else.
+    tier_models, errors_ = {}, []
+    for name, n in nodes.items():
+        step, variant = family(name)
+        if FAMILIES.get(step) == "tier" and n.get("enabled") is not False:
+            alias = n.get("model") or agents[n["agent"]].get("model") or defaults.get("model")
+            if tier_models.setdefault(variant, alias) != alias:
+                raise ValueError(f"tier {variant}: nodes give it models {tier_models[variant]} and {alias}")
+    air_models = {a: _model_id(models, a) for a in models}
+    air_models.update({t: _model_id(models, a) for t, a in tier_models.items()})
+
+    def role_of(agent_name):
+        a = agents[agent_name]
+        return {"script": "script", "human": "human"}.get(a.get("harness")) or a["role"]
+
+    roles = {}
+    for name, n in nodes.items():
+        step, variant = family(name)
+        a = agents[n["agent"]]
+        role = role_of(n["agent"])
+        if role in ("script", "human"):
+            continue
+        entry = roles.setdefault(role, {})
+        alias = n.get("model") or a.get("model") or defaults.get("model")
+        if FAMILIES.get(step) == "focus":
+            entry.setdefault("modes", {})[variant] = {"tier": alias}
+        elif FAMILIES.get(step) != "tier":
+            entry.setdefault("tier", alias)
+    for role, entry in roles.items():
+        if "modes" in entry:
+            entry.setdefault("tier", next(iter(entry["modes"].values()))["tier"])
+
+    # Nodes: one engine node per step; its variants are its tiers or focuses.
+    wf_nodes, schedules = {}, {}
+    for name, n in nodes.items():
+        step, variant = family(name)
+        if step in wf_nodes:  # a later variant of the same step
+            wf_nodes[step]["tiers" if FAMILIES[step] == "tier" else "focuses"].append(variant)
+            continue
+        wf_nodes[step] = _node(name, n, agents, role_of, prefix, schedules, envs, default_env, sorted(used),
+                               {c for c, v in commands.items() if "pr_label" in v["store"]})
+        if variant:
+            wf_nodes[step]["tiers" if FAMILIES[step] == "tier" else "focuses"] = [variant]
+    for node in wf_nodes.values():
+        if "tiers" in node:
+            node["tiers"].sort(key=TIER_ORDER.index)
+
+    join = nodes.get("join") or {}
+    merge_settings = (nodes.get("merge") or {}).get("settings") or {}
+    notify = (nodes.get("notify") or {}).get("settings") or {}
+    fix_rounds = next((v["settings"]["fix_rounds"] for k, v in nodes.items()
+                       if family(k)[0] == "fix" and "fix_rounds" in (v.get("settings") or {})), None)
+    descriptor = {
+        "engine": 1,
+        "project": {"name": f.get("name")},
+        "tracker": dict(f.get("tracker") or {}),
+        "repositories": repositories,
+        "environments": environments,
+        "workflow": WORKFLOW,
+        "states": states,
+        "commands": commands,
+        "branch_pattern": dset.get("branch_pattern"),
+        "commit_prefix": dset.get("commit_prefix"),
+        "targets": {"air": {"bot_login": dset.get("bot_login"), "models": air_models}},
+        "roles": roles,
+        "limits": {**(wset.get("limits") or {}), **({"fix_rounds": fix_rounds} if fix_rounds else {})},
+        "gates": {"auto_merge": {"enabled": bool(merge_settings.get("auto_merge", True)),
+                                 "max_risk": merge_settings.get("max_risk", "high")},
+                  "confirm_external_writes": dset.get("confirm_external_writes", True),
+                  "confirm_external_writes_scope": dset.get("confirm_external_writes_scope") or []},
+        "reviews": {"trusted_bots": [], **({"required": join["settings"]["required"]}
+                                          if (join.get("settings") or {}).get("required") else {})},
+        **({"notify": {"github_user": notify["github_user"]}} if notify.get("github_user") else {}),
+    }
+    return descriptor, {"format": 2, "adapters": {"ticket": (f.get("tracker") or {}).get("adapter", "github-issues"),
+                                                  "pr": "github"},
+                        "schedules": schedules,
+                        "webhooks": {k: {"description": (v or {}).get("description", k)}
+                                     for k, v in (f.get("webhooks") or {}).items()},
+                        "nodes": wf_nodes}
+
+
+def _wake(t, name, prefix, schedules, env):
+    if t == "manual":
+        return "manual"
+    (k, v), = t.items()
+    if k == "stage":
+        return f"state {v}"
+    if k == "label":
+        cmd, fill = _command(v, prefix)
+        if fill and family(name)[1]:  # a variant node wakes on its step's template: the engine fills it
+            return f"command {cmd}"
+        return f"command {cmd.split('<')[0]}{fill}" if fill else f"command {cmd}"
+    if k == "schedule":
+        key = name if name not in schedules or schedules[name]["cron"] == v else f"{name}-{len(schedules)}"
+        schedules[key] = {"cron": v}
+        return f"schedule {key}"
+    if k == "webhook":
+        return f"webhook {v}"
+    if k == "ci":
+        return f"run {(env.get('ci') or {}).get('workflow', 'quality-gates')}"
+    return TRIGGER_WAKES[(k, v)]
+
+
+def _effect(e, prefix):
+    out = {k: v for k, v in e.items() if k == "on"}
+    key = next(k for k in e if k != "on")
+    if key == "stage":
+        return {"state": e["stage"], **out}
+    if key in ("label", "unlabel"):
+        cmd, fill = _command(e[key], prefix)
+        ref = f"{cmd.split('<')[0]}{fill}" if fill else cmd
+        return {("command" if key == "label" else "uncommand"): ref}
+    return dict(e)
+
+
+def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_stages, pr_cmds):
+    env_name = n.get("environment") or default_env
+    a = agents[n["agent"]]
+    role = role_of(n["agent"])
+    when = dict(n.get("when") or {})
+    when = ({"state" if k == "stage" else k: v for k, v in when.items()} if when else {"always": True})
+    if role == "human":
+        when = {"actor": "human"}
+    pr_woken = any(isinstance(t, dict) and next(iter(t)) in ("pr", "ci") or
+                   (isinstance(t, dict) and "label" in t and _command(t["label"], prefix)[0] in pr_cmds)
+                   for t in n.get("triggers") or [])
+    out = {"env": env_name} if role != "human" else {}
+    out["wakes_on"] = [_wake(t, name, prefix, schedules, envs.get(env_name) or {}) for t in n.get("triggers") or []]
+    out["when"] = when
+    out["role"] = role
+    if role == "script":
+        out["run"] = n.get("run") or a.get("run")
+    if role not in ("script", "human") and not family(name)[1]:
+        out["tier"] = n.get("model") or a.get("model")
+    if role != "human":
+        out["output"] = n.get("output", "read-only")
+    if pr_woken and "ci" not in when:
+        out["ci-independent"] = True
+    if n.get("enabled") is False:
+        out["enabled"] = False
+    outcomes = {}
+    for o, oc in (n.get("outcomes") or {}).items():
+        oc = dict(oc or {})
+        guard = dict(oc.pop("if", None) or {})
+        res = {}
+        st = guard.pop("stage", None)
+        if st is not None:
+            if isinstance(st, str) and st.startswith("!"):
+                res["from"] = [s for s in all_stages if s != st[1:]]
+            else:
+                res["from"] = st if isinstance(st, list) else [st]
+        if "ci" in guard:
+            ci = guard.pop("ci")
+            res["ci"] = ci if isinstance(ci, list) else [ci]
+        if guard:
+            res["if"] = guard  # risk, complexity: the gate checks them (gate.guard_holds)
+        for k in ("else", "enabled"):
+            if k in oc:
+                res[k] = oc[k]
+        if "effects" in oc:
+            res["effects"] = [_effect(e, prefix) for e in oc["effects"] if next(k for k in e if k != "on") != "close"]
+        outcomes[o] = res
+    out["outcomes"] = outcomes
+    return out

@@ -145,4 +145,3 @@ webhooks:
     description: A notification for the factory inbox, posted by the gate and by Air run-end senders
     schema: inbox.schema.json     # the engine's payload schema
     api_key_env: FACTORY_INBOX_KEY
-

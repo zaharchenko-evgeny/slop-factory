@@ -223,6 +223,19 @@ def outcome_of(h):
     return h.get("status")
 
 
+def guard_holds(guard, facts):
+    """True when the ticket matches an outcome's `if` guard (ADR-0021): `risk` and `complexity` are a value or a
+    list; the ticket's complexity is its `complexity:<size>` label."""
+    have = {"risk": facts.get("risk"),
+            "complexity": next((x[11:] for x in facts.get("attrs", []) if x.startswith("complexity:")), None)}
+    for key, want in guard.items():
+        if key not in have:
+            raise Bad(f"unknown guard: {key}")
+        if have[key] not in (want if isinstance(want, list) else [want]):
+            return False
+    return True
+
+
 def fix_tier(facts, default="mid"):
     """The tier of the ticket's `complexity:*` label (`default` without one)."""
     for label in facts.get("attrs", []):
@@ -446,6 +459,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             outcome = "unresolvable"
             payload = {**payload, "reason": payload.get("reason") or f"[factory] Blocked: the {payload['tier']} tier could not resolve it and no higher tier exists. A person decides."}
     out = node["outcomes"][outcome]
+    if out.get("if") and not guard_holds(out["if"], tracker.facts(ticket)) and out.get("else") in node["outcomes"]:
+        out = node["outcomes"][out["else"]]  # ADR-0021: e.g. a cheap path refused for a high-risk ticket
     if out.get("ci") and tracker.facts(ticket)["ci"] not in out["ci"] and out.get("else") in node["outcomes"]:
         out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
         if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier

@@ -51,6 +51,9 @@ def _defaults():
 def load(team_root=None, descriptor=None):
     """The workflow file a project's descriptor links with `workflow:`."""
     root = Path(team_root or config.team_root())
+    import definition
+    if definition.present(root):  # ADR-0021
+        return definition.to_project(definition.load(root))[1]
     descriptor = project_mod._read(root) if descriptor is None else descriptor
     return yaml.safe_load((root / descriptor["workflow"]).read_text()) or {}
 

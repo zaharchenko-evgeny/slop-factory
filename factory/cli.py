@@ -230,9 +230,14 @@ def validate():
     if definition.present(config.team_root()):  # ADR-0021: factory.yaml + workflow.yaml + roles/
         defn = definition.load(config.team_root())
         errs = definition.errors(defn)
+        if not errs:  # the compiled view must pass the engine's own checks too
+            import project
+            import workflow
+            errs = [f"compiled: {e}" for e in config.validate() or
+                    workflow.validate(project.load(config.team_root()), workflow.load(config.team_root()))]
         print("\n".join([*errs, *(f"warning: {w}" for w in definition.warnings(defn)), *([] if errs else ["factory: ok"])]))
         return 1 if errs else 0
-    project_mode = (config.team_root() / config.PROJECT_DESCRIPTOR).is_file()
+    project_mode = config.is_project()
     errs = config.validate()
     if not errs and project_mode:
         import project

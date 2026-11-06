@@ -4,6 +4,7 @@
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/definition.py (ADR-0021). Run: uv run factory/tests/test_definition.py"""
+import os
 import shutil
 import subprocess
 import sys
@@ -110,8 +111,8 @@ class DefinitionTest(unittest.TestCase):
         self.assertError("unlisted-role: roles/painter")
 
     def test_else_names_an_outcome(self):
-        self.edit("workflow.yaml", lambda w: w["nodes"]["implement"]["outcomes"]["done-cheap"].update({"else": "done-nothing"}))
-        self.assertError("unknown-else: nodes.implement.done-cheap: done-nothing")
+        self.edit("workflow.yaml", lambda w: w["nodes"]["join"]["outcomes"]["approved"].update({"else": "nothing"}))
+        self.assertError("unknown-else: nodes.join.approved: nothing")
 
     def test_undefined_template_name(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(prompt="Limit {{ settings.nope }}"))
@@ -119,22 +120,62 @@ class DefinitionTest(unittest.TestCase):
 
     def test_settings_merge_order(self):
         defn = definition.load(self.root)
-        s = definition.settings(defn, "fix")
+        s = definition.settings(defn, "fix-mid")
         self.assertEqual(s["fix_rounds"], 3)                    # node
         self.assertEqual(s["limits"]["runs_per_day"], 20)       # workflow settings
         self.assertEqual(s["size_stop_factor"], 1.5)            # agent `dev`
         self.assertEqual(s["branch_pattern"], "ez/{ticket}-{slug}")   # factory defaults
-        defn["workflow"]["nodes"]["fix"]["settings"]["branch_pattern"] = None   # `null` clears
-        self.assertNotIn("branch_pattern", definition.settings(defn, "fix"))
+        defn["workflow"]["nodes"]["fix-mid"]["settings"]["branch_pattern"] = None   # `null` clears
+        self.assertNotIn("branch_pattern", definition.settings(defn, "fix-mid"))
 
     def test_render_uses_environment_repositories(self):
-        body, prompt = definition.render(definition.load(self.root), "review-knowledge")
+        body, prompt = definition.render(definition.load(self.root), "knowledge-review")
         self.assertIn("`zaharchenko-evgeny/slop-eval-factory` (main)", body)
         self.assertIn("focus knowledge", prompt)
 
+    def test_compile_variant_nodes_into_steps(self):
+        descriptor, wf = definition.to_project(definition.load(self.root))
+        n = wf["nodes"]
+        self.assertEqual(n["implement"]["tiers"], ["cheap", "mid", "strong"])
+        self.assertEqual(n["implement"]["wakes_on"], ["command implement-<tier>"])
+        self.assertEqual(n["review"]["focuses"], ["full", "cheap"])
+        self.assertEqual(n["update"]["tiers"], ["cheap", "strong"])
+        air = descriptor["targets"]["air"]["models"]
+        self.assertEqual((air["cheap"], air["mid"]), ("codex/gpt-6-luna", "claude/claude-sonnet-5-5[1m]"))
+        self.assertEqual(descriptor["roles"]["reviewer"]["modes"], {"full": {"tier": "sol"}, "cheap": {"tier": "luna"}})
+        self.assertEqual(descriptor["reviews"]["required"], {"low": ["cheap"], "high": ["full"]})
+
+    def test_compile_triggers(self):
+        wakes = {k: v["wakes_on"] for k, v in definition.to_project(definition.load(self.root))[1]["nodes"].items()}
+        self.assertEqual(wakes["join"], ["pr reviewed", "run quality-gates"])   # ci: failed
+        self.assertEqual(wakes["finish"], ["state pr-merged", "ticket closed", "state blocked", "ticket commented"])
+        self.assertEqual(wakes["notify"], ["state blocked", "state needs-answers", "webhook inbox"])
+        self.assertEqual(wakes["retro"], ["schedule retro"])
+        self.assertEqual(wakes["human"], ["manual"])
+
+    def test_compile_guards_and_effects(self):
+        desc, wf = definition.to_project(definition.load(self.root))
+        n = wf["nodes"]
+        self.assertNotIn("done", n["human"]["outcomes"]["ready"]["from"])          # `!done`
+        self.assertIn("approved", n["human"]["outcomes"]["ready"]["from"])
+        self.assertEqual(n["join"]["outcomes"]["approved"], {"ci": ["green"], "else": "changes",
+                                                            "effects": [{"state": "approved"}]})
+        self.assertEqual(n["implement"]["outcomes"]["error"]["effects"],
+                         [{"uncommand": "implement-*"}, {"command": "implement-<next tier>"}, {"state": "in-dev"}])
+        self.assertEqual(desc["commands"]["knowledge-review"], {"store": {"pr_label": "factory:knowledge-review"}})
+        self.assertEqual(desc["states"]["done"]["kind"], "final")
+
+    def test_compiled_view_passes_engine_checks(self):
+        os.environ["FACTORY_TEAM"] = str(self.root)
+        try:
+            import config, nodes  # noqa: E401
+            self.assertEqual(nodes.validate(nodes.load(), config.load()), [])
+        finally:
+            del os.environ["FACTORY_TEAM"]
+
     def test_cli_validate(self):
         run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
-                             text=True, env={**__import__("os").environ, "FACTORY_TEAM": str(self.root)})
+                             text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
         self.assertEqual((run.returncode, run.stdout.strip()), (0, "factory: ok"), run.stderr)
 
 
