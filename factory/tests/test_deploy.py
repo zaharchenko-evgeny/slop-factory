@@ -1124,5 +1124,18 @@ class DefinitionPlanTest(unittest.TestCase):
             self.assertIn(label, self.plan["labels"])
 
 
+
+class LabelsTest(unittest.TestCase):
+    def test_missing_labels_per_repository(self):
+        seen = []
+
+        def run(cmd, **kw):
+            seen.append(cmd)
+            return mock.Mock(stdout="factory:ready\nrisk:low\n" if cmd[4] == "o/tracker" else "factory:ready\n")
+        plan = {"labels": ["factory:ready", "risk:low"], "label_repositories": ["o/tracker", "o/code"]}
+        self.assertEqual(deploy.missing_labels(plan, run=run), [("o/code", "risk:low")])
+        self.assertEqual([c[4] for c in seen], ["o/tracker", "o/code"])
+
+
 if __name__ == "__main__":
     unittest.main()
