@@ -255,6 +255,22 @@ def lesson_effects(ticket, node, payload):
     return [{"kind": "comment", "ticket": ticket, "value": body}, {"kind": "label", "ticket": ticket, "value": vocab.lesson()}]
 
 
+def decide(name, ticket, tracker, nodes):
+    """ADR-0021 `factory decide`: apply the first outcome of node `name` whose guards hold (`from`, `ci`, `if`), for a
+    node whose agent only runs this command. (status, {outcome, ...}); no outcome holding is NO_GO."""
+    node = load_node(name, nodes)
+    facts = tracker.facts(ticket)
+    for outcome, out in node["outcomes"].items():
+        if out.get("enabled") is False or (out.get("from") and facts["stage"] not in out["from"]) \
+                or (out.get("ci") and facts["ci"] not in out["ci"]) \
+                or (out.get("if") and not guard_holds(out["if"], facts, tracker, ticket)):
+            continue
+        payload = {"ticket": ticket, "reason": f"[factory] {name}: {outcome}"}
+        status, res = apply(name, outcome, payload, tracker, nodes)
+        return status, {"outcome": outcome, **res}
+    return NO_GO, {"outcome": None, "applied": False, "reason": "no outcome's guards hold"}
+
+
 def merge_refused(effects, facts):
     """ADR-0021: a `merge` effect keeps its own invariants, whatever chose it: the current head is approved by the
     agent reviews at it, none asks for changes, CI is green there and the branch is not behind. None when it may
@@ -1187,7 +1203,7 @@ def run_ci_sync(dry_run=False, progress=None):
 
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "ci-sync"])
+    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "ci-sync", "decide"])
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
@@ -1229,6 +1245,12 @@ def main(argv):
             raise Bad("--tracker is github or memory:FILE")
         nodes = spec_nodes(a.spec) if a.spec else nodes_mod.load(a.nodes)
         config = config_mod.load()
+        if a.cmd == "decide":
+            if not (a.node and a.issue):
+                raise Bad("decide needs --node NODE --issue TICKET")
+            status, out = decide(a.node, a.issue, tracker, nodes)
+            print(json.dumps(out))
+            return status
         if a.cmd == "wake-reviewers":
             if not a.issue:
                 raise Bad("wake-reviewers needs --issue TICKET")

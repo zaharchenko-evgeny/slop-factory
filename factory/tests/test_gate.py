@@ -97,6 +97,24 @@ class GateTest(unittest.TestCase):
                 if not applied:
                     self.assertTrue(out["reason"].startswith("merge refused"), out)
 
+    def test_decide_applies_the_first_outcome_whose_guards_hold(self):
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["finisher"] = {"role": "clerk", "when": {"always": True}, "triggers": ["manual"], "outcomes": {
+            "done": {"if": {"pr": "merged"}, "effects": [{"stage": "done"}]},
+            "children-done": {"from": ["split"], "if": {"children": "closed"}, "effects": [{"stage": "done"}]},
+            "waiting": {}}}
+        merged = MemoryTracker({"7": {"stage": "in-review", "pr_state": "merged"}})
+        status, out = gate.decide("finisher", "7", merged, graph)
+        self.assertEqual((out["outcome"], merged.get_stage(merged._t("7"))), ("done", "done"))
+        split = MemoryTracker({"8": {"stage": "split", "children": [{"state": "closed"}]}})
+        split.children = lambda n: [{"state": "closed"}]
+        self.assertEqual(gate.decide("finisher", "8", split, graph)[1]["outcome"], "children-done")
+        idle = MemoryTracker({"9": {"stage": "in-review"}})
+        self.assertEqual(gate.decide("finisher", "9", idle, graph)[1]["outcome"], "waiting")
+        del graph["nodes"]["finisher"]["outcomes"]["waiting"]
+        status, out = gate.decide("finisher", "9", idle, graph)
+        self.assertEqual((status, out["outcome"]), (gate.NO_GO, None))
+
     def test_label_group_holds_one_value(self):
         graph = copy.deepcopy(NODES)
         graph["nodes"]["intake"]["outcomes"]["risky"] = {"effects": [{"label": "risk:high"}, {"stage": "ready"}]}

@@ -288,7 +288,7 @@ def main(argv=None):
     load_engine(HERE)
     if team:
         config.set_team(team)
-    if cmd in ("check", "apply", "sweep", "ci-sync"):
+    if cmd in ("check", "apply", "sweep", "ci-sync", "decide"):
         return gate.main([cmd, *rest])
     if cmd == "deploy" and rest[:2] == ["--target", "local"]:
         from local import deploy as local_deploy
