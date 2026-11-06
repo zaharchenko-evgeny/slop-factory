@@ -135,7 +135,7 @@ environments:
       - repo: {{TEAM_REPOSITORY}} # the knowledge base, read-only
     ci: { workflow: {{CI_WORKFLOW}} }   # `ci: failed` = Air workflow_run.failed for this workflow
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
-              "*.blob.core.windows.net", pypi.org, files.pythonhosted.org, air.jetbrains.cloud]
+              "*.blob.core.windows.net", pypi.org, files.pythonhosted.org]
     vm: default
     setup: null                   # optional script path, run after the engine's bootstrap; installs the environment's tools
   knowledge:                      # retro: the knowledge base is main, the project is evidence
@@ -144,14 +144,14 @@ environments:
         main: true
       - repo: {{MAIN_REPOSITORY}}
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
-              pypi.org, files.pythonhosted.org, air.jetbrains.cloud]
+              pypi.org, files.pythonhosted.org]
     vm: default
   team:                           # routines on the team repository
     repositories:
       - repo: {{TEAM_REPOSITORY}}
         main: true
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
-              pypi.org, files.pythonhosted.org, air.jetbrains.cloud]
+              pypi.org, files.pythonhosted.org]
     vm: default
 
 # Webhooks: endpoints that wake nodes, for example `deploy: { description: ..., api_key_env: ... }`.

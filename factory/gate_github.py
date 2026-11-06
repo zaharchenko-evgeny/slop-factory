@@ -240,6 +240,10 @@ class GitHubTicketStore:
                  "not_planned": k.get("state") == "closed" and k.get("state_reason") == "not_planned",
                  "attrs": [x["name"] for x in k.get("labels") or []]} for k in self.read_list(f"issues/{n}/sub_issues")]
 
+    def blocked_by(self, n):
+        """Every native blocker of `n`, open or closed (`[{number, state}]`)."""
+        return [{"number": b["number"], "state": b["state"]} for b in self.read_list(f"issues/{n}/dependencies/blocked_by")]
+
     def blocking(self, n):
         """Issues whose native or body fallback dependency list names `n` as a blocker."""
         dependents = self.read_list(f"issues/{n}/dependencies/blocking")
@@ -715,6 +719,9 @@ class GitHubGateTracker(DescriptorPort):
     def blocking(self, n):
         """Issues whose native or body fallback dependency list names `n` as a blocker."""
         return self.tickets.blocking(n)
+
+    def blocked_by(self, n):
+        return self.tickets.blocked_by(n) if hasattr(self.tickets, "blocked_by") else []
 
     def not_planned(self, n):
         """True when issue `n` was closed with state_reason not_planned."""

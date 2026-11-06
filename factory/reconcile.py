@@ -191,14 +191,16 @@ def send(tracker, n, nodes, stage, head, kind, label, on, why):
 
 
 def wake_ready(tracker, minutes, now=None, dry_run=False):
-    """ADR-0021: a `ready` ticket with no open blocker whose label is older than `minutes` was not started (its
-    blocker closed by hand, or the wake was lost): remove and re-add `ready` so its trigger fires again."""
+    """ADR-0021: a `ready` ticket that had blockers, all now closed, whose label is older than `minutes` was not
+    started (a blocker closed by hand, or the wake was lost): remove and re-add `ready` so its trigger fires again.
+    A ready ticket that never had a blocker is left alone: nothing it waited on has changed."""
     now = now or datetime.now(timezone.utc)
     label, out = vocab.stage("ready"), []
     for n in tracker.sweep_tickets(["ready"], open_only=True):
         facts = tracker.stale_facts(n)
         since = facts.get("stage_at")
-        if facts["stage"] != "ready" or facts.get("blockers_open") or not since or \
+        had = tracker.blocked_by(n) if hasattr(tracker, "blocked_by") else facts.get("blocked_by") or []
+        if facts["stage"] != "ready" or facts.get("blockers_open") or not had or not since or \
                 now - datetime.fromisoformat(since.replace("Z", "+00:00")) < timedelta(minutes=minutes):
             continue
         if not dry_run:

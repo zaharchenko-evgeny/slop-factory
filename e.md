@@ -1,11 +1,11 @@
-[factory] Doctor finds a definition team's skills where factory setup installs them.
+[factory] A ticket's repositories line accepts owner/repo (dispatch on #723 failed).
 
 ## Merge Danger
 
 **Door:** two-way.
 
-**Blast Radius:** doctor.
+**Blast Radius:** gate.
 
-Closes #724.
+Closes #733.
 
 Factory-Run: manual:pi-session-2026-11-06
