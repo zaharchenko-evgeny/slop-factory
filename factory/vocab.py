@@ -18,9 +18,15 @@ def _tracker():
     return _cache[key]
 
 
+UNDECLARED = "\x00undeclared:"  # no label starts with NUL: an undeclared command never matches and is never written
+
+
 def _command_label(name):
-    store = _tracker()["commands"][name]
-    return next(iter(store.values()))
+    """The label of command `name`. A team that does not declare it (an ADR-0021 team has none of the old
+    `implement-<tier>`, `fix-<tier>`, `review-<focus>` templates) gets a label no ticket can carry, so the
+    engine's checks for it simply never match."""
+    store = _tracker()["commands"].get(name)
+    return next(iter(store.values())) if store else f"{UNDECLARED}{name}"
 
 
 def cmd(name, fill=None):
