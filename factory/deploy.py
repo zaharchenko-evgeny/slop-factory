@@ -16,6 +16,7 @@ air: {"automations": [...], "environments": [...]}: one automation per enabled n
 """
 import fnmatch
 import json
+import time
 import os
 import re
 import shlex
@@ -485,7 +486,10 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
+    label_repos = list(dict.fromkeys(x for x in ((config.get("tracker") or {}).get("repository"),
+                                                 repository(primary)["fullName"]) if x))
     return {"prefix": prefix, "automations": automations, "environments": envs, "labels": labels(nodes, config),
+            "label_repositories": label_repos,
             "files": actions_files(nodes, config)}
 
 
@@ -604,7 +608,12 @@ class Mcp:
         if res.get("isError"):
             raise RuntimeError(f"{tool}: {res['content']}")
         text = "".join(c.get("text", "") for c in res.get("content", []))
-        return json.loads(text) if text else res.get("structuredContent")  # the text is the tool's JSON; structuredContent may wrap it
+        if not text:
+            return res.get("structuredContent")  # the text is the tool's JSON; structuredContent may wrap it
+        try:
+            return json.loads(text)
+        except ValueError:
+            return {"text": text}  # a tool that answers in prose (delete_automation)
 
     def close(self) -> None:
         self.proc.stdin.close()
@@ -650,8 +659,15 @@ class Backend:
     def get_automation(self, automation_id: str) -> dict:
         return self.request("GET", f"/automations/{urllib.parse.quote(automation_id, safe='')}")
 
-    def set_additional(self, automation_id: str, repositories: list[dict]) -> None:
-        current = self.get_automation(automation_id)
+    def set_additional(self, automation_id: str, repositories: list[dict], attempts: int = 12, pause: float = 10) -> None:
+        for attempt in range(attempts):  # an automation created a moment ago answers 403 until Air settles
+            try:
+                current = self.get_automation(automation_id)
+                break
+            except urllib.error.HTTPError as e:
+                if e.code not in (403, 404) or attempt == attempts - 1:
+                    raise
+                time.sleep(pause)
         body = {key: current[key] for key in self.SPEC_FIELDS if current.get(key) is not None}  # the API rejects nulls
         if "triggers" in body:
             body["triggers"] = [{key: value for key, value in trigger.items()
@@ -876,7 +892,13 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     for line in extra_variables(plan, state[1]):
         print(line)
     if mode == "--dry-run":
+        for repo, label in missing_labels(plan):
+            print(f"create label {label} in {repo}")
         return 0
+    for repo, label in missing_labels(plan):  # a missing label fails every handoff that adds it; never deleted
+        subprocess.run(["gh", "label", "create", label, "-R", repo, "--color", "ededed"], check=True,
+                       capture_output=True, text=True)
+        print(f"created label {label} in {repo}")
     if any(c[0] == "delete" for c in changes) and not allow_delete:
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
@@ -894,6 +916,17 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         for w in x["webhooks"]:
             print(f"webhook {x['name']}: trigger {w['id']}" + (f" {w['url']}" if w["url"] else ""))
     return 0
+
+
+def missing_labels(plan: dict, run=subprocess.run) -> list[tuple[str, str]]:
+    """(repository, label) per label of the plan missing from a repository the factory labels: the tracker's and
+    the main code repository (`plan["label_repositories"]`)."""
+    out = []
+    for repo in plan.get("label_repositories") or []:
+        have = run(["gh", "label", "list", "-R", repo, "--limit", "1000", "--json", "name", "-q", ".[].name"],
+                   check=True, capture_output=True, text=True).stdout.split("\n")
+        out += [(repo, label) for label in plan["labels"] if label not in have]
+    return out
 
 
 def write_files(files: dict, apply: bool) -> int:

@@ -1206,6 +1206,9 @@
     }
   ],
   "files": {},
+  "label_repositories": [
+    "o/main"
+  ],
   "labels": [
     "complexity:large",
     "complexity:medium",
