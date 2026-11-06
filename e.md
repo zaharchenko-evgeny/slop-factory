@@ -1,11 +1,11 @@
-[factory] A ticket's repositories line accepts owner/repo (dispatch on #723 failed).
+[factory] Reconcile wakes only once-blocked ready tickets; environments drop air.jetbrains.cloud; fixture from slop-eval-factory cf2a278.
 
 ## Merge Danger
 
 **Door:** two-way.
 
-**Blast Radius:** gate.
+**Blast Radius:** reconcile.
 
-Closes #733.
+Closes #736.
 
 Factory-Run: manual:pi-session-2026-11-06

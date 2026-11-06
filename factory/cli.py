@@ -83,7 +83,12 @@ def begin(argv, team=None):
     p.add_argument("--main", action="store_true")
     p.add_argument("--tracker")  # tests: a memory tracker
     a = p.parse_args(argv)
-    engine = from_main() if a.main or a.automation.split("-")[0] in PR_NODES else None
+    # ADR-0021: the installed `factory` is the engine's main, never the pull request's code: no main worktree.
+    # Checked by files, before any engine module is imported.
+    root = Path(team or os.environ.get("FACTORY_TEAM") or Path.home() / "factory-team")
+    definition_team = all((root / f).is_file() for f in ("factory.yaml", "workflow.yaml"))
+    engine = None if definition_team else \
+        from_main() if a.main or a.automation.split("-")[0] in PR_NODES else None
     load_engine(Path(engine) / "factory" if engine else HERE)
     if engine or team:
         config.set_team(team or os.environ.get("FACTORY_TEAM") or engine)
