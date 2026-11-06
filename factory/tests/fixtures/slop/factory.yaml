@@ -57,6 +57,8 @@ skills:
     path: pstack/skills/principle-test-behavior-not-implementation
     sha256: c8b25ca3336056109d6eaf5a973e676945b389ab3d03a12ae8c8ba360869ee21
   to-tickets: { path: skills/to-tickets }   # a local copy: this team edited it after vendoring
+  pr: { path: skills/pr }                   # adapted from mattpocock/skills (credits in the file)
+  merge-risk: { path: skills/merge-risk }   # adapted from warpdotdev/common-skills (credits in the file)
   retro:
     source: "github:mattpocock/skills@a496f5513d4a"
     path: skills/engineering/retro
@@ -68,7 +70,7 @@ skills:
 roles:
   developer:
     description: Implements a ticket, fixes review findings, resolves merge conflicts
-    skills: [ponytail, tdd, diagnosing-bugs, principle-test-behavior-not-implementation]
+    skills: [ponytail, ponytail-review, merge-risk, pr, tdd, diagnosing-bugs, principle-test-behavior-not-implementation]
     mcp: {}
   notify:
     description: Tells the owner about a state that needs them
@@ -82,6 +84,7 @@ roles:
     description: Reviews a PR at its head and pins the verdict to that head
     skills:
       - ponytail-review           # a name from `skills`
+      - merge-risk
       # - adr-reading: { path: roles/reviewer/skills/adr-reading }      # a role-only local skill
       # - security-review: { source: "github:owner/repo@<sha>", path: skills/security-review, sha256: ... }
     mcp: {}
