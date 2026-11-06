@@ -216,10 +216,13 @@ class WakeReadyTest(unittest.TestCase):
         from datetime import datetime, timezone
         old, new = "2026-11-06T10:00:00Z", "2026-11-06T11:55:00Z"
         tr = MemoryTracker({"1": {"stage": "ready", "stage_at": old}, "2": {"stage": "ready", "stage_at": old, "blockers_open": 1},
-                            "3": {"stage": "ready", "stage_at": new}, "4": {"stage": "in-dev", "stage_at": old}})
+                            "3": {"stage": "ready", "stage_at": new}, "4": {"stage": "in-dev", "stage_at": old},
+                            "5": {"stage": "ready", "stage_at": old}})
+        had = {"1": [{"number": 9, "state": "closed"}], "2": [{"number": 8, "state": "open"}], "3": [{"number": 9, "state": "closed"}]}
+        tr.blocked_by = lambda n: had.get(str(n), [])
         now = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
         got = reconcile.wake_ready(tr, 30, now=now)
-        self.assertEqual([r["ticket"] for r in got], ["1"])
+        self.assertEqual([r["ticket"] for r in got], ["1"])   # 5 never had a blocker: left alone
 
 
 if __name__ == "__main__":
