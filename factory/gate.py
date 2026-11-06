@@ -389,6 +389,22 @@ def guard_holds(guard, facts, tracker=None, ticket=None):
     return holds(guard, facts, {})
 
 
+def latest_mention(facts, tracker=None, ticket=None):
+    """{by, body, at, on, url} of the latest comment or review on the ticket or its PR that names @factory:, else None."""
+    found = [dict(c, on="ticket") for c in facts.get("comments") or []]
+    pr = facts.get("pr_comments")
+    if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
+        pr = tracker.pr_comments(ticket)
+    found += [dict(c, on="pr") for c in pr or []]
+    found += [{"author": r.get("author"), "body": r.get("body"), "at": r.get("submitted_at"), "on": "pr"}
+              for r in facts.get("reviews") or [] if r.get("body")]
+    found = [c for c in found if "@factory:" in (c.get("body") or "")]
+    if not found:
+        return None
+    c = max(enumerate(found), key=lambda ic: (ic[1].get("at") or "", ic[0]))[1]
+    return {"by": c.get("author"), "body": c.get("body"), "at": c.get("at"), "on": c["on"], "url": c.get("url")}
+
+
 def mention_holds(agent, facts, tracker=None, ticket=None):
     """ADR-0021 #590: the latest comment on the ticket or its PR names `@factory:<agent>`, and may ask it. A person
     may ask any agent; an agent (its comment's `factory:from` marker) only a neighbour in workflow.yaml; a reply
@@ -511,6 +527,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
         "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if step in ("fix", "update") else ()))],
+        **({"mention": latest_mention(facts, tracker, event["ticket"])} if name.startswith("reply-") and definition_team() else {}),
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and step in ("fix", "update")),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
         # one entry per repository of a ticket that changes several (ADR-0017), all on the ticket's one branch
@@ -817,6 +834,13 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                 e["heads"] = facts["heads"]  # one per repository of a multi-repository ticket
         if e["kind"] == "comment" and payload.get("run_id"):
             e["run_id"] = payload["run_id"]
+        if e["kind"] == "comment" and e.get("on") == "mention":  # #590: answer where, and whom, the question came from
+            asked = latest_mention(facts, tracker, ticket)
+            e["on"] = "pr" if asked and asked["on"] == "pr" else None
+            if not e["on"]:
+                del e["on"]
+            if asked and asked.get("by"):
+                e["value"] = f"@{asked['by']} {e['value']}"
         if e["kind"] == "comment" and definition_team():
             e["value"] = f"{e['value']}\n\n{comment_marker(name)}"
         if e["kind"] == "review" and definition_team():

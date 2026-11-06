@@ -36,7 +36,35 @@ def load(root):
     factory = _keys(yaml.safe_load((root / FACTORY).read_text()) or {})
     workflow = _keys(yaml.safe_load((root / WORKFLOW).read_text()) or {})
     bodies = {p.parent.name: p.read_text() for p in sorted((root / ROLES).glob("*/role.md"))}
-    return {"root": root, "factory": factory, "workflow": workflow, "bodies": bodies}
+    defn = {"root": root, "factory": factory, "workflow": workflow, "bodies": bodies}
+    _add_mentions(defn)
+    return defn
+
+
+ROUTER = "mentions"  # the generated node that routes @factory:<agent> to that agent's reply step (#590)
+
+
+def _add_mentions(defn):
+    """#590: an agent with `mentionable: true` can be asked with @factory:<agent>. Add, in memory, one router node
+    (a comment or review -> the asked agent's reply label, by the `mention` fact) and a `reply-<agent>` node per
+    mentionable agent (its role in reply mode, read-only, any stage). Both are marked `generated`."""
+    f, w = defn["factory"], defn["workflow"]
+    agents, nodes = f.setdefault("agents", {}), w.setdefault("nodes", {})
+    prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
+    askable = [a for a, spec in agents.items() if (spec or {}).get("mentionable")]
+    if not askable or ROUTER in nodes:
+        return
+    agents.setdefault("mention-router", {"run": "decide", "model": (f.get("defaults") or {}).get("model"),
+                                         "access": "read-only", "generated": True})
+    nodes[ROUTER] = {"agent": "mention-router", "generated": True,
+                     "triggers": [{"ticket": "commented"}, {"pr": "commented"}, {"pr": "reviewed"}],
+                     "outcomes": {**{f"reply-{a}": {"if": {"mention": a}, "effects": [{"label": f"{prefix}reply-{a}"}]}
+                                     for a in askable}, "none": {}}}
+    for a in askable:
+        nodes.setdefault(f"reply-{a}", {
+            "agent": a, "generated": True, "triggers": [{"label": f"{prefix}reply-{a}"}], "output": "read-only",
+            "settings": {"mode": "reply"},
+            "outcomes": {"replied": {"effects": [{"unlabel": f"{prefix}reply-{a}"}, {"comment": "reply", "on": "mention"}]}}})
 
 
 def merge(base, over):
@@ -93,8 +121,8 @@ def render(defn, name):
 
 def neighbours(defn):
     """{frozenset({a, b})}: agents a and b are neighbours when an outcome of a node of one adds a label that a node
-    of the other triggers on (#590: they may mention each other)."""
-    nodes = (defn["workflow"].get("nodes") or {}).values()
+    of the other triggers on (#590: they may mention each other). Generated mention nodes do not count."""
+    nodes = [n for n in (defn["workflow"].get("nodes") or {}).values() if not n.get("generated")]
     woken = {}
     for n in nodes:
         for t in n.get("triggers") or []:
@@ -165,6 +193,8 @@ def errors(defn):
     errs += [f"unlisted-role: {ROLES}/{r}: not in `roles`" for r in defn["bodies"] if r not in roles]
     for a, spec in agents.items():
         spec = spec or {}
+        if spec.get("mentionable") and (spec.get("run") or spec.get("harness") in NO_ROLE):
+            errs.append(f"mentionable-needs-role: agents.{a}: only an agent with a role can reply")
         if spec.get("harness") not in NO_ROLE and not spec.get("run") and spec.get("role") not in roles:
             errs.append(f"unknown-role: agents.{a}: {spec.get('role')}")
         if spec.get("model") is not None and spec["model"] not in models:
@@ -189,6 +219,8 @@ def errors(defn):
             continue
         human = (agents[n["agent"]] or {}).get("harness") == "human"
         env = n.get("environment") or default_env
+        if n.get("generated") is not True and name == ROUTER or (name.startswith("reply-") and not n.get("generated")):
+            errs.append(f"reserved-node: {where}: `{ROUTER}` and `reply-<agent>` are generated from `mentionable`")
         if (agents[n["agent"]] or {}).get("run") not in (None, "decide"):
             errs.append(f"unknown-command: agents.{n['agent']}: run {agents[n['agent']]['run']}")
         if not human and env not in envs:
@@ -421,7 +453,7 @@ def _effect(e, prefix):
         return {"state": e["stage"]}
     if key in ("label", "unlabel"):
         return {("command" if key == "label" else "uncommand"): _name(e[key], prefix)}
-    return dict(e)
+    return dict(e)  # `comment` with `on: mention` keeps it: the gate posts where the question was
 
 
 def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_stages, pr_cmds):

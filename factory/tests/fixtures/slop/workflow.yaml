@@ -4,7 +4,7 @@
 # labels (`risk:*` and `complexity:*` hold one value each) and PR states; routing is the labels outcomes add.
 # Deterministic rules live only in `when`, an outcome's `if` (when it fails the gate applies `else`, or
 # refuses) and the effects' own checks (a merge needs an approved head with green CI).
-# Agents, environments and webhooks are defined in factory.yaml; nodes name them.
+# Agents and environments are defined in factory.yaml; nodes name them.
 # Merge order: factory.yaml defaults -> environment -> role -> agent -> settings below -> node.
 
 # Stage names come from the nodes (`when`, triggers, effects). Labels are <label_prefix><stage>.
@@ -176,40 +176,15 @@ nodes:
       children-done: { if: { stage: split, children: closed }, effects: [{ stage: done }] }
       waiting:       {}
 
-  # --- Mentions: @factory:<agent> in a comment asks that agent; it replies in reply mode ---------
-  mentions:                       # a person may ask any agent below; an agent only its workflow neighbour
-    agent: clerk
-    triggers: [{ ticket: commented }, { pr: commented }, { pr: reviewed }]
-    outcomes:
-      ask-dev:      { if: { mention: dev },      effects: [{ label: "factory:ask-dev" }] }
-      ask-reviewer: { if: { mention: reviewer }, effects: [{ label: "factory:ask-reviewer" }] }
-      none:         {}
-
-  ask-dev:
-    agent: dev
-    triggers: [{ label: "factory:ask-dev" }]
-    output: read-only
-    settings: { mode: reply }
-    outcomes:
-      replied: { effects: [{ unlabel: "factory:ask-dev" }, { comment: reply }] }
-
-  ask-reviewer:
-    agent: reviewer
-    triggers: [{ label: "factory:ask-reviewer" }]
-    output: read-only
-    settings: { mode: reply, focus: [full] }
-    outcomes:
-      replied: { effects: [{ unlabel: "factory:ask-reviewer" }, { comment: reply }] }
-
   # --- Notifications --------------------------------------------------------------------------
-  notify:
-    agent: inbox
+  notify:                         # a state that needs the owner: the agent writes one message, or skips
+    agent: notify
     environment: team
-    triggers: [{ stage: blocked }, { stage: needs-answers }, { label: "factory:needs-human" }, { webhook: inbox }]
+    triggers: [{ stage: blocked }, { stage: needs-answers }, { label: "factory:needs-human" }]
     output: read-only
-    settings: { github_user: zaharchenko-evgeny, inbox_title: Factory inbox }
     outcomes:
-      notified: {}
+      notified: { effects: [{ comment: message }] }
+      skipped:  {}
 
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
   retro:
