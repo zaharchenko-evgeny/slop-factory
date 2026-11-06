@@ -142,6 +142,20 @@ class YouTrackTicketStore:
     def can_answer(self, login):
         return login in self.writers
 
+    # --- tag inventory (deploy)
+    def list_tags(self):
+        """{name: id} of the tags the token can see."""
+        return {t["name"]: t["id"] for t in self.run("GET", f"/api/tags?fields=id,name&{TOP}")}
+
+    def create_tag(self, name):
+        self.run("POST", "/api/tags?fields=id,name", {"name": name})
+
+    def delete_tag(self, name, owned_prefixes):
+        """Delete a tag only inside the factory's namespaces; anything else is someone else's and never removed."""
+        if not name.startswith(tuple(owned_prefixes)):
+            raise ValueError(f"tag {name!r} is not factory-owned")
+        self.run("DELETE", f"/api/tags/{self.list_tags()[name]}")
+
     # --- writes
     def _tag_id(self, name):
         tag = next((t for t in self.run("GET", f"/api/tags?fields=id,name&query={urllib.parse.quote(name)}&{TOP}")

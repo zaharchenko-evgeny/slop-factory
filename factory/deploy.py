@@ -34,6 +34,7 @@ import github_tracker
 import nodes as nodes_mod
 import project as project_mod
 import vocab
+import youtrack_tracker
 
 ROOT = Path(__file__).resolve().parents[1]
 SLOP_FIXTURE = ROOT / "factory/tests/fixtures/slop"
@@ -495,12 +496,15 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
+    tags = youtrack_tags(nodes, config)
     label_repos = list(dict.fromkeys(x for x in ((config.get("tracker") or {}).get("repository"),
                                                  repository(primary)["fullName"]) if x))
+    tag_plan = {"tags": tags, "owned_tag_prefixes": sorted({t.partition(":")[0] + ":" for t in tags if ":" in t}),
+                "tag_tracker": config["tracker"]} if tags else {}  # keeps a GitHub plan (and its fixture) unchanged
     return {"prefix": prefix, "automations": automations, "environments": envs, "labels": labels(nodes, config),
             "label_repositories": label_repos, "label_specs": label_specs(config),
             "owned_label_prefixes": owned_label_prefixes(config),
-            "files": actions_files(nodes, config)}
+            **tag_plan, "files": actions_files(nodes, config)}
 
 
 def actions_files(nodes: dict, config: dict) -> dict:
@@ -591,6 +595,36 @@ def reconcile_labels(plan: dict, run=None) -> list[tuple]:
                 out.append(("update", repo, name, want, changed))
         out += [("remove", repo, name, None) for name in sorted(have) if name.startswith(owned) and name not in plan["labels"]]
     return out
+
+
+def youtrack_tags(nodes: dict, config: dict) -> list[str]:
+    """The tags a YouTrack definition stores its stages and commands in, `<tier>` and `<focus>` expanded; none for other adapters."""
+    if (config.get("tracker") or {}).get("adapter") != "youtrack":
+        return []
+    tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
+    focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
+    out = set()
+    for x in [*(config.get("states") or {}).values(), *(config.get("commands") or {}).values()]:
+        tag = x["store"].get("tag")
+        if isinstance(tag, str):
+            out |= {tag.replace("<tier>", t) for t in tiers} if "<tier>" in tag else \
+                {tag.replace("<focus>", f) for f in focuses} if "<focus>" in tag else {tag}
+    return sorted(out)
+
+
+def tag_store(plan: dict, run=None):
+    return youtrack_tracker.YouTrackTicketStore.from_config(plan["tag_tracker"], run)
+
+
+def reconcile_tags(plan: dict, run=None) -> list[tuple]:
+    """(action, tag) per required YouTrack tag to create and per factory-owned tag no longer required to remove;
+    tags outside the factory's namespaces are never listed for removal."""
+    if not plan.get("tags"):
+        return []
+    have = tag_store(plan, run).list_tags()
+    owned = tuple(plan.get("owned_tag_prefixes") or [])
+    return [("create", t) for t in plan["tags"] if t not in have] + \
+        [("remove", t) for t in sorted(have) if owned and t.startswith(owned) and t not in plan["tags"]]
 
 
 def labels(nodes: dict, config: dict) -> list[str]:
@@ -918,7 +952,7 @@ def extra_variables(plan: dict, envs: list[dict]) -> list[str]:
             for k in have.get(e["name"], {}) if k not in (e.get("variables") or {})]
 
 
-def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None) -> int:
+def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None, yt_run=None) -> int:
     """Write only to Air and to repository labels (through `run`, a `gh` runner): deploy never creates, edits or closes a tracker ticket."""
     # The automations' repositories too: an environment moved off a repository is found there, then replaced.
     repo_urls = list(dict.fromkeys([e["repository"] for e in plan["environments"]] +
@@ -939,10 +973,17 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     for line in extra_variables(plan, state[1]):
         print(line)
     label_changes = reconcile_labels(plan, run)
+    tag_changes = reconcile_tags(plan, yt_run)
     if mode == "--dry-run":
         for action, repo, label, *rest in label_changes:
             print(f"{action} label {label} in {repo}" + (f" ({', '.join(rest[1])})" if action == "update" else ""))
+        for action, tag in tag_changes:
+            print(f"{action} tag {tag} in YouTrack")
         return 0
+    for action, tag in tag_changes:  # a missing tag fails every handoff that adds it
+        if action == "create":
+            tag_store(plan, yt_run).create_tag(tag)
+            print(f"created tag {tag} in YouTrack")
     for action, repo, label, want, *_ in label_changes:  # a missing label fails every handoff that adds it
         tracker = label_tracker(repo, run)
         if action == "create":
@@ -953,14 +994,20 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
             continue
         print(f"{action}d label {label} in {repo}")
     removals = [c for c in label_changes if c[0] == "remove"]
-    if (removals or any(c[0] == "delete" for c in changes)) and not allow_delete:
+    tag_removals = [t for a, t in tag_changes if a == "remove"]
+    if (removals or tag_removals or any(c[0] == "delete" for c in changes)) and not allow_delete:
         for _, repo, label, _ in removals:
             print(f"refused: would remove label {label} in {repo}", file=sys.stderr)
+        for tag in tag_removals:
+            print(f"refused: would remove tag {tag} in YouTrack", file=sys.stderr)
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
     for _, repo, label, _ in removals:
         label_tracker(repo, run).delete_label(label, plan["owned_label_prefixes"])
         print(f"removed label {label} in {repo}")
+    for tag in tag_removals:
+        tag_store(plan, yt_run).delete_tag(tag, plan["owned_tag_prefixes"])
+        print(f"removed tag {tag} in YouTrack")
     if changes:
         apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories)
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
