@@ -62,6 +62,19 @@ class GateTest(unittest.TestCase):
         gate.apply("intake", "cheap", {"ticket": "7"}, low, graph)
         self.assertIn("factory:cheap", low.facts("7")["attrs"])
 
+    def test_lessons_comment_and_label(self):
+        tr = MemoryTracker({"7": {"stage": "triage"}})
+        gate.apply("intake", "not-actionable", {"ticket": "7", "reason": "[factory] no", "lessons": [
+            {"text": "The router  misses ADRs", "scope": "factory", "about": "router", "evidence": "#7"}]}, tr, NODES)
+        log = tr.tickets["7"]["log"]
+        lesson = [json.loads(v) for k, v in log if k == "comment" and "factory:lesson" in v]
+        self.assertEqual(lesson, ["[factory] Lessons from `intake`\n<!-- factory:lesson -->\n"
+                                  "- [factory] router: The router misses ADRs (evidence: #7)"])
+        self.assertIn("factory:lesson", tr.facts("7")["attrs"])
+        with self.assertRaises(gate.Bad):
+            gate.apply("intake", "not-actionable", {"ticket": "7", "reason": "r", "lessons": ["just text"]},
+                       MemoryTracker({"7": {"stage": "triage"}}), NODES)
+
     def test_guard_names_known_fields(self):
         with self.assertRaises(gate.Bad):
             gate.guard_holds({"colour": "red"}, {})

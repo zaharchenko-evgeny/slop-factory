@@ -364,7 +364,9 @@ def to_project(defn):
     descriptor = {
         "engine": 1,
         "project": {"name": f.get("name")},
-        "tracker": dict(f.get("tracker") or {}),
+        "tracker": {**(f.get("tracker") or {}),
+                    **({"lesson_label": (dset.get("knowledge") or {})["lesson_label"]}
+                       if (dset.get("knowledge") or {}).get("lesson_label") else {})},
         "repositories": repositories,
         "environments": environments,
         "workflow": WORKFLOW,

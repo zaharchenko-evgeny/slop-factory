@@ -1498,6 +1498,7 @@
     "factory:implement-mid",
     "factory:implement-strong",
     "factory:inbox",
+    "factory:lesson",
     "factory:needs-answers",
     "factory:needs-human",
     "factory:ready",

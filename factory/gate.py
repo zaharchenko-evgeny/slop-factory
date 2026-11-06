@@ -223,6 +223,25 @@ def outcome_of(h):
     return h.get("status")
 
 
+LESSON_MARKER = "<!-- factory:lesson -->"
+
+
+def lesson_effects(ticket, node, payload):
+    """ADR-0021: a result's `lessons` as one marked comment on the ticket and the lesson label, which retro collects.
+    Each lesson is `{text, scope: project|factory|engine, about, evidence}`; only `text` is required."""
+    lessons = payload.get("lessons") or []
+    if not isinstance(lessons, list) or not all(isinstance(x, dict) and str(x.get("text") or "").strip() for x in lessons):
+        raise Bad("lessons must be a list of objects with `text`")
+    if not lessons:
+        return []
+    lines = [f"- [{x.get('scope', 'project')}] {x.get('about') or 'general'}: {' '.join(str(x['text']).split())}"
+             + (f" (evidence: {x['evidence']})" if x.get("evidence") else "") for x in lessons]
+    body = f"[factory] Lessons from `{node}`\n{LESSON_MARKER}\n" + "\n".join(lines)
+    if payload.get("run_id"):
+        body += f"\n\nFactory-Run: {payload['run_id']}"
+    return [{"kind": "comment", "ticket": ticket, "value": body}, {"kind": "label", "ticket": ticket, "value": vocab.lesson()}]
+
+
 def guard_holds(guard, facts):
     """True when the ticket matches an outcome's `if` guard (ADR-0021): `risk` and `complexity` are a value or a
     list; the ticket's complexity is its `complexity:<size>` label."""
@@ -632,6 +651,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     why = matches(gated(name, node, facts), facts, {**payload, "id": payload.get("event")}, out)
     if why:
         return NO_GO, {"applied": False, "reason": why}
+    after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
     written = [e["kind"] for e in effects + after if tracker.apply(e)]
     for kind in [notify_kind] if notify_kind else notification(name, outcome, effects):  # only after the effects were applied
         notify(kind, ticket, next((e["value"] for e in effects if e["kind"] == "comment"), None), facts.get("pr"))

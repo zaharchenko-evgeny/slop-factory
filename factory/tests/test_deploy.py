@@ -1116,7 +1116,8 @@ class DefinitionPlanTest(unittest.TestCase):
         self.assertEqual(envs["[Slop factory] engine"]["secrets"], ["FACTORY_WRITE_TOKEN"])
         self.assertEqual(envs["[Slop factory] knowledge"]["repository"],
                          "https://github.com/zaharchenko-evgeny/slop-eval-factory")
-        for label in ("factory:implement-cheap", "factory:review-full", "factory:knowledge-review", "factory:done"):
+        for label in ("factory:implement-cheap", "factory:review-full", "factory:knowledge-review", "factory:done",
+                      "factory:lesson"):
             self.assertIn(label, self.plan["labels"])
 
 
