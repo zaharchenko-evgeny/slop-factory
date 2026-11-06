@@ -231,6 +231,29 @@ class DefinitionTest(unittest.TestCase):
         finally:
             config.set_team(before)
 
+    def test_the_last_child_done_finishes_its_split_parent(self):
+        import config
+        import gate
+        import nodes as nodes_mod
+        from gate_port import MemoryTracker
+        before = config._team
+        config.set_team(self.root)
+        try:
+            n = nodes_mod.load()
+            t = MemoryTracker({"9": {"stage": "split"}, "7": {"stage": "approved", "pr_state": "merged"},
+                               "8": {"stage": "done"}})
+            state = {"7": "open", "8": "closed"}
+            t.parent = lambda x: "9" if str(x) in ("7", "8") else None
+            t.children = lambda x: [{"number": k, "state": s} for k, s in state.items()] if str(x) == "9" else []
+            plain = t.apply
+            t.apply = lambda e: (state.__setitem__("7", "closed") if e["kind"] == "stage" and e["ticket"] == "7" else None) \
+                or plain(e)
+            out = gate.decide("finish", "7", t, n)[1]
+            self.assertEqual((out["outcome"], out["parent"]["outcome"]), ("done", "children-done"))
+            self.assertEqual(t.facts("9")["stage"], "done")
+        finally:
+            config.set_team(before)
+
     def test_neighbours_come_from_the_workflow(self):
         pairs = definition.neighbours(definition.load(self.root))
         for a, b in [("dev", "reviewer"), ("dev", "reviewer-cheap"), ("reviewer", "approver"), ("dispatcher", "dev"),
