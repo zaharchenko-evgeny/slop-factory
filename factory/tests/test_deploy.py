@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from unittest import mock
 from pathlib import Path
 
@@ -1212,6 +1213,73 @@ class LabelsTest(unittest.TestCase):
             deploy.deploy("--apply", False, plan, None, None, run=wrapped)
         creates = {(r, t) for v, r, t in tokens if v == "create"}
         self.assertEqual(creates, {("o/tracker", None), ("o/code", "t")})
+
+
+class FakeTags:
+    """A YouTrack runner over a tag inventory {name: id}; records writes."""
+
+    def __init__(self, tags, shared=()):
+        self.tags, self.shared, self.writes = dict(tags), set(shared), []
+
+    def __call__(self, method, path, body=None):
+        if method == "GET" and path.startswith("/api/issues"):  # tags another project's issues carry
+            return [{"idReadable": "X-1"}] if any(urllib.parse.quote(f"{{{t}}}") in path for t in self.shared) else []
+        if method == "GET":
+            return [{"id": i, "name": n} for n, i in self.tags.items()]
+        self.writes.append((method, path, body))
+        return {}
+
+
+class YouTrackTagsTest(unittest.TestCase):
+    TAGS = ["factory:implement-mid", "factory:ready"]
+    PLAN = {"tags": TAGS, "owned_tag_prefixes": ["factory:"], "tag_tracker": {"url": "https://y.example", "project": "LME"},
+            "labels": [], "label_repositories": [], "owned_label_prefixes": []}
+
+    def test_required_tags_come_from_the_compiled_definition(self):
+        project, wf = this_repository()
+        project["tracker"] = {"adapter": "youtrack", "url": "https://y.example", "project": "LME"}
+        project["code_host"] = {"repository": "o/r"}
+        project["states"]["ready"] = {"kind": "active", "store": {"tag": "factory:ready"}}
+        project["commands"]["implement-<tier>"] = {"store": {"tag": "factory:implement-<tier>"}}
+        plan = project_plan(project, wf)
+        self.assertIn("factory:ready", plan["tags"])
+        self.assertIn("factory:implement-mid", plan["tags"])
+        self.assertFalse([t for t in plan["tags"] if "<" in t])
+        self.assertEqual(plan["owned_tag_prefixes"], ["factory:"])
+
+    def run_deploy(self, mode, allow_delete, have, shared=()):
+        fake = FakeTags(have, shared)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(deploy, "read_state", return_value=([], [])):
+            code = deploy.deploy(mode, allow_delete, {**self.PLAN, "prefix": "p", "environments": [], "automations": []},
+                                 None, None, yt_run=fake)
+        return code, out.getvalue(), err.getvalue(), fake.writes
+
+    def test_dry_run_reports_without_writing(self):
+        code, out, _, writes = self.run_deploy("--dry-run", False, {"factory:ready": "1", "factory:old": "2", "bug": "3"})
+        self.assertEqual(code, 0)
+        self.assertIn("create tag factory:implement-mid in YouTrack", out)
+        self.assertIn("remove tag factory:old in YouTrack", out)
+        self.assertNotIn("tag bug", out)
+        self.assertEqual(writes, [])
+
+    def test_apply_creates_missing_tags_and_refuses_removal_without_allow_delete(self):
+        code, _, err, writes = self.run_deploy("--apply", False, {"factory:ready": "1", "factory:old": "2"})
+        self.assertEqual(code, 1)
+        self.assertIn("refused: would remove tag factory:old in YouTrack", err)
+        self.assertEqual(writes, [("POST", "/api/tags?fields=id,name", {"name": "factory:implement-mid"})])
+
+    def test_apply_with_allow_delete_removes_owned_tags_only(self):
+        code, _, _, writes = self.run_deploy("--apply", True, {"factory:ready": "1", "factory:old": "2", "bug": "3"})
+        self.assertEqual(code, 0)
+        self.assertEqual([w[:2] for w in writes], [("POST", "/api/tags?fields=id,name"), ("DELETE", "/api/tags/2")])
+
+    def test_tag_used_by_another_project_is_never_removed(self):
+        code, out, _, writes = self.run_deploy("--apply", True, {"factory:ready": "1", "factory:shared": "2"}, shared=["factory:shared"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("factory:shared", out)
+        self.assertEqual([w[:2] for w in writes], [("POST", "/api/tags?fields=id,name")])
 
 
 if __name__ == "__main__":

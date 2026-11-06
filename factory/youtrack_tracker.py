@@ -142,6 +142,28 @@ class YouTrackTicketStore:
     def can_answer(self, login):
         return login in self.writers
 
+    # --- tag inventory (deploy)
+    def list_tags(self):
+        """{name: id} of the tags the token can see."""
+        return {t["name"]: t["id"] for t in self.run("GET", f"/api/tags?fields=id,name&{TOP}")}
+
+    def used_outside_project(self, name):
+        """Whether an issue outside the configured project carries the tag; True when no project is configured, as
+        ownership cannot then be established. Tags are account-wide, so only a tag no other project uses is safe to delete."""
+        if not self.project:
+            return True
+        query = urllib.parse.quote(f"tag: {{{name}}} and project: -{{{self.project}}}")
+        return bool(self.run("GET", f"/api/issues?query={query}&fields=idReadable&$top=1"))
+
+    def create_tag(self, name):
+        self.run("POST", "/api/tags?fields=id,name", {"name": name})
+
+    def delete_tag(self, name, owned_prefixes):
+        """Delete a tag only inside the factory's namespaces; anything else is someone else's and never removed."""
+        if not name.startswith(tuple(owned_prefixes)):
+            raise ValueError(f"tag {name!r} is not factory-owned")
+        self.run("DELETE", f"/api/tags/{self.list_tags()[name]}")
+
     # --- writes
     def _tag_id(self, name):
         tag = next((t for t in self.run("GET", f"/api/tags?fields=id,name&query={urllib.parse.quote(name)}&{TOP}")

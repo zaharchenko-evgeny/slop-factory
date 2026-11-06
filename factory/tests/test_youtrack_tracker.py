@@ -199,5 +199,34 @@ class StoreTest(unittest.TestCase):
                                                               "value": {"name": "factory:ready"}}]})])
 
 
+class TagInventoryTest(unittest.TestCase):
+    def test_lists_creates_and_deletes_factory_tags_but_preserves_others(self):
+        calls = []
+
+        def run(method, path, body=None):
+            calls.append((method, path, body))
+            return [{"id": "1", "name": "factory:old"}, {"id": "2", "name": "bug"}] if method == "GET" else {}
+        store = yt.YouTrackTicketStore(run)
+        self.assertEqual(store.list_tags(), {"factory:old": "1", "bug": "2"})
+        store.create_tag("factory:ready")
+        store.delete_tag("factory:old", ["factory:"])
+        with self.assertRaises(ValueError):
+            store.delete_tag("bug", ["factory:"])
+        self.assertEqual([c for c in calls if c[0] != "GET"],
+                         [("POST", "/api/tags?fields=id,name", {"name": "factory:ready"}), ("DELETE", "/api/tags/1", None)])
+
+    def test_used_outside_project_queries_other_projects_and_is_conservative_without_a_project(self):
+        calls = []
+
+        def run(method, path, body=None):
+            calls.append(path)
+            return [{"idReadable": "X-1"}]
+        self.assertTrue(yt.YouTrackTicketStore(run, project="LME").used_outside_project("factory:old"))
+        self.assertIn("project%3A%20-%7BLME%7D", calls[0])
+        self.assertTrue(yt.YouTrackTicketStore(run).used_outside_project("factory:old"))
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(yt.YouTrackTicketStore(lambda *a, **k: [], project="LME").used_outside_project("factory:old"))
+
+
 if __name__ == "__main__":
     unittest.main()
