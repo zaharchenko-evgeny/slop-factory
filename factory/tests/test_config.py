@@ -129,10 +129,9 @@ class TeamRootTest(unittest.TestCase):
                 if not ok:
                     self.assertIn("code_host.repository: required", errors[0])
 
-    def test_unknown_notify_provider_fails_validate_naming_it(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config.set_team(team(tmp, {**DESCRIPTOR, "notify": {**DESCRIPTOR["notify"], "providers": [{"kind": "nope"}]}}))
-            self.assertTrue([e for e in config.validate() if "nope" in e])
+    def test_owner_falls_back_to_the_v1_notify_user(self):
+        self.assertEqual(config.owner({"owner": "a", "notify": {"github_user": "b"}}), "a")
+        self.assertEqual(config.owner({"notify": {"github_user": "b"}}), "b")
 
     def test_validate_passes_for_this_repository(self):
         config.set_team(ROOT / "factory/tests/fixtures/team")

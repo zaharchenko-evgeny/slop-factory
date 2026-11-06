@@ -1,7 +1,8 @@
 # Slop factory, definition v2. This file lists what the factory has: tracker, models, skills,
-# roles, agents, environments, webhooks. workflow.yaml says how they connect and run.
+# roles, agents, environments. workflow.yaml says how they connect and run.
 name: Slop factory
 engine: "git+https://github.com/zaharchenko-evgeny/slop-factory@main"   # what the Air startup script installs
+owner: zaharchenko-evgeny   # the GitHub login the notify node tells
 tracker:
   adapter: github-issues
   repository: zaharchenko-evgeny/slop-factory
@@ -69,8 +70,8 @@ roles:
     description: Implements a ticket, fixes review findings, resolves merge conflicts
     skills: [ponytail, tdd, diagnosing-bugs, principle-test-behavior-not-implementation]
     mcp: {}
-  inbox:
-    description: Posts factory notifications to the configured inbox provider
+  notify:
+    description: Tells the owner about a state that needs them
     skills: []
     mcp: {}
   retro:
@@ -117,7 +118,7 @@ agents:
   clerk:          { run: decide, model: luna, access: read-only }  # runs `factory decide`: the node's guards choose
   ops:            { role: ops, model: luna, access: read-only }
   retro:          { role: retro, model: sonnet, access: full }
-  inbox:          { role: inbox, model: luna, access: read-only, settings: { provider: github-inbox } }
+  notify:         { role: notify, model: luna, access: read-only }
 
 # Environments: where agents run. One repository is `main`; the others are additional.
 environments:
@@ -150,10 +151,3 @@ environments:
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               pypi.org, files.pythonhosted.org, air.jetbrains.cloud]
     vm: default
-
-# Webhooks: endpoints that wake nodes.
-webhooks:
-  inbox:
-    description: A notification for the factory inbox, posted by the gate and by Air run-end senders
-    schema: inbox.schema.json     # the engine's payload schema
-    api_key_env: FACTORY_INBOX_KEY

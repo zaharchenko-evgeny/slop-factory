@@ -4,7 +4,7 @@
 # labels (`risk:*` and `complexity:*` hold one value each) and PR states; routing is the labels outcomes add.
 # Deterministic rules live only in `when`, an outcome's `if` (when it fails the gate applies `else`, or
 # refuses) and the effects' own checks (a merge needs an approved head with green CI).
-# Agents, environments and webhooks are defined in factory.yaml; nodes name them.
+# Agents and environments are defined in factory.yaml; nodes name them.
 # Merge order: factory.yaml defaults -> environment -> role -> agent -> settings below -> node.
 
 # Stage names come from the nodes (`when`, triggers, effects). Labels are <label_prefix><stage>.
@@ -202,14 +202,14 @@ nodes:
       replied: { effects: [{ unlabel: "factory:ask-reviewer" }, { comment: reply }] }
 
   # --- Notifications --------------------------------------------------------------------------
-  notify:
-    agent: inbox
+  notify:                         # a state that needs the owner: the agent writes one message, or skips
+    agent: notify
     environment: team
-    triggers: [{ stage: blocked }, { stage: needs-answers }, { label: "factory:needs-human" }, { webhook: inbox }]
+    triggers: [{ stage: blocked }, { stage: needs-answers }, { label: "factory:needs-human" }]
     output: read-only
-    settings: { github_user: zaharchenko-evgeny, inbox_title: Factory inbox }
     outcomes:
-      notified: {}
+      notified: { effects: [{ comment: message }] }
+      skipped:  {}
 
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
   retro:

@@ -46,7 +46,6 @@ ALLOW = {
     "roles/", "roles/_common.md", "roles/approver/role.md", "policies/", "judgments/", "policies/auto-approve.rego",
     "judgments/auto-approve.yaml", "workflows/delivery.md", ".air/cloud/startup.sh",
     "AGENTS.md:ez/<issue>-*", "AGENTS.md:roles/*/setup.sh",
-    "engine/template-v1/roles/inbox/role.md:request.json", "engine/template-v1/roles/inbox/role.md:summary.md",
     "docs/design.md:roles/<role>/", "docs/plan.md:roles/{router,developer,reviewer}/",
     "docs/recipes/auto-approve.md:conftest test --policy policies summary.json",
     "docs/statechart-proposed.md:#669", "docs/statechart-proposed.md:#333", "docs/statechart-proposed.md:#999",

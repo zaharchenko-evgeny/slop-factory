@@ -31,7 +31,6 @@ flowchart LR
     N_reopen["<b>reopen</b><br/>on: PR push<br/>on: PR +factory:ci-red<br/>script"]:::node
     N_merge["<b>merge</b><br/>on: issue +factory:approved<br/>on: PR +factory:ci-green<br/>script"]:::node
     N_finish["<b>finish</b><br/>on: PR merged<br/>on: issue closed<br/>on: issue +factory:blocked<br/>on: issues.comment<br/>script"]:::node
-    N_inbox["<b>inbox</b><br/>on: webhook notify<br/>on: PR opened<br/>on: comment on a PR<br/>inbox · cheap"]:::node
     N_recover["<b>recover</b><br/>on: a person<br/>script"]:::node
     N_reconcile["<b>reconcile</b><br/>on: cron 17 * * * *<br/>script"]:::node
     N_doctor["<b>doctor</b><br/>on: cron 0 5 * * *<br/>script"]:::node
@@ -150,7 +149,6 @@ flowchart LR
 | `reopen` | `PR push`<br>`PR +factory:ci-red` | reopened: → in-review | script | built |
 | `merge` | `issue +factory:approved`<br>`PR +factory:ci-green` | merged: —<br>updated: —<br>waiting: — | script | built |
 | `finish` | `PR merged`<br>`issue closed`<br>`issue +factory:blocked`<br>`issues.comment` | answered: → triage<br>children-done: → done<br>child-blocked: → blocked<br>conflict: +factory:update-cheap → changes-requested<br>merged: → done | script | built |
-| `inbox` | `webhook notify`<br>`PR opened`<br>`comment on a PR` | delivered: —<br>skipped: —<br>failed: — | inbox · cheap | built |
 | `recover` | `a person` | blocked: → blocked | script | built |
 | `reconcile` | `cron 17 * * * *` | reconciled: — | script | built |
 | `doctor` | `cron 0 5 * * *` | probed: — | script | built |

@@ -1,7 +1,4 @@
 format: 2
-webhooks:
-  notify:
-    description: A notification request for the factory inbox (engine/inbox.schema.json) as the JSON body
 adapters:
   ticket: github-issues
   pr: github
@@ -412,24 +409,6 @@ nodes:
         - investigating
         effects:
         - state: done
-  inbox:
-    env: ops
-    pilot: true
-    routine: true
-    ci-independent: true
-    wakes_on:
-    - webhook notify
-    - pr opened
-    - pr commented
-    when:
-      always: true
-    role: inbox
-    tier: cheap
-    output: read-only
-    outcomes:
-      delivered: {}
-      skipped: {}
-      failed: {}
   recover:
     env: read
     runner: manual

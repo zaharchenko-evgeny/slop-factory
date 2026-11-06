@@ -179,8 +179,7 @@ INSTALLED_FACTORY = (" Run the installed `factory` command (`command -v factory`
 PR_NUMBER = " --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>"
 SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>", "finish": PR_NUMBER,
                "reopen": PR_NUMBER, "merge": PR_NUMBER,
-               "doctor": " doctor", "doctor-write": " doctor", "doctor-ops": " doctor",
-               "notify": " notify --issue <the issue number>"}
+               "doctor": " doctor", "doctor-write": " doctor", "doctor-ops": " doctor"}
 
 
 def team_is_project(team: dict, config: dict) -> bool:
@@ -290,9 +289,6 @@ def script_prompt(name: str, main_repository: dict | None = None, config: dict |
     elif name == "reconcile":
         prompt = ("This step runs one command and judges nothing: it changes no file, label, comment or review itself. "
                   "Run `factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
-    elif name == "notify":
-        prompt = ("Run `factory notify --issue <the issue number>` in the foreground with no "
-                  "time limit, wait until it exits, and report its output.")
     else:
         args = SCRIPT_ARGS.get(name, "")
         prompt = SCRIPT_PROMPT.format(args=args)
@@ -327,8 +323,6 @@ def begin_arg(node: str, n: dict) -> str:
     """The number a node begins with; a scheduled routine has no ticket or PR, so it takes none."""
     if all(str(t).startswith("schedule ") for t in n["triggers"]):
         return ""
-    if n["role"] == "inbox":  # the payload is not a ticket: the role builds its own request
-        return ""
     if any(str(t).startswith("webhook ") for t in n["triggers"]):
         return "--issue <the `issue` field of the trigger payload>"
     return "--pr <the pull request number>" if node in PR_TRIGGERED_NODES else "--issue <the issue number>"
@@ -342,13 +336,6 @@ def mcp_connectors(n: dict, config: dict, focus: str | None) -> list[str]:
         if source.get("mcp") is not None:
             return list(source["mcp"])
     return []
-
-
-INBOX_PAYLOAD = ("## Trigger event fields\n\n"
-                 "- `webhook notify`: the whole POST body is the request.\n"
-                 "- `pr opened`: `pull_request.number`, `pull_request.title`, `pull_request.body`, `pull_request.head.ref`.\n"
-                 "- `pr commented`: `issue.number` (the pull request), `issue.title`, `comment.user.login`, "
-                 "`comment.body`, `comment.html_url`.\n\n")
 
 
 def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None,
@@ -375,8 +362,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     checkout = checkout_instructions(main_repository, config)
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
-    payload = INBOX_PAYLOAD if role == "inbox" else ""
-    return (f"{who}\n\n{checkout}{text}\n\n{payload}## Your skills\n\n{skills}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
+    return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skills}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts and the branch or PR head. "
@@ -560,7 +546,6 @@ def labels(nodes: dict, config: dict) -> list[str]:
     t = config.get("tracker") or {}
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
     out.add(vocab.needs_human())
-    out.add(vocab.inbox())
     out.add(vocab.lesson())  # ADR-0021: a ticket with uncollected lessons
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
