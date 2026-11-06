@@ -141,6 +141,24 @@ class GateTest(unittest.TestCase):
         self.assertEqual((out["ci"], out["failing"], len(naps)), ("red", "lint: E501", 2))
         self.assertEqual(gate.ci_state(MemoryTracker({"7": {"ci": "pending"}}), "7")["ci"], "pending")   # no wait
 
+    def test_mention_fact(self):
+        """#590: a person may ask any agent; an agent only a workflow neighbour; a reply asks no one."""
+        pairs = {frozenset(("dev", "reviewer"))}
+        def holds(body, agent):
+            facts = {"comments": [{"body": "older @factory:dev", "at": "1"}, {"body": body, "at": "2"}]}
+            with patch("definition.neighbours", return_value=pairs), patch("definition.load", return_value={}):
+                return gate.guard_holds({"mention": agent}, facts)
+        self.assertTrue(holds("@factory:dev why X?", "dev"))                                         # a person
+        self.assertFalse(holds("@factory:dev-cheap why?", "dev"))                                    # another handle
+        self.assertTrue(holds("@factory:dev why? <!-- factory:from reviewer -->", "dev"))           # a neighbour
+        self.assertFalse(holds("@factory:approver ok? <!-- factory:from dev -->", "approver"))      # not a neighbour
+        self.assertFalse(holds("@factory:reviewer see <!-- factory:from dev reply -->", "reviewer"))  # a reply
+        self.assertFalse(holds("no mention", "dev"))
+        review = {"reviews": [{"body": "B1 @factory:dev is this intended? <!-- factory:from reviewer -->",
+                               "submitted_at": "3"}], "comments": []}
+        with patch("definition.neighbours", return_value=pairs), patch("definition.load", return_value={}):
+            self.assertTrue(gate.guard_holds({"mention": "dev"}, review))                          # asked in a review
+
     def test_label_group_holds_one_value(self):
         graph = copy.deepcopy(NODES)
         graph["nodes"]["intake"]["outcomes"]["risky"] = {"effects": [{"label": "risk:high"}, {"stage": "ready"}]}

@@ -450,6 +450,15 @@ class GitHubGateTracker(DescriptorPort):
     def _list(self, path, repo=None):
         return self.github.read_list(path, repo=repo)
 
+    def pr_comments(self, n):
+        """The comments on ticket `n`'s PR, as `tickets.comments` gives them ({author, author_is_bot, body, at})."""
+        pr = self._pr(n)
+        if not pr:
+            return []
+        return [{"author": (c.get("user") or {}).get("login"), "author_is_bot": (c.get("user") or {}).get("type") == "Bot",
+                 "body": c.get("body") or "", "at": c.get("created_at")}
+                for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)]
+
     def _labels(self, number, repo=None):
         """The labels of ticket `number`, or of the pull request `number` in `repo`."""
         if repo is None:
@@ -642,6 +651,7 @@ class GitHubGateTracker(DescriptorPort):
                         "verdict": verdict, "agent": agent, "assoc": r.get("author_association"), "submitted_at": r.get("submitted_at"),
                         "bot": r["user"].get("type") == "Bot" or r["user"]["login"].endswith("[bot]")})
             out[-1]["findings"] = re.findall(r"^\*\*([A-Z]\d+)\*\*", r.get("body") or "", re.M)
+            out[-1]["body"] = r.get("body") or ""  # #590: a mention in a review asks that agent
         return out
 
     def _pr_patch(self, base, sha):

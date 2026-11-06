@@ -217,6 +217,24 @@ class DefinitionTest(unittest.TestCase):
         finally:
             config.set_team(before)
 
+    def test_neighbours_come_from_the_workflow(self):
+        pairs = definition.neighbours(definition.load(self.root))
+        for a, b in [("dev", "reviewer"), ("dev", "reviewer-cheap"), ("reviewer", "approver"), ("dispatcher", "dev"),
+                     ("approver", "clerk"), ("dev", "dev-strong")]:
+            self.assertIn(frozenset((a, b)), pairs, (a, b))
+        self.assertNotIn(frozenset(("router", "approver")), pairs)
+
+    def test_comment_marker_names_the_agent(self):
+        import config
+        import gate
+        before = config._team
+        config.set_team(self.root)
+        try:
+            self.assertEqual(gate.comment_marker("review-high"), "<!-- factory:from reviewer -->")
+            self.assertEqual(gate.comment_marker("ask-dev"), "<!-- factory:from dev reply -->")
+        finally:
+            config.set_team(before)
+
     def test_cli_validate(self):
         run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
                              text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
