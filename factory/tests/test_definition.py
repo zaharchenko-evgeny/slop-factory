@@ -180,6 +180,36 @@ class DefinitionTest(unittest.TestCase):
         finally:
             del os.environ["FACTORY_TEAM"]
 
+    def test_a_ticket_walks_the_agent_only_flow(self):
+        """triage -> ready -> in-dev -> in-review -> approved -> merged -> done on a memory tracker (ADR-0021)."""
+        import config
+        import gate
+        import nodes as nodes_mod
+        from gate_port import MemoryTracker
+        before = config._team
+        config.set_team(self.root)
+        try:
+            n = nodes_mod.load()
+            t = MemoryTracker({"7": {"stage": "triage", "head": "h1", "pr": 5, "pr_state": "open", "ci": "green"}})
+            for node, outcome, extra in [("intake", "medium-high", {}), ("dispatch", "medium", {}),
+                                         ("implement-medium", "done-low", {}),
+                                         ("review-low", "approve", {"findings": [], "verdict": "approve"})]:
+                self.assertTrue(gate.apply(node, outcome, {"ticket": "7", **extra}, t, n)[1]["applied"], node)
+            attrs = t.facts("7")["attrs"]
+            self.assertIn("risk:low", attrs)
+            self.assertNotIn("risk:high", attrs)                     # one value per group
+            t.tickets["7"]["reviews"] = [{"agent": True, "commit_id": "h1", "verdict": "approve"}]
+            self.assertTrue(gate.apply("automerge", "merge", {"ticket": "7"}, t, n)[1]["applied"])
+            self.assertEqual(gate.decide("merge", "7", t, n)[1]["outcome"], "merged")
+            t.tickets["7"]["pr_state"] = "merged"
+            self.assertEqual(gate.decide("finish", "7", t, n)[1]["outcome"], "done")
+            self.assertEqual(t.facts("7")["stage"], "done")
+            risky = MemoryTracker({"8": {"stage": "approved", "attrs": ["risk:high"], "pr": 6, "pr_state": "open"}})
+            gate.apply("automerge", "merge", {"ticket": "8", "reason": "[factory] fine"}, risky, n)
+            self.assertIn("factory:needs-human", risky.facts("8")["attrs"])   # the guard sent it to a person
+        finally:
+            config.set_team(before)
+
     def test_cli_validate(self):
         run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
                              text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})

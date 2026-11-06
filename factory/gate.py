@@ -750,12 +750,18 @@ SWEEP_STAGES = ("ready", "approved", "split", "in-review", "needs-answers")
 
 def commands():
     """Label prefixes of the developer commands: each starts a developer run."""
-    return tuple(vocab.prefix(c) for c in ("implement-<tier>", "fix-<tier>", "update-<tier>"))
+    declared = config_mod.load()["tracker"].get("commands") or {}  # a definition team has none of these (ADR-0021)
+    return tuple(vocab.prefix(c) for c in ("implement-<tier>", "fix-<tier>", "update-<tier>") if c in declared)
 
 
 def clear_commands(ticket):
     """Effects that remove every command label. A stopped ticket keeps none, so the first command after a
     person's factory:ready is a new label and fires its node (re-adding a present label fires nothing)."""
+    declared = config_mod.load()["tracker"].get("commands") or {}
+    if "implement-<tier>" not in declared:  # a definition team (ADR-0021): its routing labels on ticket and PR
+        return [{"kind": "unlabel", "ticket": ticket, "value": next(iter(store.values())),
+                 **({"on": "pr"} if "pr_label" in store else {})}
+                for name, store in declared.items() if ":" not in name]
     return [{"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("implement-<tier>", "*")},
             {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("fix-<tier>", "*"), "on": "pr"},
             {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("update-<tier>", "*"), "on": "pr"}]
