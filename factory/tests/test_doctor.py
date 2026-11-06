@@ -214,5 +214,16 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(got["read:actions-run-logs"]["result"], "denied")
 
 
+
+class SkillInstalledTest(unittest.TestCase):
+    def test_skill_installed_by_factory_setup(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            self.assertFalse(doctor.skill_installed("tdd", home, definition_team=True))
+            (Path(home) / ".agents/skills/tdd").mkdir(parents=True)
+            (Path(home) / ".agents/skills/tdd/SKILL.md").write_text("x")
+            self.assertTrue(doctor.skill_installed("tdd", home, definition_team=True))
+
+
 if __name__ == "__main__":
     unittest.main()

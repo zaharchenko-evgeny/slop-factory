@@ -49,6 +49,17 @@ def env_needs(env, nodes, resolve=config.resolve):
     return sorted(tools), sorted(skills)
 
 
+def skill_installed(name, home=None, definition_team=None):
+    """ADR-0021: `factory setup` installs a definition team's skills under ~/.agents/skills/<name>; the old layout
+    vendors them in the team repository's skills/."""
+    import definition
+    if definition_team is None:
+        definition_team = definition.present(config.team_root())
+    if definition_team:
+        return (Path(home or Path.home()) / ".agents/skills" / name / "SKILL.md").is_file()
+    return config.resolve(f"skills/{name}/SKILL.md").is_file()
+
+
 def env_needs_tiers(nodes):
     return sorted({t for n in nodes["nodes"].values() for t in n.get("tiers") or []})
 
@@ -109,7 +120,7 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
     for t in tools:
         results.append({"probe": f"tool:{t}", "result": "ok" if which(t) else "missing", "detail": env})
     for s in skills:
-        found = has_skill(s) if has_skill else config.resolve(f"skills/{s}/SKILL.md").is_file()
+        found = has_skill(s) if has_skill else skill_installed(s)
         results.append({"probe": f"skill:{s}", "result": "ok" if found else "missing", "detail": env})
     declared = (nodes.get("environments") or {}).get(env) or {}
     for name in [*(declared.get("variables") or {}), *(declared.get("secrets") or [])]:
