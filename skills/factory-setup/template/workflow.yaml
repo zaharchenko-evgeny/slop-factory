@@ -41,9 +41,6 @@ nodes:
     when: { stage: triage }
     output: read-only
     settings: { max_changed_lines: 400, max_repositories: 3 }
-    prompt: >-
-      Scope the ticket in the trigger. Split it above {{ settings.max_changed_lines }} changed
-      lines or {{ settings.max_repositories }} repositories. Estimate size and risk when the ticket shows them.
     outcomes:
       small-low:      { effects: [{ label: "complexity:small" },  { label: "risk:low" },  { stage: ready }] }
       small-high:     { effects: [{ label: "complexity:small" },  { label: "risk:high" }, { stage: ready }] }
@@ -73,7 +70,7 @@ nodes:
     triggers: [{ label: "factory:implement-small" }]
     when: { stage: in-dev }
     output: create-pr
-    prompt: Implement the ticket in the trigger (mode `implement`).
+    settings: { mode: implement }
     outcomes:
       done-low:   { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
       done-high:  { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
@@ -85,7 +82,7 @@ nodes:
     triggers: [{ label: "factory:implement-medium" }]
     when: { stage: in-dev }
     output: create-pr
-    prompt: Implement the ticket in the trigger (mode `implement`).
+    settings: { mode: implement }
     outcomes:
       done-low:   { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
       done-high:  { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
@@ -97,7 +94,7 @@ nodes:
     triggers: [{ label: "factory:implement-large" }]
     when: { stage: in-dev }
     output: create-pr
-    prompt: Implement the ticket in the trigger (mode `implement`).
+    settings: { mode: implement }
     outcomes:
       done-low:   { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
       done-high:  { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
@@ -110,7 +107,6 @@ nodes:
     when: { stage: in-review }
     output: read-only
     settings: { focus: [behaviour] }
-    prompt: Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}.
     outcomes:
       approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "factory:automerge", on: pr }, { stage: approved }] }
       changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-low" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
@@ -121,7 +117,6 @@ nodes:
     when: { stage: in-review }
     output: read-only
     settings: { focus: [full, structure-security] }
-    prompt: Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}.
     outcomes:
       approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "factory:automerge", on: pr }, { stage: approved }] }
       changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-high" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
@@ -132,8 +127,7 @@ nodes:
     triggers: [{ label: "factory:fix" }, { ci: failed }]
     when: { stage: [in-review, changes-requested, approved], fix-rounds: below-cap }
     output: push-to-source
-    settings: { fix_rounds: 3 }
-    prompt: Fix the blocking findings and CI failures on the PR in the trigger (mode `fix`).
+    settings: { mode: fix, fix_rounds: 3 }
     outcomes:
       done-low:  { effects: [{ unlabel: "factory:fix" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
       done-high: { effects: [{ unlabel: "factory:fix" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
@@ -144,7 +138,7 @@ nodes:
     triggers: [{ label: "factory:update" }]
     when: { stage: changes-requested }
     output: push-to-source
-    prompt: Resolve the merge conflict on the PR in the trigger (mode `update`).
+    settings: { mode: update }
     outcomes:
       resolved:     { effects: [{ unlabel: "factory:update" }, { label: "factory:automerge", on: pr }, { stage: approved }] }
       unresolvable: { effects: [{ unlabel: "factory:update" }, { comment: reason }, { stage: blocked }] }
@@ -205,7 +199,6 @@ nodes:
     triggers: [{ label: "factory:knowledge-review" }]
     output: read-only
     settings: { focus: [knowledge] }
-    prompt: Review the knowledge PR in the trigger with focus {{ settings.focus | join(" and ") }}.
     outcomes:
       approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:knowledge-review" }] }
       changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:knowledge-review" }] }

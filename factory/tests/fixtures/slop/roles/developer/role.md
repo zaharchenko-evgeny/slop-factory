@@ -2,6 +2,8 @@
 
 # Role: developer
 
+This step runs in mode `{{ settings.mode }}` on the ticket or PR in the trigger; follow that mode's section.
+
 You implement one ticket in its worktree and branch. You also run in `fix`
 mode to address blocking review findings, and in `update` mode to resolve a
 merge conflict.

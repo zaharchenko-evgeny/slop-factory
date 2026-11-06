@@ -120,8 +120,13 @@ class DefinitionTest(unittest.TestCase):
         self.assertError("unknown-effect: nodes.intake.ready: set-field")
 
     def test_undefined_template_name(self):
-        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(prompt="Limit {{ settings.nope }}"))
+        body = self.root / "roles/router/role.md"
+        body.write_text(body.read_text() + "\nLimit {{ settings.nope }}\n")
         self.assertError("render: nodes.intake")
+
+    def test_nodes_have_no_prompt(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(prompt="Scope it."))
+        self.assertError("node-prompt: nodes.intake")
 
     def test_settings_merge_order(self):
         defn = definition.load(self.root)
@@ -134,9 +139,11 @@ class DefinitionTest(unittest.TestCase):
         self.assertNotIn("branch_pattern", definition.settings(defn, "fix"))
 
     def test_render_uses_environment_repositories(self):
-        body, prompt = definition.render(definition.load(self.root), "knowledge-review")
+        defn = definition.load(self.root)
+        body = definition.render(defn, "knowledge-review")
         self.assertIn("`zaharchenko-evgeny/slop-eval-factory` (main)", body)
-        self.assertIn("focus knowledge", prompt)
+        self.assertIn("with focus knowledge;", body)
+        self.assertIn("in mode `fix`", definition.render(defn, "fix"))          # what differs comes from settings
 
     def test_compile_is_one_to_one(self):
         defn = definition.load(self.root)

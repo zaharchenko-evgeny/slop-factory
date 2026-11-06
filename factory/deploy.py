@@ -359,7 +359,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
     checkout = checkout_instructions(main_repository, config)
     import definition
-    if definition.present(config_mod.team_root()):  # ADR-0021: the node's role body and prompt, rendered
+    if definition.present(config_mod.team_root()):  # ADR-0021: the node's role body, rendered with its settings
         defn = definition.load(config_mod.team_root())
         agent = (defn["factory"].get("agents") or {}).get(((defn["workflow"].get("nodes") or {}).get(name) or {}).get("agent")) or {}
         if agent.get("run"):  # ADR-0021: a step with no judgement: the agent only runs the engine command
@@ -367,8 +367,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
                     "trigger>` once, in the foreground, and wait until it exits. Copy only that one number. It applies "
                     "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
                     "Report its JSON output." + INSTALLED_FACTORY)
-        body, step = definition.render(defn, name)
-        text = body.strip() + (f"\n\n{step.strip()}" if step.strip() else "")
+        text = definition.render(defn, name).strip()
         skills = definition.skill_lines(defn, role)
     else:
         text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))

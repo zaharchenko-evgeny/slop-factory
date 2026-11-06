@@ -29,7 +29,9 @@ Decision:
    `setup.sh` that installs the role's tools, and any file the role needs. No
    YAML lives there.
 4. **A node** is an agent + an environment + `triggers` + `when` + `outcomes`,
-   with optional `model`, `settings`, `prompt` and `enabled: false`. Every node
+   with optional `model`, `settings` and `enabled: false`; it has no prompt of
+   its own: its role's `role.md` says what to do, from the node's settings
+   (`mode`, `focus`). Every node
    is an agent node (#674-#678): the agent reports one outcome and the gate
    applies its static effects (`stage`, `label`, `unlabel`, `comment`,
    `review`, `merge`, `update-branch`, `create-issues`). States are stage

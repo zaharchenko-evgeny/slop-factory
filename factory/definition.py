@@ -2,7 +2,7 @@
 works) and `roles/<role>/role.md` (instructions).
 
 `load(root)` reads the files; `errors(defn)` lists every problem; `warnings(defn)` lists what is legal but likely
-wrong; `settings(defn, node)` is a node's merged settings; `render(defn, node)` renders its role body and prompt.
+wrong; `settings(defn, node)` is a node's merged settings; `render(defn, node)` renders its role body.
 Nothing else in the engine reads this layout yet (#669 compiles it into the config and the node graph).
 """
 import re
@@ -80,14 +80,15 @@ def _jinja(defn):
 
 
 def render(defn, name):
-    """(role body, prompt) of node `name`, rendered with its merged settings. Raises on an undefined name."""
+    """The role body of node `name`, rendered with its merged settings; a node's own instructions come from its
+    settings (`mode`, `focus`), never from a prompt of its own. Raises on an undefined name."""
     node, agent, role, env = _parts(defn, name)
     ctx = {"settings": settings(defn, name), "node": {**node, "name": name},
            "agent": {**agent, "name": node.get("agent")}, "role": role, "environment": env,
            "factory": {k: v for k, v in defn["factory"].items() if k != "environments"}}
     j = _jinja(defn)
     body = defn["bodies"].get(agent.get("role"), "") if agent.get("role") else ""
-    return j.from_string(body).render(ctx), j.from_string(node.get("prompt") or "").render(ctx)
+    return j.from_string(body).render(ctx)
 
 
 def role_skills(defn, role):
@@ -176,6 +177,8 @@ def errors(defn):
             errs.append(f"unknown-model: {where}: {n['model']}")
         if not n.get("triggers"):
             errs.append(f"no-trigger: {where}")
+        if "prompt" in n:
+            errs.append(f"node-prompt: {where}: instructions belong in roles/<role>/role.md; pass what differs as settings")
         for t in n.get("triggers") or []:
             if isinstance(t, dict) and "webhook" in t and t["webhook"] not in hooks:
                 errs.append(f"unknown-webhook: {where}: {t['webhook']}")

@@ -1105,7 +1105,7 @@ class DefinitionPlanTest(unittest.TestCase):
             self.assertNotIn("{{", a["prompt"], name)
             self.assertNotIn("{%", a["prompt"], name)
         intake = self.by["[Slop factory] intake"]["prompt"]
-        self.assertIn("Split it above 400 changed lines or 3 repositories.", intake)
+        self.assertIn("Split it above 400 changed lines or\n3 repositories.", intake)
         self.assertIn("- to-tickets: `~/.agents/skills/to-tickets/SKILL.md`", intake)
 
     def test_ci_failed_is_a_failed_workflow_run(self):
