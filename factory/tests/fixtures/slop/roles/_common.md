@@ -57,6 +57,12 @@ stay on the ticket and are written by the gate. Identify the ticket that will
 fix a process gap (or open a new ticket); do not fix the factory inside an
 unrelated ticket.
 
+## Writing for people
+
+Write every comment, note, PR body, review finding and explanation that a person reads with the
+`simplified-technical-english` skill: short sentences, one idea per sentence, active voice, plain
+words. Keep code, names, commands and domain terms exactly as they are.
+
 ## Secrets
 
 Reference secrets by name. Never print, store or commit their values.
