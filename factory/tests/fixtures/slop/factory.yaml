@@ -20,7 +20,7 @@ defaults:
   env:
     GH_TOKEN: { required: true, secret: true, description: "gh as jetbrains-air[bot], set by Air" }
   mcp: {}
-  skills: []                      # given to every role (the engine's factory-step always is)
+  skills: [simplified-technical-english]   # given to every role (the engine's factory-step always is)
   settings:
     branch_pattern: "ez/{ticket}-{slug}"
     commit_prefix: "#{ticket} "
@@ -60,6 +60,7 @@ skills:
   pr: { path: skills/pr }                   # adapted from mattpocock/skills (credits in the file)
   merge-risk: { path: skills/merge-risk }   # adapted from warpdotdev/common-skills (credits in the file)
   walkthrough: { path: skills/walkthrough } # adapted from warpdotdev pr-walkthrough + readout (credits in the file)
+  simplified-technical-english: { path: skills/simplified-technical-english }   # adapted from 0xpili/simplified-technical-english, MIT (NOTICE.md)
   resolve-merge-conflicts:
     source: "github:warpdotdev/common-skills@8792394ff1b6"   # MIT
     path: .agents/skills/resolve-merge-conflicts
