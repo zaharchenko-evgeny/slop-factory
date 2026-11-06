@@ -338,16 +338,45 @@ class ImportTimeBoundaryTest(unittest.TestCase):
 class EnvRolesTest(unittest.TestCase):
     def test_prints_roles_of_enabled_agent_nodes_in_the_environment(self):
         self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
-        cases = {"slop": {"engine": "approver\nclerk\ndeveloper\ndispatcher\nmention-router\nops\nreviewer\nrouter\nwalkthrough\n",
-                          "knowledge": "retro\nreviewer\n", "team": "notify\nops\n"},
-                 "slop-v1": {"read": "reviewer\nrouter\n", "write": "developer\n", "ops": "distill\nretro\n"}}
-        for fixture, envs in cases.items():
-            cfg.set_team(ROOT / "factory/tests/fixtures" / fixture)
-            for env, roles in envs.items():
-                out = io.StringIO()
-                with contextlib.redirect_stdout(out):
-                    self.assertEqual(cli.main(["env", "roles", env]), 0)
-                self.assertEqual(out.getvalue(), roles, f"{fixture} {env}")
+        cfg.set_team(ROOT / "factory/tests/fixtures/slop-v1")
+        for env, roles in {"read": "reviewer\nrouter\n", "write": "developer\n", "ops": "distill\nretro\n"}.items():
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cli.main(["env", "roles", env]), 0)
+            self.assertEqual(out.getvalue(), roles, f"slop-v1 {env}")
+
+        fixture = ROOT / "factory/tests/fixtures/slop"
+        cfg.set_team(fixture)
+        for env in ("engine", "knowledge", "team"):
+            self.assert_slop_roles(fixture, env, self.roles(env))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            team = Path(tmp) / "team"
+            shutil.copytree(fixture, team)
+            factory = team / "factory.yaml"
+            factory.write_text(factory.read_text().replace("agents:\n", "agents:\n  extra-agent: { role: extra-role }\n"
+                                                            "  disabled-agent: { role: disabled-only }\n", 1))
+            workflow = team / "workflow.yaml"
+            workflow.write_text(workflow.read_text().replace("nodes:\n", "nodes:\n"
+                                    "  extra-role: { agent: extra-agent, enabled: true }\n"
+                                    "  disabled-role: { agent: disabled-agent, enabled: false }\n", 1))
+            for role in ("extra-role", "disabled-only"):
+                (team / "roles" / role).mkdir()
+                (team / "roles" / role / "role.md").write_text(f"# {role}\n")
+            cfg.set_team(team)
+            extended = self.roles("engine")
+            self.assertIn("extra-role", extended)
+            self.assertNotIn("disabled-only", extended)
+
+    def assert_slop_roles(self, fixture, env, roles):
+        self.assertEqual(roles, sorted(set(roles)), env)
+        self.assertTrue(all((fixture / "roles" / role / "role.md").is_file()
+                            for role in roles if role != "clerk"), env)
+
+    def roles(self, env):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out): self.assertEqual(cli.main(["env", "roles", env]), 0)
+        return out.getvalue().splitlines()
 
 
 if __name__ == "__main__":
