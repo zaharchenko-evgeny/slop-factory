@@ -1,11 +1,11 @@
-[factory] An undeclared command resolves to an unmatchable label instead of a KeyError; `factory begin intake --issue 704` now returns go.
+[factory] Doctor finds a definition team's skills where factory setup installs them.
 
 ## Merge Danger
 
 **Door:** two-way.
 
-**Blast Radius:** gate.
+**Blast Radius:** doctor.
 
-Closes #707.
+Closes #724.
 
 Factory-Run: manual:pi-session-2026-11-06
