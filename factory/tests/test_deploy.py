@@ -435,6 +435,20 @@ class ApplyTest(unittest.TestCase):
         for a in ops:
             self.assertIn("Run every command from `/workspaces/slop-factory`", a["prompt"], a["name"])
 
+    def test_ci_result_labels_wake_on_the_pull_request(self):
+        """#790: CI adds factory:ci-green/ci-red to the PR, so their wakes are pull_request.labeled."""
+        slop, before = HERE / "fixtures/slop", cfg.team_root()
+        try:
+            with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
+                cfg.set_team(project_team(slop))
+            plan = deploy.plan_air(nodes.load(), cfg.load())
+        finally:
+            cfg.set_team(before)
+        a = {x["name"]: x for x in plan["automations"]}
+        for name, label in (("review-low", "factory:ci-green"), ("review-high", "factory:ci-green"), ("ci-red", "factory:ci-red")):
+            events = [t["eventType"] for t in a[f"[Slop factory] {name}"]["triggers"] if t["filters"].get("label") == label]
+            self.assertEqual(events, ["pull_request.labeled"], name)
+
     def test_apply_prints_webhook_registration_when_unchanged(self):
         state = ([{"name": "[F] hook", "webhooks": [{"id": "t1", "url": "https://air/hook/t1"}]}], [])
         out = io.StringIO()

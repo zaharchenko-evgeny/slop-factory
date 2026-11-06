@@ -169,6 +169,12 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(descriptor["commands"]["review-low"], {"store": {"pr_label": "factory:review-low"}})
         self.assertEqual(descriptor["commands"]["risk:low"], {"store": {"label": "risk:low"}})
 
+    def test_ci_result_labels_are_pr_labels(self):
+        """#790: CI labels the PR itself, so no effect needs `on: pr` for a CI result label."""
+        descriptor = definition.to_project(definition.load(ROOT / "tests/fixtures/slop"))[0]
+        for fact in ("ci-green", "ci-red"):
+            self.assertEqual(descriptor["commands"][fact], {"store": {"pr_label": f"factory:{fact}"}})
+
     def test_compile_triggers(self):
         wakes = {k: v["wakes_on"] for k, v in definition.to_project(definition.load(self.root))[1]["nodes"].items()}
         self.assertEqual(wakes["fix"], ["command fix"])   # red CI reaches it through the reviewer's verdict
