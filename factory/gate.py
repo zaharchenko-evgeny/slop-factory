@@ -255,6 +255,13 @@ def lesson_effects(ticket, node, payload):
     return [{"kind": "comment", "ticket": ticket, "value": body}, {"kind": "label", "ticket": ticket, "value": vocab.lesson()}]
 
 
+def legacy_step(name):
+    """The node's name for the old layout's name-keyed behaviour (join, start, review focuses, tiers); None for a
+    definition team (ADR-0021), whose nodes do exactly what workflow.yaml says."""
+    import definition
+    return None if definition.present(config_mod.team_root()) else name
+
+
 def decide(name, ticket, tracker, nodes):
     """ADR-0021 `factory decide`: apply the first outcome of node `name` whose guards hold (`from`, `ci`, `if`), for a
     node whose agent only runs this command. (status, {outcome, ...}); no outcome holding is NO_GO."""
@@ -372,12 +379,14 @@ def matches(node, facts, event, outcome=None):
 def gated(name, node, facts):
     """The node whose `when` check and apply both judge. Reconciliation can route an unapproved conflict to a fix
     before its review round completes, so a conflicting fix in changes-requested drops the round condition."""
-    if name == "fix" and facts.get("stage") == "changes-requested" and facts.get("conflict"):
+    step = legacy_step(name)  # ADR-0021: a definition team's nodes have no engine-named behaviour
+    if step == "fix" and facts.get("stage") == "changes-requested" and facts.get("conflict"):
         return {**node, "when": {k: v for k, v in node["when"].items() if k != "round"}}
     return node
 
 
 def check(name, event, tracker, nodes, config, code_host=None):
+    step = legacy_step(name)  # ADR-0021: a definition team's nodes have no engine-named behaviour
     node = load_node(name, nodes)
     if "id" not in event:
         raise Bad("malformed event: needs `id`")
@@ -397,7 +406,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
         event["rereview"] = next(iter(pending), None) or next(
             (x.removeprefix(vocab.prefix("rereview-<focus>")) for x in labels
              if x.startswith(vocab.prefix("rereview-<focus>"))), None)
-    if name == "fix" and facts.get("ci") == "red" and facts.get("head") and hasattr(tracker, "ci_failure"):
+    if step == "fix" and facts.get("ci") == "red" and facts.get("head") and hasattr(tracker, "ci_failure"):
         failure = tracker.ci_failure(facts["head"])
         if failure:
             facts["ci_failure"] = failure
@@ -417,8 +426,8 @@ def check(name, event, tracker, nodes, config, code_host=None):
         "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
-        "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if name in ("fix", "update") else ()))],
-        "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and name in ("fix", "update")),
+        "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if step in ("fix", "update") else ()))],
+        "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and step in ("fix", "update")),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
         # one entry per repository of a ticket that changes several (ADR-0017), all on the ticket's one branch
         "checkouts": [{"repo": p["repo"], "branch": p["branch"] or branch} for p in facts.get("prs") or []],
@@ -524,10 +533,11 @@ def notification(name, outcome, effects):
 
 def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None, auto_merge=None,
           notify_kind=None):
+    step = legacy_step(name)  # ADR-0021: a definition team's nodes have no engine-named behaviour
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
         raise Bad(f"unknown outcome: {outcome}")
-    if name == "review":
+    if step == "review":
         if "verdict" in payload and outcome_of({"verdict": payload["verdict"]}) != outcome:
             raise Bad(f"review verdict {payload['verdict']!r} does not match outcome {outcome!r}")
         blocking = any(f.get("severity") == "blocking" for f in payload.get("findings", []))
@@ -570,13 +580,13 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         for e in effects:
             if e["kind"] in ("review", "comment"):
                 e["notes"] = notes
-        if name == "implement" and outcome == "done":
+        if step == "implement" and outcome == "done":
             effects.append({"kind": "pr-notes", "ticket": ticket, "run_id": payload.get("run_id"), "value":
                             f"<!-- factory:agent-notes\n{json.dumps(notes)}\n-->"})
-    if name in ("review", "join"):
+    if step in ("review", "join"):
         effects.append({"kind": "pr-notes-sync", "ticket": ticket, "value": ""})  # notes parked before the PR existed
     facts = tracker.facts(ticket)
-    if name == "finish" and outcome == "merged":
+    if step == "finish" and outcome == "merged":
         effects.append({"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human()})
         checks = after_merge_checks(facts.get("body"))
         if checks and not after_merge_complete(facts.get("comments", [])):
@@ -588,7 +598,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                            {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]},
                            {"kind": "comment", "ticket": ticket, "run_id": "finish:after-merge",
                             "value": f"[factory] After-merge operator checks:\n\n{checklist}\n\n{AFTER_MERGE_MARKER}"}]
-    if name == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
+    if step == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
             and not facts.get("focus_missing") and facts.get("ci") == "green" and facts.get("pr") and facts.get("head"):
         people = facts["waiting_reviewers"]
         effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
@@ -598,24 +608,24 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                     {"kind": "comment", "ticket": ticket,
                      "value": f"[factory] Re-review PR #{facts['pr']}: your change request was addressed at {facts['head']}",
                      "on": "pr"}]
-    if name == "join" and outcome == "changes" and facts.get("pr") and facts.get("head"):
+    if step == "join" and outcome == "changes" and facts.get("pr") and facts.get("head"):
         human_changes = [r["author"] for r in facts.get("reviews", [])
                          if not r.get("agent") and r.get("verdict") == "changes"
                          and r.get("commit_id") == facts["head"]]
         if human_changes:
             effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                         {"kind": "assign", "ticket": ticket, "value": sorted(set(human_changes)), "on": "pr"}]
-    if name == "reopen" and outcome == "reopened" and facts.get("ci") == "red" and facts.get("pr"):
+    if step == "reopen" and outcome == "reopened" and facts.get("ci") == "red" and facts.get("pr"):
         effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                     {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"], "on": "pr"}]
-    if name == "merge" and outcome == "waiting":
+    if step == "merge" and outcome == "waiting":
         effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
                     {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]},
                     {"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                     {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"], "on": "pr"}]
-    if name == "join" and outcome == "changes" and facts.get("handed_to_fix") and has_dispute_rereview(facts):
+    if step == "join" and outcome == "changes" and facts.get("handed_to_fix") and has_dispute_rereview(facts):
         effects.insert(0, {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("fix-<tier>", "*"), "on": "pr"})
-    if name in ("implement", "fix") and outcome == "done":
+    if step in ("implement", "fix") and outcome == "done":
         estimate = size_estimate(facts.get("body", ""))
         if estimate is not None:
             config = config_mod.load()
@@ -629,7 +639,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                           f"Largest files: {largest}. Edit the ticket's size line or split it, then set {vocab.stage('ready')}.")
                 effects = [{"kind": "comment", "ticket": ticket, "value": reason},
                            {"kind": "stage", "ticket": ticket, "value": "blocked"}]
-    if name == "fix" and outcome == "done" and facts.get("handed_to_fix") and local_head() == facts.get("head"):
+    if step == "fix" and outcome == "done" and facts.get("handed_to_fix") and local_head() == facts.get("head"):
         addressed = payload.get("findings_addressed", [])
         focuses = payload.get("disputed_focuses", [])
         expected = [finding for r in facts.get("reviews", []) if r.get("agent") and r.get("verdict") == "changes"
@@ -656,12 +666,12 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                            "[factory] Stopped: the fix round ended without a commit, so nothing starts the next "
                            f"review. A person decides, then sets {vocab.stage('ready')}.")},
                        {"kind": "stage", "ticket": ticket, "value": "blocked"}]
-    if name == "merge":  # the plan may be seconds old
+    if step == "merge":  # the plan may be seconds old
         decision = merge_decision(facts, auto_merge if auto_merge is not None else config_mod.load()["gates"].get("auto_merge"))
         if decision is None or decision[0] != outcome:
             return NO_GO, {"applied": False, "reason": "a merge gate no longer holds"}
     after = []  # effects that must follow the stage change
-    if name == "implement" and outcome == "done" and facts.get("pr") and facts.get("ci") in ("green", "red") \
+    if step == "implement" and outcome == "done" and facts.get("pr") and facts.get("ci") in ("green", "red") \
             and checked_pr_head is not None and facts.get("head") == checked_pr_head and local_head() == facts.get("head"):
         # A resumed ticket implemented on its open PR with no new commit: no push, so no CI label would come.
         # Re-fire it, and run the join once the stage is in-review: reviews already at this head decide.
@@ -669,7 +679,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         after = ([{"kind": "label", "ticket": ticket, "value": vocab.cmd("review-<focus>", focus), "on": "pr"}
                   for focus in facts.get("focus_missing", [])] if facts["ci"] == "green" else [])
         after.append({"kind": "join", "ticket": ticket, "value": "all-approve", "tier": fix_tier(facts)})
-    if name in ("implement", "fix") and outcome == "done" and not after and facts.get("pr") and facts.get("ci") == "green" \
+    if step in ("implement", "fix") and outcome == "done" and not after and facts.get("pr") and facts.get("ci") == "green" \
             and any(e["kind"] == "stage" and e["value"] == "in-review" for e in effects):
         # CI may have finished while the ticket was not yet in-review, when its wake found no stage to act on:
         # whichever of the two comes last wakes the reviewers. A focus whose label is present is already woken.

@@ -66,7 +66,8 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
     if n.get("tiers"):
         spec["tiers"] = n["tiers"]  # the ordered tiers the gate escalates through
     if any((o or {}).get("else") for o in n["outcomes"].values()):
-        spec["else_tier"] = nodes["nodes"]["fix"]["tiers"][0]  # the fix tier a red CI hands the ticket to
+        if (nodes["nodes"].get("fix") or {}).get("tiers"):  # old layout: the fix tier a red CI hands the ticket to
+            spec["else_tier"] = nodes["nodes"]["fix"]["tiers"][0]
     if top and n["role"] == "script":  # a sweep applies the other script nodes (join, finish) too
         spec["runs"] = {k: node_spec(k, v, config, None, None, nodes, False) for k, v in nodes["nodes"].items()
                         if v["role"] == "script" and k != name and v.get("enabled") is not False and not v.get("routine")}
@@ -356,10 +357,17 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     servers = mcp_connectors(n, config, focus)
     mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
+    checkout = checkout_instructions(main_repository, config)
     import definition
     if definition.present(config_mod.team_root()):  # ADR-0021: the node's role body and prompt, rendered
         defn = definition.load(config_mod.team_root())
-        body, step = definition.render(defn, definition.node_name(name, n, tier, focus))
+        agent = (defn["factory"].get("agents") or {}).get(((defn["workflow"].get("nodes") or {}).get(name) or {}).get("agent")) or {}
+        if agent.get("run"):  # ADR-0021: a step with no judgement: the agent only runs the engine command
+            return (f"{who}\n\n{checkout}Run `factory {agent['run']} --node {name} --issue <the ticket number from the "
+                    "trigger>` once, in the foreground, and wait until it exits. Copy only that one number. It applies "
+                    "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
+                    "Report its JSON output." + INSTALLED_FACTORY)
+        body, step = definition.render(defn, name)
         text = body.strip() + (f"\n\n{step.strip()}" if step.strip() else "")
         skills = definition.skill_lines(defn, role)
     else:

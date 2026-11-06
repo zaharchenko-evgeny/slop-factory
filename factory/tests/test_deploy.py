@@ -1090,13 +1090,15 @@ class DefinitionPlanTest(unittest.TestCase):
         finally:
             cfg.set_team(before)
         cls.by = {a["name"]: a for a in cls.plan["automations"]}
+        for a in cls.plan["automations"]:  # also by node name: a node's first automation (repository scopes aside)
+            cls.by.setdefault(" ".join(a["name"].split(" ")[:3]), a)
 
     def test_each_variant_runs_its_agents_model(self):
         model = {k: a["agentAndModel"]["id"] for k, a in self.by.items()}
-        self.assertEqual(model["[Slop factory] implement-cheap slop-factory"], "gpt-6-luna")
-        self.assertEqual(model["[Slop factory] implement-mid slop-factory"], "claude-sonnet-5-5[1m]")
-        self.assertEqual(model["[Slop factory] review-full slop-factory"], "gpt-6.1-sol")
-        self.assertEqual(model["[Slop factory] review-cheap slop-factory"], "gpt-6-luna")
+        self.assertEqual(model["[Slop factory] implement-small"], "gpt-6-luna")
+        self.assertEqual(model["[Slop factory] implement-medium"], "claude-sonnet-5-5[1m]")
+        self.assertEqual(model["[Slop factory] review-high"], "gpt-6.1-sol")
+        self.assertEqual(model["[Slop factory] review-low"], "gpt-6-luna")
 
     def test_prompts_are_rendered(self):
         for name, a in self.by.items():
@@ -1107,16 +1109,23 @@ class DefinitionPlanTest(unittest.TestCase):
         self.assertIn("- to-tickets: `~/.agents/skills/to-tickets/SKILL.md`", intake)
 
     def test_ci_failed_is_a_failed_workflow_run(self):
-        join = self.by["[Slop factory] join slop-factory"]["triggers"]
+        fix = self.by["[Slop factory] fix"]["triggers"]
         self.assertIn({"triggerType": "EVENT", "source": "github", "eventType": "workflow_run.failed",
-                       "filters": {"workflow_name": "quality-gates", "repo_label": "repo:slop-factory"}}, join)
+                       "filters": {"workflow_name": "quality-gates", "repo_label": "repo:slop-factory"}}, fix)
+
+    def test_a_decide_agent_only_runs_the_command(self):
+        merge = self.by["[Slop factory] merge"]["prompt"]
+        self.assertIn("You are the clerk of Slop factory.", merge)
+        self.assertIn("factory decide --node merge --issue", merge)
+        self.assertNotIn("factory begin clerk", merge)
 
     def test_environments_and_labels(self):
         envs = {e["name"]: e for e in self.plan["environments"]}
         self.assertEqual(envs["[Slop factory] engine"]["secrets"], ["FACTORY_WRITE_TOKEN"])
         self.assertEqual(envs["[Slop factory] knowledge"]["repository"],
                          "https://github.com/zaharchenko-evgeny/slop-eval-factory")
-        for label in ("factory:implement-cheap", "factory:review-full", "factory:knowledge-review", "factory:done",
+        for label in ("factory:implement-small", "factory:review-high", "factory:knowledge-review", "factory:done",
+                      "factory:automerge", "risk:low", "complexity:large",
                       "factory:lesson"):
             self.assertIn(label, self.plan["labels"])
 

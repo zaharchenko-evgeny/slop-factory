@@ -50,8 +50,7 @@ class DefinitionTest(unittest.TestCase):
 
     def test_fixture_warns_only_about_labels_a_person_adds(self):
         self.assertEqual(definition.warnings(definition.load(self.root)), [])
-        self.edit("workflow.yaml", lambda w: w["nodes"].pop("adopt"))
-        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["proceed"]["effects"]
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"]["effects"]
                   .append({"label": "factory:nobody"}))
         self.assertEqual(definition.warnings(definition.load(self.root)),
                          ["unwatched-label: factory:nobody: no node triggers on it"])
@@ -111,12 +110,14 @@ class DefinitionTest(unittest.TestCase):
         self.assertError("unlisted-role: roles/painter")
 
     def test_else_names_an_outcome(self):
-        self.edit("workflow.yaml", lambda w: w["nodes"]["join"]["outcomes"]["approved"].update({"else": "nothing"}))
-        self.assertError("unknown-else: nodes.join.approved: nothing")
+        self.edit("workflow.yaml", lambda w: w["nodes"]["automerge"]["outcomes"]["merge"].update({"else": "nothing"}))
+        self.assertError("unknown-else: nodes.automerge.merge: nothing")
 
     def test_guard_reads_known_facts(self):
-        self.edit("workflow.yaml", lambda w: w["nodes"]["join"]["outcomes"]["approved"].update({"if": {"colour": "red"}}))
-        self.assertError("unknown-guard: nodes.join.approved: colour")
+        self.edit("workflow.yaml", lambda w: w["nodes"]["merge"]["outcomes"]["merged"].update({"if": {"colour": "red"}}))
+        self.assertError("unknown-guard: nodes.merge.merged: colour")
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"]["effects"].append({"set-field": "risk"}))
+        self.assertError("unknown-effect: nodes.intake.ready: set-field")
 
     def test_undefined_template_name(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(prompt="Limit {{ settings.nope }}"))
@@ -124,36 +125,37 @@ class DefinitionTest(unittest.TestCase):
 
     def test_settings_merge_order(self):
         defn = definition.load(self.root)
-        s = definition.settings(defn, "fix-mid")
+        s = definition.settings(defn, "fix")
         self.assertEqual(s["fix_rounds"], 3)                    # node
         self.assertEqual(s["limits"]["runs_per_day"], 20)       # workflow settings
         self.assertEqual(s["size_stop_factor"], 1.5)            # agent `dev`
         self.assertEqual(s["branch_pattern"], "ez/{ticket}-{slug}")   # factory defaults
-        defn["workflow"]["nodes"]["fix-mid"]["settings"]["branch_pattern"] = None   # `null` clears
-        self.assertNotIn("branch_pattern", definition.settings(defn, "fix-mid"))
+        defn["workflow"]["nodes"]["fix"]["settings"]["branch_pattern"] = None   # `null` clears
+        self.assertNotIn("branch_pattern", definition.settings(defn, "fix"))
 
     def test_render_uses_environment_repositories(self):
         body, prompt = definition.render(definition.load(self.root), "knowledge-review")
         self.assertIn("`zaharchenko-evgeny/slop-eval-factory` (main)", body)
         self.assertIn("focus knowledge", prompt)
 
-    def test_compile_variant_nodes_into_steps(self):
-        descriptor, wf = definition.to_project(definition.load(self.root))
+    def test_compile_is_one_to_one(self):
+        defn = definition.load(self.root)
+        descriptor, wf = definition.to_project(defn)
+        self.assertEqual(set(wf["nodes"]), set(defn["workflow"]["nodes"]))
         n = wf["nodes"]
-        self.assertEqual(n["implement"]["tiers"], ["cheap", "mid", "strong"])
-        self.assertEqual(n["implement"]["wakes_on"], ["command implement-<tier>"])
-        self.assertEqual(n["review"]["focuses"], ["full", "cheap"])
-        self.assertEqual(n["update"]["tiers"], ["cheap", "strong"])
-        air = descriptor["targets"]["air"]["models"]
-        self.assertEqual((air["cheap"], air["mid"]), ("codex/gpt-6-luna", "claude/claude-sonnet-5-5[1m]"))
-        self.assertEqual(descriptor["roles"]["reviewer"]["modes"], {"full": {"tier": "sol"}, "cheap": {"tier": "luna"}})
-        self.assertEqual(descriptor["reviews"]["required"], {"low": ["cheap"], "high": ["full"]})
+        self.assertEqual((n["implement-small"]["tier"], n["implement-medium"]["tier"], n["review-high"]["tier"]),
+                         ("luna", "sonnet", "sol"))
+        self.assertNotIn("tiers", n["implement-small"])
+        self.assertEqual(n["implement-small"]["wakes_on"], ["command implement-small"])
+        self.assertEqual(descriptor["targets"]["air"]["models"]["sol"], "codex/gpt-6.1-sol")
+        self.assertEqual(descriptor["commands"]["review-low"], {"store": {"pr_label": "factory:review-low"}})
+        self.assertEqual(descriptor["commands"]["risk:low"], {"store": {"label": "risk:low"}})
 
     def test_compile_triggers(self):
         wakes = {k: v["wakes_on"] for k, v in definition.to_project(definition.load(self.root))[1]["nodes"].items()}
-        self.assertEqual(wakes["join"], ["pr reviewed", "run quality-gates"])   # ci: failed
-        self.assertEqual(wakes["finish"], ["state pr-merged", "ticket closed", "state blocked", "ticket commented"])
-        self.assertEqual(wakes["notify"], ["state blocked", "state needs-answers", "webhook inbox"])
+        self.assertEqual(wakes["fix"], ["command fix", "run quality-gates"])   # ci: failed
+        self.assertEqual(wakes["finish"], ["state pr-merged", "ticket closed"])
+        self.assertEqual(wakes["notify"], ["state blocked", "state needs-answers", "command needs-human", "webhook inbox"])
         self.assertEqual(wakes["retro"], ["schedule retro"])
         self.assertEqual(wakes["human"], ["manual"])
 
@@ -161,12 +163,13 @@ class DefinitionTest(unittest.TestCase):
         desc, wf = definition.to_project(definition.load(self.root))
         n = wf["nodes"]
         self.assertNotIn("done", n["human"]["outcomes"]["ready"]["from"])          # `!done`
-        self.assertIn("approved", n["human"]["outcomes"]["ready"]["from"])
-        self.assertEqual(n["join"]["outcomes"]["approved"], {"ci": ["green"], "else": "changes",
-                                                            "effects": [{"state": "approved"}]})
-        self.assertEqual(n["implement"]["outcomes"]["error"]["effects"],
-                         [{"uncommand": "implement-*"}, {"command": "implement-<next tier>"}, {"state": "in-dev"}])
-        self.assertEqual(desc["commands"]["knowledge-review"], {"store": {"pr_label": "factory:knowledge-review"}})
+        self.assertIn("draft", n["human"]["outcomes"]["ready"]["from"])
+        self.assertEqual(n["merge"]["outcomes"]["merged"]["if"], {"review": "approved-at-head"})
+        self.assertEqual(n["merge"]["outcomes"]["merged"]["ci"], ["green"])
+        self.assertEqual(n["automerge"]["outcomes"]["merge"]["if"], {"label": "risk:low"})
+        self.assertEqual(n["automerge"]["outcomes"]["merge"]["else"], "needs-human")
+        self.assertEqual(n["dispatch"]["outcomes"]["small"]["effects"],
+                         [{"command": "complexity:small"}, {"command": "implement-small"}, {"state": "in-dev"}])
         self.assertEqual(desc["states"]["done"]["kind"], "final")
 
     def test_compiled_view_passes_engine_checks(self):
