@@ -2,13 +2,7 @@
 name: walkthrough
 description: "Use when a person must decide on a PR: write one GitHub comment that orients them on the change (views as Mermaid, where to look, how to verify and roll back), without reviewing it."
 metadata:
-  credits:
-    - skill: pr-walkthrough
-      author: Warp
-      url: "https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/pr-walkthrough/SKILL.md"
-    - skill: readout
-      author: Warp
-      url: "https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/readout/SKILL.md"
+  credits: "Warp, https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/pr-walkthrough/SKILL.md and https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/readout/SKILL.md"
 ---
 
 A walkthrough gets a person who has none of the context to a decision on a PR quickly. It is not a review:

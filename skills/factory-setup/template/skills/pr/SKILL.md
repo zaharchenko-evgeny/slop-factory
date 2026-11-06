@@ -2,12 +2,7 @@
 name: pr
 description: "Use when writing a PR body (on Air, your final message becomes the PR body)."
 metadata:
-  credits:
-    skill: pr
-    author: Matt Pocock
-    url: "https://github.com/mattpocock/skills/blob/main/skills/engineering/pr/SKILL.md"
-    based_on: "https://github.com/humanlayer/skills/blob/main/plugins/show-me/skills/show-me/SKILL.md"
-    review_guide_from: "https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/write-pr-description/SKILL.md"
+  credits: "Matt Pocock, https://github.com/mattpocock/skills/blob/main/skills/engineering/pr/SKILL.md; based on https://github.com/humanlayer/skills/blob/main/plugins/show-me/skills/show-me/SKILL.md; review guide from https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/write-pr-description/SKILL.md"
 ---
 
 Write the PR body with this template. Skip preambles; keep prose brief; use the repository's own terms.

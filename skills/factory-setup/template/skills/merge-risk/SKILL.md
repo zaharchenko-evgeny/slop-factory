@@ -2,10 +2,7 @@
 name: merge-risk
 description: "Use when assessing the risk of merging a factory PR: score alignment, impact, verification, rollback cost and error detection, and say what to fix or what a person must check."
 metadata:
-  credits:
-    skill: merge-risk
-    author: Warp
-    url: "https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/merge-risk/SKILL.md"
+  credits: "Warp, https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/merge-risk/SKILL.md"
 ---
 
 Score the diff against the base branch, not the PR text. Read the ticket for alignment.
