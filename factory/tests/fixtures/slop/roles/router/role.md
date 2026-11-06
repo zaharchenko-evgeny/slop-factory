@@ -35,8 +35,13 @@ Input: a request (free text or a tracker issue).
    Keep `questions` short: at most 3 numbered questions, one line each, then the proposed checks only for the
    questions asked. No preamble, no restating the ticket, no risk or size summary.
    Every Operator check must become a test or be rewritten as `Operator check after the merge (not part of the PR): …`.
-   A ticket that changes more than the primary repository needs a line `repositories: <primary>, <name>, …` in its
-   body, primary first, with names from the environment's repositories ({{ environment.repositories | map(attribute='repo') | join(', ') }}) (ADR-0017). Without one it changes
+   A check on a live system that the ticket requires before work (a spike) is not a question: if the ticket names
+   what to do for each result, proceed; otherwise choose `split` with the spike as the first slice.
+   A person's comment on the ticket is an answer and binds the scope, the same as the body. Apply it (for example
+   "engine only" drops the other repository's parts and their checks), then ask only what it leaves open, in one
+   line, and propose the checks that follow from it. Never repeat a question that a comment answered.
+   A ticket that changes more than the primary repository needs a line `repositories: <primary>, <name>, …` (or
+   `Affected repositories: …`, which means the same) in its body, primary first, with names from the environment's repositories ({{ environment.repositories | map(attribute='repo') | join(', ') }}) (ADR-0017). Without one it changes
    only the primary repository; if its scope needs another, choose `grill` and propose the line in `questions`.
 3. The gate derives the risk path from the issue's risk label; do not state it.
 4. Estimate the size as the lines a reviewer must read: added lines plus
