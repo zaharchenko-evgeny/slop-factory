@@ -105,7 +105,8 @@ def role_skills(defn, role):
 
 def skill_lines(defn, role):
     """One line per skill of the role, for the agent's prompt; setup installs them under ~/.agents/skills."""
-    return "\n".join(f"- {name}: `~/.agents/skills/{name}/SKILL.md`" for name in role_skills(defn, role))
+    names = ["factory-step", *(n for n in role_skills(defn, role) if n != "factory-step")]  # the engine's, always
+    return "\n".join(f"- {name}: `~/.agents/skills/{name}/SKILL.md`" for name in names)
 
 
 def _skill_errors(where, skill, known):
@@ -220,7 +221,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red", "wake-dependents")
+           "request-reviewers", "park-behind-main-red")
 
 
 def _name(label, prefix):

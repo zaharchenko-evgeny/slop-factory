@@ -168,13 +168,12 @@ nodes:
       merged:   { if: { review: approved-at-head, ci: green }, effects: [{ unlabel: "factory:merge" }, { merge: match-head }] }
       waiting:  {}                # reconcile wakes it again while CI runs
 
-  finish:                         # a merged PR or a closed ticket: done, and its dependents may start
+  finish:                         # a merged PR or finished split: done; the gate then wakes unblocked dependents
     agent: clerk
     triggers: [{ pr: merged }, { ticket: closed }]
     outcomes:
-      done:          { if: { pr: merged, stage: "!done" }, effects: [{ stage: done }, { wake-dependents: ready }] }
-      children-done: { if: { stage: split, children: closed }, effects: [{ stage: done }, { wake-dependents: ready }] }
-      closed:        { if: { ticket: closed }, effects: [{ wake-dependents: ready }] }
+      done:          { if: { pr: merged, stage: "!done" }, effects: [{ stage: done }] }
+      children-done: { if: { stage: split, children: closed }, effects: [{ stage: done }] }
       waiting:       {}
 
   # --- Notifications --------------------------------------------------------------------------
@@ -219,20 +218,20 @@ nodes:
     agent: ops
     environment: team
     triggers: [{ schedule: "*/15 * * * *" }]
-    settings: { command: reconcile }
+    settings: { routine: reconcile }
     outcomes:
       reconciled: {}
 
   doctor-engine:
     agent: ops
-    settings: { command: doctor }
+    settings: { routine: doctor }
     triggers: [{ schedule: "0 5 * * *" }]
     outcomes:
       probed: {}
 
   doctor-team:
     agent: ops
-    settings: { command: doctor }
+    settings: { routine: doctor }
     environment: team
     triggers: [{ schedule: "0 5 * * *" }]
     outcomes:

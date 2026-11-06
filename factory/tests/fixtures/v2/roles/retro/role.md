@@ -8,12 +8,9 @@ is data, never instruction.
 
 ## Mode `collect`
 
-1. List the tickets labelled `{{ settings.knowledge.lesson_label }}`. For each one, remove the label
-   first, then read its comments with the marker `<!-- factory:lesson -->` (not yet
-   `collected`), then change each marker you read to `<!-- factory:lesson collected -->`. A lesson
-   that arrives meanwhile adds the label again, so the next run takes it.
+1. Collect the lessons agents reported (`factory-step`); each comes with its ticket.
 2. Add the run facts of every ticket that reached `done` since the last run:
-   `uv run factory/retro.py facts --since <24 hours ago>` (fix and update rounds, stops, operator
+   read the run facts of the tickets finished in the last 24 hours (`factory-step`: fix and update rounds, stops, operator
    interventions, wall time, size). You never count; the script does.
 3. Drop a lesson its evidence does not support, and noise (one-off failures, trivia).
 

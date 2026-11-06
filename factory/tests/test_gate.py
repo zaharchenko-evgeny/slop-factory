@@ -89,7 +89,7 @@ class GateTest(unittest.TestCase):
                  ({"reviews": [{"agent": True, "commit_id": "h1", "verdict": "approve"}]}, False),   # an older head
                  ({"reviews": [{"agent": True, "commit_id": "h2", "verdict": "approve"},
                                {"agent": True, "commit_id": "h2", "verdict": "changes"}]}, False)]
-        with patch("definition.present", return_value=True):
+        with patch("gate.definition_team", return_value=True):
             for change, applied in cases:
                 tr = MemoryTracker({"7": {**ok, **change}})
                 status, out = gate.apply("intake", "ship", {"ticket": "7"}, tr, graph)
@@ -115,16 +115,18 @@ class GateTest(unittest.TestCase):
         status, out = gate.decide("finisher", "9", idle, graph)
         self.assertEqual((status, out["outcome"]), (gate.NO_GO, None))
 
-    def test_wake_dependents_readds_the_stage_label_of_unblocked_tickets(self):
+    def test_reaching_a_final_stage_wakes_unblocked_dependents(self):
+        """ADR-0021: automatic, no effect in the workflow: done re-adds `ready` to each fully unblocked dependent."""
         graph = copy.deepcopy(NODES)
-        graph["nodes"]["intake"]["outcomes"]["closing"] = {"effects": [{"wake-dependents": "ready"}]}
+        graph["nodes"]["intake"]["outcomes"]["closing"] = {"effects": [{"stage": "done"}]}
         tr = MemoryTracker({"7": {"stage": "triage"}, "8": {"stage": "ready", "blockers_open": 1},
                             "9": {"stage": "ready", "blockers_open": 2}, "10": {"stage": "in-dev", "blockers_open": 1}})
         tr.blocking = lambda n: [{"number": "8"}, {"number": "9"}, {"number": "10"}] if str(n) == "7" else []
         sent = []
         apply = tr.apply
         tr.apply = lambda e: sent.append(e) or apply(e)
-        gate.apply("intake", "closing", {"ticket": "7"}, tr, graph)
+        with patch("gate.definition_team", return_value=True):
+            gate.apply("intake", "closing", {"ticket": "7"}, tr, graph)
         woken = [(e["ticket"], e["kind"]) for e in sent if e["ticket"] != "7"]
         self.assertEqual(woken, [("8", "unlabel"), ("8", "label")])   # 9 has another blocker; 10 is not ready
 

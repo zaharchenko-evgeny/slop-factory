@@ -258,11 +258,16 @@ def lesson_effects(ticket, node, payload):
     return [{"kind": "comment", "ticket": ticket, "value": body}, {"kind": "label", "ticket": ticket, "value": vocab.lesson()}]
 
 
+def definition_team():
+    """True when the team defines its factory in factory.yaml + workflow.yaml (ADR-0021)."""
+    import definition
+    return definition.present(config_mod.team_root())
+
+
 def legacy_step(name):
     """The node's name for the old layout's name-keyed behaviour (join, start, review focuses, tiers); None for a
     definition team (ADR-0021), whose nodes do exactly what workflow.yaml says."""
-    import definition
-    return None if definition.present(config_mod.team_root()) else name
+    return None if definition_team() else name
 
 
 def ci_state(tracker, ticket, wait_seconds=0, poll=30, sleep=None):
@@ -302,8 +307,7 @@ def merge_refused(effects, facts):
     """ADR-0021: a `merge` effect keeps its own invariants, whatever chose it: the current head is approved by the
     agent reviews at it, none asks for changes, CI is green there and the branch is not behind. None when it may
     merge, else the reason. The old layout's merge node checks its gates before it gets here."""
-    import definition
-    if not any(e["kind"] == "merge" for e in effects) or not definition.present(config_mod.team_root()):
+    if not any(e["kind"] == "merge" for e in effects) or not definition_team():
         return None
     if review_at_head(facts) != "approve":
         return "merge refused: no approving review at the current head"
@@ -314,22 +318,23 @@ def merge_refused(effects, facts):
     return None
 
 
-def wake_dependents(effects, tracker, facts):
-    """ADR-0021 `wake-dependents: <stage>`: each ticket this one blocks that is in `<stage>` and has no other open
-    blocker gets its stage label removed and added again, which fires the stage's trigger (re-adding a present
-    label fires nothing). This ticket counts as closed: its own close is what unblocks them."""
-    out = []
-    for e in effects:
-        if e["kind"] != "wake-dependents":
-            out.append(e)
-            continue
-        label = vocab.stage(e["value"])
-        for d in (tracker.blocking(e["ticket"]) if hasattr(tracker, "blocking") else []):
-            n = d["number"] if isinstance(d, dict) else d
-            f = tracker.facts(n)
-            others = f.get("blockers_open", 0) - (1 if facts.get("issue_state", "open") == "open" else 0)
-            if f["stage"] == e["value"] and others <= 0:
-                out += [{"kind": "unlabel", "ticket": n, "value": label}, {"kind": "label", "ticket": n, "value": label}]
+def unblocked(effects, tracker, facts):
+    """ADR-0021, automatic: when this outcome moves the ticket to a final stage, each ticket it blocks that is
+    `ready` with no other open blocker gets `ready` removed and added again, which fires its trigger (re-adding a
+    present label fires nothing). `reconcile` does the same for a ticket a person closed."""
+    if not definition_team() or not hasattr(tracker, "blocking"):
+        return []
+    final = {s for s, k in (config_mod.load()["tracker"].get("stage_kinds") or {}).items() if k == "final"}
+    to = next((e["value"] for e in effects if e["kind"] == "stage"), None)
+    if to not in final:
+        return []
+    ticket, label, out = next(e["ticket"] for e in effects if e["kind"] == "stage"), vocab.stage("ready"), []
+    for d in tracker.blocking(ticket):
+        n = d["number"] if isinstance(d, dict) else d
+        f = tracker.facts(n)
+        others = f.get("blockers_open", 0) - (1 if facts.get("issue_state", "open") == "open" else 0)
+        if f["stage"] == "ready" and others <= 0:
+            out += [{"kind": "unlabel", "ticket": n, "value": label}, {"kind": "label", "ticket": n, "value": label}]
     return out
 
 
@@ -755,7 +760,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             human_effects += [{"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                               {"kind": "unassign", "ticket": ticket, "value": None, "on": "pr"}]
         effects[:0] = human_effects
-    effects = wake_dependents(effects, tracker, facts)
+    after = [*after, *unblocked(effects, tracker, facts)]
     effects[:0] = group_unlabels(effects, facts)
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:

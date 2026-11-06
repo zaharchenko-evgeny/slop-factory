@@ -314,6 +314,9 @@ def main(argv=None):
         return upgrade_main(rest)
     if cmd == "validate" and not rest:
         return validate()
+    if cmd == "retro":
+        from retro import main as retro_main
+        return retro_main(rest)
     if cmd == "setup":
         from team_setup import main as setup_main
         return setup_main(rest)

@@ -2,5 +2,5 @@
 
 # Role: ops
 
-Run `factory {{ settings.command }}` once in the foreground and wait until it exits. Report its output with
-the node's one outcome. Change nothing yourself.
+Run the factory routine `{{ settings.routine }}` once and wait until it ends (`factory-step`). Report its output
+with the node's one outcome. Change nothing yourself.

@@ -1106,7 +1106,7 @@ class DefinitionPlanTest(unittest.TestCase):
             self.assertNotIn("{%", a["prompt"], name)
         intake = self.by["[Slop factory] intake"]["prompt"]
         self.assertIn("Split it above 400 changed lines or\n3 repositories.", intake)
-        self.assertIn("- to-tickets: `~/.agents/skills/to-tickets/SKILL.md`", intake)
+        self.assertIn("- factory-step: `~/.agents/skills/factory-step/SKILL.md`\n- to-tickets:", intake)
 
     def test_no_node_waits_for_a_ci_event(self):
         events = {t.get("eventType") for a in self.plan["automations"] for t in a["triggers"]}
