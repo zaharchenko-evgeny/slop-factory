@@ -1,11 +1,11 @@
-[factory] Scheduled nodes are routines; doctor reads a definition team's skills from factory.yaml. Found by the first doctor runs.
+[factory] An undeclared command resolves to an unmatchable label instead of a KeyError; `factory begin intake --issue 704` now returns go.
 
 ## Merge Danger
 
 **Door:** two-way.
 
-**Blast Radius:** doctor and routines.
+**Blast Radius:** gate.
 
-Closes #705.
+Closes #707.
 
 Factory-Run: manual:pi-session-2026-11-06
