@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
-"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, contracts (operator-only), chart, validate, doctor.
+"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, contracts (operator-only), chart, validate, setup, doctor.
 
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> --issue N | --pr N | [payload file]   (payload on stdin by default; exit 10: the node must not act)
@@ -314,6 +314,9 @@ def main(argv=None):
         return upgrade_main(rest)
     if cmd == "validate" and not rest:
         return validate()
+    if cmd == "setup":
+        from team_setup import main as setup_main
+        return setup_main(rest)
     if cmd == "env" and len(rest) == 2 and rest[0] == "roles":
         print("\n".join(env_roles(rest[1])))
         return 0

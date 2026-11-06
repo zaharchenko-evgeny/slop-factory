@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Render the nodes of engine/nodes.yaml as deployable specs (ADR-0014). Output is JSON.
 
@@ -148,6 +148,9 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
         name, _, value = arg.partition("=")
         filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
         return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
+    if event == "workflow_run":  # ADR-0021 `ci: failed`: Air fires only on a failed run (AIRA-725)
+        return {"triggerType": "EVENT", "source": "github", "eventType": "workflow_run.failed",
+                "filters": {"workflow_name": arg, **({"repo_label": f"repo:{repo}"} if repo else {})}}
     labeled = event.startswith("issues.") or event.startswith("pull_request.labeled")
     filters = {"label": arg} if labeled and arg else {}
     if pr_author and event.startswith("pull_request"):
@@ -335,17 +338,25 @@ INBOX_PAYLOAD = ("## Trigger event fields\n\n"
 
 
 def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None,
-                 main_repository: dict | None = None) -> str:
+                 main_repository: dict | None = None, tier: str | None = None) -> str:
     role = n["role"]
     servers = mcp_connectors(n, config, focus)
     mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
-    text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
+    import definition
+    if definition.present(config_mod.team_root()):  # ADR-0021: the node's role body and prompt, rendered
+        defn = definition.load(config_mod.team_root())
+        body, step = definition.render(defn, definition.node_name(name, n, tier, focus))
+        text = body.strip() + (f"\n\n{step.strip()}" if step.strip() else "")
+        skills = definition.skill_lines(defn, role)
+    else:
+        text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
+        skills = skill_lines(role)
     checkout = checkout_instructions(main_repository, config)
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
     payload = INBOX_PAYLOAD if role == "inbox" else ""
-    return (f"{who}\n\n{checkout}{text}\n\n{payload}## Your skills\n\n{skill_lines(role)}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
+    return (f"{who}\n\n{checkout}{text}\n\n{payload}## Your skills\n\n{skills}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts and the branch or PR head. "
@@ -441,7 +452,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "environmentConfigId": f"{prefix}{env}" + (f" {env_scope}" if env_scope else ""),
                 "mcpConnectors": mcp_connectors(n, config, focus),
                 "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
-                    name, n, config, aname, focus, automation_repository),
+                    name, n, config, aname, focus, automation_repository, tier_arg or tier),
             }
             if automation_repository["fullName"] != repository(team)["fullName"]:
                 automation["additionalRepositories"] = additional_repositories(automation_repository, team, config)

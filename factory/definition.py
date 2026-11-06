@@ -14,6 +14,7 @@ FACTORY = "factory.yaml"
 WORKFLOW = "workflow.yaml"
 ROLES = "roles"
 NO_ROLE = ("script", "human")  # harnesses that run no role
+STARTUP = ".air/cloud/startup.sh"  # Air runs it from the checkout; it runs `factory setup` (ADR-0021)
 
 
 def present(root):
@@ -86,6 +87,30 @@ def render(defn, name):
     j = _jinja(defn)
     body = defn["bodies"].get(agent.get("role"), "") if agent.get("role") else ""
     return j.from_string(body).render(ctx), j.from_string(node.get("prompt") or "").render(ctx)
+
+
+def node_name(step, node=None, tier=None, focus=None):
+    """The definition's node for an engine node and its variant: `implement` + tier `cheap` -> `implement-cheap`."""
+    if step in FAMILIES and (tier or focus):
+        return f"{step}-{tier or focus}"
+    return step
+
+
+def role_skills(defn, role):
+    """{name: spec} of every skill an agent of `role` gets: defaults, then the role's (named or inline)."""
+    f = defn["factory"]
+    known, out = f.get("skills") or {}, {}
+    for s in [*((f.get("defaults") or {}).get("skills") or []), *(((f.get("roles") or {}).get(role) or {}).get("skills") or [])]:
+        if isinstance(s, str):
+            out[s] = known[s]
+        else:
+            out.update(s)
+    return out
+
+
+def skill_lines(defn, role):
+    """One line per skill of the role, for the agent's prompt; setup installs them under ~/.agents/skills."""
+    return "\n".join(f"- {name}: `~/.agents/skills/{name}/SKILL.md`" for name in role_skills(defn, role))
 
 
 def _skill_errors(where, skill, known):
@@ -247,7 +272,7 @@ def to_project(defn):
                          if (v or {}).get("secret") and k != "GH_TOKEN")
         environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": secrets,
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"),
-                            **({"startup": e["setup"]} if e.get("setup") else {})}
+                            "startup": STARTUP}
 
     # Stages: every name the nodes use, plus the engine's PR facts.
     used = set()

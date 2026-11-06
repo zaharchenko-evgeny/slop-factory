@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/deploy.py. Run: uv run factory/tests/test_deploy.py
 Regenerate the fixture: UPDATE_FIXTURE=1 uv run factory/tests/test_deploy.py"""
@@ -1075,6 +1075,49 @@ class PlanTest(unittest.TestCase):
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
                          {"intake", "start", "implement", "review", "join", "fix", "update", "finish", "reopen", "merge", "inbox"})
         self.assertEqual(deploy.plan_air(n, config), plan)
+
+
+
+class DefinitionPlanTest(unittest.TestCase):
+    """A plan from the ADR-0021 layout (factory/tests/fixtures/v2)."""
+
+    @classmethod
+    def setUpClass(cls):
+        before = cfg._team
+        cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
+        try:
+            cls.plan = deploy.plan_air(nodes.load(), cfg.load())
+        finally:
+            cfg.set_team(before)
+        cls.by = {a["name"]: a for a in cls.plan["automations"]}
+
+    def test_each_variant_runs_its_agents_model(self):
+        model = {k: a["agentAndModel"]["id"] for k, a in self.by.items()}
+        self.assertEqual(model["[Slop factory] implement-cheap slop-factory"], "gpt-6-luna")
+        self.assertEqual(model["[Slop factory] implement-mid slop-factory"], "claude-sonnet-5-5[1m]")
+        self.assertEqual(model["[Slop factory] review-full slop-factory"], "gpt-6.1-sol")
+        self.assertEqual(model["[Slop factory] review-cheap slop-factory"], "gpt-6-luna")
+
+    def test_prompts_are_rendered(self):
+        for name, a in self.by.items():
+            self.assertNotIn("{{", a["prompt"], name)
+            self.assertNotIn("{%", a["prompt"], name)
+        intake = self.by["[Slop factory] intake"]["prompt"]
+        self.assertIn("Split it above 400 changed lines or 3 repositories.", intake)
+        self.assertIn("- to-tickets: `~/.agents/skills/to-tickets/SKILL.md`", intake)
+
+    def test_ci_failed_is_a_failed_workflow_run(self):
+        join = self.by["[Slop factory] join slop-factory"]["triggers"]
+        self.assertIn({"triggerType": "EVENT", "source": "github", "eventType": "workflow_run.failed",
+                       "filters": {"workflow_name": "quality-gates", "repo_label": "repo:slop-factory"}}, join)
+
+    def test_environments_and_labels(self):
+        envs = {e["name"]: e for e in self.plan["environments"]}
+        self.assertEqual(envs["[Slop factory] engine"]["secrets"], ["FACTORY_WRITE_TOKEN"])
+        self.assertEqual(envs["[Slop factory] knowledge"]["repository"],
+                         "https://github.com/zaharchenko-evgeny/slop-eval-factory")
+        for label in ("factory:implement-cheap", "factory:review-full", "factory:knowledge-review", "factory:done"):
+            self.assertIn(label, self.plan["labels"])
 
 
 if __name__ == "__main__":
