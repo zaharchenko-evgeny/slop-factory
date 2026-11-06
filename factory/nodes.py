@@ -114,7 +114,8 @@ def validate(nodes, config):
                 keys = [k for k in e if k != "on"] if isinstance(e, dict) else []
                 if len(keys) != 1 or keys[0] not in EFFECTS:
                     errs.append(f"unknown-effect: {name}.{oname}: {e}")
-                elif "on" in e and (e["on"] not in ("issue", "pr") or keys[0] not in ("label", "unlabel", "comment")):
+                elif "on" in e and (e["on"] not in ("issue", "pr", "mention") or keys[0] not in ("label", "unlabel", "comment")
+                                   or (e["on"] == "mention" and keys[0] != "comment")):  # #590: where the question was
                     errs.append(f"unknown-effect: {name}.{oname}: bad `on` in {e}")
             if (o or {}).get("else") and o["else"] not in n["outcomes"]:
                 errs.append(f"unknown-outcome: {name}.{oname}: else {o['else']}")

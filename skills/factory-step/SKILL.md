@@ -17,6 +17,7 @@ command (`command -v factory`), never `uv run` or a path into the engine.
 | read the run facts of recently finished tickets | `factory retro facts --since <ISO time>` |
 | collect the lessons agents reported | `factory retro collect`: the uncollected lesson comments, marked collected |
 | run the routine named in your settings | `factory <routine>` (`reconcile`, `doctor`) with no other arguments |
+| answer the mention that woke you (`mention` in the step's facts) | `factory end replied --reply "…"`: the gate posts it where the question was, to whoever asked |
 | report your outcome | `factory end <outcome>`, as below |
 
 1. `factory begin` (the prompt gives its arguments) prints the facts, the
@@ -27,7 +28,7 @@ command (`command -v factory`), never `uv run` or a path into the engine.
 
 | Data | Option |
 | --- | --- |
-| reason, summary, size estimate | `--reason "…"`, `--summary "…"`, `--size-estimate "~120"` |
+| reason, summary, size estimate, reply | `--reason "…"`, `--summary "…"`, `--size-estimate "~120"`, `--reply "…"` |
 | failing check on `origin/main` | `--failing-check "<check>"` with `env-broken` |
 | acceptance check result | `--pass "<check>"`, `--fail "<check>"`, `--not-run "<check> \| <why>"` |
 | finding | `--blocking "<id> <file:line> <finding> \| case: <repro>"`, `--minor "<id> <file:line> <finding>"` |

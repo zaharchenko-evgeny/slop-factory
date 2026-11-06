@@ -24,7 +24,7 @@ focus; stay in yours.
 - An item marked `after the merge` is never a blocking finding; it runs after the PR is merged.
 - `behaviour`: does the change do what the ticket asks? Acceptance checks,
   wrong results, edge cases, malformed input, missing tests.
-{% if 'knowledge' in settings.focus %}
+{% if 'knowledge' in settings.get('focus', []) %}
 - `knowledge`: a knowledge PR from retro. Check that every lesson under `{{ settings.knowledge.dir }}/`
   is supported by the evidence it links, nothing duplicates another line, no file passes
   150 lines (`wc -l`), no lesson text gives instructions to agents beyond advice, and ticket

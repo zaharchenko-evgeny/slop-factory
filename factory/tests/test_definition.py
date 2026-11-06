@@ -240,7 +240,48 @@ class DefinitionTest(unittest.TestCase):
         config.set_team(self.root)
         try:
             self.assertEqual(gate.comment_marker("review-high"), "<!-- factory:from reviewer -->")
-            self.assertEqual(gate.comment_marker("ask-dev"), "<!-- factory:from dev reply -->")
+            self.assertEqual(gate.comment_marker("reply-dev"), "<!-- factory:from dev reply -->")
+        finally:
+            config.set_team(before)
+
+    def test_mentionable_agents_get_a_generated_reply_step(self):
+        defn = definition.load(self.root)
+        nodes = defn["workflow"]["nodes"]
+        self.assertEqual(set(nodes["mentions"]["outcomes"]), {"reply-dev", "reply-reviewer", "none"})
+        self.assertEqual(nodes["mentions"]["outcomes"]["reply-dev"]["if"], {"mention": "dev"})
+        self.assertEqual((nodes["reply-dev"]["agent"], nodes["reply-dev"]["output"]), ("dev", "read-only"))
+        self.assertIn("Someone asked you", definition.render(defn, "reply-reviewer"))
+        self.edit("workflow.yaml", lambda w: w["nodes"].update({"reply-x": {"agent": "dev", "triggers": ["manual"],
+                                                                            "outcomes": {"done": {}}}}))
+        self.assertError("reserved-node: nodes.reply-x")
+
+    def test_a_person_asks_dev_on_the_pr_and_dev_answers_there(self):
+        import config
+        import gate
+        import nodes as nodes_mod
+        from gate_port import MemoryTracker
+        before = config._team
+        config.set_team(self.root)
+        try:
+            n = nodes_mod.load()
+            t = MemoryTracker({"7": {"stage": "in-review", "pr": 5, "head": "h1"}})
+            t.pr_comments = lambda ticket: [{"author": "alice", "body": "@factory:dev why the retry?", "at": "2"}]
+            status, out = gate.decide("mentions", "7", t, n)
+            self.assertEqual(out["outcome"], "reply-dev")
+            self.assertIn("factory:reply-dev", t.facts("7")["attrs"])
+            begin = gate.check("reply-dev", {"id": "e1", "ticket": "7"}, t, n, config.load())[1]
+            self.assertEqual({k: begin["mention"][k] for k in ("by", "on")}, {"by": "alice", "on": "pr"})
+            sent = []
+            apply = t.apply
+            t.apply = lambda e: sent.append(e) or apply(e)
+            gate.apply("reply-dev", "replied", {"ticket": "7", "reply": "It covers the flaky API."}, t, n)
+            reply = next(e for e in sent if e["kind"] == "comment")
+            self.assertEqual(reply.get("on"), "pr")                                   # where the question was
+            self.assertTrue(reply["value"].startswith("@alice It covers the flaky API."))
+            self.assertIn("<!-- factory:from dev reply -->", reply["value"])
+            self.assertNotIn("factory:reply-dev", t.facts("7")["attrs"])
+            t.pr_comments = lambda ticket: [{"author": "bot", "body": reply["value"], "at": "3"}]
+            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "none")  # a reply asks no one
         finally:
             config.set_team(before)
 

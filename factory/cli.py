@@ -7,7 +7,7 @@
 
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> --issue N | --pr N | [payload file]   (payload on stdin by default; exit 10: the node must not act)
-       factory end <outcome> [--reason TEXT] [--summary TEXT] [--size-estimate N] [--disputed-focuses a,b]
+       factory end <outcome> [--reason TEXT] [--summary TEXT] [--reply TEXT] [--size-estimate N] [--disputed-focuses a,b]
                    [--pass CHECK] [--fail CHECK] [--not-run 'CHECK | REASON'] [--propose-check CHECK]
                    [--blocking 'ID FILE FINDING | case: REPRO'] [--minor 'ID FILE FINDING']
                    [--fixed 'ID SHA'] [--disputed 'ID REASON'] [--slice FILE.md]
@@ -173,7 +173,8 @@ def handoff_of(a):
                        ("proposed_checks", a.propose_check)):
         if items:
             data[key] = data.get(key, []) + items
-    data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate)) if v})
+    data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate),
+                                   ("reply", a.reply)) if v})
     addressed = json.loads(Path(a.addressed).read_text()) if a.addressed else []
     addressed += ["{}: fixed in {}".format(*id_and(t, "--fixed 'ID SHA'")) for t in a.fixed]
     addressed += ["{}: disputed — {}".format(*id_and(t, "--disputed 'ID REASON'")) for t in a.disputed]
@@ -192,7 +193,7 @@ def handoff_of(a):
 def end_parser():
     p = argparse.ArgumentParser(prog="factory end", allow_abbrev=False)
     p.add_argument("outcome")
-    for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "addressed", "disputed-focuses", "notes",
+    for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "reply", "addressed", "disputed-focuses", "notes",
                 "note-for", "note-hint", "note-repro"):
         p.add_argument(f"--{opt}")
     p.add_argument("--failing-check")

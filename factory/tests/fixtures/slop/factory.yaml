@@ -109,10 +109,10 @@ agents:
   router:         { role: router, model: luna, access: read-only }
   dispatcher:     { role: dispatcher, model: luna, access: read-only }
   dev-cheap:      { role: developer, model: luna, access: full }
-  dev:            { role: developer, model: sonnet, reasoning: high, access: full,
+  dev:            { role: developer, model: sonnet, reasoning: high, access: full, mentionable: true,
                     settings: { size_stop_factor: 1.5 } }          # stop and propose a split past 1.5x the estimate
   dev-strong:     { role: developer, model: sonnet, reasoning: max, access: full }
-  reviewer:       { role: reviewer, model: sol, access: read-only }
+  reviewer:       { role: reviewer, model: sol, access: read-only, mentionable: true }   # @factory:reviewer
   reviewer-cheap: { role: reviewer, model: luna, access: read-only }
   approver:       { role: approver, model: luna, access: read-only }
   clerk:          { run: decide, model: luna, access: read-only }  # runs `factory decide`: the node's guards choose
