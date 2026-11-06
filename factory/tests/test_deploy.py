@@ -21,6 +21,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "factory"))
+sys.path.insert(0, str(HERE))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 import deploy
