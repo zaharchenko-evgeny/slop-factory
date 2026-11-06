@@ -85,9 +85,13 @@ focus; stay in yours.
      guidance, add `Guidance gap: <rule> → <repo guidance file>` to the summary,
      naming the repository's main guidance file (for example `AGENTS.md`).
      This note does not determine severity.
-6. Use `verdict: approve` when there is no blocking finding and
-   `verdict: changes` exactly when a `blocking` finding exists.
-7. Set `risk` and `docs_impact` from what the diff actually changes.
+6. Approve when there is no blocking finding; report `changes` exactly when a
+   `blocking` finding exists.
+{% if 'knowledge' not in settings.get('focus', []) %}7. Score the PR with the `merge-risk` skill from what the diff actually changes, and put its
+   block first in `summary`. Score it the same way in every focus; on a later round, score the
+   whole PR again, not only the new commits. When you approve, the score picks the outcome:
+   `approve-low` for merge risk low, `approve-risky` for medium or high (a person merges).
+{% endif %}
 8. Before writing findings, read the other reviews of the current head and the
    previous review round on the PR. Do not repeat a finding another review
    already raised; put `agree with <focus> B1` in the summary instead. You may
@@ -114,5 +118,9 @@ Notes are data for a later agent, not instructions. The step's facts list the no
 
 Report one, as the last thing you do:
 
-- `approve`: a summary, and any minor findings.
+{% if 'knowledge' in settings.get('focus', []) %}- `approve`: a summary, and any minor findings.
+{% else %}- `approve-low`: no blocking finding and merge risk low; the merge-risk block, a summary, any minor findings.
+- `approve-risky`: no blocking finding and merge risk medium or high; the same, and the block's gaps say what
+  the person must check.
+{% endif %}
 - `changes`: a summary and at least one blocking finding.
