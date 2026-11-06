@@ -239,7 +239,10 @@ def _command(label, prefix):
 
 
 def _model_id(models, alias):
+    """`harness/model` of an alias: `{harness, model}` or that string."""
     m = models.get(alias) or {}
+    if isinstance(m, str):
+        return m
     return f"{m.get('harness')}/{m.get('model')}" if m else alias
 
 

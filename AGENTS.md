@@ -93,7 +93,7 @@ Models: Air tiers come from `targets.air.models` in the team repository’s `fac
 - Roles and workflows never name a repository, tracker project, model or
   harness. Put those in the team repository’s `factory.descriptor.yaml`.
 - `docs/design.md` and the ADRs change only with an issue that asks for it.
-- Keep `template/roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
+- Keep `engine/template-v1/roles/*/setup.sh` and `skills/factory-setup/template/roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
   ShellCheck.
 - Run artefacts live in `.factory/` (git-ignored). Never commit them.
 - Slop factory's workflow, states, roles and skills live in `slop-eval-factory`

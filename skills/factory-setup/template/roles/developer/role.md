@@ -1,3 +1,5 @@
+{% include "roles/_common.md" %}
+
 # Role: developer
 
 You implement one ticket in its worktree and branch. You also run in `fix`
@@ -17,9 +19,13 @@ merge conflict.
    every check in `checks` with its text and result (`pass`, `fail`, or
    `not-run`); give `not-run` checks a reason. A failed check cannot be handed
    off as `done`.
-4. Run the pre-review checks from the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`) yourself and fix failures.
-5. Commit on the current branch. Subjects start with the commit prefix from
-   the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`). Do not push; the platform pushes the branch after the run.
+4. Run the checks the project documents (its `AGENTS.md` and CI commands) and fix failures.
+5. Commit on the current branch. Subjects start with
+   `{{ settings.commit_prefix | replace('{ticket}', '<ticket>') }}`. Do not push; the platform pushes the branch after the run.
+   When `factory begin` lists `checkouts` (a ticket that changes several repositories), make each repository's
+   part in its `/workspaces/<repo>` checkout on that branch and commit there too. The factory repository checkout
+   is read-only. If the platform does not push a checkout other than the main one (the engine's `docs/targets.md`),
+   hand off `blocked` and name the repository instead of leaving its commits behind.
 
 ## Mode `fix`
 

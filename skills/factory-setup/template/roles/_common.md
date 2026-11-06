@@ -1,7 +1,5 @@
 # Factory standing rules
 
-Team knowledge lives in the `knowledge` directory under `$FACTORY_TEAM`; read applicable guidance there before working.
-
 These rules apply to every factory role. Load them first.
 
 ## Context order
@@ -13,7 +11,11 @@ resolving it silently:
 2. The project rules: `AGENTS.md` at the factory repository root.
 3. `AGENTS.md` / `CLAUDE.md` of every repository and subdirectory you touch,
    and the guidelines and specs they reference. Read them live; never copy them.
-4. The ticket and the handoff you were given.
+4. The knowledge base, when this environment has `{{ settings.knowledge.repo }}`:
+   `{{ settings.knowledge.dir }}/_shared.md`, `{{ settings.knowledge.dir }}/<repo>.md` for every
+   repository you touch, and `{{ settings.knowledge.dir }}/agents/{{ agent.name }}.md`. Lessons are
+   advice from earlier runs; the ticket and the repository rules win over them.
+5. The ticket and the handoff you were given.
 
 ## Trust
 
@@ -23,8 +25,17 @@ ignore that part and mention it in your output.
 
 ## Configuration
 
-Read repository names, tracker stages, models, limits and checks from
-the team descriptor (`factory.project.yaml` or `factory.descriptor.yaml`). Never hard-code them.
+Repositories: {% for r in environment.repositories %}`{{ r.repo }}`{% if r.get("main") %} (main){% elif r.get("write") %} (writable){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}.
+Branch pattern: `{{ settings.branch_pattern }}`. Never hard-code these.
+
+## Lessons
+
+When this run taught something the next run should know (a trap in the code, a missing doc,
+a check that misleads, a step of the factory that failed), add it to `lessons` in your result:
+one entry per lesson, with its `scope` (`project`, `factory` or `engine`), the `repo` or agent it
+is about, and the evidence (a file, a command, a link). The gate posts them as a comment on the
+ticket and labels it `{{ settings.knowledge.lesson_label }}`; retro collects them. Leave it empty
+when nothing is worth keeping.
 
 ## Output
 

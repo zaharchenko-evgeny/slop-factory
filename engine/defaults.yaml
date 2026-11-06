@@ -74,7 +74,7 @@ limits:
     - docs/statechart-proposed.md
     - skills/factory-setup/templates/**
     - skills/vendor/**
-    - template/roles/**
-    - template/skills/**
-    - template/workflows/delivery.md
-    - template/workflows/delivery.yaml
+    - engine/template-v1/roles/**
+    - engine/template-v1/skills/**
+    - engine/template-v1/workflows/delivery.md
+    - engine/template-v1/workflows/delivery.yaml

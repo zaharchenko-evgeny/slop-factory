@@ -42,8 +42,10 @@ store; the workflow names only states and commands. When the team root has
 `factory migrate workflow <nodes.yaml> <factory.descriptor.yaml> --out DIR`
 converts the old pair. `repositories[]` marks exactly one repository
 `role: primary` and the others `role: project`; `targets` takes `air` and
-`local` (ADR-0017). A new project starts from the engine's
-[`template/`](template/README.md); `factory upgrade --diff` shows what changed
+`local` (ADR-0017). A new team starts from the factory-setup skill's
+[`skills/factory-setup/template/`](skills/factory-setup/template/README.md), in the layout of ADR-0021
+(`factory.yaml`, `workflow.yaml`, `roles/`). The old layout's template is
+[`engine/template-v1/`](engine/template-v1/README.md); `factory upgrade --diff` shows what changed
 in it since the project's `engine` version, and `factory upgrade --apply PATH`
 takes one file.
 
@@ -62,7 +64,7 @@ when the token is missing in `token` mode.
 ### Team-owned runtime files
 
 Runtime `roles/`, `skills/`, workflows, policies, and judgments come only from
-the team's repository. `template/roles/` and `template/skills/` are setup
+the team's repository. `engine/template-v1/roles/` and `engine/template-v1/skills/` are setup
 examples, not runtime fallbacks; the engine's node graph is `engine/nodes.yaml`.
 
 An environment can also define a `setup.sh` in the team's `environments`
@@ -94,7 +96,7 @@ from a fresh copy. To run that test locally, set `FACTORY_SLOP_TEAM=<checkout>`.
 
 See [factory setup](skills/factory-setup/SKILL.md), [design](docs/design.md),
 [environment variables](docs/environment.md),
-and the [delivery template](template/workflows/delivery.md) for more detail.
+and the [delivery template](engine/template-v1/workflows/delivery.md) for more detail.
 
 ## Attention
 

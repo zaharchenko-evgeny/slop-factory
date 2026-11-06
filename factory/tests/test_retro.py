@@ -84,7 +84,7 @@ class ChangedLinesTest(unittest.TestCase):
         files = [{"filename": "a.py", "status": "modified", "additions": 5, "deletions": 3},
                  {"filename": "old.py", "status": "removed", "additions": 0, "deletions": 400},
                  {"filename": "gen.json", "status": "modified", "additions": 90, "deletions": 90},
-                 {"filename": "template/skills/x/SKILL.md", "status": "added", "additions": 50, "deletions": 0}]
+                 {"filename": "engine/template-v1/skills/x/SKILL.md", "status": "added", "additions": 50, "deletions": 0}]
         self.assertEqual(retro.changed_lines(files, ["gen.json"]), 9)
 
 

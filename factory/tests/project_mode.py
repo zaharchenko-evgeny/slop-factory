@@ -20,8 +20,10 @@ def link_runtime_files(root):
     root = Path(root)
     for rel in ("roles", "skills"):
         path = root / rel
+        if path.is_symlink() and not path.exists():  # a link left by an older checkout layout
+            path.unlink()
         if not path.exists():
-            path.symlink_to(ENGINE / "template" / rel, target_is_directory=True)
+            path.symlink_to(ENGINE / "engine/template-v1" / rel, target_is_directory=True)
     return root
 
 

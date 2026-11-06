@@ -1,6 +1,6 @@
 # Checks
 
-Declared in `checks` in `factory.descriptor.yaml`, per repository.
+Run by each project repository's own CI; the factory reads the result (`ci: failed` and the CI state at the PR head).
 
 ## Contract
 

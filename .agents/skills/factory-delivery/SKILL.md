@@ -38,7 +38,7 @@ GitHub credentials; role files and skills always come from `FACTORY_TEAM`.
 4. Read `role_file` from the team checkout and each listed skill from
    `$FACTORY_TEAM/skills/<name>/SKILL.md`. Do the role's work on `branch` in
    your project checkout (create it from the default branch when it does not
-   exist). Commit; do not push. The engine's `template/` is not a runtime fallback.
+   exist). Commit; do not push. The engine's templates are not a runtime fallback.
 5. Write the role's handoff to `handoff_path`.
 6. `uv run <tmp>/factory-main/factory/gate.py apply --node <node> [--tier <tier>] --event <file> --handoff <handoff_path>`.
 

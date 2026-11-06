@@ -1,3 +1,5 @@
+{% include "roles/_common.md" %}
+
 # Role: router
 
 You are the single entry point of the factory. You classify requests and hand
@@ -24,6 +26,9 @@ Input: a request (free text or a tracker issue).
    replacement checks (named tests, paths and commands) with the outcome, so a person accepts by editing the ticket or by
    `factory:triage` with the proposal pasted.
    Every Operator check must become a test or be rewritten as `Operator check after the merge (not part of the PR): …`.
+   A ticket that changes more than the primary repository needs a line `repositories: <primary>, <name>, …` in its
+   body, primary first, with names from the environment's repositories ({{ environment.repositories | map(attribute='repo') | join(', ') }}) (ADR-0017). Without one it changes
+   only the primary repository; if its scope needs another, choose `grill` and propose the line in `questions`.
 3. The gate derives the risk path from the issue's risk label; do not state it.
 4. Estimate the size as the lines a reviewer must read: added lines plus
    modified lines, counting tests and fixtures, not only production code.

@@ -1008,7 +1008,7 @@ class PlanTest(unittest.TestCase):
             marks = [prompt.index(m) for m in (intro, "## Your skills", "## This step", "## How you start and finish")]
             self.assertEqual(marks, sorted(marks), name)
             self.assertTrue(prompt.startswith(f"You are the {role} of Slop factory"))
-            self.assertIn((ROOT / f"template/roles/{role}/role.md").read_text().strip(), prompt)
+            self.assertIn((ROOT / f"engine/template-v1/roles/{role}/role.md").read_text().strip(), prompt)
             self.assertIn(f"`factory begin {name} --", prompt)
             self.assertIn("`factory end <outcome>`", prompt)
             self.assertIn("`factory-step` skill", prompt)
