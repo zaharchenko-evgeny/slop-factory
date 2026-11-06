@@ -79,6 +79,24 @@ class GateTest(unittest.TestCase):
             gate.guard_holds({"colour": "red"}, f)
         self.assertTrue(gate.guard_holds({"children": "closed"}, {**f, "children_open": 0}))
 
+    def test_merge_effect_keeps_its_invariants(self):
+        """ADR-0021: for a definition team, `merge` is refused without an approval at head, with red CI, or behind."""
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["intake"]["outcomes"]["ship"] = {"effects": [{"merge": "match-head"}]}
+        ok = {"stage": "triage", "head": "h2", "ci": "green", "pr": 5, "pr_state": "open",
+              "reviews": [{"agent": True, "commit_id": "h2", "verdict": "approve"}]}
+        cases = [({}, True), ({"ci": "red"}, False), ({"behind": True}, False),
+                 ({"reviews": [{"agent": True, "commit_id": "h1", "verdict": "approve"}]}, False),   # an older head
+                 ({"reviews": [{"agent": True, "commit_id": "h2", "verdict": "approve"},
+                               {"agent": True, "commit_id": "h2", "verdict": "changes"}]}, False)]
+        with patch("definition.present", return_value=True):
+            for change, applied in cases:
+                tr = MemoryTracker({"7": {**ok, **change}})
+                status, out = gate.apply("intake", "ship", {"ticket": "7"}, tr, graph)
+                self.assertEqual(out["applied"], applied, (change, out))
+                if not applied:
+                    self.assertTrue(out["reason"].startswith("merge refused"), out)
+
     def test_label_group_holds_one_value(self):
         graph = copy.deepcopy(NODES)
         graph["nodes"]["intake"]["outcomes"]["risky"] = {"effects": [{"label": "risk:high"}, {"stage": "ready"}]}

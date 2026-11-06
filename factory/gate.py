@@ -255,6 +255,22 @@ def lesson_effects(ticket, node, payload):
     return [{"kind": "comment", "ticket": ticket, "value": body}, {"kind": "label", "ticket": ticket, "value": vocab.lesson()}]
 
 
+def merge_refused(effects, facts):
+    """ADR-0021: a `merge` effect keeps its own invariants, whatever chose it: the current head is approved by the
+    agent reviews at it, none asks for changes, CI is green there and the branch is not behind. None when it may
+    merge, else the reason. The old layout's merge node checks its gates before it gets here."""
+    import definition
+    if not any(e["kind"] == "merge" for e in effects) or not definition.present(config_mod.team_root()):
+        return None
+    if review_at_head(facts) != "approve":
+        return "merge refused: no approving review at the current head"
+    if facts.get("ci") != "green":
+        return f"merge refused: CI is {facts.get('ci')} at the current head"
+    if facts.get("behind"):
+        return "merge refused: the branch is behind its base (update it first)"
+    return None
+
+
 def group_unlabels(effects, facts):
     """ADR-0021: a label `<group>:<value>` outside the stage namespace holds one value per group; adding one removes
     the group's other values (`risk:high` removes `risk:low`) on the same ticket or PR."""
@@ -692,7 +708,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             e["run_id"] = payload["run_id"]
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
-    why = matches(gated(name, node, facts), facts, {**payload, "id": payload.get("event")}, out)
+    why = matches(gated(name, node, facts), facts, {**payload, "id": payload.get("event")}, out) \
+        or merge_refused(effects, facts)
     if why:
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
