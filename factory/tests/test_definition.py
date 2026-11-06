@@ -104,12 +104,14 @@ class DefinitionTest(unittest.TestCase):
         self.assertError("main-repository: environments.engine")
 
     def test_writable_repository_needs_token(self):
-        self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].pop("token_env"))
+        self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(write=True))
         self.assertError("write-token: environments.engine")
 
     def test_token_env_must_be_declared(self):
-        self.edit("factory.yaml", lambda f: f["environments"]["engine"].pop("env"))
-        self.assertError("undeclared-env: environments.engine: FACTORY_WRITE_TOKEN")
+        self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(write=True, token_env="T"))
+        self.assertError("undeclared-env: environments.engine: T")
+        self.edit("factory.yaml", lambda f: f["environments"]["engine"].update(env={"T": {"secret": True}}))
+        self.assertEqual(self.errors(), [])
 
     def test_role_needs_body_and_body_needs_role(self):
         (self.root / "roles/router/role.md").unlink()
