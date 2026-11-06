@@ -32,8 +32,6 @@ from gate_port import MemoryTracker, TagTracker  # noqa: E402
 
 CONFIG = cfg.load()
 NODES = nodes.load()
-SENT = []
-gate.notify = lambda kind, ticket, result=None, pr=None: SENT.append((kind, ticket))  # no network or gh
 PAYLOAD = {"risk": "low", "complexity": "small", "tier": "mid"}
 
 
@@ -47,9 +45,6 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
-    def setUp(self):
-        SENT.clear()
-
     def test_label_guard_falls_back(self):
         """ADR-0021: an outcome's `if` guard that fails applies its `else`; without one the outcome is refused."""
         graph = copy.deepcopy(NODES)
@@ -182,32 +177,19 @@ class GateTest(unittest.TestCase):
             gate.apply("intake", "not-actionable", {"ticket": "7", "reason": "r", "lessons": ["just text"]},
                        MemoryTracker({"7": {"stage": "triage"}}), NODES)
 
-    def test_blocked_sends_one_decision_needed(self):
-        gate.apply("implement", "blocked", {"ticket": "7", "reason": "[factory] blocked"}, MemoryTracker({"7": {"stage": "in-dev"}}), NODES)
-        self.assertEqual(SENT, [("automation-error", "7"), ("decision-needed", "7")])  # both: error and entering blocked
-        SENT.clear()
-        gate.apply("intake", "grill", {"ticket": "7", "questions": "[factory] Which API?"}, MemoryTracker({"7": {"stage": "triage"}}), NODES)
-        self.assertEqual(SENT, [("decision-needed", "7")])
-
-    def test_join_waiting_with_reviewers_sends_one_review_needed(self):
-        tr = MemoryTracker({"7": {"stage": "in-review", "head": "h", "pr": 42, "ci": "green",
-                                  "waiting_reviewers": ["rv"], "focus_missing": []}})
-        gate.apply("join", "waiting", {"ticket": "7", "event": "e"}, tr, NODES)
-        self.assertEqual(SENT, [("review-needed", "7")])
-
-    def test_implement_failed_sends_automation_error_but_error_sends_nothing(self):
-        gate.apply("implement", "failed", {"ticket": "7", "reason": "[factory] x"}, MemoryTracker({"7": {"stage": "in-dev"}}), NODES)
-        self.assertEqual(SENT, [("automation-error", "7")])
-        SENT.clear()
-        gate.apply("implement", "error", {"ticket": "7", "tier": "mid"}, MemoryTracker({"7": {"stage": "in-dev"}}), NODES)
-        self.assertEqual(SENT, [])
+    def test_apply_sends_no_notification(self):
+        """Notifications are workflow nodes: applying an outcome that enters `blocked` loads no sender."""
+        gate.apply("implement", "blocked", {"ticket": "7", "reason": "[factory] blocked"},
+                   MemoryTracker({"7": {"stage": "in-dev"}}), NODES)
+        self.assertNotIn("inbox", sys.modules)
+        self.assertFalse(hasattr(gate, "notify") or hasattr(gate, "notification"))
 
     def test_dry_run_sends_nothing(self):
         tr = MemoryTracker({7: {"stage": "ready", "since": "2026-11-01T00:00:00Z"}})
         tr.sweep_tickets = lambda stages: [7]
         gate.sweep_stale(tr, NODES, 2, datetime(2026, 11, 1, 12, tzinfo=timezone.utc), dry_run=True)
         gate.sweep(tr, NODES, dry_run=True)
-        self.assertEqual(SENT, [])
+        self.assertEqual(tr.tickets[7]["stage"], "ready")
 
     def test_plan_change_opens_deploy_ticket(self):
         class PlanTracker(MemoryTracker):

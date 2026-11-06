@@ -102,6 +102,12 @@ def load():
     return merge(defaults, descriptor())
 
 
+def owner(cfg=None):
+    """The GitHub login a person-wait is assigned to: `owner`, or the v1 descriptor's `notify.github_user`."""
+    cfg = load() if cfg is None else cfg
+    return cfg.get("owner") or (cfg.get("notify") or {}).get("github_user")
+
+
 def _check(schema, value, where, errs, root_schema=None):
     root_schema = schema if root_schema is None else root_schema
     if "$ref" in schema:

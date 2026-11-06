@@ -6,7 +6,6 @@
 # Nodes marked `enabled: false` need a later slice. `pilot: true` = delivered by the pilot.
 environments:
   # `secrets` are names only; `domains` the network allow-list; `vm` the machine size (deploy.py plan).
-  # `air.jetbrains.cloud`: the inbox webhook (`notify.webhook`), posted to by the gate.
   # `FACTORY_ENV` (the key) tells .air/cloud/startup.sh which skills and tools to install.
   # `read`: intake, review, join, finish. `write`: implement, fix, update. `ops`: the routines.
   read:
@@ -28,8 +27,6 @@ environments:
     secrets: []
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com, pypi.org, files.pythonhosted.org, air.jetbrains.cloud]
     vm: default
-webhooks:
-  notify: { description: "A notification request for the factory inbox (engine/inbox.schema.json) as the JSON body" }
 adapters:
   ticket: github-issues   # stage, fields, labels, blockers
   pr: github              # state, head, CI, reviews by head SHA
@@ -213,20 +210,6 @@ nodes:
       child-blocked: { from: [split], effects: [{ comment: reason }, { stage: blocked }] }
       conflict: { from: [approved], effects: [{ label: "factory:update-cheap", "on": pr }, { stage: changes-requested }] }
       merged: { from: [draft, triage, ready, in-dev, in-review, changes-requested, approved, blocked, needs-answers, split, investigating], effects: [{ stage: done }] }
-  inbox:
-    env: ops
-    pilot: true
-    routine: true  # outside any ticket: the role reads its own trigger event, `factory begin` needs no payload
-    ci-independent: true  # acts on a PR event, not on a head
-    triggers: ["webhook notify", "pull_request.opened", "issue_comment.created"]
-    when: { always: true }
-    role: inbox
-    tier: cheap
-    output: read-only
-    outcomes:
-      delivered: {}
-      skipped: {}
-      failed: {}
   recover:
     env: read
     # No automation: the hourly reconciler replaced it. Only `gate.py sweep --stale`, run by a person, still applies this outcome.

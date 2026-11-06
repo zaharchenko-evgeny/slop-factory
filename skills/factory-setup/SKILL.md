@@ -50,8 +50,8 @@ Ask, one round at a time, with a recommended answer for each question:
    in plan mode for each repository, and propose only the entries that fit.
    Changes to a project's hooks or CI go to that repository as a PR.
 9. Project rules for `AGENTS.md`.
-10. Each webhook: name, sender and the payload field that holds the ticket number. Recommended: none
-    beyond `inbox`.
+10. Each webhook: name, sender and the payload field that holds the ticket number. Recommended: none;
+    notifications come from the `notify` node's state triggers.
 11. Which MCP servers per role (`roles.<role>.mcp`). Recommended: none, then only
     the server a role needs (for example the tracker for the router).
 12. Environment variables and secrets per environment: names, and for a
@@ -84,7 +84,7 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.yaml` |
 | `MAIN_REPOSITORY` | `owner/repo` of the project's main repository | `factory.yaml` |
 | `TEAM_REPOSITORY` | `owner/repo` of this definition and the knowledge base | `factory.yaml` |
-| `GITHUB_USER` | GitHub login told about tickets that wait for a person | `workflow.yaml` |
+| `GITHUB_USER` | GitHub login told about tickets that wait for a person (`owner`) | `factory.yaml` |
 | `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG`, `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Air model (`harness/model`) per alias | `factory.yaml` |
 | `BRANCH_PATTERN`, `COMMIT_PREFIX` | Branch name and commit subject prefix, with `{ticket}` and `{slug}` | `factory.yaml` |
 | `CI_WORKFLOW` | The project CI workflow whose failure wakes the gate | `factory.yaml` |

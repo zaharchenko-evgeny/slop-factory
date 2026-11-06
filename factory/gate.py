@@ -44,7 +44,6 @@ from gate_space import SpaceCodeHost, from_config as space_from_config, space_ev
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
 from github_tracker import project_repositories  # noqa: E402
 import vocab  # noqa: E402
-from inbox import send as inbox_send  # noqa: E402
 
 ROOT = nodes_mod.ROOT
 GO, NO_GO, BAD, FAILED = 0, 10, 2, 1
@@ -589,34 +588,7 @@ def resolve(effect, payload, ticket):
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
-def notify(kind, ticket, result=None, pr=None):
-    """Send the operator a `kind` request; a failure only warns (the sender never raises)."""
-    try:
-        issue = int(ticket)
-    except (TypeError, ValueError):
-        return
-    inbox_send.send(inbox_send.build(kind, issue, pr, result), config_mod.load())
-
-
-def notification(name, outcome, effects):
-    """The request kinds for an applied outcome: what needs the operator."""
-    kinds = []
-    if name in ("implement", "fix") and outcome in ("failed", "blocked", "env-broken"):
-        kinds.append("automation-error")
-    if name == "join" and outcome == "waiting" and any(
-            e["kind"] == "comment" and str(e["value"]).startswith("[factory] Re-review PR") for e in effects):
-        kinds.append("review-needed")
-    if name in ("implement", "fix") and outcome in ("failed", "env-broken"):
-        return kinds  # the automation error alone; only a `blocked` outcome also asks the operator to decide
-    if (name, outcome) == ("merge", "waiting") or any(
-            e["kind"] == "stage" and e["value"] in ("blocked", "needs-answers")
-            or e.get("run_id") == "finish:after-merge" for e in effects):
-        kinds.append("decision-needed")
-    return kinds
-
-
-def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None, auto_merge=None,
-          notify_kind=None):
+def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None, auto_merge=None):
     step = legacy_step(name)  # ADR-0021: a definition team's nodes have no engine-named behaviour
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
@@ -679,7 +651,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             else:
                 checklist = "\n".join(f"- [ ] {check}" for check in checks)
                 effects = [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
-                           {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]},
+                           {"kind": "assign", "ticket": ticket, "value": config_mod.owner()},
                            {"kind": "comment", "ticket": ticket, "run_id": "finish:after-merge",
                             "value": f"[factory] After-merge operator checks:\n\n{checklist}\n\n{AFTER_MERGE_MARKER}"}]
     if step == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
@@ -701,12 +673,12 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                         {"kind": "assign", "ticket": ticket, "value": sorted(set(human_changes)), "on": "pr"}]
     if step == "reopen" and outcome == "reopened" and facts.get("ci") == "red" and facts.get("pr"):
         effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
-                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"], "on": "pr"}]
+                    {"kind": "assign", "ticket": ticket, "value": config_mod.owner(), "on": "pr"}]
     if step == "merge" and outcome == "waiting":
         effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
-                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"]},
+                    {"kind": "assign", "ticket": ticket, "value": config_mod.owner()},
                     {"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
-                    {"kind": "assign", "ticket": ticket, "value": config_mod.load()["notify"]["github_user"], "on": "pr"}]
+                    {"kind": "assign", "ticket": ticket, "value": config_mod.owner(), "on": "pr"}]
     if step == "join" and outcome == "changes" and facts.get("handed_to_fix") and has_dispute_rereview(facts):
         effects.insert(0, {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("fix-<tier>", "*"), "on": "pr"})
     if step in ("implement", "fix") and outcome == "done":
@@ -791,7 +763,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                               {"kind": "unassign", "ticket": ticket, "value": None}]
         if human_state:
             person = (facts.get("author") if target == "needs-answers" else
-                      config_mod.load()["notify"]["github_user"])
+                      config_mod.owner())
             human_effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
                               {"kind": "assign", "ticket": ticket, "value": person},
                               {"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
@@ -829,8 +801,6 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
     written = [e["kind"] for e in effects + after if tracker.apply(e)]
-    for kind in [notify_kind] if notify_kind else notification(name, outcome, effects):  # only after the effects were applied
-        notify(kind, ticket, next((e["value"] for e in effects if e["kind"] == "comment"), None), facts.get("pr"))
     return GO, {"applied": True, "written": written}
 
 
@@ -1215,17 +1185,16 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                         progress({**r, "recover": "skipped"})
                     continue  # preserve an existing human wait and its assignee
                 tracker.apply({"ticket": n, "kind": "label", "value": vocab.needs_human()})
-                tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"]})
+                tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.owner()})
                 tracker.apply({"ticket": n, "kind": "label", "value": vocab.needs_human(), "on": "pr"})
-                tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.load()["notify"]["github_user"], "on": "pr"})
+                tracker.apply({"ticket": n, "kind": "assign", "value": config_mod.owner(), "on": "pr"})
                 text = f"{RECOVER} stage={stage}: {why}. A person decides, then sets {vocab.stage('ready')}."
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run, "value": text})
-                notify("decision-needed", n, text, facts.get("pr"))
             elif recovered(facts, stage):
                 r["recover"] = "blocked"
                 _, out = apply("recover", "blocked", {"ticket": n, "run_id": run,
                                                           "reason": f"[factory] Stopped: the node did not respond twice in {stage}. A person decides, then sets {vocab.stage('ready')}."},
-                               tracker, nodes, notify_kind="automation-error")
+                               tracker, nodes)
                 r["applied"] = out["applied"]
             else:  # the comment last: for `ready` the re-added stage label starts the stage, and the comment must follow it
                 tracker.apply({"ticket": n, "kind": "unlabel", "value": label, "on": on})

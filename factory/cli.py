@@ -329,12 +329,6 @@ def main(argv=None):
     if cmd == "reconcile":
         from reconcile import main as reconcile_main
         return reconcile_main(rest)
-    if cmd == "inbox":
-        from inbox import main as inbox_main
-        return inbox_main(rest)
-    if cmd == "notify":
-        from inbox import notify_main
-        return notify_main(rest)
     print(__doc__)
     return 0 if cmd in ("-h", "--help") else 2
 

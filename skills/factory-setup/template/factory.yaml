@@ -1,7 +1,8 @@
 # {{PROJECT_NAME}} factory (ADR-0021). This file lists what the factory has: tracker, models, skills,
-# roles, agents, environments, webhooks. workflow.yaml says how they connect and run.
+# roles, agents, environments, webhooks (none by default). workflow.yaml says how they connect and run.
 name: {{PROJECT_NAME}}
 engine: "{{ENGINE}}"              # what the Air startup script installs (uv tool install)
+owner: {{GITHUB_USER}}            # the GitHub login the notify node tells
 tracker:
   adapter: github-issues
   repository: {{TRACKER_REPOSITORY}}
@@ -74,8 +75,8 @@ roles:
     description: Implements a ticket, fixes review findings, resolves merge conflicts
     skills: [ponytail, tdd, diagnosing-bugs, principle-test-behavior-not-implementation]
     mcp: {}
-  inbox:
-    description: Posts factory notifications to the configured inbox provider
+  notify:
+    description: Tells the owner about a state that needs them
     skills: []
     mcp: {}
   retro:
@@ -122,7 +123,7 @@ agents:
   clerk:          { run: decide, model: cheap, access: read-only }  # runs `factory decide`: the node's guards choose
   ops:            { role: ops, model: cheap, access: read-only }
   retro:          { role: retro, model: mid, access: full }
-  inbox:          { role: inbox, model: cheap, access: read-only, settings: { provider: github-inbox } }
+  notify:         { role: notify, model: cheap, access: read-only }
 
 # Environments: where agents run. One repository is `main`; the others are additional.
 environments:
@@ -152,9 +153,5 @@ environments:
               pypi.org, files.pythonhosted.org, air.jetbrains.cloud]
     vm: default
 
-# Webhooks: endpoints that wake nodes.
-webhooks:
-  inbox:
-    description: A notification for the factory inbox, posted by the gate and by Air run-end senders
-    schema: inbox.schema.json     # the engine's payload schema
-    api_key_env: FACTORY_INBOX_KEY
+# Webhooks: endpoints that wake nodes, for example `deploy: { description: ..., api_key_env: ... }`.
+webhooks: {}

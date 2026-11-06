@@ -48,7 +48,6 @@
         "hold_label": {"type": "string"},
         "pr_fact_labels": {"type": "object", "additionalProperties": {"type": "string"}},
         "needs_human_label": {"type": "string"},
-        "inbox_label": {"type": "string"},
         "lesson_label": {"type": "string"}
       }
     },
@@ -110,25 +109,11 @@
     },
     "branch_pattern": {"type": "string"},
     "commit_prefix": {"type": "string"},
+    "owner": {"type": "string"},
     "notify": {
       "type": "object",
       "properties": {
-        "webhook": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["url_secret", "key_secret"],
-          "properties": {"url_secret": {"type": "string"}, "key_secret": {"type": "string"}}
-        },
-        "github_user": {"type": "string"},
-        "providers": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["kind"],
-            "properties": {"kind": {"enum": ["github-inbox", "log"]}}
-          }
-        }
+        "github_user": {"type": "string"}
       }
     },
     "reviews": {"type": "object"},
