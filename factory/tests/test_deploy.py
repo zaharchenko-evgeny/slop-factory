@@ -1108,10 +1108,9 @@ class DefinitionPlanTest(unittest.TestCase):
         self.assertIn("Split it above 400 changed lines or\n3 repositories.", intake)
         self.assertIn("- to-tickets: `~/.agents/skills/to-tickets/SKILL.md`", intake)
 
-    def test_ci_failed_is_a_failed_workflow_run(self):
-        fix = self.by["[Slop factory] fix"]["triggers"]
-        self.assertIn({"triggerType": "EVENT", "source": "github", "eventType": "workflow_run.failed",
-                       "filters": {"workflow_name": "quality-gates", "repo_label": "repo:slop-factory"}}, fix)
+    def test_no_node_waits_for_a_ci_event(self):
+        events = {t.get("eventType") for a in self.plan["automations"] for t in a["triggers"]}
+        self.assertNotIn("workflow_run.failed", events)   # reviewers wait for CI themselves (factory ci --wait)
 
     def test_a_decide_agent_only_runs_the_command(self):
         merge = self.by["[Slop factory] merge"]["prompt"]

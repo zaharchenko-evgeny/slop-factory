@@ -99,6 +99,9 @@ def holds(when, facts, event):
         if key == "review":
             value(want, ("approved-at-head", "changes-at-head", "none-at-head"))
             return review_at_head(facts) == want.removesuffix("-at-head").replace("approved", "approve")
+        if key == "ticket":
+            value(want, ("open", "closed"))
+            return facts.get("issue_state", "open") == want
         if key == "children":
             value(want, ("open", "closed"))
             return ("children_open" in facts) and (facts["children_open"] == 0) == (want == "closed")
@@ -262,6 +265,23 @@ def legacy_step(name):
     return None if definition.present(config_mod.team_root()) else name
 
 
+def ci_state(tracker, ticket, wait_seconds=0, poll=30, sleep=None):
+    """{ci, head, failing}: CI at the ticket's PR head, after waiting up to `wait_seconds` for it to conclude
+    (ADR-0021: a reviewer runs `factory ci --wait` before its verdict, so no CI event has to wake anyone)."""
+    import time
+    sleep = sleep or time.sleep
+    waited = 0
+    while True:
+        facts = tracker.facts(ticket)
+        if facts.get("ci") in ("green", "red") or waited >= wait_seconds:
+            break
+        sleep(poll)
+        waited += poll
+    failing = tracker.ci_failure(facts["head"]) if facts.get("ci") == "red" and facts.get("head") \
+        and hasattr(tracker, "ci_failure") else None
+    return {"ci": facts.get("ci"), "head": facts.get("head"), "failing": failing}
+
+
 def decide(name, ticket, tracker, nodes):
     """ADR-0021 `factory decide`: apply the first outcome of node `name` whose guards hold (`from`, `ci`, `if`), for a
     node whose agent only runs this command. (status, {outcome, ...}); no outcome holding is NO_GO."""
@@ -292,6 +312,25 @@ def merge_refused(effects, facts):
     if facts.get("behind"):
         return "merge refused: the branch is behind its base (update it first)"
     return None
+
+
+def wake_dependents(effects, tracker, facts):
+    """ADR-0021 `wake-dependents: <stage>`: each ticket this one blocks that is in `<stage>` and has no other open
+    blocker gets its stage label removed and added again, which fires the stage's trigger (re-adding a present
+    label fires nothing). This ticket counts as closed: its own close is what unblocks them."""
+    out = []
+    for e in effects:
+        if e["kind"] != "wake-dependents":
+            out.append(e)
+            continue
+        label = vocab.stage(e["value"])
+        for d in (tracker.blocking(e["ticket"]) if hasattr(tracker, "blocking") else []):
+            n = d["number"] if isinstance(d, dict) else d
+            f = tracker.facts(n)
+            others = f.get("blockers_open", 0) - (1 if facts.get("issue_state", "open") == "open" else 0)
+            if f["stage"] == e["value"] and others <= 0:
+                out += [{"kind": "unlabel", "ticket": n, "value": label}, {"kind": "label", "ticket": n, "value": label}]
+    return out
 
 
 def group_unlabels(effects, facts):
@@ -332,7 +371,7 @@ def guard_holds(guard, facts, tracker=None, ticket=None):
     return holds(guard, facts, {})
 
 
-GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children"}
+GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket"}
 
 
 def fix_tier(facts, default="mid"):
@@ -716,6 +755,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             human_effects += [{"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                               {"kind": "unassign", "ticket": ticket, "value": None, "on": "pr"}]
         effects[:0] = human_effects
+    effects = wake_dependents(effects, tracker, facts)
     effects[:0] = group_unlabels(effects, facts)
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
@@ -1219,7 +1259,8 @@ def run_ci_sync(dry_run=False, progress=None):
 
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "ci-sync", "decide"])
+    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "ci-sync", "decide", "ci"])
+    p.add_argument("--wait", action="store_true")
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
@@ -1261,6 +1302,13 @@ def main(argv):
             raise Bad("--tracker is github or memory:FILE")
         nodes = spec_nodes(a.spec) if a.spec else nodes_mod.load(a.nodes)
         config = config_mod.load()
+        if a.cmd == "ci":
+            if not a.issue:
+                raise Bad("ci needs --issue TICKET")
+            minutes = (config_mod.load().get("limits") or {}).get("ci_wait_minutes", 30)
+            out = ci_state(tracker, a.issue, minutes * 60 if a.wait else 0)
+            print(json.dumps(out))
+            return GO if out["ci"] == "green" else FAILED if out["ci"] == "red" else NO_GO
         if a.cmd == "decide":
             if not (a.node and a.issue):
                 raise Bad("decide needs --node NODE --issue TICKET")

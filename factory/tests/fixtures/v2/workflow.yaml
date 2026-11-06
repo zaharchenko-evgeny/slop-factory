@@ -100,7 +100,7 @@ nodes:
       done-high:  { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
 
-  # --- Review: one review per ticket, chosen by risk; runs alongside CI -------------------------
+  # --- Review: one review per ticket, chosen by risk; starts with CI, waits for it before the verdict
   review-low:
     agent: reviewer-cheap
     triggers: [{ label: "factory:review-low" }]
@@ -121,10 +121,10 @@ nodes:
       approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "factory:automerge", on: pr }, { stage: approved }] }
       changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-high" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
 
-  # --- Fix: review findings or red CI -> a new head, reviewed again -----------------------------
+  # --- Fix: review findings, red CI included -> a new head, reviewed again ---------------------
   fix:
     agent: dev
-    triggers: [{ label: "factory:fix" }, { ci: failed }]
+    triggers: [{ label: "factory:fix" }]
     when: { stage: [in-review, changes-requested, approved], fix-rounds: below-cap }
     output: push-to-source
     settings: { mode: fix, fix_rounds: 3 }
@@ -157,20 +157,24 @@ nodes:
 
   merge:                          # the guards choose; the merge effect checks head, approval and CI itself
     agent: clerk
-    triggers: [{ label: "factory:merge" }, { pr: pushed }]
+    triggers: [{ label: "factory:merge" }]
     when: { stage: approved }
     outcomes:
       conflict: { if: { pr: conflicting }, effects: [{ unlabel: "factory:merge" }, { label: "factory:update", on: pr }, { stage: changes-requested }] }
-      updated:  { if: { pr: behind }, effects: [{ update-branch: match-head }] }
+      updated-low:  { if: { pr: behind, label: "risk:low" },  effects: [{ update-branch: match-head }, { unlabel: "factory:merge" },
+                                                               { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      updated-high: { if: { pr: behind, label: "risk:high" }, effects: [{ update-branch: match-head }, { unlabel: "factory:merge" },
+                                                               { label: "factory:review-high", on: pr }, { stage: in-review }] }
       merged:   { if: { review: approved-at-head, ci: green }, effects: [{ unlabel: "factory:merge" }, { merge: match-head }] }
       waiting:  {}                # reconcile wakes it again while CI runs
 
-  finish:
+  finish:                         # a merged PR or a closed ticket: done, and its dependents may start
     agent: clerk
     triggers: [{ pr: merged }, { ticket: closed }]
     outcomes:
-      done:          { if: { pr: merged, stage: "!done" }, effects: [{ stage: done }] }
-      children-done: { if: { stage: split, children: closed }, effects: [{ stage: done }] }
+      done:          { if: { pr: merged, stage: "!done" }, effects: [{ stage: done }, { wake-dependents: ready }] }
+      children-done: { if: { stage: split, children: closed }, effects: [{ stage: done }, { wake-dependents: ready }] }
+      closed:        { if: { ticket: closed }, effects: [{ wake-dependents: ready }] }
       waiting:       {}
 
   # --- Notifications --------------------------------------------------------------------------

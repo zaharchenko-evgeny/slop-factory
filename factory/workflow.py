@@ -32,7 +32,7 @@ WORKFLOW_PATH = "workflows/delivery.yaml"
 # The team commit a `copy_project` output was copied from.
 SOURCE = "SOURCE"
 EFFECTS = {"state", "command", "uncommand", "comment", "review", "create-issues", "merge", "update-branch",
-           "set-field", "join", "request-reviewers", "park-behind-main-red"}
+           "set-field", "join", "request-reviewers", "park-behind-main-red", "wake-dependents"}
 PLACEHOLDERS = ("<tier>", "<focus>")
 # GitHub adapter: wakes that are events, not a state entered or a command given.
 EVENTS = {"manual": "manual", "pr pushed": "pull_request.synchronize", "pr opened": "pull_request.opened",

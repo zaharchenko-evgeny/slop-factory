@@ -115,6 +115,30 @@ class GateTest(unittest.TestCase):
         status, out = gate.decide("finisher", "9", idle, graph)
         self.assertEqual((status, out["outcome"]), (gate.NO_GO, None))
 
+    def test_wake_dependents_readds_the_stage_label_of_unblocked_tickets(self):
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["intake"]["outcomes"]["closing"] = {"effects": [{"wake-dependents": "ready"}]}
+        tr = MemoryTracker({"7": {"stage": "triage"}, "8": {"stage": "ready", "blockers_open": 1},
+                            "9": {"stage": "ready", "blockers_open": 2}, "10": {"stage": "in-dev", "blockers_open": 1}})
+        tr.blocking = lambda n: [{"number": "8"}, {"number": "9"}, {"number": "10"}] if str(n) == "7" else []
+        sent = []
+        apply = tr.apply
+        tr.apply = lambda e: sent.append(e) or apply(e)
+        gate.apply("intake", "closing", {"ticket": "7"}, tr, graph)
+        woken = [(e["ticket"], e["kind"]) for e in sent if e["ticket"] != "7"]
+        self.assertEqual(woken, [("8", "unlabel"), ("8", "label")])   # 9 has another blocker; 10 is not ready
+
+    def test_ci_state_waits_until_ci_concludes(self):
+        states = iter(["pending", "pending", "red"])
+        tr = MemoryTracker({"7": {"stage": "in-review", "head": "h1", "ci": "pending"}})
+        facts = tr.facts
+        tr.facts = lambda n: {**facts(n), "ci": next(states)}
+        tr.ci_failure = lambda head: "lint: E501"
+        naps = []
+        out = gate.ci_state(tr, "7", wait_seconds=600, poll=30, sleep=naps.append)
+        self.assertEqual((out["ci"], out["failing"], len(naps)), ("red", "lint: E501", 2))
+        self.assertEqual(gate.ci_state(MemoryTracker({"7": {"ci": "pending"}}), "7")["ci"], "pending")   # no wait
+
     def test_label_group_holds_one_value(self):
         graph = copy.deepcopy(NODES)
         graph["nodes"]["intake"]["outcomes"]["risky"] = {"effects": [{"label": "risk:high"}, {"stage": "ready"}]}

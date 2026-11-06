@@ -14,7 +14,7 @@ FACTORY = "factory.yaml"
 WORKFLOW = "workflow.yaml"
 ROLES = "roles"
 NO_ROLE = ("script", "human")  # harnesses that run no role
-GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children")  # the facts a guard reads (gate.GUARD_KEYS)
+GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children", "ticket")  # the facts a guard reads (gate.GUARD_KEYS)
 STARTUP = ".air/cloud/startup.sh"  # Air runs it from the checkout; it runs `factory setup` (ADR-0021)
 
 
@@ -220,7 +220,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red")
+           "request-reviewers", "park-behind-main-red", "wake-dependents")
 
 
 def _name(label, prefix):

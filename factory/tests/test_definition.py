@@ -160,7 +160,7 @@ class DefinitionTest(unittest.TestCase):
 
     def test_compile_triggers(self):
         wakes = {k: v["wakes_on"] for k, v in definition.to_project(definition.load(self.root))[1]["nodes"].items()}
-        self.assertEqual(wakes["fix"], ["command fix", "run quality-gates"])   # ci: failed
+        self.assertEqual(wakes["fix"], ["command fix"])   # red CI reaches it through the reviewer's verdict
         self.assertEqual(wakes["finish"], ["state pr-merged", "ticket closed"])
         self.assertEqual(wakes["notify"], ["state blocked", "state needs-answers", "command needs-human", "webhook inbox"])
         self.assertEqual(wakes["retro"], ["schedule retro"])
