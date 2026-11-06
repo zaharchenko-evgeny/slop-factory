@@ -55,10 +55,7 @@ skills:
     source: "github:cursor/plugins@4dd1d05818d1"
     path: pstack/skills/principle-test-behavior-not-implementation
     sha256: c8b25ca3336056109d6eaf5a973e676945b389ab3d03a12ae8c8ba360869ee21
-  to-tickets:
-    source: "github:mattpocock/skills@a496f5513d4a"
-    path: skills/engineering/to-tickets
-    sha256: 293c186d02cec4a4f502c4ffdc07a5c4c7e89745cd7f9fb90a7258cdf845fb9f
+  to-tickets: { path: skills/to-tickets }   # a local copy: this team edited it after vendoring
   retro:
     source: "github:mattpocock/skills@a496f5513d4a"
     path: skills/engineering/retro

@@ -28,6 +28,7 @@ def fetch(spec, tmp):
     """The directory of a sourced skill (`github:owner/repo@commit` or `npm:package@version`), fetched into `tmp`."""
     kind, _, ref = spec["source"].partition(":")
     name, _, version = ref.rpartition("@")
+    Path(tmp).mkdir(parents=True, exist_ok=True)
     if kind == "npm":
         subprocess.run(["npm", "pack", f"{name}@{version}", "--pack-destination", tmp], check=True, capture_output=True)
         subprocess.run(["tar", "-xzf", str(next(Path(tmp).glob("*.tgz"))), "-C", tmp], check=True)
