@@ -121,5 +121,18 @@ class ProjectPortsTest(unittest.TestCase):
             MemoryTracker({7: {"stage": "ready"}}).state(7)
 
 
+
+class TicketRepositoriesTest(unittest.TestCase):
+    def test_full_names_map_to_repository_names(self):
+        from gate_port import ticket_repositories
+        names = ["slop-factory", "slop-eval-factory"]
+        self.assertEqual(ticket_repositories("repositories: zaharchenko-evgeny/slop-factory", names, "slop-factory"),
+                         ["slop-factory"])
+        self.assertEqual(ticket_repositories("repositories: slop-factory, o/slop-eval-factory", names, "slop-factory"),
+                         ["slop-factory", "slop-eval-factory"])
+        with self.assertRaises(ValueError):
+            ticket_repositories("repositories: o/other", names, "slop-factory")
+
+
 if __name__ == "__main__":
     unittest.main()
