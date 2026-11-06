@@ -796,7 +796,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         if e["kind"] == "stage":
             e["event"] = payload.get("event")
         if e["kind"] == "review":
-            e["focus"], e["round"] = payload.get("focus"), payload.get("round")
+            # ADR-0021: a definition team has no focuses; its review is named after the node that wrote it
+            e["focus"] = payload.get("focus") or (name if step is None else None)
+            e["round"] = payload.get("round")
             e["findings"], e["summary"], e["run_id"] = payload.get("findings"), payload.get("summary"), payload.get("run_id")
         if e["kind"] == "join":
             e["tier"] = payload.get("tier")
