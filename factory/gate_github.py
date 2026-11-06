@@ -719,6 +719,10 @@ class GitHubGateTracker(DescriptorPort):
         """The parent issue number of sub-issue `n`, else None."""
         return self.tickets.parent(n)
 
+    def children(self, n):
+        """The sub-issues of `n` (the `children` guard, ADR-0021)."""
+        return self.tickets.children(n)
+
     def blocking(self, n):
         """Issues whose native or body fallback dependency list names `n` as a blocker."""
         return self.tickets.blocking(n)
