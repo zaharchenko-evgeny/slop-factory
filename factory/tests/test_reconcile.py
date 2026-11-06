@@ -257,6 +257,20 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(logged(t, "label"), ['"factory:fix"'])
         self.assertEqual(t.get_stage(t.tickets[1]), "changes-requested")
 
+    def test_conflict_uses_the_fix_stage_of_the_definition(self):
+        import copy
+        defn = copy.deepcopy(self.defn)
+        for n in defn["workflow"]["nodes"].values():
+            for oc in (n.get("outcomes") or {}).values():
+                for fx in (oc or {}).get("effects") or []:
+                    if fx.get("stage") == "changes-requested":
+                        fx["stage"] = "repair"
+        tr = MemoryTracker({1: self.pr(conflict=True)})
+        tracker = self.config["tracker"]
+        reconcile.recover_definition(tr, defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
+                                     self.config["limits"], now=NOW)
+        self.assertEqual(tr.get_stage(tr.tickets[1]), "repair")
+
     def test_conflict_at_the_fix_round_cap_or_fresh_is_left_alone(self):
         self.assertEqual(self.recover(self.pr(conflict=True, fix_rounds=3))[1], [])
         self.assertEqual(self.recover(self.pr(conflict=True, since=FRESH))[1], [])

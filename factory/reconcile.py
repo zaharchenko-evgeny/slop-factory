@@ -175,12 +175,12 @@ def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress)
             progress(r)
 
 
-def send(tracker, n, nodes, stage, head, kind, label, on, why):
+def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="changes-requested"):
     def apply(**e):
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
     if kind == "conflict":
         apply(kind="label", value=label or vocab.cmd("fix-<tier>", "cheap"), on="pr")
-        apply(kind="stage", value="changes-requested")
+        apply(kind="stage", value=fix_stage)
     elif kind == "blocked":
         apply(kind="label", value=vocab.needs_human())
         apply(kind="comment", value=f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets {vocab.stage('ready')}.")
@@ -257,7 +257,7 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             r = {"ticket": n, "stage": stage, "node": node, "reconcile": kind, "why": why}
             results.append(r)
             if not dry_run:
-                send(tracker, n, None, stage, head, kind, label, on, why)
+                send(tracker, n, None, stage, head, kind, label, on, why, fix_stage=fix[2] if fix else None)
             if progress:
                 progress(r)
         except Exception as e:  # one ticket failing does not stop the others
