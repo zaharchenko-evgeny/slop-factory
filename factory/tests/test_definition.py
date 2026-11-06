@@ -306,6 +306,19 @@ class DefinitionTest(unittest.TestCase):
         finally:
             config.set_team(before)
 
+    def test_old_command_templates_never_match_for_a_definition_team(self):
+        import config
+        import vocab
+        before = config._team
+        config.set_team(self.root)
+        try:
+            for name in ("implement-<tier>", "fix-<tier>", "update-<tier>", "review-<focus>", "rereview-<focus>"):
+                self.assertFalse("factory:fix".startswith(vocab.prefix(name)), name)
+                self.assertTrue(vocab.cmd(name, "x").startswith(vocab.UNDECLARED))
+            self.assertEqual(vocab.cmd("review-low"), "factory:review-low")   # a declared one still resolves
+        finally:
+            config.set_team(before)
+
     def test_cli_validate(self):
         run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
                              text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
