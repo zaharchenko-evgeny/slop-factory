@@ -1,11 +1,9 @@
-# Slop factory workflow: how the factory works. Stages, shared settings, then the nodes in
-# delivery order. A node = agent + environment + triggers + outcomes; the agent reports one
-# outcome and the gate applies its effects. Several triggers on a node are OR. An outcome's `if`
-# is a guard on ticket/PR fields; when it fails the gate applies `else`.
-# Variants of an engine step are separate nodes named <step>-<variant>: implement-cheap,
-# implement-mid, implement-strong (by complexity), fix-*, update-*, review-<focus>. Each has its own
-# agent; the engine picks the variant (complexity, risk) and adds its label. Outcome names of
-# these steps and of the gate nodes are the engine's.
+# Slop factory workflow: how the factory works. Stages, shared settings, then the nodes in delivery
+# order. Every node is an agent + an environment + triggers + outcomes: the agent reports one outcome and
+# the gate applies its effects (ADR-0021). Several triggers on a node are OR. States are stage labels, other
+# labels (`risk:*` and `complexity:*` hold one value each) and PR states; routing is the labels outcomes add.
+# Deterministic rules live only in `when`, an outcome's `if` (when it fails the gate applies `else`, or
+# refuses) and the effects' own checks (a merge needs an approved head with green CI).
 # Agents, environments and webhooks are defined in factory.yaml; nodes name them.
 # Merge order: factory.yaml defaults -> environment -> role -> agent -> settings below -> node.
 
@@ -13,7 +11,7 @@
 stages:
   label_prefix: "factory:"
   final: [done, not-actionable]
-  waiting: [draft, blocked, needs-answers, investigating]
+  waiting: [draft, blocked, needs-answers]
 
 settings:                         # every node inherits these; a node overrides them
   environment: engine             # where a node runs unless it names one
@@ -33,10 +31,10 @@ nodes:
     agent: human
     triggers: [manual]
     outcomes:
-      triage: { if: { stage: "!done" }, effects: [{ stage: triage }] }   # run intake again
-      ready:  { if: { stage: "!done" }, effects: [{ stage: ready }] }    # skip intake or restart
+      triage: { if: { stage: "!done" }, effects: [{ stage: triage }] }
+      ready:  { if: { stage: "!done" }, effects: [{ stage: ready }] }
 
-  # --- Intake: triage -> ready ----------------------------------------------------------------
+  # --- Triage: scope, estimate when it can ------------------------------------------------------
   intake:
     agent: router
     triggers: [{ stage: triage }]
@@ -45,173 +43,147 @@ nodes:
     settings: { max_changed_lines: 400, max_repositories: 3 }
     prompt: >-
       Scope the ticket in the trigger. Split it above {{ settings.max_changed_lines }} changed
-      lines or {{ settings.max_repositories }} repositories.
+      lines or {{ settings.max_repositories }} repositories. Estimate size and risk when the ticket shows them.
     outcomes:
-      proceed:        { effects: [{ set-field: risk }, { set-field: complexity }, { stage: ready }] }
+      small-low:      { effects: [{ label: "complexity:small" },  { label: "risk:low" },  { stage: ready }] }
+      small-high:     { effects: [{ label: "complexity:small" },  { label: "risk:high" }, { stage: ready }] }
+      medium-low:     { effects: [{ label: "complexity:medium" }, { label: "risk:low" },  { stage: ready }] }
+      medium-high:    { effects: [{ label: "complexity:medium" }, { label: "risk:high" }, { stage: ready }] }
+      large-high:     { effects: [{ label: "complexity:large" },  { label: "risk:high" }, { stage: ready }] }
+      ready:          { effects: [{ stage: ready }] }               # no estimate: dispatch makes one
       grill:          { effects: [{ comment: questions }, { stage: needs-answers }] }
       split:          { effects: [{ create-issues: children }, { stage: split }] }
       not-actionable: { effects: [{ comment: reason }, { stage: not-actionable }] }
-      bug:            { enabled: false, effects: [{ stage: investigating }] }
 
-  start:                          # ready -> in-dev; complexity small/medium/large picks implement-cheap/mid/strong
-    agent: gate
-    run: uv run factory/gate.py sweep
+  # --- Ready: estimate if needed, start the developer the size needs ----------------------------
+  dispatch:
+    agent: dispatcher
     triggers: [{ stage: ready }]
     when: { stage: ready, blockers: closed }
-    outcomes:
-      started: { if: { stage: ready }, effects: [{ label: "factory:implement-<tier>" }, { stage: in-dev }] }
-
-  # --- Implement: in-dev -> in-review ---------------------------------------------------------
-  implement-cheap:
-    agent: dev-cheap
-    triggers: [{ label: "factory:implement-cheap" }]
-    when: { stage: in-dev }
-    output: create-pr
-    prompt: Implement the ticket in the trigger (mode `implement`).
-    outcomes: &implement
-      done:       { effects: [{ unlabel: "factory:implement-*" }, { stage: in-review }] }
-      error:      { effects: [{ unlabel: "factory:implement-*" }, { label: "factory:implement-<next tier>" }, { stage: in-dev }] }
-      blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
-      failed:     { effects: [{ comment: reason }, { stage: blocked }] }
-      env-broken: { effects: [{ unlabel: "factory:implement-*" }, { park-behind-main-red: failing_check }, { stage: ready }] }
-
-  implement-mid:
-    agent: dev
-    triggers: [{ label: "factory:implement-mid" }]
-    when: { stage: in-dev }
-    output: create-pr
-    prompt: Implement the ticket in the trigger (mode `implement`).
-    outcomes: *implement
-
-  implement-strong:
-    agent: dev-strong
-    triggers: [{ label: "factory:implement-strong" }]
-    when: { stage: in-dev }
-    output: create-pr
-    prompt: Implement the ticket in the trigger (mode `implement`).
-    outcomes: *implement
-
-  # --- Review: in-review -> approved | changes-requested --------------------------------------
-  # join asks for the reviews `required` by the ticket's risk; each focus is a node.
-  review-full:
-    agent: reviewer
-    triggers: [{ label: "factory:review-full" }, { label: "factory:rereview-full" }]
-    when: { stage: in-review, ci: [green] }
     output: read-only
-    settings: { focus: [full, structure-security] }
-    prompt: Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}.
-    outcomes: &review
-      approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-<focus>" }] }
-      changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-<focus>" }] }
+    settings: { small_lines: 150, medium_lines: 400 }
+    outcomes:
+      small:  { effects: [{ label: "complexity:small" },  { label: "factory:implement-small" },  { stage: in-dev }] }
+      medium: { effects: [{ label: "complexity:medium" }, { label: "factory:implement-medium" }, { stage: in-dev }] }
+      large:  { effects: [{ label: "complexity:large" },  { label: "factory:implement-large" },  { stage: in-dev }] }
 
-  review-cheap:
+  # --- Implement: the developer sets the risk it found and picks the review ---------------------
+  implement-small:
+    agent: dev-cheap
+    triggers: [{ label: "factory:implement-small" }]
+    when: { stage: in-dev }
+    output: create-pr
+    prompt: Implement the ticket in the trigger (mode `implement`).
+    outcomes:
+      done-low:   { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high:  { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      error:      { effects: [{ unlabel: "factory:implement-small" }, { label: "factory:implement-medium" }] }   # retry on a stronger model
+      blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
+
+  implement-medium:
+    agent: dev
+    triggers: [{ label: "factory:implement-medium" }]
+    when: { stage: in-dev }
+    output: create-pr
+    prompt: Implement the ticket in the trigger (mode `implement`).
+    outcomes:
+      done-low:   { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high:  { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      error:      { effects: [{ unlabel: "factory:implement-medium" }, { label: "factory:implement-large" }] }
+      blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
+
+  implement-large:
+    agent: dev-strong
+    triggers: [{ label: "factory:implement-large" }]
+    when: { stage: in-dev }
+    output: create-pr
+    prompt: Implement the ticket in the trigger (mode `implement`).
+    outcomes:
+      done-low:   { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high:  { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
+
+  # --- Review: one review per ticket, chosen by risk; runs alongside CI -------------------------
+  review-low:
     agent: reviewer-cheap
-    triggers: [{ label: "factory:review-cheap" }, { label: "factory:rereview-cheap" }]
-    when: { stage: in-review, ci: [green] }
+    triggers: [{ label: "factory:review-low" }]
+    when: { stage: in-review }
     output: read-only
     settings: { focus: [behaviour] }
     prompt: Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}.
-    outcomes: *review
-
-  join:                           # counts agent reviews and people with write access; other bots never block
-    agent: gate
-    run: uv run factory/gate.py sweep
-    triggers: [{ pr: reviewed }, { ci: failed }]
-    when: { stage: in-review, ci: [green, red] }
-    settings:
-      required: { low: [cheap], high: [full] }   # review focuses each risk needs at the head
     outcomes:
-      changes:  { effects: [{ label: "factory:fix-<tier>" }, { stage: changes-requested }] }
-      approved: { if: { ci: green }, else: changes, effects: [{ stage: approved }] }
-      waiting:  { if: { stage: in-review }, effects: [{ join: all-approve }] }
+      approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "factory:automerge", on: pr }, { stage: approved }] }
+      changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-low" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
 
-  # --- Fix and update: changes-requested -> in-review -----------------------------------------
-  fix-cheap:
-    agent: dev-cheap
-    triggers: [{ label: "factory:fix-cheap" }]
-    when: { stage: changes-requested, round: complete, fix-rounds: below-cap }
-    output: push-to-source
-    settings: { fix_rounds: 3 }   # the gate blocks the ticket after this many rounds
-    prompt: Fix the blocking findings and CI failures on the PR in the trigger (mode `fix`).
-    outcomes: &fix
-      done:           { effects: [{ unlabel: "factory:fix-*" }, { request-reviewers: changes }, { stage: in-review }] }
-      blocked:        { if: { stage: changes-requested }, effects: [{ comment: reason }, { stage: blocked }] }
-      env-broken:     { if: { stage: changes-requested }, effects: [{ unlabel: "factory:fix-*" }, { park-behind-main-red: failing_check }, { stage: ready }] }
-      nothing-to-fix: { if: { stage: changes-requested }, effects: [{ unlabel: "factory:fix-*" }, { join: all-approve }, { stage: in-review }] }
+  review-high:
+    agent: reviewer
+    triggers: [{ label: "factory:review-high" }]
+    when: { stage: in-review }
+    output: read-only
+    settings: { focus: [full, structure-security] }
+    prompt: Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}.
+    outcomes:
+      approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "factory:automerge", on: pr }, { stage: approved }] }
+      changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-high" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
 
-  fix-mid:
+  # --- Fix: review findings or red CI -> a new head, reviewed again -----------------------------
+  fix:
     agent: dev
-    triggers: [{ label: "factory:fix-mid" }]
-    when: { stage: changes-requested, round: complete, fix-rounds: below-cap }
+    triggers: [{ label: "factory:fix" }, { ci: failed }]
+    when: { stage: [in-review, changes-requested, approved], fix-rounds: below-cap }
     output: push-to-source
     settings: { fix_rounds: 3 }
     prompt: Fix the blocking findings and CI failures on the PR in the trigger (mode `fix`).
-    outcomes: *fix
+    outcomes:
+      done-low:  { effects: [{ unlabel: "factory:fix" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high: { effects: [{ unlabel: "factory:fix" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      blocked:   { effects: [{ unlabel: "factory:fix" }, { comment: reason }, { stage: blocked }] }
 
-  fix-strong:
-    agent: dev-strong
-    triggers: [{ label: "factory:fix-strong" }]
-    when: { stage: changes-requested, round: complete, fix-rounds: below-cap }
-    output: push-to-source
-    settings: { fix_rounds: 3 }
-    prompt: Fix the blocking findings and CI failures on the PR in the trigger (mode `fix`).
-    outcomes: *fix
-
-  update-cheap:                   # a merge conflict
+  update:                         # a merge conflict
     agent: dev-cheap
-    triggers: [{ label: "factory:update-cheap" }]
+    triggers: [{ label: "factory:update" }]
     when: { stage: changes-requested }
     output: push-to-source
     prompt: Resolve the merge conflict on the PR in the trigger (mode `update`).
-    outcomes: &update
-      resolved:     { effects: [{ unlabel: "factory:update-*" }, { stage: in-review }] }
-      escalate:     { effects: [{ unlabel: "factory:update-*" }, { label: "factory:update-<next tier>" }, { stage: changes-requested }] }
-      unresolvable: { effects: [{ unlabel: "factory:update-*" }, { comment: reason }, { stage: blocked }] }
+    outcomes:
+      resolved:     { effects: [{ unlabel: "factory:update" }, { label: "factory:automerge", on: pr }, { stage: approved }] }
+      unresolvable: { effects: [{ unlabel: "factory:update" }, { comment: reason }, { stage: blocked }] }
 
-  update-strong:
-    agent: dev-strong
-    triggers: [{ label: "factory:update-strong" }]
-    when: { stage: changes-requested }
-    output: push-to-source
-    prompt: Resolve the merge conflict on the PR in the trigger (mode `update`). A smaller model escalated it.
-    outcomes: *update
+  # --- Approved -> merged -> done ---------------------------------------------------------------
+  automerge:                      # an agent decides; high risk always goes to a person
+    agent: approver
+    triggers: [{ label: "factory:automerge" }]
+    when: { stage: approved }
+    output: read-only
+    settings: { risky_paths: ["engine/**", ".github/**"] }
+    outcomes:
+      merge:       { if: { label: "risk:low" }, else: needs-human,
+                     effects: [{ unlabel: "factory:automerge" }, { label: "factory:merge", on: pr }] }
+      needs-human: { effects: [{ unlabel: "factory:automerge" }, { comment: reason }, { label: "factory:needs-human" }] }
 
-  # --- Approved -> merged -> done -------------------------------------------------------------
-  reopen:                         # a new head or red CI after approval
-    agent: gate
-    run: uv run factory/gate.py sweep
-    triggers: [{ pr: pushed }, { ci: failed }]
+  merge:                          # the guards choose; the merge effect checks head, approval and CI itself
+    agent: clerk
+    triggers: [{ label: "factory:merge" }, { pr: pushed }]
     when: { stage: approved }
     outcomes:
-      reopened: { if: { stage: approved }, effects: [{ stage: in-review }] }
-
-  merge:
-    agent: gate
-    run: uv run factory/gate.py sweep
-    triggers: [{ stage: approved }]   # reconcile wakes it again while CI runs
-    when: { stage: approved, round: complete-at-head, ci: green }
-    settings: { auto_merge: true, max_risk: high }   # above max_risk a person merges
-    outcomes:
-      merged:  { if: { stage: approved }, effects: [{ merge: match-head }] }
-      updated: { if: { stage: approved }, effects: [{ update-branch: match-head }] }
-      waiting: { if: { stage: approved }, effects: [{ comment: reason, on: pr }] }
+      conflict: { if: { pr: conflicting }, effects: [{ unlabel: "factory:merge" }, { label: "factory:update", on: pr }, { stage: changes-requested }] }
+      updated:  { if: { pr: behind }, effects: [{ update-branch: match-head }] }
+      merged:   { if: { review: approved-at-head, ci: green }, effects: [{ unlabel: "factory:merge" }, { merge: match-head }] }
+      waiting:  {}                # reconcile wakes it again while CI runs
 
   finish:
-    agent: gate
-    run: uv run factory/gate.py sweep
-    triggers: [{ pr: merged }, { ticket: closed }, { stage: blocked }, { ticket: commented }]
+    agent: clerk
+    triggers: [{ pr: merged }, { ticket: closed }]
     outcomes:
-      answered:      { if: { stage: needs-answers }, effects: [{ stage: triage }] }
-      children-done: { if: { stage: split }, effects: [{ stage: done }] }
-      child-blocked: { if: { stage: split }, effects: [{ comment: reason }, { stage: blocked }] }
-      conflict:      { if: { stage: approved }, effects: [{ label: "factory:update-cheap" }, { stage: changes-requested }] }
-      merged:        { if: { stage: "!done" }, effects: [{ stage: done }] }
+      done:          { if: { pr: merged, stage: "!done" }, effects: [{ stage: done }] }
+      children-done: { if: { stage: split, children: closed }, effects: [{ stage: done }] }
+      waiting:       {}
 
   # --- Notifications --------------------------------------------------------------------------
   notify:
     agent: inbox
     environment: team
-    triggers: [{ stage: blocked }, { stage: needs-answers }, { webhook: inbox }]
+    triggers: [{ stage: blocked }, { stage: needs-answers }, { label: "factory:needs-human" }, { webhook: inbox }]
     output: read-only
     settings: { github_user: zaharchenko-evgeny, inbox_title: Factory inbox }
     outcomes:
@@ -243,56 +215,28 @@ nodes:
     triggers: [manual]
     outcomes:
       accepted: { if: { pr: approved }, effects: [{ merge: match-head }] }
-      rejected: { effects: [{ comment: reason, on: pr }, { close: pr }] }
+      rejected: { effects: [{ comment: reason, on: pr }] }
 
   # --- Routines -------------------------------------------------------------------------------
   reconcile:                      # re-fires missed wakes; polls CI for merge (Air has no CI-success trigger)
-    agent: gate
-    run: uv run factory/cli.py reconcile
+    agent: ops
     environment: team
     triggers: [{ schedule: "*/15 * * * *" }]
+    settings: { command: reconcile }
     outcomes:
       reconciled: {}
 
-  recover:
-    agent: gate
-    run: uv run factory/gate.py sweep --stale
-    triggers: [manual]
-    outcomes:
-      blocked: { effects: [{ comment: reason }, { stage: blocked }] }
-
   doctor-engine:
-    agent: gate
-    run: uv run factory/cli.py doctor
+    agent: ops
+    settings: { command: doctor }
     triggers: [{ schedule: "0 5 * * *" }]
     outcomes:
       probed: {}
 
   doctor-team:
-    agent: gate
-    run: uv run factory/cli.py doctor
+    agent: ops
+    settings: { command: doctor }
     environment: team
     triggers: [{ schedule: "0 5 * * *" }]
     outcomes:
       probed: {}
-
-  # --- Not built yet --------------------------------------------------------------------------
-  investigate:                    # ticket 161
-    enabled: false
-    agent: dev
-    triggers: [{ stage: investigating }]
-    when: { stage: investigating }
-    output: read-only
-    outcomes:
-      bug:              { effects: [{ comment: diagnosis }, { label: "factory:implement-mid" }, { stage: in-dev }] }
-      intended:         { effects: [{ comment: reason }, { stage: not-actionable }] }
-      cannot-reproduce: { effects: [{ comment: questions }, { stage: needs-answers }] }
-
-  adopt:                          # ticket 160; a person adds factory:adopt to a PR with no ticket stage
-    enabled: false
-    agent: router
-    triggers: [{ label: "factory:adopt" }]
-    when: { stage: none }
-    output: read-only
-    outcomes:
-      adopted: { if: { stage: none }, effects: [{ set-field: risk }, { stage: in-review }] }

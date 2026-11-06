@@ -84,6 +84,18 @@ roles:
       # - adr-reading: { path: roles/reviewer/skills/adr-reading }      # a role-only local skill
       # - security-review: { source: "github:owner/repo@<sha>", path: skills/security-review, sha256: ... }
     mcp: {}
+  dispatcher:
+    description: Starts a ready ticket with the developer its size needs, estimating it when it has no size
+    skills: []
+    mcp: {}
+  approver:
+    description: Decides whether an approved PR merges automatically or goes to a person
+    skills: []
+    mcp: {}
+  ops:
+    description: Runs one engine command and reports its result
+    skills: []
+    mcp: {}
   router:
     description: Scopes a ticket, sets risk and complexity, or asks, splits, or rejects it
     skills: [to-tickets]
@@ -92,17 +104,20 @@ roles:
 # Agents: a role (above; roles/<role>/: role.md, setup.sh) + a model
 # + access + settings. `gate` and `human` have no role.
 agents:
-  gate:   { harness: script, model: luna, access: read-only }   # runs `run`, never judges
-  human:  { harness: human }                                     # a person; never deployed
-  router: { role: router, model: luna, access: read-only }
-  dev-cheap: { role: developer, model: luna, access: full }
-  dev:       { role: developer, model: sonnet, reasoning: high, access: full,
-               settings: { size_stop_factor: 1.5 } }             # stop and propose a split past 1.5x the estimate
-  dev-strong: { role: developer, model: sonnet, reasoning: max, access: full }
+  human:          { harness: human }                               # a person; never deployed
+  router:         { role: router, model: luna, access: read-only }
+  dispatcher:     { role: dispatcher, model: luna, access: read-only }
+  dev-cheap:      { role: developer, model: luna, access: full }
+  dev:            { role: developer, model: sonnet, reasoning: high, access: full,
+                    settings: { size_stop_factor: 1.5 } }          # stop and propose a split past 1.5x the estimate
+  dev-strong:     { role: developer, model: sonnet, reasoning: max, access: full }
   reviewer:       { role: reviewer, model: sol, access: read-only }
   reviewer-cheap: { role: reviewer, model: luna, access: read-only }
-  retro:  { role: retro, model: sonnet, access: full }
-  inbox:  { role: inbox, model: luna, access: read-only, settings: { provider: github-inbox } }
+  approver:       { role: approver, model: luna, access: read-only }
+  clerk:          { run: decide, model: luna, access: read-only }  # runs `factory decide`: the node's guards choose
+  ops:            { role: ops, model: luna, access: read-only }
+  retro:          { role: retro, model: sonnet, access: full }
+  inbox:          { role: inbox, model: luna, access: read-only, settings: { provider: github-inbox } }
 
 # Environments: where agents run. One repository is `main`; the others are additional.
 environments:

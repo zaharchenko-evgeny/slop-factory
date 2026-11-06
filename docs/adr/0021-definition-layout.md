@@ -29,17 +29,19 @@ Decision:
    `setup.sh` that installs the role's tools, and any file the role needs. No
    YAML lives there.
 4. **A node** is an agent + an environment + `triggers` + `when` + `outcomes`,
-   with optional `model`, `settings`, `prompt` and `enabled: false`. Several
-   triggers are OR. The agent reports one outcome; the gate applies its
-   effects. An outcome's `if` is a guard on ticket and PR fields; when it
-   fails the gate applies `else` (guards: `stage`, `ci`, `risk`, `complexity`).
-   Variants are separate nodes; there is no matrix and no model router. The
-   engine's steps keep their names and outcomes: a node `<step>-<variant>`
-   (`implement-cheap`, `fix-strong`, `update-cheap`, `review-full`) is that
-   step for one variant, with its own agent and model, and the engine picks
-   the variant as before (tier from complexity, review focuses from risk via
-   the `join` node's `required` setting) and adds its label. They compile
-   into one engine node with `tiers` or `focuses` (`definition.to_project`).
+   with optional `model`, `settings`, `prompt` and `enabled: false`. Every node
+   is an agent node (#674-#678): the agent reports one outcome and the gate
+   applies its static effects (`stage`, `label`, `unlabel`, `comment`,
+   `review`, `merge`, `update-branch`, `create-issues`). States are stage
+   labels, other labels and PR states; a label `<group>:<value>` (`risk:low`,
+   `complexity:small`) holds one value per group. Routing is the labels
+   outcomes add; variants are separate nodes; there is no matrix, router,
+   tier or focus. Deterministic rules live in three places only: `when`, an
+   outcome's `if` (facts: `stage`, `label`, `pr`, `ci`, `review`, `blockers`,
+   `children`; when it fails the gate applies `else`, or refuses), and the
+   effects' own checks (a merge needs an approved head with green CI). A step
+   with no judgement runs a cheap agent with `run: decide`: `factory decide`
+   applies the node's first outcome whose guards hold. Several triggers are OR.
 5. **An environment** lists its repositories; exactly one is `main` (branches,
    PRs and the node's output apply there). A writable repository that is not
    `main` needs `token_env`, declared in `env`. An optional `setup` script

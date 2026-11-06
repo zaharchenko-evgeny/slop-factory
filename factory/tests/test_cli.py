@@ -338,7 +338,8 @@ class ImportTimeBoundaryTest(unittest.TestCase):
 class EnvRolesTest(unittest.TestCase):
     def test_prints_roles_of_enabled_agent_nodes_in_the_environment(self):
         self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
-        cases = {"slop": {"engine": "developer\nreviewer\nrouter\n", "knowledge": "retro\nreviewer\n", "team": "inbox\n"},
+        cases = {"slop": {"engine": "approver\nclerk\ndeveloper\ndispatcher\nops\nreviewer\nrouter\n",
+                          "knowledge": "retro\nreviewer\n", "team": "inbox\nops\n"},
                  "slop-v1": {"read": "reviewer\nrouter\n", "write": "developer\n", "ops": "distill\nretro\n"}}
         for fixture, envs in cases.items():
             cfg.set_team(ROOT / "factory/tests/fixtures" / fixture)
