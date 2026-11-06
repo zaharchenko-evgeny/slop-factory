@@ -70,8 +70,8 @@ the same format as implement mode. A failed check cannot be handed off as
 `done`.
 
 When `check` prints `merge_main: true` (the PR conflicts with `main`), first
-merge `origin/main` into the branch and resolve the conflicts, then address the
-findings. A fix round that only resolves the conflict, with no review finding,
+merge `origin/main` into the branch and resolve the conflicts as in `update` mode
+(the `resolve-merge-conflicts` skill), then address the findings. A fix round that only resolves the conflict, with no review finding,
 is valid.
 
 ## Mode `update`
@@ -81,7 +81,9 @@ Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
 1. Merge `origin/main` into the branch with a merge commit. Never rebase or
    force-push.
 2. Resolve only the conflicting hunks and keep the intent of both sides. Add
-   nothing else.
+   nothing else. Use the `resolve-merge-conflicts` skill: start with its summary
+   (`python3 ~/.agents/skills/resolve-merge-conflicts/scripts/extract_conflict_context.py`),
+   then one file at a time with `--file`; open a whole file only when the compact view is not enough.
 3. Regenerate generated files (the deploy fixture, the chart) with their
    generator instead of merging them by hand.
 4. Rerun the acceptance checks and the pre-review checks, and record them in

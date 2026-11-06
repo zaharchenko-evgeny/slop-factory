@@ -192,6 +192,15 @@ nodes:
       notified: { effects: [{ comment: message }] }
       skipped:  {}
 
+  walkthrough:                    # an approved PR a person must merge: one comment that orients them, no review
+    agent: walkthrough
+    triggers: [{ label: "factory:needs-human" }]
+    when: { stage: approved }
+    output: read-only
+    outcomes:
+      posted:  { effects: [{ comment: summary, on: pr }] }
+      skipped: {}
+
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
   retro:
     agent: retro
