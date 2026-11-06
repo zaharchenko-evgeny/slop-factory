@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from unittest import mock
 from pathlib import Path
 
@@ -1213,10 +1214,12 @@ class LabelsTest(unittest.TestCase):
 class FakeTags:
     """A YouTrack runner over a tag inventory {name: id}; records writes."""
 
-    def __init__(self, tags):
-        self.tags, self.writes = dict(tags), []
+    def __init__(self, tags, shared=()):
+        self.tags, self.shared, self.writes = dict(tags), set(shared), []
 
     def __call__(self, method, path, body=None):
+        if method == "GET" and path.startswith("/api/issues"):  # tags another project's issues carry
+            return [{"idReadable": "X-1"}] if any(urllib.parse.quote(f"{{{t}}}") in path for t in self.shared) else []
         if method == "GET":
             return [{"id": i, "name": n} for n, i in self.tags.items()]
         self.writes.append((method, path, body))
@@ -1240,8 +1243,8 @@ class YouTrackTagsTest(unittest.TestCase):
         self.assertFalse([t for t in plan["tags"] if "<" in t])
         self.assertEqual(plan["owned_tag_prefixes"], ["factory:"])
 
-    def run_deploy(self, mode, allow_delete, have):
-        fake = FakeTags(have)
+    def run_deploy(self, mode, allow_delete, have, shared=()):
+        fake = FakeTags(have, shared)
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                 mock.patch.object(deploy, "read_state", return_value=([], [])):
@@ -1267,6 +1270,12 @@ class YouTrackTagsTest(unittest.TestCase):
         code, _, _, writes = self.run_deploy("--apply", True, {"factory:ready": "1", "factory:old": "2", "bug": "3"})
         self.assertEqual(code, 0)
         self.assertEqual([w[:2] for w in writes], [("POST", "/api/tags?fields=id,name"), ("DELETE", "/api/tags/2")])
+
+    def test_tag_used_by_another_project_is_never_removed(self):
+        code, out, _, writes = self.run_deploy("--apply", True, {"factory:ready": "1", "factory:shared": "2"}, shared=["factory:shared"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("factory:shared", out)
+        self.assertEqual([w[:2] for w in writes], [("POST", "/api/tags?fields=id,name")])
 
 
 if __name__ == "__main__":

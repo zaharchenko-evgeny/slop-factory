@@ -147,6 +147,14 @@ class YouTrackTicketStore:
         """{name: id} of the tags the token can see."""
         return {t["name"]: t["id"] for t in self.run("GET", f"/api/tags?fields=id,name&{TOP}")}
 
+    def used_outside_project(self, name):
+        """Whether an issue outside the configured project carries the tag; True when no project is configured, as
+        ownership cannot then be established. Tags are account-wide, so only a tag no other project uses is safe to delete."""
+        if not self.project:
+            return True
+        query = urllib.parse.quote(f"tag: {{{name}}} and project: -{{{self.project}}}")
+        return bool(self.run("GET", f"/api/issues?query={query}&fields=idReadable&$top=1"))
+
     def create_tag(self, name):
         self.run("POST", "/api/tags?fields=id,name", {"name": name})
 

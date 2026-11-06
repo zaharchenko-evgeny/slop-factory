@@ -618,13 +618,15 @@ def tag_store(plan: dict, run=None):
 
 def reconcile_tags(plan: dict, run=None) -> list[tuple]:
     """(action, tag) per required YouTrack tag to create and per factory-owned tag no longer required to remove;
-    tags outside the factory's namespaces are never listed for removal."""
+    tags outside the factory's namespaces, or still used by another project's issues, are never listed for removal."""
     if not plan.get("tags"):
         return []
-    have = tag_store(plan, run).list_tags()
+    store = tag_store(plan, run)
+    have = store.list_tags()
     owned = tuple(plan.get("owned_tag_prefixes") or [])
     return [("create", t) for t in plan["tags"] if t not in have] + \
-        [("remove", t) for t in sorted(have) if owned and t.startswith(owned) and t not in plan["tags"]]
+        [("remove", t) for t in sorted(have) if owned and t.startswith(owned) and t not in plan["tags"]
+         and not store.used_outside_project(t)]
 
 
 def labels(nodes: dict, config: dict) -> list[str]:

@@ -215,6 +215,17 @@ class TagInventoryTest(unittest.TestCase):
         self.assertEqual([c for c in calls if c[0] != "GET"],
                          [("POST", "/api/tags?fields=id,name", {"name": "factory:ready"}), ("DELETE", "/api/tags/1", None)])
 
+    def test_used_outside_project_queries_other_projects_and_is_conservative_without_a_project(self):
+        calls = []
+
+        def run(method, path, body=None):
+            calls.append(path)
+            return [{"idReadable": "X-1"}]
+        self.assertTrue(yt.YouTrackTicketStore(run, project="LME").used_outside_project("factory:old"))
+        self.assertIn("project%3A%20-%7BLME%7D", calls[0])
+        self.assertTrue(yt.YouTrackTicketStore(run).used_outside_project("factory:old"))
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(yt.YouTrackTicketStore(lambda *a, **k: [], project="LME").used_outside_project("factory:old"))
 
 
 if __name__ == "__main__":
