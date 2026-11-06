@@ -814,8 +814,10 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
                 if not automation_id:
                     raise RuntimeError(f"create_automation returned no automation id for {name}")
                 backend.set_additional(automation_id, additional)
-        else:
-            client.call(f"delete_{noun}", {id_key: x["id"]})
+        elif kind == "environment":  # air-cloud has no delete_environment
+            print(f"remove by hand in Air: environment {name}", file=sys.stderr)
+        else:  # confirmName guards against deleting the wrong automation
+            client.call("delete_automation", {id_key: x["id"], "confirmName": x["name"]})
 
 
 def missing_secrets(plan: dict, envs: list[dict]) -> list[str]:
@@ -863,7 +865,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                            additional_names=additional_names)
         state = after
-        left = diff(plan, *after)
+        left = [c for c in diff(plan, *after) if not (c[0] == "delete" and c[1] == "environment")]
         for action, kind, name, *_ in left:
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:
