@@ -1,11 +1,11 @@
-[factory] A definition team has no required review focuses (automerge refused PR #735 for a missing `full` focus).
+[factory] CI labels only the CI result; no more `factory:review-full`.
 
 ## Merge Danger
 
 **Door:** two-way.
 
-**Blast Radius:** GitHub tracker facts.
+**Blast Radius:** ci-label job.
 
-Closes #744.
+Closes #746.
 
 Factory-Run: manual:pi-session-2026-11-06
