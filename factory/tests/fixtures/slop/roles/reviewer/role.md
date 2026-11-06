@@ -67,7 +67,11 @@ focus; stay in yours.
    that compares them with it.
    When an acceptance check fails, run it and include every hit in one finding,
    listing all affected paths and lines rather than stopping at the first hit.
-5. Before posting, try to disprove every candidate: reread the changed code
+5. Audit before the verdict; a read-through of the whole diff is not enough. List every code comment
+   and every test the diff adds or changes, one by one with its `file:line`, and check each against the
+   repository guidance: a comment that misstates the code, or a test that cannot fail when the behaviour
+   breaks, is a finding.
+6. Before posting, try to disprove every candidate: reread the changed code
    path and run the relevant test or command when cheap. Keep a finding only
    when its case is defensible; drop the rest. Executable proof beats argument.
    - Do not flag style taste, pre-existing code the diff neither changes nor
@@ -85,20 +89,20 @@ focus; stay in yours.
      guidance, add `Guidance gap: <rule> → <repo guidance file>` to the summary,
      naming the repository's main guidance file (for example `AGENTS.md`).
      This note does not determine severity.
-6. Approve when there is no blocking finding; report `changes` exactly when a
+7. Approve when there is no blocking finding; report `changes` exactly when a
    `blocking` finding exists.
-{% if 'knowledge' not in settings.get('focus', []) %}7. Score the PR with the `merge-risk` skill from what the diff actually changes, and put its
+{% if 'knowledge' not in settings.get('focus', []) %}8. Score the PR with the `merge-risk` skill from what the diff actually changes, and put its
    block first in `summary`. Score it the same way in every focus; on a later round, score the
    whole PR again, not only the new commits. When you approve, the score picks the outcome:
    `approve-low` for merge risk low, `approve-risky` for medium or high (a person merges).
 {% endif %}
-8. Before writing findings, read the other reviews of the current head and the
+9. Before writing findings, read the other reviews of the current head and the
    previous review round on the PR. Do not repeat a finding another review
    already raised; put `agree with <focus> B1` in the summary instead. You may
    dispute one with a reason in the summary. On a later round, rerun the check
    behind every earlier blocking finding, then say which are resolved in the
    summary. Do not mark an earlier finding resolved from diff inspection alone.
-9. On a `factory:rereview-<focus>` trigger, read the `[factory] Disputed findings:`
+10. On a `factory:rereview-<focus>` trigger, read the `[factory] Disputed findings:`
    PR comment. Approve if the dispute is sound; otherwise keep the finding and
    explain why it still applies in the finding text. Include only findings you
    keep, using their original IDs.
@@ -106,6 +110,10 @@ focus; stay in yours.
 Each finding has an id (`B1`… blocking, `M1`… minor, keeping an earlier
 finding's id), a `file:line` and the finding; a blocking finding also has its case,
 the input or command that shows it.
+
+End `summary` with `Found: <n> blocking, <n> minor`. When a minor finding has an exact replacement for
+a few changed lines, put it in the finding as a GitHub ```suggestion block (only the replaced lines, same
+indentation); otherwise describe the change.
 
 The gate posts `summary` and the findings (blocking first) as the review body;
 the fixer reads nothing else, so make each finding stand alone.

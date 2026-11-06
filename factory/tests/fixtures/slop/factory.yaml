@@ -59,6 +59,11 @@ skills:
   to-tickets: { path: skills/to-tickets }   # a local copy: this team edited it after vendoring
   pr: { path: skills/pr }                   # adapted from mattpocock/skills (credits in the file)
   merge-risk: { path: skills/merge-risk }   # adapted from warpdotdev/common-skills (credits in the file)
+  walkthrough: { path: skills/walkthrough } # adapted from warpdotdev pr-walkthrough + readout (credits in the file)
+  resolve-merge-conflicts:
+    source: "github:warpdotdev/common-skills@8792394ff1b6"   # MIT
+    path: .agents/skills/resolve-merge-conflicts
+    sha256: 4ebcdd6f0d66d6b1d40bbe0e7df80b13088f20913ad4dbdaf3328c8835978df9
   retro:
     source: "github:mattpocock/skills@a496f5513d4a"
     path: skills/engineering/retro
@@ -70,11 +75,15 @@ skills:
 roles:
   developer:
     description: Implements a ticket, fixes review findings, resolves merge conflicts
-    skills: [ponytail, ponytail-review, merge-risk, pr, tdd, diagnosing-bugs, principle-test-behavior-not-implementation]
+    skills: [ponytail, ponytail-review, merge-risk, pr, resolve-merge-conflicts, tdd, diagnosing-bugs, principle-test-behavior-not-implementation]
     mcp: {}
   notify:
     description: Tells the owner about a state that needs them
     skills: []
+    mcp: {}
+  walkthrough:
+    description: Orients a person on a PR that waits for them, without reviewing it
+    skills: [walkthrough, merge-risk]
     mcp: {}
   retro:
     description: Collects lessons from tickets and merges them into the knowledge base
@@ -122,6 +131,7 @@ agents:
   ops:            { role: ops, model: luna, access: read-only }
   retro:          { role: retro, model: sonnet, access: full }
   notify:         { role: notify, model: luna, access: read-only }
+  walkthrough:    { role: walkthrough, model: sol, access: read-only }
 
 # Environments: where agents run. One repository is `main`; the others are additional.
 environments:
