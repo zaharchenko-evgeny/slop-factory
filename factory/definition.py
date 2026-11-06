@@ -14,7 +14,7 @@ FACTORY = "factory.yaml"
 WORKFLOW = "workflow.yaml"
 ROLES = "roles"
 NO_ROLE = ("script", "human")  # harnesses that run no role
-GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children", "ticket")  # the facts a guard reads (gate.GUARD_KEYS)
+GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention")  # the facts a guard reads (gate.GUARD_KEYS)
 STARTUP = ".air/cloud/startup.sh"  # Air runs it from the checkout; it runs `factory setup` (ADR-0021)
 
 
@@ -89,6 +89,25 @@ def render(defn, name):
     j = _jinja(defn)
     body = defn["bodies"].get(agent.get("role"), "") if agent.get("role") else ""
     return j.from_string(body).render(ctx)
+
+
+def neighbours(defn):
+    """{frozenset({a, b})}: agents a and b are neighbours when an outcome of a node of one adds a label that a node
+    of the other triggers on (#590: they may mention each other)."""
+    nodes = (defn["workflow"].get("nodes") or {}).values()
+    woken = {}
+    for n in nodes:
+        for t in n.get("triggers") or []:
+            if isinstance(t, dict) and "label" in t:
+                woken.setdefault(t["label"], set()).add(n.get("agent"))
+    pairs = set()
+    for n in nodes:
+        for oc in (n.get("outcomes") or {}).values():
+            for e in (oc or {}).get("effects") or []:
+                for b in woken.get(e.get("label"), ()):
+                    if b and b != n.get("agent"):
+                        pairs.add(frozenset((n.get("agent"), b)))
+    return pairs
 
 
 def role_skills(defn, role):
@@ -218,7 +237,7 @@ def warnings(defn):
 # wakes, its outcomes' static effects; `if: {stage}` becomes `from`, `if: {ci}` becomes `ci`, the rest stays
 # an `if` the gate checks. Labels are commands named after themselves; one an effect adds `on: pr` is a PR label.
 TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed", ("pr", "opened"): "pr opened",
-                 ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed",
+                 ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed", ("pr", "commented"): "pr commented",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
            "request-reviewers", "park-behind-main-red")

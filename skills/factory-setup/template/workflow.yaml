@@ -176,6 +176,31 @@ nodes:
       children-done: { if: { stage: split, children: closed }, effects: [{ stage: done }] }
       waiting:       {}
 
+  # --- Mentions: @factory:<agent> in a comment asks that agent; it replies in reply mode ---------
+  mentions:                       # a person may ask any agent below; an agent only its workflow neighbour
+    agent: clerk
+    triggers: [{ ticket: commented }, { pr: commented }, { pr: reviewed }]
+    outcomes:
+      ask-dev:      { if: { mention: dev },      effects: [{ label: "factory:ask-dev" }] }
+      ask-reviewer: { if: { mention: reviewer }, effects: [{ label: "factory:ask-reviewer" }] }
+      none:         {}
+
+  ask-dev:
+    agent: dev
+    triggers: [{ label: "factory:ask-dev" }]
+    output: read-only
+    settings: { mode: reply }
+    outcomes:
+      replied: { effects: [{ unlabel: "factory:ask-dev" }, { comment: reply }] }
+
+  ask-reviewer:
+    agent: reviewer
+    triggers: [{ label: "factory:ask-reviewer" }]
+    output: read-only
+    settings: { mode: reply, focus: [full] }
+    outcomes:
+      replied: { effects: [{ unlabel: "factory:ask-reviewer" }, { comment: reply }] }
+
   # --- Notifications --------------------------------------------------------------------------
   notify:
     agent: inbox

@@ -258,6 +258,15 @@ def lesson_effects(ticket, node, payload):
     return [{"kind": "comment", "ticket": ticket, "value": body}, {"kind": "label", "ticket": ticket, "value": vocab.lesson()}]
 
 
+def comment_marker(node):
+    """`<!-- factory:from <agent>[ reply] -->`: which agent wrote a comment, so a mention in it can be checked."""
+    import definition
+    defn = definition.load(config_mod.team_root())
+    n = (defn["workflow"].get("nodes") or {}).get(node) or {}
+    reply = definition.settings(defn, node).get("mode") == "reply"
+    return f"<!-- factory:from {n.get('agent', node)}{' reply' if reply else ''} -->"
+
+
 def definition_team():
     """True when the team defines its factory in factory.yaml + workflow.yaml (ADR-0021)."""
     import definition
@@ -373,10 +382,41 @@ def guard_holds(guard, facts, tracker=None, ticket=None):
     unknown = set(guard) - GUARD_KEYS
     if unknown:
         raise Bad(f"unknown guard: {', '.join(sorted(unknown))}")
+    if "mention" in guard:
+        if not mention_holds(guard["mention"], facts, tracker, ticket):
+            return False
+        guard = {k: v for k, v in guard.items() if k != "mention"}
     return holds(guard, facts, {})
 
 
-GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket"}
+def mention_holds(agent, facts, tracker=None, ticket=None):
+    """ADR-0021 #590: the latest comment on the ticket or its PR names `@factory:<agent>`, and may ask it. A person
+    may ask any agent; an agent (its comment's `factory:from` marker) only a neighbour in workflow.yaml; a reply
+    never asks anyone, so two agents cannot answer each other forever."""
+    comments = list(facts.get("comments") or [])
+    pr_comments = facts.get("pr_comments")
+    if pr_comments is None and tracker is not None and hasattr(tracker, "pr_comments"):
+        pr_comments = tracker.pr_comments(ticket)
+    comments += pr_comments or []
+    comments += [{"body": r.get("body") or "", "at": r.get("submitted_at") or r.get("at")}
+                 for r in facts.get("reviews") or [] if r.get("body")]  # a reviewer asks in its review
+    if not comments:
+        return False
+    latest = max(enumerate(comments), key=lambda ic: (ic[1].get("at") or "", ic[0]))[1]
+    body = latest.get("body") or ""
+    if not re.search(rf"@factory:{re.escape(agent)}(?![\w-])", body):
+        return False
+    marker = FROM.search(body)
+    if not marker:
+        return True  # a person
+    if marker[2] or marker[1] == agent:
+        return False
+    import definition
+    return frozenset((marker[1], agent)) in definition.neighbours(definition.load(config_mod.team_root()))
+
+
+GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention"}
+FROM = re.compile(r"<!-- factory:from (\S+?)( reply)? -->")
 
 
 def fix_tier(facts, default="mid"):
@@ -777,6 +817,10 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
                 e["heads"] = facts["heads"]  # one per repository of a multi-repository ticket
         if e["kind"] == "comment" and payload.get("run_id"):
             e["run_id"] = payload["run_id"]
+        if e["kind"] == "comment" and definition_team():
+            e["value"] = f"{e['value']}\n\n{comment_marker(name)}"
+        if e["kind"] == "review" and definition_team():
+            e["summary"] = f"{e.get('summary') or ''}\n\n{comment_marker(name)}"
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
     why = matches(gated(name, node, facts), facts, {**payload, "id": payload.get("event")}, out) \

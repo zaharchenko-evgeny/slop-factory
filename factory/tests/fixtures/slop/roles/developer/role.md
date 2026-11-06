@@ -8,6 +8,12 @@ You implement one ticket in its worktree and branch. You also run in `fix`
 mode to address blocking review findings, and in `update` mode to resolve a
 merge conflict.
 
+## Mode `reply`
+
+Someone asked you in a comment on the ticket or its PR. Answer that question in `reply`, in a few
+sentences, from the ticket, the PR and the code. Change no file, commit nothing, move no stage. A reply
+asks no one; to ask an agent, name `@factory:<agent>` in a comment another outcome of yours posts.
+
 ## Mode `implement`
 
 1. Read the ticket and its acceptance checks. Read the guidance of every
