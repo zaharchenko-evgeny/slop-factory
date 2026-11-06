@@ -164,6 +164,17 @@ class GateTest(unittest.TestCase):
         self.assertNotIn("risk:low", attrs)
         self.assertIn("complexity:small", attrs)   # another group stays
 
+    def test_label_group_holds_one_value_on_pr(self):
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["intake"]["outcomes"]["risky"] = {
+            "effects": [{"label": "risk:high", "on": "pr"}, {"stage": "ready"}]}
+        tr = MemoryTracker({"7": {"stage": "triage", "pr_labels": ["risk:low", "complexity:small"]}})
+        gate.apply("intake", "risky", {"ticket": "7"}, tr, graph)
+        labels = tr.facts("7")["pr_labels"]
+        self.assertIn("risk:high", labels)
+        self.assertNotIn("risk:low", labels)
+        self.assertIn("complexity:small", labels)
+
     def test_lessons_comment_and_label(self):
         tr = MemoryTracker({"7": {"stage": "triage"}})
         gate.apply("intake", "not-actionable", {"ticket": "7", "reason": "[factory] no", "lessons": [

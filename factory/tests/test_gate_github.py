@@ -1474,6 +1474,15 @@ class ResumeTest(unittest.TestCase):
 
 
 class GateTest(unittest.TestCase):
+    def test_decide_replaces_issue_label_group(self):
+        gh = FakeGh(labels=("factory:triage", "risk:low"))
+        graph = nodes.load()
+        graph["nodes"]["intake"]["outcomes"] = {"done-high": {"effects": [{"label": "risk:high"}]}}
+        status, result = gate.decide("intake", 7, tr(gh), graph)
+        self.assertEqual((status, result["outcome"]), (gate.GO, "done-high"))
+        self.assertIn(["issue", "edit", "7", "-R", REPO, "--remove-label", "risk:low"], gh.writes)
+        self.assertIn(["issue", "edit", "7", "-R", REPO, "--add-label", "risk:high"], gh.writes)
+
     def test_duplicate_event_caught_by_stage(self):
         gh, nd = FakeGh(labels=["factory:in-dev"]), nodes.load()
         payload = {"ticket": 7, "event": "e1"}
