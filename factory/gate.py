@@ -829,7 +829,24 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
     written = [e["kind"] for e in effects + after if tracker.apply(e)]
-    return GO, {"applied": True, "written": written}
+    parent = parent_decision(name, ticket, effects, tracker, nodes)
+    return GO, {"applied": True, "written": written, **({"parent": parent} if parent else {})}
+
+
+def parent_decision(name, ticket, effects, tracker, nodes):
+    """ADR-0021, automatic: when this outcome moves a ticket to a final stage, the same node decides on its parent
+    (a split ticket's `children` guard), since nothing else wakes the parent when its last child closes."""
+    if not definition_team() or not hasattr(tracker, "parent"):
+        return None
+    final = {s for s, k in (config_mod.load()["tracker"].get("stage_kinds") or {}).items() if k == "final"}
+    if next((e["value"] for e in effects if e["kind"] == "stage"), None) not in final:
+        return None
+    p = tracker.parent(ticket)
+    if not p or tracker.facts(p)["stage"] in final:
+        return None
+    if not any("children" in (o.get("if") or {}) for o in load_node(name, nodes)["outcomes"].values()):
+        return None
+    return {"ticket": p, **decide(name, p, tracker, nodes)[1]}
 
 
 SWEEP_STAGES = ("ready", "approved", "split", "in-review", "needs-answers")
