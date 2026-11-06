@@ -35,6 +35,7 @@ import project as project_mod
 import vocab
 
 ROOT = Path(__file__).resolve().parents[1]
+SLOP_FIXTURE = ROOT / "factory/tests/fixtures/slop"
 PR_TRIGGERED_NODES = {"review", "join", "fix", "update", "finish", "reopen"}
 BOT_FILTERED = ("review-", "join", "reopen")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
@@ -182,6 +183,40 @@ def team_is_project(team: dict, config: dict) -> bool:
     """True when the team repository is also a descriptor project repository (ADR-0019)."""
     return bool(config.get("team_repository")) and any(
         repository(r)["fullName"] == repository(team)["fullName"] for r in config["repositories"])
+
+
+def workflow_drift(fixture: Path, team: Path) -> list[str]:
+    """Describe differences between the migrated Slop fixture and the live team files."""
+    project_file, workflow_file = "factory.project.yaml", "workflows/delivery.yaml"
+    fixture_project = yaml.safe_load((fixture / project_file).read_text())
+    team_project = yaml.safe_load((team / project_file).read_text())
+    drift = [project_file] if fixture_project != team_project else []
+    fixture_workflow = yaml.safe_load((fixture / workflow_file).read_text())
+    team_workflow = yaml.safe_load((team / workflow_file).read_text())
+    if fixture_workflow != team_workflow:
+        fixture_nodes, team_nodes = fixture_workflow.get("nodes", {}), team_workflow.get("nodes", {})
+        outcomes = [f"{name}.{outcome}" for name in sorted(fixture_nodes.keys() | team_nodes.keys())
+                    for outcome in sorted((fixture_nodes.get(name) or {}).get("outcomes", {}).keys() |
+                                          (team_nodes.get(name) or {}).get("outcomes", {}).keys())
+                    if (fixture_nodes.get(name) or {}).get("outcomes", {}).get(outcome) !=
+                       (team_nodes.get(name) or {}).get("outcomes", {}).get(outcome)]
+        drift.extend(f"{workflow_file}: {item}" for item in outcomes)
+        if not outcomes:
+            drift.append(workflow_file)
+    return drift
+
+
+def check_fixture_drift(config: dict, team: Path | None = None) -> int:
+    """Fail before contacting Air when this engine's Slop fixture differs from its deployed team."""
+    if not SLOP_FIXTURE.is_dir():
+        return 0
+    fixture_project = yaml.safe_load((SLOP_FIXTURE / "factory.project.yaml").read_text())
+    if config.get("team_repository", "").rstrip("/") != fixture_project.get("team_repository", "").rstrip("/"):
+        return 0
+    drift = workflow_drift(SLOP_FIXTURE, team or config_mod.team_root())
+    for item in drift:
+        print(f"fixture drift: {item}", file=sys.stderr)
+    return 1 if drift else 0
 
 
 def other_projects(main_repository: dict, team: dict, config: dict) -> list[dict]:
@@ -867,9 +902,12 @@ def main(argv: list[str]) -> int:
         renames[old] = new
         del rest[i:i + 2]
     if argv and argv[0] in ("--dry-run", "--apply") and set(rest) <= {"--allow-delete"}:
+        config = config_mod.load()
+        if check_fixture_drift(config):
+            return 1
         servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
         try:
-            plan = {**plan_air(nodes_mod.load(), config_mod.load()), "renames": renames}
+            plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
             code = deploy(argv[0], "--allow-delete" in argv, plan, *servers)
             return code or write_files(plan["files"], argv[0] == "--apply")
         finally:
