@@ -13,6 +13,9 @@ NO_AGENT_ROLES = ("script", "human")
 
 
 def _read(team_root):
+    import definition
+    if definition.present(team_root):  # ADR-0021: the definition compiled into this shape
+        return definition.to_project(definition.load(team_root))[0]
     return yaml.safe_load((Path(team_root) / config.PROJECT_DESCRIPTOR).read_text()) or {}
 
 

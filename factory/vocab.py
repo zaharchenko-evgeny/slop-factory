@@ -58,5 +58,9 @@ def inbox():
     return _tracker()["inbox_label"]
 
 
+def lesson():
+    return _tracker()["lesson_label"]
+
+
 def map_label():
     return _tracker()["map_label"]

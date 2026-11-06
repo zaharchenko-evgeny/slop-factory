@@ -46,7 +46,7 @@ ALLOW = {
     "roles/", "roles/_common.md", "roles/approver/role.md", "policies/", "judgments/", "policies/auto-approve.rego",
     "judgments/auto-approve.yaml", "workflows/delivery.md", ".air/cloud/startup.sh",
     "AGENTS.md:ez/<issue>-*", "AGENTS.md:roles/*/setup.sh",
-    "template/roles/inbox/role.md:request.json", "template/roles/inbox/role.md:summary.md",
+    "engine/template-v1/roles/inbox/role.md:request.json", "engine/template-v1/roles/inbox/role.md:summary.md",
     "docs/design.md:roles/<role>/", "docs/plan.md:roles/{router,developer,reviewer}/",
     "docs/recipes/auto-approve.md:conftest test --policy policies summary.json",
     "docs/statechart-proposed.md:#669", "docs/statechart-proposed.md:#333", "docs/statechart-proposed.md:#999",
@@ -62,7 +62,7 @@ ISSUE = re.compile(r"(?<![\w/])#(\d+)\b")
 def docs(root=ROOT):
     paths = [root / "README.md", root / "AGENTS.md"]
     paths += sorted((root / "docs").glob("**/*.md"))
-    paths += sorted((root / "template" / "roles").glob("**/*.md"))
+    paths += sorted((root / "engine/template-v1" / "roles").glob("**/*.md"))
     return [p for p in paths if p.is_file() and "docs/adr/" not in p.relative_to(root).as_posix()
             and "knowledge/" not in p.relative_to(root).as_posix()]
 

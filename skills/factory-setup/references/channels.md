@@ -1,6 +1,6 @@
 # Channels
 
-Selected by `channels` (a list) in `factory.descriptor.yaml`.
+Selected by `channels` (a list) in `factory.yaml`.
 
 ## Contract
 

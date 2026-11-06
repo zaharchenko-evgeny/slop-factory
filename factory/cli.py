@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
-"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, contracts (operator-only), chart, validate, doctor.
+"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, contracts (operator-only), chart, validate, setup, doctor.
 
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> --issue N | --pr N | [payload file]   (payload on stdin by default; exit 10: the node must not act)
@@ -255,7 +255,18 @@ def end(argv, team=None):
 
 
 def validate():
-    project_mode = (config.team_root() / config.PROJECT_DESCRIPTOR).is_file()
+    import definition
+    if definition.present(config.team_root()):  # ADR-0021: factory.yaml + workflow.yaml + roles/
+        defn = definition.load(config.team_root())
+        errs = definition.errors(defn)
+        if not errs:  # the compiled view must pass the engine's own checks too
+            import project
+            import workflow
+            errs = [f"compiled: {e}" for e in config.validate() or
+                    workflow.validate(project.load(config.team_root()), workflow.load(config.team_root()))]
+        print("\n".join([*errs, *(f"warning: {w}" for w in definition.warnings(defn)), *([] if errs else ["factory: ok"])]))
+        return 1 if errs else 0
+    project_mode = config.is_project()
     errs = config.validate()
     if not errs and project_mode:
         import project
@@ -306,7 +317,8 @@ def main(argv=None):
     load_engine(HERE)
     if team:
         config.set_team(team)
-    if cmd in ("check", "apply", "sweep", "ci-sync", "mention"):
+    if cmd in ("check", "apply", "sweep", "ci-sync", "mention", "thread", "reply", "decide", "ci"):
+
         return gate.main([cmd, *rest])
     if cmd == "deploy" and rest[:2] == ["--target", "local"]:
         from local import deploy as local_deploy
@@ -332,6 +344,12 @@ def main(argv=None):
         return upgrade_main(rest)
     if cmd == "validate" and not rest:
         return validate()
+    if cmd == "retro":
+        from retro import main as retro_main
+        return retro_main(rest)
+    if cmd == "setup":
+        from team_setup import main as setup_main
+        return setup_main(rest)
     if cmd == "env" and len(rest) == 2 and rest[0] == "roles":
         print("\n".join(env_roles(rest[1])))
         return 0

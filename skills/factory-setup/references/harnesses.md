@@ -26,10 +26,10 @@ Values: `claude-code`, `codex`, `junie`, `pi`; an unknown value fails
 ## Role contract
 
 - The role files stay harness-neutral; only the adapter knows the format.
-- Model comes from the role's tier in `factory.descriptor.yaml`; tools come from the role.
+- Model comes from the node's agent in `factory.yaml`; tools come from the role's `setup.sh`.
 - A run takes a prompt, returns the final text, and writes no state outside
   its worktree and run directory.
-- Skills in `skills.txt` must be installed; setup reports missing ones.
+- The role's skills (`roles.<role>.skills` in `factory.yaml`) are installed by `factory setup`, which refuses a skill whose sha256 differs.
 - `targets.local.model_access: central` applies to `pi` only (projects that keep the local target).
 - A read-only reviewer on `claude-code` runs `git diff|log|show|status` only;
   on `codex` it has a read-only sandbox, so the prompt must carry what it needs.

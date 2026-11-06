@@ -15,8 +15,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "template/.air/cloud/startup.sh"
-TEAMS = {"template": ROOT / "template", "slop": ROOT / "factory/tests/fixtures/slop"}
+SCRIPT = ROOT / "engine/template-v1/.air/cloud/startup.sh"
+TEAMS = {"engine/template-v1": ROOT / "engine/template-v1", "slop": ROOT / "factory/tests/fixtures/slop"}
 
 
 def team_fixture(src, dest):
@@ -24,7 +24,7 @@ def team_fixture(src, dest):
     team = Path(dest) / src.name
     shutil.copytree(src, team, ignore=shutil.ignore_patterns("roles", "skills"))
     for d in ("roles", "skills"):
-        shutil.copytree(ROOT / "template" / d, team / d)
+        shutil.copytree(ROOT / "engine/template-v1" / d, team / d)
     return team
 
 
@@ -52,7 +52,7 @@ class StartupTemplateTest(unittest.TestCase):
                     self.assertTrue(roles)
                     expected = {"factory-step"}
                     for role in roles:
-                        expected |= set((ROOT / "template/roles" / role / "skills.txt").read_text().split())
+                        expected |= set((ROOT / "engine/template-v1/roles" / role / "skills.txt").read_text().split())
                     done = subprocess.run(["sh", str(SCRIPT)], cwd=team, capture_output=True, text=True,
                                           env={**self.env, "FACTORY_ENV": env})
                     self.assertEqual(done.returncode, 0, done.stderr)
@@ -61,14 +61,14 @@ class StartupTemplateTest(unittest.TestCase):
                     self.assertIn(f"roles={' '.join(roles)} ", done.stdout)
 
     def test_dry_run_points_the_factory_at_the_home_worktree(self):
-        team = team_fixture(TEAMS["template"], self.tmp)
+        team = team_fixture(TEAMS["engine/template-v1"], self.tmp)
         done = subprocess.run(["sh", str(SCRIPT)], cwd=team, capture_output=True, text=True,
                               env={**self.env, "FACTORY_ENV": "read"})
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("startup: FACTORY_TEAM=$HOME/factory-team", done.stdout)
 
     def test_missing_team_role_file_is_an_error(self):
-        team = team_fixture(TEAMS["template"], self.tmp)
+        team = team_fixture(TEAMS["engine/template-v1"], self.tmp)
         role = self.factory(team, "env", "roles", "read").split()[0]
         (team / "roles" / role / "skills.txt").unlink()
         done = subprocess.run(["sh", str(SCRIPT)], cwd=team, capture_output=True, text=True,

@@ -84,8 +84,38 @@ class ChangedLinesTest(unittest.TestCase):
         files = [{"filename": "a.py", "status": "modified", "additions": 5, "deletions": 3},
                  {"filename": "old.py", "status": "removed", "additions": 0, "deletions": 400},
                  {"filename": "gen.json", "status": "modified", "additions": 90, "deletions": 90},
-                 {"filename": "template/skills/x/SKILL.md", "status": "added", "additions": 50, "deletions": 0}]
+                 {"filename": "engine/template-v1/skills/x/SKILL.md", "status": "added", "additions": 50, "deletions": 0}]
         self.assertEqual(retro.changed_lines(files, ["gen.json"]), 9)
+
+
+
+class CollectTest(unittest.TestCase):
+    def test_collect_removes_label_then_marks(self):
+        """The label goes before the comments are read; each lesson comment is taken once."""
+        calls, comments = [], {10: [{"id": 1, "html_url": "u1", "body": "[factory] Lessons\n<!-- factory:lesson -->\n- a"},
+                                    {"id": 2, "body": "not a lesson"},
+                                    {"id": 3, "body": "[factory] Lessons\n<!-- factory:lesson collected -->\n- old"}]}
+
+        class Tracker:
+            def _list(self, path):
+                calls.append(("list", path))
+                if path.startswith("issues?"):
+                    return [{"number": 10}]
+                return comments[int(path.split("/")[1])]
+
+            def _edit(self, n, add=(), remove=()):
+                calls.append(("unlabel", n, list(remove)))
+
+            def _api(self, path, *flags):
+                calls.append(("patch", path, flags[-1]))
+                comments[10][0]["body"] = flags[-1].removeprefix("body=")
+
+        got = retro.collect(Tracker(), "factory:lesson")
+        self.assertEqual(got, [{"ticket": 10, "url": "u1", "body": "[factory] Lessons\n\n- a"}])
+        order = [c[0] for c in calls]
+        self.assertLess(order.index("unlabel"), order.index("patch"))
+        self.assertIn("<!-- factory:lesson collected -->", comments[10][0]["body"])
+        self.assertEqual(retro.collect(Tracker(), "factory:lesson"), [])   # nothing is read twice
 
 
 if __name__ == "__main__":

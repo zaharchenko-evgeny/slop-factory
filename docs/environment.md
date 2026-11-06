@@ -1,6 +1,6 @@
 # Environment variables
 
-One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails when a `FACTORY_*` name in `factory/*.py` or `template/` has no row here.
+One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails when a `FACTORY_*` name in `factory/*.py` or `engine/template-v1/` has no row here.
 
 | Variable | Set by | Read in | Required |
 |---|---|---|---|
@@ -8,7 +8,7 @@ One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails whe
 | `FACTORY_MENTION_URLS` | repository secret of `factory-mention.yaml`: JSON `{node: Air webhook URL}` of the mentionable nodes | `factory/gate.py` (`gate.py mention`) | required to wake a mentioned agent |
 | `FACTORY_MENTION_KEY` | repository secret of `factory-mention.yaml`: the API key of those webhooks | `factory/gate.py` (`gate.py mention`) | required to wake a mentioned agent |
 | `FACTORY_MENTION_URL` | `gate.py mention` (internal): the URL of the node it wakes, for `inbox.send.post` | `factory/gate.py` | internal |
-| `FACTORY_TEAM` | the startup wrapper of `factory` (internal) | `factory/config.py`, `factory/cli.py`, `factory/local.py`, `template/roles/` | optional; defaults to the `factory-team` directory in the home directory when it exists, else the working directory |
+| `FACTORY_TEAM` | the startup wrapper of `factory` (internal) | `factory/config.py`, `factory/cli.py`, `factory/local.py`, `engine/template-v1/roles/` | optional; defaults to the `factory-team` directory in the home directory when it exists, else the working directory |
 | `FACTORY_ENGINE` | tests and development | `factory/config.py` | optional; defaults to this checkout |
 | `FACTORY_WRITE_TOKEN` | a person, in Air: a secret `factory deploy` adds to the `write` and `ops` environments with `write_mode: token` | `factory/github_tracker.py` (the GH_TOKEN of a write to a `role: project` repository), `factory/doctor.py`, `factory/deploy.py` (by name) | required with `write_mode: token`; else unused |
 | `FACTORY_GH` | tests and development | `factory/github_tracker.py` | optional; defaults to `gh` |

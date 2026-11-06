@@ -23,7 +23,7 @@ and template examples. It does not own Slop factory runtime files.
 
 - `skills/factory-setup/` — the reusable setup skill.
 - `engine/` and `factory/` — the engine, whose node graph is `engine/nodes.yaml`.
-- `template/roles/`, `template/skills/`, and `template/workflows/` — examples
+- `engine/template-v1/roles/`, `engine/template-v1/skills/`, and `engine/template-v1/workflows/` — examples
   used by setup and generators, never runtime fallbacks.
 
 Slop factory runtime files (`factory.project.yaml`, roles, skills and workflow)
