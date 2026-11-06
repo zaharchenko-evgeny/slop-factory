@@ -1110,11 +1110,13 @@ class DefinitionPlanTest(unittest.TestCase):
         self.assertEqual(arg("review-low"), "factory begin review-low --pr <the pull request number>")
         self.assertEqual(arg("automerge"), "factory begin automerge --pr <the pull request number>")
         self.assertEqual(arg("intake"), "factory begin intake --issue <the issue number>")
+        merge = self.by["[Slop factory] merge"]["prompt"]
+        self.assertIn("factory decide --node merge --pr <the pull request number>", merge)  # PR label wakes it
 
     def test_a_decide_agent_only_runs_the_command(self):
         merge = self.by["[Slop factory] merge"]["prompt"]
         self.assertIn("You are the clerk of Slop factory.", merge)
-        self.assertIn("factory decide --node merge --issue", merge)
+        self.assertIn("factory decide --node merge --pr", merge)
         self.assertNotIn("factory begin clerk", merge)
 
     def test_environments_and_labels(self):

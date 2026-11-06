@@ -295,7 +295,7 @@ def ci_state(tracker, ticket, wait_seconds=0, poll=30, sleep=None):
     return {"ci": facts.get("ci"), "head": facts.get("head"), "failing": failing}
 
 
-def decide(name, ticket, tracker, nodes):
+def decide(name, ticket, tracker, nodes, dry_run=False):
     """ADR-0021 `factory decide`: apply the first outcome of node `name` whose guards hold (`from`, `ci`, `if`), for a
     node whose agent only runs this command. (status, {outcome, ...}); no outcome holding is NO_GO."""
     node = load_node(name, nodes)
@@ -305,6 +305,8 @@ def decide(name, ticket, tracker, nodes):
                 or (out.get("ci") and facts["ci"] not in out["ci"]) \
                 or (out.get("if") and not guard_holds(out["if"], facts, tracker, ticket)):
             continue
+        if dry_run:  # the outcome whose guards hold, nothing written
+            return GO, {"outcome": outcome, "applied": False, "dry_run": True}
         payload = {"ticket": ticket, "reason": f"[factory] {name}: {outcome}"}
         status, res = apply(name, outcome, payload, tracker, nodes)
         return status, {"outcome": outcome, **res}
@@ -1310,6 +1312,7 @@ def main(argv):
     p.add_argument("--stale", action="store_true")
     p.add_argument("--event", nargs="?", const="-")
     p.add_argument("--issue", type=int)
+    p.add_argument("--pr", type=int)  # decide: the PR that woke the node; the gate finds its ticket
     p.add_argument("--outcome")
     p.add_argument("--payload")
     p.add_argument("--handoff")
@@ -1328,6 +1331,7 @@ def main(argv):
         results, failed = run_ci_sync(a.dry_run, lambda r: print(json.dumps(r), file=sys.stderr, flush=True))
         print(json.dumps({"dry_run": a.dry_run, "ci_sync": results}))
         return FAILED if failed else GO
+    code_host = None
     try:
         kind, _, path = (a.tracker or "github").partition(":")
         if kind == "github" and not path:
@@ -1354,9 +1358,10 @@ def main(argv):
             print(json.dumps(out))
             return GO if out["ci"] == "green" else FAILED if out["ci"] == "red" else NO_GO
         if a.cmd == "decide":
-            if not (a.node and a.issue):
-                raise Bad("decide needs --node NODE --issue TICKET")
-            status, out = decide(a.node, a.issue, tracker, nodes)
+            ticket = a.issue or (pr_ticket(code_host, a.pr) if a.pr and code_host else None)
+            if not (a.node and ticket):
+                raise Bad("decide needs --node NODE and --issue TICKET or --pr PR")
+            status, out = decide(a.node, ticket, tracker, nodes, dry_run=a.dry_run)
             print(json.dumps(out))
             return status
         if a.cmd == "wake-reviewers":
