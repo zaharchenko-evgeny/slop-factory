@@ -163,6 +163,23 @@ class GitHubTracker:
         return cls(t["repository"], t["stages"], t.get("map_label") or vocab.map_label(), run,
                    t.get("risk_labels"), t.get("docs_impact_label", "docs-impact"))
 
+    def list_labels(self, repo=None):
+        """{name: {"color", "description"}} of the repository's labels (default: the tracker's)."""
+        out = self.run(["label", "list", "-R", repo or self.repo, "--limit", "1000", "--json", "name,color,description"])
+        return {x["name"]: {"color": x["color"].lower(), "description": x.get("description") or ""} for x in json.loads(out)}
+
+    def create_label(self, name, color, description="", repo=None):
+        self.run(["label", "create", name, "-R", repo or self.repo, "--color", color, "--description", description])
+
+    def update_label(self, name, color, description="", repo=None):
+        self.run(["label", "edit", name, "-R", repo or self.repo, "--color", color, "--description", description])
+
+    def delete_label(self, name, owned_prefixes, repo=None):
+        """Delete a label only inside the factory's namespaces; anything else is someone else's and never removed."""
+        if not name.startswith(tuple(owned_prefixes)):
+            raise ValueError(f"label {name!r} is not factory-owned")
+        self.run(["label", "delete", name, "-R", repo or self.repo, "--yes"])
+
     def _issue(self, n):
         return json.loads(self.run(["issue", "view", str(n), "-R", self.repo, "--json", "state,labels,assignees"]))
 

@@ -1132,19 +1132,82 @@ class DefinitionPlanTest(unittest.TestCase):
                       "factory:automerge", "risk:low", "complexity:large",
                       "factory:lesson"):
             self.assertIn(label, self.plan["labels"])
+        for label in ("factory:reply-dev", "factory:reply-reviewer", "factory:needs-human"):  # generated reply and needs-human labels
+            self.assertIn(label, self.plan["labels"])
+        self.assertEqual(self.plan["owned_label_prefixes"], ["complexity:", "factory:", "risk:"])
 
+
+
+def fake_labels(by_repo):
+    """A `gh` runner over {repo: {name: (color, description)}}; records label writes."""
+    writes = []
+
+    def run(args, **kw):
+        repo = args[args.index("-R") + 1]
+        if args[:2] == ["label", "list"]:
+            return json.dumps([{"name": n, "color": c, "description": d} for n, (c, d) in by_repo[repo].items()])
+        writes.append((args[1], repo, args[2]))
+        return ""
+    run.writes = writes
+    return run
 
 
 class LabelsTest(unittest.TestCase):
-    def test_missing_labels_per_repository(self):
-        seen = []
+    PLAN = {"labels": ["complexity:medium", "factory:ready", "risk:low"], "label_repositories": ["o/tracker", "o/code"],
+            "owned_label_prefixes": ["complexity:", "factory:", "risk:"], "label_specs": deploy.label_specs({})}
+    HAVE = {"factory:ready": ("ededed", ""), "complexity:medium": ("fbca04", deploy.COMPLEXITY_SPEC["description"]),
+            "risk:low": ("ededed", ""), "factory:old": ("ededed", ""), "bug": ("ff0000", "")}
 
-        def run(cmd, **kw):
-            seen.append(cmd)
-            return mock.Mock(stdout="factory:ready\nrisk:low\n" if cmd[4] == "o/tracker" else "factory:ready\n")
-        plan = {"labels": ["factory:ready", "risk:low"], "label_repositories": ["o/tracker", "o/code"]}
-        self.assertEqual(deploy.missing_labels(plan, run=run), [("o/code", "risk:low")])
-        self.assertEqual([c[4] for c in seen], ["o/tracker", "o/code"])
+    def test_each_repository_is_reconciled_independently(self):
+        run = fake_labels({"o/tracker": self.HAVE, "o/code": {"factory:ready": ("00ff00", "x")}})
+        got = deploy.reconcile_labels(self.PLAN, run=run)
+        self.assertEqual([(a, r, n) for a, r, n, *_ in got],
+                         [("remove", "o/tracker", "factory:old"),
+                          ("create", "o/code", "complexity:medium"), ("update", "o/code", "factory:ready"),
+                          ("create", "o/code", "risk:low")])
+        self.assertEqual(got[-2][4], ["color", "description"])
+
+    def run_deploy(self, mode, allow_delete, have):
+        run = fake_labels({"o/tracker": have, "o/code": have})
+        plan = {**self.PLAN, "prefix": "p", "environments": [], "automations": []}
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(deploy, "read_state", return_value=([], [])), \
+                mock.patch.object(deploy.github_tracker, "gh", run):
+            code = deploy.deploy(mode, allow_delete, plan, None, None)
+        return code, out.getvalue(), err.getvalue(), run.writes
+
+    def test_dry_run_reports_without_writing(self):
+        code, out, _, writes = self.run_deploy("--dry-run", False, {**self.HAVE, "risk:low": ("ff0000", "")})
+        self.assertEqual(code, 0)
+        self.assertIn("update label risk:low in o/tracker (color)", out)
+        self.assertIn("remove label factory:old in o/code", out)
+        self.assertEqual(writes, [])
+
+    def test_apply_updates_but_refuses_removal_without_allow_delete(self):
+        have = {**self.HAVE, "risk:low": ("ff0000", ""), "complexity:medium": ("ededed", "")}
+        code, _, err, writes = self.run_deploy("--apply", False, have)
+        self.assertEqual(code, 1)
+        self.assertIn("refused: would remove label factory:old in o/tracker", err)
+        self.assertEqual(writes, [("edit", r, n) for r in ("o/tracker", "o/code") for n in ("complexity:medium", "risk:low")])
+
+    def test_apply_with_allow_delete_removes_owned_labels_only(self):
+        code, _, _, writes = self.run_deploy("--apply", True, self.HAVE)
+        self.assertEqual(code, 0)
+        self.assertEqual(writes, [("delete", "o/tracker", "factory:old"), ("delete", "o/code", "factory:old")])
+
+    def test_apply_writes_project_labels_with_the_write_token(self):
+        tokens = []
+
+        def run(args, **kw):
+            tokens.append((args[1], args[args.index("-R") + 1], kw.get("token")))
+            return "[]" if args[:2] == ["label", "list"] else ""
+        wrapped = deploy.github_tracker.ProjectWriteRun(run, ["o/code"], {"FACTORY_WRITE_TOKEN": "t"})
+        plan = {**self.PLAN, "label_repositories": ["o/tracker", "o/code"], "prefix": "p", "environments": [], "automations": []}
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(deploy, "read_state", return_value=([], [])):
+            deploy.deploy("--apply", False, plan, None, None, run=wrapped)
+        creates = {(r, t) for v, r, t in tokens if v == "create"}
+        self.assertEqual(creates, {("o/tracker", None), ("o/code", "t")})
 
 
 if __name__ == "__main__":

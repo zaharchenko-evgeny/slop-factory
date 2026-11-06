@@ -498,7 +498,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
     label_repos = list(dict.fromkeys(x for x in ((config.get("tracker") or {}).get("repository"),
                                                  repository(primary)["fullName"]) if x))
     return {"prefix": prefix, "automations": automations, "environments": envs, "labels": labels(nodes, config),
-            "label_repositories": label_repos,
+            "label_repositories": label_repos, "label_specs": label_specs(config),
+            "owned_label_prefixes": owned_label_prefixes(config),
             "files": actions_files(nodes, config)}
 
 
@@ -553,6 +554,43 @@ jobs:
       - run: pipx install uv
       - run: {run}
 """
+
+
+LABEL_COLOR = "ededed"
+COMPLEXITY_SPEC = {"color": "fbca04", "description": "Size grade set by intake; chooses the developer tier"}
+
+
+def owned_label_prefixes(config: dict) -> list[str]:
+    """The label namespaces the deploy may remove from: the stage namespace (`factory:`) and the risk and complexity groups."""
+    t = config.get("tracker") or {}
+    ready = (t.get("stages") or {}).get("ready") or vocab.stage("ready")
+    risks = (t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values()
+    return sorted({ready.partition(":")[0] + ":", "complexity:", *(r.partition(":")[0] + ":" for r in risks)})
+
+
+def label_specs(config: dict) -> dict:
+    """{label: {color, description}} the repositories should carry; names come from `labels()`."""
+    return {"complexity:" + c: COMPLEXITY_SPEC for c in ("small", "medium", "large")}
+
+
+def label_tracker(repo: str, run=None):
+    return github_tracker.GitHubTracker(repo, {}, run=run or github_tracker.gh)
+
+
+def reconcile_labels(plan: dict, run=None) -> list[tuple]:
+    """(action, repository, label, changed fields) per required label to create or update, and per factory-owned
+    label no longer required to remove, in each repository of `plan["label_repositories"]` independently."""
+    out, owned = [], tuple(plan.get("owned_label_prefixes") or [])
+    for repo in plan.get("label_repositories") or []:
+        have = label_tracker(repo, run).list_labels()
+        for name in plan["labels"]:
+            want = {"color": LABEL_COLOR, "description": "", **(plan.get("label_specs") or {}).get(name, {})}
+            if name not in have:
+                out.append(("create", repo, name, want))
+            elif changed := [k for k in want if have[name][k] != want[k]]:
+                out.append(("update", repo, name, want, changed))
+        out += [("remove", repo, name, None) for name in sorted(have) if name.startswith(owned) and name not in plan["labels"]]
+    return out
 
 
 def labels(nodes: dict, config: dict) -> list[str]:
@@ -880,8 +918,8 @@ def extra_variables(plan: dict, envs: list[dict]) -> list[str]:
             for k in have.get(e["name"], {}) if k not in (e.get("variables") or {})]
 
 
-def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None) -> int:
-    """Write only to Air: deploy never creates, edits or closes a tracker ticket."""
+def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None) -> int:
+    """Write only to Air and to repository labels (through `run`, a `gh` runner): deploy never creates, edits or closes a tracker ticket."""
     # The automations' repositories too: an environment moved off a repository is found there, then replaced.
     repo_urls = list(dict.fromkeys([e["repository"] for e in plan["environments"]] +
                                    [a["repository"]["browseUrl"] for a in plan["automations"]
@@ -900,17 +938,29 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print(line)
     for line in extra_variables(plan, state[1]):
         print(line)
+    label_changes = reconcile_labels(plan, run)
     if mode == "--dry-run":
-        for repo, label in missing_labels(plan):
-            print(f"create label {label} in {repo}")
+        for action, repo, label, *rest in label_changes:
+            print(f"{action} label {label} in {repo}" + (f" ({', '.join(rest[1])})" if action == "update" else ""))
         return 0
-    for repo, label in missing_labels(plan):  # a missing label fails every handoff that adds it; never deleted
-        subprocess.run(["gh", "label", "create", label, "-R", repo, "--color", "ededed"], check=True,
-                       capture_output=True, text=True)
-        print(f"created label {label} in {repo}")
-    if any(c[0] == "delete" for c in changes) and not allow_delete:
+    for action, repo, label, want, *_ in label_changes:  # a missing label fails every handoff that adds it
+        tracker = label_tracker(repo, run)
+        if action == "create":
+            tracker.create_label(label, want["color"], want["description"])
+        elif action == "update":
+            tracker.update_label(label, want["color"], want["description"])
+        else:
+            continue
+        print(f"{action}d label {label} in {repo}")
+    removals = [c for c in label_changes if c[0] == "remove"]
+    if (removals or any(c[0] == "delete" for c in changes)) and not allow_delete:
+        for _, repo, label, _ in removals:
+            print(f"refused: would remove label {label} in {repo}", file=sys.stderr)
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
+    for _, repo, label, _ in removals:
+        label_tracker(repo, run).delete_label(label, plan["owned_label_prefixes"])
+        print(f"removed label {label} in {repo}")
     if changes:
         apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories)
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
@@ -925,17 +975,6 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         for w in x["webhooks"]:
             print(f"webhook {x['name']}: trigger {w['id']}" + (f" {w['url']}" if w["url"] else ""))
     return 0
-
-
-def missing_labels(plan: dict, run=subprocess.run) -> list[tuple[str, str]]:
-    """(repository, label) per label of the plan missing from a repository the factory labels: the tracker's and
-    the main code repository (`plan["label_repositories"]`)."""
-    out = []
-    for repo in plan.get("label_repositories") or []:
-        have = run(["gh", "label", "list", "-R", repo, "--limit", "1000", "--json", "name", "-q", ".[].name"],
-                   check=True, capture_output=True, text=True).stdout.split("\n")
-        out += [(repo, label) for label in plan["labels"] if label not in have]
-    return out
 
 
 def write_files(files: dict, apply: bool) -> int:
@@ -970,7 +1009,8 @@ def main(argv: list[str]) -> int:
         servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
-            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers)
+            run = github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config))
+            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run)
             return code or write_files(plan["files"], argv[0] == "--apply")
         finally:
             for server in servers:

@@ -192,6 +192,29 @@ class GitHub(unittest.TestCase):
 
 
 
+class Labels(unittest.TestCase):
+    def test_list_create_update_delete(self):
+        calls = []
+
+        def run(args):
+            calls.append(args)
+            return json.dumps([{"name": "factory:x", "color": "ABCDEF", "description": None}]) if args[1] == "list" else ""
+        t = GitHubTracker(REPO, STAGES, run=run)
+        self.assertEqual(t.list_labels(), {"factory:x": {"color": "abcdef", "description": ""}})
+        t.create_label("factory:y", "ededed", "d", repo="o/other")
+        t.update_label("factory:x", "000000")
+        t.delete_label("risk:low", ["factory:", "risk:"])
+        self.assertEqual([c[:5] for c in calls[1:]], [["label", "create", "factory:y", "-R", "o/other"],
+                                                      ["label", "edit", "factory:x", "-R", REPO],
+                                                      ["label", "delete", "risk:low", "-R", REPO]])
+
+    def test_never_deletes_a_label_outside_the_owned_groups(self):
+        calls = []
+        with self.assertRaises(ValueError):
+            GitHubTracker(REPO, STAGES, run=calls.append).delete_label("bug", ["factory:", "risk:"])
+        self.assertEqual(calls, [])
+
+
 class RateLimit(unittest.TestCase):
     def stub(self, d, script):
         path = Path(d, "gh")

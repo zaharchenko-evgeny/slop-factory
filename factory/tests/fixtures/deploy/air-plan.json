@@ -1209,6 +1209,20 @@
   "label_repositories": [
     "o/main"
   ],
+  "label_specs": {
+    "complexity:large": {
+      "color": "fbca04",
+      "description": "Size grade set by intake; chooses the developer tier"
+    },
+    "complexity:medium": {
+      "color": "fbca04",
+      "description": "Size grade set by intake; chooses the developer tier"
+    },
+    "complexity:small": {
+      "color": "fbca04",
+      "description": "Size grade set by intake; chooses the developer tier"
+    }
+  },
   "labels": [
     "complexity:large",
     "complexity:medium",
@@ -1230,6 +1244,11 @@
     "factory:x",
     "risk:high",
     "risk:low"
+  ],
+  "owned_label_prefixes": [
+    "complexity:",
+    "factory:",
+    "risk:"
   ],
   "prefix": "[Slop factory] "
 }
