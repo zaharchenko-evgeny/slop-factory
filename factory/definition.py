@@ -14,6 +14,7 @@ FACTORY = "factory.yaml"
 WORKFLOW = "workflow.yaml"
 ROLES = "roles"
 NO_ROLE = ("script", "human")  # harnesses that run no role
+GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children")  # the facts a guard reads (gate.GUARD_KEYS)
 STARTUP = ".air/cloud/startup.sh"  # Air runs it from the checkout; it runs `factory setup` (ADR-0021)
 
 
@@ -190,6 +191,7 @@ def errors(defn):
             oc = oc or {}
             if oc.get("else") is not None and oc["else"] not in outcomes:
                 errs.append(f"unknown-else: {where}.{o}: {oc['else']}")
+            errs += [f"unknown-guard: {where}.{o}: {k}" for k in (oc.get("if") or {}) if k not in GUARDS]
         if not human and n.get("enabled") is not False and env in envs:
             try:
                 render(defn, name)

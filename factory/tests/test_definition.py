@@ -114,6 +114,10 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["join"]["outcomes"]["approved"].update({"else": "nothing"}))
         self.assertError("unknown-else: nodes.join.approved: nothing")
 
+    def test_guard_reads_known_facts(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["join"]["outcomes"]["approved"].update({"if": {"colour": "red"}}))
+        self.assertError("unknown-guard: nodes.join.approved: colour")
+
     def test_undefined_template_name(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(prompt="Limit {{ settings.nope }}"))
         self.assertError("render: nodes.intake")

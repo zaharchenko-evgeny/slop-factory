@@ -50,17 +50,44 @@ class GateTest(unittest.TestCase):
     def setUp(self):
         SENT.clear()
 
-    def test_risk_guard_falls_back(self):
-        """ADR-0021: an outcome's `if` guard that fails applies its `else` (a cheap path refused for high risk)."""
+    def test_label_guard_falls_back(self):
+        """ADR-0021: an outcome's `if` guard that fails applies its `else`; without one the outcome is refused."""
         graph = copy.deepcopy(NODES)
         graph["nodes"]["intake"]["outcomes"]["cheap"] = {
-            "if": {"risk": ["low"]}, "else": "proceed", "effects": [{"stage": "ready"}, {"label": "factory:cheap"}]}
-        high = MemoryTracker({"7": {"stage": "triage"}})
+            "if": {"label": "risk:low"}, "else": "proceed", "effects": [{"stage": "ready"}, {"label": "factory:cheap"}]}
+        high = MemoryTracker({"7": {"stage": "triage", "attrs": ["risk:high"]}})
         gate.apply("intake", "cheap", {"ticket": "7", "risk": "high", "complexity": "small"}, high, graph)
         self.assertNotIn("factory:cheap", high.facts("7")["attrs"])
-        low = MemoryTracker({"7": {"stage": "triage", "risk": "low", "attrs": ["complexity:small"]}})
+        low = MemoryTracker({"7": {"stage": "triage", "attrs": ["risk:low"]}})
         gate.apply("intake", "cheap", {"ticket": "7"}, low, graph)
         self.assertIn("factory:cheap", low.facts("7")["attrs"])
+        del graph["nodes"]["intake"]["outcomes"]["cheap"]["else"]
+        with self.assertRaises(gate.Bad):
+            gate.apply("intake", "cheap", {"ticket": "7"}, MemoryTracker({"7": {"stage": "triage"}}), graph)
+
+    def test_guard_facts(self):
+        f = {"attrs": ["risk:low"], "pr_state": "open", "behind": True, "conflict": False, "ci": "green",
+             "head": "h2", "blockers_open": 0, "stage": "in-review",
+             "reviews": [{"agent": True, "commit_id": "h1", "verdict": "changes"},
+                         {"agent": True, "commit_id": "h2", "verdict": "approve"}]}
+        for guard, want in [({"label": "risk:low"}, True), ({"label": ["risk:low", "x"]}, False),
+                            ({"pr": "behind"}, True), ({"pr": "conflicting"}, False), ({"pr": "open"}, True),
+                            ({"review": "approved-at-head"}, True), ({"review": "changes-at-head"}, False),
+                            ({"ci": "green", "stage": "in-review"}, True), ({"blockers": "closed"}, True)]:
+            self.assertEqual(gate.guard_holds(guard, f), want, guard)
+        with self.assertRaises(gate.Bad):
+            gate.guard_holds({"colour": "red"}, f)
+        self.assertTrue(gate.guard_holds({"children": "closed"}, {**f, "children_open": 0}))
+
+    def test_label_group_holds_one_value(self):
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["intake"]["outcomes"]["risky"] = {"effects": [{"label": "risk:high"}, {"stage": "ready"}]}
+        tr = MemoryTracker({"7": {"stage": "triage", "attrs": ["risk:low", "complexity:small"]}})
+        gate.apply("intake", "risky", {"ticket": "7"}, tr, graph)
+        attrs = tr.facts("7")["attrs"]
+        self.assertIn("risk:high", attrs)
+        self.assertNotIn("risk:low", attrs)
+        self.assertIn("complexity:small", attrs)   # another group stays
 
     def test_lessons_comment_and_label(self):
         tr = MemoryTracker({"7": {"stage": "triage"}})
@@ -74,11 +101,6 @@ class GateTest(unittest.TestCase):
         with self.assertRaises(gate.Bad):
             gate.apply("intake", "not-actionable", {"ticket": "7", "reason": "r", "lessons": ["just text"]},
                        MemoryTracker({"7": {"stage": "triage"}}), NODES)
-
-    def test_guard_names_known_fields(self):
-        with self.assertRaises(gate.Bad):
-            gate.guard_holds({"colour": "red"}, {})
-        self.assertTrue(gate.guard_holds({"complexity": ["small", "medium"]}, {"attrs": ["complexity:medium"]}))
 
     def test_blocked_sends_one_decision_needed(self):
         gate.apply("implement", "blocked", {"ticket": "7", "reason": "[factory] blocked"}, MemoryTracker({"7": {"stage": "in-dev"}}), NODES)

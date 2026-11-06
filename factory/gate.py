@@ -89,6 +89,19 @@ def holds(when, facts, event):
             return facts.get("pr_state", "none") == want
         if key == "always":
             return bool(want)
+        if key == "label":  # ADR-0021: every label listed is on the ticket
+            return all(x in facts.get("attrs", []) for x in (want if isinstance(want, list) else [want]))
+        if key == "pr":
+            value(want, ("open", "merged", "behind", "conflicting", "none"))
+            return {"open": facts.get("pr_state") == "open", "merged": facts.get("pr_state") == "merged",
+                    "behind": bool(facts.get("behind")), "conflicting": bool(facts.get("conflict")),
+                    "none": facts.get("pr_state", "none") == "none"}[want]
+        if key == "review":
+            value(want, ("approved-at-head", "changes-at-head", "none-at-head"))
+            return review_at_head(facts) == want.removesuffix("-at-head").replace("approved", "approve")
+        if key == "children":
+            value(want, ("open", "closed"))
+            return ("children_open" in facts) and (facts["children_open"] == 0) == (want == "closed")
         return bool(facts["due"]) == bool(want)  # due
     return all(one(k, v) for k, v in when.items())
 
@@ -242,17 +255,45 @@ def lesson_effects(ticket, node, payload):
     return [{"kind": "comment", "ticket": ticket, "value": body}, {"kind": "label", "ticket": ticket, "value": vocab.lesson()}]
 
 
-def guard_holds(guard, facts):
-    """True when the ticket matches an outcome's `if` guard (ADR-0021): `risk` and `complexity` are a value or a
-    list; the ticket's complexity is its `complexity:<size>` label."""
-    have = {"risk": facts.get("risk"),
-            "complexity": next((x[11:] for x in facts.get("attrs", []) if x.startswith("complexity:")), None)}
-    for key, want in guard.items():
-        if key not in have:
-            raise Bad(f"unknown guard: {key}")
-        if have[key] not in (want if isinstance(want, list) else [want]):
-            return False
-    return True
+def group_unlabels(effects, facts):
+    """ADR-0021: a label `<group>:<value>` outside the stage namespace holds one value per group; adding one removes
+    the group's other values (`risk:high` removes `risk:low`) on the same ticket or PR."""
+    labels = [e for e in effects if e["kind"] == "label" and ":" in str(e.get("value"))]
+    if not labels:
+        return []
+    stages = config_mod.load()["tracker"].get("stages") or {}
+    namespaces = {str(v).partition(":")[0] for v in stages.values() if ":" in str(v)}
+    out = []
+    for e in labels:
+        group = str(e["value"]).partition(":")[0]
+        if group in namespaces:
+            continue
+        have = facts.get("pr_labels" if e.get("on") == "pr" else "attrs") or []
+        out += [{"kind": "unlabel", "ticket": e["ticket"], "value": x, **({"on": e["on"]} if e.get("on") else {})}
+                for x in have if x.startswith(f"{group}:") and x != e["value"]]
+    return out
+
+
+def review_at_head(facts):
+    """`approve` when agent reviews at the current head all approve, `changes` when one asks for changes, else `none`."""
+    verdicts = [r.get("verdict") for r in facts.get("reviews") or [] if r.get("agent") and r.get("commit_id") == facts.get("head")]
+    if not verdicts:
+        return "none"
+    return "changes" if any(v != "approve" for v in verdicts) else "approve"
+
+
+def guard_holds(guard, facts, tracker=None, ticket=None):
+    """True when the ticket holds an outcome's `if` guard (ADR-0021): the same facts as `when`."""
+    if "children" in guard and "children_open" not in facts and tracker is not None and hasattr(tracker, "children"):
+        kids = tracker.children(ticket) or []
+        facts = {**facts, "children_open": sum(1 for c in kids if c.get("state") == "open")}
+    unknown = set(guard) - GUARD_KEYS
+    if unknown:
+        raise Bad(f"unknown guard: {', '.join(sorted(unknown))}")
+    return holds(guard, facts, {})
+
+
+GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children"}
 
 
 def fix_tier(facts, default="mid"):
@@ -478,8 +519,10 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             outcome = "unresolvable"
             payload = {**payload, "reason": payload.get("reason") or f"[factory] Blocked: the {payload['tier']} tier could not resolve it and no higher tier exists. A person decides."}
     out = node["outcomes"][outcome]
-    if out.get("if") and not guard_holds(out["if"], tracker.facts(ticket)) and out.get("else") in node["outcomes"]:
-        out = node["outcomes"][out["else"]]  # ADR-0021: e.g. a cheap path refused for a high-risk ticket
+    if out.get("if") and not guard_holds(out["if"], tracker.facts(ticket), tracker, ticket):
+        if out.get("else") not in node["outcomes"]:
+            raise Bad(f"outcome {outcome}: its guard does not hold")
+        out = node["outcomes"][out["else"]]  # ADR-0021: e.g. automatic merge refused for a high-risk ticket
     if out.get("ci") and tracker.facts(ticket)["ci"] not in out["ci"] and out.get("else") in node["outcomes"]:
         out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
         if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
@@ -631,6 +674,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             human_effects += [{"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                               {"kind": "unassign", "ticket": ticket, "value": None, "on": "pr"}]
         effects[:0] = human_effects
+    effects[:0] = group_unlabels(effects, facts)
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
         if e["kind"] == "stage":
