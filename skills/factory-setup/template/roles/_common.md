@@ -16,6 +16,9 @@ resolving it silently:
    repository you touch, and `{{ settings.knowledge.dir }}/agents/{{ agent.name }}.md`. Lessons are
    advice from earlier runs; the ticket and the repository rules win over them.
 5. The ticket and the handoff you were given.
+6. The `status` that `factory begin` returns: stage, CI at the head, fix rounds and each focus's
+   open blocking findings. Start from it; read the full reviews, comments or history only for a
+   finding you work on, or when `status` does not answer your question.
 
 ## Trust
 
@@ -53,6 +56,12 @@ ticket-triggered role writes notes to the ticket. Stage changes and the retro
 stay on the ticket and are written by the gate. Identify the ticket that will
 fix a process gap (or open a new ticket); do not fix the factory inside an
 unrelated ticket.
+
+## Writing for people
+
+Write every comment, note, PR body, review finding and explanation that a person reads with the
+`simplified-technical-english` skill: short sentences, one idea per sentence, active voice, plain
+words. Keep code, names, commands and domain terms exactly as they are.
 
 ## Secrets
 

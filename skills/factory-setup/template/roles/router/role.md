@@ -28,6 +28,12 @@ Input: a request (free text or a tracker issue).
    exclude, and what command or test should verify it. Propose the
    replacement checks (named tests, paths and commands) with the outcome, so a person accepts by editing the ticket or by
    `factory:triage` with the proposal pasted.
+   Grill only for a decision the person owns: what to build, which behaviour to choose, or a check that cannot be
+   verified. Never grill for details the developer can choose while building: test or fixture names and paths, the
+   docs file, the exact dry-run output, edge cases already implied by the scope. A check named by its test or command
+   is ready even if the test does not exist yet. When only such details are open, proceed.
+   Keep `questions` short: at most 3 numbered questions, one line each, then the proposed checks only for the
+   questions asked. No preamble, no restating the ticket, no risk or size summary.
    Every Operator check must become a test or be rewritten as `Operator check after the merge (not part of the PR): …`.
    A ticket that changes more than the primary repository needs a line `repositories: <primary>, <name>, …` in its
    body, primary first, with names from the environment's repositories ({{ environment.repositories | map(attribute='repo') | join(', ') }}) (ADR-0017). Without one it changes

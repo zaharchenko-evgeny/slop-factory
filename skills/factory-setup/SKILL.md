@@ -13,6 +13,7 @@ References (contract plus one section per adapter):
 - [`references/harnesses.md`](references/harnesses.md)
 - [`references/checks.md`](references/checks.md)
 - [`references/run-log.md`](references/run-log.md)
+- [`references/nodes.md`](references/nodes.md): each node's purpose, trigger and outcomes
 
 You build a software factory inside the team's own repository. The factory
 belongs to the team. Generate its definition, then apply it to a target after
@@ -64,7 +65,8 @@ branch protection). Ask only for decisions.
 ## 2. Generate
 
 `render.py ANSWERS.json OUT_DIR` writes a team from `template/`:
-`factory.yaml`, `workflow.yaml`, `roles/`, `.air/cloud/startup.sh` (the Air
+`factory.yaml`, `workflow.yaml`, `roles/`, `skills/` (the local skills the
+definition names), `.air/cloud/startup.sh` (the Air
 startup script, which runs `factory setup`) and `README.md`, replacing every
 `{{NAME}}` placeholder with the interview answer (a missing answer is an
 error; Jinja's `{{ name }}` in role bodies is rendered later, by setup).

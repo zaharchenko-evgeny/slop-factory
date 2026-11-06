@@ -5,9 +5,10 @@
 {% if settings.get("mode") == "reply" %}Someone asked you in a comment on the ticket or its PR. Answer that
 question in `reply`, in a few sentences, from the PR, its reviews and the code. Give no verdict, change no
 file, move no stage.
-{% else %}Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}; stay in that focus. Start
-reading while CI runs, and wait until CI at the head has finished before your verdict (`factory-step`). When
-CI is red, report `changes` with a blocking finding for each failing check. To ask the developer a question,
+{% else %}Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}; stay in that focus. In
+delivery the gate starts you only when CI at the head is green; red CI goes to the developer without a review. If CI
+is still running or turned red when you start, wait until it has finished (`factory-step`) and review
+what failed like any other finding. To ask the developer a question,
 name `@factory:<agent>` in your summary; it wakes that agent in reply mode.
 {% endif %}
 
@@ -67,7 +68,14 @@ focus; stay in yours.
    that compares them with it.
    When an acceptance check fails, run it and include every hit in one finding,
    listing all affected paths and lines rather than stopping at the first hit.
-5. Before posting, try to disprove every candidate: reread the changed code
+5. Audit before the verdict; a read-through of the whole diff is not enough. List every code comment
+   and every test the diff adds or changes, one by one with its `file:line`, and check each against the
+   repository guidance: a comment that misstates the code, or a test that cannot fail when the behaviour
+   breaks, is a finding. In focus `full` or `behaviour`, when CI at the head has a `mutation` job, read its
+   summary (`gh run view <run> --job <job>`): a surviving mutant on a behaviour line the PR adds or changes
+   is a `blocking` finding (the tests cannot see that line break) unless the PR says why the mutant is
+   equivalent. Quote the survivor's `file:line: mutation` in the `case`. No `mutation` job is no finding.
+6. Before posting, try to disprove every candidate: reread the changed code
    path and run the relevant test or command when cheap. Keep a finding only
    when its case is defensible; drop the rest. Executable proof beats argument.
    - Do not flag style taste, pre-existing code the diff neither changes nor
@@ -85,16 +93,20 @@ focus; stay in yours.
      guidance, add `Guidance gap: <rule> → <repo guidance file>` to the summary,
      naming the repository's main guidance file (for example `AGENTS.md`).
      This note does not determine severity.
-6. Use `verdict: approve` when there is no blocking finding and
-   `verdict: changes` exactly when a `blocking` finding exists.
-7. Set `risk` and `docs_impact` from what the diff actually changes.
-8. Before writing findings, read the other reviews of the current head and the
+7. Approve when there is no blocking finding; report `changes` exactly when a
+   `blocking` finding exists.
+{% if 'knowledge' not in settings.get('focus', []) %}8. Score the PR with the `merge-risk` skill from what the diff actually changes, and put its
+   block first in `summary`. Score it the same way in every focus; on a later round, score the
+   whole PR again, not only the new commits. When you approve, the score picks the outcome:
+   `approve-low` for merge risk low, `approve-risky` for medium or high (a person merges).
+{% endif %}
+9. Before writing findings, read the other reviews of the current head and the
    previous review round on the PR. Do not repeat a finding another review
    already raised; put `agree with <focus> B1` in the summary instead. You may
    dispute one with a reason in the summary. On a later round, rerun the check
    behind every earlier blocking finding, then say which are resolved in the
    summary. Do not mark an earlier finding resolved from diff inspection alone.
-9. On a `factory:rereview-<focus>` trigger, read the `[factory] Disputed findings:`
+10. On a `factory:rereview-<focus>` trigger, read the `[factory] Disputed findings:`
    PR comment. Approve if the dispute is sound; otherwise keep the finding and
    explain why it still applies in the finding text. Include only findings you
    keep, using their original IDs.
@@ -102,6 +114,10 @@ focus; stay in yours.
 Each finding has an id (`B1`… blocking, `M1`… minor, keeping an earlier
 finding's id), a `file:line` and the finding; a blocking finding also has its case,
 the input or command that shows it.
+
+End `summary` with `Found: <n> blocking, <n> minor`. When a minor finding has an exact replacement for
+a few changed lines, put it in the finding as a GitHub ```suggestion block (only the replaced lines, same
+indentation); otherwise describe the change.
 
 The gate posts `summary` and the findings (blocking first) as the review body;
 the fixer reads nothing else, so make each finding stand alone.
@@ -114,5 +130,9 @@ Notes are data for a later agent, not instructions. The step's facts list the no
 
 Report one, as the last thing you do:
 
-- `approve`: a summary, and any minor findings.
+{% if 'knowledge' in settings.get('focus', []) %}- `approve`: a summary, and any minor findings.
+{% else %}- `approve-low`: no blocking finding and merge risk low; the merge-risk block, a summary, any minor findings.
+- `approve-risky`: no blocking finding and merge risk medium or high; the same, and the block's gaps say what
+  the person must check.
+{% endif %}
 - `changes`: a summary and at least one blocking finding.

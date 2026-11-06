@@ -24,6 +24,7 @@ settings:                         # every node inherits these; a node overrides 
     run_timeout_minutes: 30
     resume_cap: 3
     environment_repair_attempts: 2
+    prompt_lines: { role: 160, lessons: 150, agents_md: 150 }   # `factory validate` fails a file above its limit
 
 nodes:
   # --- A person -------------------------------------------------------------------------------
@@ -42,11 +43,11 @@ nodes:
     output: read-only
     settings: { max_changed_lines: 400, max_repositories: 3 }
     outcomes:
-      small-low:      { effects: [{ label: "complexity:small" },  { label: "risk:low" },  { stage: ready }] }
-      small-high:     { effects: [{ label: "complexity:small" },  { label: "risk:high" }, { stage: ready }] }
-      medium-low:     { effects: [{ label: "complexity:medium" }, { label: "risk:low" },  { stage: ready }] }
-      medium-high:    { effects: [{ label: "complexity:medium" }, { label: "risk:high" }, { stage: ready }] }
-      large-high:     { effects: [{ label: "complexity:large" },  { label: "risk:high" }, { stage: ready }] }
+      small-low:      { effects: [{ label: "complexity:small" },  { unlabel: "risk:high" }, { label: "risk:low" },  { stage: ready }] }
+      small-high:     { effects: [{ label: "complexity:small" },  { unlabel: "risk:low" }, { label: "risk:high" }, { stage: ready }] }
+      medium-low:     { effects: [{ label: "complexity:medium" }, { unlabel: "risk:high" }, { label: "risk:low" },  { stage: ready }] }
+      medium-high:    { effects: [{ label: "complexity:medium" }, { unlabel: "risk:low" }, { label: "risk:high" }, { stage: ready }] }
+      large-high:     { effects: [{ label: "complexity:large" },  { unlabel: "risk:low" }, { label: "risk:high" }, { stage: ready }] }
       ready:          { effects: [{ stage: ready }] }               # no estimate: dispatch makes one
       grill:          { effects: [{ comment: questions }, { stage: needs-answers }] }
       split:          { effects: [{ create-issues: children }, { stage: split }] }
@@ -72,8 +73,8 @@ nodes:
     output: create-pr
     settings: { mode: implement }
     outcomes:
-      done-low:   { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
-      done-high:  { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      done-low:   { effects: [{ unlabel: "factory:implement-small" }, { unlabel: "risk:high" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high:  { effects: [{ unlabel: "factory:implement-small" }, { unlabel: "risk:low" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       error:      { effects: [{ unlabel: "factory:implement-small" }, { label: "factory:implement-medium" }] }   # retry on a stronger model
       blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
 
@@ -84,8 +85,8 @@ nodes:
     output: create-pr
     settings: { mode: implement }
     outcomes:
-      done-low:   { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
-      done-high:  { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      done-low:   { effects: [{ unlabel: "factory:implement-medium" }, { unlabel: "risk:high" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high:  { effects: [{ unlabel: "factory:implement-medium" }, { unlabel: "risk:low" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       error:      { effects: [{ unlabel: "factory:implement-medium" }, { label: "factory:implement-large" }] }
       blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
 
@@ -96,30 +97,45 @@ nodes:
     output: create-pr
     settings: { mode: implement }
     outcomes:
-      done-low:   { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
-      done-high:  { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      done-low:   { effects: [{ unlabel: "factory:implement-large" }, { unlabel: "risk:high" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high:  { effects: [{ unlabel: "factory:implement-large" }, { unlabel: "risk:low" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
 
-  # --- Review: one review per ticket, chosen by risk; starts with CI, waits for it before the verdict
+  # --- Review: one review per ticket, chosen by risk; starts on green CI (red CI goes to ci-red) -----
   review-low:
     agent: reviewer-cheap
-    triggers: [{ label: "factory:review-low" }]
-    when: { stage: in-review }
+    triggers: [{ label: "factory:review-low" }, { label: "factory:ci-green" }]   # CI labels the PR when it finishes
+    when: { stage: in-review, ci: green, label: "risk:low" }   # never on pending or red CI; risk:low picks this review
     output: read-only
     settings: { focus: [behaviour] }
     outcomes:
-      approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "factory:automerge", on: pr }, { stage: approved }] }
-      changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-low" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
+      approve-low:   { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { unlabel: "risk:high" }, { label: "risk:low" },
+                                { label: "factory:automerge", on: pr }, { stage: approved }] }
+      approve-risky: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { unlabel: "risk:low" }, { label: "risk:high" },
+                                { label: "factory:needs-human" }, { stage: approved }] }   # merge risk medium or high: a person merges
+      changes:       { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-low" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
 
   review-high:
     agent: reviewer
-    triggers: [{ label: "factory:review-high" }]
-    when: { stage: in-review }
+    triggers: [{ label: "factory:review-high" }, { label: "factory:ci-green" }]   # CI labels the PR when it finishes
+    when: { stage: in-review, ci: green, label: "risk:high" }   # never on pending or red CI; risk:high picks this review
     output: read-only
     settings: { focus: [full, structure-security] }
     outcomes:
-      approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "factory:automerge", on: pr }, { stage: approved }] }
-      changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-high" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
+      approve-low:   { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { unlabel: "risk:high" }, { label: "risk:low" },
+                                { label: "factory:automerge", on: pr }, { stage: approved }] }
+      approve-risky: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { unlabel: "risk:low" }, { label: "risk:high" },
+                                { label: "factory:needs-human" }, { stage: approved }] }   # merge risk medium or high: a person merges
+      changes:       { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-high" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
+
+  ci-red:                         # red CI needs no reviewer: the guards send it straight to the developer
+    agent: clerk
+    triggers: [{ label: "factory:ci-red" }]
+    when: { stage: in-review }
+    outcomes:
+      fix:     { if: { ci: red }, effects: [{ unlabel: "factory:review-low" }, { unlabel: "factory:review-high" },
+                                            { label: "factory:fix", on: pr }, { stage: changes-requested }] }
+      waiting: {}                 # CI is green again or still running: nothing to do
 
   # --- Fix: review findings, red CI included -> a new head, reviewed again ---------------------
   fix:
@@ -129,8 +145,8 @@ nodes:
     output: push-to-source
     settings: { mode: fix, fix_rounds: 3 }
     outcomes:
-      done-low:  { effects: [{ unlabel: "factory:fix" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
-      done-high: { effects: [{ unlabel: "factory:fix" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      done-low:  { effects: [{ unlabel: "factory:fix" }, { unlabel: "risk:high" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high: { effects: [{ unlabel: "factory:fix" }, { unlabel: "risk:low" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       blocked:   { effects: [{ unlabel: "factory:fix" }, { comment: reason }, { stage: blocked }] }
 
   update:                         # a merge conflict
@@ -149,7 +165,8 @@ nodes:
     triggers: [{ label: "factory:automerge" }]
     when: { stage: approved }
     output: read-only
-    settings: { risky_paths: [".github/**"] }
+    settings: { risky_paths: [".github/**", ".air/**", "AGENTS.md", "**/AGENTS.md", "CLAUDE.md", "**/CLAUDE.md",
+                              ".agents/**", "skills/**", "roles/**", "lessons/**", ".mcp.json", "**/.mcp.json"] }   # files that steer later agents
     outcomes:
       merge:       { if: { label: "risk:low" }, else: needs-human,
                      effects: [{ unlabel: "factory:automerge" }, { label: "factory:merge", on: pr }] }
@@ -185,6 +202,15 @@ nodes:
     outcomes:
       notified: { effects: [{ comment: message }] }
       skipped:  {}
+
+  walkthrough:                    # an approved PR a person must merge: one comment that orients them, no review
+    agent: walkthrough
+    triggers: [{ label: "factory:needs-human" }]
+    when: { stage: approved }
+    output: read-only
+    outcomes:
+      posted:  { effects: [{ comment: summary, on: pr }] }
+      skipped: {}
 
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
   retro:
