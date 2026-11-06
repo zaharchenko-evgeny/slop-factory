@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for `factory begin` and `factory end` (factory/cli.py). Run: uv run factory/tests/test_cli.py"""
 import contextlib
@@ -359,13 +359,17 @@ class ImportTimeBoundaryTest(unittest.TestCase):
 
 class EnvRolesTest(unittest.TestCase):
     def test_prints_roles_of_enabled_agent_nodes_in_the_environment(self):
-        cfg.set_team(ROOT / "factory/tests/fixtures/slop")
         self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
-        for env, roles in {"read": "reviewer\nrouter\n", "write": "developer\n", "ops": "distill\nretro\n"}.items():
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                self.assertEqual(cli.main(["env", "roles", env]), 0)
-            self.assertEqual(out.getvalue(), roles)
+        cases = {"slop": {"engine": "approver\nclerk\ndeveloper\ndispatcher\nops\nreviewer\nrouter\n",
+                          "knowledge": "retro\nreviewer\n", "team": "inbox\nops\n"},
+                 "slop-v1": {"read": "reviewer\nrouter\n", "write": "developer\n", "ops": "distill\nretro\n"}}
+        for fixture, envs in cases.items():
+            cfg.set_team(ROOT / "factory/tests/fixtures" / fixture)
+            for env, roles in envs.items():
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(cli.main(["env", "roles", env]), 0)
+                self.assertEqual(out.getvalue(), roles, f"{fixture} {env}")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/deploy.py. Run: uv run factory/tests/test_deploy.py
 Regenerate the fixture: UPDATE_FIXTURE=1 uv run factory/tests/test_deploy.py"""
@@ -408,7 +408,17 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--apply"), 1)
         self.assertEqual(self.calls("automation"), [])
         self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
-        self.assertEqual(self.calls("automation"), [["delete_automation", {"automationId": "a2"}]])
+        self.assertEqual(self.calls("automation"), [["delete_automation", {"automationId": "a2", "confirmName": "[F] gone"}]])
+
+    def test_apply_leaves_an_environment_delete_to_a_person(self):
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"},
+                       {"id": "e9", "name": "[F] gone", "startup": "x", "repository": "https://github.com/o/r"}])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = self.run_deploy("--apply", allow_delete=True)
+        self.assertNotIn("delete_environment", [c[0] for c in self.calls("environment")])
+        self.assertIn("remove by hand in Air: environment [F] gone", err.getvalue())
+        self.assertEqual(code, 0)
 
     def test_team_repository_automation_runs_from_the_tracker_checkout(self):
         slop, before = HERE / "fixtures/slop", cfg.team_root()
@@ -431,6 +441,16 @@ class ApplyTest(unittest.TestCase):
             code = deploy.deploy("--apply", False, {"prefix": "[F]", "environments": [], "automations": []}, None, None)
         self.assertEqual(code, 0)
         self.assertIn("webhook [F] hook: trigger t1 https://air/hook/t1", out.getvalue())
+
+    def test_apply_creates_environment_with_air_arguments(self):
+        self.plan["environments"][0].update({"repository": "https://github.com/o/r", "variables": {"FACTORY_ENV": "read"},
+                                            "domains": ["pypi.org"]})
+        self.seed([], [])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        created = [c for c in self.calls("environment") if c[0] == "create_environment"]
+        self.assertEqual(created, [["create_environment", {"name": "[F] read", "repositoryUrl": "https://github.com/o/r",
+                                                           "allowedDomains": ["pypi.org"],
+                                                           "variables": [{"key": "FACTORY_ENV", "value": "read"}]}]])
 
     def test_apply_verifies_after_write(self):
         self.seed([], [])
@@ -529,9 +549,9 @@ class ProjectPlanTest(unittest.TestCase):
                          json.dumps(current, indent=2, sort_keys=True))
 
     def test_slop_plan_deploys_the_team_workflow(self):
-        """Slop factory's settings (fixtures/slop, slop-eval-factory's files) deploy every node of their own workflow,
+        """Slop factory's old-layout settings (fixtures/slop-v1, frozen) deploy every node of their own workflow,
         on their schedules, with every repository they list; engine/nodes.yaml may differ from them."""
-        slop, before = HERE / "fixtures/slop", cfg.team_root()
+        slop, before = HERE / "fixtures/slop-v1", cfg.team_root()
         project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
         wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
         try:
@@ -580,6 +600,25 @@ class ProjectPlanTest(unittest.TestCase):
                 self.assertEqual((slop / rel).read_text(), Path(path).read_text(), f"fixtures/slop/{rel}")
         self.assertEqual(sorted(str(p.relative_to(slop)) for p in slop.rglob("*") if p.is_file()),
                          sorted(str(Path(p).relative_to(tmp)) for p in written))
+
+    def test_mention_allowlist(self):
+        """fixtures/slop-v1's agents (ADR-0020, the old layout): dev, rex and ria, and whom each may mention on which subject."""
+        slop = HERE / "fixtures/slop-v1"
+        project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
+        wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
+        specs = {a["spec"]["node"]: a["spec"] for a in project_plan(project, wf)["automations"]}
+        for node, spec in specs.items():
+            self.assertEqual(spec["role"] != "script", {"agent", "persona", "mentions"} <= set(spec), node)
+        self.assertEqual((specs["fix"]["mentions_on"]["rex"], specs["review"]["mentions_on"]["dev"]), (["pr"], ["pr"]))
+        self.assertEqual((specs["implement"]["mentions_on"]["ria"], specs["intake"]["mentions_on"]["dev"]),
+                         (["ticket"], ["ticket"]))
+        listed = {p for spec in specs.values() for p in spec.get("mentions", [])}
+        self.assertFalse(listed & {"merge", "finish", "join", "script"}, listed)
+        self.assertFalse({"persona", "mentions"} & (set(specs["merge"]) | set(specs["finish"]) | set(specs["join"])))
+        wf["nodes"]["intake"]["mention"] = False  # ria's only node
+        specs = {a["spec"]["node"]: a["spec"] for a in project_plan(project, wf)["automations"]}
+        self.assertEqual(specs["intake"]["mentions"], [])
+        self.assertFalse([n for n, spec in specs.items() if "ria" in spec.get("mentions", [])])
 
     def test_youtrack_tracker_renders_ticket_triggers_as_youtrack_events(self):
         project, wf = this_repository()
@@ -667,6 +706,14 @@ class PlanTest(unittest.TestCase):
         if os.environ.get("UPDATE_FIXTURE"):
             (FIX / "air-plan.json").write_text(got)
         self.assertEqual(got, (FIX / "air-plan.json").read_text())
+
+    def test_plan_unchanged_without_agents(self):
+        """Without `agents:` and `agent:` keys the plan is the committed one: no spec names an agent (ADR-0020)."""
+        config = yaml.safe_load((FIX / "factory.yaml").read_text())
+        self.assertNotIn("agents", config)
+        plan = deploy.plan_air(yaml.safe_load((FIX / "nodes.yaml").read_text()), config)
+        self.assertEqual(json.dumps(plan, indent=2, sort_keys=True) + "\n", (FIX / "air-plan.json").read_text())
+        self.assertFalse([a["name"] for a in plan["automations"] if {"agent", "persona", "mentions"} & set(a["spec"])])
 
     def test_environments_only_export_the_environment_name(self):
         url = "https://github.com/o/team"
@@ -871,13 +918,25 @@ class PlanTest(unittest.TestCase):
         envs = {e["name"]: e["repository"] for e in plan["environments"]}
         self.assertEqual(envs["[Slop factory] write api"], "https://github.com/o/api")
 
+    def test_scoped_knowledge_review_uses_team_environment(self):
+        plan = self.three_repositories(team_repository="https://github.com/o/team")
+        envs = {e["name"]: e["repository"] for e in plan["environments"]}
+        for a in plan["automations"]:  # Air: the automation repository must be its environment's repository
+            self.assertEqual(a["repository"]["browseUrl"], envs[a["environmentConfigId"]], a["name"])
+        knowledge = [a for a in plan["automations"] if "review-knowledge" in a["name"]]
+        self.assertTrue(knowledge)
+        self.assertTrue(all(a["repository"]["browseUrl"] == "https://github.com/o/team" for a in knowledge))
+
     def test_token_write_mode_deploys_one_node_set(self):
         plan = self.three_repositories(write_mode="token")
         names = {a["name"] for a in plan["automations"]}
         self.assertIn("[Slop factory] implement-mid", names)
         self.assertFalse([n for n in names if n.endswith((" api", " client"))])
-        write = next(e for e in plan["environments"] if e["name"] == "[Slop factory] write")
-        self.assertIn(deploy.WRITE_TOKEN_SECRET, write["secrets"])
+        envs = {e["name"]: e["secrets"] for e in plan["environments"]}
+        self.assertEqual(deploy.WRITE_TOKEN_SECRET, "FACTORY_WRITE_TOKEN")
+        self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] write"])
+        self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] ops"])  # reconcile's CI label sync
+        self.assertNotIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] read"])
         self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):
@@ -949,7 +1008,7 @@ class PlanTest(unittest.TestCase):
             marks = [prompt.index(m) for m in (intro, "## Your skills", "## This step", "## How you start and finish")]
             self.assertEqual(marks, sorted(marks), name)
             self.assertTrue(prompt.startswith(f"You are the {role} of Slop factory"))
-            self.assertIn((ROOT / f"template/roles/{role}/role.md").read_text().strip(), prompt)
+            self.assertIn((ROOT / f"engine/template-v1/roles/{role}/role.md").read_text().strip(), prompt)
             self.assertIn(f"`factory begin {name} --", prompt)
             self.assertIn("`factory end <outcome>`", prompt)
             self.assertIn("`factory-step` skill", prompt)
@@ -1016,6 +1075,58 @@ class PlanTest(unittest.TestCase):
         self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
                          {"intake", "start", "implement", "review", "join", "fix", "update", "finish", "reopen", "merge", "inbox"})
         self.assertEqual(deploy.plan_air(n, config), plan)
+
+
+
+class DefinitionPlanTest(unittest.TestCase):
+    """A plan from the ADR-0021 layout (factory/tests/fixtures/v2)."""
+
+    @classmethod
+    def setUpClass(cls):
+        before = cfg._team
+        cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
+        try:
+            cls.plan = deploy.plan_air(nodes.load(), cfg.load())
+        finally:
+            cfg.set_team(before)
+        cls.by = {a["name"]: a for a in cls.plan["automations"]}
+        for a in cls.plan["automations"]:  # also by node name: a node's first automation (repository scopes aside)
+            cls.by.setdefault(" ".join(a["name"].split(" ")[:3]), a)
+
+    def test_each_variant_runs_its_agents_model(self):
+        model = {k: a["agentAndModel"]["id"] for k, a in self.by.items()}
+        self.assertEqual(model["[Slop factory] implement-small"], "gpt-6-luna")
+        self.assertEqual(model["[Slop factory] implement-medium"], "claude-sonnet-5-5[1m]")
+        self.assertEqual(model["[Slop factory] review-high"], "gpt-6.1-sol")
+        self.assertEqual(model["[Slop factory] review-low"], "gpt-6-luna")
+
+    def test_prompts_are_rendered(self):
+        for name, a in self.by.items():
+            self.assertNotIn("{{", a["prompt"], name)
+            self.assertNotIn("{%", a["prompt"], name)
+        intake = self.by["[Slop factory] intake"]["prompt"]
+        self.assertIn("Split it above 400 changed lines or\n3 repositories.", intake)
+        self.assertIn("- factory-step: `~/.agents/skills/factory-step/SKILL.md`\n- to-tickets:", intake)
+
+    def test_no_node_waits_for_a_ci_event(self):
+        events = {t.get("eventType") for a in self.plan["automations"] for t in a["triggers"]}
+        self.assertNotIn("workflow_run.failed", events)   # reviewers wait for CI themselves (factory ci --wait)
+
+    def test_a_decide_agent_only_runs_the_command(self):
+        merge = self.by["[Slop factory] merge"]["prompt"]
+        self.assertIn("You are the clerk of Slop factory.", merge)
+        self.assertIn("factory decide --node merge --issue", merge)
+        self.assertNotIn("factory begin clerk", merge)
+
+    def test_environments_and_labels(self):
+        envs = {e["name"]: e for e in self.plan["environments"]}
+        self.assertEqual(envs["[Slop factory] engine"]["secrets"], ["FACTORY_WRITE_TOKEN"])
+        self.assertEqual(envs["[Slop factory] knowledge"]["repository"],
+                         "https://github.com/zaharchenko-evgeny/slop-eval-factory")
+        for label in ("factory:implement-small", "factory:review-high", "factory:knowledge-review", "factory:done",
+                      "factory:automerge", "risk:low", "complexity:large",
+                      "factory:lesson"):
+            self.assertIn(label, self.plan["labels"])
 
 
 if __name__ == "__main__":

@@ -47,11 +47,14 @@ RESET = re.compile(r"x-ratelimit-reset:\s*(\d+)", re.I)
 MAX_WAIT, DEFAULT_WAIT = 300, 60  # seconds: the longest wait for a reset, and the wait when none is given
 
 
-def gh(args, timeout=None):
+def gh(args, timeout=None, token=None):
     """Run `gh` (or $FACTORY_GH) with an argument list (no shell); return stdout. On a rate-limit answer
-    (HTTP 403 or 429), wait until `x-ratelimit-reset` (at most MAX_WAIT), retry once, then raise RateLimited."""
+    (HTTP 403 or 429), wait until `x-ratelimit-reset` (at most MAX_WAIT), retry once, then raise RateLimited.
+    `token`: GH_TOKEN of this call only."""
+    env = {**os.environ, "GH_TOKEN": token} if token else None
     for attempt in (1, 2):
-        p = subprocess.run([os.environ.get("FACTORY_GH", "gh"), *args], capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run([os.environ.get("FACTORY_GH", "gh"), *args], capture_output=True, text=True, timeout=timeout,
+                           env=env)
         if not p.returncode:
             return p.stdout
         text = f"{p.stderr}\n{p.stdout}"
@@ -92,6 +95,51 @@ class CountedRun:
         if key:
             self.memo[key] = out
         return out
+
+
+# `write_mode: token`: Air's GitHub token writes only the factory repository, so writes to a `role: project`
+# repository use this secret (deploy.py adds it to WRITE_TOKEN_ENVS). It is read from the environment, never printed.
+WRITE_TOKEN = "FACTORY_WRITE_TOKEN"
+WRITE_TOKEN_ENVS = ("write", "ops")
+WRITE_VERBS = {"create", "edit", "merge", "review", "comment", "close", "reopen", "delete", "ready", "update-branch"}
+
+
+def project_repositories(config):
+    """owner/repo of each `role: project` repository of the descriptor: the CI label sync's repositories."""
+    return ["/".join(r["url"].rstrip("/").split("/")[-2:]) for r in config.get("repositories") or []
+            if r.get("role") == "project"]
+
+
+def gh_target(args):
+    """owner/repo a `gh` call names with `-R`/`--repo` or a `repos/<owner>/<repo>/` path, else None."""
+    for flag, value in zip(args, args[1:]):
+        if flag in ("-R", "--repo"):
+            return value
+    path = next((str(x) for x in args if str(x).startswith("repos/")), "")
+    return "/".join(path.split("?")[0].split("/")[1:3]) or None
+
+
+def gh_writes(args):
+    """True when a `gh` call writes: `gh api` with a method other than GET or a field (gh then POSTs), or a
+    WRITE_VERBS subcommand such as `pr edit` or `label create`."""
+    if args[0] == "api":
+        method = next((v for f, v in zip(args, args[1:]) if f in ("-X", "--method")), None)
+        return method.upper() != "GET" if method else bool({"-f", "-F", "--field", "--raw-field"} & set(args))
+    return len(args) > 1 and args[1] in WRITE_VERBS
+
+
+class ProjectWriteRun:
+    """Wrap a `gh` runner: a write to one of `repositories` runs with $FACTORY_WRITE_TOKEN as its GH_TOKEN, when
+    that is set; every other call, and every call without it, runs as before."""
+
+    def __init__(self, run, repositories, environ=os.environ):
+        self.run, self.repositories, self.environ = run, {r.lower() for r in repositories}, environ
+
+    def __call__(self, args, **kw):
+        token = self.environ.get(WRITE_TOKEN)
+        if token and gh_writes(args) and (gh_target(args) or "").lower() in self.repositories:
+            kw["token"] = token
+        return self.run(args, **kw)
 
 
 class GitHubTracker:

@@ -48,7 +48,8 @@
         "hold_label": {"type": "string"},
         "pr_fact_labels": {"type": "object", "additionalProperties": {"type": "string"}},
         "needs_human_label": {"type": "string"},
-        "inbox_label": {"type": "string"}
+        "inbox_label": {"type": "string"},
+        "lesson_label": {"type": "string"}
       }
     },
     "repositories": {
@@ -163,6 +164,32 @@
             "additionalProperties": {
               "type": "object",
               "properties": {"mcp": {"type": "array", "items": {"type": "string"}}}
+            }
+          }
+        }
+      }
+    },
+    "agents": {
+      "type": "object",
+      "description": "Named role and model bundles that workflow nodes declare with `agent:` (ADR-0020)",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["persona", "role"],
+        "properties": {
+          "persona": {"type": "string", "description": "lowercase slug, the handle in @factory:<persona>"},
+          "role": {"type": "string"},
+          "tier": {"type": "string"},
+          "tier_high_risk": {"type": "string"},
+          "fallback": {"type": "string"},
+          "effort": {"type": "string", "description": "reasoning effort, for targets that take one"},
+          "tools": {"type": "string"},
+          "modes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {"tier": {"type": "string"}, "fallback": {"type": "string"}}
             }
           }
         }

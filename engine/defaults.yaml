@@ -54,6 +54,8 @@ tracker:
   needs_human_label: factory:needs-human
   # The one open issue the github-inbox provider comments on.
   inbox_label: factory:inbox
+  # A ticket with lesson comments retro has not collected yet (ADR-0021).
+  lesson_label: factory:lesson
 # Where notifications go (factory inbox); `github_user` comes from the team.
 notify:
   providers: [{ kind: github-inbox }]
@@ -72,7 +74,7 @@ limits:
     - docs/statechart-proposed.md
     - skills/factory-setup/templates/**
     - skills/vendor/**
-    - template/roles/**
-    - template/skills/**
-    - template/workflows/delivery.md
-    - template/workflows/delivery.yaml
+    - engine/template-v1/roles/**
+    - engine/template-v1/skills/**
+    - engine/template-v1/workflows/delivery.md
+    - engine/template-v1/workflows/delivery.yaml

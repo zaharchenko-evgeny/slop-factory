@@ -6,7 +6,7 @@ import os
 
 from setuptools import setup
 
-ROOTS = ["engine", "template"]
+ROOTS = ["engine", "skills"]  # skills/: factory-step, which `factory setup` installs, and factory-setup
 
 
 def engine_files():

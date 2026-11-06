@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Fill the setup skill templates: render.py ANSWERS.json OUT_DIR.
-Fills the engine's template/ (factory.project.yaml, workflows/, roles/, .air/cloud/startup.sh; ADR-0016).
-With --extras, fill templates/ (AGENTS.md workflow section, policies, docs) instead.
+"""Fill the setup skill's templates: render.py ANSWERS.json OUT_DIR.
+Fills `template/` (a team definition in the layout of the engine's ADR-0021: factory.yaml, workflow.yaml,
+roles/, .air/cloud/startup.sh, README.md). With --extras, fill `templates/` (the AGENTS.md workflow
+section, docs) instead.
 
-ANSWERS.json maps each `{{NAME}}` placeholder to a string (or a list of lines).
-Every template file is written to OUT_DIR at the same relative path;
-with --extras, `roles/setup.sh` is written once per role in answers["ROLES"] ({role: tools}).
-A placeholder without an answer is an error.
+ANSWERS.json maps each `{{NAME}}` placeholder to a string (or a list of lines). Jinja's `{{ name }}` (lowercase,
+with spaces) in role bodies is not a placeholder: setup renders it. A placeholder without an answer is an error.
 """
 import json
 import re
 import sys
 from pathlib import Path
 
-T = Path(__file__).resolve().parent / "templates"
-PROJECT_T = Path(__file__).resolve().parents[2] / "template"
+SKILL = Path(__file__).resolve().parent
+T = SKILL / "templates"
+PROJECT_T = SKILL / "template"
 PH = re.compile(r"\{\{([A-Z_]+)\}\}")
 
 
@@ -25,23 +25,19 @@ def fill(text, a):
     return PH.sub(one, text)
 
 
+def _render(root, a):
+    return {f.relative_to(root).as_posix(): fill(f.read_text(), a)
+            for f in sorted(p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts)}
+
+
 def render(a):
-    """Return {relative path: text}."""
-    out = {}
-    for f in sorted(p for p in T.rglob("*") if p.is_file()):
-        rel = f.relative_to(T).as_posix()
-        if rel == "roles/setup.sh.tmpl":
-            for role, tools in a["ROLES"].items():
-                out[f"roles/{role}/setup.sh"] = fill(f.read_text(), {**a, "ROLE": role, "TOOLS": tools})
-        else:
-            out[rel] = fill(f.read_text(), a)
-    return out
+    """{relative path: text} of the extras (`templates/`)."""
+    return _render(T, a)
 
 
 def render_project(a):
-    """Return {relative path: text} of a new project's factory repository, from the engine's template/."""
-    return {f.relative_to(PROJECT_T).as_posix(): fill(f.read_text(), a)
-            for f in sorted(p for p in PROJECT_T.rglob("*") if p.is_file())}
+    """{relative path: text} of a new team's definition (`template/`)."""
+    return _render(PROJECT_T, a)
 
 
 if __name__ == "__main__":
@@ -52,3 +48,5 @@ if __name__ == "__main__":
         dest = Path(args[extras + 1]) / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text)
+        if rel.endswith(".sh"):
+            dest.chmod(0o755)

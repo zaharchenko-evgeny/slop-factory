@@ -1834,6 +1834,26 @@ class CiSyncCodeHostTest(unittest.TestCase):
         self.assertEqual(calls[-2:], [["pr", "edit", "1", "-R", "o/app", "--remove-label", "factory:ci-green"],
                                       ["pr", "edit", "1", "-R", "o/app", "--add-label", "factory:ci-green"]])
 
+    def test_from_config_writes_to_project_repositories_with_the_write_token(self):
+        desc = {**CONFIG, "tracker": {**CONFIG["tracker"], "repository": "o/main"}, "repositories": [
+            {"name": "main", "url": "https://github.com/o/main", "role": "primary"},
+            {"name": "app", "url": "https://github.com/o/app", "role": "project"}]}
+        seen = []
+        run = lambda args, token=None: seen.append((args[:2], args[4], token)) or ""  # noqa: E731
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, "factory.descriptor.yaml")
+            path.write_text(yaml.safe_dump(desc))
+            with patch.dict(os.environ, {"FACTORY_WRITE_TOKEN": "pat"}):
+                host = M_GH.GitHubCodeHost.from_config(path, run=run)
+                host.edit_pr_labels("o/app", 1, add=["factory:ci-green"])
+                host.edit_pr_labels("o/main", 2, add=["factory:ci-green"])
+                GitHubGateTracker.from_config(path, run=run).run(["pr", "merge", "3", "-R", "o/app", "--merge"])
+            with patch.dict(os.environ):
+                os.environ.pop("FACTORY_WRITE_TOKEN", None)
+                host.edit_pr_labels("o/app", 1, add=["factory:ci-green"])
+        self.assertEqual(seen, [(["pr", "edit"], "o/app", "pat"), (["pr", "edit"], "o/main", None),
+                                (["pr", "merge"], "o/app", "pat"), (["pr", "edit"], "o/app", None)])
+
 
 if __name__ == "__main__":
     unittest.main()

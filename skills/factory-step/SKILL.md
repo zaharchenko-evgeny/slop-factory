@@ -1,12 +1,23 @@
 ---
 name: factory-step
-description: How any factory role starts its step with `factory begin` and reports its outcome, with the outcome's data, through `factory end`. Use whenever a role file tells you to report an outcome.
+description: How any factory role does what its role file asks through the `factory` command — start the step, wait for CI, read run facts, collect lessons, run a routine, and report the outcome with its data. Use whenever a role file names one of these intentions or tells you to report an outcome.
 ---
 
 # Factory step
 
 You never change labels, stages, reviews or comments yourself. You report one
-outcome; the gate checks it and moves the work on.
+outcome; the gate checks it and moves the work on. Role files say what to do,
+never which command does it; this table is how. Run the installed `factory`
+command (`command -v factory`), never `uv run` or a path into the engine.
+
+| The role asks you to | Run |
+| --- | --- |
+| start the step and see its facts, branch and outcomes | `factory begin` with the arguments the prompt gives |
+| wait until CI at the PR head has finished | `factory ci --wait --issue <ticket>`: prints `green`, or `red` with the failing checks |
+| read the run facts of recently finished tickets | `factory retro facts --since <ISO time>` |
+| collect the lessons agents reported | `factory retro collect`: the uncollected lesson comments, marked collected |
+| run the routine named in your settings | `factory <routine>` (`reconcile`, `doctor`) with no other arguments |
+| report your outcome | `factory end <outcome>`, as below |
 
 1. `factory begin` (the prompt gives its arguments) prints the facts, the
    branch and `outcomes`, the outcomes this step may report. Exit 10: do not

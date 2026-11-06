@@ -42,15 +42,29 @@ store; the workflow names only states and commands. When the team root has
 `factory migrate workflow <nodes.yaml> <factory.descriptor.yaml> --out DIR`
 converts the old pair. `repositories[]` marks exactly one repository
 `role: primary` and the others `role: project`; `targets` takes `air` and
-`local` (ADR-0017). A new project starts from the engine's
-[`template/`](template/README.md); `factory upgrade --diff` shows what changed
+`local` (ADR-0017). A new team starts from the factory-setup skill's
+[`skills/factory-setup/template/`](skills/factory-setup/template/README.md), in the layout of ADR-0021
+(`factory.yaml`, `workflow.yaml`, `roles/`). The old layout's template is
+[`engine/template-v1/`](engine/template-v1/README.md); `factory upgrade --diff` shows what changed
 in it since the project's `engine` version, and `factory upgrade --apply PATH`
 takes one file.
+
+`write_mode` says how the factory writes to the `role: project` repositories.
+`per-repo` (the default) deploys the write nodes once per repository. With
+`token`, `factory deploy` keeps one node set and adds the secret
+`FACTORY_WRITE_TOKEN` to the `write` and `ops` environments, never to `read`.
+A person sets it in Air to a fine-grained personal access token with Contents,
+Pull requests and Issues write on every project repository. Air's own token
+can write only the factory repository. While the token is set, each `gh` write
+that names a project repository runs with it as `GH_TOKEN`, for example a CI
+label or a merge. In `write` and `ops`, `factory doctor` runs one
+`write:label:<owner/repo>` probe per project repository and reports `fail`
+when the token is missing in `token` mode.
 
 ### Team-owned runtime files
 
 Runtime `roles/`, `skills/`, workflows, policies, and judgments come only from
-the team's repository. `template/roles/` and `template/skills/` are setup
+the team's repository. `engine/template-v1/roles/` and `engine/template-v1/skills/` are setup
 examples, not runtime fallbacks; the engine's node graph is `engine/nodes.yaml`.
 
 An environment can also define a `setup.sh` in the team's `environments`
@@ -65,24 +79,24 @@ configuration and runtime files live in the separate settings repository.
 
 Slop factory's settings live in
 [slop-eval-factory](https://github.com/zaharchenko-evgeny/slop-eval-factory):
-a change to its workflow, states, roles or skills goes there. CI checks the
-copy of its `factory.project.yaml` and workflow in `factory/tests/fixtures/slop/`
-(`test_slop_plan_deploys_the_team_workflow`). The copy may differ from
-`engine/nodes.yaml`. To regenerate it, run this from a clean slop-eval-factory
+a change to its definition (`factory.yaml`, `workflow.yaml`, `roles/`; ADR-0021) goes there. CI checks the
+copy of those files in `factory/tests/fixtures/slop/`. The copy may differ from
+`engine/nodes.yaml`; `factory/tests/fixtures/slop-v1/` is a frozen copy of the old layout that the
+old-layout tests use. To regenerate it, run this from a clean slop-eval-factory
 checkout at the commit to copy:
 
 ```bash
 uv run factory/cli.py migrate project <checkout> --out factory/tests/fixtures/slop
 ```
 
-The command validates both files, copies them byte for byte and writes the
-commit to `factory/tests/fixtures/slop/SOURCE`. CI checks out that commit and
+The command validates the definition, copies its files byte for byte and writes the
+commit and the team's URL to `factory/tests/fixtures/slop/SOURCE`. CI checks out that commit and
 `test_slop_fixture_is_migrate_project_output` fails when the fixture differs
 from a fresh copy. To run that test locally, set `FACTORY_SLOP_TEAM=<checkout>`.
 
 See [factory setup](skills/factory-setup/SKILL.md), [design](docs/design.md),
 [environment variables](docs/environment.md),
-and the [delivery template](template/workflows/delivery.md) for more detail.
+and the [delivery template](engine/template-v1/workflows/delivery.md) for more detail.
 
 ## Attention
 

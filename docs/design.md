@@ -23,7 +23,7 @@ and template examples. It does not own Slop factory runtime files.
 
 - `skills/factory-setup/` — the reusable setup skill.
 - `engine/` and `factory/` — the engine, whose node graph is `engine/nodes.yaml`.
-- `template/roles/`, `template/skills/`, and `template/workflows/` — examples
+- `engine/template-v1/roles/`, `engine/template-v1/skills/`, and `engine/template-v1/workflows/` — examples
   used by setup and generators, never runtime fallbacks.
 
 Slop factory runtime files (`factory.project.yaml`, roles, skills and workflow)
@@ -74,6 +74,22 @@ Each role is a folder `roles/<role>/` with `role.md` (harness-neutral
 instructions), `skills.txt` (subset of pinned skills) and `setup.sh` (installs
 those skills and the role's tools). Models and harnesses come from
 `factory.yaml`.
+
+## 4a. Agents (ADR-0020)
+
+An agent is a named bundle of a role and its model fields, declared under
+`agents:` in `factory.project.yaml` and named on workflow nodes with
+`agent: <id>` ([0020-agents](adr/0020-agents.md)). The role says what to do,
+the node says when, the agent says who. Its `persona` is the handle in
+`@factory:<persona>`; the same `dev` implements, fixes and updates. A node
+without `agent:` runs its role's implicit agent, whose persona is the role
+name.
+
+Deploy generates the mention allowlist from the workflow: agent X may mention
+agent Y when a node of X wakes a node of Y, or the other way round, and both
+act on the same subject (ticket or PR). Script and routine nodes, and nodes
+with `mention: false`, are never mentionable. Each node spec lists the
+personas its agent may address, and `factory begin` prints them.
 
 ## 5. Flows
 

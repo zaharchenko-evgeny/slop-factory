@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Render the nodes of engine/nodes.yaml as deployable specs (ADR-0014). Output is JSON.
 
@@ -14,6 +14,7 @@ place (same id) to NEW instead of creating NEW and deleting OLD.
 air: {"automations": [...], "environments": [...]}: one automation per enabled node (per tier or focus
      where the node has them) and one environment per environment in use, for the factory-deploy skill.
 """
+import fnmatch
 import json
 import os
 import re
@@ -28,10 +29,13 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
+import github_tracker
 import nodes as nodes_mod
+import project as project_mod
 import vocab
 
 ROOT = Path(__file__).resolve().parents[1]
+SLOP_FIXTURE = ROOT / "factory/tests/fixtures/slop"
 PR_TRIGGERED_NODES = {"review", "join", "fix", "update", "finish", "reopen"}
 BOT_FILTERED = ("review-", "join", "reopen")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
@@ -62,11 +66,61 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
     if n.get("tiers"):
         spec["tiers"] = n["tiers"]  # the ordered tiers the gate escalates through
     if any((o or {}).get("else") for o in n["outcomes"].values()):
-        spec["else_tier"] = nodes["nodes"]["fix"]["tiers"][0]  # the fix tier a red CI hands the ticket to
+        if (nodes["nodes"].get("fix") or {}).get("tiers"):  # old layout: the fix tier a red CI hands the ticket to
+            spec["else_tier"] = nodes["nodes"]["fix"]["tiers"][0]
     if top and n["role"] == "script":  # a sweep applies the other script nodes (join, finish) too
         spec["runs"] = {k: node_spec(k, v, config, None, None, nodes, False) for k, v in nodes["nodes"].items()
                         if v["role"] == "script" and k != name and v.get("enabled") is not False and not v.get("routine")}
+    if config.get("agents") and n["role"] not in project_mod.NO_AGENT_ROLES:  # without `agents:` the plan is unchanged
+        agents = agents_of(nodes, config)
+        persona = agents[name]["persona"]
+        allowed = mention_allowlist(nodes, agents)[persona]
+        spec.update(agent=agents[name]["id"], persona=persona, mentions=sorted(allowed), mentions_on=allowed)
     return spec
+
+
+def agents_of(nodes: dict, config: dict) -> dict:
+    """{node: agent} of the graph's agent nodes (ADR-0020); a bad `agents:` entry or `agent:` key is rejected."""
+    agents, errors = project_mod.node_agents(config, nodes["nodes"])
+    if errors:
+        raise ValueError("; ".join(errors))
+    return agents
+
+
+def subject(name: str) -> str:
+    """What a node acts on: `pr` for a PR-triggered node, else `ticket`."""
+    return "pr" if name in PR_TRIGGERED_NODES else "ticket"
+
+
+def wakes(a: dict, b: dict) -> bool:
+    """True when an outcome effect of node `a` sets a stage in `b`'s `when.stage` or applies a label `b` triggers on."""
+    def glob(label):
+        return re.sub(r"<[^>]*>", "*", str(label))
+    stages = (b.get("when") or {}).get("stage")
+    stages = set(stages if isinstance(stages, list) else [stages]) - {None}
+    labels = [glob(t.partition(" ")[2]) for t in map(str, b.get("triggers") or [])
+              if t.partition(" ")[0] in ("issues.labeled", "pull_request.labeled", "youtrack.tagAdded")]
+    for outcome in a["outcomes"].values():
+        for e in (outcome or {}).get("effects") or []:
+            if e.get("stage") in stages:
+                return True
+            if "label" in e and any(fnmatch.fnmatchcase(glob(e["label"]), t) or fnmatch.fnmatchcase(t, glob(e["label"]))
+                                    for t in labels):
+                return True
+    return False
+
+
+def mention_allowlist(nodes: dict, agents: dict) -> dict:
+    """{persona: {persona: [subject]}} (ADR-0020): agent X may mention agent Y on a subject when a node of X and a node
+    of Y both act on it and one wakes the other. Routines and `mention: false` nodes are outside the graph."""
+    graph = {k: n for k, n in nodes["nodes"].items() if k in agents and not n.get("routine") and n.get("mention") is not False}
+    allowed = {a["persona"]: {} for a in agents.values()}
+    for x, nx in graph.items():
+        for y, ny in graph.items():
+            px, py = agents[x]["persona"], agents[y]["persona"]
+            if px != py and subject(x) == subject(y) and (wakes(nx, ny) or wakes(ny, nx)):
+                allowed[px].setdefault(py, set()).add(subject(x))
+    return {p: {q: sorted(on) for q, on in sorted(m.items())} for p, m in allowed.items()}
 
 
 def project_name(config: dict) -> str:
@@ -95,6 +149,9 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
         name, _, value = arg.partition("=")
         filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
         return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
+    if event == "workflow_run":  # ADR-0021 `ci: failed`: Air fires only on a failed run (AIRA-725)
+        return {"triggerType": "EVENT", "source": "github", "eventType": "workflow_run.failed",
+                "filters": {"workflow_name": arg, **({"repo_label": f"repo:{repo}"} if repo else {})}}
     labeled = event.startswith("issues.") or event.startswith("pull_request.labeled")
     filters = {"label": arg} if labeled and arg else {}
     if pr_author and event.startswith("pull_request"):
@@ -130,6 +187,53 @@ def team_is_project(team: dict, config: dict) -> bool:
     """True when the team repository is also a descriptor project repository (ADR-0019)."""
     return bool(config.get("team_repository")) and any(
         repository(r)["fullName"] == repository(team)["fullName"] for r in config["repositories"])
+
+
+def workflow_drift(fixture: Path, team: Path) -> list[str]:
+    """Describe differences between the migrated Slop fixture and the live team files."""
+    project_file, workflow_file = "factory.project.yaml", "workflows/delivery.yaml"
+    fixture_project = yaml.safe_load((fixture / project_file).read_text())
+    team_project = yaml.safe_load((team / project_file).read_text())
+    drift = [project_file] if fixture_project != team_project else []
+    fixture_workflow = yaml.safe_load((fixture / workflow_file).read_text())
+    team_workflow = yaml.safe_load((team / workflow_file).read_text())
+    if fixture_workflow != team_workflow:
+        fixture_nodes, team_nodes = fixture_workflow.get("nodes", {}), team_workflow.get("nodes", {})
+        outcomes = [f"{name}.{outcome}" for name in sorted(fixture_nodes.keys() | team_nodes.keys())
+                    for outcome in sorted((fixture_nodes.get(name) or {}).get("outcomes", {}).keys() |
+                                          (team_nodes.get(name) or {}).get("outcomes", {}).keys())
+                    if (fixture_nodes.get(name) or {}).get("outcomes", {}).get(outcome) !=
+                       (team_nodes.get(name) or {}).get("outcomes", {}).get(outcome)]
+        drift.extend(f"{workflow_file}: {item}" for item in outcomes)
+        if not outcomes:
+            drift.append(workflow_file)
+    return drift
+
+
+def check_fixture_drift(config: dict, team: Path | None = None) -> int:
+    """Fail before contacting Air when this engine's Slop fixture differs from its deployed team."""
+    if not SLOP_FIXTURE.is_dir():
+        return 0
+    if (SLOP_FIXTURE / "factory.yaml").is_file():  # ADR-0021: the fixture is a copy of the team's files
+        team = Path(team or config_mod.team_root())
+        fixture = yaml.safe_load((SLOP_FIXTURE / "factory.yaml").read_text()) or {}
+        if not (team / "factory.yaml").is_file() or \
+                (yaml.safe_load((team / "factory.yaml").read_text()) or {}).get("name") != fixture.get("name"):
+            return 0
+        drift = [p.relative_to(SLOP_FIXTURE).as_posix() for p in sorted(SLOP_FIXTURE.rglob("*"))
+                 if p.is_file() and p.name != "SOURCE" and
+                 (not (team / p.relative_to(SLOP_FIXTURE)).is_file() or
+                  (team / p.relative_to(SLOP_FIXTURE)).read_bytes() != p.read_bytes())]
+        for item in drift:
+            print(f"fixture drift: {item}", file=sys.stderr)
+        return 1 if drift else 0
+    fixture_project = yaml.safe_load((SLOP_FIXTURE / "factory.project.yaml").read_text())
+    if config.get("team_repository", "").rstrip("/") != fixture_project.get("team_repository", "").rstrip("/"):
+        return 0
+    drift = workflow_drift(SLOP_FIXTURE, team or config_mod.team_root())
+    for item in drift:
+        print(f"fixture drift: {item}", file=sys.stderr)
+    return 1 if drift else 0
 
 
 def other_projects(main_repository: dict, team: dict, config: dict) -> list[dict]:
@@ -248,17 +352,31 @@ INBOX_PAYLOAD = ("## Trigger event fields\n\n"
 
 
 def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None,
-                 main_repository: dict | None = None) -> str:
+                 main_repository: dict | None = None, tier: str | None = None) -> str:
     role = n["role"]
     servers = mcp_connectors(n, config, focus)
     mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
-    text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
+    checkout = checkout_instructions(main_repository, config)
+    import definition
+    if definition.present(config_mod.team_root()):  # ADR-0021: the node's role body, rendered with its settings
+        defn = definition.load(config_mod.team_root())
+        agent = (defn["factory"].get("agents") or {}).get(((defn["workflow"].get("nodes") or {}).get(name) or {}).get("agent")) or {}
+        if agent.get("run"):  # ADR-0021: a step with no judgement: the agent only runs the engine command
+            return (f"{who}\n\n{checkout}Run `factory {agent['run']} --node {name} --issue <the ticket number from the "
+                    "trigger>` once, in the foreground, and wait until it exits. Copy only that one number. It applies "
+                    "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
+                    "Report its JSON output." + INSTALLED_FACTORY)
+        text = definition.render(defn, name).strip()
+        skills = definition.skill_lines(defn, role)
+    else:
+        text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
+        skills = skill_lines(role)
     checkout = checkout_instructions(main_repository, config)
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
     payload = INBOX_PAYLOAD if role == "inbox" else ""
-    return (f"{who}\n\n{checkout}{text}\n\n{payload}## Your skills\n\n{skill_lines(role)}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
+    return (f"{who}\n\n{checkout}{text}\n\n{payload}## Your skills\n\n{skills}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
             f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts and the branch or PR head. "
@@ -267,9 +385,10 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
             "and the data it needs, as the `factory-step` skill describes.")
 
 
-def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str, str | None]]:
-    """(automation suffix, tier of the node, model tier, focus) per tier or focus of the node."""
-    role = roles.get(n["role"], {})
+def variants(name: str, n: dict, roles: dict, agent: dict | None = None) -> list[tuple[str, str | None, str, str | None]]:
+    """(automation suffix, tier of the node, model tier, focus) per tier or focus of the node; the node's agent, when
+    given, replaces its role's tiers."""
+    role = agent or roles.get(n["role"], {})
     if n.get("tiers"):
         return [(f"{name}-{t}", t, t, None) for t in n["tiers"]]
     if n.get("focuses"):
@@ -279,11 +398,11 @@ def variants(name: str, n: dict, roles: dict) -> list[tuple[str, str | None, str
 
 def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
     """The node, gate options and spec of one automation (`review-behaviour`, `fix-mid`) from the node graph."""
-    roles = config["roles"]
+    roles, agents = config["roles"], agents_of(nodes, config)
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] in ("human", "script"):
             continue
-        for aname, tier_arg, tier, focus in variants(name, n, roles):
+        for aname, tier_arg, tier, focus in variants(name, n, roles, agents.get(name)):
             if aname == automation:
                 return {"node": name, "focus": focus, "tier": tier_arg or (tier if focus else None),
                         "spec": node_spec(name, n, config, tier_arg or tier, focus, nodes)}
@@ -293,11 +412,13 @@ def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
 # Nodes planned once per project repository when `write_mode` is `per-repo` (default) and the project has several
 # repositories: Air pushes only to an automation's primary repository. Only triage sees every repository.
 PER_REPO = ("implement", "fix", "update", "review", "join", "merge", "finish")
-WRITE_TOKEN_SECRET = "FACTORY_WRITE_TOKEN"  # `write_mode: token`: the write environment's token, by name only
+WRITE_TOKEN_SECRET = github_tracker.WRITE_TOKEN  # `write_mode: token`: the project-repository write token, by name only
 
 
 def plan_air(nodes: dict, config: dict) -> dict:
-    air, roles = config["targets"]["air"]["models"], config["roles"]
+    air, roles, agents = config["targets"]["air"]["models"], config["roles"], agents_of(nodes, config)
+    for aid in sorted({a["id"] for a in agents.values() if a.get("effort")}):
+        print(f"deploy: agent {aid}: effort ignored, Air automations take no reasoning setting", file=sys.stderr)
     repos = {r["name"]: r for r in config["repositories"]}
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     team = {"name": "team", "url": config.get("team_repository") or primary["url"]}
@@ -315,7 +436,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
         scopes = config["repositories"] if per_repo and name in PER_REPO else [None]
-        for scope, (aname, tier_arg, tier, focus) in [(sc, v) for sc in scopes for v in variants(name, n, roles)]:
+        for scope, (aname, tier_arg, tier, focus) in [(sc, v) for sc in scopes
+                                                      for v in variants(name, n, roles, agents.get(name))]:
             env = n["env"]
             agent, _, model = air[tier].partition("/")
             trig = []
@@ -334,7 +456,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
             scope_name = scope["name"] if scope else None
-            if scope_name:
+            env_scope = None if focus == "knowledge" else scope_name  # a knowledge review runs in the team's own environment
+            if env_scope:
                 if (env, scope_name) not in scoped:
                     scoped.append((env, scope_name))
             else:
@@ -346,10 +469,10 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
-                "environmentConfigId": f"{prefix}{env}" + (f" {scope_name}" if scope_name else ""),
+                "environmentConfigId": f"{prefix}{env}" + (f" {env_scope}" if env_scope else ""),
                 "mcpConnectors": mcp_connectors(n, config, focus),
                 "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
-                    name, n, config, aname, focus, automation_repository),
+                    name, n, config, aname, focus, automation_repository, tier_arg or tier),
             }
             if automation_repository["fullName"] != repository(team)["fullName"]:
                 automation["additionalRepositories"] = additional_repositories(automation_repository, team, config)
@@ -369,7 +492,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "repository": repo["url"],
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env},
-            "secrets": [*d.get("secrets", []), *([WRITE_TOKEN_SECRET] if token and env == "write" else [])],
+            "secrets": [*d.get("secrets", []), *([WRITE_TOKEN_SECRET] if token and env in github_tracker.WRITE_TOKEN_ENVS else [])],
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
@@ -438,6 +561,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
     out.add(vocab.needs_human())
     out.add(vocab.inbox())
+    out.add(vocab.lesson())  # ADR-0021: a ticket with uncollected lessons
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
@@ -570,6 +694,19 @@ def same(key: str, have, want) -> bool:
     return have == want
 
 
+def create_environment_args(p: dict, live: dict | None = None) -> dict:
+    """Air `create_environment` arguments for a planned environment; `live` is the record it replaces, whose domains and
+    network settings it keeps."""
+    live = live or {}
+    live_domains = live.get("domains") or []
+    variables = p.get("variables") or {}
+    args = {"name": p["name"], "repositoryUrl": p["repository"],
+            "allowedDomains": live_domains + [d for d in p.get("domains") or [] if d not in live_domains],
+            "variables": [{"key": k, "value": v} for k, v in variables.items()] if isinstance(variables, dict) else variables}
+    args.update({k: live[k] for k in ("networkAccess", "predefinedDomainLists") if live.get(k)})
+    return args
+
+
 def environment_detail(x: dict) -> dict:
     """Normalize get_environment's cloud fields to the deploy plan's environment shape."""
     x = dict(x)
@@ -673,13 +810,8 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
         client, noun = (cloud, "environment") if kind == "environment" else (automations, "automation")
         additional = (p or {}).get("additionalRepositories") if kind == "automation" else None
         if action == "replace":
-            live_domains = x.get("domains") or []
-            args = {"name": p["name"], "repositoryUrl": p["repository"],
-                    "allowedDomains": live_domains + [d for d in p.get("domains") or [] if d not in live_domains],
-                    "variables": [{"key": key, "value": value} for key, value in (p.get("variables") or {}).items()]}
-            args.update({k: x[k] for k in ("networkAccess", "predefinedDomainLists") if x.get(k)})
             client.call("edit_environment", {"id": x["id"], "name": f"retired {x['name']}"})
-            client.call("create_environment", args)
+            client.call("create_environment", create_environment_args(p, x))
             retired.append(x["id"])
             print(f"retired environment {x['name']} ({x['id']}) is renamed 'retired {x['name']}': delete it in the Air UI",
                   file=sys.stderr)
@@ -706,7 +838,7 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
                     raise RuntimeError("Air automation backend is required to set additionalRepositories")
                 backend.set_additional(x["id"], additional)
         elif action == "create":
-            result = client.call(f"create_{noun}", p)
+            result = client.call(f"create_{noun}", create_environment_args(p) if kind == "environment" else p)
             if additional is not None:
                 if backend is None:
                     raise RuntimeError("Air automation backend is required to set additionalRepositories")
@@ -714,8 +846,10 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
                 if not automation_id:
                     raise RuntimeError(f"create_automation returned no automation id for {name}")
                 backend.set_additional(automation_id, additional)
-        else:
-            client.call(f"delete_{noun}", {id_key: x["id"]})
+        elif kind == "environment":  # air-cloud has no delete_environment
+            print(f"remove by hand in Air: environment {name}", file=sys.stderr)
+        else:  # confirmName guards against deleting the wrong automation
+            client.call("delete_automation", {id_key: x["id"], "confirmName": x["name"]})
 
 
 def missing_secrets(plan: dict, envs: list[dict]) -> list[str]:
@@ -763,7 +897,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                            additional_names=additional_names)
         state = after
-        left = diff(plan, *after)
+        left = [c for c in diff(plan, *after) if not (c[0] == "delete" and c[1] == "environment")]
         for action, kind, name, *_ in left:
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:
@@ -800,9 +934,12 @@ def main(argv: list[str]) -> int:
         renames[old] = new
         del rest[i:i + 2]
     if argv and argv[0] in ("--dry-run", "--apply") and set(rest) <= {"--allow-delete"}:
+        config = config_mod.load()
+        if check_fixture_drift(config):
+            return 1
         servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
         try:
-            plan = {**plan_air(nodes_mod.load(), config_mod.load()), "renames": renames}
+            plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
             code = deploy(argv[0], "--allow-delete" in argv, plan, *servers)
             return code or write_files(plan["files"], argv[0] == "--apply")
         finally:

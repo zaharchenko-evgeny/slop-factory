@@ -1,7 +1,6 @@
 # Targets
 
-Selected by `targets.<name>` in the team's effective configuration (`factory.project.yaml` or
-`factory.descriptor.yaml`).
+Selected by the target the team deploys to; the Air models come from `models` in `factory.yaml`.
 
 ## Contract
 

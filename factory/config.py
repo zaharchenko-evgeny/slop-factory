@@ -41,7 +41,8 @@ def team_root():
     if home.is_dir():
         return home.resolve()
     cwd = Path.cwd()
-    if any((d / f).exists() for d in (cwd, ENGINE_ROOT) for f in (PROJECT_DESCRIPTOR, DESCRIPTOR)):
+    if any((d / f).exists() for d in (cwd, ENGINE_ROOT) for f in (PROJECT_DESCRIPTOR, DESCRIPTOR)) \
+            or all((cwd / f).is_file() for f in ("factory.yaml", "workflow.yaml")):  # ADR-0021
         return cwd.resolve()
     raise SystemExit("factory: no team repository (set FACTORY_TEAM or run the installed factory)")
 
@@ -74,6 +75,12 @@ def pop_team(argv):
     return argv
 
 
+def is_project(root=None):
+    """A project team: `factory.project.yaml` (ADR-0016), or `factory.yaml` + `workflow.yaml` (ADR-0021)."""
+    root = Path(root or team_root())
+    return (root / PROJECT_DESCRIPTOR).is_file() or all((root / f).is_file() for f in ("factory.yaml", "workflow.yaml"))
+
+
 def merge(defaults, descriptor):
     """The descriptor overrides the defaults key by key, one level deep."""
     out = dict(defaults)
@@ -88,7 +95,7 @@ def descriptor():
 
 def load():
     root = team_root()
-    if (root / PROJECT_DESCRIPTOR).is_file():
+    if is_project(root):
         import project
         return project.legacy_config(project.load(root))
     defaults = yaml.safe_load((engine_root() / "engine/defaults.yaml").read_text()) or {}
@@ -174,7 +181,7 @@ def mcp_errors(roles, connectors, nodes):
 
 def validate():
     """Error lines for the team descriptor against engine/descriptor.schema.json."""
-    if (team_root() / PROJECT_DESCRIPTOR).is_file():
+    if is_project():
         import project
         return project.validate(team_root())
     schema = json.loads((engine_root() / "engine/descriptor.schema.json").read_text())

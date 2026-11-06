@@ -11,7 +11,7 @@ copies a v2 team's descriptor and workflow (`factory migrate project`, how facto
 Usage: workflow.py migrate <nodes.yaml> <factory.descriptor.yaml> [--out DIR]
        workflow.py project <team checkout> [--out DIR]
 Each validate error starts with a name: unknown-state, unknown-command, unknown-schedule, unknown-webhook, unknown-wake,
-unknown-effect, unknown-condition, uncovered-state.
+unknown-effect, unknown-condition, uncovered-state, and the agent errors of `project.node_agents`.
 """
 import argparse
 import copy
@@ -51,6 +51,9 @@ def _defaults():
 def load(team_root=None, descriptor=None):
     """The workflow file a project's descriptor links with `workflow:`."""
     root = Path(team_root or config.team_root())
+    import definition
+    if definition.present(root):  # ADR-0021
+        return definition.to_project(definition.load(root))[1]
     descriptor = project_mod._read(root) if descriptor is None else descriptor
     return yaml.safe_load((root / descriptor["workflow"]).read_text()) or {}
 
@@ -207,6 +210,7 @@ def validate(project, wf):
     if not isinstance(wf, dict) or not isinstance(wf.get("nodes"), dict):
         return errs
     errs += config.mcp_errors(project.get("roles"), ((project.get("targets") or {}).get("air") or {}).get("mcp_connectors"), wf)
+    errs += project_mod.node_agents(project, wf["nodes"])[1]
     states, commands = project.get("states") or {}, project.get("commands") or {}
     schedules, webhooks, covered = wf.get("schedules") or {}, wf.get("webhooks") or {}, set()
 
@@ -365,6 +369,14 @@ def copy_project(team, out):
     """Copy a v2 team checkout's factory.project.yaml and the workflow it links into `out` byte for byte, after
     validating them, and write the team's HEAD commit to SOURCE. Returns the written paths."""
     team, out = Path(team), Path(out)
+    import definition
+    if definition.present(team):  # ADR-0021: factory.yaml, workflow.yaml and every file under roles/
+        errors = definition.errors(definition.load(team))
+        if errors:
+            raise ValueError("; ".join(errors))
+        files = [definition.FACTORY, definition.WORKFLOW,
+                 *sorted(p.relative_to(team).as_posix() for p in (team / definition.ROLES).rglob("*") if p.is_file())]
+        return _copy(team, out, files)
     descriptor = project_mod.load(team)
     wf = load(team, descriptor)
     if wf.get("format") != FORMAT:
@@ -372,8 +384,11 @@ def copy_project(team, out):
     errors = validate(descriptor, wf)
     if errors:
         raise ValueError("; ".join(errors))
-    files = [config.PROJECT_DESCRIPTOR, descriptor["workflow"]]
+    return _copy(team, out, [config.PROJECT_DESCRIPTOR, descriptor["workflow"]])
 
+
+def _copy(team, out, files):
+    """Copy `files` of a clean team checkout into `out`; SOURCE gets the team's HEAD commit, then its origin URL."""
     def git(*args):
         return subprocess.run(["git", "-C", str(team), *args], capture_output=True, text=True, check=True).stdout.strip()
     try:
@@ -382,11 +397,17 @@ def copy_project(team, out):
         commit = git("rev-parse", "HEAD")
     except (OSError, subprocess.CalledProcessError) as e:
         raise ValueError(f"{team}: not a git checkout ({e})") from e
+    stale = [p for p in out.rglob("*") if p.is_file() and p.relative_to(out).as_posix() not in {*files, SOURCE}] \
+        if (out / SOURCE).is_file() else []  # prune only an earlier copy: a file the team no longer has
     written = []
     for rel in files:
         (out / rel).parent.mkdir(parents=True, exist_ok=True)
         written.append(str(shutil.copyfile(team / rel, out / rel)))
-    (out / SOURCE).write_text(commit + "\n")
+    for p in stale:
+        p.unlink()
+    url = subprocess.run(["git", "-C", str(team), "remote", "get-url", "origin"], capture_output=True, text=True)
+    url = url.stdout.strip().removesuffix(".git") if url.returncode == 0 else ""
+    (out / SOURCE).write_text(f"{commit}\n" + (f"{url}\n" if url else ""))
     return [*written, str(out / SOURCE)]
 
 

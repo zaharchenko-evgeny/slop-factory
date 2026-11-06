@@ -21,7 +21,7 @@ import yaml
 import config
 import github_graphql
 from gate_port import PR_DEFAULTS, DescriptorPort, child_attrs, child_links, child_order, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
-from github_tracker import CountedRun, GitHubTracker, gh
+from github_tracker import CountedRun, GitHubTracker, ProjectWriteRun, gh, project_repositories
 import vocab
 from youtrack_tracker import YouTrackTicketStore
 
@@ -128,7 +128,8 @@ class GitHubCodeHost:
     @classmethod
     def from_config(cls, path=None, run=gh):
         c = yaml.safe_load(Path(path).read_text()) if path else config.load()
-        return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"], run)
+        return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"],
+                   ProjectWriteRun(run, project_repositories(c)))
 
     def ticket_for_pr(self, number, repository=None):
         """Resolve a PR number to its ticket from the live head ref, else the live title; `repository` (owner/repo)
@@ -402,8 +403,10 @@ class GitHubTicketStore:
 
 class GitHubGateTracker(DescriptorPort):
     def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8,
-                 ci_workflows=("quality-gates",), pr_repo=None, project=None, repositories=None, tickets=None):
+                 ci_workflows=("quality-gates",), pr_repo=None, project=None, repositories=None, tickets=None,
+                 required=None):
         self.trusted, self.run_cap, self.ci_workflows = set(trusted_bots), run_cap, set(ci_workflows)
+        self.required = {**FOCUSES, **(required or {})}  # review focuses by risk; `reviews.required` overrides
         self.project = project  # factory.project.yaml: the stores of states and commands (DescriptorPort)
         self.pr_repo = pr_repo or repo  # the code host: pull requests, CI, commits, merges
         # {name: owner/repo} of the descriptor's repositories, the primary first; the primary is the code host
@@ -432,12 +435,13 @@ class GitHubGateTracker(DescriptorPort):
                           if isinstance((s.get("store") or {}).get("field"), dict)), None)
             tickets = YouTrackTicketStore.from_config(t, state_field=field, bots=t.get("bot_logins") or ())
             repo = code_repo
-        return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"], run,
+        return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"],
+                   ProjectWriteRun(run, project_repositories(c)),
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
                    (c.get("ci") or {}).get("workflows") or ["quality-gates"],
                    (c.get("code_host") or {}).get("repository"),
                    {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,
-                   repository_names(c), tickets)
+                   repository_names(c), tickets, (c.get("reviews") or {}).get("required"))
 
     # --- reads
     def _api(self, path, *flags, repo=None):
@@ -770,7 +774,7 @@ class GitHubGateTracker(DescriptorPort):
         blockers = self.tickets.open_blockers(n)
         body = issue["body"]
         risk = "low" if self.risk_labels["low"] in labels else "high"
-        required, pr = FOCUSES[risk], self._pr(n)
+        required, pr = self.required[risk], self._pr(n)
         f = {"stage": stage, "attrs": [x for x in labels if x not in by_label],
              "assignees": issue["assignees"], "blockers_open": len(blockers),
              "head": None, "pr": None, "mergeable": None, "conflict": False, "ci": "none", "reviews": [], "requested_reviewers": [],
