@@ -287,6 +287,25 @@ class DefinitionTest(unittest.TestCase):
         finally:
             config.set_team(before)
 
+    def test_scheduled_nodes_are_routines(self):
+        n = definition.to_project(definition.load(self.root))[1]["nodes"]
+        self.assertTrue(all(n[k].get("routine") for k in ("retro", "reconcile", "doctor-engine", "doctor-team")))
+        self.assertFalse(n["intake"].get("routine"))
+
+    def test_doctor_reads_skills_from_the_definition(self):
+        import config
+        import doctor
+        import nodes as nodes_mod
+        before = config._team
+        config.set_team(self.root)
+        try:
+            tools, skills = doctor.env_needs("engine", nodes_mod.load())
+            self.assertIn("tdd", skills)
+            self.assertIn("factory-step", skills)
+            self.assertNotIn("retro", skills)        # retro runs in `knowledge`
+        finally:
+            config.set_team(before)
+
     def test_cli_validate(self):
         run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
                              text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})

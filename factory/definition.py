@@ -478,6 +478,8 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
         out["output"] = n.get("output", "read-only")
     if pr_woken and "ci" not in when:
         out["ci-independent"] = True
+    if n.get("triggers") and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"]):
+        out["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
     if n.get("enabled") is False:
         out["enabled"] = False
     outcomes = {}
