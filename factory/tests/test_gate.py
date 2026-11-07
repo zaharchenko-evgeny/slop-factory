@@ -336,6 +336,29 @@ class GateTest(unittest.TestCase):
         with patch("definition.neighbours", return_value=pairs), patch("definition.load", return_value={}):
             self.assertTrue(gate.guard_holds({"mention": "dev"}, review))                          # asked in a review
 
+    def _mention(self, body, agent="dev"):
+        facts = {"comments": [{"body": body, "at": "2"}]}
+        with patch("definition.neighbours", return_value={frozenset(("dev", "reviewer"))}), \
+                patch("definition.load", return_value={}):
+            return gate.guard_holds({"mention": agent}, facts)
+
+    def test_factory_text_without_marker_asks_no_one(self):
+        self.assertFalse(self._mention("[factory] ask @factory:dev about it"))
+        self.assertTrue(self._mention("ask @factory:dev about it"))
+
+    def test_review_marker_uses_neighbour_rule(self):
+        review = "[factory] Reviewer: ask @factory:{} <!-- factory:review focus=full round=1 verdict=approve -->"
+        self.assertTrue(self._mention(review.format("dev")))
+        self.assertFalse(self._mention(review.format("approver"), "approver"))
+
+    def test_mention_in_code_is_a_quote(self):
+        self.assertFalse(self._mention("ask `@factory:dev` here"))
+        self.assertFalse(self._mention("run:\n```\n@factory:dev\n```"))
+        self.assertFalse(self._mention("run:\n~~~text\n@factory:dev\n~~~"))
+        self.assertFalse(self._mention("run:\n~~~~text\n~~~\n@factory:dev\n~~~~"))
+        self.assertFalse(self._mention("run:\n````\n```\n@factory:dev\n````"))
+        self.assertIsNone(gate.latest_mention({"comments": [{"body": "see `@factory:dev`", "at": "1"}], "pr_comments": []}))
+
     def test_label_group_holds_one_value(self):
         graph = copy.deepcopy(NODES)
         graph["nodes"]["intake"]["outcomes"]["risky"] = {"effects": [{"label": "risk:high"}, {"stage": "ready"}]}
