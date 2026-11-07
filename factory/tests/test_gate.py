@@ -1637,6 +1637,48 @@ class AutoMergeTest(unittest.TestCase):
         self.assertEqual((code, out["applied"]), (gate.NO_GO, False))
 
 
+class MergeBlockersTest(unittest.TestCase):
+    """`blockers: merge`: work starts on open blockers, the merge waits for them (default `start`: the work waits)."""
+    APPROVED = {"stage": "approved", "head": "abc", "pr": 42, "pr_state": "open", "ci": "green", "risk": "low",
+                "round_complete": True, "round_verdict": "approve", "round_head": "abc"}
+    AUTO = {"enabled": True, "max_risk": "high"}
+    MERGE = copy.deepcopy({**NODES, "blockers": "merge"})
+    MERGE["nodes"]["start"]["when"] = {"stage": "ready"}  # a merge-mode workflow does not wait at the start
+
+    def sweep(self, tickets, nodes, **kw):
+        tr = MemoryTracker(tickets)
+        tr.sweep_tickets = lambda stages: [7]
+        return tr, gate.sweep(tr, nodes, auto_merge=self.AUTO, **kw)[0]
+
+    def test_ready_with_open_blocker_starts_in_merge_mode_and_waits_by_default(self):
+        tr, res = self.sweep({7: {"stage": "ready", "blockers_open": 1}}, self.MERGE)
+        self.assertEqual([(r["node"], r["outcome"]) for r in res], [("start", "started")])
+        self.assertEqual(tr.tickets[7]["stage"], "in-dev")
+        tr, res = self.sweep({7: {"stage": "ready", "blockers_open": 1}}, NODES)
+        self.assertEqual((res, tr.tickets[7]["stage"]), ([], "ready"))
+
+    def test_approved_with_open_blocker_does_not_merge_until_it_closes(self):
+        tr, res = self.sweep({7: {**self.APPROVED, "blockers_open": 1}}, self.MERGE)
+        self.assertEqual((res, tr.tickets[7]["stage"]), ([], "approved"))
+        tr.tickets[7]["blockers_open"] = 0  # the blocker closed
+        res = gate.sweep(tr, self.MERGE, auto_merge=self.AUTO)[0]
+        self.assertEqual([(r["node"], r["outcome"]) for r in res], [("merge", "merged")])
+
+    def test_closing_a_blocker_wakes_the_merge_of_its_approved_dependent(self):
+        tr = MemoryTracker({10: {"blocking": [7]}, 7: {**self.APPROVED, "blockers_open": 0}})
+        tr.sweep_tickets = lambda stages: []
+        res, failed = gate.sweep(tr, self.MERGE, closed_ticket=10, auto_merge=self.AUTO)
+        self.assertFalse(failed)
+        self.assertEqual([(r["ticket"], r["outcome"]) for r in res], [(7, "merged")])
+        tr = MemoryTracker({10: {"blocking": [7]}, 7: {**self.APPROVED, "blockers_open": 0}})
+        tr.sweep_tickets = lambda stages: []
+        self.assertEqual(gate.sweep(tr, NODES, closed_ticket=10, auto_merge=self.AUTO)[0], [])  # default: no wake
+
+    def test_a_bad_mode_is_refused(self):
+        with self.assertRaises(gate.Bad):
+            gate.blockers_mode({"blockers": "never"})
+
+
 class UnblockedSweepTest(unittest.TestCase):
     def sweep(self, tickets, closed=10):
         tr = MemoryTracker(tickets)
