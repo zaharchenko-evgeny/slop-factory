@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from email import message_from_bytes
 from pathlib import Path
 from unittest.mock import patch
@@ -161,6 +162,129 @@ class NotifyTest(unittest.TestCase):
         adapter.ack({"login": "ann", "email": "ann@example.com"}, "<abc@example.com>", "Got it")
         mail = message_from_bytes(self.smtp.mails[0][1])
         self.assertEqual(mail["In-Reply-To"], "<abc@example.com>")
+
+
+class FakeSlack(ThreadingHTTPServer):
+    """A webhook that keeps each POST (headers and JSON body) and answers `status`."""
+    daemon_threads = True
+
+    def __init__(self, status=200):
+        self.posts, self.status = [], status
+        super().__init__(("127.0.0.1", 0), Hook)
+        threading.Thread(target=self.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.shutdown()
+        self.server_close()
+
+
+class Hook(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path == "/moved":
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(302)
+            self.send_header("Location", "/secret-path")
+            self.end_headers()
+            return
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        self.server.posts.append((self.headers["Content-Type"], body))
+        self.send_response(self.server.status)
+        self.end_headers()
+        self.wfile.write(b'{"request_id": "req-1"}')
+
+    def log_message(self, *args):
+        pass
+
+
+SLACK = {"adapters": {"slack-workflow": {"url_env": "TEST_NOTIFY_SLACK"}},
+         "people": {"ann": {"via": ["slack-workflow"], "slack-workflow": "ann@example.com"},
+                    "bob": {"via": ["slack-workflow"], "slack-workflow": "bob@example.com"}}}
+
+
+class SlackWorkflowTest(unittest.TestCase):
+    def setUp(self):
+        self.hook = FakeSlack()
+        self.addCleanup(self.hook.close)
+        self.url = f"http://127.0.0.1:{self.hook.server_address[1]}/secret-path"
+        for p in (patch.dict(os.environ, {"TEST_NOTIFY_SLACK": self.url}), patch.object(gate, "notify_config", return_value=SLACK)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.graph = {"nodes": {"notify": {"agent": "notify", "role": "notify", "when": {}, "outcomes": {
+            "notified": {"effects": [{"notify": "message"}]}}}}}
+
+    def tracker(self, comments=()):
+        tr = MemoryTracker({"7": {"stage": "blocked", "comments": list(comments)}})
+        tr.repo = "o/r"
+        return tr
+
+    def apply(self, tr, **extra):
+        return gate.apply("notify", "notified", {"ticket": "7", **FIELDS, **extra}, tr, self.graph)
+
+    def stage_comment(self, run, extra=""):
+        return {"author": "bot", "author_is_bot": True, "body": f"[factory] moved{extra}\n\nFactory-Run: {run}", "at": None}
+
+    def test_one_post_per_person_with_the_five_fields(self):
+        tr = self.tracker()
+        self.apply(tr, run_id="https://air/run/notify")
+        self.assertEqual(len(self.hook.posts), 2)
+        self.assertEqual({t for t, _ in self.hook.posts}, {"application/json"})
+        bodies = sorted((b for _, b in self.hook.posts), key=lambda b: b["recipient"])
+        self.assertEqual([b["recipient"] for b in bodies], ["ann@example.com", "bob@example.com"])
+        for b in bodies:
+            self.assertEqual(set(b), {"recipient", "title", "text", "issue_url", "run_url"})
+            self.assertEqual(b["title"], "Tests fail on main")
+            self.assertEqual(b["issue_url"], "https://github.com/o/r/issues/7")
+            self.assertIn("1. Retry (suggested)", b["text"])
+            self.assertTrue(b["text"].endswith("Answer on GitHub: https://github.com/o/r/issues/7"))
+        (comment,) = [json.loads(v) for k, v in tr.tickets["7"]["log"] if k == "comment"]
+        self.assertIn("<!-- factory:notify via=slack-workflow person=ann ref=req-1 -->", comment)
+        self.assertNotIn("secret-path", comment)
+
+    def test_run_url_is_the_latest_stage_comment_run(self):
+        notify_comment = {"author": "bot", "author_is_bot": True, "body": "[factory] x\n<!-- factory:notify via=email person=ann ref=1 -->\n\nFactory-Run: r-old-notify", "at": None}
+        tr = self.tracker([self.stage_comment("https://air/run/1"), self.stage_comment("https://air/run/2"), notify_comment])
+        self.apply(tr, run_id="https://air/run/notify")
+        self.assertEqual({b["run_url"] for _, b in self.hook.posts}, {"https://air/run/2"})
+
+    def test_run_url_skips_a_lesson_comment(self):
+        lesson = self.stage_comment("https://air/run/lesson", "\n<!-- factory:lesson -->")
+        self.apply(self.tracker([self.stage_comment("https://air/run/stage"), lesson]), run_id="https://air/run/notify")
+        self.assertEqual({b["run_url"] for _, b in self.hook.posts}, {"https://air/run/stage"})
+
+    def test_run_url_skips_a_reconcile_comment(self):
+        reconcile = {"author": "bot", "author_is_bot": True, "at": None,
+                     "body": "[factory] reconcile: stage=in-review head=abc re-fired factory:review-low (no review-low outcome)\n\nFactory-Run: reconcile"}
+        self.apply(self.tracker([self.stage_comment("https://air/run/stage"), reconcile]), run_id="https://air/run/notify")
+        self.assertEqual({b["run_url"] for _, b in self.hook.posts}, {"https://air/run/stage"})
+
+    def test_run_url_falls_back_to_the_notify_run(self):
+        self.apply(self.tracker(), run_id="https://air/run/notify")
+        self.assertEqual({b["run_url"] for _, b in self.hook.posts}, {"https://air/run/notify"})
+
+    def test_error_status_fails_the_effect_without_the_url(self):
+        self.hook.status = 400
+        with self.assertRaises(RuntimeError) as ctx:
+            self.apply(self.tracker())
+        self.assertIn("HTTP 400", str(ctx.exception))
+        self.assertNotIn("secret-path", str(ctx.exception))
+        self.assertNotIn("127.0.0.1", str(ctx.exception))
+
+    def test_redirect_fails_with_its_status(self):
+        with patch.dict(os.environ, {"TEST_NOTIFY_SLACK": self.url.replace("secret-path", "moved")}):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.apply(self.tracker())
+        self.assertIn("HTTP 302", str(ctx.exception))
+        self.assertEqual(self.hook.posts, [])
+
+    def test_malformed_url_error_does_not_hold_the_url(self):
+        with patch.dict(os.environ, {"TEST_NOTIFY_SLACK": "not-a-url/FAKE_SECRET"}):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.apply(self.tracker())
+        self.assertNotIn("FAKE_SECRET", str(ctx.exception))
+
+    def test_ack_sends_nothing(self):
+        self.assertFalse(notify.ack_all(SLACK, "ann", "slack-workflow", "req-1", "Got it"))
+        self.assertEqual(self.hook.posts, [])
 
 
 class ValidateTest(unittest.TestCase):
