@@ -375,6 +375,27 @@ class RecoverDefinitionTest(unittest.TestCase):
         reconcile.report_systemic(self.config, [], run=gh)
         self.assertEqual([c[:3] for c in calls if c[:2] == ["issue", "close"]], [["issue", "close", "9"]])
 
+    def test_a_failed_end_on_this_head_blocks_once_instead_of_refiring(self):
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": OLD})
+        failure = ("[factory] end failed: node=review-low head=abc123def456 outcome=approve-low\n\n```\n"
+                   "RuntimeError: HTTP 403: Resource not accessible by integration\n```\n\nThe outcome did not land; x")
+        ticket["log"] = [("comment", json.dumps(failure))]
+        t, results = self.recover(ticket)
+        self.assertEqual([r["reconcile"] for r in results], ["end-failed"])
+        self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
+        note = logged(t, "comment")[-1]
+        self.assertIn("HTTP 403", note)
+        self.assertNotIn('"factory:review-low"', logged(t, "label"))  # not re-fired
+        ticket.update(stage="in-review", log=[("comment", json.dumps(failure)), ("comment", note)])
+        self.assertEqual(self.recover(ticket)[1], [])  # one notice per stage and head
+
+    def test_a_failed_end_on_an_older_head_does_not_stop_the_refire(self):
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": OLD})
+        ticket["log"] = [("comment", json.dumps("[factory] end failed: node=review-low head=000000000000 outcome=x\n\nerr"))]
+        self.assertEqual([r["reconcile"] for r in self.recover(ticket)[1]], ["refire"])
+
     def test_needs_human_ticket_is_left_alone(self):
         t, results = self.recover(self.pr(conflict=True, attrs=["factory:needs-human"]))
         self.assertEqual(results, [])

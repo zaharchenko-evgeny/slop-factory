@@ -224,10 +224,25 @@ def stuck_label(wakes, nodes, facts, on_pr, ago):
     return None
 
 
+def last_end_failure(facts, node, head):
+    """The error block of the last `[factory] end failed:` comment for `node` at `head`, else None (#997)."""
+    for c in reversed(facts.get("recover_comments", [])):
+        if c.startswith("[factory] end failed:") and f"node={node} " in c and f"head={head} " in c:
+            body = c.split("\n", 1)[1] if "\n" in c else ""
+            return body.split("The outcome did not land")[0].strip() or "no error output"
+    return None
+
+
 def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="changes-requested"):
     def apply(**e):
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
-    if kind == "stuck":
+    if kind == "end-failed":
+        apply(kind="label", value=vocab.needs_human())
+        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} end failed, not re-fired: {why}\n"
+                                    f"Options: fix the cause (a new head, a token, a setting), then set {vocab.stage('ready')} "
+                                    f"or re-add `{label}`.")
+        apply(kind="stage", value="blocked")
+    elif kind == "stuck":
         apply(kind="label", value=vocab.needs_human())
         apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} stuck: {why}\nOptions: fix the cause and set "
                                     f"{vocab.stage('ready')}, or remove `{label}` and move the ticket by hand.")
@@ -311,6 +326,13 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             kind, node, label, on, why = step
             if kind == "stuck" and any(f"stage={stage} head={head} stuck:" in c for c in facts.get("recover_comments", [])):
                 continue
+            failed = last_end_failure(facts, node, head)
+            if failed and kind == "refire":  # #997: a retry on this head fails the same way; a person fixes the cause
+                if any(f"stage={stage} head={head} end failed" in c for c in facts.get("recover_comments", [])):
+                    continue
+                kind, why = "end-failed", f"`factory end` of {node} failed on this head:\n{failed}"
+            elif failed and kind == "stuck":
+                why = f"{why}\nLast error of {node} on this head:\n{failed}"
             missed = sum(f"stage={stage} head={head} re-fired {label} (" in c for c in facts.get("recover_comments", []))
             kind = "blocked" if kind == "refire" and missed else kind
             r = {"ticket": n, "stage": stage, "node": node, "reconcile": kind, "why": why}
