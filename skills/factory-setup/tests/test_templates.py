@@ -70,11 +70,20 @@ class Templates(unittest.TestCase):
             self.assertIn(f"`{name}`", doc, name)
         self.assertEqual(used, set(ANSWERS))
 
-    def test_workflow_has_ci_red_and_walkthrough(self):
+    def test_workflow_has_ci_red_and_no_walkthrough_node(self):
         nodes = yaml.safe_load((render.PROJECT_T / "workflow.yaml").read_text())["nodes"]
         self.assertIn("ci-red", nodes)
-        self.assertIn("walkthrough", nodes)
-        self.assertTrue((render.PROJECT_T / "roles/walkthrough/role.md").is_file())
+        self.assertNotIn("walkthrough", nodes)
+        self.assertFalse((render.PROJECT_T / "roles" / "walkthrough").exists())
+        factory = yaml.safe_load(render.render_project(ANSWERS)["factory.yaml"])
+        self.assertIn("walkthrough", factory["roles"]["reviewer"]["skills"])
+        self.assertNotIn("walkthrough", factory["roles"])
+        self.assertNotIn("walkthrough", factory["agents"])
+
+    def test_reviewer_role_orders_the_review_sections(self):
+        role = (render.PROJECT_T / "roles/reviewer/role.md").read_text()
+        at = [role.index(h) for h in ("## Decision for you", "## Summary", "## Walkthrough", "## Merge danger")]
+        self.assertEqual(at, sorted(at))
 
     def test_every_node_is_documented(self):
         doc = (SKILL / "references/nodes.md").read_text()
