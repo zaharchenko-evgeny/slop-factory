@@ -16,7 +16,10 @@ permissions: {}
 
 jobs:
   label:
-    if: contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    # Factory asks come from the Air app, whose comments are CONTRIBUTOR.
+    if: >-
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      || github.event.comment.user.type == 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
