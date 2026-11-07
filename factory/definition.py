@@ -334,10 +334,12 @@ def _notify_errors(config):
 
 
 def _notify_effect_errors(where, outcome, spec, config):
-    """A `notify` effect is `message` or `{message: message, people: [logins]}`, and needs `notify` config."""
+    """A `notify` effect is `ack`, `message` or `{message: message, people: [logins]}`, and needs `notify` config."""
     errs = []
     if not config:
         errs.append(f"missing-notify: {where}.{outcome}: a `notify` effect needs `notify` config in factory.yaml")
+    if spec == "ack":
+        return errs
     body = spec if isinstance(spec, dict) else {"message": spec}
     people = body.get("people")
     if body.get("message") != "message" or set(body) - {"message", "people"} \
