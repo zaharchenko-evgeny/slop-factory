@@ -165,6 +165,28 @@ jobs:
       # Scans the whole tree; it picks up AGENTS.md, SKILL.md and roles/**/*.md.
       - run: scripts/retry-network.sh npx --yes agnix@0.59.3 .
 
+  # Information for the reviewer, not a required check: mutants of the changed lines that the tests do not catch.
+  mutation:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { fetch-depth: 0, persist-credentials: false }
+      - run: pipx install uv
+      - name: Mutate the changed lines
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -o pipefail
+          {
+            echo '## Surviving mutants'
+            echo '```'
+            uv run --quiet python scripts/mutation-diff.py --base "$BASE_SHA"
+            echo '```'
+          } > mutation.md || { cat mutation.md; exit 1; }
+          cat mutation.md >> "$GITHUB_STEP_SUMMARY"
+
   # The CI label is the result of every job: it runs last, so the run is about to complete when the label wakes a
   # reviewer or the join, and they read the same result from the workflow runs instead of `pending`.
   ci-label:
