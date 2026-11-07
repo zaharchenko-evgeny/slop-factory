@@ -419,6 +419,12 @@ def status(facts, limit=2000, cut=160):
         for c in reviews.values():
             for f in c["open"]:
                 f["text"] = f["text"][:cut]
+    while len(json.dumps(out)) > limit:  # still too long (many findings): drop the last open findings and count them
+        c = max(reviews.values(), key=lambda c: len(c["open"]))
+        if not c["open"]:
+            break
+        c["open"].pop()
+        c["omitted"] = c.get("omitted", 0) + 1
     return out
 
 
