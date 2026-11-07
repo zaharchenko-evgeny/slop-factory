@@ -15,13 +15,46 @@ WORKFLOW = "workflow.yaml"
 ROLES = "roles"
 NO_ROLE = ("script", "human")  # harnesses that run no role
 GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention")  # the facts a guard reads (gate.GUARD_KEYS)
+# Nodes planned once per code repository when `write_mode` is `per-repo`: Air pushes only to an automation's own repository.
+PER_REPO = ("implement", "fix", "update", "review", "join", "merge", "finish")
+TIER_SUFFIXES = ("-small", "-medium", "-large", "-low", "-high")  # a tiered node: `implement-medium`, `review-high`
 STARTUP = ".air/cloud/startup.sh"  # Air runs it from the checkout; it runs `factory setup` (ADR-0021)
+
+
+def per_repo_node(name):
+    """True when a node (or its tiered form, `implement-medium`) is planned once per code repository."""
+    return name.removesuffix(next((t for t in TIER_SUFFIXES if name.endswith(t)), "")) in PER_REPO
 
 
 def present(root):
     """True when `root` holds a definition in this layout."""
     root = Path(root)
     return (root / FACTORY).is_file() and (root / WORKFLOW).is_file()
+
+
+def full_name(url):
+    """`owner/repo` of a repository URL or name."""
+    return "/".join(str(url).removesuffix(".git").rstrip("/").split("/")[-2:])
+
+
+def code_repos(defn):
+    """The code repositories of a definition, in order: those its environments list, less the team repository (the
+    one that holds the definition) and the knowledge base."""
+    f = defn["factory"]
+    knowledge = (((f.get("defaults") or {}).get("settings") or {}).get("knowledge") or {}).get("repo")
+    skip = {full_name(u) for u in (team_url(defn["root"]), knowledge) if u}
+    repos = [r["repo"] for e in (f.get("environments") or {}).values() for r in (e or {}).get("repositories") or []]
+    return [r for r in dict.fromkeys(repos) if full_name(r) not in skip]
+
+
+def per_repo_envs(defn):
+    """{code repository: the first environment where it is `main`} for the repositories that have one."""
+    out = {}
+    for name, e in (defn["factory"].get("environments") or {}).items():
+        for r in (e or {}).get("repositories") or []:
+            if r.get("main"):
+                out.setdefault(r["repo"], name)
+    return {r: out[r] for r in code_repos(defn) if r in out}
 
 
 def _keys(x):
@@ -360,6 +393,11 @@ def errors(defn):
     if w.get("blockers", "start") not in ("start", "merge"):
         errs.append(f"bad-blockers: workflow.yaml: `blockers` is `start` or `merge`, not {w['blockers']!r}")
     default_env = (w.get("settings") or {}).get("environment")
+    code = code_repos(defn)
+    if len(code) > 1 and any(per_repo_node(n) for n in nodes) \
+            and ((f.get("defaults") or {}).get("settings") or {}).get("write_mode", "per-repo") == "per-repo":
+        errs += [f"per-repo-env: {r}: a per-repository node needs an environment where it is `main`"
+                 for r in code if r not in per_repo_envs(defn)]
     for name, n in nodes.items():
         where = f"nodes.{name}"
         if n.get("agent") not in agents:
@@ -449,7 +487,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed", ("pr", "commented"): "pr commented",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red", "assign", "unassign", "notify")
+           "request-reviewers", "park-behind-main-red", "assign", "unassign", "notify", "route", "reply", "skip")
 
 
 def _name(label, prefix):

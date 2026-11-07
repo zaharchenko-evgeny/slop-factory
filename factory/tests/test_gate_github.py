@@ -1750,7 +1750,7 @@ def ticket_store_contract(test, make):
     test.assertEqual((issue["body"], issue["state"], issue["author"], sorted(issue["attrs"]), issue["assignees"]),
                      ("scope", "open", "author", sorted(attrs), ["alice"]))
     test.assertEqual(store.events(n), events)
-    test.assertEqual(store.comments(n), comments)
+    test.assertEqual([{k: v for k, v in c.items() if k != "id"} for c in store.comments(n)], comments)  # `id` is extra
     test.assertEqual(len(store.open_blockers(n)), 1)
     test.assertEqual([store.can_answer(x) for x in ("alice", "eve", "nobody")], [True, False, False])
     store.add_attr(n, "docs")
