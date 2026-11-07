@@ -200,6 +200,35 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(data["agent_notes"], {"for": "fixer", "files": ["a.py", "b.py"], "repro": "uv run t.py"})
         self.assertNotIn("agent_notes", self.handoff("approve"))
 
+    def test_end_lesson_option(self):
+        data = self.handoff("done", "--lesson", "factory router | it misses ADRs | evidence: #7",
+                            "--lesson", "project gate.py | apply runs twice")
+        self.assertEqual(data["lessons"], [
+            {"scope": "factory", "about": "router", "text": "it misses ADRs", "evidence": "#7"},
+            {"scope": "project", "about": "gate.py", "text": "apply runs twice"}])
+        self.assertNotIn("lessons", self.handoff("done"))
+
+    def test_end_lesson_bad_scope(self):
+        for bad in ("team router | text", "factory router | ", "factory | text"):
+            with self.assertRaises(ValueError, msg=bad):
+                self.handoff("done", "--lesson", bad)
+        self.tracker()
+        self.assertEqual(self.run_cli("begin", "implement-mid", "event.json", "--tracker", "memory:tickets.json")[0], 0)
+        code, out = self.run_cli("end", "done", "--lesson", "team router | text")
+        self.assertEqual(code, 2, out)
+        self.assertIn("malformed option", json.loads(out)["error"])
+
+    def test_end_lessons_reach_gate(self):
+        tracker = self.tracker()
+        self.assertEqual(self.run_cli("begin", "implement-mid", "event.json", *tracker)[0], 0)
+        code, out = self.run_cli("end", "done", "--lesson", "engine cli.py | end dropped lessons | evidence: #869")
+        self.assertEqual(code, 0, out)
+        record = json.loads(Path("tickets.json").read_text())["7"]
+        comments = [json.loads(v) for k, v in record["log"] if k == "comment" and "factory:lesson" in v]
+        self.assertEqual(len(comments), 1, record["log"])
+        self.assertIn("- [engine] cli.py: end dropped lessons (evidence: #869)", comments[0])
+        self.assertIn("factory:lesson", record["attrs"])
+
     def test_begin_fix_prints_ci_failure(self):
         failure = [{"job": "tests", "step": "Run tests", "log_tail": "assert False"}]
         tracker = self.tracker(stage="changes-requested", ci="red", round_complete=True,
