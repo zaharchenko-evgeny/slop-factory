@@ -5,6 +5,7 @@
 # ///
 """Tests for factory/reconcile.py over MemoryTracker. Run: uv run factory/tests/test_reconcile.py"""
 import copy
+import json
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -354,6 +355,36 @@ class RecoverDefinitionTest(unittest.TestCase):
                                                now=NOW, dry_run=True)
         self.assertIn("error", results[0])
         self.assertEqual(tracker.tickets[1].get("log", []), [])
+
+
+class ReconcileFailureTest(unittest.TestCase):
+    """#845: a reconcile crash is a Doctor ticket, not a silent `reconciled` run."""
+    def setUp(self):
+        self.previous = cfg._team
+        cfg.set_team(RecoverDefinitionTest.SLOP)
+        self.real = reconcile.reconcile_main
+        self.calls = []
+
+    def tearDown(self):
+        reconcile.reconcile_main = self.real
+        cfg.set_team(self.previous)
+
+    def gh(self, args, token=None):
+        self.calls.append(args)
+        return json.dumps([{"number": 7, "title": "Doctor: reconcile fails"}]) if args[:2] == ["issue", "list"] else ""
+
+    def test_crash_opens_the_ticket_and_a_clean_run_closes_it(self):
+        def boom(argv):
+            raise RuntimeError("gh: HTTP 502")
+        reconcile.reconcile_main = boom
+        with self.assertRaises(RuntimeError):
+            reconcile.main([], run=self.gh)
+        comment = next(c for c in self.calls if c[:2] == ["issue", "comment"])
+        self.assertIn("RuntimeError: gh: HTTP 502", comment[comment.index("--body") + 1])
+        self.calls.clear()
+        reconcile.reconcile_main = lambda argv: 0
+        self.assertEqual(reconcile.main([], run=self.gh), 0)
+        self.assertEqual([c[:3] for c in self.calls if c[:2] == ["issue", "close"]], [["issue", "close", "7"]])
 
 
 if __name__ == "__main__":
