@@ -14,7 +14,7 @@ number = (event.get("issue") or event.get("pull_request") or {}).get("number")
 body = (event.get("comment") or {}).get("body")
 if not number or body is None:
     raise SystemExit("comment event has no issue number or comment body")
-if "factory:from" in body and "factory:ask" not in body:
+if "<!-- factory:from " in body and "<!-- factory:ask " not in body:
     raise SystemExit(0)
 subprocess.run(["gh", "issue", "edit", str(number), "-R", sys.argv[2], "--add-label", "factory:comment"],
                check=True)
