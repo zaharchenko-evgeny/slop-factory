@@ -338,7 +338,12 @@ def report_crash(cmd, error, run=subprocess.run):
         found = gh("issue", "list", "-R", repo, "--state", "open", "--search", f'"{title}" in:title',
                    "--json", "title", "-q", ".[].title").stdout.splitlines()
         if title not in found:
-            gh("issue", "create", "-R", repo, "--title", title, "--label", "factory:triage", "--body",
+            try:  # the triage label comes from the vocabulary, which needs the engine files: none when they are missing
+                import doctor
+                label = doctor.triage_label()
+            except Exception:
+                label = None
+            gh("issue", "create", "-R", repo, "--title", title, *(["--label", label] if label else []), "--body",
                f"[factory] `factory {cmd}` crashed in Air environment `{os.environ['FACTORY_ENV']}`: "
                f"`{type(error).__name__}: {str(error)[:500]}`. Every node that runs this command fails until it is "
                f"fixed.\n\nFactory-Run: {os.environ.get('FACTORY_NODE') or 'factory'}")
