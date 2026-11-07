@@ -395,5 +395,38 @@ class EnvRolesTest(unittest.TestCase):
         return out.getvalue().splitlines()
 
 
+class CrashReportTest(unittest.TestCase):
+    """#984: a crash in an Air run opens one Doctor ticket through gh alone."""
+    def gh(self, open_titles):
+        calls = []
+
+        def run(args, **kw):
+            calls.append(args)
+            out = "\n".join(open_titles) if args[1:3] == ["issue", "list"] else "o/r" if args[1:3] == ["repo", "view"] else ""
+            return subprocess.CompletedProcess(args, 0, out, "")
+        return calls, run
+
+    def test_air_crash_opens_the_ticket_once(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"FACTORY_ENV": "engine"}):
+            os.environ.pop("GITHUB_REPOSITORY", None)
+            calls, run = self.gh([])
+            cli.report_crash("begin", FileNotFoundError("engine/defaults.yaml"), run=run)
+            create = next(c for c in calls if c[1:3] == ["issue", "create"])
+            self.assertEqual(create[create.index("--title") + 1], "Doctor: factory begin crashes")
+            self.assertIn("FileNotFoundError: engine/defaults.yaml", create[create.index("--body") + 1])
+            calls, run = self.gh(["Doctor: factory begin crashes"])
+            cli.report_crash("begin", FileNotFoundError("x"), run=run)
+            self.assertFalse([c for c in calls if c[1:3] == ["issue", "create"]])
+
+    def test_local_crash_reports_nothing(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {}):
+            os.environ.pop("FACTORY_ENV", None)
+            calls, run = self.gh([])
+            cli.report_crash("begin", RuntimeError("x"), run=run)
+            self.assertEqual(calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
