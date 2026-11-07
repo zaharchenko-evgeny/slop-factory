@@ -66,6 +66,7 @@ class Templates(unittest.TestCase):
     def test_placeholders_documented_and_answered(self):
         doc = (SKILL / "SKILL.md").read_text()
         used = {m for f in [*files(render.T), *files(render.PROJECT_T)] for m in render.PH.findall(f.read_text())}
+        used.discard("ENGINE_SKILL_SOURCE")  # render.py derives this from ENGINE
         for name in used:
             self.assertIn(f"`{name}`", doc, name)
         self.assertEqual(used, set(ANSWERS))
@@ -94,6 +95,17 @@ class Templates(unittest.TestCase):
             self.assertEqual(definition.errors(defn), [])
             self.assertEqual(definition.warnings(defn), [])
             self.assertEqual(defn["factory"]["tracker"]["repository"], "zaharchenko-evgeny/slop-factory")
+            pin = defn["factory"]["skills"]["factory-deploy"]
+            self.assertEqual(pin["source"], "github:zaharchenko-evgeny/slop-factory@main")
+            self.assertEqual(pin["path"], ".agents/skills/factory-deploy")
+            self.assertEqual(pin["sha256"], "bd997445b6b34390926afd9cb2e4af665b773c46233a2ec5e5ec08ed2e6502bb")
+            run = subprocess.run(["factory", "validate", "--team", tmp], capture_output=True, text=True)
+            self.assertEqual(run.stdout.strip(), "factory: ok", run.stderr)
+
+    def test_readme_documents_factory_deploy(self):
+        readme = render.render_project(ANSWERS)["README.md"]
+        self.assertIn("## Deploy", readme)
+        self.assertIn("factory-deploy", readme)
 
     def test_statechart_skill_is_pinned_and_fetched_not_vendored(self):
         spec = importlib.util.spec_from_file_location("vendor_skills", ROOT / "scripts/vendor-skills.py")

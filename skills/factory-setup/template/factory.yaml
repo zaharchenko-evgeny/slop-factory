@@ -63,6 +63,10 @@ skills:
     path: skills/engineering/to-tickets
     sha256: 6eccfac132d92b949821d154679adc7f597bfc3e8c929f3c03786b92f91b961f
   # Local skills: shipped with this template under skills/<name>.
+  factory-deploy:
+    source: "{{ENGINE_SKILL_SOURCE}}"
+    path: .agents/skills/factory-deploy
+    sha256: bd997445b6b34390926afd9cb2e4af665b773c46233a2ec5e5ec08ed2e6502bb
   pr: { path: skills/pr }
   merge-risk: { path: skills/merge-risk }
   walkthrough: { path: skills/walkthrough }
