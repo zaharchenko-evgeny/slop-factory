@@ -143,6 +143,20 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 if age <= timedelta(minutes=default):
                     continue
             else:
+                replay = gate.stale_review_plan(facts) if stage == "in-review" else None
+                if replay:
+                    node, outcome, payload = replay
+                    if age <= timedelta(minutes=nodes["nodes"][node].get("timeout_minutes", default)):
+                        continue
+                    r = {"ticket": n, "stage": stage, "node": node, "outcome": outcome,
+                         "reconcile": "reapply", "why": "review marker landed at the head; finish its outcome"}
+                    results.append(r)
+                    if not dry_run:
+                        _, out = gate.apply(node, outcome, {"ticket": n, **payload, "run_id": RUN}, tracker, nodes)
+                        r.update(applied=out["applied"], written=out.get("written", []))
+                    if progress:
+                        progress(r)
+                    continue
                 step = next((w for w in wakes(nodes, facts)
                              if age > timedelta(minutes=nodes["nodes"][w[0]].get("timeout_minutes", default))), None)
                 stale_reviews = [label for label, at in facts.get("review_labels", [])

@@ -44,6 +44,33 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_partial_outcome_failure_reports_effects_that_landed(self):
+        graph = {"nodes": {"review": {"when": {}, "outcomes": {"changes": {"effects": [
+            {"review": "request-changes-at-head"}, {"unlabel": "factory:review-x", "on": "pr"}]}}}}}
+
+        class FailsAfterReview(MemoryTracker):
+            def apply(self, effect):
+                if effect["kind"] == "unlabel":
+                    raise RuntimeError("unlabel failed")
+                if effect["kind"] == "comment":
+                    self.report = effect
+                return super().apply(effect)
+
+        tr = FailsAfterReview({"7": {"stage": "in-review", "head": "abc"}})
+        with self.assertRaisesRegex(RuntimeError, "unlabel failed"):
+            gate.apply("review", "changes", {"ticket": "7", "focus": "x", "round": 1,
+                                                "run_id": "run-1"}, tr, graph)
+        comments = [json.loads(v) for kind, v in tr.tickets["7"]["log"] if kind == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("review", comments[0])
+        self.assertEqual((tr.report["on"], tr.report["run_id"]), ("pr", "run-1"))
+
+    def test_sweep_plan_replays_stale_review_marker_instead_of_refiring(self):
+        facts = {"stage": "in-review", "head": "abc", "pr_labels": ["factory:review-x"],
+                 "reviews": [{"agent": True, "focus": "x", "verdict": "changes", "commit_id": "abc", "round": 2}]}
+        self.assertEqual(gate.sweep_plan(facts),
+                         ("review", "changes", {"focus": "x", "round": 2, "review_replay": True}))
+
     def test_assignment_effect_resolves_owner_and_preserves_logins(self):
         self.assertEqual(gate.resolve({"assign": "owner", "on": "pr"}, {}, "7"),
                          {"kind": "assign", "ticket": "7", "value": cfg.owner(CONFIG), "on": "pr"})

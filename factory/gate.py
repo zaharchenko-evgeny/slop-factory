@@ -891,7 +891,11 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             e["summary"] = f"{e.get('summary') or ''}\n\n{comment_marker(name)}"
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
-    why = matches(node, facts, {**payload, "id": payload.get("event")}, out) \
+    replay = (payload.get("review_replay") and facts.get("stage") == "in-review"
+              and stale_review_plan(facts) == (name, outcome, {"focus": payload.get("focus"),
+                                                               "round": payload.get("round"),
+                                                               "review_replay": True}))
+    why = (None if replay else matches(node, facts, {**payload, "id": payload.get("event")}, out)) \
         or merge_refused(effects, facts)
     if why:
         return NO_GO, {"applied": False, "reason": why}
@@ -901,9 +905,37 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         for e in posted:
             tracker.apply(e)
         raise RuntimeError("notify failed: " + "; ".join(failures))
-    written = [e["kind"] for e in effects + after if tracker.apply(e)]
+    written = []
+    for e in effects + after:
+        if payload.get("review_replay") and e["kind"] == "review":
+            continue  # the marker proves this review already landed
+        try:
+            if tracker.apply(e):
+                written.append(e["kind"])
+        except Exception as error:
+            if written:
+                report = {"kind": "comment", "ticket": ticket, "on": "pr",
+                          "value": f"[factory] Outcome stopped after these effects landed: {', '.join(written)}.",
+                          "run_id": payload.get("run_id") or "gate:partial-outcome"}
+                try:
+                    tracker.apply(report)
+                except Exception as report_error:
+                    raise RuntimeError(f"{error}; partial outcome report also failed: {report_error}") from error
+            raise
     parent = parent_decision(name, ticket, effects, tracker, nodes)
     return GO, {"applied": True, "written": written, **({"parent": parent} if parent else {})}
+
+
+def stale_review_plan(facts):
+    """The review outcome whose marker landed at this head but whose command label remains."""
+    labels = set(facts.get("pr_labels") or [])
+    for review in reversed(facts.get("reviews") or []):
+        focus, verdict = review.get("focus"), review.get("verdict")
+        if (review.get("agent") and review.get("commit_id") == facts.get("head")
+                and focus and verdict in ("approve", "changes")
+                and vocab.cmd("review-<focus>", focus) in labels):
+            return "review", verdict, {"focus": focus, "round": review.get("round"), "review_replay": True}
+    return None
 
 
 def parent_decision(name, ticket, effects, tracker, nodes):
@@ -1027,6 +1059,8 @@ def blockers_mode(nodes):
 def sweep_plan(facts, auto_merge=None, default_tier="mid", blockers="start", start_waits=False):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
+    if stage == "in-review" and (replay := stale_review_plan(facts)):
+        return replay
     waits = blockers == "merge" and facts.get("blockers_open")  # approved, but a blocker is still open
     if facts.get("pr_state") == "merged" and config_mod.load()["tracker"]["stage_kinds"].get(stage) != "final":
         comments = facts.get("comments", [])

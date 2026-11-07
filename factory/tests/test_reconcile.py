@@ -45,6 +45,18 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(results[0]["node"], "review")
         self.assertIn('"factory:review-behaviour"', logged(t, "label"))
 
+    def test_landed_review_marker_reapplies_outcome_without_refiring_reviewer(self):
+        ticket = {"stage": "in-review", "pr": 5, "pr_state": "open", "ci": "green", "since": OLD,
+                  "head": "abc", "pr_labels": ["factory:review-behaviour"],
+                  "log": [["label", '"factory:review-behaviour"']],
+                  "reviews": [{"agent": True, "focus": "behaviour", "verdict": "changes",
+                               "commit_id": "abc", "round": 1}]}
+        t, results, failed = run(ticket)
+        self.assertFalse(failed)
+        self.assertEqual((results[0]["reconcile"], results[0]["node"], results[0]["outcome"]),
+                         ("reapply", "review", "changes"))
+        self.assertNotIn("factory:review-behaviour", t.facts(1)["pr_labels"])
+
     def test_stale_review_label_without_review_refired(self):
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": FRESH,
                              "focus_missing": ["behaviour"],
