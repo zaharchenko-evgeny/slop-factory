@@ -5,7 +5,8 @@
 # ///
 """Deterministic run facts for the nightly `retro` (ADR-0015): the agent writes lessons, it never counts.
 
-Usage: uv run factory/retro.py facts --since <ISO time>   (JSON: one object per ticket that reached `done` since)
+Usage: uv run factory/retro.py facts --since <ISO time>   (JSON: `tickets`, one object per ticket that reached `done` since,
+                                                           and `reviews`, the per-focus totals over them)
        uv run factory/retro.py collect                     (JSON: the uncollected lesson comments; marks them collected)
 `ticket_facts` is pure: it takes the ticket's and PR's events, reviews and comments as the GitHub API returns them.
 """
@@ -21,6 +22,7 @@ import config as cfg  # noqa: E402
 import vocab  # noqa: E402
 
 QUIET = ("triage", "ready")  # stage labels a person sets in the normal flow: not an intervention
+REGRESSION = re.compile(r"(?i)regression|broke")
 MARKER = re.compile(r"<!-- factory:review focus=(\S+) .*?verdict=(\w+)")
 SIZE = re.compile(r"(?i)size:\s*about\s*([\d,]+)\s*lines")
 
@@ -34,18 +36,43 @@ def labeled(events, prefix):
     return [e for e in events if e.get("event") == "labeled" and e["label"]["name"].startswith(prefix)]
 
 
-def ticket_facts(number, issue_events, pr_events, reviews, comments, bots=(), body="", pr_lines=None):
+def references(text, numbers):
+    """The numbers of `numbers` that `text` mentions as `#N` or as an issue or pull request URL."""
+    found = re.findall(r"(?<![\w/])#(\d+)\b|/(?:issues|pull)/(\d+)\b", text or "")
+    return {int(a or b) for a, b in found} & set(numbers)
+
+
+def escaped(numbers, later):
+    """How many `later` tickets ({number, body, labels}) report a bug in work numbered `numbers` (the ticket and its PR):
+    a line that names it with `regression` or `broke`, or a `bug` label with a link to it."""
+    return sum(1 for t in later
+               if any(references(line, numbers) and REGRESSION.search(line) for line in (t.get("body") or "").splitlines())
+               or ("bug" in t.get("labels", ()) and references(t.get("body"), numbers)))
+
+
+def ticket_facts(number, issue_events, pr_events, reviews, comments, bots=(), body="", pr_lines=None,
+                 pr_number=None, merged=False, later=()):
     """Facts of one ticket, counted across its whole life (a person's `factory:ready` resets nothing)."""
     stage = lambda name: [e for e in issue_events if e.get("event") == "labeled" and e["label"]["name"] == f"factory:{name}"]
     first_ready, done = (stage("ready") or [{}])[0].get("created_at"), (stage("done") or [{}])[-1].get("created_at")
-    marked = [(m[1], m[2], r["body"]) for r in reviews if (m := MARKER.search(r.get("body") or ""))]
+    marked = [(m[1], m[2], r["body"], r.get("commit_id")) for r in reviews if (m := MARKER.search(r.get("body") or ""))]
     by_focus = {}
-    for focus, verdict, text in marked:
-        c = by_focus.setdefault(focus, {"approve": 0, "changes": 0, "blocking": 0, "changes_without_finding": 0})
+    for i, (focus, verdict, text, head) in enumerate(marked):
+        c = by_focus.setdefault(focus, {"reviews": 0, "approve": 0, "changes": 0, "blocking": 0, "changes_without_finding": 0,
+                                        "confirmed": 0, "withdrawn": 0, "escaped": 0})
         found = len(re.findall(r"\*\*B\d+\*\*", text))
+        c["reviews"] += 1
         c[verdict] = c.get(verdict, 0) + 1
         c["blocking"] += found
         c["changes_without_finding"] += verdict == "changes" and not found
+        nxt = next(((v, h) for f, v, _, h in marked[i + 1:] if f == focus), None)  # the same focus's next review
+        if verdict == "changes" and nxt and nxt[1] != head:
+            c["confirmed"] += found  # a new head followed: the developer acted on it
+        elif verdict == "changes" and nxt and nxt[0] == "approve":
+            c["withdrawn"] += found  # approved at the same head: a false alarm
+    if merged:
+        for c in by_focus.values():
+            c["escaped"] = escaped({number, pr_number} - {None}, later) if c["approve"] else 0
     stops = [e for n in ("blocked", "needs-answers") for e in stage(n)]
     def reason(at):  # the first line of the bot's next comment on the ticket
         later = [c for c in comments if not person(c.get("user"), bots) and (c.get("created_at") or "") >= at]
@@ -72,6 +99,17 @@ def ticket_facts(number, issue_events, pr_events, reviews, comments, bots=(), bo
     }
 
 
+def review_totals(tickets):
+    """The per-focus counters of `ticket_facts` summed over `tickets`."""
+    totals = {}
+    for t in tickets:
+        for focus, c in t["reviews"].items():
+            sums = totals.setdefault(focus, dict.fromkeys(c, 0))
+            for k, v in c.items():
+                sums[k] += v
+    return totals
+
+
 def changed_lines(files, generated_paths=()):
     """The repository's sizing rule over a PR's files: generated and vendored paths are excluded, a whole deleted
     file counts as one line, removed lines of a remaining file count as modified."""
@@ -93,6 +131,9 @@ def facts(tracker, since):
     """Facts of every ticket whose `factory:done` label was added at or after `since`."""
     done = tracker.stages["done"]
     out = []
+    later = [{"number": i["number"], "body": i.get("body") or "", "created_at": i["created_at"],
+              "labels": [x["name"] for x in i.get("labels") or []]}
+             for i in tracker._list(f"issues?state=all&since={since}&per_page=100") if "pull_request" not in i]
     for i in tracker._list(f"issues?state=all&labels={done}&since={since}&per_page=100"):
         n = i["number"]
         if "pull_request" in i:
@@ -106,9 +147,11 @@ def facts(tracker, since):
         comments = tracker._list(f"issues/{n}/comments")
         lines = changed_lines(tracker._list(f"pulls/{pr['number']}/files?per_page=100"),
                               cfg.load().get("limits", {}).get("generated_paths", [])) if pr else None
+        finished = max(e["created_at"] for e in events if e.get("event") == "labeled" and e["label"]["name"] == done)
         out.append(ticket_facts(n, events, pr_events, reviews, comments, {tracker.bot, *tracker.trusted},
-                                i.get("body") or "", lines))
-    return out
+                                i.get("body") or "", lines, pr and pr["number"], bool(pr and pr.get("merged")),
+                                [t for t in later if t["created_at"] > finished and t["number"] != n]))
+    return {"tickets": out, "reviews": review_totals(out)}
 
 
 LESSON, COLLECTED = "<!-- factory:lesson -->", "<!-- factory:lesson collected -->"
