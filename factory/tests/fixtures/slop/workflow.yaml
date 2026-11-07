@@ -38,12 +38,22 @@ nodes:
   human-reply:                    # a person comments on a ticket or PR that waits for them: resume it
     agent: resume
     triggers: [{ ticket: commented }, { pr: commented }]
-    when: { label: "factory:needs-human" }   # only waiting tickets; the stage effect removes the label
+    when: { label: "factory:needs-human" }   # the label is on the PR (`on: pr`); resuming removes it
     output: read-only
     outcomes:
-      triage:  { if: { stage: "!done" }, effects: [{ stage: triage }] }
-      ready:   { if: { stage: "!done" }, effects: [{ stage: ready }] }
+      triage:  { if: { stage: "!done" }, effects: [{ unlabel: "factory:needs-human", on: pr }, { stage: triage }] }
+      ready:   { if: { stage: "!done" }, effects: [{ unlabel: "factory:needs-human", on: pr }, { stage: ready }] }
       skipped: {}                 # a factory comment, or the person asks for nothing
+
+  ticket-reply:                   # a person answers a ticket that waits in blocked or needs-answers: resume it
+    agent: resume
+    triggers: [{ ticket: commented }]
+    when: { stage: [blocked, needs-answers] }
+    output: read-only
+    outcomes:
+      triage:  { effects: [{ stage: triage }] }
+      ready:   { effects: [{ stage: ready }] }
+      skipped: {}
 
   # --- Triage: scope, estimate when it can ------------------------------------------------------
   intake:
