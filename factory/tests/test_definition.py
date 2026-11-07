@@ -439,6 +439,31 @@ class DefinitionTest(unittest.TestCase):
         finally:
             config.set_team(before)
 
+    def test_a_failed_review_write_leaves_labels_and_stage_as_they_were(self):
+        import config
+        import gate
+        import nodes as nodes_mod
+        from gate_port import MemoryTracker
+        before = config._team
+        config.set_team(ROOT / "tests/fixtures/slop")  # its review outcomes replace the risk label (#998)
+        try:
+            n = nodes_mod.load()
+            t = MemoryTracker({"7": {"stage": "in-review", "pr": 5, "head": "h1", "ci": "green", "attrs": ["risk:low"],
+                                     "pr_labels": ["factory:review-low"]}})
+            apply = t.apply
+
+            def failing(e):
+                if e["kind"] == "review":
+                    raise RuntimeError("HTTP 403: Resource not accessible by integration")
+                return apply(e)
+            t.apply = failing
+            with self.assertRaises(RuntimeError):
+                gate.apply("review-low", "approve-risky", {"ticket": "7", "summary": "ok"}, t, n)
+            f = t.facts("7")
+            self.assertEqual((f["stage"], "risk:low" in f["attrs"]), ("in-review", True))
+        finally:
+            config.set_team(before)
+
     def test_a_person_asks_dev_on_the_pr_and_dev_answers_there(self):
         import config
         import gate
