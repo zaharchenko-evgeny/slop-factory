@@ -6,6 +6,7 @@
   "required": ["nodes"],
   "properties": {
     "format": {"type": "integer"},
+    "blockers": {"enum": ["start", "merge"]},
     "environments": {"type": "object"},
     "adapters": {"type": "object"},
     "schedules": {

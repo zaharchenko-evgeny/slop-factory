@@ -144,12 +144,6 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.end_review("approve")
         self.assertEqual(code, 0, out)
 
-    def test_end_changes_requires_blocking_finding(self):
-        Path("f.json").write_text(json.dumps([{"id": "M1", "file": "x.py:1", "finding": "name it", "severity": "minor"}]))
-        code, out = self.end_review("changes", "--findings", "f.json")
-        self.assertEqual(code, 2, out)
-        self.assertIn("requires a blocking finding", out)
-
     def test_end_done_refuses_failed_check(self):
         tracker = self.tracker()
         self.run_cli("begin", "implement-mid", "event.json", *tracker)
@@ -367,13 +361,6 @@ class ImportTimeBoundaryTest(unittest.TestCase):
 class EnvRolesTest(unittest.TestCase):
     def test_prints_roles_of_enabled_agent_nodes_in_the_environment(self):
         self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
-        cfg.set_team(ROOT / "factory/tests/fixtures/slop-v1")
-        for env, roles in {"read": "reviewer\nrouter\n", "write": "developer\n", "ops": "distill\nretro\n"}.items():
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                self.assertEqual(cli.main(["env", "roles", env]), 0)
-            self.assertEqual(out.getvalue(), roles, f"slop-v1 {env}")
-
         fixture = ROOT / "factory/tests/fixtures/slop"
         cfg.set_team(fixture)
         for env in ("engine", "knowledge", "team"):

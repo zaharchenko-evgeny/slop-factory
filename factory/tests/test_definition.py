@@ -49,6 +49,15 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    def test_per_repository_node_needs_an_environment_per_code_repository(self):
+        def two_repos(f):
+            f["environments"]["engine"]["repositories"] += [{"repo": "o/web"}]
+            f["environments"]["web"] = {**f["environments"]["engine"], "repositories": [{"repo": "o/web", "main": True}]}
+        self.edit("factory.yaml", two_repos)
+        self.assertEqual(self.errors(), [])
+        self.edit("factory.yaml", lambda f: f["environments"].pop("web"))
+        self.assertError("per-repo-env: o/web")
+
     def test_write_mode_compiles_from_the_default_settings(self):
         self.edit("factory.yaml", lambda f: f["defaults"]["settings"].update(write_mode="token"))
         self.assertEqual(self.errors(), [])
@@ -286,6 +295,33 @@ class DefinitionTest(unittest.TestCase):
                          [{"command": "complexity:small"}, {"command": "implement-small"}, {"state": "in-dev"}])
         self.assertEqual(desc["states"]["done"]["kind"], "final")
 
+    def test_nodes_read_the_definition_in_the_gate_shape(self):
+        graph = definition.nodes(definition.load(self.root))
+        n = graph["nodes"]
+        self.assertEqual(n["fix"]["triggers"], ["pull_request.labeled factory:fix"])
+        self.assertEqual(n["finish"]["triggers"], ["pull_request.merged", "issues.closed"])
+        self.assertEqual(n["retro"]["triggers"], ["schedule retro"])
+        self.assertTrue(n["retro"]["routine"])
+        self.assertEqual(n["human"]["triggers"], ["manual"])
+        self.assertEqual(n["human"]["when"], {"actor": "human"})
+        self.assertNotIn("done", n["human"]["outcomes"]["ready"]["from"])          # `!done`
+        self.assertIn("draft", n["human"]["outcomes"]["ready"]["from"])
+        self.assertEqual(n["dispatch"]["outcomes"]["small"]["effects"],
+                         [{"label": "complexity:small"}, {"label": "factory:implement-small"}, {"stage": "in-dev"}])
+        self.assertEqual(n["automerge"]["triggers"], ["pull_request.labeled factory:automerge"])  # a PR label
+        self.assertTrue(n["automerge"]["ci-independent"])
+        self.assertEqual(n["automerge"]["outcomes"]["merge"]["effects"][1], {"label": "factory:merge", "on": "pr"})
+        self.assertEqual(graph["schedules"]["retro"], {"cron": "0 2 * * *"})
+        self.assertEqual(graph["environments"]["engine"]["repository"], "primary")
+        self.assertEqual(graph["environments"]["team"]["repository"], "slop-eval-factory")
+
+    def test_config_reads_stages_and_commands_from_the_definition(self):
+        tracker = definition.config(definition.load(self.root))["tracker"]
+        self.assertEqual(tracker["stages"]["in-dev"], "factory:in-dev")
+        self.assertEqual(tracker["stage_kinds"]["done"], "final")
+        self.assertNotIn("pr-merged", tracker["stages"])  # a PR fact is no label
+        self.assertEqual(tracker["commands"]["review-low"], {"pr_label": "factory:review-low"})
+
     def test_compiled_view_passes_engine_checks(self):
         from unittest import mock
         with mock.patch.dict(os.environ, {"FACTORY_TEAM": str(self.root)}):  # restores the caller's value
@@ -376,6 +412,24 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"].update({"reply-x": {"agent": "dev", "triggers": ["manual"],
                                                                             "outcomes": {"done": {}}}}))
         self.assertError("reserved-node: nodes.reply-x")
+
+    def test_fix_and_update_merge_main_on_a_conflicting_pr(self):
+        import config
+        import gate
+        import nodes as nodes_mod
+        from gate_port import MemoryTracker
+        before = config._team
+        config.set_team(self.root)
+        try:
+            n = nodes_mod.load()
+            for conflict, want in ((True, True), (False, False)):
+                t = MemoryTracker({"7": {"stage": "changes-requested", "pr": 5, "head": "h1", "conflict": conflict}})
+                for node in ("fix", "update"):
+                    with self.subTest(node=node, conflict=conflict):
+                        code, out = gate.check(node, {"id": "e1", "ticket": "7"}, t, n, config.load())
+                        self.assertEqual((code, out["merge_main"]), (gate.GO, want))
+        finally:
+            config.set_team(before)
 
     def test_a_person_asks_dev_on_the_pr_and_dev_answers_there(self):
         import config
@@ -482,6 +536,43 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
         self.assertIn("nodes.intake.ready", run.stdout)
         self.assertIn("keep only the label", run.stdout)
+
+
+class SlopBugPathTest(unittest.TestCase):
+    """#161: a bug report goes triage -> investigating, then to in-dev, not-actionable or needs-answers."""
+
+    def run_flow(self, outcome, reason):
+        import config
+        import gate
+        import nodes as nodes_mod
+        from gate_port import MemoryTracker
+        before = config._team
+        config.set_team(ROOT / "tests/fixtures/slop")
+        try:
+            n = nodes_mod.load()
+            t = MemoryTracker({"7": {"stage": "triage"}})
+            self.assertTrue(gate.apply("intake", "bug", {"ticket": "7"}, t, n)[1]["applied"])
+            self.assertEqual(t.facts("7")["stage"], "investigating")
+            code, _ = gate.apply("investigate", outcome, {"ticket": "7", "reason": reason}, t, n)
+            self.assertEqual(code, gate.GO)
+            return t
+        finally:
+            config.set_team(before)
+
+    def test_a_bug_with_a_failing_test_goes_to_in_dev(self):
+        t = self.run_flow("bug", "[factory] Failing test: tests/test_x.py::test_empty; cause: x.py:10")
+        self.assertEqual(t.facts("7")["stage"], "in-dev")
+        self.assertIn("factory:implement-medium", t.facts("7")["attrs"])   # the developer starts on it
+        self.assertIn("tests/test_x.py::test_empty", str(t.tickets["7"].get("log")))
+
+    def test_intended_behaviour_is_not_actionable_with_the_evidence(self):
+        t = self.run_flow("intended", "[factory] Intended: docs/x.md:12 says empty input is rejected")
+        self.assertEqual(t.facts("7")["stage"], "not-actionable")
+        self.assertIn("docs/x.md:12", str(t.tickets["7"].get("log")))
+
+    def test_cannot_reproduce_asks_the_reporter(self):
+        t = self.run_flow("cannot-reproduce", "[factory] Not reproduced. 1. Which version?")
+        self.assertEqual(t.facts("7")["stage"], "needs-answers")
 
 
 if __name__ == "__main__":

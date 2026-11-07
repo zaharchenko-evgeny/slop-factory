@@ -30,6 +30,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
+import definition
 import github_tracker
 import nodes as nodes_mod
 import project as project_mod
@@ -417,7 +418,7 @@ def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
 
 # Nodes planned once per project repository when `write_mode` is `per-repo` (default) and the project has several
 # repositories: Air pushes only to an automation's primary repository. Only triage sees every repository.
-PER_REPO = ("implement", "fix", "update", "review", "join", "merge", "finish")
+PER_REPO = definition.PER_REPO
 WRITE_TOKEN_SECRET = github_tracker.WRITE_TOKEN  # `write_mode: token`: the project-repository write token, by name only
 
 
@@ -435,20 +436,25 @@ def plan_air(nodes: dict, config: dict) -> dict:
     prefix = f"[{project_name(config)}] "
     automations = []
     used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
-    import definition
-    # ADR-0021: a definition's environments list their repositories; there are no per-repository copies
-    per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(config["repositories"]) > 1 \
-        and not definition.present(config_mod.team_root())
     unscoped = set()  # environments some automation shares across the project
     scoped = []  # (env, repository name, node) of the per-repository or per-node automations
     defn = definition.load(config_mod.team_root()) if definition.present(config_mod.team_root()) else None
+    # ADR-0021: a definition's environments list their repositories, so only a code repository that is `main` in an
+    # environment gets per-repository automations, in that environment
+    code_envs = definition.per_repo_envs(defn) if defn else {}
+    code_scopes = [r for r in config["repositories"] if definition.full_name(r["url"]) in
+                   {definition.full_name(c) for c in code_envs}] if defn else config["repositories"]
+    per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(code_scopes) > 1
+    if per_repo:
+        used += [e for e in code_envs.values() if e not in used]
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
-        scopes = config["repositories"] if per_repo and name in PER_REPO else [None]
+        scopes = code_scopes if per_repo and definition.per_repo_node(name) else [None]
         for scope, (aname, tier_arg, tier, focus) in [(sc, v) for sc in scopes
                                                       for v in variants(name, n, roles, agents.get(name))]:
-            env = n["env"]
+            env = next((e for r, e in code_envs.items() if scope and definition.full_name(r) == definition.full_name(scope["url"])),
+                       n["env"])  # a definition: the environment where the scope repository is `main`
             agent, _, model = air[tier].partition("/")
             trig = []
             webhook = any(str(t).startswith("webhook ") for t in n["triggers"])
@@ -466,7 +472,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
             scope_name = scope["name"] if scope else None
-            env_scope = None if focus == "knowledge" else scope_name  # a knowledge review runs in the team's own environment
+            env_scope = None if focus == "knowledge" or defn else scope_name  # a knowledge review runs in the team's own environment
             # A node with custom MCP servers runs in an environment of its own: setup writes `.mcp.json` per environment
             env_node = name if defn and focus != "knowledge" and definition.mcp_custom(definition.mcp(defn, name)) else None
             if env_scope or env_node:
