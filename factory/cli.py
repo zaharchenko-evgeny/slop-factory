@@ -325,8 +325,46 @@ def pop_team(argv):
     return team, argv
 
 
+def report_crash(cmd, error, run=subprocess.run):
+    """In an Air run (FACTORY_ENV set), open `Doctor: factory <cmd> crashes` unless one is open (#984). Only `gh` and
+    the checkout's remote: it must work when the engine files themselves are missing."""
+    if not os.environ.get("FACTORY_ENV"):
+        return
+    gh = lambda *a: run(["gh", *a], capture_output=True, text=True, timeout=60)  # noqa: E731
+    try:
+        repo = os.environ.get("GITHUB_REPOSITORY") or gh("repo", "view", "--json", "nameWithOwner", "-q",
+                                                         ".nameWithOwner").stdout.strip()
+        title = f"Doctor: factory {cmd or 'help'} crashes"
+        found = gh("issue", "list", "-R", repo, "--state", "open", "--search", f'"{title}" in:title',
+                   "--json", "title", "-q", ".[].title").stdout.splitlines()
+        if title not in found:
+            try:  # the triage label comes from the vocabulary, which needs the engine files: none when they are missing
+                import doctor
+                label = doctor.triage_label()
+            except Exception:
+                label = None
+            gh("issue", "create", "-R", repo, "--title", title, *(["--label", label] if label else []), "--body",
+               f"[factory] `factory {cmd}` crashed in Air environment `{os.environ['FACTORY_ENV']}`: "
+               f"`{type(error).__name__}: {str(error)[:500]}`. Every node that runs this command fails until it is "
+               f"fixed.\n\nFactory-Run: {os.environ.get('FACTORY_NODE') or 'factory'}")
+    except Exception as e:  # the crash itself is what matters; never hide it behind a reporting error
+        print(f"factory: could not report the crash: {e}", file=sys.stderr)
+
+
 def main(argv=None):
-    team, argv = pop_team(sys.argv[1:] if argv is None else argv)
+    args = sys.argv[1:] if argv is None else argv
+    try:
+        return _main(args)
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        rest = [a for a in args if not a.startswith("--team")]
+        report_crash(rest[0] if rest else "", e)
+        raise
+
+
+def _main(argv):
+    team, argv = pop_team(argv)
     cmd, rest = (argv[0], argv[1:]) if argv else ("", [])
     if cmd == "sweep" and "--main" in rest:
         engine = from_main()
