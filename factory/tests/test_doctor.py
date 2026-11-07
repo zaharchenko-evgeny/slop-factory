@@ -4,6 +4,7 @@
 # dependencies = ["pyyaml>=6"]
 # ///
 """Unit tests for factory/doctor.py with a stubbed gh. Run: uv run --quiet factory/tests/test_doctor.py"""
+import base64
 import contextlib
 import io
 import json
@@ -57,6 +58,10 @@ class FakeGh:
             return "log line"
         if args[0] == "api" and args[-1].endswith("/commits/main"):
             return json.dumps({"sha": "b" * 40, "parents": [{"sha": "a" * 40}]})
+        if args[0] == "api" and "contents/" in args[-1]:
+            path = args[-1].split("contents/", 1)[1]
+            content = (ROOT / path).read_text()
+            return json.dumps({"content": base64.b64encode(content.encode()).decode()})
         if args[0] == "api" and "/issues/" in args[-1] and not args[-1].endswith("timeline"):
             return json.dumps({"id": 999})
         return ""

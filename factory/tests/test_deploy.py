@@ -5,6 +5,7 @@
 # ///
 """Tests for factory/deploy.py. Run: uv run factory/tests/test_deploy.py
 Regenerate the fixture: UPDATE_FIXTURE=1 uv run factory/tests/test_deploy.py"""
+import base64
 import contextlib
 import copy
 import io
@@ -531,6 +532,39 @@ class ApplyTest(unittest.TestCase):
         apply.assert_called_once()
         issues.assert_not_called()
         gate_issues.assert_not_called()
+
+
+class CommentWakeDeployTest(unittest.TestCase):
+    def test_apply_installs_files_once_in_every_configured_github_repository(self):
+        files = {}
+        writes = []
+
+        def gh(args):
+            endpoint = next((x for x in args if x.startswith("repos/") and "/contents/" in x), None)
+            if not endpoint:
+                raise AssertionError(args)
+            if "-X" not in args:
+                if endpoint not in files:
+                    raise RuntimeError("HTTP 404: Not Found")
+                return json.dumps({"sha": "sha", "content": base64.b64encode(files[endpoint].encode()).decode()})
+            content = next(x.split("=", 1)[1] for x in args if x.startswith("content="))
+            files[endpoint] = base64.b64decode(content).decode()
+            writes.append(endpoint)
+            return "{}"
+
+        settings = {"repositories": [
+            {"name": "main", "url": "https://github.com/o/main", "role": "primary"},
+            {"name": "app", "url": "https://github.com/o/app", "role": "project"},
+        ]}
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(deploy.sync_comment_wake_files(settings, gh, True), 0)
+            self.assertEqual(deploy.sync_comment_wake_files(settings, gh, True), 0)
+        self.assertEqual(len(writes), 4)
+        self.assertEqual(set(files), {
+            f"repos/o/{repo}/contents/{path}"
+            for repo in ("main", "app") for path in deploy.COMMENT_WAKE_FILES
+        })
 
 
 class BackendTest(unittest.TestCase):

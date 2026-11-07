@@ -12,6 +12,7 @@ Needs `FACTORY_ENV` (read, write, ops) for the tool check. Also one `env:<NAME>`
 environment declares: `ok` when set and non-empty, `missing` otherwise. In the environments that write to the
 `role: project` repositories, one `write:label:<owner/repo>` probe per such repository.
 """
+import base64
 import json
 import os
 import shutil
@@ -116,6 +117,10 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
         results.append({"probe": "setup", "result": "denied", "detail": str(e)[:200]})
     finally:
         results += cleanup(repo, made, run)
+    try:
+        results += comment_wake_probes(config.load(), run)
+    except Exception as e:
+        results.append({"probe": "project-files", "result": "denied", "detail": str(e)[:200]})
     tools, skills = env_needs(env, nodes)
     for t in tools:
         results.append({"probe": f"tool:{t}", "result": "ok" if which(t) else "missing", "detail": env})
@@ -150,6 +155,24 @@ def project_write_probes(settings, env, run, environ=os.environ):
                 run(["label", "delete", label, "-R", repo, "--yes"])
             except Exception as e:
                 results.append({"probe": "cleanup", "result": "denied", "detail": f"label delete {repo}: {e}"[:200]})
+    return results
+
+
+def comment_wake_probes(settings, run):
+    """Check that each GitHub project repository has the current comment wake workflow and script."""
+    import deploy
+    expected = {path: (deploy.ROOT / path).read_text() for path in deploy.COMMENT_WAKE_FILES}
+    results = []
+    repos = ["/".join(r["url"].rstrip("/").split("/")[-2:]) for r in settings.get("repositories", [])
+             if r.get("role") in ("primary", "project") and "github.com" in r.get("url", "")]
+    for repo in repos:
+        for path, text in expected.items():
+            name = f"project-file:{repo}/{path}"
+            def check(repo=repo, path=path, text=text):
+                data = json.loads(run(["api", f"repos/{repo}/contents/{path}"]))
+                if base64.b64decode(data.get("content", "")).decode() != text:
+                    raise RuntimeError("file content differs from factory source")
+            probe(results, name, check)
     return results
 
 

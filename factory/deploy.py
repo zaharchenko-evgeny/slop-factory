@@ -14,6 +14,7 @@ place (same id) to NEW instead of creating NEW and deleting OLD.
 air: {"automations": [...], "environments": [...]}: one automation per enabled node (per tier or focus
      where the node has them) and one environment per environment in use, for the factory-deploy skill.
 """
+import base64
 import fnmatch
 import json
 import time
@@ -547,6 +548,42 @@ def actions_files(nodes: dict, config: dict) -> dict:
             files[f".github/workflows/factory-{name}.yml"] = ACTIONS_WORKFLOW.format(
                 name=name, project=project_name(config), cron=cron, wake=wake, run=n["run"].replace("uv run factory/cli.py", "uv run --quiet factory/cli.py"))
     return files
+
+
+COMMENT_WAKE_FILES = (".github/workflows/comment-wake-label.yml", "scripts/comment-wake-label.sh")
+
+
+def sync_comment_wake_files(config: dict, run, apply: bool) -> int:
+    """Install the comment wake workflow and its script in every configured GitHub project repository."""
+    files = {path: (ROOT / path).read_text() for path in COMMENT_WAKE_FILES}
+    repositories = [r for r in config.get("repositories", []) if "github.com" in r["url"]]
+    for repo in repositories:
+        name = repository(repo)["fullName"]
+        for path, text in files.items():
+            endpoint = f"repos/{name}/contents/{path}"
+            try:
+                current = json.loads(run(["api", endpoint]))
+                old = base64.b64decode(current.get("content", "")).decode()
+                if old == text:
+                    continue
+                action = "update"
+            except Exception as error:
+                if "HTTP 404" not in str(error):
+                    print(f"error: cannot read {name}/{path}: {error}", file=sys.stderr)
+                    return 1
+                current, action = {}, "create"
+            print(f"{action} project file {name}/{path}")
+            if apply:
+                args = ["api", "-X", "PUT", endpoint, "-f", "message=Install factory comment wake workflow",
+                        "-f", f"content={base64.b64encode(text.encode()).decode()}"]
+                if current.get("sha"):
+                    args += ["-f", f"sha={current['sha']}"]
+                try:
+                    run(args)
+                except Exception as error:
+                    print(f"error: cannot write {name}/{path}: {error}", file=sys.stderr)
+                    return 1
+    return 0
 
 
 # The token is the built-in github.token while the factory repository is also the target (#339); labels it sets wake Air.
@@ -1163,7 +1200,10 @@ def main(argv: list[str]) -> int:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
             run = github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config))
             code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run)
-            return code or write_files(plan["files"], argv[0] == "--apply")
+            if code:
+                return code
+            code = write_files(plan["files"], argv[0] == "--apply")
+            return code or sync_comment_wake_files(config, run, argv[0] == "--apply")
         finally:
             for server in servers:
                 server.close()
