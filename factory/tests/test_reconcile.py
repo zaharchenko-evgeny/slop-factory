@@ -45,6 +45,18 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(results[0]["node"], "review")
         self.assertIn('"factory:review-behaviour"', logged(t, "label"))
 
+    def test_landed_review_marker_reapplies_outcome_without_refiring_reviewer(self):
+        ticket = {"stage": "in-review", "pr": 5, "pr_state": "open", "ci": "green", "since": OLD,
+                  "head": "abc", "pr_labels": ["factory:review-behaviour"],
+                  "log": [["label", '"factory:review-behaviour"']],
+                  "reviews": [{"agent": True, "focus": "behaviour", "verdict": "changes",
+                               "commit_id": "abc", "round": 1}]}
+        t, results, failed = run(ticket)
+        self.assertFalse(failed)
+        self.assertEqual((results[0]["reconcile"], results[0]["node"], results[0]["outcome"]),
+                         ("reapply", "review", "changes"))
+        self.assertNotIn("factory:review-behaviour", t.facts(1)["pr_labels"])
+
     def test_stale_review_label_without_review_refired(self):
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": FRESH,
                              "focus_missing": ["behaviour"],
@@ -279,6 +291,19 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual([r["reconcile"] for r in results], ["conflict"])
         self.assertEqual(logged(t, "label"), ['"factory:fix"'])
         self.assertEqual(t.get_stage(t.tickets[1]), "changes-requested")
+
+    def test_landed_review_marker_replays_the_reported_outcome_of_the_definition(self):
+        """The review is named after its node; a split approval replays the outcome its marker names."""
+        review = {"agent": True, "focus": "review-high", "verdict": "approve", "outcome": "approve-risky",
+                  "commit_id": "abc123def4567", "round": 1}
+        t, results = self.recover(self.pr(ci="green", attrs=["risk:high"], pr_labels=["factory:review-high"],
+                                          label_at={"factory:review-high": OLD}, reviews=[review]))
+        self.assertEqual([(r["reconcile"], r["node"], r["outcome"]) for r in results],
+                         [("reapply", "review-high", "approve-risky")])
+        self.assertEqual(t.get_stage(t.tickets[1]), "approved")
+        self.assertNotIn("factory:review-high", t.facts(1)["pr_labels"])
+        self.assertIn('"factory:needs-human"', logged(t, "label"))
+        self.assertNotIn("factory:review-low", logged(t, "label"))
 
     def test_conflict_uses_the_fix_stage_of_the_definition(self):
         import copy

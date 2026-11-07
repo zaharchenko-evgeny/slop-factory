@@ -143,6 +143,20 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 if age <= timedelta(minutes=default):
                     continue
             else:
+                replay = gate.stale_review_plan(facts) if stage == "in-review" else None
+                if replay:
+                    node, outcome, payload = replay
+                    if age <= timedelta(minutes=nodes["nodes"][node].get("timeout_minutes", default)):
+                        continue
+                    r = {"ticket": n, "stage": stage, "node": node, "outcome": outcome,
+                         "reconcile": "reapply", "why": "review marker landed at the head; finish its outcome"}
+                    results.append(r)
+                    if not dry_run:
+                        _, out = gate.apply(node, outcome, {"ticket": n, **payload, "run_id": RUN}, tracker, nodes)
+                        r.update(applied=out["applied"], written=out.get("written", []))
+                    if progress:
+                        progress(r)
+                    continue
                 step = next((w for w in wakes(nodes, facts)
                              if age > timedelta(minutes=nodes["nodes"][w[0]].get("timeout_minutes", default))), None)
                 stale_reviews = [label for label, at in facts.get("review_labels", [])
@@ -291,6 +305,19 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             ago = lambda at: now - datetime.fromisoformat(at.replace("Z", "+00:00"))  # noqa: E731
             step = None
             on_pr = facts.get("pr_labels") or []
+            replay = gate.stale_review_plan(facts, defn["workflow"]) if stage == "in-review" else None
+            if replay:  # the review landed at this head but its outcome did not finish: apply it, never re-fire the reviewer
+                node, outcome, payload = replay
+                if ago(since) > timedelta(minutes=nodes[node].get("timeout_minutes", default)):
+                    r = {"ticket": n, "stage": stage, "node": node, "outcome": outcome, "reconcile": "reapply",
+                         "why": "review marker landed at the head; finish its outcome"}
+                    results.append(r)
+                    if not dry_run:
+                        _, out = gate.apply(node, outcome, {"ticket": n, **payload, "run_id": RUN}, tracker, defn["workflow"])
+                        r.update(applied=out["applied"], written=out.get("written", []))
+                    if progress:
+                        progress(r)
+                continue
             if (fix and facts.get("conflict") and facts.get("pr") and facts.get("pr_state") in (None, "none", "open")
                     and fix[1] not in on_pr and gate.holds(nodes[fix[0]].get("when") or {}, facts, {})
                     and ago(since) > timedelta(minutes=default)):
