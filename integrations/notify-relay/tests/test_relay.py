@@ -9,7 +9,7 @@ BODY = """Option 2 please.
 On Sat, 7 Nov 2026 at 10:00, Factory <factory@example.com> wrote:
 > Which option?
 > 1. wait
--- 
+--\x20
 Ann
 """
 
