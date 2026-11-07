@@ -32,9 +32,11 @@ RED_TITLE = re.compile(r"Main is red(?: in Air)?: (.+)")
 FACTS_ERROR = f"{PREFIX} ticket facts failed:"
 
 
-def ticket_error(tracker, number, error):
+def ticket_error(tracker, number, error, dry_run=False):
     """Report a ticket-local read failure once, without preventing the next ticket from running."""
     result = {"ticket": number, "error": f"{type(error).__name__}: {error}"}
+    if dry_run:
+        return result
     try:
         store = getattr(tracker, "tickets", None)
         if hasattr(store, "comments"):
@@ -166,7 +168,7 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 progress(r)
         except Exception as e:  # one ticket failing does not stop the others
             failed = True
-            results.append(ticket_error(tracker, n, e))
+            results.append(ticket_error(tracker, n, e, dry_run))
             if progress:
                 progress(results[-1])
     return results, failed
@@ -279,7 +281,7 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             if progress:
                 progress(r)
         except Exception as e:  # one ticket failing does not stop the others
-            results.append(ticket_error(tracker, n, e))
+            results.append(ticket_error(tracker, n, e, dry_run))
             if progress:
                 progress(results[-1])
     return results

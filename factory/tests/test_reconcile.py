@@ -323,6 +323,19 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(sum("ticket facts failed" in value for kind, value in tracker.tickets[1]["log"]
                              if kind == "comment"), 1)
 
+    def test_bad_ticket_dry_run_does_not_post_a_comment(self):
+        class BadTicketTracker(MemoryTracker):
+            def stale_facts(self, ticket):
+                raise ValueError("ticket names unknown repositories: fixture")
+
+        tracker = BadTicketTracker({1: {"stage": "ready"}})
+        config = self.config["tracker"]
+        results = reconcile.recover_definition(tracker, self.defn, list(config["stages"]),
+                                               config.get("stage_kinds", {}), self.config["limits"],
+                                               now=NOW, dry_run=True)
+        self.assertIn("error", results[0])
+        self.assertEqual(tracker.tickets[1].get("log", []), [])
+
 
 if __name__ == "__main__":
     unittest.main()
