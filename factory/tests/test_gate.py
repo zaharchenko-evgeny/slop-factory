@@ -1761,5 +1761,120 @@ class CiSyncTest(unittest.TestCase):
         self.assertEqual((results[0]["repo"], results[1]["added"], host.edits), ("o/missing", [self.GREEN], []))
 
 
+class DefinitionDeliveryTest(unittest.TestCase):
+    """The delivery scenarios of the removed name-keyed tests, on the definition fixture (ADR-0021): each outcome of
+    `fixtures/v2/workflow.yaml` does what its effects say, and the gate refuses it when its guards do not hold."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.previous = cfg.team_root()
+        cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
+        cls.graph, cls.config = nodes.load(), cfg.load()
+
+    @classmethod
+    def tearDownClass(cls):
+        cfg.set_team(cls.previous)
+
+    def apply(self, node, outcome, facts, **payload):
+        tr = MemoryTracker({"7": {"head": "abc", "ci": "green", "pr": 9, "pr_state": "open", **facts}})
+        status, out = gate.apply(node, outcome, {"ticket": "7", "event": "e", **payload}, tr, self.graph)
+        return tr, status, out
+
+    def log(self, tr, kind):
+        return [json.loads(v) for k, v in tr.tickets["7"].get("log", []) if k == kind]
+
+    def test_implement_done_starts_the_review_its_risk_needs(self):
+        for outcome, risk in (("done-low", "low"), ("done-high", "high")):
+            with self.subTest(outcome=outcome):
+                tr, status, _ = self.apply("implement-large", outcome, {"stage": "in-dev", "attrs": ["factory:implement-large"]})
+                t = tr.tickets["7"]
+                self.assertEqual((status, t["stage"]), (gate.GO, "in-review"))
+                self.assertEqual(t["pr_labels"], [f"factory:review-{risk}"])  # the review waits for CI itself
+                self.assertIn(f"risk:{risk}", t["attrs"])
+                self.assertNotIn("factory:implement-large", t["attrs"])
+
+    def test_fix_done_returns_to_review_and_removes_its_label(self):
+        for stage in ("changes-requested", "in-review", "approved"):
+            with self.subTest(stage=stage):
+                tr, status, _ = self.apply("fix", "done-high", {"stage": stage, "attrs": ["factory:fix"], "pr_labels": ["factory:fix"]})
+                t = tr.tickets["7"]
+                self.assertEqual((status, t["stage"]), (gate.GO, "in-review"))
+                self.assertIn("factory:review-high", t["pr_labels"])
+                self.assertNotIn("factory:fix", t["attrs"])
+
+    def test_fix_starts_only_below_the_round_cap_from_a_reviewable_stage(self):
+        event = {"id": "e", "ticket": "7"}
+        for facts, go in (({"stage": "changes-requested"}, True),
+                          ({"stage": "changes-requested", "fix_rounds": 2}, True),
+                          ({"stage": "changes-requested", "fix_rounds": 3}, False),  # the cap is 3
+                          ({"stage": "in-dev"}, False)):
+            with self.subTest(facts=facts):
+                tr = MemoryTracker({"7": {"head": "abc", "pr": 9, **facts}})
+                code, out = gate.check("fix", event, tr, self.graph, self.config)
+                self.assertEqual((code == gate.GO, out["merge_main"]), (go, False))
+
+    def test_fix_done_is_refused_for_a_seen_event_or_after_the_stage_moved(self):
+        tr, status, out = self.apply("fix", "done-low", {"stage": "changes-requested", "seen": ["e"]})
+        self.assertEqual((status, out["reason"]), (gate.NO_GO, "duplicate event"))
+        tr, status, out = self.apply("fix", "done-low", {"stage": "in-dev"})
+        self.assertEqual((status, tr.tickets["7"]["stage"]), (gate.NO_GO, "in-dev"))
+
+    def test_conflict_goes_to_the_update_node_and_resolved_goes_to_automerge(self):
+        tr, status, _ = self.apply("merge", "conflict", {"stage": "approved", "conflict": True, "attrs": ["factory:merge"]})
+        t = tr.tickets["7"]
+        self.assertEqual((status, t["stage"]), (gate.GO, "changes-requested"))
+        self.assertEqual(t["pr_labels"], ["factory:update"])
+        self.assertNotIn("factory:merge", t["attrs"])
+        tr, status, _ = self.apply("update", "resolved", {"stage": "changes-requested", "attrs": ["factory:update"]})
+        self.assertEqual((status, tr.tickets["7"]["stage"], tr.tickets["7"]["pr_labels"]), (gate.GO, "approved", ["factory:automerge"]))
+        tr, status, _ = self.apply("update", "resolved", {"stage": "approved"})  # not a conflict round
+        self.assertEqual((status, tr.tickets["7"]["stage"]), (gate.NO_GO, "approved"))
+
+    def test_merge_node_merges_an_approved_head_and_does_not_update_without_a_conflict(self):
+        approved = {"stage": "approved", "reviews": [{"agent": True, "commit_id": "abc", "verdict": "approve"}]}
+        tr = MemoryTracker({"7": {"head": "abc", "ci": "green", "pr": 9, "pr_state": "open", **approved}})
+        status, out = gate.decide("merge", "7", tr, self.graph)
+        self.assertEqual((out["outcome"], self.log(tr, "merge")), ("merged", ["match-head"]))
+        tr = MemoryTracker({"7": {"head": "abc", "ci": "pending", "pr": 9, "pr_state": "open", **approved}})
+        self.assertEqual(gate.decide("merge", "7", tr, self.graph)[1]["outcome"], "waiting")
+        self.assertEqual(self.log(tr, "merge"), [])
+
+    def test_automerge_waits_for_a_person_above_low_risk(self):
+        tr, status, _ = self.apply("automerge", "merge", {"stage": "approved", "attrs": ["risk:low", "factory:automerge"]})
+        t = tr.tickets["7"]
+        self.assertEqual((status, t["stage"], t["pr_labels"]), (gate.GO, "approved", ["factory:merge"]))
+        self.assertNotIn("factory:needs-human", t["attrs"])
+        tr, status, _ = self.apply("automerge", "merge", {"stage": "approved", "attrs": ["risk:high", "factory:automerge"]},
+                                   reason="[factory] merge PR 9")
+        t = tr.tickets["7"]
+        self.assertEqual((status, t["stage"], t.get("pr_labels", [])), (gate.GO, "approved", []))
+        self.assertIn("factory:needs-human", t["attrs"])
+        self.assertIn("[factory] merge PR 9", self.log(tr, "comment")[0])
+        self.assertNotIn("factory:automerge", t["attrs"])
+
+    def test_blocked_stops_the_ticket_with_a_comment_for_the_owner(self):
+        tr, status, _ = self.apply("implement-small", "blocked", {"stage": "in-dev"}, reason="[factory] stuck")
+        t = tr.tickets["7"]
+        self.assertEqual((status, t["stage"]), (gate.GO, "blocked"))
+        self.assertIn("[factory] stuck", self.log(tr, "comment")[0])
+        self.assertEqual(t["assignees"], [cfg.owner(self.config)])
+
+    def test_review_changes_asks_for_a_fix_and_a_moved_head_is_refused(self):
+        tr, status, _ = self.apply("review-high", "changes", {"stage": "in-review"}, head="old")
+        self.assertEqual((status, tr.tickets["7"]["stage"]), (gate.NO_GO, "in-review"))  # the head moved since the review began
+        tr, status, _ = self.apply("review-high", "changes", {"stage": "in-review"}, findings=[{"id": "B1"}])
+        t = tr.tickets["7"]
+        self.assertEqual((status, t["stage"], t["pr_labels"]), (gate.GO, "changes-requested", ["factory:fix"]))
+        self.assertEqual(self.log(tr, "review"), ["request-changes-at-head"])
+
+    def test_finish_waits_until_the_pr_is_merged(self):
+        open_pr = MemoryTracker({"7": {"stage": "approved", "pr_state": "open"}})
+        self.assertEqual(gate.decide("finish", "7", open_pr, self.graph)[1]["outcome"], "waiting")
+        self.assertEqual(open_pr.tickets["7"]["stage"], "approved")
+        merged = MemoryTracker({"7": {"stage": "approved", "pr_state": "merged"}})
+        self.assertEqual(gate.decide("finish", "7", merged, self.graph)[1]["outcome"], "done")
+        self.assertEqual(merged.tickets["7"]["stage"], "done")
+
+
 if __name__ == "__main__":
     unittest.main()
