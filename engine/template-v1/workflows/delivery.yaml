@@ -78,8 +78,6 @@ nodes:
         - comment: reason
         - state: not-actionable
       bug:
-        enabled: false
-        ticket: 161
         effects:
         - state: investigating
   start:
@@ -103,8 +101,6 @@ nodes:
         - state: in-dev
   investigate:
     env: write
-    enabled: false
-    ticket: 161
     wakes_on:
     - state investigating
     when:

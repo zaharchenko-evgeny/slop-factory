@@ -21,7 +21,7 @@ flowchart LR
     N_human["<b>human</b><br/>on: a person<br/>human"]:::node
     N_intake["<b>intake</b><br/>on: issue +factory:triage<br/>router · cheap"]:::node
     N_start["<b>start</b><br/>on: issue +factory:ready<br/>script"]:::node
-    N_investigate["<b>investigate</b> (#161)<br/>on: issue +factory:investigating<br/>developer · mid"]:::planned
+    N_investigate["<b>investigate</b><br/>on: issue +factory:investigating<br/>developer · mid"]:::node
     N_implement["<b>implement</b><br/>on: issue +factory:implement-{cheap|mid|strong}<br/>developer · cheap|mid|strong"]:::node
     N_adopt["<b>adopt</b> (#160)<br/>on: PR +factory:adopt<br/>router · cheap"]:::planned
     N_review["<b>review</b><br/>on: PR +factory:review-<focus><br/>on: PR +factory:rereview-<focus><br/>reviewer · review tiers"]:::node
@@ -72,14 +72,13 @@ flowchart LR
     N_intake -- "grill" --> S_needs_answers
     N_intake -- "split" --> S_split
     N_intake -- "not-actionable" --> S_not_actionable
-    S_triage -.-> N_intake
-    N_intake -. "bug (#161)" -.-> S_investigating
+    N_intake -- "bug" --> S_investigating
     S_ready --> N_start
     N_start -- "started +factory:implement-{tier}" --> S_in_dev
-    S_investigating -.-> N_investigate
-    N_investigate -. "bug" -.-> S_in_dev
-    N_investigate -. "intended" -.-> S_not_actionable
-    N_investigate -. "cannot-reproduce" -.-> S_needs_answers
+    S_investigating --> N_investigate
+    N_investigate -- "bug" --> S_in_dev
+    N_investigate -- "intended" --> S_not_actionable
+    N_investigate -- "cannot-reproduce" --> S_needs_answers
     S_in_dev --> N_implement
     N_implement -- "done" --> S_in_review
     N_implement -- "error +factory:implement-{next}" --> S_in_dev
@@ -137,9 +136,9 @@ flowchart LR
 | Node | Starts on | Writes (labels it adds, stage it sets) | Role · tier | Status |
 |---|---|---|---|---|
 | `human` | `a person` | triage: → triage<br>ready: → ready | human | built |
-| `intake` | `issue +factory:triage` | proceed: → ready<br>grill: → needs-answers<br>split: → split<br>not-actionable: → not-actionable<br>bug: → investigating (planned #161) | router · cheap | built |
+| `intake` | `issue +factory:triage` | proceed: → ready<br>grill: → needs-answers<br>split: → split<br>not-actionable: → not-actionable<br>bug: → investigating | router · cheap | built |
 | `start` | `issue +factory:ready` | started: +factory:implement-{tier} → in-dev | script | built |
-| `investigate` | `issue +factory:investigating` | bug: → in-dev<br>intended: → not-actionable<br>cannot-reproduce: → needs-answers | developer · mid | planned #161 |
+| `investigate` | `issue +factory:investigating` | bug: → in-dev<br>intended: → not-actionable<br>cannot-reproduce: → needs-answers | developer · mid | built |
 | `implement` | `issue +factory:implement-{cheap|mid|strong}` | done: → in-review<br>error: +factory:implement-{next} → in-dev<br>blocked: → blocked<br>failed: → blocked<br>env-broken: → ready | developer · cheap/mid/strong | built |
 | `adopt` | `PR +factory:adopt` | adopted: → in-review | router · cheap | planned #160 |
 | `review` | `PR +factory:review-<focus>`<br>`PR +factory:rereview-<focus>` | approve: —<br>changes: — | reviewer · per focus | built |
