@@ -131,16 +131,21 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
 
 def project_write_probes(settings, env, run, environ=os.environ):
     """In an environment that writes with the project token (github_tracker.token_env), one `write:label:<owner/repo>` probe per `role: project` repository: create
-    a probe label, then delete it, with $FACTORY_WRITE_TOKEN when it is set (github_tracker.ProjectWriteRun). In
-    `write_mode: token` a missing token is a `fail`, and nothing is written."""
+    a probe label, then delete it, with the issues token (`issues_token_env`) or $FACTORY_WRITE_TOKEN when it is set
+    (github_tracker.ProjectWriteRun). With `issues_token_env` or `write_mode: token`, a missing token is a `fail` that
+    names the secret, and nothing is written."""
     if not github_tracker.token_env(env, settings):
         return []
     repos = github_tracker.project_repositories(settings)
-    run = github_tracker.ProjectWriteRun(run, repos, environ)
+    issues = settings.get("issues_token_env")
+    run = github_tracker.ProjectWriteRun(run, repos, environ, issues)
     results = []
     for repo in repos:
         name = f"write:label:{repo}"
-        if settings.get("write_mode") == "token" and not environ.get(github_tracker.WRITE_TOKEN):
+        if issues and not environ.get(issues) and not environ.get(github_tracker.WRITE_TOKEN):
+            results.append({"probe": name, "result": "fail", "detail": f"{issues} is not set (issues_token_env)"})
+            continue
+        if not issues and settings.get("write_mode") == "token" and not environ.get(github_tracker.WRITE_TOKEN):
             results.append({"probe": name, "result": "fail", "detail": f"{github_tracker.WRITE_TOKEN} is not set (write_mode: token)"})
             continue
         label = f"factory-doctor-probe-{uuid.uuid4().hex[:12]}"

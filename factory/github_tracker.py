@@ -113,7 +113,8 @@ def token_env(env, config):
     """Whether `env` writes project repositories with WRITE_TOKEN: it declares the secret (a definition team), or it
     is one of WRITE_TOKEN_ENVS (the old layout)."""
     declared = ((config.get("environments") or {}).get(env) or {}).get("secrets") or []
-    return WRITE_TOKEN in declared or env in WRITE_TOKEN_ENVS
+    issues = config.get("issues_token_env")
+    return WRITE_TOKEN in declared or env in WRITE_TOKEN_ENVS or bool(issues and issues in declared)
 WRITE_VERBS = {"create", "edit", "merge", "review", "comment", "close", "reopen", "delete", "ready", "update-branch"}
 
 
@@ -142,14 +143,16 @@ def gh_writes(args):
 
 
 class ProjectWriteRun:
-    """Wrap a `gh` runner: a write to one of `repositories` runs with $FACTORY_WRITE_TOKEN as its GH_TOKEN, when
-    that is set; every other call, and every call without it, runs as before."""
+    """Wrap a `gh` runner: a write to one of `repositories` runs with the issues token (the variable named by the
+    `issues_token_env` setting) as its GH_TOKEN, else with $FACTORY_WRITE_TOKEN, when one is set; every other
+    call, and every call without a token, runs as before."""
 
-    def __init__(self, run, repositories, environ=os.environ):
+    def __init__(self, run, repositories, environ=os.environ, issues_token_env=None):
         self.run, self.repositories, self.environ = run, {r.lower() for r in repositories}, environ
+        self.issues_token_env = issues_token_env
 
     def __call__(self, args, **kw):
-        token = self.environ.get(WRITE_TOKEN)
+        token = (self.issues_token_env and self.environ.get(self.issues_token_env)) or self.environ.get(WRITE_TOKEN)
         if token and gh_writes(args) and (gh_target(args) or "").lower() in self.repositories:
             kw["token"] = token
         return self.run(args, **kw)

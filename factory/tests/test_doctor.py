@@ -112,6 +112,19 @@ class ProjectWriteProbeTest(unittest.TestCase):
         self.assertEqual(gh.calls[0][2], gh.calls[1][2])
         self.assertEqual(gh.tokens, ["pat", "pat"])
 
+    def test_issues_token_probe_uses_the_issues_token_and_names_a_missing_secret(self):
+        settings = {**self.SETTINGS, "write_mode": "per-repo", "issues_token_env": "FACTORY_ISSUES_TOKEN",
+                    "environments": {"read": {"secrets": ["FACTORY_ISSUES_TOKEN"]}}}
+        gh = FakeGh()
+        got = doctor.project_write_probes(settings, "read", gh, {"FACTORY_ISSUES_TOKEN": "iss"})
+        self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])
+        self.assertEqual(gh.tokens, ["iss", "iss"])
+        gh = FakeGh()
+        got = doctor.project_write_probes(settings, "read", gh, {})
+        self.assertEqual(got, [{"probe": "write:label:o/app", "result": "fail",
+                                "detail": "FACTORY_ISSUES_TOKEN is not set (issues_token_env)"}])
+        self.assertEqual(gh.calls, [])
+
     def test_an_environment_that_declares_the_token_is_probed_whatever_its_name(self):
         settings = {**self.SETTINGS, "environments": {"engine": {"secrets": ["FACTORY_WRITE_TOKEN"]}, "team": {"secrets": []}}}
         got = doctor.project_write_probes(settings, "engine", FakeGh(), {"FACTORY_WRITE_TOKEN": "pat"})
