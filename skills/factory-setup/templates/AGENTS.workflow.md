@@ -16,8 +16,10 @@ change, whether you are a person, a pi session or a factory role.
    `draft → triage → ready → in-dev → in-review → approved → merged → done`, with
    `changes-requested` for a fix round and `blocked` or `failed` when a run
    stops. `triage` starts the router; `ready` starts a developer once every
-   blocker is closed. The next ticket to work on comes from the frontier: open, `ready`,
-   every blocker closed, unclaimed (no assignee), in map order.
+   blocker is closed (workflow `blockers: start`, the default). With `blockers: merge` the developer
+   starts at once and the merge waits until every blocker is closed. The next ticket to work on comes from
+   the frontier: open, `ready`, every blocker closed in `start` mode (any blocker state in `merge` mode),
+   unclaimed (no assignee), in map order.
 3. **Size and splits.** Estimate size as lines a reviewer must read: added
    lines plus modified lines, counting tests and fixtures. Exclude paths listed
    in `engine/defaults.yaml` under `limits.generated_paths`; verify those files
