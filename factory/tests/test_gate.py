@@ -66,6 +66,14 @@ class GateTest(unittest.TestCase):
         with self.assertRaises(gate.Bad):
             gate.apply("intake", "cheap", {"ticket": "7"}, MemoryTracker({"7": {"stage": "triage"}}), graph)
 
+    def test_confirmed_bug_starts_implementation(self):
+        """#161: investigate's `bug` outcome moves the ticket to in-dev and adds the implement label that wakes `implement`."""
+        tr = MemoryTracker({"7": {"stage": "investigating"}})
+        gate.apply("investigate", "bug", {"ticket": "7", "diagnosis": "d", "tier": "mid"}, tr, NODES)
+        facts = tr.facts("7")
+        self.assertEqual(facts["stage"], "in-dev")
+        self.assertIn("factory:implement-mid", facts["attrs"])
+
     def test_guard_facts(self):
         f = {"attrs": ["risk:low"], "pr_state": "open", "behind": True, "conflict": False, "ci": "green",
              "head": "h2", "blockers_open": 0, "stage": "in-review",
@@ -1907,6 +1915,15 @@ class MultiRepositoryTest(unittest.TestCase):
         facts = self.facts(self.pr("a", "h1"), self.pr("b", "h2"))
         self.assertEqual((facts["ci"], facts["round_head"], facts["heads"]), ("green", "h1", {"a": "h1", "b": "h2"}))
         self.assertEqual(gate.sweep_plan(facts, self.ON), ("merge", "merged", {}))
+
+    def test_merged_pr_ci_does_not_override_open_pr_ci(self):
+        facts = self.facts(self.pr("a", "h1", pr_state="merged", ci="none"), self.pr("b", "h2"))
+        self.assertEqual(facts["ci"], "green")
+
+    def test_merged_pr_approval_does_not_complete_open_review_round(self):
+        facts = self.facts(self.pr("a", "h1", pr_state="merged"), self.pr(
+            "b", "h2", round_complete=False, round_verdict=None, round_head=None), stage="in-review")
+        self.assertFalse(facts["round_complete"])
 
     def test_one_red_pr_makes_the_ticket_red_and_reopens_it(self):
         facts = self.facts(self.pr("a", "h1"), self.pr("b", "h2", ci="red"))
