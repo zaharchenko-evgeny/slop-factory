@@ -377,6 +377,24 @@ class DefinitionTest(unittest.TestCase):
                                                                             "outcomes": {"done": {}}}}))
         self.assertError("reserved-node: nodes.reply-x")
 
+    def test_fix_and_update_merge_main_on_a_conflicting_pr(self):
+        import config
+        import gate
+        import nodes as nodes_mod
+        from gate_port import MemoryTracker
+        before = config._team
+        config.set_team(self.root)
+        try:
+            n = nodes_mod.load()
+            for conflict, want in ((True, True), (False, False)):
+                t = MemoryTracker({"7": {"stage": "changes-requested", "pr": 5, "head": "h1", "conflict": conflict}})
+                for node in ("fix", "update"):
+                    with self.subTest(node=node, conflict=conflict):
+                        code, out = gate.check(node, {"id": "e1", "ticket": "7"}, t, n, config.load())
+                        self.assertEqual((code, out["merge_main"]), (gate.GO, want))
+        finally:
+            config.set_team(before)
+
     def test_a_person_asks_dev_on_the_pr_and_dev_answers_there(self):
         import config
         import gate
