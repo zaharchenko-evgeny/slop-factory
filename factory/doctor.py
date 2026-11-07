@@ -14,10 +14,13 @@ environment declares: `ok` when set and non-empty, `missing` otherwise. In the e
 """
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import urllib.parse
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -268,6 +271,116 @@ def file_tickets(repo, failed, run, run_id="doctor"):
             print(json.dumps({"probe": "report", "result": "denied", "detail": f"{title}: {e}"[:200]}))
 
 
+NS = "factory"  # probe names, not labels
+STUCK, FACTS = f"{NS}:stuck", f"{NS}:facts"
+STUCK_HOURS = 6
+FACT_STAGES = ("ready", "in-dev", "in-review", "changes-requested", "approved", "blocked")
+KNOWN_DRIFT = re.compile(r"update label .+ in \S+ \(description\)")
+
+
+def stuck_tickets(tracker, tickets, wakes, nodes, now=None, hours=STUCK_HOURS):
+    """[(ticket, why)] of the open tickets whose waking label wakes no node for more than `hours`: the reconcile rule
+    (`reconcile.stuck_label`), `why` naming each failing guard. `wakes` is (node, label, timeout) per waking label."""
+    import reconcile
+    now = now or datetime.now(timezone.utc)
+    ago = lambda at: now - datetime.fromisoformat(at.replace("Z", "+00:00"))  # noqa: E731
+    limit = [(node, label, hours * 30) for node, label, _ in wakes]  # stuck_label waits 2 timeouts
+    out = []
+    for n in tickets:
+        facts = tracker.stale_facts(n)
+        if facts.get("issue_state", "open") != "open" or facts.get("blockers_open"):
+            continue
+        step = reconcile.stuck_label(limit, nodes, facts, facts.get("pr_labels") or [], ago)
+        if step:
+            out.append((n, step[4]))
+    return out
+
+
+def stuck_probe(tracker, defn, settings, now=None, hours=STUCK_HOURS):
+    """`factory:stuck`: fails when a ticket has been stuck longer than `hours`."""
+    import reconcile
+    import vocab
+    _, wakes = reconcile.definition_recovery(defn, settings["tracker"]["stages"], vocab.needs_human(),
+                                             settings["limits"].get("run_timeout_minutes", 30))
+    kinds = settings["tracker"].get("stage_kinds", {})
+    stages = [s for s in settings["tracker"]["stages"] if kinds.get(s) not in ("waiting", "final")]
+    found = stuck_tickets(tracker, tracker.sweep_tickets(stages, open_only=True), wakes,
+                          defn["workflow"]["nodes"], now, hours) if wakes else []
+    return {"probe": STUCK, "result": "fail" if found else "ok",
+            "detail": "; ".join(f"#{n}: {why}" for n, why in found)}
+
+
+def fact_mismatches(facts, in_frontier):
+    """[text] per fact of one ticket that disagrees with GitHub: ticket, fact, both values. `in_frontier` is a callable."""
+    import vocab
+    n, out, labels = facts["ticket"], [], facts.get("pr_labels") or []
+    for want in ("green", "red"):
+        label = vocab.ci(f"ci-{want}")
+        if label in labels and facts.get("ci") != want:
+            out.append(f"#{n} ci: gate fact {facts.get('ci')}, GitHub label {label}")
+    if facts.get("pr_state") == "merged" and facts["stage"] not in ("merged", "done"):
+        out.append(f"#{n} stage: gate fact {facts['stage']}, GitHub PR #{facts.get('pr')} merged")
+    if (facts["stage"] == "ready" and facts.get("issue_state", "open") == "open" and not facts.get("blockers_open")
+            and not facts.get("assignees") and not in_frontier(n)):
+        out.append(f"#{n} frontier: gate fact not in the frontier, GitHub ready with every blocker closed")
+    return out
+
+
+def facts_probe(tracker, stages, frontier):
+    """`factory:facts`: the gate's facts of each open factory ticket against GitHub; fails on any mismatch.
+    `frontier` returns the issue numbers of the frontier."""
+    found = []
+    for n in tracker.sweep_tickets([s for s in FACT_STAGES if s in stages], open_only=True):
+        found += fact_mismatches({**tracker.facts(n), "ticket": n}, lambda x: x in frontier())
+    return {"probe": FACTS, "result": "fail" if found else "ok", "detail": "; ".join(found)}
+
+
+def deploy_run():
+    """Output and exit code of `factory deploy --dry-run`; the doctor never applies a deploy."""
+    p = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "cli.py"), "deploy", "--dry-run"],
+                       capture_output=True, text=True)
+    return p.stdout + p.stderr, p.returncode
+
+
+def drift_probe(dry_run):
+    """`deploy:drift`: fails when the dry run lists anything besides label-description updates, or fails itself."""
+    text, code = dry_run()
+    lines = [x.strip() for x in text.splitlines() if x.strip() and x.strip() != "unchanged"]
+    drift = [x for x in lines if not KNOWN_DRIFT.fullmatch(x)]
+    if code and not drift:
+        drift = [f"factory deploy --dry-run exited {code}"]
+    return {"probe": "deploy:drift", "result": "fail" if drift else "ok", "detail": "; ".join(drift)[:500]}
+
+
+def report_engine(repo, results, run, run_id="doctor"):
+    """A failed engine probe opens or updates its ticket; one that passes again comments on it and closes it."""
+    file_tickets(repo, [r for r in results if r["result"] != "ok"], run, run_id)
+    for r in results:
+        if r["result"] == "ok":
+            close_ticket(repo, r["probe"], run, run_id)
+
+
+def engine_probes(settings, tracker=None, dry_run=deploy_run, now=None):
+    """The `factory:stuck`, `factory:facts` and `deploy:drift` results; a probe that cannot run is a `fail`."""
+    import definition
+    out = []
+
+    def attempt(name, fn):
+        try:
+            out.append(fn())
+        except Exception as e:
+            out.append({"probe": name, "result": "fail", "detail": f"{type(e).__name__}: {e}"[:300]})
+    if tracker is None:
+        import gate_github
+        tracker = gate_github.GitHubGateTracker.from_config()
+    if definition.present(config.team_root()):
+        attempt(STUCK, lambda: stuck_probe(tracker, definition.load(config.team_root()), settings, now))
+    attempt(FACTS, lambda: facts_probe(tracker, settings["tracker"]["stages"],
+                                                 github_tracker.GitHubTracker.from_config()._frontier))
+    attempt("deploy:drift", lambda: drift_probe(dry_run))
+    return out
+
+
 def main(argv=None, run=github_tracker.gh):
     env = os.environ.get("FACTORY_ENV")
     if env not in (nodes_mod.load().get("environments") or {}):
@@ -280,11 +393,14 @@ def main(argv=None, run=github_tracker.gh):
     results += project_write_probes(settings, env, run)
     if settings["tracker"].get("adapter") == "youtrack":
         results += youtrack_probes(settings, env_needs_tiers(nodes_mod.load()))
-    for r in results:
+    engine = engine_probes(settings) if "--engine" in (argv or []) else []
+    for r in [*results, *engine]:
         print(json.dumps(r))
-    failed = [r for r in results if r["result"] != "ok"]
-    if failed:
-        file_tickets(repo, failed, run, run_id)
+    failed = [r for r in [*results, *engine] if r["result"] != "ok"]
+    if any(r["result"] != "ok" for r in results):
+        file_tickets(repo, [r for r in results if r["result"] != "ok"], run, run_id)
+    if engine:
+        report_engine(repo, engine, run, run_id)
     return 1 if failed else 0
 
 
