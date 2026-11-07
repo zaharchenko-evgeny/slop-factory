@@ -1,5 +1,7 @@
 from email.message import EmailMessage
 
+import pytest
+
 import relay
 
 PEOPLE = {"ann@example.com": "ann"}
@@ -69,3 +71,27 @@ def test_post_sends_api_key_header(monkeypatch):
     monkeypatch.setattr(relay.httpx, "post", fake_post)
     relay.post({"issue": 1}, "https://air.example/hook", "k")
     assert seen["headers"] == {"Authorization": "ApiKey k"} and seen["url"] == "https://air.example/hook"
+
+
+def test_idle_raises_abort_when_server_closes_after_done(monkeypatch):
+    class Conn:
+        lines = [b"+ idling\r\n"]
+        reads = 0
+
+        def _new_tag(self):
+            return b"A1"
+
+        def send(self, data):
+            pass
+
+        def socket(self):
+            return None
+
+        def readline(self):
+            self.reads += 1
+            assert self.reads < 10, "idle kept reading after EOF"
+            return self.lines.pop(0) if self.lines else b""
+
+    monkeypatch.setattr(relay.select, "select", lambda *a: ([], [], []))
+    with pytest.raises(relay.imaplib.IMAP4.abort):
+        relay.idle(Conn(), 1)

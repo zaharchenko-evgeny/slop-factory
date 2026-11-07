@@ -85,16 +85,23 @@ def handle(raw: bytes, people: dict[str, str], send: Callable[[dict], None]) -> 
     return True
 
 
+def _readline(conn: imaplib.IMAP4_SSL) -> bytes:
+    line = conn.readline()
+    if not line:
+        raise imaplib.IMAP4.abort("connection closed during IDLE")
+    return line
+
+
 def idle(conn: imaplib.IMAP4_SSL, seconds: int) -> None:
     """Wait for new mail with IMAP IDLE (imaplib has no IDLE command)."""
     tag = conn._new_tag()
     conn.send(tag + b" IDLE\r\n")
-    conn.readline()  # "+ idling"
+    _readline(conn)  # "+ idling"
     ready, _, _ = select.select([conn.socket()], [], [], seconds)
     if ready:
-        conn.readline()
+        _readline(conn)
     conn.send(b"DONE\r\n")
-    while not conn.readline().startswith(tag):
+    while not _readline(conn).startswith(tag):
         pass
 
 
