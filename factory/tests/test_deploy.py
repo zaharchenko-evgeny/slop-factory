@@ -208,6 +208,16 @@ class ApplyTest(unittest.TestCase):
         self.assertIn("set by a person: read secret YOUTRACK_TOKEN", out.getvalue())
         self.assertNotIn("secret HAVE", out.getvalue())
 
+    def test_extra_personal_secret_plans_no_environment_update(self):
+        self.plan["environments"][0]["secrets"] = ["HAVE", "MISSING"]
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                        "personalSecrets": [{"key": "HAVE"}, {"key": "PERSONAL_EXTRA"}]}])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.run_deploy("--dry-run"), 0)
+        self.assertNotIn("(secrets)", out.getvalue())
+        self.assertIn("set by a person: read secret MISSING", out.getvalue())
+
     def test_apply_leaves_variable_air_cannot_delete_to_a_person_and_succeeds(self):
         self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
         self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
