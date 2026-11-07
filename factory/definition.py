@@ -142,6 +142,39 @@ def node_writes(defn, name):
     return [r for r in listed if r in wanted]
 
 
+def tracker_repositories(defn):
+    """Full names of the ticket repositories, in order; the first is the tracker. `tracker.repositories`, or the
+    single `tracker.repository`."""
+    t = defn["factory"].get("tracker") or {}
+    listed = t.get("repositories")
+    if listed is None:
+        listed = [t["repository"]] if t.get("repository") else []
+    return [full_name(r) for r in listed if isinstance(r, str)]
+
+
+def node_listens(defn, name):
+    """Full names of the ticket repositories node `name` listens to: `tracker` is the first one, `tickets` (the
+    default) all of them. A node with no event trigger (schedule, webhook, manual) listens to nothing: `[]`."""
+    node = _parts(defn, name)[0]
+    if not any(isinstance(t, dict) and not {"schedule", "webhook"} & t.keys() for t in node.get("triggers") or []):
+        return []
+    tickets = tracker_repositories(defn)
+    listens = node.get("listens", "tickets")
+    if listens == "tracker":
+        return tickets[:1]
+    if listens == "tickets":
+        return tickets
+    return [full_name(r) for r in listens if isinstance(r, str)] if isinstance(listens, list) else []
+
+
+def _primary(defn, env):
+    """The repository the node output applies to in environment `env`: its `main`, else the tracker repository
+    (an environment may have no `main`), else its first repository."""
+    repos = (env or {}).get("repositories") or []
+    return next((r["repo"] for r in repos if r.get("main")),
+                next(iter(tracker_repositories(defn)), None) or repos[0]["repo"])
+
+
 def environment_secrets(defn, env_name):
     """{name: description} of the secrets `env_name` needs: those of the defaults and the environment, and those of
     the role, agent and node of every node that runs in it. GH_TOKEN is Air's own and is left out."""
@@ -377,6 +410,26 @@ def _writes_errors(where, node, agent, env):
     return errs
 
 
+def _listens_errors(defn, where, node):
+    listens = node.get("listens")
+    if listens is None or listens in ("tracker", "tickets"):
+        return []
+    if not isinstance(listens, list) or not all(isinstance(r, str) for r in listens):
+        return [f"bad-listens: {where}: `listens` is `tracker`, `tickets` or a list of ticket repositories"]
+    return [f"bad-listens: {where}: {r} is not a ticket repository" for r in listens
+            if full_name(r) not in tracker_repositories(defn)]
+
+
+def _event_errors(defn, name, node):
+    """`writes-not-heard` and `schedule-writes-several` of node `name`."""
+    where, writes = f"nodes.{name}", node_writes(defn, name)
+    errs = [f"writes-not-heard: {where}: writes {r} but does not listen to it" for r in writes
+            if node_listens(defn, name) and r not in node_listens(defn, name)]
+    if len(writes) > 1 and any(isinstance(t, dict) and "schedule" in t for t in node.get("triggers") or []):
+        errs.append(f"schedule-writes-several: {where}: a scheduled node writes at most one repository")
+    return errs
+
+
 def errors(defn):
     f, w = defn["factory"], defn["workflow"]
     errs = []
@@ -421,6 +474,9 @@ def errors(defn):
     if w.get("blockers", "start") not in ("start", "merge"):
         errs.append(f"bad-blockers: workflow.yaml: `blockers` is `start` or `merge`, not {w['blockers']!r}")
     default_env = (w.get("settings") or {}).get("environment")
+    in_envs = {full_name(r["repo"]) for spec in envs.values() for r in (spec or {}).get("repositories") or []}
+    errs += [f"tracker-repository: factory.yaml: tracker repository {r} is in no environment"
+             for r in tracker_repositories(defn) if r not in in_envs]
     code = code_repos(defn)
     if len(code) > 1 and any(per_repo_node(n) for n in nodes) \
             and ((f.get("defaults") or {}).get("settings") or {}).get("write_mode", "per-repo") == "per-repo":
@@ -440,6 +496,7 @@ def errors(defn):
         if not human and env not in envs:
             errs.append(f"unknown-environment: {where}: {env}")
         errs += _writes_errors(where, n, agents[n["agent"]] or {}, envs.get(env) or {})
+        errs += _listens_errors(defn, where, n) + _event_errors(defn, name, n)
         if n.get("model") is not None and n["model"] not in models:
             errs.append(f"unknown-model: {where}: {n['model']}")
         if not n.get("triggers"):
@@ -592,7 +649,7 @@ def to_project(defn):
     default_env = wset.get("environment")
 
     # Repositories: every listed one; the primary is the main repository of the default environment.
-    primary = next(r["repo"] for r in envs[default_env]["repositories"] if r.get("main"))
+    primary = _primary(defn, envs[default_env])
     names, repositories = {}, []
     for e in envs.values():
         for r in e.get("repositories") or []:
@@ -829,7 +886,7 @@ def nodes(defn):
     wset = w.get("settings") or {}
     prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
     default_env, all_stages = wset.get("environment"), sorted(_used_stages(w))
-    primary = next(r["repo"] for r in envs[default_env]["repositories"] if r.get("main"))
+    primary = _primary(defn, envs[default_env])
     on_pr = {f"{prefix}ci-green", f"{prefix}ci-red"}
     for n in (w.get("nodes") or {}).values():
         for oc in (n.get("outcomes") or {}).values():

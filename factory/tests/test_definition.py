@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 import definition  # noqa: E402
 
 FIXTURE = ROOT / "tests/fixtures/v2"
+MAIN, OTHER = "zaharchenko-evgeny/slop-factory", "zaharchenko-evgeny/slop-eval-factory"
 
 
 class DefinitionTest(unittest.TestCase):
@@ -152,7 +153,52 @@ class DefinitionTest(unittest.TestCase):
 
     def test_environment_without_main_is_valid(self):
         self.edit("factory.yaml", self._no_main)
-        self.edit("workflow.yaml", lambda w: [w["nodes"][n].update(writes="all") for n in self._full_nodes()])
+        self.edit("workflow.yaml", lambda w: [w["nodes"][n].update(writes=[MAIN]) for n in self._full_nodes()])
+        self.assertEqual(self.errors(), [])
+
+    def test_environment_without_main_compiles(self):
+        self.edit("factory.yaml", self._no_main)
+        self.edit("workflow.yaml", lambda w: [w["nodes"][n].update(writes=[MAIN]) for n in self._full_nodes()])
+        defn = definition.load(self.root)
+        self.assertEqual(definition.errors(defn), [])
+        project, _ = definition.to_project(defn)
+        self.assertEqual([r["name"] for r in project["repositories"] if r["role"] == "primary"], ["slop-factory"])
+        self.assertEqual(definition.nodes(defn)["environments"]["engine"]["repository"], "primary")
+
+    def _two_ticket_repositories(self):
+        self.edit("factory.yaml", lambda f: f["tracker"].update(repositories=[MAIN, OTHER]))
+        return definition.load(self.root)
+
+    def test_listens_defaults_to_every_ticket_repository(self):
+        defn = self._two_ticket_repositories()
+        self.assertEqual(definition.node_listens(defn, "implement-small"), [MAIN, OTHER])
+        self.assertEqual(definition.node_listens(defn, "human"), [])
+        self.assertEqual(definition.tracker_repositories(definition.load(self.root)), [MAIN, OTHER])
+
+    def test_listens_tracker_is_the_first_ticket_repository(self):
+        self._two_ticket_repositories()
+        self.edit("workflow.yaml", lambda w: w["nodes"]["implement-small"].update(listens="tracker"))
+        self.assertEqual(definition.node_listens(definition.load(self.root), "implement-small"), [MAIN])
+
+    def test_listens_outside_ticket_repositories_is_bad_listens(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(listens=["o/elsewhere"]))
+        self.assertError("bad-listens: nodes.intake: o/elsewhere")
+
+    def test_tracker_repository_must_be_in_an_environment(self):
+        self.edit("factory.yaml", lambda f: f["tracker"].update(repositories=[MAIN, "o/elsewhere"]))
+        self.assertError("tracker-repository: factory.yaml: tracker repository o/elsewhere")
+
+    def test_event_node_writing_an_unheard_repository_is_refused(self):
+        node = self._full_nodes()[0]
+        self.edit("workflow.yaml", lambda w: w["nodes"][node].update(writes=[OTHER]))
+        self.assertError("writes-not-heard: nodes.%s: writes %s" % (node, OTHER))
+        self._two_ticket_repositories()
+        self.assertEqual(self.errors(), [])
+
+    def test_scheduled_node_writing_two_repositories_is_refused(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["implement-small"].update(writes="all", triggers=[{"schedule": "0 * * * *"}]))
+        self.assertError("schedule-writes-several: nodes.implement-small")
+        self.edit("workflow.yaml", lambda w: w["nodes"]["implement-small"].update(writes=[MAIN]))
         self.assertEqual(self.errors(), [])
 
     def test_writes_all_expands_to_environment_repositories(self):
