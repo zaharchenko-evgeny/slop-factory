@@ -130,6 +130,18 @@ def _parts(defn, name):
     return node, agent, role, env
 
 
+def node_writes(defn, name):
+    """Full names of the repositories node `name` writes, in environment order; `writes: all` is every repository of
+    its environment. `[]` when the node writes nothing."""
+    node, _, _, env = _parts(defn, name)
+    writes = node.get("writes")
+    listed = [full_name(r["repo"]) for r in env.get("repositories") or []]
+    if writes == "all":
+        return listed
+    wanted = {full_name(r) for r in writes or [] if isinstance(r, str)}
+    return [r for r in listed if r in wanted]
+
+
 def environment_secrets(defn, env_name):
     """{name: description} of the secrets `env_name` needs: those of the defaults and the environment, and those of
     the role, agent and node of every node that runs in it. GH_TOKEN is Air's own and is left out."""
@@ -349,6 +361,22 @@ def _notify_effect_errors(where, outcome, spec, config):
     return errs
 
 
+def _writes_errors(where, node, agent, env):
+    repos = (env or {}).get("repositories") or []
+    writes = node.get("writes")
+    errs = []
+    if writes is not None and writes != "all":
+        listed = {full_name(r["repo"]) for r in repos}
+        if not isinstance(writes, list) or not all(isinstance(r, str) for r in writes):
+            return [f"bad-writes: {where}: `writes` is `all` or a list of repositories"]
+        errs = [f"bad-writes: {where}: {r} is not in the environment" for r in writes if full_name(r) not in listed]
+    if writes and agent.get("access") == "read-only":
+        errs.append(f"writes-read-only: {where}: a node with `writes` runs an agent with `access: read-only`")
+    if not writes and agent.get("access") == "full" and not node.get("generated") and not any(r.get("main") for r in repos):
+        errs.append(f"no-writes: {where}: an environment without `main` needs `writes` on a node with `access: full`")
+    return errs
+
+
 def errors(defn):
     f, w = defn["factory"], defn["workflow"]
     errs = []
@@ -383,8 +411,8 @@ def errors(defn):
     for e, spec in envs.items():
         repos = (spec or {}).get("repositories") or []
         declared = set(((f.get("defaults") or {}).get("env") or {})) | set((spec or {}).get("env") or {})
-        if sum(1 for r in repos if r.get("main")) != 1:
-            errs.append(f"main-repository: environments.{e}: needs exactly one `main: true`")
+        if sum(1 for r in repos if r.get("main")) > 1:
+            errs.append(f"main-repository: environments.{e}: needs at most one `main: true`")
         for r in repos:
             if r.get("write") and not r.get("main") and not r.get("token_env"):
                 errs.append(f"write-token: environments.{e}: {r.get('repo')} is writable without `token_env`")
@@ -411,6 +439,7 @@ def errors(defn):
             errs.append(f"unknown-command: agents.{n['agent']}: run {agents[n['agent']]['run']}")
         if not human and env not in envs:
             errs.append(f"unknown-environment: {where}: {env}")
+        errs += _writes_errors(where, n, agents[n["agent"]] or {}, envs.get(env) or {})
         if n.get("model") is not None and n["model"] not in models:
             errs.append(f"unknown-model: {where}: {n['model']}")
         if not n.get("triggers"):

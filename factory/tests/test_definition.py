@@ -141,6 +141,41 @@ class DefinitionTest(unittest.TestCase):
         self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(main=True))
         self.assertError("main-repository: environments.engine")
 
+    def _no_main(self, f):
+        for r in f["environments"]["engine"]["repositories"]:
+            r.pop("main", None)
+
+    def _full_nodes(self):
+        w = definition.load(self.root)
+        agents = w["factory"]["agents"]
+        return [n for n, spec in w["workflow"]["nodes"].items() if (agents.get(spec.get("agent")) or {}).get("access") == "full" and not spec.get("generated")]
+
+    def test_environment_without_main_is_valid(self):
+        self.edit("factory.yaml", self._no_main)
+        self.edit("workflow.yaml", lambda w: [w["nodes"][n].update(writes="all") for n in self._full_nodes()])
+        self.assertEqual(self.errors(), [])
+
+    def test_writes_all_expands_to_environment_repositories(self):
+        node = self._full_nodes()[0]
+        self.edit("workflow.yaml", lambda w: w["nodes"][node].update(writes="all"))
+        defn = definition.load(self.root)
+        env = definition._parts(defn, node)[3]
+        self.assertEqual(definition.node_writes(defn, node), [definition.full_name(r["repo"]) for r in env["repositories"]])
+        self.assertEqual(definition.node_writes(defn, "intake"), [])
+
+    def test_writes_outside_environment_is_bad_writes(self):
+        node = self._full_nodes()[0]
+        self.edit("workflow.yaml", lambda w: w["nodes"][node].update(writes=["o/elsewhere"]))
+        self.assertError("bad-writes: nodes.%s: o/elsewhere" % node)
+
+    def test_writes_with_read_only_agent_is_refused(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(writes="all"))
+        self.assertError("writes-read-only: nodes.intake")
+
+    def test_full_access_node_without_writes_needs_main(self):
+        self.edit("factory.yaml", self._no_main)
+        self.assertError("no-writes: nodes.%s" % self._full_nodes()[0])
+
     def test_writable_repository_needs_token(self):
         self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(write=True))
         self.assertError("write-token: environments.engine")
