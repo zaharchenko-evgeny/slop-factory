@@ -381,6 +381,53 @@ def review_at_head(facts):
     return "changes" if any(v != "approve" for v in verdicts) else "approve"
 
 
+def _resolved_ids(body):
+    """Finding ids a review summary says are resolved (not the finding lines, not `not resolved`)."""
+    ids = set()
+    for line in body.splitlines():
+        if line.startswith("**") or re.search(r"\b(not|un)\s?resolved\b", line, re.I) or not re.search(r"\bresolved\b", line, re.I):
+            continue
+        ids |= set(re.findall(r"\b([A-Z]\d+)\b", line))
+    return ids
+
+
+def status(facts, limit=2000, cut=160):
+    """The short computed `status` of `factory begin`: stage, PR, CI, fix rounds and, per review focus, the latest
+    review with its open blocking findings (a `B<n>` finding stays open until a later review of the focus says it is resolved)."""
+    failure = facts.get("ci_failure")
+    failure = failure if isinstance(failure, dict) else {}
+    ci = {"state": facts.get("ci"), **({"failing": [failure["job"]]} if failure.get("job") else {})}
+    focuses = {}
+    for r in facts.get("reviews") or []:
+        if not r.get("agent"):
+            continue
+        cur = focuses.setdefault(r.get("focus") or "review", {"open": {}})
+        for i in _resolved_ids(r.get("body") or ""):
+            cur["open"].pop(i, None)
+        if r.get("verdict") == "approve":
+            cur["open"].clear()
+        for m in re.finditer(r"^\*\*(B\d+)\*\*\s*(.*)$", r.get("body") or "", re.M):
+            cur["open"][m[1]] = m[2]
+        cur.update(round=r.get("round"), verdict=r.get("verdict"), head=r.get("commit_id"))
+    reviews = {f: {**{k: v for k, v in c.items() if k != "open"},
+                   "open": [{"id": i, "text": t if len(t) <= cut else t[:cut - 1] + "…"} for i, t in c["open"].items()]}
+               for f, c in focuses.items()}
+    out = {"stage": facts.get("stage"), "pr": facts.get("pr"), "head": facts.get("head"), "ci": ci,
+           "fix_rounds": facts.get("fix_rounds"), "fix_cap": facts.get("fix_cap"), "reviews": reviews}
+    while len(json.dumps(out)) > limit and cut > 20:  # keep the whole status under `limit`: cut finding lines further
+        cut //= 2
+        for c in reviews.values():
+            for f in c["open"]:
+                f["text"] = f["text"][:cut]
+    while len(json.dumps(out)) > limit:  # still too long (many findings): drop the last open findings and count them
+        c = max(reviews.values(), key=lambda c: len(c["open"]))
+        if not c["open"]:
+            break
+        c["open"].pop()
+        c["omitted"] = c.get("omitted", 0) + 1
+    return out
+
+
 def guard_holds(guard, facts, tracker=None, ticket=None):
     """True when the ticket holds an outcome's `if` guard (ADR-0021): the same facts as `when`."""
     if "children" in guard and "children_open" not in facts and tracker is not None and hasattr(tracker, "children"):
@@ -529,7 +576,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
         "focus": event.get("focus"),
         "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
-        "context": facts, "outcomes": list(node["outcomes"]),
+        "context": facts, "status": status(facts), "outcomes": list(node["outcomes"]),
         "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if fixing else ()))],
         **({"mention": latest_mention(facts, tracker, event["ticket"])} if name.startswith("reply-") and definition_team() else {}),
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and fixing),
