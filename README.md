@@ -81,8 +81,7 @@ Slop factory's settings live in
 [slop-eval-factory](https://github.com/zaharchenko-evgeny/slop-eval-factory):
 a change to its definition (`factory.yaml`, `workflow.yaml`, `roles/`; ADR-0021) goes there. CI checks the
 copy of those files in `factory/tests/fixtures/slop/`. The copy may differ from
-`engine/nodes.yaml`; `factory/tests/fixtures/slop-v1/` is a frozen copy of the old layout that the
-old-layout tests use. To regenerate it, run this from a clean slop-eval-factory
+`engine/nodes.yaml`. To regenerate it, run this from a clean slop-eval-factory
 checkout at the commit to copy:
 
 ```bash

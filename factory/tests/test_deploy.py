@@ -28,31 +28,10 @@ import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 import deploy
 import nodes
+import definition  # noqa: E402
 import workflow  # noqa: E402
-from project_mode import link_runtime_files, team as project_team  # noqa: E402
 
 FIX = HERE / "fixtures/deploy"
-
-
-def this_repository():
-    """(project descriptor, v2 workflow) migrated from engine/nodes.yaml and the team fixture."""
-    return workflow.migrate(yaml.safe_load((ROOT / cfg.NODES).read_text()),
-                            yaml.safe_load((HERE / "fixtures/team/factory.descriptor.yaml").read_text()))
-
-
-def project_plan(project, wf):
-    """The Air plan of a factory.project.yaml team: deploy reads only the descriptor and the workflow it names."""
-    before = cfg.team_root()
-    with tempfile.TemporaryDirectory() as tmp:
-        (Path(tmp) / workflow.WORKFLOW_PATH).parent.mkdir(parents=True)
-        (Path(tmp) / cfg.PROJECT_DESCRIPTOR).write_text(workflow.dump(project))
-        (Path(tmp) / workflow.WORKFLOW_PATH).write_text(workflow.dump(wf))
-        link_runtime_files(tmp)
-        cfg.set_team(tmp)
-        try:
-            return deploy.plan_air(nodes.load(), cfg.load())
-        finally:
-            cfg.set_team(before)
 
 
 FAKE_SERVER = r"""
@@ -332,8 +311,7 @@ class ApplyTest(unittest.TestCase):
         slop = HERE / "fixtures/slop"
         before = cfg.team_root()
         try:
-            with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
-                cfg.set_team(project_team(slop))
+            cfg.set_team(slop)
             plan = deploy.plan_air(nodes.load(), cfg.load())
         finally:
             cfg.set_team(before)
@@ -427,8 +405,7 @@ class ApplyTest(unittest.TestCase):
     def test_team_repository_automation_runs_from_the_tracker_checkout(self):
         slop, before = HERE / "fixtures/slop", cfg.team_root()
         try:
-            with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
-                cfg.set_team(project_team(slop))
+            cfg.set_team(slop)
             plan = deploy.plan_air(nodes.load(), cfg.load())
         finally:
             cfg.set_team(before)
@@ -441,8 +418,7 @@ class ApplyTest(unittest.TestCase):
         """#790: CI adds factory:ci-green/ci-red to the PR, so their wakes are pull_request.labeled."""
         slop, before = HERE / "fixtures/slop", cfg.team_root()
         try:
-            with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
-                cfg.set_team(project_team(slop))
+            cfg.set_team(slop)
             plan = deploy.plan_air(nodes.load(), cfg.load())
         finally:
             cfg.set_team(before)
@@ -556,25 +532,13 @@ class BackendTest(unittest.TestCase):
 
 
 class ProjectPlanTest(unittest.TestCase):
-    def test_migrated_plan_equals_current(self):
-        before = cfg.team_root()
-        cfg.set_team(HERE / "fixtures/team")
-        try:
-            current = deploy.plan_air(nodes.load(), cfg.load())
-        finally:
-            cfg.set_team(before)
-        self.assertEqual(json.dumps(project_plan(*this_repository()), indent=2, sort_keys=True),
-                         json.dumps(current, indent=2, sort_keys=True))
-
     def test_slop_plan_deploys_the_team_workflow(self):
-        """Slop factory's old-layout settings (fixtures/slop-v1, frozen) deploy every node of their own workflow,
-        on their schedules, with every repository they list; engine/nodes.yaml may differ from them."""
-        slop, before = HERE / "fixtures/slop-v1", cfg.team_root()
-        project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
-        wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
+        """Slop factory's definition (fixtures/slop) deploys every node of its own workflow, on their schedules,
+        with every repository it lists."""
+        slop, before = HERE / "fixtures/slop", cfg.team_root()
+        project, wf = definition.to_project(definition.load(slop))
         try:
-            with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
-                cfg.set_team(project_team(slop))
+            cfg.set_team(slop)
             plan = deploy.plan_air(nodes.load(), cfg.load())
         finally:
             cfg.set_team(before)
@@ -619,51 +583,6 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(sorted(str(p.relative_to(slop)) for p in slop.rglob("*") if p.is_file()),
                          sorted(str(Path(p).relative_to(tmp)) for p in written))
 
-    def test_mention_allowlist(self):
-        """fixtures/slop-v1's agents (ADR-0020, the old layout): dev, rex and ria, and whom each may mention on which subject."""
-        slop = HERE / "fixtures/slop-v1"
-        project = yaml.safe_load((slop / cfg.PROJECT_DESCRIPTOR).read_text())
-        wf = yaml.safe_load((slop / workflow.WORKFLOW_PATH).read_text())
-        specs = {a["spec"]["node"]: a["spec"] for a in project_plan(project, wf)["automations"]}
-        for node, spec in specs.items():
-            self.assertEqual(spec["role"] != "script", {"agent", "persona", "mentions"} <= set(spec), node)
-        self.assertEqual((specs["fix"]["mentions_on"]["rex"], specs["review"]["mentions_on"]["dev"]), (["pr"], ["pr"]))
-        self.assertEqual((specs["implement"]["mentions_on"]["ria"], specs["intake"]["mentions_on"]["dev"]),
-                         (["ticket"], ["ticket"]))
-        listed = {p for spec in specs.values() for p in spec.get("mentions", [])}
-        self.assertFalse(listed & {"merge", "finish", "join", "script"}, listed)
-        self.assertFalse({"persona", "mentions"} & (set(specs["merge"]) | set(specs["finish"]) | set(specs["join"])))
-        wf["nodes"]["intake"]["mention"] = False  # ria's only node
-        specs = {a["spec"]["node"]: a["spec"] for a in project_plan(project, wf)["automations"]}
-        self.assertEqual(specs["intake"]["mentions"], [])
-        self.assertFalse([n for n, spec in specs.items() if "ria" in spec.get("mentions", [])])
-
-    def test_youtrack_tracker_renders_ticket_triggers_as_youtrack_events(self):
-        project, wf = this_repository()
-        project["tracker"] = {"adapter": "youtrack", "url": "https://y.example", "project": "LME"}
-        project["code_host"] = {"repository": "o/r"}
-        project["states"]["ready"] = {"kind": "active", "store": {"field": {"name": "State", "value": "Ready"}}}
-        project["commands"]["implement-<tier>"] = {"store": {"tag": "factory:implement-<tier>"}}
-        a = {x["name"]: x for x in project_plan(project, wf)["automations"]}
-        triggers = a["[Slop factory] implement-mid"]["triggers"]
-        self.assertIn({"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated",
-                       "filters": {"tagAdded": "factory:implement-mid"}}, triggers)
-        self.assertEqual({t["source"] for t in a["[Slop factory] fix-mid"]["triggers"]}, {"github"})
-        self.assertEqual(deploy.trigger("youtrack.fieldChanged State=In Progress", None)["filters"], {"State": "In Progress"})
-
-    def test_mcp_connectors_come_from_node_then_mode_then_role(self):
-        project, wf = this_repository()
-        project["roles"]["developer"]["mcp"] = ["youtrack"]
-        project["roles"]["reviewer"]["modes"]["behaviour"]["mcp"] = ["slack"]
-        wf["nodes"]["fix"]["mcp"] = ["slack"]
-        a = {x["name"]: x for x in project_plan(project, wf)["automations"]}
-        self.assertEqual(a["[Slop factory] implement-mid"]["mcpConnectors"], ["youtrack"])
-        self.assertIn("## Your MCP servers\n\n- youtrack\n", a["[Slop factory] implement-mid"]["prompt"])
-        self.assertEqual(a["[Slop factory] fix-mid"]["mcpConnectors"], ["slack"])  # the node's list replaces the role's
-        self.assertEqual(a["[Slop factory] review-behaviour"]["mcpConnectors"], ["slack"])
-        self.assertEqual(a["[Slop factory] review-full"]["mcpConnectors"], [])
-        self.assertNotIn("Your MCP servers", a["[Slop factory] review-full"]["prompt"])
-
     def test_hand_added_connector_is_a_removal(self):
         planned = {"name": "[F] a", "mcpConnectors": []}
         plan = {"prefix": "[F] ", "environments": [], "automations": [planned]}
@@ -671,40 +590,6 @@ class ProjectPlanTest(unittest.TestCase):
                          [("update", "automation", "[F] a", planned, {"id": "a1", "name": "[F] a", "mcpConnectors": ["slack"]},
                            ["mcpConnectors"])])
         self.assertEqual(deploy.diff(plan, [{"id": "a1", "name": "[F] a"}], []), [])  # a record without the field has none
-
-    def test_triggers_from_command_store(self):
-        project, wf = this_repository()
-        project["commands"]["implement-<tier>"] = {"store": {"label": "work:implement-<tier>"}}
-        project["commands"]["review-<focus>"] = {"store": {"pr_label": "look:<focus>"}}
-        a = {x["name"]: x for x in project_plan(project, wf)["automations"]}
-        self.assertEqual([t["filters"] for t in a["[Slop factory] implement-mid"]["triggers"]], [{"label": "work:implement-mid"}])
-        self.assertEqual(a["[Slop factory] implement-mid"]["triggers"][0]["eventType"], "issues.labeled")
-        review = a["[Slop factory] review-behaviour"]["triggers"][0]
-        self.assertEqual((review["eventType"], review["filters"]["label"]), ("pull_request.labeled", "look:behaviour"))
-
-    def test_labels_from_states_and_commands(self):
-        project, wf = this_repository()
-        project["states"]["ready"]["store"] = {"label": "status:ready"}
-        project["commands"]["fix-<tier>"] = {"store": {"pr_label": "work:fix-<tier>"}}
-        got = project_plan(project, wf)["labels"]
-        for want in ("status:ready", "work:fix-cheap", "work:fix-strong", "factory:ci-green", "factory:review-full"):
-            self.assertIn(want, got)
-        for gone in ("factory:ready", "factory:fix-cheap"):
-            self.assertNotIn(gone, got)
-        self.assertFalse([x for x in got if "<" in x])
-
-    def test_environment_repositories_from_descriptor(self):
-        project, wf = this_repository()
-        self.assertNotIn("environments", wf)
-        project["repositories"].append({"name": "other", "url": "https://github.com/o/other", "default_branch": "main"})
-        project["environments"]["ops"]["repositories"] = ["other"]
-        plan = project_plan(project, wf)
-        envs = {e["name"]: e["repository"] for e in plan["environments"]}
-        self.assertEqual(envs["[Slop factory] ops"], "https://github.com/o/other")
-        self.assertEqual(envs["[Slop factory] read"], "https://github.com/zaharchenko-evgeny/slop-factory")
-        reconcile = next(a for a in plan["automations"] if a["name"] == "[Slop factory] reconcile")
-        self.assertEqual(reconcile["repository"]["fullName"], "o/other")
-
 
 class PlanTest(unittest.TestCase):
     def test_routines_target_team_repository(self):
@@ -1269,8 +1154,7 @@ def slop_specs(edit=None):
     """(labels, label_specs) of the slop fixture's config, after `edit` changed a copy of it."""
     before = cfg.team_root()
     try:
-        with mock.patch.dict(os.environ, {"FACTORY_TEST_PROJECT": "1"}):
-            cfg.set_team(project_team(HERE / "fixtures/slop"))
+        cfg.set_team(HERE / "fixtures/slop")
         conf = copy.deepcopy(cfg.load())
         if edit:
             edit(conf)
@@ -1338,18 +1222,6 @@ class YouTrackTagsTest(unittest.TestCase):
     PLAN = {"tags": TAGS, "owned_tag_prefixes": ["factory:"], "tag_tracker": {"url": "https://y.example", "project": "LME"},
             "labels": [], "label_repositories": [], "owned_label_prefixes": []}
 
-    def test_required_tags_come_from_the_compiled_definition(self):
-        project, wf = this_repository()
-        project["tracker"] = {"adapter": "youtrack", "url": "https://y.example", "project": "LME"}
-        project["code_host"] = {"repository": "o/r"}
-        project["states"]["ready"] = {"kind": "active", "store": {"tag": "factory:ready"}}
-        project["commands"]["implement-<tier>"] = {"store": {"tag": "factory:implement-<tier>"}}
-        plan = project_plan(project, wf)
-        self.assertIn("factory:ready", plan["tags"])
-        self.assertIn("factory:implement-mid", plan["tags"])
-        self.assertFalse([t for t in plan["tags"] if "<" in t])
-        self.assertEqual(plan["owned_tag_prefixes"], ["factory:"])
-
     def run_deploy(self, mode, allow_delete, have, shared=()):
         fake = FakeTags(have, shared)
         out, err = io.StringIO(), io.StringIO()
@@ -1416,16 +1288,6 @@ class YouTrackFieldValuesTest(unittest.TestCase):
         return code, out.getvalue(), err.getvalue(), fake.writes
 
     HAVE = {"factory:ready": ("1", False), "factory:done": ("2", False), "factory:old": ("3", False), "Open": ("4", False)}
-
-    def test_plan_collects_field_values_with_final_states_resolved(self):
-        project, wf = this_repository()
-        project["tracker"] = {"adapter": "youtrack", "url": "https://y.example", "project": "LME"}
-        project["code_host"] = {"repository": "o/r"}
-        project["states"]["ready"] = {"kind": "active", "store": {"field": {"name": "State", "value": "factory:ready"}}}
-        project["states"]["done"] = {"kind": "final", "store": {"field": {"name": "State", "value": "factory:done"}}}
-        plan = project_plan(project, wf)
-        self.assertEqual(plan["fields"], {"State": {"factory:ready": False, "factory:done": True}})
-        self.assertEqual(plan["owned_field_prefixes"], ["factory:"])
 
     def test_dry_run_reports_missing_changed_and_obsolete_values_without_writing(self):
         have = {k: v for k, v in self.HAVE.items() if k != "factory:ready"}

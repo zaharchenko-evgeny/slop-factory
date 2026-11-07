@@ -56,20 +56,18 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("unknown-command: implement.wakes_on: deploy-<tier>", errors)
         self.assertTrue(any(e.startswith("unknown-effect: implement.done") for e in errors), errors)
 
-    def test_webhook_wake_renders_and_unknown_name_is_rejected(self):
+    def test_webhook_wake_is_valid_and_unknown_name_is_rejected(self):
         proj, wf = self.migrated()
         wf["webhooks"] = {**wf.get("webhooks", {}), "dry-run-finished": {"description": "TeamCity dry run done"}}
         wf["nodes"]["intake"]["wakes_on"].append("webhook dry-run-finished")
         self.assertEqual(workflow.validate(proj, wf), [])
-        self.assertIn("webhook dry-run-finished", workflow.to_nodes(proj, wf)["nodes"]["intake"]["triggers"])
         wf["nodes"]["intake"]["wakes_on"].append("webhook nope")
         self.assertIn("unknown-webhook: intake: nope", workflow.validate(proj, wf))
 
-    def test_pr_commented_wake_renders_to_issue_comment_created(self):
+    def test_pr_commented_wake_is_valid(self):
         proj, wf = self.migrated()
         wf["nodes"]["intake"]["wakes_on"].append("pr commented")
         self.assertEqual(workflow.validate(proj, wf), [])
-        self.assertIn("issue_comment.created", workflow.to_nodes(proj, wf)["nodes"]["intake"]["triggers"])
 
     def test_uncovered_active_state_rejected(self):
         proj, wf = self.migrated()
@@ -84,7 +82,6 @@ class WorkflowTest(unittest.TestCase):
         proj, wf = workflow.migrate(nodes, descriptor)
         proj, wf = yaml.safe_load(workflow.dump(proj)), yaml.safe_load(workflow.dump(wf))
         self.assertEqual(workflow.validate(proj, wf), [])
-        self.assertEqual(workflow.to_nodes(proj, wf), nodes)
         for wake in (w for n in wf["nodes"].values() for w in n["wakes_on"]):
             self.assertNotIn(":", wake, "a v2 wake names no label")
         self.assertEqual(proj["states"]["ci-green"], {"kind": "active", "store": {"pr": "ci-green"}})
@@ -94,9 +91,6 @@ class WorkflowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / config.PROJECT_DESCRIPTOR).write_text(workflow.dump(proj))
             self.assertEqual(project.validate(tmp), [])
-        legacy, current = project.legacy_config(proj)["tracker"], config.load()["tracker"]
-        self.assertEqual(legacy["stages"], current["stages"])
-        self.assertEqual(legacy["stage_kinds"], current["stage_kinds"])
 
     def test_migrate_command_writes_both_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -138,17 +132,17 @@ class WorkflowTest(unittest.TestCase):
                 self.assertEqual(workflow.project_main([tmp, "--out", str(Path(tmp) / "out")]), 1)
             self.assertIn("unknown-state: start.when: nope", err.getvalue())
 
-    def test_nodes_load_renders_project_workflow(self):
-        config.set_team(FIXTURE)
+    def test_nodes_load_reads_the_definition(self):
+        config.set_team(ROOT / "tests/fixtures/v2")
         try:
-            rendered = nodes_mod.load()
+            read = nodes_mod.load()
         finally:
             config.set_team(None)
-        self.assertEqual(rendered["nodes"]["review"]["triggers"],
-                         ["issues.labeled factory:review", "pull_request.labeled factory:pr-review"])
-        self.assertEqual(rendered["nodes"]["start"]["outcomes"]["started"]["effects"],
-                         [{"label": "factory:review"}, {"stage": "needs-review"}])
-        self.assertEqual(rendered["nodes"]["merge"]["when"], {"stage": "pr-approved"})
+        self.assertEqual(read["nodes"]["dispatch"]["triggers"], ["issues.labeled factory:ready"])
+        self.assertEqual(read["nodes"]["dispatch"]["outcomes"]["large"]["effects"],
+                         [{"label": "complexity:large"}, {"label": "factory:implement-large"}, {"stage": "in-dev"}])
+        self.assertEqual(read["nodes"]["automerge"]["triggers"], ["pull_request.labeled factory:automerge"])
+        self.assertEqual(read["nodes"]["automerge"]["when"], {"stage": "approved"})
 
 
 if __name__ == "__main__":
