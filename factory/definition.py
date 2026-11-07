@@ -54,6 +54,12 @@ def _add_mentions(defn):
     askable = [a for a, spec in agents.items() if (spec or {}).get("mentionable")]
     if not askable or ROUTER in nodes:
         return
+    pairs = neighbours(defn)
+    for n in nodes.values():  # an `ask` outcome (#591): the agents its agent may ask, the deploy-time allowlist
+        if n.get("agent") in askable and n.get("mention") is not False and not n.get("generated") \
+                and not all(isinstance(t, dict) and "schedule" in t for t in n.get("triggers") or [None]):
+            to = sorted(b for b in askable if frozenset((n["agent"], b)) in pairs)
+            n.setdefault("outcomes", {}).setdefault("ask", {"to": to, "effects": [{"comment": "text"}]})
     agents.setdefault("mention-router", {"run": "decide", "model": (f.get("defaults") or {}).get("model"),
                                          "access": "read-only", "generated": True})
     nodes[ROUTER] = {"agent": "mention-router", "generated": True,
@@ -346,6 +352,15 @@ def errors(defn):
             errs += [f"unknown-guard: {where}.{o}: {k}" for k in (oc.get("if") or {}) if k not in GUARDS]
             errs += [f"unknown-effect: {where}.{o}: {next(k for k in e if k != 'on')}" for e in oc.get("effects") or []
                      if next((k for k in e if k != "on"), None) not in EFFECTS]
+            for effect in oc.get("effects") or []:
+                if isinstance(effect, dict) and ("assign" in effect or "unassign" in effect):
+                    key = "assign" if "assign" in effect else "unassign"
+                    value = effect[key]
+                    valid = isinstance(value, str) or (isinstance(value, list) and all(isinstance(v, str) for v in value))
+                    if key == "unassign":
+                        valid = valid or value == "all"
+                    if not valid:
+                        errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins")
             prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
             by_target = {}
             for effect in oc.get("effects") or []:
@@ -391,7 +406,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed", ("pr", "commented"): "pr commented",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red")
+           "request-reviewers", "park-behind-main-red", "assign", "unassign")
 
 
 def _name(label, prefix):
@@ -621,7 +636,7 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
             res["ci"] = ci if isinstance(ci, list) else [ci]
         if guard:
             res["if"] = guard  # label, pr, review, blockers, children: the gate checks them (gate.guard_holds)
-        for k in ("else", "enabled"):
+        for k in ("else", "enabled", "to"):
             if k in oc:
                 res[k] = oc[k]
         if "effects" in oc:
