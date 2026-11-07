@@ -21,6 +21,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCK = ROOT / "skills.lock"
+if not LOCK.is_file():  # installed: skills.lock sits beside this file
+    LOCK = Path(__file__).resolve().parent / "skills.lock"
 VENDOR = ROOT / "engine/template-v1" / "skills"
 
 
