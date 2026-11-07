@@ -7,6 +7,8 @@
 Run: uv run --with pytest pytest factory/tests/test_check_workflow.py (TLC and Node run; the first run downloads the pinned jar)."""
 import contextlib
 import io
+import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -51,3 +53,13 @@ def test_missing_workflow_exits_2():
     with tempfile.TemporaryDirectory() as tmp:
         code, out = run(tmp)
     assert code == 2 and "not found" in out
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="uv builds and runs the wheel")
+def test_installed_wheel_runs_the_check(tmp_path):
+    subprocess.run(["uv", "build", "--wheel", "--out-dir", str(tmp_path), str(ROOT)], check=True, capture_output=True)
+    wheel = next(tmp_path.glob("*.whl"))
+    for name, code in (("../slop", 0), ("no-deadlock", 1)):
+        run = subprocess.run(["uv", "run", "--no-project", "--with", str(wheel), "factory", "check-workflow",
+                              str(FIXTURES / name)], capture_output=True, text=True)
+        assert run.returncode == code, run.stderr

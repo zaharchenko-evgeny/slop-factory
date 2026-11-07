@@ -29,6 +29,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from importlib import metadata
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -274,11 +275,16 @@ def check_workflow(argv):
     import yaml
     path = Path(argv[0] if argv else config.team_root()) / "workflow.yaml"
     skill = HERE.parent / "skills/factory-setup"
+    if not skill.is_dir():  # installed: the wheel records statechart.py and its pin files under share/factory
+        try:
+            skill = next(f.locate().resolve().parent for f in metadata.files("slop-factory") or [] if f.name == "statechart.py")
+        except (metadata.PackageNotFoundError, StopIteration):
+            pass
     if not path.is_file():
         print(f"check-workflow: {path} not found", file=sys.stderr)
         return 2
     if not (skill / "statechart.py").is_file():
-        print("check-workflow: statechart.py is not in this install; run it from an engine checkout", file=sys.stderr)
+        print("check-workflow: statechart.py is not in this install", file=sys.stderr)
         return 2
     sys.path.insert(0, str(skill))
     import statechart
