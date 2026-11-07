@@ -148,6 +148,67 @@ class DefinitionTest(unittest.TestCase):
         body.write_text(body.read_text() + "\nLimit {{ settings.nope }}\n")
         self.assertError("render: nodes.intake")
 
+    MCP = {"youtrack": {"connector": "internal-youtrack"},
+           "idea": {"command": "npx", "args": ["-y", "@jetbrains/mcp-proxy"], "env": {"IDE_PORT": "${IDE_PORT}"}},
+           "docs": {"url": "https://mcp.example/sse", "headers": {"Authorization": "Bearer ${DOCS_TOKEN}"}}}
+
+    def add_mcp(self, layer="roles.developer", servers=None, env=("IDE_PORT", "DOCS_TOKEN")):
+        """Put `servers` on `layer` ("roles.developer", "agents.dev", "defaults") and declare `env` in defaults."""
+        def change(f):
+            f["defaults"].setdefault("env", {}).update({v: {"required": False} for v in env})
+            top, _, name = layer.partition(".")
+            (f["defaults"] if top == "defaults" else f[top][name])["mcp"] = servers if servers is not None else self.MCP
+        self.edit("factory.yaml", change)
+
+    def test_mcp_merges_by_key_across_layers_and_null_removes(self):
+        self.add_mcp("defaults", {"glean": {"connector": "internal-glean"}, "docs": {"url": "https://old.example/sse"}})
+        self.add_mcp("roles.developer")
+        self.edit("factory.yaml", lambda f: f["agents"]["dev"].update(mcp={"slack": {"connector": "slack"}, "docs": None}))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["implement-medium"].update(mcp={"glean": None}))
+        defn = definition.load(self.root)
+        self.assertEqual(sorted(definition.mcp(defn, "implement-medium")), ["idea", "slack", "youtrack"])
+        self.assertEqual(sorted(definition.mcp(defn, "implement-small")), ["docs", "glean", "idea", "youtrack"])  # other agent
+        self.assertEqual(definition.mcp(defn, "implement-small")["docs"], self.MCP["docs"])   # role replaces default's entry whole
+        self.assertEqual(definition.mcp_connectors(definition.mcp(defn, "implement-small")), ["internal-glean", "internal-youtrack"])
+        self.assertEqual(sorted(definition.mcp_custom(definition.mcp(defn, "implement-small"))), ["docs", "idea"])
+
+    def test_mcp_connectors_reach_the_compiled_node(self):
+        self.add_mcp()
+        _, wf = definition.to_project(definition.load(self.root))
+        self.assertEqual(wf["nodes"]["implement-medium"]["mcp"], ["internal-youtrack"])
+        self.assertNotIn("mcp", wf["nodes"]["intake"])
+
+    def test_mcp_valid_servers_pass_validate(self):
+        self.add_mcp()
+        self.assertEqual(self.errors(), [])
+
+    def test_mcp_validate_unknown_connector(self):
+        self.add_mcp(servers={"x": {"connector": "nope"}})
+        self.assertError("unknown-mcp-connector: roles.developer.mcp.x: nope")
+        self.edit("factory.yaml", lambda f: f.setdefault("targets", {}).update(air={"mcp_connectors": ["nope"]}))
+        self.assertEqual(self.errors(), [])   # the list in `targets.air.mcp_connectors` replaces the default
+
+    def test_mcp_validate_undeclared_env(self):
+        self.add_mcp(env=("IDE_PORT",))
+        self.assertError("mcp-undeclared-env: roles.developer.mcp.docs: ${DOCS_TOKEN}")
+        self.add_mcp()   # now declared
+        self.assertEqual(self.errors(), [])
+        self.edit("workflow.yaml", lambda w: w["nodes"]["fix"].update(mcp={"d": {"url": "https://x.example/${HOST}"}}))
+        self.assertError("mcp-undeclared-env: nodes.fix.mcp.d: ${HOST}")
+        self.edit("workflow.yaml", lambda w: w["nodes"]["fix"].update(env={"HOST": {"required": False}}))   # the node's own env
+        self.assertEqual(self.errors(), [])
+
+    def test_mcp_validate_literal_secret(self):
+        self.add_mcp(servers={"docs": {"url": "https://x.example", "headers": {"Authorization": "Bearer abc123"}},
+                              "idea": {"command": "x", "env": {"PLAIN": "ghp_abcdef123456"}}})
+        errs = self.errors()
+        self.assertIn("mcp-literal-secret: roles.developer.mcp.docs.headers.Authorization: use a ${VAR} reference", errs)
+        self.assertIn("mcp-literal-secret: roles.developer.mcp.idea.env.PLAIN: use a ${VAR} reference", errs)
+
+    def test_mcp_validate_mixed_entry(self):
+        self.add_mcp(servers={"x": {"connector": "slack", "command": "npx"}})
+        self.assertError("mcp-mixed-entry: roles.developer.mcp.x")
+
     def test_nodes_have_no_prompt(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(prompt="Scope it."))
         self.assertError("node-prompt: nodes.intake")
