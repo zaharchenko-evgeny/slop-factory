@@ -246,6 +246,15 @@ def errors(defn):
             errs += [f"unknown-guard: {where}.{o}: {k}" for k in (oc.get("if") or {}) if k not in GUARDS]
             errs += [f"unknown-effect: {where}.{o}: {next(k for k in e if k != 'on')}" for e in oc.get("effects") or []
                      if next((k for k in e if k != "on"), None) not in EFFECTS]
+            for effect in oc.get("effects") or []:
+                if isinstance(effect, dict) and ("assign" in effect or "unassign" in effect):
+                    key = "assign" if "assign" in effect else "unassign"
+                    value = effect[key]
+                    valid = isinstance(value, str) or (isinstance(value, list) and all(isinstance(v, str) for v in value))
+                    if key == "unassign":
+                        valid = valid or value == "all"
+                    if not valid:
+                        errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins")
             prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
             by_target = {}
             for effect in oc.get("effects") or []:
@@ -291,7 +300,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed", ("pr", "commented"): "pr commented",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red")
+           "request-reviewers", "park-behind-main-red", "assign", "unassign")
 
 
 def _name(label, prefix):
