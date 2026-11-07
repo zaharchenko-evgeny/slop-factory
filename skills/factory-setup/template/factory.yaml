@@ -22,7 +22,7 @@ defaults:
   env:
     GH_TOKEN: { required: true, secret: true, description: "gh as jetbrains-air[bot], set by Air" }
   mcp: {}
-  skills: []                      # given to every role (the engine's factory-step always is)
+  skills: [simplified-technical-english]   # given to every role (the engine's factory-step always is)
   settings:
     branch_pattern: "{{BRANCH_PATTERN}}"
     commit_prefix: "{{COMMIT_PREFIX}}"
@@ -62,6 +62,15 @@ skills:
     source: "github:mattpocock/skills@a496f5513d4a"
     path: skills/engineering/to-tickets
     sha256: 6eccfac132d92b949821d154679adc7f597bfc3e8c929f3c03786b92f91b961f
+  # Local skills: shipped with this template under skills/<name>.
+  pr: { path: skills/pr }
+  merge-risk: { path: skills/merge-risk }
+  walkthrough: { path: skills/walkthrough }
+  simplified-technical-english: { path: skills/simplified-technical-english }
+  resolve-merge-conflicts:
+    source: "github:warpdotdev/common-skills@8792394ff1b6"
+    path: .agents/skills/resolve-merge-conflicts
+    sha256: 4ebcdd6f0d66d6b1d40bbe0e7df80b13088f20913ad4dbdaf3328c8835978df9
   retro:
     source: "github:mattpocock/skills@a496f5513d4a"
     path: skills/engineering/retro
@@ -73,11 +82,15 @@ skills:
 roles:
   developer:
     description: Implements a ticket, fixes review findings, resolves merge conflicts
-    skills: [ponytail, tdd, diagnosing-bugs, principle-test-behavior-not-implementation]
+    skills: [ponytail, ponytail-review, merge-risk, pr, resolve-merge-conflicts, tdd, diagnosing-bugs, principle-test-behavior-not-implementation]
     mcp: {}
   notify:
     description: Tells the owner about a state that needs them
     skills: []
+    mcp: {}
+  walkthrough:
+    description: Orients a person on a PR that waits for them, without reviewing it
+    skills: [walkthrough, merge-risk]
     mcp: {}
   retro:
     description: Collects lessons from tickets and merges them into the knowledge base
@@ -87,6 +100,7 @@ roles:
     description: Reviews a PR at its head and pins the verdict to that head
     skills:
       - ponytail-review           # a name from `skills`
+      - merge-risk
       # - adr-reading: { path: roles/reviewer/skills/adr-reading }      # a role-only local skill
       # - security-review: { source: "github:owner/repo@<sha>", path: skills/security-review, sha256: ... }
     mcp: {}
@@ -125,6 +139,7 @@ agents:
   ops:            { role: ops, model: cheap, access: read-only }
   retro:          { role: retro, model: mid, access: full }
   notify:         { role: notify, model: cheap, access: read-only }
+  walkthrough:    { role: walkthrough, model: review_strong, access: read-only }
 
 # Environments: where agents run. One repository is `main`; the others are additional.
 environments:

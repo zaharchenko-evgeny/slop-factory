@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
 ROOT = SKILL.parent.parent
@@ -47,6 +49,21 @@ class Templates(unittest.TestCase):
         for name in used:
             self.assertIn(f"`{name}`", doc, name)
         self.assertEqual(used, set(ANSWERS))
+
+    def test_workflow_has_ci_red_and_walkthrough(self):
+        nodes = yaml.safe_load((render.PROJECT_T / "workflow.yaml").read_text())["nodes"]
+        self.assertIn("ci-red", nodes)
+        self.assertIn("walkthrough", nodes)
+        self.assertTrue((render.PROJECT_T / "roles/walkthrough/role.md").is_file())
+
+    def test_every_node_is_documented(self):
+        doc = (SKILL / "references/nodes.md").read_text()
+        for name in yaml.safe_load((render.PROJECT_T / "workflow.yaml").read_text())["nodes"]:
+            self.assertIn(f"`{name}`", doc, name)
+
+    def test_setup_scripts_parse(self):
+        for script in render.PROJECT_T.glob("roles/*/setup.sh"):
+            subprocess.run(["bash", "-n", str(script)], check=True)
 
     def test_rendered_team_validates(self):
         with tempfile.TemporaryDirectory() as tmp:

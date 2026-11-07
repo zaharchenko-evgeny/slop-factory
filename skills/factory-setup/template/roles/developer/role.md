@@ -28,12 +28,18 @@ asks no one; to ask an agent, name `@factory:<agent>` in a comment another outco
    `not-run`); give `not-run` checks a reason. A failed check cannot be handed
    off as `done`.
 4. Run the checks the project documents (its `AGENTS.md` and CI commands) and fix failures.
-5. Commit on the current branch. Subjects start with
+5. Review your own diff against the base branch as a reviewer would, with `ponytail-review`, and fix
+   every blocking finding. Then score it with `merge-risk` and lower the risk before handing off: drop
+   changes the ticket did not ask for, make new failure paths report instead of passing silently, and
+   collect before/after evidence. When impact stays large, hand off `blocked` with a proposed split.
+6. Commit on the current branch. Subjects start with
    `{{ settings.commit_prefix | replace('{ticket}', '<ticket>') }}`. Do not push; the platform pushes the branch after the run.
    When the step's facts list `checkouts` (a ticket that changes several repositories), make each repository's
    part in its `/workspaces/<repo>` checkout on that branch and commit there too. The factory repository checkout
    is read-only. If the platform does not push a checkout other than the main one (the engine's `docs/targets.md`),
    hand off `blocked` and name the repository instead of leaving its commits behind.
+7. Your final message becomes the PR body: write it with the `pr` skill (summary sketch, before/after
+   evidence with every acceptance check, merge danger), and nothing else.
 
 ## Mode `fix`
 
@@ -64,8 +70,8 @@ the same format as implement mode. A failed check cannot be handed off as
 `done`.
 
 When `check` prints `merge_main: true` (the PR conflicts with `main`), first
-merge `origin/main` into the branch and resolve the conflicts, then address the
-findings. A fix round that only resolves the conflict, with no review finding,
+merge `origin/main` into the branch and resolve the conflicts as in `update` mode
+(the `resolve-merge-conflicts` skill), then address the findings. A fix round that only resolves the conflict, with no review finding,
 is valid.
 
 ## Mode `update`
@@ -75,7 +81,9 @@ Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
 1. Merge `origin/main` into the branch with a merge commit. Never rebase or
    force-push.
 2. Resolve only the conflicting hunks and keep the intent of both sides. Add
-   nothing else.
+   nothing else. Use the `resolve-merge-conflicts` skill: start with its summary
+   (`python3 ~/.agents/skills/resolve-merge-conflicts/scripts/extract_conflict_context.py`),
+   then one file at a time with `--file`; open a whole file only when the compact view is not enough.
 3. Regenerate generated files (the deploy fixture, the chart) with their
    generator instead of merging them by hand.
 4. Rerun the acceptance checks and the pre-review checks, and record them in
@@ -113,7 +121,8 @@ for the next agent (for instance what you could not finish or verify), add a not
 
 Report one, as the last thing you do:
 
-- `done`: every acceptance check, each passed, failed or not run with the
+- `done` (`done-low` or `done-high` when the step lists them: `done-low` only when your `merge-risk`
+  score is low): every acceptance check, each passed, failed or not run with the
   reason; `done` with a failed check is refused. A `fix` run also lists each
   finding as fixed (with its commit) or disputed (with the reason) and, when
   it disputes every finding, the focuses it disputes.
