@@ -82,6 +82,14 @@ error; Jinja's `{{ name }}` in role bodies is rendered later, by setup).
 without showing the diff. Then apply the interview's choices to the generated
 files and run `factory validate --team OUT_DIR`.
 
+Before it writes any file, `render.py` checks the rendered `workflow.yaml` with the pinned `statechart` skill
+(`skills.lock`, fetched at its pin with the sha256 check; the step stops when the fetch fails): `statechart.py` turns the stages and node outcomes into a
+TLA+ spec and runs TLC. It needs Node 22.18+ and Java 11+. The rules are one stage label per ticket
+(`OneStageLabel`), a moving node for every non-final and non-waiting stage (`MovingNode`), no deadlock outside final and
+waiting stages (`NoDeadlock`) and `done` reachable from `triage` (`DoneReachable`). A broken rule stops the run.
+Fix what the template can resolve (a stage with no node that moves out, a misspelled stage). When the fix needs a
+user decision, such as a stage that should be waiting or final, ask the user. The README gets the Mermaid state chart.
+
 Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 `tests/test_templates.py` checks them):
 
