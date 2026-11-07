@@ -118,6 +118,12 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual([r for r, _ in self.smtp.mails], [["bob@example.com"]])
         self.assertEqual(self.comments(tr)[0].count("factory:notify"), 1)
 
+    def test_empty_people_limit_sends_to_nobody(self):
+        tr = MemoryTracker({"7": {"stage": "blocked"}})
+        self.graph["nodes"]["notify"]["outcomes"]["pr-only"]["effects"][0]["notify"]["people"] = []
+        self.apply("pr-only", tr)
+        self.assertEqual(self.smtp.mails, [])
+
     def test_unknown_person_in_limit_sends_nothing(self):
         tr = MemoryTracker({"7": {"stage": "blocked"}})
         self.graph["nodes"]["notify"]["outcomes"]["pr-only"]["effects"][0]["notify"]["people"] = ["eve"]

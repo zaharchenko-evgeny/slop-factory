@@ -44,14 +44,14 @@ def marker(via, person, ref):
 
 
 def send_all(config, message, people=None):
-    """Send `message` to each person of `config` (or only `people`) on each adapter in their `via`.
+    """Send `message` to each person of `config` (or only `people`; an empty list means nobody) on each adapter in their `via`.
     Returns (sent, errors): `sent` is [(via, login, ref)], `errors` is ["<login> via <adapter>: <error>"]."""
     known = config.get("people") or {}
     unknown = [p for p in people or [] if p not in known]
     if unknown:
         raise ValueError(f"notify: not in notify.people: {', '.join(unknown)}")
     sent, errors = [], []
-    for login in people or list(known):
+    for login in list(known) if people is None else people:
         person = {**known[login], "login": login}
         for via in person.get("via") or []:
             try:
