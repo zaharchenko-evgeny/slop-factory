@@ -225,6 +225,29 @@ class WakeReadyTest(unittest.TestCase):
         self.assertEqual([r["ticket"] for r in got], ["1"])   # 5 never had a blocker: left alone
 
 
+class WakeApprovedTest(unittest.TestCase):
+    """`blockers: merge`: an approved ticket whose last blocker closed gets its merge label re-fired."""
+    NODES = {"blockers": "merge", "nodes": {"merge": {
+        "role": "approver", "triggers": ["pull_request.labeled factory:automerge"],
+        "when": {"stage": "approved", "blockers": "closed"}, "outcomes": {}}}}
+    NOW = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
+
+    def wake(self, nodes=None, blockers_open=0):
+        tr = MemoryTracker({1: {"stage": "approved", "blockers_open": blockers_open, "pr": 5, "pr_state": "open",
+                                "label_at": {"factory:automerge": "2026-11-06T10:00:00Z"}}})
+        tr.blocked_by = lambda n: [{"number": 9, "state": "closed"}]
+        return tr, reconcile.wake_approved(tr, nodes or self.NODES, 30, now=self.NOW)
+
+    def test_refires_the_merge_label_once_the_last_blocker_closed(self):
+        tr, got = self.wake()
+        self.assertEqual([(r["ticket"], r["node"], r["label"]) for r in got], [(1, "merge", "factory:automerge")])
+        self.assertIn("factory:automerge", [v.strip('"') for k, v in tr.tickets[1]["log"] if k == "label"])
+
+    def test_waits_for_an_open_blocker_and_ignores_the_default_mode(self):
+        self.assertEqual(self.wake(blockers_open=1)[1], [])
+        self.assertEqual(self.wake({**self.NODES, "blockers": "start"})[1], [])
+
+
 class RecoverDefinitionTest(unittest.TestCase):
     """ADR-0021 team (fixtures/slop): the lost wakes come from workflow.yaml."""
     SLOP = Path(__file__).resolve().parent / "fixtures/slop"

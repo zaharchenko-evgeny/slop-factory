@@ -324,6 +324,36 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
     return results
 
 
+def wake_approved(tracker, nodes, minutes, now=None, dry_run=False):
+    """`blockers: merge`: an `approved` ticket that had blockers, all now closed, whose merge label is older than
+    `minutes` did not merge (a blocker closed by hand, or the wake was lost): re-fire the merge node's label."""
+    if gate_blockers(nodes) != "merge":
+        return []
+    now, out = now or datetime.now(timezone.utc), []
+    for n in tracker.sweep_tickets(["approved"], open_only=True):
+        facts = tracker.stale_facts(n)
+        had = tracker.blocked_by(n) if hasattr(tracker, "blocked_by") else facts.get("blocked_by") or []
+        if facts["stage"] != "approved" or facts.get("blockers_open") or not had or facts.get("issue_state", "open") != "open":
+            continue
+        for node, label, on, why in wakes(nodes, facts):
+            at = (facts.get("label_at") or {}).get(label) or facts.get("stage_at")
+            if (nodes["nodes"][node].get("when") or {}).get("blockers") != "closed" or not at or \
+                    now - datetime.fromisoformat(at.replace("Z", "+00:00")) < timedelta(minutes=minutes):
+                continue
+            if not dry_run:
+                send(tracker, n, nodes, "approved", (facts.get("head") or "")[:12], "refire", label, on,
+                     "the last blocker closed")
+            out.append({"ticket": n, "node": node, "outcome": "refire", "label": label,
+                        "why": "approved, unblocked and not merged"})
+            break
+    return out
+
+
+def gate_blockers(nodes):
+    import gate
+    return gate.blockers_mode(nodes)
+
+
 def wake_ready(tracker, minutes, now=None, dry_run=False):
     """ADR-0021: a `ready` ticket that had blockers, all now closed, whose label is older than `minutes` was not
     started (a blocker closed by hand, or the wake was lost): remove and re-add `ready` so its trigger fires again.
@@ -376,7 +406,9 @@ def reconcile_main(argv):
     config = config_mod.load()
     if definition.present(config_mod.team_root()):  # ADR-0021: the waits the gate cannot see, from the definition
         progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
-        results = wake_ready(tracker, config["limits"].get("run_timeout_minutes", 30), dry_run=dry_run)
+        minutes = config["limits"].get("run_timeout_minutes", 30)
+        results = wake_ready(tracker, minutes, dry_run=dry_run)
+        results += wake_approved(tracker, nodes_mod.load(), minutes, dry_run=dry_run)
         results += recover_definition(tracker, definition.load(config_mod.team_root()), config["tracker"]["stages"],
                                       config["tracker"].get("stage_kinds", {}), config["limits"],
                                       dry_run=dry_run, progress=progress)

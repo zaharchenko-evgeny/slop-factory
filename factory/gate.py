@@ -892,14 +892,25 @@ def after_merge_complete(comments):
     return bool(checks) and all(x.lower() == "x" for x in checks)
 
 
-def sweep_plan(facts, auto_merge=None, default_tier="mid"):
+def blockers_mode(nodes):
+    """The workflow's `blockers` key: `start` (default) waits for every blocker before the work starts, `merge`
+    starts the work at once and waits at the merge (a node's own `when.blockers: closed` still applies)."""
+    mode = (nodes or {}).get("blockers", "start")
+    if mode not in ("start", "merge"):
+        raise Bad(f"bad blockers mode {mode!r}: allowed start, merge")
+    return mode
+
+
+def sweep_plan(facts, auto_merge=None, default_tier="mid", blockers="start", start_waits=False):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
+    waits = blockers == "merge" and facts.get("blockers_open")  # approved, but a blocker is still open
     if facts.get("pr_state") == "merged" and config_mod.load()["tracker"]["stage_kinds"].get(stage) != "final":
         comments = facts.get("comments", [])
         return ("finish", "merged", {}) if not after_merge_checks(facts.get("body")) \
             or not after_merge_comment(comments) or after_merge_complete(comments) else None
-    if stage == "ready" and not facts.get("blockers_open") and facts.get("issue_state", "open") == "open":
+    if stage == "ready" and (blockers == "merge" and not start_waits or not facts.get("blockers_open")) \
+            and facts.get("issue_state", "open") == "open":
         return "start", "started", {"tier": fix_tier(facts, default_tier)}
     if stage == "needs-answers" and facts.get("answered"):
         return "finish", "answered", {}
@@ -909,7 +920,7 @@ def sweep_plan(facts, auto_merge=None, default_tier="mid"):
             and ((facts.get("round_head") is not None and facts.get("head") != facts.get("round_head"))
                  or facts.get("ci") == "red"):
         return "reopen", "reopened", {}
-    if stage == "approved" and (m := merge_decision(facts, auto_merge)):
+    if stage == "approved" and not waits and (m := merge_decision(facts, auto_merge)):
         return "merge", *m
     if stage == "split" and (kids := facts.get("children")):
         if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
@@ -932,6 +943,8 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
     step). A ticket that reaches done or blocked also lets its split parent finish. Returns (results, failed)."""
     results, failed, done_tickets = [], False, []
     stages = config_mod.load()["tracker"]["stages"]
+    mode = blockers_mode(nodes)
+    start_waits = ((nodes.get("nodes", {}).get("start") or {}).get("when") or {}).get("blockers") == "closed"
     queue, seen, merged = ([issue] if issue is not None else list(tracker.sweep_tickets(stages))), set(), False
     prefetch(tracker, queue)
     while queue:
@@ -939,7 +952,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
             try:
                 facts = tracker.facts(n)
-                plan = sweep_plan(facts, auto_merge, default_tier)
+                plan = sweep_plan(facts, auto_merge, default_tier, mode, start_waits)
                 if plan is None or (n, facts["stage"]) in seen:
                     if progress:
                         progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
@@ -999,6 +1012,15 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                             progress({"ticket": n, "outcome": "skipped", "why": "already inspected"})
                         continue
                     facts = tracker.facts(n)
+                    if mode == "merge" and facts["stage"] == "approved" and not facts["blockers_open"]:
+                        woken.add(n)  # its last blocker closed: the merge it waited on may run now
+                        if merged:  # one merge at a time; the next sweep reads the rest against the new main
+                            continue
+                        sub, sub_failed = sweep(tracker, nodes, dry_run, None, auto_merge, default_tier, progress, issue=n)
+                        results += sub
+                        merged = merged or any((r.get("node"), r.get("outcome")) == ("merge", "merged") for r in sub)
+                        failed = failed or sub_failed
+                        continue
                     if facts["stage"] != "ready" or facts["blockers_open"]:
                         if progress:
                             progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})

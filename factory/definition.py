@@ -357,6 +357,8 @@ def errors(defn):
                 errs.append(f"write-token: environments.{e}: {r.get('repo')} is writable without `token_env`")
             if r.get("token_env") and r["token_env"] not in declared:
                 errs.append(f"undeclared-env: environments.{e}: {r['token_env']}")
+    if w.get("blockers", "start") not in ("start", "merge"):
+        errs.append(f"bad-blockers: workflow.yaml: `blockers` is `start` or `merge`, not {w['blockers']!r}")
     default_env = (w.get("settings") or {}).get("environment")
     for name, n in nodes.items():
         where = f"nodes.{name}"
@@ -608,6 +610,7 @@ def to_project(defn):
     }
     return descriptor, {"format": 2, "adapters": {"ticket": (f.get("tracker") or {}).get("adapter", "github-issues"),
                                                   "pr": "github"},
+                        **({"blockers": w["blockers"]} if w.get("blockers") else {}),
                         "schedules": schedules,
                         "webhooks": {k: {"description": (v or {}).get("description", k)}
                                      for k, v in (f.get("webhooks") or {}).items()},
