@@ -76,6 +76,7 @@ the same format as implement mode. A failed check cannot be handed off as
 `done`.
 
 When `check` prints `merge_main: true` (the PR conflicts with `main`), first
+deepen the checkout (`git fetch --unshallow origin`; the Air clone is one commit), then
 merge `origin/main` into the branch and resolve the conflicts as in `update` mode
 (the `resolve-merge-conflicts` skill), then address the findings. A fix round that only resolves the conflict, with no review finding,
 is valid.
@@ -84,8 +85,8 @@ is valid.
 
 Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
 
-1. Merge `origin/main` into the branch with a merge commit. Never rebase or
-   force-push.
+1. Deepen the checkout (`git fetch --unshallow origin`; the Air clone is one commit), then
+   merge `origin/main` into the branch with a merge commit. Never rebase or force-push.
 2. Resolve only the conflicting hunks and keep the intent of both sides. Add
    nothing else. Use the `resolve-merge-conflicts` skill: start with its summary
    (`python3 ~/.agents/skills/resolve-merge-conflicts/scripts/extract_conflict_context.py`),
