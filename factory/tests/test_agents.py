@@ -80,15 +80,14 @@ class AgentsTest(unittest.TestCase):
         proj, wf = with_agents()
         wf["nodes"]["fix"]["agent"] = "nobody"
         with self.assertRaisesRegex(ValueError, "unknown-agent: fix: nobody"):
-            deploy.agents_of(workflow.to_nodes(proj, wf), config.merge(proj, {}))
+            deploy.agents_of(wf, config.merge(proj, {}))
 
     def test_agent_tier_replaces_the_role_tier(self):
         proj, wf = with_agents()
         proj["agents"]["ria"]["tier"] = "mid"
         wf["nodes"]["intake"].pop("tier", None)  # a node's own tier still wins over its agent's
-        nodes = workflow.to_nodes(proj, wf)
-        agent = deploy.agents_of(nodes, proj)["intake"]
-        self.assertEqual(deploy.variants("intake", nodes["nodes"]["intake"], proj["roles"], agent),
+        agent = deploy.agents_of(wf, proj)["intake"]
+        self.assertEqual(deploy.variants("intake", wf["nodes"]["intake"], proj["roles"], agent),
                          [("intake", None, "mid", None)])
 
     def test_gate_spec_nodes_keep_agent_persona_and_mentions(self):

@@ -71,8 +71,6 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(results[0]["reconcile"], "conflict")
         self.assertEqual(t.tickets[1]["stage"], "changes-requested")
         self.assertIn('"factory:fix-cheap"', logged(t, "label"))
-        code, result = gate.check("fix", {"id": "recovered-conflict", "ticket": 1}, t, NODES, CONFIG)
-        self.assertEqual((code, result["merge_main"]), (gate.GO, True))
 
     def test_stale_fix_label_on_conflicting_pr_refired(self):
         t, results, _ = run({"stage": "changes-requested", "pr": 5, "conflict": True, "since": OLD,

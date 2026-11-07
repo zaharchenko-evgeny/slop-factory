@@ -469,9 +469,26 @@ def _pr_woken(n):
     return any(isinstance(t, dict) and next(iter(t)) in ("pr", "ci") for t in n.get("triggers") or [])
 
 
+def _used_stages(w):
+    """Every stage name the workflow's nodes and `stages:` mention."""
+    stages, used = w.get("stages") or {}, set()
+    for n in (w.get("nodes") or {}).values():
+        used |= {t["stage"] for t in n.get("triggers") or [] if isinstance(t, dict) and "stage" in t}
+        if (n.get("when") or {}).get("stage"):
+            st = n["when"]["stage"]
+            used |= set(st if isinstance(st, list) else [st])
+        for oc in (n.get("outcomes") or {}).values():
+            used |= {e["stage"] for e in (oc or {}).get("effects") or [] if "stage" in e}
+            st = ((oc or {}).get("if") or {}).get("stage")
+            used |= set(st if isinstance(st, list) else [st] if st and not str(st).startswith("!") else [])
+    used |= {s for k in ("final", "waiting") for s in stages.get(k) or []}  # declared stages count too
+    used.discard("none")
+    return used
+
+
 def to_project(defn):
-    """(project descriptor, format-2 workflow) of the definition, for `project.legacy_config` and
-    `workflow.to_nodes`. The definition must have no `errors`."""
+    """(project descriptor, format-2 workflow) of the definition, for the project loaders (`project.load`,
+    `workflow.load`) and `config`. The definition must have no `errors`."""
     f, w = defn["factory"], defn["workflow"]
     nodes, agents, envs = w.get("nodes") or {}, f.get("agents") or {}, f.get("environments") or {}
     models = f.get("models") or {}
@@ -500,18 +517,7 @@ def to_project(defn):
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP}
 
     # Stages: every name the nodes use, plus the engine's PR facts.
-    used = set()
-    for n in nodes.values():
-        used |= {t["stage"] for t in n.get("triggers") or [] if isinstance(t, dict) and "stage" in t}
-        if (n.get("when") or {}).get("stage"):
-            st = n["when"]["stage"]
-            used |= set(st if isinstance(st, list) else [st])
-        for oc in (n.get("outcomes") or {}).values():
-            used |= {e["stage"] for e in (oc or {}).get("effects") or [] if "stage" in e}
-            st = ((oc or {}).get("if") or {}).get("stage")
-            used |= set(st if isinstance(st, list) else [st] if st and not str(st).startswith("!") else [])
-    used |= {s for k in ("final", "waiting") for s in stages.get(k) or []}  # declared stages count too
-    used.discard("none")
+    used = _used_stages(w)
     kind = {s: k for k in ("final", "waiting") for s in stages.get(k) or []}
     states = {s: {"kind": kind.get(s, "active"), "store": {"label": f"{prefix}{s}"}} for s in sorted(used)}
     states["pr-merged"] = {"kind": "final", "store": {"pr": "merged"}}
@@ -662,3 +668,127 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
         outcomes[o] = res
     out["outcomes"] = outcomes
     return out
+
+
+# --- The shapes the gate reads, straight from the definition -------------------------------------
+# `nodes(defn)` is engine/nodes.yaml's shape: triggers as event strings, `when.stage`, stage and label effects.
+EVENTS = {("pr", "reviewed"): "pull_request_review.submitted", ("pr", "pushed"): "pull_request.synchronize",
+          ("pr", "opened"): "pull_request.opened", ("pr", "merged"): "pull_request.merged",
+          ("pr", "commented"): "issue_comment.created", ("ticket", "closed"): "issues.closed",
+          ("ticket", "commented"): "issues.comment"}
+
+
+def _trigger(t, name, prefix, on_pr, schedules, env):
+    """A trigger of a definition node as the gate's event string; a schedule is recorded in `schedules`."""
+    if t == "manual":
+        return "manual"
+    (k, v), = t.items()
+    if k == "stage":
+        return f"issues.labeled {prefix}{v}"
+    if k == "label":
+        return f"{'pull_request' if v in on_pr else 'issues'}.labeled {v}"
+    if k == "schedule":
+        key = name if name not in schedules or schedules[name]["cron"] == v else f"{name}-{len(schedules)}"
+        schedules[key] = {"cron": v}
+        return f"schedule {key}"
+    if k == "webhook":
+        return f"webhook {v}"
+    if k == "ci":
+        return f"workflow_run {(env.get('ci') or {}).get('workflow', 'quality-gates')}"
+    return EVENTS[(k, v)]
+
+
+def _outcome(oc, on_pr, all_stages):
+    oc = dict(oc or {})
+    guard = dict(oc.pop("if", None) or {})
+    out = {}
+    st = guard.pop("stage", None)
+    if st is not None:
+        out["from"] = [s for s in all_stages if s != st[1:]] if isinstance(st, str) and st.startswith("!") \
+            else st if isinstance(st, list) else [st]
+    if "ci" in guard:
+        ci = guard.pop("ci")
+        out["ci"] = ci if isinstance(ci, list) else [ci]
+    if guard:
+        out["if"] = guard  # label, pr, review, blockers, children: the gate checks them (gate.guard_holds)
+    for k in ("else", "enabled", "to"):
+        if k in oc:
+            out[k] = oc[k]
+    if "effects" in oc:
+        out["effects"] = [_label_effect(e, on_pr) for e in oc["effects"]]
+    return out
+
+
+def _label_effect(e, on_pr):
+    """A label is on the PR when any effect puts it there; `comment` with `on: mention` stays as written."""
+    key = next(k for k in e if k != "on")
+    if key in ("label", "unlabel"):
+        return {key: e[key], **({"on": "pr"} if e[key] in on_pr else {})}
+    return dict(e)
+
+
+def nodes(defn):
+    """The gate's node graph of the definition (nodes, schedules, webhooks, adapters, environments). The definition
+    must have no `errors`."""
+    f, w = defn["factory"], defn["workflow"]
+    agents, envs, defaults = f.get("agents") or {}, f.get("environments") or {}, f.get("defaults") or {}
+    wset = w.get("settings") or {}
+    prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
+    default_env, all_stages = wset.get("environment"), sorted(_used_stages(w))
+    primary = next(r["repo"] for r in envs[default_env]["repositories"] if r.get("main"))
+    on_pr = {f"{prefix}ci-green", f"{prefix}ci-red"}
+    for n in (w.get("nodes") or {}).values():
+        for oc in (n.get("outcomes") or {}).values():
+            on_pr |= {e.get("label") or e.get("unlabel") for e in (oc or {}).get("effects") or []
+                      if ("label" in e or "unlabel" in e) and e.get("on") == "pr"}
+    environments = {}
+    for en, e in envs.items():
+        repos = sorted(e.get("repositories") or [], key=lambda r: not r.get("main"))
+        secrets = sorted(k for k, v in {**(defaults.get("env") or {}), **(e.get("env") or {})}.items()
+                         if (v or {}).get("secret") and k != "GH_TOKEN")
+        environments[en] = {"repository": "primary" if repos and repos[0]["repo"] == primary else repos[0]["repo"].split("/")[-1],
+                            "secrets": secrets, "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"),
+                            "startup": STARTUP}
+    schedules, out = {}, {}
+    for name, n in (w.get("nodes") or {}).items():
+        a = agents[n["agent"]]
+        role = {"script": "script", "human": "human"}.get(a.get("harness")) or a.get("role") or n["agent"]
+        env_name = n.get("environment") or default_env
+        when = dict(n.get("when") or {}) or {"always": True}
+        triggers = [_trigger(t, name, prefix, on_pr, schedules, envs.get(env_name) or {}) for t in n.get("triggers") or []]
+        node = {"env": env_name} if role != "human" else {}
+        node.update(triggers=triggers, when={"actor": "human"} if role == "human" else when, role=role)
+        if role == "script":
+            node["run"] = n.get("run") or a.get("run")
+        if role not in ("script", "human"):
+            node["tier"] = n.get("model") or a.get("model")
+        if role != "human":
+            node["output"] = n.get("output", "read-only")
+        pr_woken = any(isinstance(t, dict) and (next(iter(t)) in ("pr", "ci") or ("label" in t and t["label"] in on_pr))
+                       for t in n.get("triggers") or [])
+        if pr_woken and "ci" not in node["when"]:
+            node["ci-independent"] = True
+        if n.get("triggers") and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"]):
+            node["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
+        if n.get("enabled") is False:
+            node["enabled"] = False
+        node["outcomes"] = {o: _outcome(oc, on_pr, all_stages) for o, oc in (n.get("outcomes") or {}).items()}
+        connectors = mcp_connectors(mcp(defn, name))
+        if connectors:  # Air's `mcpConnectors`; the custom servers go to `.mcp.json` at setup (team_setup)
+            node["mcp"] = connectors
+        out[name] = node
+    return {"adapters": {"ticket": (f.get("tracker") or {}).get("adapter", "github-issues"), "pr": "github"},
+            "environments": environments, "schedules": schedules,
+            "webhooks": {k: {"description": (v or {}).get("description", k)} for k, v in (f.get("webhooks") or {}).items()},
+            "nodes": out}
+
+
+def config(defn):
+    """The engine config of the definition, to merge over engine/defaults.yaml: its project descriptor, with the
+    tracker's `stages`, `stage_kinds` and `commands` that the gate reads."""
+    descriptor = to_project(defn)[0]
+    states = {name: s for name, s in descriptor["states"].items() if "label" in s["store"]}
+    return {**descriptor, "tracker": {**descriptor["tracker"],
+                                      "stages": {name: s["store"]["label"] for name, s in states.items()},
+                                      "stage_kinds": {name: s["kind"] for name, s in states.items()},
+                                      "commands": {name: c["store"] for name, c in descriptor["commands"].items()}}}

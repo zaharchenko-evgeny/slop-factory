@@ -254,14 +254,8 @@ def validate():
                     workflow.validate(project.load(config.team_root()), workflow.load(config.team_root()))]
         print("\n".join([*errs, *(f"warning: {w}" for w in definition.warnings(defn)), *([] if errs else ["factory: ok"])]))
         return 1 if errs else 0
-    project_mode = config.is_project()
     errs = config.validate()
-    if not errs and project_mode:
-        import project
-        import workflow
-        descriptor = project.load(config.team_root())
-        errs = workflow.validate(descriptor, workflow.load(config.team_root(), descriptor))
-    elif not errs:
+    if not errs:
         errs = nodes.validate(nodes.load(), config.load())
     print("\n".join(errs) or "factory: ok")
     return 1 if errs else 0

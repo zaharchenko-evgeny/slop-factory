@@ -286,6 +286,33 @@ class DefinitionTest(unittest.TestCase):
                          [{"command": "complexity:small"}, {"command": "implement-small"}, {"state": "in-dev"}])
         self.assertEqual(desc["states"]["done"]["kind"], "final")
 
+    def test_nodes_read_the_definition_in_the_gate_shape(self):
+        graph = definition.nodes(definition.load(self.root))
+        n = graph["nodes"]
+        self.assertEqual(n["fix"]["triggers"], ["pull_request.labeled factory:fix"])
+        self.assertEqual(n["finish"]["triggers"], ["pull_request.merged", "issues.closed"])
+        self.assertEqual(n["retro"]["triggers"], ["schedule retro"])
+        self.assertTrue(n["retro"]["routine"])
+        self.assertEqual(n["human"]["triggers"], ["manual"])
+        self.assertEqual(n["human"]["when"], {"actor": "human"})
+        self.assertNotIn("done", n["human"]["outcomes"]["ready"]["from"])          # `!done`
+        self.assertIn("draft", n["human"]["outcomes"]["ready"]["from"])
+        self.assertEqual(n["dispatch"]["outcomes"]["small"]["effects"],
+                         [{"label": "complexity:small"}, {"label": "factory:implement-small"}, {"stage": "in-dev"}])
+        self.assertEqual(n["automerge"]["triggers"], ["pull_request.labeled factory:automerge"])  # a PR label
+        self.assertTrue(n["automerge"]["ci-independent"])
+        self.assertEqual(n["automerge"]["outcomes"]["merge"]["effects"][1], {"label": "factory:merge", "on": "pr"})
+        self.assertEqual(graph["schedules"]["retro"], {"cron": "0 2 * * *"})
+        self.assertEqual(graph["environments"]["engine"]["repository"], "primary")
+        self.assertEqual(graph["environments"]["team"]["repository"], "slop-eval-factory")
+
+    def test_config_reads_stages_and_commands_from_the_definition(self):
+        tracker = definition.config(definition.load(self.root))["tracker"]
+        self.assertEqual(tracker["stages"]["in-dev"], "factory:in-dev")
+        self.assertEqual(tracker["stage_kinds"]["done"], "final")
+        self.assertNotIn("pr-merged", tracker["stages"])  # a PR fact is no label
+        self.assertEqual(tracker["commands"]["review-low"], {"pr_label": "factory:review-low"})
+
     def test_compiled_view_passes_engine_checks(self):
         from unittest import mock
         with mock.patch.dict(os.environ, {"FACTORY_TEAM": str(self.root)}):  # restores the caller's value
