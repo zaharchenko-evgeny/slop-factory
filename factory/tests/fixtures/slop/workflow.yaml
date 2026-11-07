@@ -61,7 +61,7 @@ nodes:
     triggers: [{ stage: triage }]
     when: { stage: triage }
     output: read-only
-    settings: { max_changed_lines: 400, max_repositories: 3 }
+    settings: { max_repositories: 3 }
     outcomes:
       small-low:      { effects: [{ label: "complexity:small" },  { label: "risk:low" },  { stage: ready }] }
       small-high:     { effects: [{ label: "complexity:small" },  { label: "risk:high" }, { stage: ready }] }

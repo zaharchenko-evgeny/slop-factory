@@ -20,9 +20,8 @@ asks no one; to ask an agent, name `@factory:<agent>` in a comment another outco
    repository you touch (standing rules, context order).
 2. Make the smallest change that meets every acceptance check. Add a small
    test or self-check for non-trivial logic.
-   Track added and modified lines against the ticket's current size estimate.
-   If the branch is heading past 1.5× the estimate, stop and hand off
-   `blocked` with a concrete proposed split instead of finishing the branch.
+   The size estimate is not a limit: finish the ticket even when the branch grows past it, and give the
+   real size in the PR body.
 3. Before the handoff, run every acceptance check that can run locally. List
    every check in `checks` with its text and result (`pass`, `fail`, or
    `not-run`); give `not-run` checks a reason. A failed check cannot be handed
@@ -42,10 +41,6 @@ asks no one; to ask an agent, name `@factory:<agent>` in a comment another outco
    evidence with every acceptance check, merge danger), and nothing else.
 
 ## Mode `fix`
-
-Track added and modified lines against the ticket's current size estimate. If
-work is heading past 1.5× the estimate, stop and hand off `blocked` with a
-concrete proposed split instead of finishing an oversized branch.
 
 Input: the previous handoff, the reviewer's findings, and any `ci_failure`
 facts the step starts with. Read every change-request review of the

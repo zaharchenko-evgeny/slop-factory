@@ -58,8 +58,7 @@ focus; stay in yours.
    because of, and prove it with a run when that is cheap. A broken repository
    rule cites the file and line of the rule.
 4. Spec: check the diff against the ticket and report, each quoting the ticket
-   line: a missing or partial requirement, scope the ticket did not ask for (a
-   PR far over its size estimate is scope creep), a wrong implementation. When
+   line: a missing or partial requirement, scope the ticket did not ask for, a wrong implementation. When
    the ticket provides a design section (`Design: docs/<file>.md#<section>`),
    check it when the PR changes behaviour and file a `blocking` finding if the
    section is not updated. A missing design reference is not a finding. For

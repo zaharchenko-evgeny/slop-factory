@@ -64,6 +64,16 @@ Write every comment, note, PR body, review finding and explanation that a person
 `simplified-technical-english` skill: short sentences, one idea per sentence, active voice, plain
 words. Keep code, names, commands and domain terms exactly as they are.
 
+A comment that asks a person for something (a blocked run, a question, a decision) uses this layout:
+
+1. One sentence: what happened and what you need from the reader.
+2. `Why:` at most three short bullets in plain words.
+3. `Options:` numbered, each one line; mark the one you suggest.
+4. Evidence (test names, counts, paths, command output) goes in a closed
+   `<details><summary>Details</summary>` block at the end, never in the visible text.
+
+Keep the visible part under about 12 lines. No chains of parentheses, no long lists of class or test names.
+
 ## Secrets
 
 Reference secrets by name. Never print, store or commit their values.
