@@ -217,11 +217,13 @@ class CodeHost(Protocol):
 
 def child_links(children):
     """Each child's prerequisite indexes: the children of the repositories it is `after`, else (no `repo` anywhere)
-    the previous child, which chains a plain split."""
+    the previous child, which chains a plain split. An `after` entry is a repository name or the 1-based position of
+    a child in the list."""
     kids = [c if isinstance(c, dict) else {"title": str(c)} for c in children]
     if not any(c.get("repo") for c in kids):
         return [[i - 1] if i else [] for i in range(len(kids))]
-    return [[j for j, d in enumerate(kids) if d.get("repo") in (c.get("after") or [])] for c in kids]
+    return [[j for j, d in enumerate(kids) if d.get("repo") in (c.get("after") or []) or j + 1 in (c.get("after") or [])]
+            for c in kids]
 
 
 def child_order(links):

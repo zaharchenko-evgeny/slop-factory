@@ -251,6 +251,17 @@ class RepositoryTagsTest(unittest.TestCase):
                                 ("create", "w", "web"), ("T-3", "subtask of T-1"), ("T-3", "depends on T-2"),
                                 ("T-1", "depends on T-3")])
 
+    def test_create_children_links_by_one_based_position_in_after(self):
+        fake, store = self.store()
+        ids, cmds = iter(["T-2", "T-3"]), []
+        store._create = lambda title, body, tags=(), repo=None: (cmds.append(("create", title, repo)), next(ids))[1]
+        store._command = lambda n, q: cmds.append((n, q))
+        store.open_blockers_all = lambda n: []
+        store.set_stage = lambda *a: True
+        store.create_children("T-1", [{"title": "a", "repo": "api"}, {"title": "w", "repo": "web", "after": [1]}],
+                              "factory:ready")
+        self.assertIn(("T-3", "depends on T-2"), cmds)
+
 
 class TagInventoryTest(unittest.TestCase):
     def test_lists_creates_and_deletes_factory_tags_but_preserves_others(self):
