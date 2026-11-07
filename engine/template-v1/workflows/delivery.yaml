@@ -112,6 +112,7 @@ nodes:
       bug:
         effects:
         - comment: diagnosis
+        - command: implement-<tier>
         - state: in-dev
       intended:
         effects:

@@ -76,7 +76,7 @@ flowchart LR
     S_ready --> N_start
     N_start -- "started +factory:implement-{tier}" --> S_in_dev
     S_investigating --> N_investigate
-    N_investigate -- "bug" --> S_in_dev
+    N_investigate -- "bug +factory:implement-{tier}" --> S_in_dev
     N_investigate -- "intended" --> S_not_actionable
     N_investigate -- "cannot-reproduce" --> S_needs_answers
     S_in_dev --> N_implement
@@ -138,7 +138,7 @@ flowchart LR
 | `human` | `a person` | triage: → triage<br>ready: → ready | human | built |
 | `intake` | `issue +factory:triage` | proceed: → ready<br>grill: → needs-answers<br>split: → split<br>not-actionable: → not-actionable<br>bug: → investigating | router · cheap | built |
 | `start` | `issue +factory:ready` | started: +factory:implement-{tier} → in-dev | script | built |
-| `investigate` | `issue +factory:investigating` | bug: → in-dev<br>intended: → not-actionable<br>cannot-reproduce: → needs-answers | developer · mid | built |
+| `investigate` | `issue +factory:investigating` | bug: +factory:implement-{tier} → in-dev<br>intended: → not-actionable<br>cannot-reproduce: → needs-answers | developer · mid | built |
 | `implement` | `issue +factory:implement-{cheap|mid|strong}` | done: → in-review<br>error: +factory:implement-{next} → in-dev<br>blocked: → blocked<br>failed: → blocked<br>env-broken: → ready | developer · cheap/mid/strong | built |
 | `adopt` | `PR +factory:adopt` | adopted: → in-review | router · cheap | planned #160 |
 | `review` | `PR +factory:review-<focus>`<br>`PR +factory:rereview-<focus>` | approve: —<br>changes: — | reviewer · per focus | built |

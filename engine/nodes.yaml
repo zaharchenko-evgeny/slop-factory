@@ -79,7 +79,7 @@ nodes:
     tier: mid
     output: read-only
     outcomes:
-      bug: { effects: [{ comment: diagnosis }, { stage: in-dev }] }
+      bug: { effects: [{ comment: diagnosis }, { label: "factory:implement-<tier>" }, { stage: in-dev }] }
       intended: { effects: [{ comment: reason }, { stage: not-actionable }] }
       cannot-reproduce: { effects: [{ comment: questions }, { stage: needs-answers }] }
   implement:
