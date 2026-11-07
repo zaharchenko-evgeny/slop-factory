@@ -76,6 +76,7 @@ the same format as implement mode. A failed check cannot be handed off as
 `done`.
 
 When `check` prints `merge_main: true` (the PR conflicts with `main`), first
+deepen the checkout (`git fetch --unshallow origin`; the Air clone is one commit), then
 merge `origin/main` into the branch and resolve the conflicts as in `update` mode
 (the `resolve-merge-conflicts` skill), then address the findings. A fix round that only resolves the conflict, with no review finding,
 is valid.
@@ -84,8 +85,8 @@ is valid.
 
 Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
 
-1. Merge `origin/main` into the branch with a merge commit. Never rebase or
-   force-push.
+1. Deepen the checkout (`git fetch --unshallow origin`; the Air clone is one commit), then
+   merge `origin/main` into the branch with a merge commit. Never rebase or force-push.
 2. Resolve only the conflicting hunks and keep the intent of both sides. Add
    nothing else. Use the `resolve-merge-conflicts` skill: start with its summary
    (`python3 ~/.agents/skills/resolve-merge-conflicts/scripts/extract_conflict_context.py`),
@@ -94,21 +95,19 @@ Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
    generator instead of merging them by hand.
 4. Rerun the acceptance checks and the pre-review checks, and record them in
    `checks`.
-5. Hand off `outcome: resolved`. When the tier cannot resolve it, hand
-   off `outcome: escalate`; when no tier can, hand off `outcome: unresolvable`
-   with `--reason` listing the conflicting files.
+5. Hand off `outcome: resolved`. When you cannot resolve it, hand off
+   `outcome: unresolvable` with `--reason` listing the conflicting files.
 
-## Environment failures and nothing to fix
+## Baseline failures and nothing to fix
 
-- When a required check fails and fails identically on `origin/main` in Air
-  (reproduce it there), hand off `outcome: env-broken` with `failing_check`
-  naming the check. The gate opens or reuses `Main is red in Air: <check>`,
-  blocks the ticket behind it and moves it to `ready`. Use it in `implement`
-  and `fix` mode only for a failure you reproduced on `origin/main`.
+- When a required check fails and fails identically on `origin/main` (reproduce
+  it there), the failure is not yours: do not block on it. Run the tests of the
+  files you changed, record the check with
+  `--not-run '<check> | fails on origin/main: <failing tests>'`, report your done
+  outcome, and add `--lesson "engine <check> | fails on origin/main: <failing tests>"`.
 - In `fix` mode, when there is no blocking finding, no red CI and no conflict
-  for the head (a stale or duplicate fix label), hand off
-  `outcome: nothing-to-fix` with no commit. The gate removes the label and
-  reruns the join.
+  for the head (a stale or duplicate fix label), report your done outcome with
+  no commit; the review runs again at the same head.
 
 ## Rules
 
