@@ -356,6 +356,15 @@ class DefinitionTest(unittest.TestCase):
                              text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
         self.assertEqual((run.returncode, run.stdout.strip()), (0, "factory: ok"), run.stderr)
 
+    def test_cli_validate_rejects_redundant_label_group_unlabel(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"]["effects"].extend(
+            [{"unlabel": "risk:high"}, {"label": "risk:low"}]))
+        run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
+                             text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+        self.assertIn("nodes.intake.ready", run.stdout)
+        self.assertIn("keep only the label", run.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

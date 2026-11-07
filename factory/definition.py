@@ -246,6 +246,23 @@ def errors(defn):
             errs += [f"unknown-guard: {where}.{o}: {k}" for k in (oc.get("if") or {}) if k not in GUARDS]
             errs += [f"unknown-effect: {where}.{o}: {next(k for k in e if k != 'on')}" for e in oc.get("effects") or []
                      if next((k for k in e if k != "on"), None) not in EFFECTS]
+            prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
+            by_target = {}
+            for effect in oc.get("effects") or []:
+                if not isinstance(effect, dict):
+                    continue
+                label = effect.get("label") or effect.get("unlabel")
+                if not isinstance(label, str) or ":" not in label or label.startswith(prefix):
+                    continue
+                kind = "label" if "label" in effect else "unlabel" if "unlabel" in effect else None
+                if kind:
+                    target = effect.get("on") or "issue"
+                    group = label.partition(":")[0]
+                    by_target.setdefault((target, group), set()).add(kind)
+            for (target, group), kinds in by_target.items():
+                if kinds == {"label", "unlabel"}:
+                    errs.append(f"label-group: {where}.{o}: cannot unlabel and label {group} on {target}; "
+                                "keep only the label")
         if not human and n.get("enabled") is not False and env in envs:
             try:
                 render(defn, name)
