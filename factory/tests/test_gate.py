@@ -71,6 +71,22 @@ class GateTest(unittest.TestCase):
         self.assertEqual(gate.sweep_plan(facts),
                          ("review", "changes", {"focus": "x", "round": 2, "review_replay": True}))
 
+    def test_definition_replay_uses_review_node_and_marker_outcome(self):
+        node = {"triggers": [{"label": "factory:review-high"}], "outcomes": {
+            "approve-low": {"effects": [{"review": "approve-at-head"}]},
+            "approve-risky": {"effects": [{"review": "approve-at-head"}]},
+            "changes": {"effects": [{"review": "request-changes-at-head"}]}}}
+        graph = {"nodes": {"review-high": node}}
+        review = {"agent": True, "focus": "review-high", "verdict": "approve", "commit_id": "abc", "round": 1}
+        facts = {"stage": "in-review", "head": "abc", "pr_labels": ["factory:review-high"], "reviews": [review]}
+        with patch("gate.definition_team", return_value=True):
+            self.assertIsNone(gate.stale_review_plan(facts, graph))  # two approvals: an unnamed one is not guessed
+            facts["reviews"] = [{**review, "outcome": "approve-risky"}]
+            self.assertEqual(gate.stale_review_plan(facts, graph)[:2], ("review-high", "approve-risky"))
+            facts["reviews"] = [{**review, "verdict": "changes"}]
+            self.assertEqual(gate.stale_review_plan(facts, graph)[:2], ("review-high", "changes"))
+            self.assertIsNone(gate.stale_review_plan({**facts, "pr_labels": []}, graph))
+
     def test_assignment_effect_resolves_owner_and_preserves_logins(self):
         self.assertEqual(gate.resolve({"assign": "owner", "on": "pr"}, {}, "7"),
                          {"kind": "assign", "ticket": "7", "value": cfg.owner(CONFIG), "on": "pr"})

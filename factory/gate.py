@@ -868,6 +868,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             e["focus"] = payload.get("focus") or name
             e["round"] = payload.get("round")
             e["findings"], e["summary"], e["run_id"] = payload.get("findings"), payload.get("summary"), payload.get("run_id")
+            e["outcome"] = outcome  # the marker keeps it: a replay of a split approval needs the one that was reported
         if e["kind"] == "join":
             e["tier"] = payload.get("tier")
         if e["kind"] in ("merge", "update-branch"):
@@ -892,7 +893,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
     replay = (payload.get("review_replay") and facts.get("stage") == "in-review"
-              and stale_review_plan(facts) == (name, outcome, {"focus": payload.get("focus"),
+              and stale_review_plan(facts, nodes) == (name, outcome, {"focus": payload.get("focus"),
                                                                "round": payload.get("round"),
                                                                "review_replay": True}))
     why = (None if replay else matches(node, facts, {**payload, "id": payload.get("event")}, out)) \
@@ -926,15 +927,35 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     return GO, {"applied": True, "written": written, **({"parent": parent} if parent else {})}
 
 
-def stale_review_plan(facts):
-    """The review outcome whose marker landed at this head but whose command label remains."""
+def review_outcome(node, review):
+    """The outcome of a definition node whose review effect wrote `review`: the one its marker names, else the only
+    outcome with a matching review effect. None when it cannot be told."""
+    want = "approve" if review["verdict"] == "approve" else "request-changes"
+    writes = [o for o, spec in (node.get("outcomes") or {}).items()
+              if any(str(e.get("review", "")).startswith(want) for e in (spec or {}).get("effects") or [])]
+    named = review.get("outcome")
+    return named if named in writes else writes[0] if len(writes) == 1 and not named else None
+
+
+def stale_review_plan(facts, nodes=None):
+    """The review outcome whose marker landed at this head but whose command label remains. A definition team's
+    review is named after its node (ADR-0021) and waits on that node's trigger labels; `nodes` is its workflow."""
     labels = set(facts.get("pr_labels") or [])
     for review in reversed(facts.get("reviews") or []):
         focus, verdict = review.get("focus"), review.get("verdict")
-        if (review.get("agent") and review.get("commit_id") == facts.get("head")
-                and focus and verdict in ("approve", "changes")
-                and vocab.cmd("review-<focus>", focus) in labels):
-            return "review", verdict, {"focus": focus, "round": review.get("round"), "review_replay": True}
+        if not (review.get("agent") and review.get("commit_id") == facts.get("head")
+                and focus and verdict in ("approve", "changes")):
+            continue
+        plan = {"focus": focus, "round": review.get("round"), "review_replay": True}
+        if not definition_team():
+            if vocab.cmd("review-<focus>", focus) in labels:
+                return "review", verdict, plan
+            continue
+        import definition
+        node = ((nodes or definition.load(config_mod.team_root())["workflow"]).get("nodes") or {}).get(focus)
+        if node and (outcome := review_outcome(node, review)) and any(
+                isinstance(t, dict) and t.get("label") in labels for t in node.get("triggers") or []):
+            return focus, outcome, plan
     return None
 
 

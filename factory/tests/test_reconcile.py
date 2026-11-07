@@ -292,6 +292,19 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(logged(t, "label"), ['"factory:fix"'])
         self.assertEqual(t.get_stage(t.tickets[1]), "changes-requested")
 
+    def test_landed_review_marker_replays_the_reported_outcome_of_the_definition(self):
+        """The review is named after its node; a split approval replays the outcome its marker names."""
+        review = {"agent": True, "focus": "review-high", "verdict": "approve", "outcome": "approve-risky",
+                  "commit_id": "abc123def4567", "round": 1}
+        t, results = self.recover(self.pr(ci="green", attrs=["risk:high"], pr_labels=["factory:review-high"],
+                                          label_at={"factory:review-high": OLD}, reviews=[review]))
+        self.assertEqual([(r["reconcile"], r["node"], r["outcome"]) for r in results],
+                         [("reapply", "review-high", "approve-risky")])
+        self.assertEqual(t.get_stage(t.tickets[1]), "approved")
+        self.assertNotIn("factory:review-high", t.facts(1)["pr_labels"])
+        self.assertIn('"factory:needs-human"', logged(t, "label"))
+        self.assertNotIn("factory:review-low", logged(t, "label"))
+
     def test_conflict_uses_the_fix_stage_of_the_definition(self):
         import copy
         defn = copy.deepcopy(self.defn)

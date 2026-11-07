@@ -106,7 +106,7 @@ def deploy_plan_at(revision):
             subprocess.run(["git", "worktree", "remove", "--force", path], check=True,
                            capture_output=True, text=True)
 
-MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))?(?: rereview=(1))? -->")
+MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))?(?: rereview=(1))?(?: outcome=([\w-]+))? -->")
 FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
 GOOD_CI = {"success", "neutral", "skipped"}
@@ -656,7 +656,7 @@ class GitHubGateTracker(DescriptorPort):
             verdict = (m[3] if agent else {"APPROVED": "approve", "CHANGES_REQUESTED": "changes"}.get(r["state"]))
             out.append({"author": r["user"]["login"], "state": r["state"], "commit_id": r["commit_id"],
                         "focus": m[1] if m else None, "round": int(m[2]) if m else None,
-                        "rereview": bool(m and m[4]),
+                        "rereview": bool(m and m[4]), "outcome": m[5] if m else None,
                         "verdict": verdict, "agent": agent, "assoc": r.get("author_association"), "submitted_at": r.get("submitted_at"),
                         "bot": r["user"].get("type") == "Bot" or r["user"]["login"].endswith("[bot]")})
             out[-1]["findings"] = re.findall(r"^\*\*([A-Z]\d+)\*\*", r.get("body") or "", re.M)
@@ -1191,7 +1191,8 @@ class GitHubGateTracker(DescriptorPort):
                                 and (r.get("submitted_at") or "") >= since}
         rnd = e.get("round") or len(earlier_change_heads) + 1
         verdict = "approve" if e["value"].startswith("approve") else "changes"
-        marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict}{' rereview=1' if rereview else ''} -->"
+        outcome = f" outcome={e['outcome']}" if e.get("outcome") else ""
+        marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict}{' rereview=1' if rereview else ''}{outcome} -->"
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
         defang = lambda t: str(t).replace("<!--", "<!\u200b--")  # noqa: E731  # prose never carries a marker
         lines = [defang(f"**{x['id']}** {x['file']} — {x['finding']}") for x in found]
