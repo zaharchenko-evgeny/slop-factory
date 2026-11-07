@@ -2,9 +2,12 @@
 
 It validates the definition, installs the skills of every role that runs in the environment (the engine's own
 skills too) under `~/.agents/skills/`, checking each sourced skill against its sha256, then runs the
-environment's `setup` script and each role's `roles/<role>/setup.sh`.
+environment's `setup` script and each role's `roles/<role>/setup.sh`. It then writes `.mcp.json` in the checkout
+with the custom MCP servers of the node in `FACTORY_NODE`, else of every node of the environment.
 """
 import hashlib
+import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -53,7 +56,26 @@ def roles_in(defn, environment):
     return out
 
 
-def install(defn, environment, home, fetcher=fetch, run=subprocess.run):
+def write_mcp_json(defn, environment, checkout, node=None):
+    """Write `<checkout>/.mcp.json` with the custom MCP servers of `node`, else of the enabled nodes that run in
+    `environment` (setup runs per environment). `${VAR}` references stay as written. Nothing is written when there
+    are none. Raises SystemExit when two nodes define one server name differently."""
+    w = defn["workflow"]
+    default = (w.get("settings") or {}).get("environment")
+    nodes = [node] if node else [name for name, n in (w.get("nodes") or {}).items()
+                                 if n.get("enabled") is not False and (n.get("environment") or default) == environment]
+    servers = {}
+    for name in nodes:
+        for key, entry in definition.mcp_custom(definition.mcp(defn, name)).items():
+            if servers.setdefault(key, entry) != entry:
+                raise SystemExit(f"factory setup: nodes of environment {environment} define MCP server {key} differently; "
+                                 "set FACTORY_NODE or rename one")
+    if servers:
+        (Path(checkout) / ".mcp.json").write_text(json.dumps({"mcpServers": servers}, indent=2) + "\n")
+    return sorted(servers)
+
+
+def install(defn, environment, home, fetcher=fetch, run=subprocess.run, checkout=None, node=None):
     """Install the environment's skills and run its setup scripts; returns the lines it printed. Raises SystemExit
     with the reasons when the definition is invalid or a skill's sha256 differs."""
     errs = definition.errors(defn)
@@ -88,6 +110,11 @@ def install(defn, environment, home, fetcher=fetch, run=subprocess.run):
     for script in scripts:
         run(["bash", str(script)], check=True, cwd=root)
         lines.append(f"ran {script.relative_to(root)}")
+    if node is not None and node not in (defn["workflow"].get("nodes") or {}):
+        raise SystemExit(f"factory setup: unknown node {node}")
+    written = write_mcp_json(defn, environment, checkout or Path.cwd(), node)
+    if written:
+        lines.append(f".mcp.json: {', '.join(written)}")
     return lines
 
 
@@ -105,6 +132,6 @@ def main(argv):
     if not definition.present(config.team_root()):
         print("factory setup: the team root has no factory.yaml and workflow.yaml (ADR-0021)")
         return 2
-    for line in install(definition.load(config.team_root()), argv[1], Path.home()):
+    for line in install(definition.load(config.team_root()), argv[1], Path.home(), node=os.environ.get("FACTORY_NODE")):
         print(line)
     return 0

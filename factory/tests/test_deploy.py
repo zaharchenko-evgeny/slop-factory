@@ -10,6 +10,7 @@ import copy
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -1107,6 +1108,31 @@ class DefinitionPlanTest(unittest.TestCase):
         self.assertEqual(model["[Slop factory] implement-medium"], "claude-sonnet-5-5[1m]")
         self.assertEqual(model["[Slop factory] review-high"], "gpt-6.1-sol")
         self.assertEqual(model["[Slop factory] review-low"], "gpt-6-luna")
+
+    def test_mcp_connectors_go_to_the_automation_and_custom_servers_stay_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            team = Path(tmp) / "team"
+            shutil.copytree(Path(__file__).resolve().parent / "fixtures/v2", team)
+            path = team / "factory.yaml"
+            data = yaml.safe_load(path.read_text())
+            data["defaults"]["env"]["IDE_PORT"] = {"required": False}
+            data["roles"]["developer"]["mcp"] = {
+                "youtrack": {"connector": "internal-youtrack"},
+                "idea": {"command": "npx", "args": ["-y", "@jetbrains/mcp-proxy"], "env": {"IDE_PORT": "${IDE_PORT}"}}}
+            path.write_text(yaml.safe_dump(data, sort_keys=False))
+            before = cfg._team
+            cfg.set_team(team)
+            try:
+                plan = deploy.plan_air(nodes.load(), cfg.load())
+            finally:
+                cfg.set_team(before)
+        by = {a["name"]: a for a in plan["automations"]}
+        dev = by["[Slop factory] implement-medium"]
+        self.assertEqual(dev["mcpConnectors"], ["internal-youtrack"])
+        self.assertIn("## Your MCP servers\n\n- youtrack (Air connector internal-youtrack)\n"
+                      "- idea (custom, from .mcp.json)\n", dev["prompt"])
+        self.assertEqual(by["[Slop factory] intake"]["mcpConnectors"], [])
+        self.assertNotIn("Your MCP servers", by["[Slop factory] intake"]["prompt"])
 
     def test_prompts_are_rendered(self):
         for name, a in self.by.items():

@@ -353,7 +353,6 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
                  main_repository: dict | None = None, tier: str | None = None) -> str:
     role = n["role"]
     servers = mcp_connectors(n, config, focus)
-    mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
     checkout = checkout_instructions(main_repository, config)
     import definition
@@ -367,10 +366,13 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
                     "Report its JSON output." + INSTALLED_FACTORY)
         text = definition.render(defn, name).strip()
         skills = definition.skill_lines(defn, role)
+        servers = [f"{k} (Air connector {e['connector']})" if "connector" in e else f"{k} (custom, from .mcp.json)"
+                   for k, e in definition.mcp(defn, name).items()]
     else:
         text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
         skills = skill_lines(role)
     checkout = checkout_instructions(main_repository, config)
+    mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
     return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skills}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"

@@ -4,6 +4,7 @@
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/team_setup.py (ADR-0021). Run: uv run factory/tests/test_setup.py"""
+import json
 import shutil
 import sys
 import tempfile
@@ -80,6 +81,41 @@ class SetupTest(unittest.TestCase):
         self.assertTrue((self.home / ".agents/skills/adr-reading/SKILL.md").is_file())
         self.assertEqual(self.ran[0], ["bash", str(self.root / "tools.sh")])   # environment first, then roles
         self.assertIn("ran tools.sh", lines)
+
+    def test_mcp_json_has_exactly_the_nodes_custom_servers_with_references_kept(self):
+        path = self.root / "factory.yaml"
+        data = yaml.safe_load(path.read_text())
+        data["defaults"].setdefault("env", {}).update({"IDE_PORT": {}, "DOCS_TOKEN": {"secret": True}})
+        data["roles"]["developer"]["mcp"] = {
+            "youtrack": {"connector": "internal-youtrack"},
+            "idea": {"command": "npx", "args": ["-y", "@jetbrains/mcp-proxy"], "env": {"IDE_PORT": "${IDE_PORT}"}}}
+        data["agents"]["dev"]["mcp"] = {"docs": {"url": "https://mcp.example/sse", "headers": {"Authorization": "Bearer ${DOCS_TOKEN}"}}}
+        path.write_text(yaml.safe_dump(data, sort_keys=False))
+        checkout = self.tmp / "checkout"
+        checkout.mkdir()
+        defn = definition.load(self.root)
+        lines = team_setup.install(defn, "engine", self.home, lambda spec, tmp: self.src, run=lambda cmd, **kw: None,
+                                   checkout=checkout, node="implement-medium")
+        written = json.loads((checkout / ".mcp.json").read_text())
+        self.assertEqual(written, {"mcpServers": {
+            "idea": {"command": "npx", "args": ["-y", "@jetbrains/mcp-proxy"], "env": {"IDE_PORT": "${IDE_PORT}"}},
+            "docs": {"url": "https://mcp.example/sse", "headers": {"Authorization": "Bearer ${DOCS_TOKEN}"}}}})
+        self.assertIn(".mcp.json: docs, idea", lines)
+        (checkout / ".mcp.json").unlink()
+        team_setup.install(defn, "engine", self.home, lambda spec, tmp: self.src, run=lambda cmd, **kw: None,
+                           checkout=checkout, node="intake")   # a node without custom servers: no file
+        self.assertFalse((checkout / ".mcp.json").exists())
+
+    def test_mcp_json_of_an_environment_without_a_node_is_the_union_and_conflicts_fail(self):
+        path = self.root / "factory.yaml"
+        data = yaml.safe_load(path.read_text())
+        data["roles"]["developer"]["mcp"] = {"a": {"command": "x"}}
+        data["agents"]["dev-strong"]["mcp"] = {"a": {"command": "y"}}
+        path.write_text(yaml.safe_dump(data, sort_keys=False))
+        with self.assertRaises(SystemExit) as e:
+            team_setup.install(definition.load(self.root), "engine", self.home, lambda spec, tmp: self.src,
+                               run=lambda cmd, **kw: None, checkout=self.tmp)
+        self.assertIn("define MCP server a differently", str(e.exception))
 
     def test_refuses_an_invalid_definition(self):
         (self.root / "roles/router/role.md").unlink()
