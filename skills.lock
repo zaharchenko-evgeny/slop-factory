@@ -42,6 +42,14 @@
       "license": "MIT",
       "sha256": "09c4f9fe72fc5bc8e486a2bbb32dd785ca6264c56a53dd1bf9a334af72586efd"
     },
+    "statechart": {
+      "source": "cursor/plugins",
+      "commit": "519d36aa9895",
+      "path": "pstack/skills/statechart",
+      "license": "MIT",
+      "vendored": false,
+      "sha256": "9c7d9289a592eda0dbd7854a3db08895ade57e91d66178431a59c009c536ab15"
+    },
     "tdd": {
       "source": "cursor/plugins",
       "commit": "4dd1d05818d1",

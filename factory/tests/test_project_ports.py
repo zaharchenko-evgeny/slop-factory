@@ -130,6 +130,9 @@ class TicketRepositoriesTest(unittest.TestCase):
                          ["slop-factory"])
         self.assertEqual(ticket_repositories("repositories: slop-factory, o/slop-eval-factory", names, "slop-factory"),
                          ["slop-factory", "slop-eval-factory"])
+        self.assertEqual(ticket_repositories("repositories: slop-factory, slop-eval-factory (fixture only)",
+                                             names, "slop-factory"),
+                         ["slop-factory", "slop-eval-factory"])
         with self.assertRaises(ValueError):
             ticket_repositories("repositories: o/other", names, "slop-factory")
 

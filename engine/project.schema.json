@@ -48,7 +48,8 @@
         "hold_label": {"type": "string"},
         "pr_fact_labels": {"type": "object", "additionalProperties": {"type": "string"}},
         "needs_human_label": {"type": "string"},
-        "lesson_label": {"type": "string"}
+        "lesson_label": {"type": "string"},
+        "comment_label": {"type": "string"}
       }
     },
     "repositories": {
@@ -77,6 +78,7 @@
           "repositories": {"type": "array", "items": {"type": "string"}},
           "domains": {"type": "array", "items": {"type": "string"}},
           "secrets": {"type": "array", "items": {"type": "string"}},
+          "secret_help": {"type": "object", "additionalProperties": {"type": "string"}},
           "variables": {"type": "object", "additionalProperties": {"type": "string"}},
           "vm": {"type": "string"},
           "startup": {"type": "string"}

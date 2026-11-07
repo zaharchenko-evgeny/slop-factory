@@ -17,11 +17,12 @@ pushes the tag; the tag is not created by this change.
 ## Use
 
 `factory --help` lists the available commands. The subcommands are `begin`,
-`end`, `check`, `apply`, `sweep`, `deploy`, `contracts`, `chart`, `validate`, `migrate`, `upgrade`, and `doctor`.
+`end`, `check`, `apply`, `sweep`, `deploy`, `contracts`, `chart`, `validate`, `setup`, `migrate`, `upgrade`, and `doctor`.
 `begin` starts a node and prints its handoff path; `end` applies the completed
 handoff. `check` and `apply` operate the gate, while `sweep` runs its event
 processing. `deploy` creates Air automations, `chart` renders the workflow,
-`validate` checks configuration, and `doctor` diagnoses the local setup.
+`validate` checks configuration, `setup` prepares an Air run's environment, and
+`doctor` diagnoses the local setup.
 `contracts refresh` re-records the Air service contracts and is operator-only.
 
 ## Team configuration
@@ -81,8 +82,7 @@ Slop factory's settings live in
 [slop-eval-factory](https://github.com/zaharchenko-evgeny/slop-eval-factory):
 a change to its definition (`factory.yaml`, `workflow.yaml`, `roles/`; ADR-0021) goes there. CI checks the
 copy of those files in `factory/tests/fixtures/slop/`. The copy may differ from
-`engine/nodes.yaml`; `factory/tests/fixtures/slop-v1/` is a frozen copy of the old layout that the
-old-layout tests use. To regenerate it, run this from a clean slop-eval-factory
+`engine/nodes.yaml`. To regenerate it, run this from a clean slop-eval-factory
 checkout at the commit to copy:
 
 ```bash

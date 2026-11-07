@@ -4,8 +4,7 @@
 # dependencies = ["pyyaml>=6"]
 # ///
 """Workflow files, format v2 (ADR-0016): nodes name states and commands from factory.project.yaml,
-never tracker labels or event names. `to_nodes` renders a v2 workflow into the node shape the gate
-and deploy read (ADR-0014); `migrate` converts a nodes.yaml and its team descriptor into v2; `copy_project`
+never tracker labels or event names. `migrate` converts a nodes.yaml and its team descriptor into v2; `copy_project`
 copies a v2 team's descriptor and workflow (`factory migrate project`, how factory/tests/fixtures/slop/ is made).
 
 Usage: workflow.py migrate <nodes.yaml> <factory.descriptor.yaml> [--out DIR]
@@ -32,15 +31,13 @@ WORKFLOW_PATH = "workflows/delivery.yaml"
 # The team commit a `copy_project` output was copied from.
 SOURCE = "SOURCE"
 EFFECTS = {"state", "command", "uncommand", "comment", "review", "create-issues", "merge", "update-branch",
-           "set-field", "join", "request-reviewers", "park-behind-main-red"}
+           "set-field", "join", "request-reviewers", "park-behind-main-red", "assign", "unassign"}
 PLACEHOLDERS = ("<tier>", "<focus>")
 # GitHub adapter: wakes that are events, not a state entered or a command given.
 EVENTS = {"manual": "manual", "pr pushed": "pull_request.synchronize", "pr opened": "pull_request.opened",
           "pr commented": "issue_comment.created",
           "pr reviewed": "pull_request_review.submitted", "ticket closed": "issues.closed",
           "ticket commented": "issues.comment", "ticket unlabeled": "issues.unlabeled"}
-# PR facts the GitHub adapter reads from an event; the others come from `tracker.pr_fact_labels`.
-PR_FACT_EVENTS = {"merged": "pull_request.merged", "open": "pull_request.opened"}
 PR_STATE_NAMES = {"merged": "pr-merged", "open": "pr-open"}
 
 
@@ -92,114 +89,8 @@ def resolve(commands, ref):
     return name, kind, value
 
 
-def _target(kind, what, youtrack=False):
-    """`issue` or `pr`: where the adapter keeps a label store (a YouTrack tag is on the ticket)."""
-    if kind == "label" or (youtrack and kind == "tag"):
-        return "issue"
-    if kind == "pr_label":
-        return "pr"
-    raise ValueError(f"the GitHub adapter cannot keep {what} in a {kind} store")
-
-
-def _youtrack_wake(kind, value):
-    """A YouTrack ticket event as a node trigger: `youtrack.tagAdded <tag>` or `youtrack.fieldChanged <field>=<value>`."""
-    if kind == "tag":
-        return f"youtrack.tagAdded {value}"
-    if kind == "field":
-        return f"youtrack.fieldChanged {value['name']}={value['value']}"
-    return None
-
-
-def render_wake(wake, project):
-    """A wake (`state ready`, `command implement-<tier>`, `pr pushed`, `schedule retro`, `webhook dry-run-finished`) as a node trigger."""
-    if wake in EVENTS:
-        return EVENTS[wake]
-    verb, _, arg = wake.partition(" ")
-    youtrack = (project.get("tracker") or {}).get("adapter") == "youtrack"
-    if verb in ("schedule", "webhook"):
-        return wake
-    if verb == "run":
-        return f"workflow_run {arg}"
-    if verb == "state":
-        store = project["states"][arg]["store"]
-        kind = project_mod.store_kind(store)
-        if youtrack and _youtrack_wake(kind, store[kind]):
-            return _youtrack_wake(kind, store[kind])
-        if kind == "label":
-            return f"issues.labeled {store['label']}"
-        if kind == "pr":
-            fact = store["pr"]
-            label = (project.get("tracker") or {}).get("pr_fact_labels", {}).get(fact)
-            if fact in PR_FACT_EVENTS:
-                return PR_FACT_EVENTS[fact]
-            if label:
-                return f"pull_request.labeled {label}"
-        raise ValueError(f"the GitHub adapter cannot wake on state {arg} ({kind}: {store[kind]})")
-    if verb == "command":
-        _, kind, value = resolve(project["commands"], arg)
-        if youtrack and kind == "tag":
-            return _youtrack_wake(kind, value)
-        return f"{'issues' if _target(kind, arg, youtrack) == 'issue' else 'pull_request'}.labeled {value}"
-    raise ValueError(f"unknown wake: {wake}")
-
-
-def render_effect(effect, project):
-    key = next(k for k in effect if k != "on")
-    if key == "state":
-        return {"stage": effect["state"]}
-    if key in ("command", "uncommand"):
-        _, kind, value = resolve(project["commands"], effect[key])
-        out = {"label" if key == "command" else "unlabel": value}
-        if _target(kind, effect[key], (project.get("tracker") or {}).get("adapter") == "youtrack") == "pr":
-            out["on"] = "pr"
-        return out
-    return copy.deepcopy(effect)
-
-
-def _render_outcome(outcome, project):
-    out = copy.deepcopy(outcome or {})
-    if "effects" in out:
-        out["effects"] = [render_effect(e, project) for e in out["effects"]]
-    return out
-
-
 def _primary(project):
     return next((r["name"] for r in project.get("repositories") or [] if r.get("role") == "primary"), None)
-
-
-def render_environments(project):
-    """The descriptor's environments in the nodes.yaml shape: one `repository`, `primary` for the primary one."""
-    primary, out = _primary(project), {}
-    for name, env in (project.get("environments") or {}).items():
-        out[name] = {}
-        for key, value in env.items():
-            if key == "repositories":
-                out[name]["repository"] = "primary" if value and value[0] == primary else (value or [None])[0]
-            else:
-                out[name][key] = copy.deepcopy(value)
-    return out
-
-
-def to_nodes(project, wf):
-    """The nodes.yaml shape (triggers, `when.stage`, label effects, environments) of a v2 workflow under a project."""
-    project = config.merge(_defaults(), project)
-    out = {k: copy.deepcopy(v) for k, v in wf.items() if k not in ("format", "nodes")}
-    if "environments" not in out and project.get("environments"):
-        out = {"environments": render_environments(project), **out}
-    out["nodes"] = {}
-    for name, n in (wf.get("nodes") or {}).items():
-        node = {}
-        for key, value in n.items():
-            if key == "wakes_on":
-                node["triggers"] = [render_wake(w, project) for w in value]
-            elif key == "when":
-                node["when"] = {("stage" if k == "state" else k): copy.deepcopy(v) for k, v in value.items()}
-            elif key == "outcomes":
-                node["outcomes"] = {o: _render_outcome(oc, project) for o, oc in value.items()}
-            else:
-                node[key] = copy.deepcopy(value)
-        out["nodes"][name] = node
-    return out
 
 
 def validate(project, wf):

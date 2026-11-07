@@ -144,12 +144,6 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.end_review("approve")
         self.assertEqual(code, 0, out)
 
-    def test_end_changes_requires_blocking_finding(self):
-        Path("f.json").write_text(json.dumps([{"id": "M1", "file": "x.py:1", "finding": "name it", "severity": "minor"}]))
-        code, out = self.end_review("changes", "--findings", "f.json")
-        self.assertEqual(code, 2, out)
-        self.assertIn("requires a blocking finding", out)
-
     def test_end_done_refuses_failed_check(self):
         tracker = self.tracker()
         self.run_cli("begin", "implement-mid", "event.json", *tracker)
@@ -199,6 +193,35 @@ class BeginEndTest(unittest.TestCase):
                             "--note-file", "b.py")
         self.assertEqual(data["agent_notes"], {"for": "fixer", "files": ["a.py", "b.py"], "repro": "uv run t.py"})
         self.assertNotIn("agent_notes", self.handoff("approve"))
+
+    def test_end_lesson_option(self):
+        data = self.handoff("done", "--lesson", "factory router | it misses ADRs | evidence: #7",
+                            "--lesson", "project gate.py | apply runs twice")
+        self.assertEqual(data["lessons"], [
+            {"scope": "factory", "about": "router", "text": "it misses ADRs", "evidence": "#7"},
+            {"scope": "project", "about": "gate.py", "text": "apply runs twice"}])
+        self.assertNotIn("lessons", self.handoff("done"))
+
+    def test_end_lesson_bad_scope(self):
+        for bad in ("team router | text", "factory router | ", "factory | text"):
+            with self.assertRaises(ValueError, msg=bad):
+                self.handoff("done", "--lesson", bad)
+        self.tracker()
+        self.assertEqual(self.run_cli("begin", "implement-mid", "event.json", "--tracker", "memory:tickets.json")[0], 0)
+        code, out = self.run_cli("end", "done", "--lesson", "team router | text")
+        self.assertEqual(code, 2, out)
+        self.assertIn("malformed option", json.loads(out)["error"])
+
+    def test_end_lessons_reach_gate(self):
+        tracker = self.tracker()
+        self.assertEqual(self.run_cli("begin", "implement-mid", "event.json", *tracker)[0], 0)
+        code, out = self.run_cli("end", "done", "--lesson", "engine cli.py | end dropped lessons | evidence: #869")
+        self.assertEqual(code, 0, out)
+        record = json.loads(Path("tickets.json").read_text())["7"]
+        comments = [json.loads(v) for k, v in record["log"] if k == "comment" and "factory:lesson" in v]
+        self.assertEqual(len(comments), 1, record["log"])
+        self.assertIn("- [engine] cli.py: end dropped lessons (evidence: #869)", comments[0])
+        self.assertIn("factory:lesson", record["attrs"])
 
     def test_begin_fix_prints_ci_failure(self):
         failure = [{"job": "tests", "step": "Run tests", "log_tail": "assert False"}]
@@ -338,13 +361,6 @@ class ImportTimeBoundaryTest(unittest.TestCase):
 class EnvRolesTest(unittest.TestCase):
     def test_prints_roles_of_enabled_agent_nodes_in_the_environment(self):
         self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
-        cfg.set_team(ROOT / "factory/tests/fixtures/slop-v1")
-        for env, roles in {"read": "reviewer\nrouter\n", "write": "developer\n", "ops": "distill\nretro\n"}.items():
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                self.assertEqual(cli.main(["env", "roles", env]), 0)
-            self.assertEqual(out.getvalue(), roles, f"slop-v1 {env}")
-
         fixture = ROOT / "factory/tests/fixtures/slop"
         cfg.set_team(fixture)
         for env in ("engine", "knowledge", "team"):

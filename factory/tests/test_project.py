@@ -132,13 +132,13 @@ class ProjectTest(unittest.TestCase):
             bad["states"]["ready"]["kind"] = "paused"
             with self.assertRaisesRegex(ValueError, "paused"):
                 project.load(write_project(tmp, bad))
-        config.set_team(FIXTURE)
+        config.set_team(ROOT / "tests/fixtures/v2")
         try:
-            legacy = config.load()
-            self.assertEqual(legacy["branch_pattern"], "ez/{ticket}-{slug}")
-            self.assertEqual(legacy["tracker"]["stages"]["ready"], "factory:ready")
-            self.assertEqual(legacy["tracker"]["stage_kinds"]["ready"], "active")
-            self.assertEqual(legacy["tracker"]["commands"]["review"], {"label": "factory:review"})
+            read = config.load()
+            self.assertEqual(read["branch_pattern"], "ez/{ticket}-{slug}")
+            self.assertEqual(read["tracker"]["stages"]["ready"], "factory:ready")
+            self.assertEqual(read["tracker"]["stage_kinds"]["ready"], "active")
+            self.assertEqual(read["tracker"]["commands"]["implement-small"], {"label": "factory:implement-small"})
         finally:
             config.set_team(None)
 

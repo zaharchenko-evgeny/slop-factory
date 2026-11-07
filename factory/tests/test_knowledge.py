@@ -12,6 +12,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
+import os  # noqa: E402
+os.environ["FACTORY_TEAM"] = str(ROOT / "factory/tests/fixtures/team")  # the fixture team, as CI; an Air run points it at the real team
 import knowledge  # noqa: E402
 import nodes  # noqa: E402
 from gate_port import MemoryTracker  # noqa: E402

@@ -58,7 +58,7 @@ nodes:
       grill: { effects: [{ comment: questions }, { stage: needs-answers }] }
       split: { effects: [{ create-issues: children }, { stage: split }] }
       not-actionable: { effects: [{ comment: reason }, { stage: not-actionable }] }
-      bug: { enabled: false, ticket: 161, effects: [{ stage: investigating }] }   # investigate is not built yet
+      bug: { effects: [{ stage: investigating }] }
   start:
     env: read
     pilot: true
@@ -73,15 +73,13 @@ nodes:
       started: { from: [ready], effects: [{ label: "factory:implement-<tier>" }, { stage: in-dev }] }
   investigate:
     env: write
-    enabled: false
-    ticket: 161
     triggers: ["issues.labeled factory:investigating"]
     when: { stage: investigating }
     role: developer
     tier: mid
     output: read-only
     outcomes:
-      bug: { effects: [{ comment: diagnosis }, { stage: in-dev }] }
+      bug: { effects: [{ comment: diagnosis }, { label: "factory:implement-<tier>" }, { stage: in-dev }] }
       intended: { effects: [{ comment: reason }, { stage: not-actionable }] }
       cannot-reproduce: { effects: [{ comment: questions }, { stage: needs-answers }] }
   implement:
@@ -270,7 +268,7 @@ nodes:
     when: { always: true }
     role: script
     tier: cheap
-    run: uv run factory/cli.py doctor
+    run: uv run factory/cli.py doctor --engine
     output: read-only
     outcomes:
       probed: {}

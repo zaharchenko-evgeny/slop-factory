@@ -26,6 +26,11 @@ the user approves a plan. The layout is the engine's ADR-0021:
 - `workflow.yaml` says how it works: stages, shared settings (limits) and the
   nodes in delivery order. A node is an agent + an environment + triggers +
   outcomes; the gate applies an outcome's effects.
+- `assign` takes a GitHub login, a list of logins or `owner` (the top-level
+  `factory.yaml` owner). `unassign` takes the same values or `all`. With
+  `on: pr`, `assign` targets every open PR. Without `on`, it targets the ticket.
+  Assigning a ticket in `ready` hides it from the frontier because the frontier
+  skips assigned tickets.
 - Labels before the first `:` form groups. Adding one value removes the others on the same ticket or PR ([ADR-0021](../../docs/adr/0021-definition-layout.md)).
 - `roles/<role>/role.md` holds a role's instructions (Jinja, rendered with the
   node's settings); `roles/<role>/setup.sh` installs the role's tools.
@@ -77,6 +82,14 @@ error; Jinja's `{{ name }}` in role bodies is rendered later, by setup).
 without showing the diff. Then apply the interview's choices to the generated
 files and run `factory validate --team OUT_DIR`.
 
+Before it writes any file, `render.py` checks the rendered `workflow.yaml` with the pinned `statechart` skill
+(`skills.lock`, fetched at its pin with the sha256 check; the step stops when the fetch fails): `statechart.py` turns the stages and node outcomes into a
+TLA+ spec and runs TLC. It needs Node 22.18+ and Java 11+. The rules are one stage label per ticket
+(`OneStageLabel`), a moving node for every non-final and non-waiting stage (`MovingNode`), no deadlock outside final and
+waiting stages (`NoDeadlock`) and `done` reachable from `triage` (`DoneReachable`). A broken rule stops the run.
+Fix what the template can resolve (a stage with no node that moves out, a misspelled stage). When the fix needs a
+user decision, such as a stage that should be waiting or final, ask the user. The README gets the Mermaid state chart.
+
 Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 `tests/test_templates.py` checks them):
 
@@ -84,6 +97,7 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | --- | --- | --- |
 | `PROJECT_NAME` | Project name | `factory.yaml`, `workflow.yaml`, `README.md` |
 | `ENGINE` | The engine package the team pins, as `uv tool install` takes it | `factory.yaml` |
+| `ENGINE_SKILL_SOURCE` | Derived from `ENGINE`; the GitHub source for the pinned engine's `factory-deploy` skill | `factory.yaml` |
 | `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.yaml` |
 | `MAIN_REPOSITORY` | `owner/repo` of the project's main repository | `factory.yaml` |
 | `TEAM_REPOSITORY` | `owner/repo` of this definition and the knowledge base | `factory.yaml` |

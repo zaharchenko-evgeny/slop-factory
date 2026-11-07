@@ -23,17 +23,20 @@ change, whether you are a person, a pi session or a factory role.
    `draft → triage → ready → in-dev → in-review → approved → merged → done`, with
    `changes-requested` for a fix round and `blocked` or `failed` when a run
    stops. `triage` starts the router; `ready` starts a developer once every
-   blocker is closed. The next ticket to work on comes from the frontier: open, `ready`,
-   every blocker closed, unclaimed (no assignee), in map order.
-3. **Split large tickets.** Estimate size as lines a reviewer must read: added
+   blocker is closed (workflow `blockers: start`, the default). With `blockers: merge` the developer
+   starts at once and the merge waits until every blocker is closed. The next ticket to work on comes from
+   the frontier: open, `ready`, every blocker closed in `start` mode (any blocker state in `merge` mode),
+   unclaimed (no assignee), in map order.
+3. **Size and splits.** Estimate size as lines a reviewer must read: added
    lines plus modified lines, counting tests and fixtures. Exclude paths listed
    in `engine/defaults.yaml` under `limits.generated_paths`; verify those files
    through their generator comparison test. A whole file deleted
    counts as one line because it is checked by listing it; lines removed from a
    file that remains count as modified. A ticket may report both changed lines
-   and deletion volume; use changed lines for the size estimate. Above about
-   400 lines, or 3 repositories, split the ticket into linked sub-issues before
-   starting. Deliver the first slice.
+   and deletion volume; use changed lines for the size estimate. The estimate
+   picks the developer's model tier; it is not a limit. Split a ticket into
+   linked sub-issues only when it spans more than 3 repositories or holds
+   independent changes. Deliver the first slice.
 4. **Deliver through the factory.** The factory is the node list in
    [engine/nodes.yaml](engine/nodes.yaml) ([ADR-0014](docs/adr/0014-node-model.md)),
    deployed as `[factory:<node>]` Air automations by the `factory-deploy` skill.

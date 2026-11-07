@@ -91,6 +91,12 @@ act on the same subject (ticket or PR). Script and routine nodes, and nodes
 with `mention: false`, are never mentionable. Each node spec lists the
 personas its agent may address, and `factory begin` prints them.
 
+## 4b. Notifiers (ADR-0022)
+
+A person can get an actionable message in Slack, email or Telegram and answer in
+that thread. Adapters send; the gate alone sends and applies replies
+([0022-notifiers](adr/0022-notifiers.md)).
+
 ## 5. Flows
 
 Feature or bug:
@@ -184,6 +190,11 @@ per repository.
   [0019-team-repository-is-a-project](adr/0019-team-repository-is-a-project.md)).
   Agents read team files from a pristine copy of its default branch, never
   from the checkout they edit.
+- Blockers (workflow key `blockers`): `start` (default) holds a `ready` ticket until every blocker is
+  closed. `merge` starts work at once, so tickets of several repositories develop in parallel; the merge waits
+  until every blocker is closed (`when: blockers: closed` on the merge node). When a blocker closes, `gate.py
+  sweep` merges each `approved` ticket it blocked, and `factory reconcile` re-fires the merge label of one it
+  missed. A node runs on open blockers unless its `when` says `blockers: closed`.
 - Base branch: ticket override (`base:<branch>`) or the repository default in
   `factory.yaml`.
 - Branch name pattern from `factory.yaml`, default `ez/{ticket}-{slug}`.
