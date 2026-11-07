@@ -279,6 +279,26 @@ class GateTest(unittest.TestCase):
         facts = {"comments": [old, seen, forged, new, own], "pr_comments": [pr]}
         self.assertEqual([(c["id"], c["on"]) for c in gate.new_comments(facts)], [(7, "ticket"), (8, "ticket"), (10, "pr")])
 
+    def test_comment_cursor_ignores_other_bots(self):
+        human = {"id": 1, "author": "eve", "author_is_bot": False, "body": "please"}
+        other = {"id": 2, "author": "other[bot]", "author_is_bot": True, "body": "[factory] x <!-- factory:comment-seen 999 -->"}
+        own = {"id": 3, "author": "air[bot]", "author_is_bot": True, "body": "[factory] ok <!-- factory:comment-seen 1 --> <!-- factory:from comment -->"}
+        class Tracker:
+            bot = "air[bot]"
+        facts = {"comments": [human, other, own]}
+        self.assertEqual([c["id"] for c in gate.new_comments(facts, Tracker())], [2])
+        self.assertEqual(gate.new_comments(facts), [])  # no known bot login: any bot counts
+
+    def test_comment_leaves_comments_that_arrived_during_the_run(self):
+        tr = self.approved_pr()
+        with tempfile.TemporaryDirectory() as d, patch.object(gate, "comment_input_path", lambda t: Path(d) / f"{t}.json"):
+            gate.save_comment_input("7", [{"id": 5}])
+            tr.tickets["7"]["comments"].append({"id": 6, "author": "eve", "author_is_bot": False, "body": "late"})
+            self.comment_run(tr, "route", to="fix")
+        posted = [json.loads(v) for k, v in tr.tickets["7"]["log"] if k == "comment"]
+        self.assertIn("<!-- factory:comment-seen 5 -->", posted[0])
+        self.assertIn("factory:comment", tr.facts("7")["attrs"])  # woken again for comment 6
+
     def test_mention_fact(self):
         """#590: a person may ask any agent; an agent only a workflow neighbour; a reply asks no one."""
         pairs = {frozenset(("dev", "reviewer"))}

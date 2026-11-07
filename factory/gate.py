@@ -528,8 +528,10 @@ def check(name, event, tracker, nodes, config, code_host=None):
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     notes = facts.get("agent_notes", [])
     if comment_node(node):  # ADR-0023: what the comment node reads, after the cursor
+        listed = new_comments(facts, tracker, event["ticket"])
+        save_comment_input(event["ticket"], listed)
         facts["new_comments"] = [{k: c.get(k) for k in ("id", "on", "author", "author_is_bot", "at", "body")}
-                                 for c in new_comments(facts, tracker, event["ticket"])]
+                                 for c in listed]
     facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
@@ -657,10 +659,11 @@ COMMENT_EFFECTS = ("route", "reply", "skip")  # the effects of the comment node'
 SEEN = re.compile(r"<!-- factory:comment-seen (\d+) -->")
 
 
-def comment_cursor(comments):
-    """The highest id in a `factory:comment-seen` marker of the factory's own comments (0: none)."""
-    return max((int(m[1]) for c in comments if c.get("author_is_bot") and (c.get("body") or "").startswith("[factory]")
-                and (m := SEEN.search(c["body"]))), default=0)
+def comment_cursor(comments, bot=None):
+    """The highest id in a `factory:comment-seen` marker of the factory's own comments (0: none). With the tracker's
+    `bot` login known, only that author counts; another integration cannot move the cursor."""
+    return max((int(m[1]) for c in comments if (c.get("author") == bot if bot else c.get("author_is_bot"))
+                and (c.get("body") or "").startswith("[factory]") and (m := SEEN.search(c["body"]))), default=0)
 
 
 def new_comments(facts, tracker=None, ticket=None):
@@ -670,9 +673,29 @@ def new_comments(facts, tracker=None, ticket=None):
     if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
         pr = tracker.pr_comments(ticket)
     found = [dict(c, on="ticket") for c in facts.get("comments") or []] + [dict(c, on="pr") for c in pr or []]
-    cursor = comment_cursor(found)
+    cursor = comment_cursor(found, getattr(tracker, "bot", None))
     own = lambda c: FROM.search(c.get("body") or "") and not ASK.search(c.get("body") or "")
     return sorted((c for c in found if int(c.get("id") or 0) > cursor and not own(c)), key=lambda c: int(c["id"]))
+
+
+def comment_input_path(ticket):
+    return Path(".factory") / "check" / f"{ticket}-comments.json"
+
+
+def save_comment_input(ticket, comments):
+    """The newest comment id the step's context lists: `apply` acknowledges nothing after it."""
+    path = comment_input_path(ticket)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"ticket": ticket, "last": max((int(c["id"]) for c in comments), default=0)}))
+
+
+def comment_input_last(ticket):
+    """The saved id, or None when no `check` ran (every comment is then input)."""
+    try:
+        state = json.loads(comment_input_path(ticket).read_text())
+        return int(state["last"]) if str(state.get("ticket")) == str(ticket) else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def comment_node(node):
@@ -711,7 +734,10 @@ def route_effects(to, facts, ticket, nodes, tier, clean):
 def comment_moves(moves, name, payload, facts, tracker, nodes, ticket):
     """(effects, after) for the comment node's route, reply and skip effects (ADR-0023). `effects` move the item;
     `after` always runs: remove the wake label, react on a skipped comment, post a short reply with the cursor."""
-    fresh = new_comments(facts, tracker, ticket)
+    found = new_comments(facts, tracker, ticket)
+    last = comment_input_last(ticket)
+    fresh = [c for c in found if last is None or int(c["id"]) <= last]  # what the step read
+    later = {c["on"] for c in found if c not in fresh}  # arrived during the run: still pending
     tier = payload.get("tier") or fix_tier(facts)
     effects, summary = [], "Nothing to do."
     for e in moves:
@@ -731,6 +757,8 @@ def comment_moves(moves, name, payload, facts, tracker, nodes, ticket):
     if definition_team():
         text += f"\n\n{comment_marker(name)}"
     after = [{"kind": "unlabel", "ticket": ticket, "value": vocab.comment(), **extra} for extra in ({}, {"on": "pr"})]
+    after += [{"kind": "label", "ticket": ticket, "value": vocab.comment(), **({"on": "pr"} if on == "pr" else {})}
+              for on in sorted(later)]  # the label added again wakes the node for the later comments
     after.append({"kind": "comment", "ticket": ticket, "value": text, **({"on": "pr"} if fresh and fresh[-1]["on"] == "pr" else {}),
                   **({"run_id": payload["run_id"]} if payload.get("run_id") else {})})
     return effects, after
