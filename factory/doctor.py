@@ -130,10 +130,10 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
 
 
 def project_write_probes(settings, env, run, environ=os.environ):
-    """In github_tracker.WRITE_TOKEN_ENVS, one `write:label:<owner/repo>` probe per `role: project` repository: create
+    """In an environment that writes with the project token (github_tracker.token_env), one `write:label:<owner/repo>` probe per `role: project` repository: create
     a probe label, then delete it, with $FACTORY_WRITE_TOKEN when it is set (github_tracker.ProjectWriteRun). In
     `write_mode: token` a missing token is a `fail`, and nothing is written."""
-    if env not in github_tracker.WRITE_TOKEN_ENVS:
+    if not github_tracker.token_env(env, settings):
         return []
     repos = github_tracker.project_repositories(settings)
     run = github_tracker.ProjectWriteRun(run, repos, environ)

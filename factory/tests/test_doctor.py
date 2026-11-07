@@ -112,6 +112,12 @@ class ProjectWriteProbeTest(unittest.TestCase):
         self.assertEqual(gh.calls[0][2], gh.calls[1][2])
         self.assertEqual(gh.tokens, ["pat", "pat"])
 
+    def test_an_environment_that_declares_the_token_is_probed_whatever_its_name(self):
+        settings = {**self.SETTINGS, "environments": {"engine": {"secrets": ["FACTORY_WRITE_TOKEN"]}, "team": {"secrets": []}}}
+        got = doctor.project_write_probes(settings, "engine", FakeGh(), {"FACTORY_WRITE_TOKEN": "pat"})
+        self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])
+        self.assertEqual(doctor.project_write_probes(settings, "team", FakeGh(), {}), [])
+
     def test_denied_write_without_token_mode_is_reported_and_read_env_is_not_probed(self):
         settings = {**self.SETTINGS, "write_mode": "per-repo"}
         gh = FakeGh(deny=("label create",))
