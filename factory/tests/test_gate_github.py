@@ -1853,6 +1853,25 @@ class CiSyncCodeHostTest(unittest.TestCase):
                                 (["pr", "merge"], "o/app", "pat"), (["pr", "edit"], "o/app", None)])
 
 
+    def test_issues_token_writes_a_label_and_a_comment_on_a_project_repository_issue(self):
+        desc = {**CONFIG, "tracker": {**CONFIG["tracker"], "repository": "o/main"}, "issues_token_env": "FACTORY_ISSUES_TOKEN",
+                "repositories": [{"name": "main", "url": "https://github.com/o/main", "role": "primary"},
+                                 {"name": "app", "url": "https://github.com/o/app", "role": "project"}]}
+        seen = []
+        run = lambda args, token=None: seen.append((args[:2], args[args.index("-R") + 1], token)) or ""  # noqa: E731
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, "factory.descriptor.yaml")
+            path.write_text(yaml.safe_dump(desc))
+            with patch.dict(os.environ, {"FACTORY_ISSUES_TOKEN": "iss", "FACTORY_WRITE_TOKEN": "pat"}):
+                tracker = GitHubGateTracker.from_config(path, run=run)
+                tracker.run(["issue", "edit", "1", "-R", "o/app", "--add-label", "x"])
+                tracker.run(["issue", "comment", "1", "-R", "o/app", "--body", "b"])
+                tracker.run(["issue", "comment", "2", "-R", "o/main", "--body", "b"])
+            with patch.dict(os.environ, {"FACTORY_WRITE_TOKEN": "pat"}):
+                os.environ.pop("FACTORY_ISSUES_TOKEN", None)
+                tracker.run(["issue", "comment", "1", "-R", "o/app", "--body", "b"])
+        self.assertEqual([t for _, _, t in seen], ["iss", "iss", None, "pat"])
+
 
 class GateTrackerChildrenTest(unittest.TestCase):
     def test_children_come_from_the_tickets(self):

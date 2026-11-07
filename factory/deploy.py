@@ -502,6 +502,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             automations.append(automation)
     envs = []
     token = config.get("write_mode") == "token" and len(config["repositories"]) > 1
+    issues_token = config.get("issues_token_env")  # the gate's issue, label and comment writes to project repositories
     for env, scope_name, node_name in [(e, None, None) for e in used if e in unscoped] + scoped:
         d = envs_def[env]
         repo = repos[scope_name] if scope_name else repos.get(d["repository"]) or primary
@@ -511,7 +512,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env, **({"FACTORY_NODE": node_name} if node_name else {})},
             "secrets": list(dict.fromkeys([*d.get("secrets", []),
-                                           *([WRITE_TOKEN_SECRET] if token and github_tracker.token_env(env, config) else [])])),
+                                           *([WRITE_TOKEN_SECRET] if token and github_tracker.token_env(env, config) else []),
+                                           *([issues_token] if issues_token and len(config["repositories"]) > 1 else [])])),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
@@ -1161,7 +1163,8 @@ def main(argv: list[str]) -> int:
         servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
-            run = github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config))
+            run = github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config),
+                                                    issues_token_env=config.get("issues_token_env"))
             code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run)
             return code or write_files(plan["files"], argv[0] == "--apply")
         finally:
