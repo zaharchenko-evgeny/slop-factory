@@ -354,6 +354,7 @@ class GateTest(unittest.TestCase):
     def test_mention_in_code_is_a_quote(self):
         self.assertFalse(self._mention("ask `@factory:dev` here"))
         self.assertFalse(self._mention("run:\n```\n@factory:dev\n```"))
+        self.assertFalse(self._mention("run:\n~~~text\n@factory:dev\n~~~"))
         self.assertIsNone(gate.latest_mention({"comments": [{"body": "see `@factory:dev`", "at": "1"}], "pr_comments": []}))
 
     def test_label_group_holds_one_value(self):

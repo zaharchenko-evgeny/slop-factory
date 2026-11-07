@@ -451,7 +451,7 @@ def mention_holds(agent, facts, tracker=None, ticket=None):
 GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention"}
 FROM = re.compile(r"<!-- factory:from (\S+?)( reply)? -->")
 REVIEW_MARKER = re.compile(r"<!-- factory:review focus=\S+ ")
-CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+CODE = re.compile(r"```.*?```|~~~.*?~~~|`[^`\n]*`", re.S)
 
 
 def strip_code(body):
