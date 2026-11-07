@@ -29,6 +29,24 @@ PREFIX = "[factory] reconcile:"
 RUN = "reconcile"
 LOST_FINISH = ("approved", "in-review", "changes-requested")
 RED_TITLE = re.compile(r"Main is red(?: in Air)?: (.+)")
+FACTS_ERROR = f"{PREFIX} ticket facts failed:"
+
+
+def ticket_error(tracker, number, error):
+    """Report a ticket-local read failure once, without preventing the next ticket from running."""
+    result = {"ticket": number, "error": f"{type(error).__name__}: {error}"}
+    try:
+        store = getattr(tracker, "tickets", None)
+        if hasattr(store, "comments"):
+            comments = [c["body"] for c in store.comments(number)]
+        else:
+            comments = [json.loads(value) for kind, value in store[number].get("log", []) if kind == "comment"]
+        if not any(comment.startswith(FACTS_ERROR) for comment in comments):
+            tracker.apply({"ticket": number, "run_id": RUN, "kind": "comment",
+                           "value": f"{FACTS_ERROR} {result['error']}"})
+    except Exception as comment_error:
+        result["comment_error"] = f"{type(comment_error).__name__}: {comment_error}"
+    return result
 
 
 def wakes(nodes, facts):
@@ -148,7 +166,7 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 progress(r)
         except Exception as e:  # one ticket failing does not stop the others
             failed = True
-            results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+            results.append(ticket_error(tracker, n, e))
             if progress:
                 progress(results[-1])
     return results, failed
@@ -261,7 +279,7 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             if progress:
                 progress(r)
         except Exception as e:  # one ticket failing does not stop the others
-            results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+            results.append(ticket_error(tracker, n, e))
             if progress:
                 progress(results[-1])
     return results
