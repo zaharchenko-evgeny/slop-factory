@@ -122,7 +122,7 @@ nodes:
       approve-low:   { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "risk:low" },
                                 { label: "factory:automerge", on: pr }, { stage: approved }] }
       approve-risky: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "risk:high" },
-                                { label: "factory:needs-human" }, { stage: approved }] }   # merge risk medium or high: a person merges
+                                { label: "factory:needs-human", on: pr }, { stage: approved }] }   # merge risk medium or high: a person merges
       changes:       { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-low" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
 
   review-high:
@@ -135,7 +135,7 @@ nodes:
       approve-low:   { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "risk:low" },
                                 { label: "factory:automerge", on: pr }, { stage: approved }] }
       approve-risky: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "risk:high" },
-                                { label: "factory:needs-human" }, { stage: approved }] }   # merge risk medium or high: a person merges
+                                { label: "factory:needs-human", on: pr }, { stage: approved }] }   # merge risk medium or high: a person merges
       changes:       { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-high" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
 
   ci-red:                         # red CI needs no reviewer: the guards send it straight to the developer
@@ -180,7 +180,8 @@ nodes:
     outcomes:
       merge:       { if: { label: "risk:low" }, else: needs-human,
                      effects: [{ unlabel: "factory:automerge" }, { label: "factory:merge", on: pr }] }
-      needs-human: { effects: [{ unlabel: "factory:automerge" }, { comment: reason }, { label: "factory:needs-human" }] }
+      needs-human: { effects: [{ unlabel: "factory:automerge" }, { comment: reason, on: pr },
+                                 { label: "factory:needs-human", on: pr }] }   # the person looks at the PR
 
   merge:                          # the guards choose; the merge effect checks head, approval and CI itself
     agent: clerk
@@ -207,10 +208,19 @@ nodes:
   notify:                         # a state that needs the owner: the agent writes one message, or skips
     agent: notify
     environment: team
-    triggers: [{ stage: blocked }, { stage: needs-answers }, { label: "factory:needs-human" }]
+    triggers: [{ stage: blocked }, { stage: needs-answers }]
     output: read-only
     outcomes:
       notified: { effects: [{ comment: message }] }
+      skipped:  {}
+
+  notify-pr:                      # a PR that waits for the owner: the message goes on the PR
+    agent: notify
+    environment: team
+    triggers: [{ label: "factory:needs-human" }]
+    output: read-only
+    outcomes:
+      notified: { effects: [{ comment: message, on: pr }] }
       skipped:  {}
 
   walkthrough:                    # an approved PR a person must merge: one comment that orients them, no review
