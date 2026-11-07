@@ -59,6 +59,9 @@ def test_missing_workflow_exits_2():
 def test_installed_wheel_runs_the_check(tmp_path):
     subprocess.run(["uv", "build", "--wheel", "--out-dir", str(tmp_path), str(ROOT)], check=True, capture_output=True)
     wheel = next(tmp_path.glob("*.whl"))
+    import zipfile
+    names = {n.split(".data/data/", 1)[-1] for n in zipfile.ZipFile(wheel).namelist()}
+    assert {"share/factory-engine/engine/defaults.yaml", "share/factory/statechart.py"} <= names  # #973
     for name, code in (("../slop", 0), ("no-deadlock", 1)):
         run = subprocess.run(["uv", "run", "--no-project", "--with", str(wheel), "factory", "check-workflow",
                               str(FIXTURES / name)], capture_output=True, text=True)

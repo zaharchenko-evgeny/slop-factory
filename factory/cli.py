@@ -278,7 +278,8 @@ def check_workflow(argv):
     skill = HERE.parent / "skills/factory-setup"
     if not skill.is_dir():  # installed: the wheel records statechart.py and its pin files under share/factory
         try:
-            skill = next(f.locate().resolve().parent for f in metadata.files("slop-factory") or [] if f.name == "statechart.py")
+            skill = next(d for d in (f.locate().resolve().parent for f in metadata.files("slop-factory") or []
+                                     if f.name == "statechart.py") if (d / "vendor-skills.py").is_file())
         except (metadata.PackageNotFoundError, StopIteration):
             pass
     if not path.is_file():

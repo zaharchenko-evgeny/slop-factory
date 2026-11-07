@@ -16,7 +16,3 @@ build-backend = "setuptools.build_meta"
 packages = ["notify"]
 package-dir = { "" = "factory" }
 py-modules = ["cli", "config", "contracts", "definition", "deploy", "doctor", "gate", "gate_github", "gate_port", "gate_space", "github_graphql", "github_tracker", "local", "nodes", "project", "reconcile", "retro", "team_setup", "upgrade", "vocab", "workflow", "youtrack_tracker"]
-
-# `factory check-workflow` runs statechart.py, which loads vendor-skills.py and skills.lock from its own directory when installed.
-[tool.setuptools.data-files]
-"share/factory" = ["skills.lock", "scripts/vendor-skills.py", "skills/factory-setup/statechart.py"]
