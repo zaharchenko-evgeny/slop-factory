@@ -54,6 +54,8 @@ tracker:
   needs_human_label: factory:needs-human
   # A ticket with lesson comments retro has not collected yet (ADR-0021).
   lesson_label: factory:lesson
+  # A tracker-side rule adds it to an item with a new comment; the comment node removes it (ADR-0023).
+  comment_label: factory:comment
 # The tier `start` gives a ticket without a `complexity:<size>` label.
 defaults: { tier: mid }
 gates:
@@ -62,6 +64,7 @@ gates:
 ci: { workflows: [quality-gates] }
 limits:
   remind_after_hours: 24
+  comment_runs_per_day: 50   # runs of the `comment` node per day; they do not count against `runs_per_day`
   mention_hops: 3   # asks (`factory end ask`) per ticket; a reply cannot ask
   generated_paths:
     - factory/tests/fixtures/deploy/air-plan.json

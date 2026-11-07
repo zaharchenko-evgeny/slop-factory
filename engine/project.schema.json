@@ -48,7 +48,8 @@
         "hold_label": {"type": "string"},
         "pr_fact_labels": {"type": "object", "additionalProperties": {"type": "string"}},
         "needs_human_label": {"type": "string"},
-        "lesson_label": {"type": "string"}
+        "lesson_label": {"type": "string"},
+        "comment_label": {"type": "string"}
       }
     },
     "repositories": {

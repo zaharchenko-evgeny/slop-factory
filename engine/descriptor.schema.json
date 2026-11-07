@@ -237,6 +237,9 @@
         "runs_per_day": {
           "type": "integer"
         },
+        "comment_runs_per_day": {
+          "type": "integer"
+        },
         "environment_repair_attempts": {
           "type": "integer"
         },
