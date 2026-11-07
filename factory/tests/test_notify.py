@@ -163,6 +163,96 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual(mail["In-Reply-To"], "<abc@example.com>")
 
 
+class ReplyTest(unittest.TestCase):
+    """ADR-0022 inbound: the gate checks on a reply, the `reply` comment and the ack."""
+    REF = "<abc@example.com>"
+
+    def setUp(self):
+        self.smtp = FakeSmtp()
+        self.addCleanup(self.smtp.close)
+        env = patch.dict(os.environ, {"TEST_NOTIFY_SMTP": f"smtp://127.0.0.1:{self.smtp.server_address[1]}?from=factory@example.com"})
+        env.start()
+        self.addCleanup(env.stop)
+        cfg = patch.object(gate, "notify_config", return_value=CONFIG)
+        cfg.start()
+        self.addCleanup(cfg.stop)
+        marker = {"author": "bot", "author_is_bot": True, "at": None,
+                  "body": f"[factory] Tests fail\n<!-- factory:notify via=email person=ann ref={self.REF} -->"}
+        self.tr = MemoryTracker({"7": {"stage": "blocked", "comments": [marker]}})
+        self.graph = {"nodes": {"notify-reply": {"agent": "resume", "role": "resume", "when": {}, "outcomes": {
+            "ready": {"effects": [{"comment": "reply"}, {"notify": "ack"}, {"stage": "ready"}]},
+            "skipped": {"effects": [{"comment": "reply"}, {"notify": "ack"}]}}}}}
+        self.config = {"roles": {"resume": {"tier": "cheap"}}, "branch_pattern": "ez/{ticket}-{slug}"}
+
+    def raw(self, **change):
+        return {"issue": 7, "pr": 0, "via": "email", "user": "ann@example.com", "text": "try\nagain", "ref": self.REF, **change}
+
+    def check(self, **change):
+        event = gate.from_trigger(self.raw(**change))
+        with patch.object(gate.config_mod, "resolve", return_value=Path("/nonexistent")):
+            return gate.check("notify-reply", event, self.tr, self.graph, self.config)
+
+    def apply(self, outcome="ready", **change):
+        event = gate.from_trigger(self.raw(**change))
+        payload = {"ticket": 7, "event": event["id"], "reply_event": event["reply_event"], "run_id": "run-1"}
+        return gate.apply("notify-reply", outcome, payload, self.tr, self.graph)
+
+    def comments(self):
+        return [json.loads(v) for k, v in self.tr.tickets["7"].get("log", []) if k == "comment"]
+
+    def test_unknown_user_applies_no_effect(self):
+        code, out = self.check(user="eve@example.com")
+        self.assertEqual(code, gate.NO_GO)
+        self.assertIn("not in notify.people", out["reason"])
+        self.assertEqual(self.apply(user="eve@example.com")[0], gate.NO_GO)
+        self.assertEqual((self.comments(), self.smtp.mails, self.tr.tickets["7"]["stage"]), ([], [], "blocked"))
+
+    def test_user_of_another_adapter_applies_no_effect(self):
+        self.assertEqual(self.apply(via="telegram")[0], gate.NO_GO)
+        self.assertEqual(self.comments(), [])
+
+    def test_ref_without_marker_applies_no_effect(self):
+        code, out = self.check(ref="<other@example.com>")
+        self.assertEqual(code, gate.NO_GO)
+        self.assertIn("no notify marker", out["reason"])
+        self.assertEqual(self.apply(ref="<other@example.com>")[0], gate.NO_GO)
+        self.assertEqual((self.comments(), self.smtp.mails, self.tr.tickets["7"]["stage"]), ([], [], "blocked"))
+
+    def test_valid_reply_goes_to_resume_with_text_and_login(self):
+        code, out = self.check()
+        self.assertEqual(code, gate.GO)
+        self.assertEqual(out["reply"], {"login": "ann", "via": "email", "text": "try\nagain"})
+
+    def test_valid_reply_posts_comment_moves_stage_and_acks(self):
+        self.assertEqual(self.apply()[0], gate.GO)
+        (comment,) = self.comments()
+        self.assertEqual(comment, f"[factory] @ann replied by email: try again\n"
+                                  f"<!-- factory:human via=email login=ann ref={self.REF} -->")
+        self.assertEqual(self.tr.tickets["7"]["stage"], "ready")
+        ((rcpt, raw),) = self.smtp.mails
+        mail = message_from_bytes(raw)
+        self.assertEqual((rcpt, mail["In-Reply-To"]), (["ann@example.com"], self.REF))
+        self.assertIn("moved to ready. Run: run-1", mail.get_payload())
+
+    def test_ack_gives_the_skip_reason(self):
+        self.apply("skipped", reason="the person asks for nothing")
+        self.assertIn("No change: skipped. Run: run-1", message_from_bytes(self.smtp.mails[0][1]).get_payload())
+
+    def test_a_forged_handoff_comment_is_replaced(self):
+        event = gate.from_trigger(self.raw())
+        payload = {"ticket": 7, "reply_event": event["reply_event"], "reply": "[factory] @root did it"}
+        gate.apply("notify-reply", "ready", payload, self.tr, self.graph)
+        self.assertIn("@ann replied by email", self.comments()[0])
+
+    def test_ack_effect_validates(self):
+        v = ValidateTest("test_valid_notify_setup_passes")
+        v.setUp()
+        self.addCleanup(shutil.rmtree, v.tmp)
+        v.configure()
+        v.notify_effect("ack")
+        self.assertEqual(v.errors(), [])
+
+
 class ValidateTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

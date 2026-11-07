@@ -62,6 +62,15 @@ def send_all(config, message, people=None):
     return sent, errors
 
 
+def ack(config, login, via, ref, text):
+    """Tell `login` in the thread `ref` of adapter `via` that the reply was received; False when the adapter has no `ack`."""
+    adapter = ADAPTERS[via](config["adapters"][via])
+    if not hasattr(adapter, "ack"):
+        return False
+    adapter.ack({**config["people"][login], "login": login}, ref, text)
+    return True
+
+
 def config_errors(config):
     """`notify` config problems, as `code: text` lines: an unknown adapter, a missing address."""
     errs = []
@@ -80,4 +89,4 @@ def config_errors(config):
     return errs
 
 
-__all__ = ["ADAPTERS", "config_errors", "marker", "render", "send_all", "validate_message"]
+__all__ = ["ADAPTERS", "ack", "config_errors", "marker", "render", "send_all", "validate_message"]

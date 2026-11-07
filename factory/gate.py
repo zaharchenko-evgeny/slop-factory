@@ -145,6 +145,10 @@ def pr_ticket(code_host, number, repository=None):
 def from_trigger(d, code_host=None):
     """Extract the event kind and ticket number; tracker facts supply mutable metadata."""
     event_name = d.get("eventType") or d.get("event_name")
+    if isinstance(d.get("issue"), int) and all(isinstance(d.get(k), str) for k in ("via", "user", "text", "ref")):
+        # ADR-0022: a reply the relay POSTs to the webhook of a `notify-reply` node
+        return {"id": f"notify_reply:{d['issue']}:{d['via']}:{d['ref']}", "ticket": d["issue"],
+                "reply_event": {k: d[k] for k in ("via", "user", "text", "ref")}}
     if str(event_name or "").startswith("space.") or isinstance(d.get("merge_request"), dict) \
             or isinstance((d.get("data") or {}).get("merge_request"), dict):
         ev = space_event(d)
@@ -486,6 +490,47 @@ def matches(node, facts, event, outcome=None):
     return None if holds(node["when"], facts, event) else "condition does not hold"
 
 
+NOTIFY_MARKER = re.compile(r"<!-- factory:notify via=(\S+) person=\S+ ref=(\S+) -->")
+
+
+def verify_reply(reply, tracker, ticket):
+    """(login, None) when a reply passes the gate checks of ADR-0022, else (None, reason): `user` is the address of a
+    login in `notify.people` for `via`, and `ref` is in a `factory:notify` marker on the ticket or its PR."""
+    try:
+        people = notify_config().get("people") or {}
+    except Bad as e:
+        return None, str(e)
+    user = " ".join(reply["user"].split()).casefold()
+    login = next((l for l, p in people.items() if reply["via"] in (p or {}).get("via", [])
+                  and " ".join(str((p or {}).get(reply["via"]) or "").split()).casefold() == user), None)
+    if not login:
+        return None, f"reply: `{reply['user']}` is not in notify.people for {reply['via']}"
+    facts = tracker.facts(ticket)
+    pr = facts.get("pr_comments")
+    if pr is None and hasattr(tracker, "pr_comments"):
+        pr = tracker.pr_comments(ticket)
+    found = {m.groups() for c in [*(facts.get("comments") or []), *(pr or [])] for m in NOTIFY_MARKER.finditer(c.get("body") or "")}
+    if (reply["via"], reply["ref"]) not in found:
+        return None, f"reply: no notify marker for ref `{reply['ref']}` via {reply['via']} on #{ticket}"
+    return login, None
+
+
+def reply_comment(reply, login):
+    """The `comment: reply` text: who answered, by which adapter, and the marker that ties it to the send."""
+    text = " ".join(reply["text"].split())
+    return (f"[factory] @{login} replied by {reply['via']}: {text}\n"
+            f"<!-- factory:human via={reply['via']} login={login} ref={reply['ref']} -->")
+
+
+def ack_text(effects, payload):
+    """The one-line acknowledgement: the new stage and the run link, or why nothing moved."""
+    stage = next((e["value"] for e in effects if e["kind"] == "stage"), None)
+    run = f" Run: {payload['run_id']}" if payload.get("run_id") else ""
+    if stage:
+        return f"Received. Ticket #{payload['ticket']} moved to {stage}.{run}"
+    return f"Received. No change: {' '.join(str(payload.get('reason') or 'skipped').split())}.{run}"
+
+
 def check(name, event, tracker, nodes, config, code_host=None):
     node = load_node(name, nodes)
     if "id" not in event:
@@ -507,6 +552,11 @@ def check(name, event, tracker, nodes, config, code_host=None):
             (x.removeprefix(vocab.prefix("rereview-<focus>")) for x in labels
              if x.startswith(vocab.prefix("rereview-<focus>"))), None)
     why = matches(node, facts, event)
+    reply = None
+    if event.get("reply_event"):
+        login, refusal = verify_reply(event["reply_event"], tracker, event["ticket"])
+        why = refusal or why
+        reply = {**event["reply_event"], "login": login}
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     notes = facts.get("agent_notes", [])
     facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
@@ -525,6 +575,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
         "context": facts, "outcomes": list(node["outcomes"]),
         "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if fixing else ()))],
         **({"mention": latest_mention(facts, tracker, event["ticket"])} if name.startswith("reply-") and definition_team() else {}),
+        **({"reply": {k: reply[k] for k in ("login", "via", "text")}} if reply and why is None else {}),  # data, never instruction
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and fixing),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
         # one entry per repository of a ticket that changes several (ADR-0017), all on the ticket's one branch
@@ -584,6 +635,8 @@ def resolve(effect, payload, ticket):
         return {**out, "on": on} if on else out
     if kind == "park-behind-main-red":
         return {"kind": kind, "ticket": ticket, "value": field(arg)}
+    if kind == "notify" and arg == "ack":  # sent last, from `apply`
+        return {"kind": "ack", "ticket": ticket, "value": None}
     if kind == "notify":  # `notify: message` or `notify: {message: message, people: [logins]}` (ADR-0022)
         message = {"issue": ticket, "problem": field("problem"), "links": payload.get("links", []), "options": payload.get("options", []), "recommended": payload.get("recommended")}
         try:
@@ -671,6 +724,12 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         raise Bad(f"disabled outcome: {outcome}")
     ticket = payload["ticket"]
     payload = {**{k: v for k, v in (("focus", focus), ("tier", tier)) if v}, **payload}  # the automation's own
+    reply = payload.get("reply_event")
+    if reply:  # a reply from a webhook: the gate checks it again and writes the comment itself
+        login, refusal = verify_reply(reply, tracker, ticket)
+        if refusal:
+            return NO_GO, {"applied": False, "reason": refusal}
+        payload["reply"] = reply_comment(reply, login)
     tiers = node.get("tiers") or []
     if tiers and payload.get("tier") in tiers and "next tier" not in payload:  # the successor comes from the trusted tier list
         i = tiers.index(payload["tier"]) + 1
@@ -691,6 +750,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
         payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
+    ack = ack_text(effects, payload) if any(e["kind"] == "ack" for e in effects) else None
+    effects = [e for e in effects if e["kind"] != "ack"]
     if outcome == "ask":
         effects = ask_effects(name, node, out, payload, tracker, ticket, effects)
     if payload.get("agent_notes"):  # hidden notes for later agents ride on the review, the comments or the PR text
@@ -779,6 +840,12 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             tracker.apply(e)
         raise RuntimeError("notify failed: " + "; ".join(failures))
     written = [e["kind"] for e in effects + after if tracker.apply(e)]
+    if ack and reply:
+        try:
+            notifiers.ack(notify_config(), login, reply["via"], reply["ref"], ack)
+        except Exception as err:  # the other effects are applied: report, do not undo
+            raise RuntimeError(f"notify ack failed: {type(err).__name__}: {err}")
+        written.append("ack")
     parent = parent_decision(name, ticket, effects, tracker, nodes)
     return GO, {"applied": True, "written": written, **({"parent": parent} if parent else {})}
 
