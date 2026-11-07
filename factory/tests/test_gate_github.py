@@ -1711,6 +1711,31 @@ class TwoRepositoryFactsTest(unittest.TestCase):
         posted = [w[3] for w in gh.writes if w[:3] == ["api", "-X", "POST"] and w[3].endswith("/reviews")]
         self.assertEqual(posted, [f"repos/{REPO}/pulls/5/reviews"])
 
+    def readonly_tracker(self, gh):
+        tr = self.tracker(gh)
+        tr.writable = {"primary"}  # the environment lists `other` without `write: true` (#994)
+        return tr
+
+    def test_review_skips_an_open_pr_in_a_read_only_repository(self):
+        gh = TwoRepositoryGh()
+        self.readonly_tracker(gh).apply(eff("review", "approve", focus="full", summary="ok"))
+        posted = [w[3] for w in gh.writes if w[:3] == ["api", "-X", "POST"] and w[3].endswith("/reviews")]
+        self.assertEqual(posted, [f"repos/{REPO}/pulls/5/reviews"])
+
+    def test_merge_refuses_before_any_write_when_a_pr_is_read_only(self):
+        gh = TwoRepositoryGh()
+        with self.assertRaisesRegex(RuntimeError, "other #11 is read-only in this environment"):
+            self.readonly_tracker(gh).apply(eff("merge", "match-head", heads={"primary": "h1", "other": "h9"}))
+        self.assertEqual(self.merges(gh), [])
+
+    def test_writable_comes_from_the_environment_in_factory_env(self):
+        from unittest import mock
+        c = {"environments": {"engine": {"writable": []}}}
+        with mock.patch.dict(os.environ, {"FACTORY_ENV": "engine"}):
+            self.assertEqual(self.tracker(TwoRepositoryGh())._with_writable(c).writable, {"primary"})
+        with mock.patch.dict(os.environ, {"FACTORY_ENV": ""}):
+            self.assertIsNone(self.tracker(TwoRepositoryGh())._with_writable(c).writable)
+
     def test_a_pr_event_from_the_other_repository_finds_its_ticket(self):
         host = M_GH.GitHubCodeHost(REPO, TwoRepositoryGh())
         self.assertEqual(gate.pr_ticket(host, 11, {"full_name": TwoRepositoryGh.OTHER}), 7)
