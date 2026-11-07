@@ -25,11 +25,8 @@ event): the ticket is the issue number or the `<n>` of the PR branch `ez/<n>-*` 
 uses factory/gate_github.py (bot login from `targets.air.bot_login`).
 """
 import argparse
-from collections import Counter
-import fnmatch
 import json
 import re
-import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +36,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
+import notify as notifiers  # noqa: E402
 from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
 from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
@@ -160,12 +158,14 @@ def from_trigger(d, code_host=None):
             d = d["data"]
             event_name = event_name or wrapper.get("eventType") or wrapper.get("event_name")
     pr, issue, review = d.get("pull_request"), d.get("issue"), d.get("review")
-    is_pr = isinstance(pr, dict) or str(event_name or "").startswith("pull_request")
+    pr_comment = isinstance(issue, dict) and isinstance(issue.get("pull_request"), dict) and not isinstance(pr, dict)
+    is_pr = isinstance(pr, dict) or pr_comment or str(event_name or "").startswith("pull_request")
     src = pr or issue or d
     number = src.get("number") if isinstance(src, dict) else None
     if not isinstance(number, int) or number < 1:
         raise MissingNumber("payload has no issue or PR number")
-    name = "pull_request_review" if review and is_pr else "pull_request" if is_pr else "issues"
+    name = "pull_request_review" if review and is_pr else "issue_comment" if pr_comment \
+        else "pull_request" if is_pr else "issues"  # a comment on a PR arrives as an issue event of its number
     if is_pr:
         ticket = pr_ticket(code_host, number, d.get("repository")) if code_host else None
         if ticket is None and not isinstance(code_host, GitHubCodeHost):  # a live lookup is the only source for GitHub
@@ -282,12 +282,6 @@ def definition_team():
     """True when the team defines its factory in factory.yaml + workflow.yaml (ADR-0021)."""
     import definition
     return definition.present(config_mod.team_root())
-
-
-def legacy_step(name):
-    """The node's name for the old layout's name-keyed behaviour (join, start, review focuses, tiers); None for a
-    definition team (ADR-0021), whose nodes do exactly what workflow.yaml says."""
-    return None if definition_team() else name
 
 
 def ci_state(tracker, ticket, wait_seconds=0, poll=30, sleep=None):
@@ -494,17 +488,7 @@ def matches(node, facts, event, outcome=None):
     return None if holds(node["when"], facts, event) else "condition does not hold"
 
 
-def gated(name, node, facts):
-    """The node whose `when` check and apply both judge. Reconciliation can route an unapproved conflict to a fix
-    before its review round completes, so a conflicting fix in changes-requested drops the round condition."""
-    step = legacy_step(name)  # ADR-0021: a definition team's nodes have no engine-named behaviour
-    if step == "fix" and facts.get("stage") == "changes-requested" and facts.get("conflict"):
-        return {**node, "when": {k: v for k, v in node["when"].items() if k != "round"}}
-    return node
-
-
 def check(name, event, tracker, nodes, config, code_host=None):
-    step = legacy_step(name)  # ADR-0021: a definition team's nodes have no engine-named behaviour
     node = load_node(name, nodes)
     if "id" not in event:
         raise Bad("malformed event: needs `id`")
@@ -524,20 +508,21 @@ def check(name, event, tracker, nodes, config, code_host=None):
         event["rereview"] = next(iter(pending), None) or next(
             (x.removeprefix(vocab.prefix("rereview-<focus>")) for x in labels
              if x.startswith(vocab.prefix("rereview-<focus>"))), None)
-    if step == "fix" and facts.get("ci") == "red" and facts.get("head") and hasattr(tracker, "ci_failure"):
-        failure = tracker.ci_failure(facts["head"])
-        if failure:
-            facts["ci_failure"] = failure
-    why = matches(gated(name, node, facts), facts, event)
+    why = matches(node, facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     notes = facts.get("agent_notes", [])
+    if comment_node(node):  # ADR-0023: what the comment node reads, after the cursor
+        listed = new_comments(facts, tracker, event["ticket"])
+        save_comment_input(event["ticket"], listed)
+        facts["new_comments"] = [{k: c.get(k) for k in ("id", "on", "author", "author_is_bot", "at", "body")}
+                                 for c in listed]
     facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
     if node.get("focuses"):  # one review tier per focus (roles.<role>.modes.<focus>.tier)
         tiers = [roles[role]["modes"][f]["tier"] for f in node["focuses"]]
     skills = config_mod.resolve(f"roles/{role}/skills.txt")
-    fixing = step in ("fix", "update") or (step is None and node_mode(name) in ("fix", "update"))
+    fixing = definition_team() and node_mode(name) in ("fix", "update")
     return (NO_GO if why else GO), {
         "go": why is None, "reason": why, "ticket": event["ticket"], "node": name, "role": role,
         "tier": event.get("tier") if event.get("tier") in tiers else tiers[0],
@@ -582,24 +567,6 @@ def apply_routine(name, outcome, nodes):
     return GO, {"applied": True, "written": []}
 
 
-def check_state_path(ticket):
-    return Path(".factory") / "check" / f"{ticket}.json"
-
-
-def save_check_state(ticket, head):
-    path = check_state_path(ticket)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"ticket": ticket, "head": head}))
-
-
-def checked_head(ticket):
-    try:
-        state = json.loads(check_state_path(ticket).read_text())
-        return state.get("head") if state.get("ticket") == ticket else None
-    except (OSError, ValueError, AttributeError):
-        return None
-
-
 def resolve(effect, payload, ticket):
     """(kind, value) of one effect; a missing payload field raises Bad naming it."""
     (kind, arg), = [(k, v) for k, v in effect.items() if k != "on"]
@@ -622,13 +589,58 @@ def resolve(effect, payload, ticket):
     if kind in ("comment", "create-issues"):
         out = {"kind": kind, "ticket": ticket, "value": field(arg)}
         return {**out, "on": on} if on else out
-    if kind == "park-behind-main-red":
+    if kind in ("park-behind-main-red", "route", "reply"):
         return {"kind": kind, "ticket": ticket, "value": field(arg)}
+    if kind == "notify":  # `notify: message` or `notify: {message: message, people: [logins]}` (ADR-0022)
+        message = {"issue": ticket, "problem": field("problem"), "links": payload.get("links", []), "options": payload.get("options", []), "recommended": payload.get("recommended")}
+        try:
+            notifiers.validate_message(message)
+        except ValueError as e:
+            raise Bad(f"notify: {e}")
+        return {"kind": kind, "ticket": ticket, "value": {"message": message, "people": arg.get("people") if isinstance(arg, dict) else None},
+                **({"on": on} if on else {})}
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
 ASK = re.compile(r"<!-- factory:ask id=(\S+) from=(\S+) to=(\S+) hop=(\d+) -->")
 ANSWER = re.compile(r"<!-- factory:answer id=(\S+) -->")
+
+
+def notify_config():
+    """`notify` of the team's factory.yaml; Bad when the team has none."""
+    import definition
+    config = (definition.load(config_mod.team_root())["factory"] or {}).get("notify")
+    if not config:
+        raise Bad("notify: the team's factory.yaml has no `notify` config")
+    return config
+
+
+def notify_effects(effects, tracker, ticket, name):
+    """Replace each `notify` effect with the one `[factory]` comment ADR-0022 asks for: the rendered text and one
+    `factory:notify` marker per send. The comment is posted even when a send failed (it lists the sends that went
+    out); the failures then raise. Returns the effects, the failures and the notify comments alone. A retry sends
+    again: nothing reads the markers."""
+    out, failures, posted = [], [], []
+    for e in effects:
+        if e["kind"] != "notify":
+            out.append(e)
+            continue
+        message = {**e["value"]["message"], "pr": ""}
+        if e.get("on") == "pr":
+            message["pr"] = tracker.facts(ticket).get("pr") or ""
+        try:
+            sent, errors = notifiers.send_all(notify_config(), message, e["value"]["people"])
+        except ValueError as err:
+            raise Bad(str(err))
+        failures += errors
+        if sent:
+            body = "[factory] " + notifiers.render(message) + "\n\nNotified: " + ", ".join(f"{p} via {v}" for v, p, _ in sent)
+            body += "".join("\n" + notifiers.marker(v, p, r) for v, p, r in sent)
+            if definition_team():
+                body += f"\n\n{comment_marker(name)}"
+            posted.append({"kind": "comment", "ticket": ticket, "value": body, **({"on": e["on"]} if e.get("on") else {})})
+            out.append(posted[-1])
+    return out, failures, posted
 
 
 def ask_effects(name, node, out, payload, tracker, ticket, effects):
@@ -655,19 +667,119 @@ def ask_effects(name, node, out, payload, tracker, ticket, effects):
     return [{**effects[0], "value": f"[factory] **{who}:** @factory:{to} {text}\n{marker}"}]
 
 
-def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None, auto_merge=None):
-    step = legacy_step(name)  # ADR-0021: a definition team's nodes have no engine-named behaviour
+COMMENT_EFFECTS = ("route", "reply", "skip")  # the effects of the comment node's outcomes (ADR-0023)
+SEEN = re.compile(r"<!-- factory:comment-seen (\d+) -->")
+
+
+def comment_cursor(comments, bot=None):
+    """The highest id in a `factory:comment-seen` marker of the factory's own comments (0: none). With the tracker's
+    `bot` login known, only that author counts; another integration cannot move the cursor."""
+    return max((int(m[1]) for c in comments if (c.get("author") == bot if bot else c.get("author_is_bot"))
+                and (c.get("body") or "").startswith("[factory]") and (m := SEEN.search(c["body"]))), default=0)
+
+
+def new_comments(facts, tracker=None, ticket=None):
+    """The comments on the ticket and its PR after the cursor, oldest first, `on` saying where each is. The factory's
+    own comments (a `factory:from` marker without an ask marker) are not input."""
+    pr = facts.get("pr_comments")
+    if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
+        pr = tracker.pr_comments(ticket)
+    found = [dict(c, on="ticket") for c in facts.get("comments") or []] + [dict(c, on="pr") for c in pr or []]
+    cursor = comment_cursor(found, getattr(tracker, "bot", None))
+    own = lambda c: FROM.search(c.get("body") or "") and not ASK.search(c.get("body") or "")
+    return sorted((c for c in found if int(c.get("id") or 0) > cursor and not own(c)), key=lambda c: int(c["id"]))
+
+
+def comment_input_path(ticket):
+    return Path(".factory") / "check" / f"{ticket}-comments.json"
+
+
+def save_comment_input(ticket, comments):
+    """The newest comment id the step's context lists: `apply` acknowledges nothing after it."""
+    path = comment_input_path(ticket)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"ticket": ticket, "last": max((int(c["id"]) for c in comments), default=0)}))
+
+
+def comment_input_last(ticket):
+    """The saved id, or None when no `check` ran (every comment is then input)."""
+    try:
+        state = json.loads(comment_input_path(ticket).read_text())
+        return int(state["last"]) if str(state.get("ticket")) == str(ticket) else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def comment_node(node):
+    return any(next((k for k in e if k != "on"), None) in COMMENT_EFFECTS
+               for o in node["outcomes"].values() for e in (o or {}).get("effects") or [])
+
+
+def route_effects(to, facts, ticket, nodes, tier, clean):
+    """The effects that move the item to node `to`: its trigger label and the stage its `when` needs, both from
+    workflow.yaml. `clean` also drops the person's wait and the stale command labels. Refuses (Bad, nothing
+    written) an unknown node, one without a label trigger, or one whose `when` fails with the new stage and label."""
+    node = (nodes.get("nodes") or {}).get(to)
+    if node is None or node.get("enabled") is False:
+        raise Bad(f"route: unknown node `{to}`")
+    trigger = next((m for t in node.get("triggers") or [] if isinstance(t, str)
+                    and (m := re.fullmatch(r"(issues|pull_request)\.labeled (\S+)", t))), None)
+    if not trigger:
+        raise Bad(f"route: node `{to}` has no label trigger")
+    label, on = trigger[2].replace("<tier>", tier), "pr" if trigger[1] == "pull_request" else None
+    if "<" in label:
+        raise Bad(f"route: the trigger label of `{to}` needs a value: {label}")
+    when = node.get("when") or {}
+    stages = [when["stage"]] if isinstance(when.get("stage"), str) else list(when.get("stage") or [])
+    stage = facts["stage"] if facts["stage"] in stages or not stages else stages[0]
+    held = {**facts, "stage": stage, **{"pr_labels" if on else "attrs": [*facts.get("pr_labels" if on else "attrs", []), label]}}
+    if not holds({k: v for k, v in when.items() if k != "stage"}, held, {}):
+        raise Bad(f"route: node `{to}` does not match this item now (its `when` fails)")
+    out = clear_commands(ticket) + [{"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human(), **extra}
+                                    for extra in ({}, {"on": "pr"})] if clean else []
+    out.append({"kind": "label", "ticket": ticket, "value": label, **({"on": on} if on else {})})
+    if stage != facts["stage"]:
+        out.append({"kind": "stage", "ticket": ticket, "value": stage})
+    return out, stage
+
+
+def comment_moves(moves, name, payload, facts, tracker, nodes, ticket):
+    """(effects, after) for the comment node's route, reply and skip effects (ADR-0023). `effects` move the item;
+    `after` always runs: remove the wake label, react on a skipped comment, post a short reply with the cursor."""
+    found = new_comments(facts, tracker, ticket)
+    last = comment_input_last(ticket)
+    fresh = [c for c in found if last is None or int(c["id"]) <= last]  # what the step read
+    later = {c["on"] for c in found if c not in fresh}  # arrived during the run: still pending
+    tier = payload.get("tier") or fix_tier(facts)
+    effects, summary = [], "Nothing to do."
+    for e in moves:
+        if e["kind"] == "skip":
+            if fresh:
+                effects.append({"kind": "react", "ticket": ticket, "value": "eyes", "comment": fresh[-1]["id"],
+                                **({"on": "pr"} if fresh[-1]["on"] == "pr" else {})})
+            continue
+        route = e["kind"] == "route"
+        to = e["value"] if route else f"reply-{e['value']}"
+        more, stage = route_effects(to, facts, ticket, nodes, tier, clean=route)
+        effects += more
+        summary = f"Moved to `{to}`, stage `{stage}`." if route else f"Asked `{e['value']}` to answer."
+    text = " ".join(str(payload.get("reply") or summary).split())
+    if fresh:
+        text += f"\n<!-- factory:comment-seen {fresh[-1]['id']} -->"
+    if definition_team():
+        text += f"\n\n{comment_marker(name)}"
+    after = [{"kind": "unlabel", "ticket": ticket, "value": vocab.comment(), **extra} for extra in ({}, {"on": "pr"})]
+    after += [{"kind": "label", "ticket": ticket, "value": vocab.comment(), **({"on": "pr"} if on == "pr" else {})}
+              for on in sorted(later)]  # the label added again wakes the node for the later comments
+    after.append({"kind": "comment", "ticket": ticket, "value": text, **({"on": "pr"} if fresh and fresh[-1]["on"] == "pr" else {}),
+                  **({"run_id": payload["run_id"]} if payload.get("run_id") else {})})
+    return effects, after
+
+
+def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
         raise Bad(f"unknown outcome: {outcome}" + (" (a reply cannot ask)" if outcome == "ask" and name.startswith("reply-") else ""))
-    if step == "review":
-        if "verdict" in payload and outcome_of({"verdict": payload["verdict"]}) != outcome:
-            raise Bad(f"review verdict {payload['verdict']!r} does not match outcome {outcome!r}")
-        blocking = any(f.get("severity") == "blocking" for f in payload.get("findings", []))
-        if outcome == "approve" and blocking:
-            raise Bad("review verdict approve cannot include a blocking finding")
-        if outcome == "changes" and not blocking:
-            raise Bad("review verdict changes requires a blocking finding")
     if outcome == "done" and any(c.get("result") == "fail" for c in payload.get("checks", [])):
         raise Bad("done with a failed check is refused")
     out = node["outcomes"][outcome]
@@ -705,111 +817,13 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         for e in effects:
             if e["kind"] in ("review", "comment"):
                 e["notes"] = notes
-        if step == "implement" and outcome == "done":
-            effects.append({"kind": "pr-notes", "ticket": ticket, "run_id": payload.get("run_id"), "value":
-                            f"<!-- factory:agent-notes\n{json.dumps(notes)}\n-->"})
-    if step in ("review", "join"):
-        effects.append({"kind": "pr-notes-sync", "ticket": ticket, "value": ""})  # notes parked before the PR existed
     facts = tracker.facts(ticket)
-    if step == "finish" and outcome == "merged":
-        effects.append({"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human()})
-        checks = after_merge_checks(facts.get("body"))
-        if checks and not after_merge_complete(facts.get("comments", [])):
-            if after_merge_comment(facts.get("comments", [])):
-                effects = []
-            else:
-                checklist = "\n".join(f"- [ ] {check}" for check in checks)
-                effects = [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
-                           {"kind": "assign", "ticket": ticket, "value": config_mod.owner()},
-                           {"kind": "comment", "ticket": ticket, "run_id": "finish:after-merge",
-                            "value": f"[factory] After-merge operator checks:\n\n{checklist}\n\n{AFTER_MERGE_MARKER}"}]
-    if step == "join" and outcome == "waiting" and facts.get("waiting_reviewers") \
-            and not facts.get("focus_missing") and facts.get("ci") == "green" and facts.get("pr") and facts.get("head"):
-        people = facts["waiting_reviewers"]
-        effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
-                    {"kind": "assign", "ticket": ticket, "value": people},
-                    {"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
-                    {"kind": "assign", "ticket": ticket, "value": people, "on": "pr"},
-                    {"kind": "comment", "ticket": ticket,
-                     "value": f"[factory] Re-review PR #{facts['pr']}: your change request was addressed at {facts['head']}",
-                     "on": "pr"}]
-    if step == "join" and outcome == "changes" and facts.get("pr") and facts.get("head"):
-        human_changes = [r["author"] for r in facts.get("reviews", [])
-                         if not r.get("agent") and r.get("verdict") == "changes"
-                         and r.get("commit_id") == facts["head"]]
-        if human_changes:
-            effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
-                        {"kind": "assign", "ticket": ticket, "value": sorted(set(human_changes)), "on": "pr"}]
-    if step == "reopen" and outcome == "reopened" and facts.get("ci") == "red" and facts.get("pr"):
-        effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
-                    {"kind": "assign", "ticket": ticket, "value": config_mod.owner(), "on": "pr"}]
-    if step == "merge" and outcome == "waiting":
-        effects += [{"kind": "label", "ticket": ticket, "value": vocab.needs_human()},
-                    {"kind": "assign", "ticket": ticket, "value": config_mod.owner()},
-                    {"kind": "label", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
-                    {"kind": "assign", "ticket": ticket, "value": config_mod.owner(), "on": "pr"}]
-    if step == "join" and outcome == "changes" and facts.get("handed_to_fix") and has_dispute_rereview(facts):
-        effects.insert(0, {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("fix-<tier>", "*"), "on": "pr"})
-    if step in ("implement", "fix") and outcome == "done":
-        estimate = size_estimate(facts.get("body", ""))
-        if estimate is not None:
-            config = config_mod.load()
-            base = next((r["default_branch"] for r in config["repositories"] if r.get("role") == "primary"), "main")
-            size, files = branch_size(f"origin/{base}", generated_paths=config.get("limits", {}).get("generated_paths", []))
-            limit = config.get("limits", {}).get("max_diff_lines", 400)
-            if size * 2 > estimate * 3 and size > limit:
-                largest = ", ".join(f"{path} ({count})" for path, count in files[:5]) or "none"
-                reason = (f"[factory] Blocked: branch size is {size} lines against a {estimate}-line estimate "
-                          f"(1.5× estimate: {estimate * 1.5:g}; max_diff_lines: {limit}). "
-                          f"Largest files: {largest}. Edit the ticket's size line or split it, then set {vocab.stage('ready')}.")
-                effects = [{"kind": "comment", "ticket": ticket, "value": reason},
-                           {"kind": "stage", "ticket": ticket, "value": "blocked"}]
-    if step == "fix" and outcome == "done" and facts.get("handed_to_fix") and local_head() == facts.get("head"):
-        addressed = payload.get("findings_addressed", [])
-        focuses = payload.get("disputed_focuses", [])
-        expected = [finding for r in facts.get("reviews", []) if r.get("agent") and r.get("verdict") == "changes"
-                    and r.get("commit_id") == facts.get("head") for finding in r.get("findings", [])]
-        expected_focuses = {r.get("focus") for r in facts.get("reviews", []) if r.get("agent")
-                            and r.get("verdict") == "changes" and r.get("commit_id") == facts.get("head")
-                            and r.get("findings")}
-        disputed = [m.group(1) for x in addressed if (m := re.match(r"([A-Z]\d+): disputed — .+", str(x)))]
-        all_disputed = isinstance(addressed, list) and isinstance(focuses, list) \
-            and all(isinstance(f, str) for f in focuses) and bool(expected) and Counter(expected) == Counter(disputed) \
-            and set(focuses) == expected_focuses \
-            and all(": disputed — " in str(x) for x in addressed)
-        if all_disputed and focuses and not any(
-                r.get("focus") in focuses and r.get("rereview") for r in facts.get("reviews", [])):
-            disputes = "\n".join(str(x) for x in addressed)
-            effects = [{"kind": "comment", "ticket": ticket, "value": f"[factory] Disputed findings:\n{disputes}", "on": "pr"}]
-            effects += [{"kind": "label", "ticket": ticket, "value": vocab.cmd("rereview-<focus>", focus), "on": "pr"}
-                        for focus in focuses]
-            effects.append({"kind": "stage", "ticket": ticket, "value": "in-review"})
-        else:
-        # The platform pushes after the run; an unchanged HEAD means the fix made no commit, and no event
-        # would ever start the next round. A person decides.
-            effects = [{"kind": "comment", "ticket": ticket, "value": (
-                           "[factory] Stopped: the fix round ended without a commit, so nothing starts the next "
-                           f"review. A person decides, then sets {vocab.stage('ready')}.")},
-                       {"kind": "stage", "ticket": ticket, "value": "blocked"}]
-    if step == "merge":  # the plan may be seconds old
-        decision = merge_decision(facts, auto_merge if auto_merge is not None else config_mod.load()["gates"].get("auto_merge"))
-        if decision is None or decision[0] != outcome:
-            return NO_GO, {"applied": False, "reason": "a merge gate no longer holds"}
+    comment_after = []
+    if any(e["kind"] in COMMENT_EFFECTS for e in effects):
+        moved, comment_after = comment_moves([e for e in effects if e["kind"] in COMMENT_EFFECTS], name, payload, facts,
+                                             tracker, nodes, ticket)
+        effects = [e for e in effects if e["kind"] not in COMMENT_EFFECTS] + moved
     after = []  # effects that must follow the stage change
-    if step == "implement" and outcome == "done" and facts.get("pr") and facts.get("ci") in ("green", "red") \
-            and checked_pr_head is not None and facts.get("head") == checked_pr_head and local_head() == facts.get("head"):
-        # A resumed ticket implemented on its open PR with no new commit: no push, so no CI label would come.
-        # Re-fire it, and run the join once the stage is in-review: reviews already at this head decide.
-        effects = refire_ci(ticket, facts["ci"]) + effects
-        after = ([{"kind": "label", "ticket": ticket, "value": vocab.cmd("review-<focus>", focus), "on": "pr"}
-                  for focus in facts.get("focus_missing", [])] if facts["ci"] == "green" else [])
-        after.append({"kind": "join", "ticket": ticket, "value": "all-approve", "tier": fix_tier(facts)})
-    if step in ("implement", "fix") and outcome == "done" and not after and facts.get("pr") and facts.get("ci") == "green" \
-            and any(e["kind"] == "stage" and e["value"] == "in-review" for e in effects):
-        # CI may have finished while the ticket was not yet in-review, when its wake found no stage to act on:
-        # whichever of the two comes last wakes the reviewers. A focus whose label is present is already woken.
-        after = [{"kind": "label", "ticket": ticket, "value": vocab.cmd("review-<focus>", f), "on": "pr"}
-                 for f in facts.get("focus_missing", []) if vocab.cmd("review-<focus>", f) not in facts.get("pr_labels", [])]
     starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(commands())]
     stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith(vocab.prefix("fix-<tier>")) for e in starts))
     if stop:
@@ -817,6 +831,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         # that refused later would stop it with no comment and no event to wake it.
         effects = [{"kind": "comment", "ticket": ticket, "value": stop},
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
+        # The route did not happen: no success reply and no cursor move, so a person's comment stays unread.
+        comment_after = [e for e in comment_after if e["kind"] == "unlabel"]
     if any(e["kind"] == "stage" and e["value"] == "blocked" for e in effects):
         effects = clear_commands(ticket) + effects
     stage_effect = next((e for e in effects if e["kind"] == "stage"), None)
@@ -841,7 +857,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             human_effects += [{"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                               {"kind": "unassign", "ticket": ticket, "value": None, "on": "pr"}]
         effects[:0] = human_effects
-    after = [*after, *unblocked(effects, tracker, facts)]
+    after = [*after, *comment_after, *unblocked(effects, tracker, facts)]
     effects[:0] = group_unlabels(effects, facts)
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
@@ -849,7 +865,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             e["event"] = payload.get("event")
         if e["kind"] == "review":
             # ADR-0021: a definition team has no focuses; its review is named after the node that wrote it
-            e["focus"] = payload.get("focus") or (name if step is None else None)
+            e["focus"] = payload.get("focus") or name
             e["round"] = payload.get("round")
             e["findings"], e["summary"], e["run_id"] = payload.get("findings"), payload.get("summary"), payload.get("run_id")
         if e["kind"] == "join":
@@ -875,11 +891,16 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             e["summary"] = f"{e.get('summary') or ''}\n\n{comment_marker(name)}"
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
-    why = matches(gated(name, node, facts), facts, {**payload, "id": payload.get("event")}, out) \
+    why = matches(node, facts, {**payload, "id": payload.get("event")}, out) \
         or merge_refused(effects, facts)
     if why:
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
+    effects, failures, posted = notify_effects(effects, tracker, ticket, name)
+    if failures:  # keep the markers of the sends that went out; skip the stage change and the other effects
+        for e in posted:
+            tracker.apply(e)
+        raise RuntimeError("notify failed: " + "; ".join(failures))
     written = [e["kind"] for e in effects + after if tracker.apply(e)]
     parent = parent_decision(name, ticket, effects, tracker, nodes)
     return GO, {"applied": True, "written": written, **({"parent": parent} if parent else {})}
@@ -923,13 +944,6 @@ def clear_commands(ticket):
             {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("update-<tier>", "*"), "on": "pr"}]
 
 
-def refire_ci(ticket, ci):
-    """Effects that write the PR's CI label again (remove, then add), so its node starts for an unchanged head."""
-    return [{"kind": "unlabel", "ticket": ticket, "value": vocab.ci("ci-green"), "on": "pr"},
-            {"kind": "unlabel", "ticket": ticket, "value": vocab.ci("ci-red"), "on": "pr"},
-            {"kind": "label", "ticket": ticket, "value": vocab.ci(f"ci-{ci}"), "on": "pr"}]
-
-
 def stop_reason(facts, fix=False):
     """Why no further developer run may start for this ticket, else None: the spend guard, and for a fix
     round the fix-round cap (`limits.fix_rounds`)."""
@@ -940,45 +954,6 @@ def stop_reason(facts, fix=False):
         return (f"[factory] Stopped: {facts['fix_rounds']} fix rounds reached limits.fix_rounds and the review "
                 f"still requests changes. A person decides, then sets {vocab.stage('ready')}.")
     return None
-
-
-def local_head():
-    """The checkout's HEAD, else None (no git checkout)."""
-    import subprocess
-    r = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
-    return r.stdout.strip() if r.returncode == 0 else None
-
-
-def size_estimate(body):
-    """The current estimate recorded on an intake ticket, else None."""
-    m = re.search(r"(?im)^\s*(?:size_estimate:\s*~?|Size:\s*about\s+)(\d+)\b", body or "")
-    return int(m[1]) if m else None
-
-
-def branch_size(base, checkout=None, generated_paths=()):
-    """Changed lines in the delivery checkout against the default branch, with whole-file deletions counted once."""
-    checkout = Path(checkout or Path.cwd())
-    result = subprocess.run(
-        ["git", "diff", "--no-renames", "--numstat", f"{base}...HEAD", "--", ".", ":(exclude)engine/template-v1/skills/**"],
-        cwd=checkout, capture_output=True, text=True,
-    )
-    if result.returncode:
-        raise Bad(f"could not measure branch diff against {base}: {result.stderr.strip()}")
-    files = []
-    for line in result.stdout.splitlines():
-        added, deleted, path = line.split("\t", 2)
-        if path.startswith("engine/template-v1/skills/"):
-            continue
-        if any(fnmatch.fnmatchcase(path, pattern) for pattern in generated_paths):
-            continue
-        if added == deleted == "-":  # binary files have no line count
-            continue
-        added, deleted = int(added), int(deleted)
-        count = 1 if added == 0 and deleted and not (checkout / path).exists() else added + deleted
-        if count:
-            files.append((path, count))
-    files.sort(key=lambda item: (-item[1], item[0]))
-    return sum(count for _, count in files), files
 
 
 def join_decision(facts):
@@ -1040,14 +1015,25 @@ def after_merge_complete(comments):
     return bool(checks) and all(x.lower() == "x" for x in checks)
 
 
-def sweep_plan(facts, auto_merge=None, default_tier="mid"):
+def blockers_mode(nodes):
+    """The workflow's `blockers` key: `start` (default) waits for every blocker before the work starts, `merge`
+    starts the work at once and waits at the merge (a node's own `when.blockers: closed` still applies)."""
+    mode = (nodes or {}).get("blockers", "start")
+    if mode not in ("start", "merge"):
+        raise Bad(f"bad blockers mode {mode!r}: allowed start, merge")
+    return mode
+
+
+def sweep_plan(facts, auto_merge=None, default_tier="mid", blockers="start", start_waits=False):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
+    waits = blockers == "merge" and facts.get("blockers_open")  # approved, but a blocker is still open
     if facts.get("pr_state") == "merged" and config_mod.load()["tracker"]["stage_kinds"].get(stage) != "final":
         comments = facts.get("comments", [])
         return ("finish", "merged", {}) if not after_merge_checks(facts.get("body")) \
             or not after_merge_comment(comments) or after_merge_complete(comments) else None
-    if stage == "ready" and not facts.get("blockers_open") and facts.get("issue_state", "open") == "open":
+    if stage == "ready" and (blockers == "merge" and not start_waits or not facts.get("blockers_open")) \
+            and facts.get("issue_state", "open") == "open":
         return "start", "started", {"tier": fix_tier(facts, default_tier)}
     if stage == "needs-answers" and facts.get("answered"):
         return "finish", "answered", {}
@@ -1057,7 +1043,7 @@ def sweep_plan(facts, auto_merge=None, default_tier="mid"):
             and ((facts.get("round_head") is not None and facts.get("head") != facts.get("round_head"))
                  or facts.get("ci") == "red"):
         return "reopen", "reopened", {}
-    if stage == "approved" and (m := merge_decision(facts, auto_merge)):
+    if stage == "approved" and not waits and (m := merge_decision(facts, auto_merge)):
         return "merge", *m
     if stage == "split" and (kids := facts.get("children")):
         if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
@@ -1080,6 +1066,8 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
     step). A ticket that reaches done or blocked also lets its split parent finish. Returns (results, failed)."""
     results, failed, done_tickets = [], False, []
     stages = config_mod.load()["tracker"]["stages"]
+    mode = blockers_mode(nodes)
+    start_waits = ((nodes.get("nodes", {}).get("start") or {}).get("when") or {}).get("blockers") == "closed"
     queue, seen, merged = ([issue] if issue is not None else list(tracker.sweep_tickets(stages))), set(), False
     prefetch(tracker, queue)
     while queue:
@@ -1087,7 +1075,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
             try:
                 facts = tracker.facts(n)
-                plan = sweep_plan(facts, auto_merge, default_tier)
+                plan = sweep_plan(facts, auto_merge, default_tier, mode, start_waits)
                 if plan is None or (n, facts["stage"]) in seen:
                     if progress:
                         progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
@@ -1105,7 +1093,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                     if progress:
                         progress(r)
                     break
-                code, out = apply(node, outcome, {"ticket": n, **payload}, tracker, nodes, auto_merge=auto_merge)
+                code, out = apply(node, outcome, {"ticket": n, **payload}, tracker, nodes)
                 r.update(applied=out["applied"], written=out.get("written", []))
                 if progress:
                     progress(r)
@@ -1147,6 +1135,15 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                             progress({"ticket": n, "outcome": "skipped", "why": "already inspected"})
                         continue
                     facts = tracker.facts(n)
+                    if mode == "merge" and facts["stage"] == "approved" and not facts["blockers_open"]:
+                        woken.add(n)  # its last blocker closed: the merge it waited on may run now
+                        if merged:  # one merge at a time; the next sweep reads the rest against the new main
+                            continue
+                        sub, sub_failed = sweep(tracker, nodes, dry_run, None, auto_merge, default_tier, progress, issue=n)
+                        results += sub
+                        merged = merged or any((r.get("node"), r.get("outcome")) == ("merge", "merged") for r in sub)
+                        failed = failed or sub_failed
+                        continue
                     if facts["stage"] != "ready" or facts["blockers_open"]:
                         if progress:
                             progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})
@@ -1504,8 +1501,6 @@ def main(argv):
             event = read(a.event or "", "event", raw=True, code_host=code_host)
             event.update({k: v for k, v in (("focus", a.focus), ("tier", a.tier)) if v})
             code, out = check(a.node, event, tracker, nodes, config, code_host)
-            if a.node == "implement" and code == GO:
-                save_check_state(event["ticket"], out["context"].get("head"))
         else:
             if a.handoff:
                 try:
@@ -1522,8 +1517,7 @@ def main(argv):
                 out_name = a.outcome or outcome_of(h)
             else:
                 payload, out_name = read(a.payload or "", "payload"), a.outcome or ""
-            code, out = apply(a.node, out_name, payload, tracker, nodes, a.focus, a.tier,
-                              checked_head(payload["ticket"]) if a.node == "implement" else None)
+            code, out = apply(a.node, out_name, payload, tracker, nodes, a.focus, a.tier)
             path and Path(path).write_text(json.dumps(tracker.tickets))
     except NoTicket as e:
         print(json.dumps({"go": False, "reason": str(e)}))

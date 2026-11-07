@@ -121,13 +121,16 @@ of the PR a person gets; no other node comments on it.
   what they decide. Write it for someone who has not read the ticket:
   - `**Decide:**` one question they answer by merging or not, in the repository's terms (for example "Should
     every later reviewer run follow the new rule in `roles/reviewer/role.md:120`?"). Never "review the PR" or
-    "check the risk".
-  - `**Why the factory cannot:**` one line, from the merge-danger gaps (an untested live path, a one-way door,
-    a file that steers later agents).
+    "check the risk". Ask only about a choice that the ticket left open. When the ticket already asks for
+    the behaviour, name the risk the person accepts instead.
+  - `**Why the factory cannot:**` one line, from the merge-danger gaps (a one-way door, a file that steers
+    later agents, a change to what the deployed workflow does now). A live check that no one runs before
+    the merge is not a reason.
   - `**Check:**` one to three steps, each a `file:line` to read or a command to run, with the result that
     means "merge".
   - `**If you merge / if you do not:**` one line each: what changes, and what to do instead (close, comment
-    with the change you want, or ask `@factory:dev`).
+    with the change you want, or ask the developer). Never write `@` before `factory:`, because that text
+    wakes an agent.
 - `## Summary`: what the change does in a few lines, the verdict, resolved and agreed findings, and the
   `Not checked:` and `Guidance gap:` notes.
 - `## Walkthrough`: the walkthrough of the PR, written with the `walkthrough` skill.

@@ -72,6 +72,19 @@ nodes:
       grill:          { effects: [{ comment: questions }, { stage: needs-answers }] }
       split:          { effects: [{ create-issues: children }, { stage: split }] }
       not-actionable: { effects: [{ comment: reason }, { stage: not-actionable }] }
+      bug:            { effects: [{ stage: investigating }] }       # a bug report with an unknown cause
+
+  # --- Investigate: a bug report -> reproduced and diagnosed, or rejected with evidence ----------
+  investigate:
+    agent: dev
+    triggers: [{ stage: investigating }]
+    when: { stage: investigating }
+    output: read-only
+    settings: { mode: investigate }
+    outcomes:
+      bug:              { effects: [{ comment: reason }, { label: "factory:implement-medium" }, { stage: in-dev }] }
+      intended:         { effects: [{ comment: reason }, { stage: not-actionable }] }   # the evidence is in the comment
+      cannot-reproduce: { effects: [{ comment: reason }, { stage: needs-answers }] }
 
   # --- Ready: estimate if needed, start the developer the size needs ----------------------------
   dispatch:

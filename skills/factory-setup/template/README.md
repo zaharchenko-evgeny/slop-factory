@@ -8,4 +8,9 @@ The definition of this team's software factory (ADR-0021 of the engine).
   `roles/<role>/setup.sh` installs the role's tools.
 - `.air/cloud/startup.sh`: the Air startup script; it runs `factory setup`.
 
-Check a change with `factory validate --team .`; deploy with the engine's `factory-deploy` skill.
+Check a change with `factory validate --team .`.
+
+## Deploy
+
+The engine pin in `factory.yaml` also pins the `factory-deploy` skill. Use it to
+check the definition and preview the Air plan. Review the plan before applying it.

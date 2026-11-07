@@ -40,7 +40,11 @@ def render(a):
 
 def render_project(a):
     """{relative path: text} of a new team's definition (`template/`)."""
-    return _render(PROJECT_T, a)
+    engine = a["ENGINE"]
+    match = re.fullmatch(r"git\+https://github\.com/([^/]+/[^/@]+)@(.+)", engine)
+    if not match:
+        raise ValueError("ENGINE must be a pinned GitHub URL to include factory-deploy")
+    return _render(PROJECT_T, {**a, "ENGINE_SKILL_SOURCE": f"github:{match[1]}@{match[2]}"})
 
 
 def with_chart(files):

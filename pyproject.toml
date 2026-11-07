@@ -13,7 +13,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = []
+packages = ["notify"]
 package-dir = { "" = "factory" }
 py-modules = ["cli", "config", "contracts", "definition", "deploy", "doctor", "gate", "gate_github", "gate_port", "gate_space", "github_graphql", "github_tracker", "local", "nodes", "project", "reconcile", "retro", "team_setup", "upgrade", "vocab", "workflow", "youtrack_tracker"]
 

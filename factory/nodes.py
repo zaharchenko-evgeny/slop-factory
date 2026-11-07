@@ -20,7 +20,7 @@ import config as config_mod  # noqa: E402  (`validate` takes a `config` dict)
 import vocab  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red", "assign", "unassign"}
+EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red", "assign", "unassign", "route", "reply", "skip"}
 OUTPUTS = {"read-only", "create-pr", "push-to-source", "push-to-new-branch", "as-instructed"}
 WHEN_KEYS = {"stage", "blockers", "focus", "round", "fix-rounds", "ci", "actor", "always", "due", "pr-state",
              "label", "pr", "review", "children", "ticket", "mention"}  # the last six: ADR-0021 facts
@@ -28,12 +28,10 @@ NO_ROLE = {"script", "human"}
 
 
 def load(path=None):
-    """nodes.yaml, or the project's v2 workflow rendered into the same shape (ADR-0016)."""
-    if path is None and config.is_project():
-        import project
-        import workflow
-        descriptor = project.load(config.team_root())
-        return workflow.to_nodes(descriptor, workflow.load(config.team_root(), descriptor))
+    """nodes.yaml, or the nodes of the team's definition (ADR-0021)."""
+    import definition
+    if path is None and definition.present(config.team_root()):
+        return definition.nodes(definition.load(config.team_root()))
     return yaml.safe_load(Path(path or (config.engine_root() / config.NODES)).read_text())
 
 

@@ -64,5 +64,9 @@ def lesson():
     return _tracker()["lesson_label"]
 
 
+def comment():
+    return _tracker()["comment_label"]
+
+
 def map_label():
     return _tracker()["map_label"]
