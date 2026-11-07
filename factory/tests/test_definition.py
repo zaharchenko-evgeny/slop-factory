@@ -49,6 +49,12 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    def test_write_mode_compiles_from_the_default_settings(self):
+        self.edit("factory.yaml", lambda f: f["defaults"]["settings"].update(write_mode="token"))
+        self.assertEqual(self.errors(), [])
+        project, _ = definition.to_project(definition.load(self.root))
+        self.assertEqual(project["write_mode"], "token")
+
     def test_role_secret_reaches_the_environments_of_its_nodes_only(self):
         self.edit("factory.yaml", lambda f: f["roles"]["router"].update(
             env={"ISSUES_TOKEN": {"required": True, "secret": True, "description": "Issues read/write"}}))

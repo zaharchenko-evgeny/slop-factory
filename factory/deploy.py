@@ -504,7 +504,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "repository": repo["url"],
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env, **({"FACTORY_NODE": node_name} if node_name else {})},
-            "secrets": [*d.get("secrets", []), *([WRITE_TOKEN_SECRET] if token and env in github_tracker.WRITE_TOKEN_ENVS else [])],
+            "secrets": list(dict.fromkeys([*d.get("secrets", []),
+                                           *([WRITE_TOKEN_SECRET] if token and github_tracker.token_env(env, config) else [])])),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
