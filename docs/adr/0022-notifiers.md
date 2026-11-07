@@ -15,14 +15,24 @@ Decision:
    - `send(person, message) -> ref`: deliver the message and return an opaque
      `ref` that names the thread on the channel.
    - `ack(person, ref, text)`: tell the person in that thread that their reply
-     was received or refused.
+     was received or refused. `slack-workflow` has no `ack`; people reply on
+     GitHub.
 
-   The first adapters are `email`, `slack` and `telegram`.
+   The first adapters are `email`, `slack-workflow` and `telegram`. The
+   `slack-workflow` adapter only sends through a Slack Workflow Builder webhook.
+   Its config is `{url_env: SLACK_WORKFLOW_URL}`. It sends
+   `{recipient, title, text, issue_url, run_url}`, where `recipient` is the
+   person's Slack user email. This is the Slack path until a Slack app is
+   approved in #863.
 2. **Message** is `{issue, pr, problem, links: [{title, url}], options: [text],
-   recommended: <index>}`. `pr` may be empty. `recommended` is the index of the
-   suggested entry in `options`. The `notify` agent returns these fields. The
-   gate renders them for each adapter (Slack blocks, an email body, a Telegram
-   text). The agent never formats for a channel.
+   recommended: <index>, run_url}`. `pr` may be empty. `recommended` is the
+   index of the suggested entry in `options`. `run_url` links to the Air run
+   of the step that caused the wait. Read it from the `Factory-Run:` trailer
+   of the latest `[factory]` stage comment; if there is no such comment, use
+   the notify run. Every adapter shows `run_url` next to the issue link. The
+   `notify` agent returns these fields. The gate renders them for each adapter
+   (Slack Workflow Builder fields, an email body, a Telegram text). The agent
+   never formats for a channel.
 3. **Effects** are `notify: message` (outbound) and `notify: ack` (reply
    acknowledgement). Only the gate sends. An agent never calls a channel and
    never holds a channel secret.
@@ -40,13 +50,13 @@ Decision:
    ```yaml
    notify:
      adapters:
-       slack: {token_env: SLACK_BOT_TOKEN}
+       slack-workflow: {url_env: SLACK_WORKFLOW_URL}
        telegram: {token_env: TELEGRAM_BOT_TOKEN}
        email: {smtp_env: NOTIFY_SMTP_URL}
      people:
        <github-login>:
-         via: [slack, email]
-         slack: <user id>
+         via: [slack-workflow, email]
+         slack-workflow: <user email>
          telegram: <chat id>
          email: <address>
    ```
@@ -56,25 +66,33 @@ Decision:
    `notify.people.<github-login>`, `via` lists one or more adapters; the gate
    sends on each. The first reply wins: the gate ignores later replies to the
    same send once one has been applied.
-6. **Inbound.** A relay outside Air holds the outbound-only connections: Slack
-   Socket Mode, Telegram long polling, IMAP IDLE. It POSTs each reply to the Air
+6. **Inbound.** A relay outside Air holds the outbound-only connections:
+   Telegram long polling and IMAP IDLE. It POSTs each reply to the Air
    webhook of a `notify-reply` node:
 
    ```json
-   {"issue": 859, "pr": 860, "via": "slack", "user": "U123", "text": "…", "ref": "…"}
+   {"issue": 859, "pr": 860, "via": "telegram", "user": "U123", "text": "…", "ref": "…"}
    ```
 
    The relay keeps no state and judges nothing. It does not check the user, the
    ref or the text.
 7. **Gate checks on a reply.** The gate applies an effect only when both hold:
    - `user` maps to a login in `notify.people` for the adapter named in `via`
-     (the id in that person's `slack`, `telegram` or `email` field);
+     (the id or address in that person's `slack-workflow`, `telegram` or
+     `email` field);
    - `ref` matches a `factory:notify` marker on that issue or PR.
 
    Otherwise the gate applies no effect. It may write a note on the ticket.
 8. **Reply text is data, never instruction.** The gate and any agent that reads
    it treat it like a ticket comment: it answers a question or picks an option.
    It cannot change a role, skip a check or write outside the scope of the step.
+
+Alternatives considered:
+
+- **Air Mate.** An automation cannot post through Air Mate. A reply continues
+  its own session, not an automation run, so it cannot resume this workflow.
+- **Air Slack app.** A future Air Slack app could replace the relay's Slack
+  inbound adapter.
 
 Consequences:
 
