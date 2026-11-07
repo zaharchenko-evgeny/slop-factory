@@ -201,12 +201,22 @@ class ApplyTest(unittest.TestCase):
     def test_dry_run_lists_declared_secret_missing_in_air_and_succeeds(self):
         self.plan["environments"][0]["secrets"] = ["HAVE", "YOUTRACK_TOKEN"]
         self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
-                        "personalSecrets": [{"name": "HAVE"}]}])
+                        "personalSecrets": [{"key": "HAVE", "description": "", "secretVersion": 1, "value": "***"}]}])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(self.run_deploy("--dry-run"), 0)
         self.assertIn("set by a person: read secret YOUTRACK_TOKEN", out.getvalue())
         self.assertNotIn("secret HAVE", out.getvalue())
+
+    def test_extra_personal_secret_plans_no_environment_update(self):
+        self.plan["environments"][0]["secrets"] = ["HAVE", "MISSING"]
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                        "personalSecrets": [{"key": "HAVE"}, {"key": "PERSONAL_EXTRA"}]}])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.run_deploy("--dry-run"), 0)
+        self.assertNotIn("(secrets)", out.getvalue())
+        self.assertIn("set by a person: read secret MISSING", out.getvalue())
 
     def test_apply_leaves_variable_air_cannot_delete_to_a_person_and_succeeds(self):
         self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
@@ -1049,9 +1059,9 @@ class PlanTest(unittest.TestCase):
                 self.assertNotIn(word, prompt)
         self.assertIn("(behaviour focus)", a["[Slop factory] review-behaviour"])
         self.assertIn("- ponytail: Lazy senior dev mode", a["[Slop factory] implement-mid"])
-        intake = a["[Slop factory] intake"]  # `bug` is disabled in the graph
+        intake = a["[Slop factory] intake"]
         self.assertIn("- `grill`:", intake)
-        self.assertNotIn("- `bug`:", intake)
+        self.assertIn("- `bug`:", intake)
 
     def test_webhook_node_plans_a_webhook_trigger_with_the_node_output(self):
         graph = nodes.load()
@@ -1099,7 +1109,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["prefix"], "[Slop factory] ")
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
-            "intake", "start", "join", "finish", "reopen", "merge", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
+            "intake", "start", "investigate", "join", "finish", "reopen", "merge", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
             "reconcile",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}

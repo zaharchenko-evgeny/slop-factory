@@ -35,9 +35,9 @@ Branch pattern: `{{ settings.branch_pattern }}`. Never hard-code these.
 ## Lessons
 
 When this run taught something the next run should know (a trap in the code, a missing doc,
-a check that misleads, a step of the factory that failed), add it to `lessons` in your result:
-one entry per lesson, with its `scope` (`project`, `factory` or `engine`), the `repo` or agent it
-is about, and the evidence (a file, a command, a link). The gate posts them as a comment on the
+a check that misleads, a step of the factory that failed), report each lesson with `--lesson` on
+`factory end`: one option per lesson, with its scope (`project`, `factory` or `engine`), the repo or
+agent it is about, and the evidence (a file, a command, a link). The gate posts them as a comment on the
 ticket and labels it `{{ settings.knowledge.lesson_label }}`; retro collects them. Leave it empty
 when nothing is worth keeping.
 

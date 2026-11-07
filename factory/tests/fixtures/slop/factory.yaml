@@ -86,10 +86,6 @@ roles:
     description: Moves a ticket that waits for a person to triage or ready after the person comments
     skills: []
     mcp: {}
-  walkthrough:
-    description: Orients a person on a PR that waits for them, without reviewing it
-    skills: [walkthrough, merge-risk]
-    mcp: {}
   retro:
     description: Collects lessons from tickets and merges them into the knowledge base
     skills: [retro]
@@ -99,6 +95,7 @@ roles:
     skills:
       - ponytail-review           # a name from `skills`
       - merge-risk
+      - walkthrough               # the Walkthrough section of the review body
       # - adr-reading: { path: roles/reviewer/skills/adr-reading }      # a role-only local skill
       # - security-review: { source: "github:owner/repo@<sha>", path: skills/security-review, sha256: ... }
     mcp: {}
@@ -139,7 +136,6 @@ agents:
   retro:          { role: retro, model: sonnet, access: full }
   notify:         { role: notify, model: luna, access: read-only }
   resume:         { role: resume, model: luna, access: read-only }
-  walkthrough:    { role: walkthrough, model: sol, access: read-only }
 
 # Environments: where agents run. One repository is `main`; the others are additional.
 environments:
@@ -147,7 +143,7 @@ environments:
     repositories:
       - repo: zaharchenko-evgeny/slop-factory
         main: true                # branches, PRs and the node's output apply here
-      - repo: zaharchenko-evgeny/slop-eval-factory   # the knowledge base, read-only: no Air automation changes the factory
+      - repo: zaharchenko-evgeny/slop-eval-factory   # the team repository, read-only here: a person changes it locally
     ci: { workflow: quality-gates }   # `ci: failed` = Air workflow_run.failed for this workflow
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               "*.blob.core.windows.net", pypi.org, files.pythonhosted.org, registry.npmjs.org]

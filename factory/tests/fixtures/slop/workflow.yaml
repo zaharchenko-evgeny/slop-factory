@@ -169,6 +169,13 @@ nodes:
       done-high: { effects: [{ unlabel: "factory:fix" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       blocked:   { effects: [{ unlabel: "factory:fix" }, { comment: reason }, { stage: blocked }] }
 
+  rounds-out:                     # a fix label at the fix cap: no round left, a person decides (notify tells them)
+    agent: clerk
+    triggers: [{ label: "factory:fix" }]
+    when: { stage: [in-review, changes-requested, approved], fix-rounds: at-cap }
+    outcomes:
+      blocked: { effects: [{ unlabel: "factory:fix", on: pr }, { stage: blocked }] }
+
   update:                         # a merge conflict
     agent: dev-cheap
     triggers: [{ label: "factory:update" }]
@@ -232,15 +239,6 @@ nodes:
     outcomes:
       notified: { effects: [{ comment: message, on: pr }] }
       skipped:  {}
-
-  walkthrough:                    # an approved PR a person must merge: one comment that orients them, no review
-    agent: walkthrough
-    triggers: [{ label: "factory:needs-human" }]
-    when: { stage: approved }
-    output: read-only
-    outcomes:
-      posted:  { effects: [{ comment: summary, on: pr }] }
-      skipped: {}
 
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
   retro:
