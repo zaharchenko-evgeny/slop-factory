@@ -335,6 +335,46 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(self.recover(self.pr(**labels, label_at={"factory:review-low": young}))[1], [])
         self.assertEqual(self.recover(self.pr(**labels, blockers_open=1, label_at={"factory:review-low": "2026-11-03T09:00:00Z"}))[1], [])
 
+    def missed_twice(self):
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": OLD})
+        ticket["log"] = [("comment", json.dumps(f"{reconcile.PREFIX} stage=in-review head=abc123def456 "
+                                                "re-fired factory:review-low (no review-low outcome)"))]
+        return ticket
+
+    def run_many(self, count):
+        tr = MemoryTracker({i: self.missed_twice() for i in range(1, count + 1)})
+        tracker = self.config["tracker"]
+        results = reconcile.recover_definition(tr, self.defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
+                                               self.config["limits"], now=NOW)
+        return tr, results
+
+    def test_three_second_misses_in_one_run_refire_instead_of_blocking(self):
+        tr, results = self.run_many(3)
+        self.assertEqual({(r["reconcile"], r.get("systemic")) for r in results}, {("refire", True)})
+        self.assertEqual({tr.get_stage(tr.tickets[i]) for i in (1, 2, 3)}, {"in-review"})
+
+    def test_one_second_miss_still_blocks(self):
+        tr, results = self.run_many(1)
+        self.assertEqual([r.get("reconcile") for r in results], ["blocked"], results)
+        self.assertEqual(tr.get_stage(tr.tickets[1]), "blocked")
+
+    def test_systemic_misses_open_one_doctor_ticket_and_a_clean_run_closes_it(self):
+        calls, open_titles = [], []
+
+        def gh(args, token=None):
+            calls.append(args)
+            return json.dumps([{"number": 9, "title": t} for t in open_titles]) if args[:2] == ["issue", "list"] else ""
+        reconcile.report_systemic(self.config, [{"ticket": 1, "node": "review-low"}], run=gh)
+        create = next(c for c in calls if c[:2] == ["issue", "create"])
+        self.assertEqual(create[create.index("--title") + 1], "Doctor: runs-without-outcome fails")
+        open_titles.append("Doctor: runs-without-outcome fails")
+        calls.clear()
+        reconcile.report_systemic(self.config, [{"ticket": 1, "node": "review-low"}], run=gh)
+        self.assertFalse([c for c in calls if c[:2] in (["issue", "create"], ["issue", "comment"])])
+        reconcile.report_systemic(self.config, [], run=gh)
+        self.assertEqual([c[:3] for c in calls if c[:2] == ["issue", "close"]], [["issue", "close", "9"]])
+
     def test_needs_human_ticket_is_left_alone(self):
         t, results = self.recover(self.pr(conflict=True, attrs=["factory:needs-human"]))
         self.assertEqual(results, [])

@@ -26,6 +26,7 @@ import nodes as nodes_mod
 import vocab
 
 PREFIX = "[factory] reconcile:"
+SYSTEMIC_MISSES = 3  # second misses in one run that mean the factory, not the tickets, is broken
 RUN = "reconcile"
 LOST_FINISH = ("approved", "in-review", "changes-requested")
 RED_TITLE = re.compile(r"Main is red(?: in Air)?: (.+)")
@@ -281,6 +282,7 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
     fix, wakes = definition_recovery(defn, vocab._tracker()["stages"], vocab.needs_human(), default)
     nodes = defn["workflow"]["nodes"]
     listed = tracker.sweep_tickets([s for s in stages if stage_kinds.get(s) not in ("waiting", "final")], open_only=True)
+    pending = []
     gate.prefetch(tracker, listed)
     for n in listed:
         try:
@@ -313,14 +315,22 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             kind = "blocked" if kind == "refire" and missed else kind
             r = {"ticket": n, "stage": stage, "node": node, "reconcile": kind, "why": why}
             results.append(r)
-            if not dry_run:
-                send(tracker, n, None, stage, head, kind, label, on, why, fix_stage=fix[2] if fix else None)
-            if progress:
-                progress(r)
+            pending.append((r, (tracker, n, None, stage, head, kind, label, on, why), fix[2] if fix else None))
         except Exception as e:  # one ticket failing does not stop the others
             results.append(ticket_error(tracker, n, e, dry_run))
             if progress:
                 progress(results[-1])
+    # Many second misses in one run are one factory failure (a broken install, #973), not a fault of each ticket:
+    # re-fire them all and let reconcile_main open one Doctor ticket, instead of blocking every ticket (#985).
+    systemic = sum(r["reconcile"] == "blocked" for r, _, _ in pending) >= SYSTEMIC_MISSES
+    for r, args, fix_stage in pending:
+        if systemic and r["reconcile"] == "blocked":
+            r.update(reconcile="refire", systemic=True)
+            args = (*args[:5], "refire", *args[6:])
+        if not dry_run:
+            send(*args, fix_stage=fix_stage)
+        if progress:
+            progress(r)
     return results
 
 
@@ -394,6 +404,25 @@ def main(argv, run=None):
     return code
 
 
+def report_systemic(config, systemic, run=None):
+    """Open `Doctor: runs end without an outcome` (no new comment while it is open), or close it when no run missed."""
+    import doctor
+    import github_tracker
+    run = run or github_tracker.gh
+    repo = config["tracker"].get("repository") or config["code_host"]["repository"]
+    probe = "runs-without-outcome"
+    if not systemic:
+        return doctor.close_ticket(repo, probe, run, run_id=RUN)
+    title = f"Doctor: {probe} fails"
+    found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--search", f'"{title}" in:title',
+                            "--json", "number,title"]))
+    if not any(i["title"] == title for i in found):
+        listed = ", ".join(f"#{r['ticket']} {r['node']}" for r in systemic)
+        doctor.file_tickets(repo, [{"probe": probe, "result": "fail", "detail": f"{len(systemic)} runs ended twice "
+                                    f"without an outcome in one reconcile: {listed}. Reconcile re-fired them instead of "
+                                    f"blocking each; check the install or the environment first (#973)."}], run, run_id=RUN)
+
+
 def reconcile_main(argv):
     dry_run = "--dry-run" in argv
     spec = next((a[7:] for a in argv if a.startswith("memory:")), None)
@@ -412,6 +441,8 @@ def reconcile_main(argv):
         results += recover_definition(tracker, definition.load(config_mod.team_root()), config["tracker"]["stages"],
                                       config["tracker"].get("stage_kinds", {}), config["limits"],
                                       dry_run=dry_run, progress=progress)
+        if not dry_run and not spec:
+            report_systemic(config, [r for r in results if r.get("systemic")])
         print(json.dumps({"dry_run": dry_run, "reconcile": results}))
         return 1 if any("error" in r for r in results) else 0
     progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
