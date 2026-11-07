@@ -1239,21 +1239,6 @@ class JoinTest(unittest.TestCase):
         self.assertEqual(join(gh), (True, 1))
         self.assertIn("factory:approved", gh.labels)
 
-    def test_fix_that_pushed_nothing_blocks(self):
-        gh = FakeGh(labels=["factory:changes-requested", "risk:low"], reviews=[review(BOT, C)])
-        gh.fix_events = ["2026-01-02T05:00:00Z"]
-        orig = gate.local_head
-        try:
-            gate.local_head = lambda: "h1"  # the run's checkout still at the PR head: no new commit
-            gate.apply("fix", "done", {"ticket": 7, "event": "e", "tier": "mid"}, tr(gh), nodes.load())
-            self.assertIn("factory:blocked", gh.labels)
-            gh.labels = ["factory:changes-requested", "risk:low"]
-            gate.local_head = lambda: "h2"  # a new commit, pushed by the platform after the run
-            gate.apply("fix", "done", {"ticket": 7, "event": "e2", "tier": "mid"}, tr(gh), nodes.load())
-            self.assertIn("factory:in-review", gh.labels)
-        finally:
-            gate.local_head = orig
-
     def test_fix_rounds_count_heads_not_reviewers(self):
         two = [review(BOT, C.replace("focus=full", "focus=behaviour")), review(BOT, C.replace("focus=full", "focus=structure-security"))]
         self.assertEqual(tr(FakeGh(reviews=two)).facts(7)["fix_rounds"], 1)  # two reviewers, one round

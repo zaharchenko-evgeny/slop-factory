@@ -8,3 +8,8 @@
 __pycache__/
 build/
 *.egg-info/
+# Run artefacts an agent may write at the checkout root
+/addressed.json
+/checks.json
+/findings.json
+/notes.json

@@ -97,6 +97,7 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | --- | --- | --- |
 | `PROJECT_NAME` | Project name | `factory.yaml`, `workflow.yaml`, `README.md` |
 | `ENGINE` | The engine package the team pins, as `uv tool install` takes it | `factory.yaml` |
+| `ENGINE_SKILL_SOURCE` | Derived from `ENGINE`; the GitHub source for the pinned engine's `factory-deploy` skill | `factory.yaml` |
 | `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.yaml` |
 | `MAIN_REPOSITORY` | `owner/repo` of the project's main repository | `factory.yaml` |
 | `TEAM_REPOSITORY` | `owner/repo` of this definition and the knowledge base | `factory.yaml` |
