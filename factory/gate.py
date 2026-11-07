@@ -36,6 +36,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
+import notify as notifiers  # noqa: E402
 from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
 from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
@@ -583,11 +584,56 @@ def resolve(effect, payload, ticket):
         return {**out, "on": on} if on else out
     if kind == "park-behind-main-red":
         return {"kind": kind, "ticket": ticket, "value": field(arg)}
+    if kind == "notify":  # `notify: message` or `notify: {message: message, people: [logins]}` (ADR-0022)
+        message = {"issue": ticket, "problem": field("problem"), "links": payload.get("links", []), "options": payload.get("options", []), "recommended": payload.get("recommended")}
+        try:
+            notifiers.validate_message(message)
+        except ValueError as e:
+            raise Bad(f"notify: {e}")
+        return {"kind": kind, "ticket": ticket, "value": {"message": message, "people": arg.get("people") if isinstance(arg, dict) else None},
+                **({"on": on} if on else {})}
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
 ASK = re.compile(r"<!-- factory:ask id=(\S+) from=(\S+) to=(\S+) hop=(\d+) -->")
 ANSWER = re.compile(r"<!-- factory:answer id=(\S+) -->")
+
+
+def notify_config():
+    """`notify` of the team's factory.yaml; Bad when the team has none."""
+    import definition
+    config = (definition.load(config_mod.team_root())["factory"] or {}).get("notify")
+    if not config:
+        raise Bad("notify: the team's factory.yaml has no `notify` config")
+    return config
+
+
+def notify_effects(effects, tracker, ticket, name):
+    """Replace each `notify` effect with the one `[factory]` comment ADR-0022 asks for: the rendered text and one
+    `factory:notify` marker per send. The comment is posted even when a send failed (it lists the sends that went
+    out); the failures then raise. Returns the effects, the failures and the notify comments alone. A retry sends
+    again: nothing reads the markers."""
+    out, failures, posted = [], [], []
+    for e in effects:
+        if e["kind"] != "notify":
+            out.append(e)
+            continue
+        message = {**e["value"]["message"], "pr": ""}
+        if e.get("on") == "pr":
+            message["pr"] = tracker.facts(ticket).get("pr") or ""
+        try:
+            sent, errors = notifiers.send_all(notify_config(), message, e["value"]["people"])
+        except ValueError as err:
+            raise Bad(str(err))
+        failures += errors
+        if sent:
+            body = "[factory] " + notifiers.render(message) + "\n\nNotified: " + ", ".join(f"{p} via {v}" for v, p, _ in sent)
+            body += "".join("\n" + notifiers.marker(v, p, r) for v, p, r in sent)
+            if definition_team():
+                body += f"\n\n{comment_marker(name)}"
+            posted.append({"kind": "comment", "ticket": ticket, "value": body, **({"on": e["on"]} if e.get("on") else {})})
+            out.append(posted[-1])
+    return out, failures, posted
 
 
 def ask_effects(name, node, out, payload, tracker, ticket, effects):
@@ -727,6 +773,11 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if why:
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
+    effects, failures, posted = notify_effects(effects, tracker, ticket, name)
+    if failures:  # keep the markers of the sends that went out; skip the stage change and the other effects
+        for e in posted:
+            tracker.apply(e)
+        raise RuntimeError("notify failed: " + "; ".join(failures))
     written = [e["kind"] for e in effects + after if tracker.apply(e)]
     parent = parent_decision(name, ticket, effects, tracker, nodes)
     return GO, {"applied": True, "written": written, **({"parent": parent} if parent else {})}
