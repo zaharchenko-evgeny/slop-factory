@@ -1042,7 +1042,7 @@ def blockers_mode(nodes):
     return mode
 
 
-def sweep_plan(facts, auto_merge=None, default_tier="mid", blockers="start"):
+def sweep_plan(facts, auto_merge=None, default_tier="mid", blockers="start", start_waits=False):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
     waits = blockers == "merge" and facts.get("blockers_open")  # approved, but a blocker is still open
@@ -1050,7 +1050,7 @@ def sweep_plan(facts, auto_merge=None, default_tier="mid", blockers="start"):
         comments = facts.get("comments", [])
         return ("finish", "merged", {}) if not after_merge_checks(facts.get("body")) \
             or not after_merge_comment(comments) or after_merge_complete(comments) else None
-    if stage == "ready" and (blockers == "merge" or not facts.get("blockers_open")) \
+    if stage == "ready" and (blockers == "merge" and not start_waits or not facts.get("blockers_open")) \
             and facts.get("issue_state", "open") == "open":
         return "start", "started", {"tier": fix_tier(facts, default_tier)}
     if stage == "needs-answers" and facts.get("answered"):
@@ -1085,6 +1085,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
     results, failed, done_tickets = [], False, []
     stages = config_mod.load()["tracker"]["stages"]
     mode = blockers_mode(nodes)
+    start_waits = ((nodes.get("nodes", {}).get("start") or {}).get("when") or {}).get("blockers") == "closed"
     queue, seen, merged = ([issue] if issue is not None else list(tracker.sweep_tickets(stages))), set(), False
     prefetch(tracker, queue)
     while queue:
@@ -1092,7 +1093,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
             try:
                 facts = tracker.facts(n)
-                plan = sweep_plan(facts, auto_merge, default_tier, mode)
+                plan = sweep_plan(facts, auto_merge, default_tier, mode, start_waits)
                 if plan is None or (n, facts["stage"]) in seen:
                     if progress:
                         progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})

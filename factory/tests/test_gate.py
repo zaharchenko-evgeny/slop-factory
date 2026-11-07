@@ -1657,6 +1657,12 @@ class MergeBlockersTest(unittest.TestCase):
         tr, res = self.sweep({7: {"stage": "ready", "blockers_open": 1}}, NODES)
         self.assertEqual((res, tr.tickets[7]["stage"]), ([], "ready"))
 
+    def test_start_node_requiring_closed_blockers_still_waits_in_merge_mode(self):
+        nodes = copy.deepcopy(self.MERGE)
+        nodes["nodes"]["start"]["when"] = {"stage": "ready", "blockers": "closed"}
+        tr, res = self.sweep({7: {"stage": "ready", "blockers_open": 1}}, nodes)
+        self.assertEqual((res, tr.tickets[7]["stage"]), ([], "ready"))
+
     def test_approved_with_open_blocker_does_not_merge_until_it_closes(self):
         tr, res = self.sweep({7: {**self.APPROVED, "blockers_open": 1}}, self.MERGE)
         self.assertEqual((res, tr.tickets[7]["stage"]), ([], "approved"))
