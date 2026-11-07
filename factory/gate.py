@@ -633,7 +633,8 @@ def ask_effects(name, node, out, payload, tracker, ticket, effects):
     pr = facts.get("pr_comments")
     if pr is None and hasattr(tracker, "pr_comments"):
         pr = tracker.pr_comments(ticket)
-    asked = sum(1 for c in [*(facts.get("comments") or []), *(pr or [])] if ASK.search(c.get("body") or ""))
+    asked = sum(1 for c in [*(facts.get("comments") or []), *(pr or [])]  # only the factory's own asks count
+                if c.get("author_is_bot") and (c.get("body") or "").startswith("[factory]") and ASK.search(c["body"]))
     limit = config_mod.load().get("limits", {}).get("mention_hops", 3)
     if asked >= limit:
         return [{"kind": "comment", "ticket": ticket, "value": f"[factory] Ask refused: this ticket reached its limit of "
