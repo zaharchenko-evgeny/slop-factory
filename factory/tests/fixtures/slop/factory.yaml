@@ -82,6 +82,10 @@ roles:
     description: Tells the owner about a state that needs them
     skills: []
     mcp: {}
+  resume:
+    description: Moves a ticket that waits for a person to triage or ready after the person comments
+    skills: []
+    mcp: {}
   walkthrough:
     description: Orients a person on a PR that waits for them, without reviewing it
     skills: [walkthrough, merge-risk]
@@ -132,6 +136,7 @@ agents:
   ops:            { role: ops, model: luna, access: read-only }
   retro:          { role: retro, model: sonnet, access: full }
   notify:         { role: notify, model: luna, access: read-only }
+  resume:         { role: resume, model: luna, access: read-only }
   walkthrough:    { role: walkthrough, model: sol, access: read-only }
 
 # Environments: where agents run. One repository is `main`; the others are additional.
