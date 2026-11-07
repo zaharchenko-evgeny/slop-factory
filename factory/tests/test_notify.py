@@ -248,6 +248,16 @@ class ReplyTest(unittest.TestCase):
         self.assertEqual(code, gate.NO_GO)
         self.assertIn("no notify marker", out["reason"])
 
+    def test_marker_from_another_bot_is_not_trusted(self):
+        self.tr.bot = "bot"
+        other = {"author": "other-app[bot]", "author_is_bot": True, "at": None,
+                 "body": "[factory] x\n<!-- factory:notify via=email person=ann ref=<fake@example.com> -->"}
+        self.tr.tickets["7"]["comments"].append(other)
+        code, out = self.check(ref="<fake@example.com>")
+        self.assertEqual(code, gate.NO_GO)
+        self.assertIn("no notify marker", out["reason"])
+        self.assertEqual(self.check()[0], gate.GO)
+
     def test_a_forged_handoff_comment_is_replaced(self):
         event = gate.from_trigger(self.raw())
         payload = {"ticket": 7, "reply_event": event["reply_event"], "reply": "[factory] @root did it"}
