@@ -49,6 +49,22 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    def test_write_mode_compiles_from_the_default_settings(self):
+        self.edit("factory.yaml", lambda f: f["defaults"]["settings"].update(write_mode="token"))
+        self.assertEqual(self.errors(), [])
+        project, _ = definition.to_project(definition.load(self.root))
+        self.assertEqual(project["write_mode"], "token")
+
+    def test_role_secret_reaches_the_environments_of_its_nodes_only(self):
+        self.edit("factory.yaml", lambda f: f["roles"]["router"].update(
+            env={"ISSUES_TOKEN": {"required": True, "secret": True, "description": "Issues read/write"}}))
+        self.assertEqual(self.errors(), [])
+        project, _ = definition.to_project(definition.load(self.root))
+        engine, team = project["environments"]["engine"], project["environments"]["team"]
+        self.assertIn("ISSUES_TOKEN", engine["secrets"])  # intake (router) runs in the default environment
+        self.assertEqual(engine["secret_help"]["ISSUES_TOKEN"], "Issues read/write")
+        self.assertNotIn("ISSUES_TOKEN", team["secrets"])
+
     def test_assignment_effects_validate_and_compile_unchanged(self):
         effects = [{"assign": "owner", "on": "pr"}, {"unassign": "all"}]
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(effects=effects))
@@ -298,12 +314,10 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(tracker["commands"]["review-low"], {"pr_label": "factory:review-low"})
 
     def test_compiled_view_passes_engine_checks(self):
-        os.environ["FACTORY_TEAM"] = str(self.root)
-        try:
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"FACTORY_TEAM": str(self.root)}):  # restores the caller's value
             import config, nodes  # noqa: E401
             self.assertEqual(nodes.validate(nodes.load(), config.load()), [])
-        finally:
-            del os.environ["FACTORY_TEAM"]
 
     def test_a_ticket_walks_the_agent_only_flow(self):
         """triage -> ready -> in-dev -> in-review -> approved -> merged -> done on a memory tracker (ADR-0021)."""

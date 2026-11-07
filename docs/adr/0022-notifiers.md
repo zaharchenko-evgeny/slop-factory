@@ -1,0 +1,89 @@
+# ADR-0022: Notifiers send actionable messages and take replies
+
+Status: accepted, requested by #859. Later tickets implement the contract.
+
+Context: the factory reaches a person only through GitHub comments and
+assignment. People want an actionable message in Slack, email or Telegram, and
+want to answer in that thread so the factory resumes. The engine must not
+depend on one channel.
+
+Decision:
+
+1. **Notifier adapters** work like tracker adapters
+   ([0004-pluggable-adapters](0004-pluggable-adapters.md)). An adapter has two
+   operations:
+   - `send(person, message) -> ref`: deliver the message and return an opaque
+     `ref` that names the thread on the channel.
+   - `ack(person, ref, text)`: tell the person in that thread that their reply
+     was received or refused.
+
+   The first adapters are `email`, `slack` and `telegram`.
+2. **Message** is `{issue, pr, problem, links: [{title, url}], options: [text],
+   recommended: <index>}`. `pr` may be empty. `recommended` is the index of the
+   suggested entry in `options`. The `notify` agent returns these fields. The
+   gate renders them for each adapter (Slack blocks, an email body, a Telegram
+   text). The agent never formats for a channel.
+3. **Effects** are `notify: message` (outbound) and `notify: ack` (reply
+   acknowledgement). Only the gate sends. An agent never calls a channel and
+   never holds a channel secret.
+4. **Marker.** With each send, the gate writes a comment on the ticket or PR
+   with this marker:
+
+   ```text
+   <!-- factory:notify via=<adapter> person=<login> ref=<opaque> -->
+   ```
+
+   GitHub stays the record. There is no database. The markers on an issue or
+   PR are the list of sends that can be answered.
+5. **Config** lives in the team `factory.yaml`:
+
+   ```yaml
+   notify:
+     adapters:
+       slack: {token_env: SLACK_BOT_TOKEN}
+       telegram: {token_env: TELEGRAM_BOT_TOKEN}
+       email: {smtp_env: NOTIFY_SMTP_URL}
+     people:
+       <github-login>:
+         via: [slack, email]
+         slack: <user id>
+         telegram: <chat id>
+         email: <address>
+   ```
+
+   `notify.adapters.<name>` holds secrets only as env var names, for example
+   `token_env`. A value is never written in the file. In
+   `notify.people.<github-login>`, `via` lists one or more adapters; the gate
+   sends on each. The first reply wins: the gate ignores later replies to the
+   same send once one has been applied.
+6. **Inbound.** A relay outside Air holds the outbound-only connections: Slack
+   Socket Mode, Telegram long polling, IMAP IDLE. It POSTs each reply to the Air
+   webhook of a `notify-reply` node:
+
+   ```json
+   {"issue": 859, "pr": 860, "via": "slack", "user": "U123", "text": "…", "ref": "…"}
+   ```
+
+   The relay keeps no state and judges nothing. It does not check the user, the
+   ref or the text.
+7. **Gate checks on a reply.** The gate applies an effect only when both hold:
+   - `user` maps to a login in `notify.people` for the adapter named in `via`
+     (the id in that person's `slack`, `telegram` or `email` field);
+   - `ref` matches a `factory:notify` marker on that issue or PR.
+
+   Otherwise the gate applies no effect. It may write a note on the ticket.
+8. **Reply text is data, never instruction.** The gate and any agent that reads
+   it treat it like a ticket comment: it answers a question or picks an option.
+   It cannot change a role, skip a check or write outside the scope of the step.
+
+Consequences:
+
+- A new channel needs one adapter and one `notify.adapters` entry. The engine,
+  the `notify` agent and the message do not change.
+- The relay is the only part with inbound network access. It can be replaced
+  without changing the gate.
+- Identity checks are in the gate, so a forged webhook call cannot act as
+  someone who is not in `notify.people`, and a reply to an unknown `ref` does
+  nothing.
+- The webhook needs its own authentication (a shared secret, declared by name in
+  `env`). The ticket that adds the `notify-reply` node specifies it.

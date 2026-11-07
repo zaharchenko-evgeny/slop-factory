@@ -18,6 +18,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parent
 sys.path.insert(0, str(ROOT))
+import os  # noqa: E402
+os.environ["FACTORY_TEAM"] = str(ROOT / "tests/fixtures/team")  # the fixture team, as CI; an Air run points it at the real team
 import config  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 import project  # noqa: E402

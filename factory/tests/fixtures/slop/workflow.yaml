@@ -169,6 +169,13 @@ nodes:
       done-high: { effects: [{ unlabel: "factory:fix" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       blocked:   { effects: [{ unlabel: "factory:fix" }, { comment: reason }, { stage: blocked }] }
 
+  rounds-out:                     # a fix label at the fix cap: no round left, a person decides (notify tells them)
+    agent: clerk
+    triggers: [{ label: "factory:fix" }]
+    when: { stage: [in-review, changes-requested, approved], fix-rounds: at-cap }
+    outcomes:
+      blocked: { effects: [{ unlabel: "factory:fix", on: pr }, { stage: blocked }] }
+
   update:                         # a merge conflict
     agent: dev-cheap
     triggers: [{ label: "factory:update" }]

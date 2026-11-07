@@ -474,6 +474,9 @@ def tests_for(cls, tid):
     return T
 
 
+tests_for.__test__ = False  # a test-class factory, not a test (pytest would collect it)
+
+
 GateMemory = tests_for(MemoryTracker, 7)
 GateTag = tests_for(TagTracker, "PROJ-7")
 

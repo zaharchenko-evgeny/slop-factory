@@ -253,18 +253,25 @@ def additional_repositories(main_repository: dict, team: dict, config: dict) -> 
     return projects if team_is_project(team, config) else projects + [{"repository": repository(team), "branch": "main"}]
 
 
-def checkout_instructions(main_repository: dict | None, config: dict) -> str:
+def checkout_instructions(main_repository: dict | None, config: dict, push_other_projects: bool = False) -> str:
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     team = {"url": config.get("team_repository") or primary["url"]}
     if not main_repository:
         return ""
+    push = ""
+    if push_other_projects and config.get("write_mode") == "token" and other_projects(main_repository, team, config):
+        push = ("For each other changed project repository, push this ticket branch and open or update its PR. "
+                "Use `FACTORY_WRITE_TOKEN` without printing it. Push with `git -c credential.helper= push "
+                "https://x-access-token:$FACTORY_WRITE_TOKEN@github.com/<owner>/<repo> HEAD:<branch>`, "
+                "then use `gh pr create` or `gh pr edit` with a `[factory]` body that includes `Refs #<n>`. "
+                "Use the same `ez/<n>-<slug>` branch in each repository.\n\n")
     if main_repository["fullName"] == repository(team)["fullName"]:
         # Air's gh picks its token from the working directory's origin: the tracker's checkout reaches the tracker.
         tracker = (config.get("tracker") or {}).get("repository") or repository(primary)["fullName"]
         if tracker == main_repository["fullName"]:
-            return ""
+            return push
         return (f"## Working directory\n\nRun every command from `/workspaces/{tracker.rsplit('/', 1)[-1]}`: "
-                "GitHub access there reaches the tracker. This automation's own checkout is the team repository.\n\n")
+                "GitHub access there reaches the tracker. This automation's own checkout is the team repository.\n\n" + push)
     project = main_repository["fullName"].rsplit("/", 1)[-1]
     others = ", ".join(f"`/workspaces/{repository(r)['fullName'].rsplit('/', 1)[-1]}`"
                        for r in other_projects(main_repository, team, config))
@@ -276,7 +283,7 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
         tail = "The factory repository is checked out beside it and is read-only.\n\n"
     return (f"## Project checkout\n\nBefore running project commands, `cd /workspaces/{project}`. "
             + (f"The other project repositories are checked out beside it: {others}. " if others else "")
-            + tail)
+            + tail + push)
 
 
 def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None,
@@ -354,7 +361,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     role = n["role"]
     servers = mcp_connectors(n, config, focus)
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
-    checkout = checkout_instructions(main_repository, config)
+    checkout = checkout_instructions(main_repository, config, name in {"implement", "fix", "update"})
     import definition
     if definition.present(config_mod.team_root()):  # ADR-0021: the node's role body, rendered with its settings
         defn = definition.load(config_mod.team_root())
@@ -371,7 +378,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     else:
         text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
         skills = skill_lines(role)
-    checkout = checkout_instructions(main_repository, config)
+    checkout = checkout_instructions(main_repository, config, name in {"implement", "fix", "update"})
     mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
@@ -497,7 +504,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "repository": repo["url"],
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env, **({"FACTORY_NODE": node_name} if node_name else {})},
-            "secrets": [*d.get("secrets", []), *([WRITE_TOKEN_SECRET] if token and env in github_tracker.WRITE_TOKEN_ENVS else [])],
+            "secrets": list(dict.fromkeys([*d.get("secrets", []),
+                                           *([WRITE_TOKEN_SECRET] if token and github_tracker.token_env(env, config) else [])])),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
@@ -842,6 +850,8 @@ def same(key: str, have, want) -> bool:
         return sorted(have or []) == sorted(want or [])
     if key == "domains":
         return set(want or []) <= set(have or [])
+    if key == "secrets":  # deploy cannot set or delete one: a missing one is `set by a person`, an extra one is theirs
+        return True
     if key == "variables":  # Air cannot delete a variable: an extra one is a by-hand removal, not a difference
         return all(k in (have or {}) and have[k] == v for k, v in (want or {}).items())
     return have == want
@@ -872,7 +882,7 @@ def environment_detail(x: dict) -> dict:
     if isinstance(x.get("variables"), list):
         x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
     if "personalSecrets" in x:
-        x["secrets"] = [s["name"] for s in x.pop("personalSecrets")]
+        x["secrets"] = [s.get("key") or s["name"] for s in x.pop("personalSecrets")]  # Air lists them by `key`
     return x
 
 

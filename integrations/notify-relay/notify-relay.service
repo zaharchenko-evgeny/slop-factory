@@ -1,0 +1,19 @@
+[Unit]
+Description=Factory notify-relay (email replies to the Air webhook)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=notify-relay
+WorkingDirectory=/opt/notify-relay
+EnvironmentFile=/etc/notify-relay.env
+ExecStart=/usr/local/bin/uv run --project /opt/notify-relay python /opt/notify-relay/relay.py
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
