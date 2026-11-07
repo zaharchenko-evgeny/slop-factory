@@ -147,6 +147,11 @@ class DefinitionTest(unittest.TestCase):
             environment="team", triggers=[{"label": "factory:needs-human"}]))
         self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
 
+    def test_pr_and_ci_triggers_outside_code_repositories_are_deaf_triggers(self):
+        for trigger in ({"pr": "merged"}, {"ci": "failed"}):
+            self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team", triggers=[trigger]))
+            self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
+
     def test_scheduled_node_in_any_environment_is_fine(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(environment="team"))
         self.assertEqual(self.errors(), [])
