@@ -135,6 +135,7 @@ class NotifyTest(unittest.TestCase):
 
     def test_failed_send_is_reported_and_the_other_send_is_marked(self):
         tr = MemoryTracker({"7": {"stage": "blocked"}})
+        self.graph["nodes"]["notify"]["outcomes"]["notified"]["effects"].append({"stage": "done"})
         real = notify.ADAPTERS["email"].send
 
         def flaky(self, person, message):
@@ -147,6 +148,7 @@ class NotifyTest(unittest.TestCase):
         (comment,) = self.comments(tr)
         self.assertIn("person=bob", comment)
         self.assertNotIn("person=ann", comment)
+        self.assertEqual(tr.tickets["7"]["stage"], "blocked")
 
     def test_ack_replies_in_the_thread(self):
         adapter = notify.ADAPTERS["email"](CONFIG["adapters"]["email"])

@@ -645,8 +645,9 @@ def notify_config():
 def notify_effects(effects, tracker, ticket, name):
     """Replace each `notify` effect with the one `[factory]` comment ADR-0022 asks for: the rendered text and one
     `factory:notify` marker per send. The comment is posted even when a send failed (it lists the sends that went
-    out, so a retry does not repeat them); the failures then raise."""
-    out, failures = [], []
+    out); the failures then raise. Returns the effects, the failures and the notify comments alone. A retry sends
+    again: nothing reads the markers."""
+    out, failures, posted = [], [], []
     for e in effects:
         if e["kind"] != "notify":
             out.append(e)
@@ -664,8 +665,9 @@ def notify_effects(effects, tracker, ticket, name):
             body += "".join("\n" + notifiers.marker(v, p, r) for v, p, r in sent)
             if definition_team():
                 body += f"\n\n{comment_marker(name)}"
-            out.append({"kind": "comment", "ticket": ticket, "value": body, **({"on": e["on"]} if e.get("on") else {})})
-    return out, failures
+            posted.append({"kind": "comment", "ticket": ticket, "value": body, **({"on": e["on"]} if e.get("on") else {})})
+            out.append(posted[-1])
+    return out, failures, posted
 
 
 def ask_effects(name, node, out, payload, tracker, ticket, effects):
@@ -917,10 +919,12 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     if why:
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
-    effects, failures = notify_effects(effects, tracker, ticket, name)
-    written = [e["kind"] for e in effects + after if tracker.apply(e)]
-    if failures:
+    effects, failures, posted = notify_effects(effects, tracker, ticket, name)
+    if failures:  # keep the markers of the sends that went out; skip the stage change and the other effects
+        for e in posted:
+            tracker.apply(e)
         raise RuntimeError("notify failed: " + "; ".join(failures))
+    written = [e["kind"] for e in effects + after if tracker.apply(e)]
     parent = parent_decision(name, ticket, effects, tracker, nodes)
     return GO, {"applied": True, "written": written, **({"parent": parent} if parent else {})}
 
