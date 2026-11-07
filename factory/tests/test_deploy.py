@@ -34,6 +34,25 @@ import workflow  # noqa: E402
 FIX = HERE / "fixtures/deploy"
 
 
+
+def definition_plan(edit_factory=None, edit_workflow=None, source="fixtures/slop"):
+    """The Air plan of a copy of a definition fixture, after `edit_factory` / `edit_workflow` changed its parsed
+    factory.yaml / workflow.yaml (ADR-0021)."""
+    before = cfg.team_root()
+    with tempfile.TemporaryDirectory() as tmp:
+        shutil.copytree(HERE / source, tmp, dirs_exist_ok=True)
+        for name, edit in ((definition.FACTORY, edit_factory), (definition.WORKFLOW, edit_workflow)):
+            if edit:
+                data = yaml.safe_load((Path(tmp) / name).read_text())
+                edit(data)
+                (Path(tmp) / name).write_text(yaml.safe_dump(data, sort_keys=False))
+        cfg.set_team(tmp)
+        try:
+            return deploy.plan_air(nodes.load(), cfg.load())
+        finally:
+            cfg.set_team(before)
+
+
 FAKE_SERVER = r"""
 import json, sys
 state, kind = sys.argv[1], sys.argv[2]  # state file: {"items": [...], "calls": [...]}
@@ -582,6 +601,56 @@ class ProjectPlanTest(unittest.TestCase):
                 self.assertEqual((slop / rel).read_text(), Path(path).read_text(), f"fixtures/slop/{rel}")
         self.assertEqual(sorted(str(p.relative_to(slop)) for p in slop.rglob("*") if p.is_file()),
                          sorted(str(Path(p).relative_to(tmp)) for p in written))
+
+    def test_mentionable_agents_get_a_reply_node(self):
+        """fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node and the mention router; the others do not."""
+        nodes_ = {a["spec"]["node"] for a in definition_plan()["automations"]}
+        self.assertTrue({"mentions", "reply-dev", "reply-reviewer"} <= nodes_)
+        self.assertFalse({"reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
+
+        def none_mentionable(f):
+            for spec in f["agents"].values():
+                spec.pop("mentionable", None)
+        nodes_ = {a["spec"]["node"] for a in definition_plan(edit_factory=none_mentionable)["automations"]}
+        self.assertFalse({n for n in nodes_ if n == "mentions" or n.startswith("reply-")})
+
+    def test_mcp_connectors_come_from_node_then_agent_then_role(self):
+        def edit_factory(f):
+            f["roles"]["developer"]["mcp"] = {"youtrack": {"connector": "youtrack"}}
+            f["agents"]["reviewer"]["mcp"] = {"slack": {"connector": "slack"}}
+
+        def edit_workflow(w):
+            w["nodes"]["fix"]["mcp"] = {"youtrack": None, "slack": {"connector": "slack"}}  # null removes the role's
+        a = {x["spec"]["node"]: x for x in definition_plan(edit_factory, edit_workflow)["automations"]}
+        self.assertEqual(a["implement-medium"]["mcpConnectors"], ["youtrack"])
+        self.assertIn("## Your MCP servers\n\n- youtrack (Air connector youtrack)\n", a["implement-medium"]["prompt"])
+        self.assertEqual(a["fix"]["mcpConnectors"], ["slack"])
+        self.assertEqual(a["review-high"]["mcpConnectors"], ["slack"])
+        self.assertEqual(a["review-low"]["mcpConnectors"], [])
+        self.assertNotIn("Your MCP servers", a["review-low"]["prompt"])
+
+    def test_labels_and_triggers_follow_the_stage_label_prefix(self):
+        def edit(w):
+            w["stages"]["label_prefix"] = "work:"
+            for n in w["nodes"].values():
+                for t in n.get("triggers") or []:
+                    if isinstance(t, dict) and "label" in t:
+                        t["label"] = t["label"].replace("factory:", "work:", 1)
+        plan = definition_plan(edit_workflow=edit)
+        for want in ("work:ready", "work:in-dev"):
+            self.assertIn(want, plan["labels"])
+        self.assertNotIn("factory:ready", plan["labels"])
+        a = {x["spec"]["node"]: x for x in plan["automations"]}
+        self.assertEqual({t["filters"]["label"] for t in a["implement-medium"]["triggers"]}, {"work:implement-medium"})
+        self.assertFalse([x for x in plan["labels"] if "<" in x])
+
+    def test_environment_repositories_come_from_the_definition(self):
+        def edit(f):
+            f["environments"]["team"]["repositories"] = [{"repo": "o/other", "main": True}]
+        plan = definition_plan(edit_factory=edit)
+        envs = {e["name"]: e["repository"] for e in plan["environments"]}
+        self.assertEqual(envs["[Slop factory] team"], "https://github.com/o/other")
+        self.assertEqual(envs["[Slop factory] engine"], "https://github.com/zaharchenko-evgeny/slop-factory")
 
     def test_hand_added_connector_is_a_removal(self):
         planned = {"name": "[F] a", "mcpConnectors": []}
