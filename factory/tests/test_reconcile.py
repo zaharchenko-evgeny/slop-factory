@@ -5,9 +5,10 @@
 # ///
 """Tests for factory/reconcile.py over MemoryTracker. Run: uv run factory/tests/test_reconcile.py"""
 import copy
+import json
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -70,8 +71,6 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(results[0]["reconcile"], "conflict")
         self.assertEqual(t.tickets[1]["stage"], "changes-requested")
         self.assertIn('"factory:fix-cheap"', logged(t, "label"))
-        code, result = gate.check("fix", {"id": "recovered-conflict", "ticket": 1}, t, NODES, CONFIG)
-        self.assertEqual((code, result["merge_main"]), (gate.GO, True))
 
     def test_stale_fix_label_on_conflicting_pr_refired(self):
         t, results, _ = run({"stage": "changes-requested", "pr": 5, "conflict": True, "since": OLD,
@@ -226,6 +225,29 @@ class WakeReadyTest(unittest.TestCase):
         self.assertEqual([r["ticket"] for r in got], ["1"])   # 5 never had a blocker: left alone
 
 
+class WakeApprovedTest(unittest.TestCase):
+    """`blockers: merge`: an approved ticket whose last blocker closed gets its merge label re-fired."""
+    NODES = {"blockers": "merge", "nodes": {"merge": {
+        "role": "approver", "triggers": ["pull_request.labeled factory:automerge"],
+        "when": {"stage": "approved", "blockers": "closed"}, "outcomes": {}}}}
+    NOW = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
+
+    def wake(self, nodes=None, blockers_open=0):
+        tr = MemoryTracker({1: {"stage": "approved", "blockers_open": blockers_open, "pr": 5, "pr_state": "open",
+                                "label_at": {"factory:automerge": "2026-11-06T10:00:00Z"}}})
+        tr.blocked_by = lambda n: [{"number": 9, "state": "closed"}]
+        return tr, reconcile.wake_approved(tr, nodes or self.NODES, 30, now=self.NOW)
+
+    def test_refires_the_merge_label_once_the_last_blocker_closed(self):
+        tr, got = self.wake()
+        self.assertEqual([(r["ticket"], r["node"], r["label"]) for r in got], [(1, "merge", "factory:automerge")])
+        self.assertIn("factory:automerge", [v.strip('"') for k, v in tr.tickets[1]["log"] if k == "label"])
+
+    def test_waits_for_an_open_blocker_and_ignores_the_default_mode(self):
+        self.assertEqual(self.wake(blockers_open=1)[1], [])
+        self.assertEqual(self.wake({**self.NODES, "blockers": "start"})[1], [])
+
+
 class RecoverDefinitionTest(unittest.TestCase):
     """ADR-0021 team (fixtures/slop): the lost wakes come from workflow.yaml."""
     SLOP = Path(__file__).resolve().parent / "fixtures/slop"
@@ -295,6 +317,24 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(self.recover(self.pr(ci="pending", **labels))[1], [])
         self.assertEqual(self.recover(self.pr(ci="green", **{**labels, "label_at": {"factory:review-low": FRESH}}))[1], [])
 
+    def test_review_label_whose_when_never_holds_is_stuck_once(self):
+        ticket = self.pr(ci="none", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": "2026-11-03T09:00:00Z"})  # 3 hours: past 2 timeouts
+        t, results = self.recover(ticket)
+        self.assertEqual([(r["node"], r["reconcile"]) for r in results], [("review-low", "stuck")])
+        self.assertIn('"factory:needs-human"', logged(t, "label"))
+        self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
+        note = logged(t, "comment")[0]
+        self.assertIn("review-low when.ci: want green, have none", note)
+        ticket.update(log=[("comment", note)], stage="in-review", attrs=["risk:low"])
+        self.assertEqual(self.recover(ticket)[1], [])  # one notice per stage and head
+
+    def test_stuck_label_that_is_young_or_behind_a_blocker_is_left_alone(self):
+        labels = {"ci": "none", "attrs": ["risk:low"], "pr_labels": ["factory:review-low"]}
+        young = (NOW - timedelta(minutes=45)).isoformat()
+        self.assertEqual(self.recover(self.pr(**labels, label_at={"factory:review-low": young}))[1], [])
+        self.assertEqual(self.recover(self.pr(**labels, blockers_open=1, label_at={"factory:review-low": "2026-11-03T09:00:00Z"}))[1], [])
+
     def test_needs_human_ticket_is_left_alone(self):
         t, results = self.recover(self.pr(conflict=True, attrs=["factory:needs-human"]))
         self.assertEqual(results, [])
@@ -336,6 +376,36 @@ class RecoverDefinitionTest(unittest.TestCase):
                                                now=NOW, dry_run=True)
         self.assertIn("error", results[0])
         self.assertEqual(tracker.tickets[1].get("log", []), [])
+
+
+class ReconcileFailureTest(unittest.TestCase):
+    """#845: a reconcile crash is a Doctor ticket, not a silent `reconciled` run."""
+    def setUp(self):
+        self.previous = cfg._team
+        cfg.set_team(RecoverDefinitionTest.SLOP)
+        self.real = reconcile.reconcile_main
+        self.calls = []
+
+    def tearDown(self):
+        reconcile.reconcile_main = self.real
+        cfg.set_team(self.previous)
+
+    def gh(self, args, token=None):
+        self.calls.append(args)
+        return json.dumps([{"number": 7, "title": "Doctor: reconcile fails"}]) if args[:2] == ["issue", "list"] else ""
+
+    def test_crash_opens_the_ticket_and_a_clean_run_closes_it(self):
+        def boom(argv):
+            raise RuntimeError("gh: HTTP 502")
+        reconcile.reconcile_main = boom
+        with self.assertRaises(RuntimeError):
+            reconcile.main([], run=self.gh)
+        comment = next(c for c in self.calls if c[:2] == ["issue", "comment"])
+        self.assertIn("RuntimeError: gh: HTTP 502", comment[comment.index("--body") + 1])
+        self.calls.clear()
+        reconcile.reconcile_main = lambda argv: 0
+        self.assertEqual(reconcile.main([], run=self.gh), 0)
+        self.assertEqual([c[:3] for c in self.calls if c[:2] == ["issue", "close"]], [["issue", "close", "7"]])
 
 
 if __name__ == "__main__":

@@ -215,8 +215,8 @@ class GitHubTicketStore:
         out = []
         for c in self.read_list(f"issues/{n}/comments"):
             login, user = (c.get("user") or {}).get("login", ""), c.get("user") or {}
-            out.append({"author": login, "author_is_bot": user.get("type") == "Bot" or login.endswith("[bot]"),
-                        "body": c["body"], "at": c.get("created_at") or ""})
+            out.append({"id": c.get("id"), "author": login,
+                        "author_is_bot": user.get("type") == "Bot" or login.endswith("[bot]"), "body": c["body"], "at": c.get("created_at") or ""})
         return out
 
     def open_blockers(self, n):
@@ -462,7 +462,7 @@ class GitHubGateTracker(DescriptorPort):
         pr = self._pr(n)
         if not pr:
             return []
-        return [{"author": (c.get("user") or {}).get("login"), "author_is_bot": (c.get("user") or {}).get("type") == "Bot",
+        return [{"id": c.get("id"), "author": (c.get("user") or {}).get("login"), "author_is_bot": (c.get("user") or {}).get("type") == "Bot",
                  "body": c.get("body") or "", "at": c.get("created_at")}
                 for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)]
 
@@ -1032,6 +1032,9 @@ class GitHubGateTracker(DescriptorPort):
                 return False
             self.run(["pr", "edit", str(pr["number"]), "-R", self.pr_repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
             return True
+        if kind == "react":  # a reaction on one issue comment of the ticket or its PR; the API keeps one per user
+            repo = self.pr_repo if e.get("on") == "pr" else None
+            return bool(self._api(f"issues/comments/{e['comment']}/reactions", "-f", f"content={value}", repo=repo))
         if kind == "review":
             return self._review(n, e)
         if kind == "request-reviewers":

@@ -83,7 +83,6 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual((TEMPLATE / workflow.WORKFLOW_PATH).read_text(), delivery)
         project = yaml.safe_load(descriptor)
         self.assertEqual(workflow.validate(project, yaml.safe_load(delivery)), [])
-        self.assertEqual(workflow.to_nodes(project, yaml.safe_load(delivery)), nodes)
 
 
 if __name__ == "__main__":

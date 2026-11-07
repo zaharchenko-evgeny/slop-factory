@@ -7,7 +7,7 @@ metadata:
 
 Score the diff against the base branch, not the PR text. Read the ticket for alignment.
 
-Output format (put it first in your summary or PR body):
+Output format (put it where your role says; otherwise first in your summary or PR body):
 
 ```
 **Merge risk: <low|medium|high>**

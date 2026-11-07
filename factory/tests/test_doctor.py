@@ -141,6 +141,15 @@ class DoctorTest(unittest.TestCase):
         doctor.file_tickets(REPO, failed, gh)
         self.assertEqual([c[:3] for c in gh.calls if c[:2] in (["issue", "create"], ["issue", "comment"])], [["issue", "comment", "7"]])
 
+    def test_new_ticket_starts_in_triage_and_a_passing_probe_closes_it(self):
+        gh = FakeGh()
+        doctor.file_tickets(REPO, [{"probe": "reconcile", "result": "fail", "detail": "boom"}], gh)
+        create = next(c for c in gh.calls if c[:2] == ["issue", "create"])
+        self.assertEqual(create[create.index("--label") + 1], "factory:triage")
+        gh.open_tickets = [(7, "Doctor: reconcile fails"), (8, "Doctor: write:label fails")]
+        doctor.close_ticket(REPO, "reconcile", gh)
+        self.assertEqual([c[:3] for c in gh.calls if c[:2] == ["issue", "close"]], [["issue", "close", "7"]])
+
     def test_missing_secret_ticket_says_where_and_what_to_set(self):
         gh = FakeGh()
         doctor.file_tickets(REPO, [{"probe": "env:ISSUES_TOKEN", "result": "missing", "detail": "engine",

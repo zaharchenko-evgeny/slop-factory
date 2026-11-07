@@ -227,8 +227,30 @@ def env_ticket_body(r, run_id):
             f"3. The next doctor run checks it again.\n\nFactory-Run: {run_id}")
 
 
+def triage_label():
+    """The stage label a new Doctor ticket starts with, so the router picks it up; None without a triage stage."""
+    import vocab
+    try:
+        return vocab.stage("triage")
+    except (KeyError, SystemExit):
+        return None
+
+
+def close_ticket(repo, probe, run, run_id="doctor"):
+    """Close the open `Doctor: <probe> fails` ticket, with a comment, once the probe passes again."""
+    title = f"Doctor: {probe} fails"
+    try:
+        found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--search", f'"{title}" in:title',
+                                "--json", "number,title"]))
+        for n in [i["number"] for i in found if i["title"] == title]:
+            run(["issue", "close", str(n), "-R", repo, "--comment",
+                 f"[factory] `{probe}` passes again.\n\nFactory-Run: {run_id}"])
+    except Exception as e:
+        print(json.dumps({"probe": "report", "result": "denied", "detail": f"{title}: {e}"[:200]}))
+
+
 def file_tickets(repo, failed, run, run_id="doctor"):
-    """Open `Doctor: <probe> fails`, or comment on the open one."""
+    """Open `Doctor: <probe> fails` in the triage stage, or comment on the open one."""
     for r in failed:
         title = f"Doctor: {r['probe']} fails"
         body = env_ticket_body(r, run_id) if r["probe"].startswith("env:") and r["result"] == "missing" else \
@@ -240,7 +262,8 @@ def file_tickets(repo, failed, run, run_id="doctor"):
             if match:
                 run(["issue", "comment", str(match), "-R", repo, "--body", body])
             else:
-                run(["issue", "create", "-R", repo, "--title", title, "--body", body])
+                label = triage_label()
+                run(["issue", "create", "-R", repo, "--title", title, "--body", body, *(["--label", label] if label else [])])
         except Exception as e:
             print(json.dumps({"probe": "report", "result": "denied", "detail": f"{title}: {e}"[:200]}))
 
