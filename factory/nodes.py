@@ -28,12 +28,10 @@ NO_ROLE = {"script", "human"}
 
 
 def load(path=None):
-    """nodes.yaml, or the project's v2 workflow rendered into the same shape (ADR-0016)."""
-    if path is None and config.is_project():
-        import project
-        import workflow
-        descriptor = project.load(config.team_root())
-        return workflow.to_nodes(descriptor, workflow.load(config.team_root(), descriptor))
+    """nodes.yaml, or the nodes of the team's definition (ADR-0021)."""
+    import definition
+    if path is None and definition.present(config.team_root()):
+        return definition.nodes(definition.load(config.team_root()))
     return yaml.safe_load(Path(path or (config.engine_root() / config.NODES)).read_text())
 
 

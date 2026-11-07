@@ -63,6 +63,10 @@ skills:
     path: skills/engineering/to-tickets
     sha256: 6eccfac132d92b949821d154679adc7f597bfc3e8c929f3c03786b92f91b961f
   # Local skills: shipped with this template under skills/<name>.
+  factory-deploy:
+    source: "{{ENGINE_SKILL_SOURCE}}"
+    path: .agents/skills/factory-deploy
+    sha256: bd997445b6b34390926afd9cb2e4af665b773c46233a2ec5e5ec08ed2e6502bb
   pr: { path: skills/pr }
   merge-risk: { path: skills/merge-risk }
   walkthrough: { path: skills/walkthrough }
@@ -88,10 +92,6 @@ roles:
     description: Tells the owner about a state that needs them
     skills: []
     mcp: {}
-  walkthrough:
-    description: Orients a person on a PR that waits for them, without reviewing it
-    skills: [walkthrough, merge-risk]
-    mcp: {}
   retro:
     description: Collects lessons from tickets and merges them into the knowledge base
     skills: [retro]
@@ -101,6 +101,7 @@ roles:
     skills:
       - ponytail-review           # a name from `skills`
       - merge-risk
+      - walkthrough
       # - adr-reading: { path: roles/reviewer/skills/adr-reading }      # a role-only local skill
       # - security-review: { source: "github:owner/repo@<sha>", path: skills/security-review, sha256: ... }
     mcp: {}
@@ -139,7 +140,6 @@ agents:
   ops:            { role: ops, model: cheap, access: read-only }
   retro:          { role: retro, model: mid, access: full }
   notify:         { role: notify, model: cheap, access: read-only }
-  walkthrough:    { role: walkthrough, model: review_strong, access: read-only }
 
 # Environments: where agents run. One repository is `main`; the others are additional.
 environments:

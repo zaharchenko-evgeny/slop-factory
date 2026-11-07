@@ -1,4 +1,4 @@
-"""Project descriptor loading and compatibility with the engine's legacy config shape."""
+"""Project descriptor loading and validation."""
 import json
 import re
 from pathlib import Path
@@ -125,31 +125,3 @@ def node_agents(descriptor, nodes):
         owners.setdefault(agent.get("persona"), set()).add(agent["id"])
     errors += [f"duplicate-persona: {p}: agents {', '.join(sorted(ids))}" for p, ids in owners.items() if len(ids) > 1]
     return out, errors
-
-
-def legacy_config(descriptor=None):
-    """Render project states and commands into the config shape existing engine code reads."""
-    descriptor = _read(config.team_root()) if descriptor is None else descriptor
-    defaults = yaml.safe_load((config.engine_root() / "engine/defaults.yaml").read_text()) or {}
-    result = config.merge(defaults, descriptor)
-    tracker = dict(result.get("tracker") or {})
-    stages, kinds = {}, {}
-    for name, state in (descriptor.get("states") or {}).items():
-        if not isinstance(state, dict) or "store" not in state:
-            continue
-        try:
-            kind = store_kind(state["store"])
-        except ValueError:
-            continue
-        if kind in ("label", "field", "tag"):
-            stages[name] = _store_value(state["store"])
-            if state.get("kind") is not None:
-                kinds[name] = state["kind"]
-    tracker["stages"] = stages
-    tracker["stage_kinds"] = kinds
-    tracker["commands"] = {
-        name: command["store"] for name, command in (descriptor.get("commands") or {}).items()
-        if isinstance(command, dict) and isinstance(command.get("store"), dict)
-    }
-    result["tracker"] = tracker
-    return result

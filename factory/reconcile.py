@@ -195,10 +195,43 @@ def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress)
             progress(r)
 
 
+def fact_value(key, facts):
+    """The fact a `when` key reads, as text for a person."""
+    if key == "fix-rounds":
+        return f"{facts.get('fix_rounds')}/{facts.get('fix_cap')}"
+    if key == "label":
+        return ", ".join(sorted({*(facts.get("attrs") or []), *(facts.get("pr_labels") or [])})) or "none"
+    return facts.get({"blockers": "blockers_open", "pr-state": "pr_state"}.get(key, key))
+
+
+def stuck_label(wakes, nodes, facts, on_pr, ago):
+    """A waking label older than 2 timeouts that wakes no node: every node it triggers has a `when` that fails."""
+    import gate
+    by_label = {}
+    for node, label, timeout in wakes:
+        by_label.setdefault(label, []).append((node, timeout))
+    for label, woken in by_label.items():
+        on = "issue" if label in facts.get("attrs", []) else "pr" if label in on_pr else None
+        at = (facts.get("label_at") or {}).get(label)
+        if not on or not at or ago(at) <= timedelta(minutes=2 * max(t for _, t in woken)):
+            continue
+        if any(gate.holds(nodes[node].get("when") or {}, facts, {}) for node, _ in woken):
+            continue
+        guards = [f"{node} when.{k}: want {v}, have {fact_value(k, facts)}" for node, _ in woken
+                  for k, v in (nodes[node].get("when") or {}).items() if not gate.holds({k: v}, facts, {})]
+        return ("stuck", woken[0][0], label, on, f"{label} wakes no node. Why: {'; '.join(guards)}")
+    return None
+
+
 def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="changes-requested"):
     def apply(**e):
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
-    if kind == "conflict":
+    if kind == "stuck":
+        apply(kind="label", value=vocab.needs_human())
+        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} stuck: {why}\nOptions: fix the cause and set "
+                                    f"{vocab.stage('ready')}, or remove `{label}` and move the ticket by hand.")
+        apply(kind="stage", value="blocked")
+    elif kind == "conflict":
         apply(kind="label", value=label or vocab.cmd("fix-<tier>", "cheap"), on="pr")
         apply(kind="stage", value=fix_stage)
     elif kind == "blocked":
@@ -269,9 +302,13 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
                     if on and at and ago(at) > timedelta(minutes=timeout) and gate.holds(nodes[node].get("when") or {}, facts, {}):
                         step = ("refire", node, label, on, f"no {node} outcome")
                         break
+                if step is None and not facts.get("blockers_open"):
+                    step = stuck_label(wakes, nodes, facts, on_pr, ago)
             if step is None:
                 continue
             kind, node, label, on, why = step
+            if kind == "stuck" and any(f"stage={stage} head={head} stuck:" in c for c in facts.get("recover_comments", [])):
+                continue
             missed = sum(f"stage={stage} head={head} re-fired {label} (" in c for c in facts.get("recover_comments", []))
             kind = "blocked" if kind == "refire" and missed else kind
             r = {"ticket": n, "stage": stage, "node": node, "reconcile": kind, "why": why}
@@ -285,6 +322,36 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             if progress:
                 progress(results[-1])
     return results
+
+
+def wake_approved(tracker, nodes, minutes, now=None, dry_run=False):
+    """`blockers: merge`: an `approved` ticket that had blockers, all now closed, whose merge label is older than
+    `minutes` did not merge (a blocker closed by hand, or the wake was lost): re-fire the merge node's label."""
+    if gate_blockers(nodes) != "merge":
+        return []
+    now, out = now or datetime.now(timezone.utc), []
+    for n in tracker.sweep_tickets(["approved"], open_only=True):
+        facts = tracker.stale_facts(n)
+        had = tracker.blocked_by(n) if hasattr(tracker, "blocked_by") else facts.get("blocked_by") or []
+        if facts["stage"] != "approved" or facts.get("blockers_open") or not had or facts.get("issue_state", "open") != "open":
+            continue
+        for node, label, on, why in wakes(nodes, facts):
+            at = (facts.get("label_at") or {}).get(label) or facts.get("stage_at")
+            if (nodes["nodes"][node].get("when") or {}).get("blockers") != "closed" or not at or \
+                    now - datetime.fromisoformat(at.replace("Z", "+00:00")) < timedelta(minutes=minutes):
+                continue
+            if not dry_run:
+                send(tracker, n, nodes, "approved", (facts.get("head") or "")[:12], "refire", label, on,
+                     "the last blocker closed")
+            out.append({"ticket": n, "node": node, "outcome": "refire", "label": label,
+                        "why": "approved, unblocked and not merged"})
+            break
+    return out
+
+
+def gate_blockers(nodes):
+    import gate
+    return gate.blockers_mode(nodes)
 
 
 def wake_ready(tracker, minutes, now=None, dry_run=False):
@@ -307,8 +374,27 @@ def wake_ready(tracker, minutes, now=None, dry_run=False):
     return out
 
 
-def main(argv):
+def main(argv, run=None):
+    """`factory reconcile`; a crash opens or updates `Doctor: reconcile fails`, and a clean run closes it (#845)."""
     argv = config_mod.pop_team(argv)
+    if "--dry-run" in argv or any(a.startswith("memory:") for a in argv):
+        return reconcile_main(argv)
+    import doctor
+    import github_tracker
+    run = run or github_tracker.gh
+    settings = config_mod.load()
+    repo = settings["tracker"].get("repository") or settings["code_host"]["repository"]
+    try:
+        code = reconcile_main(argv)
+    except Exception as e:
+        doctor.file_tickets(repo, [{"probe": "reconcile", "result": "fail", "detail": f"{type(e).__name__}: {e}"[:500]}],
+                            run, run_id=RUN)
+        raise
+    doctor.close_ticket(repo, "reconcile", run, run_id=RUN)
+    return code
+
+
+def reconcile_main(argv):
     dry_run = "--dry-run" in argv
     spec = next((a[7:] for a in argv if a.startswith("memory:")), None)
     if spec:
@@ -320,7 +406,9 @@ def main(argv):
     config = config_mod.load()
     if definition.present(config_mod.team_root()):  # ADR-0021: the waits the gate cannot see, from the definition
         progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
-        results = wake_ready(tracker, config["limits"].get("run_timeout_minutes", 30), dry_run=dry_run)
+        minutes = config["limits"].get("run_timeout_minutes", 30)
+        results = wake_ready(tracker, minutes, dry_run=dry_run)
+        results += wake_approved(tracker, nodes_mod.load(), minutes, dry_run=dry_run)
         results += recover_definition(tracker, definition.load(config_mod.team_root()), config["tracker"]["stages"],
                                       config["tracker"].get("stage_kinds", {}), config["limits"],
                                       dry_run=dry_run, progress=progress)
