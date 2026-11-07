@@ -85,6 +85,9 @@ class Templates(unittest.TestCase):
         for script in render.PROJECT_T.glob("roles/*/setup.sh"):
             subprocess.run(["bash", "-n", str(script)], check=True)
 
+    def test_rendered_factory_has_the_workflow_check(self):
+        self.assertIn(".github/workflows/factory-workflow-check.yml", render.render_project(ANSWERS))
+
     def test_rendered_team_validates(self):
         with tempfile.TemporaryDirectory() as tmp:
             for rel, text in render.render_project(ANSWERS).items():

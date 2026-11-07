@@ -14,6 +14,7 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
                    [--note-for ROLE] [--note-hint TEXT] [--note-repro CMD] [--note-file PATH]
                    (the outcome and the data its effects use; repeat a list option once per item;
                     skills/factory-step/SKILL.md describes them per role)
+       factory check-workflow [TEAM]               (check the team's workflow.yaml with the statechart rules; exit 1 lists the broken rules)
        factory migrate project TEAM [--out DIR]    (copy a v2 team checkout's descriptor and workflow, with its commit in SOURCE)
        factory env roles ENV                       (the roles of the enabled agent nodes that run in ENV, one per line)
        factory sweep --main ...                    (the gate's sweep from main's graph)
@@ -267,6 +268,29 @@ def validate():
     return 1 if errs else 0
 
 
+def check_workflow(argv):
+    """Run the statechart rules (skills/factory-setup/statechart.py, TLC at its pin) on TEAM's workflow.yaml.
+    Exit 0: no rule broken; 1: broken rules listed; 2: no workflow.yaml, no statechart skill, or the check could not run."""
+    import yaml
+    path = Path(argv[0] if argv else config.team_root()) / "workflow.yaml"
+    skill = HERE.parent / "skills/factory-setup"
+    if not path.is_file():
+        print(f"check-workflow: {path} not found", file=sys.stderr)
+        return 2
+    if not (skill / "statechart.py").is_file():
+        print("check-workflow: statechart.py is not in this install; run it from an engine checkout", file=sys.stderr)
+        return 2
+    sys.path.insert(0, str(skill))
+    import statechart
+    try:
+        broken, _ = statechart.check(yaml.safe_load(path.read_text()))
+    except (RuntimeError, OSError) as e:
+        print(f"check-workflow: {e}", file=sys.stderr)
+        return 2
+    print("broken rules: " + (", ".join(broken) or "none"))
+    return 1 if broken else 0
+
+
 def env_roles(env):
     """Sorted roles of the enabled agent nodes (not human or script) whose `env` is `env`, from the project's workflow."""
     import project
@@ -333,6 +357,8 @@ def main(argv=None):
     if cmd == "upgrade":
         from upgrade import main as upgrade_main
         return upgrade_main(rest)
+    if cmd == "check-workflow" and len(rest) <= 1:
+        return check_workflow(rest)
     if cmd == "validate" and not rest:
         return validate()
     if cmd == "retro":

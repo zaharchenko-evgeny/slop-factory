@@ -1,0 +1,35 @@
+name: Factory workflow check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths: [workflow.yaml, factory.yaml, "roles/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-workflow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with: { node-version: 22 }
+      - run: pipx install uv
+      # The runner's Java 11+ runs TLC. The statechart skill is not in the installed package: run the command from a checkout of the pinned engine.
+      - name: factory check-workflow
+        run: |
+          engine=$(sed -n 's/^engine: *"\{0,1\}\([^" #]*\).*/\1/p' factory.yaml)
+          url=${engine#git+}
+          ref=${url##*@}
+          url=${url%@*}
+          git clone --quiet "$url" "$RUNNER_TEMP/engine"
+          git -C "$RUNNER_TEMP/engine" checkout --quiet "$ref"
+          uv run --quiet "$RUNNER_TEMP/engine/factory/cli.py" check-workflow .
