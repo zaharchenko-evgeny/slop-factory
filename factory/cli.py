@@ -179,7 +179,7 @@ def handoff_of(a):
         if items:
             data[key] = data.get(key, []) + items
     data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate),
-                                   ("reply", a.reply)) if v})
+                                   ("reply", a.reply), ("to", a.to), ("text", a.text)) if v})
     addressed = json.loads(Path(a.addressed).read_text()) if a.addressed else []
     addressed += ["{}: fixed in {}".format(*id_and(t, "--fixed 'ID SHA'")) for t in a.fixed]
     addressed += ["{}: disputed — {}".format(*id_and(t, "--disputed 'ID REASON'")) for t in a.disputed]
@@ -199,7 +199,7 @@ def end_parser():
     p = argparse.ArgumentParser(prog="factory end", allow_abbrev=False)
     p.add_argument("outcome")
     for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "reply", "addressed", "disputed-focuses", "notes",
-                "note-for", "note-hint", "note-repro"):
+                "note-for", "note-hint", "note-repro", "to", "text"):
         p.add_argument(f"--{opt}")
     p.add_argument("--failing-check")
     for opt, dest in (("pass", "passed"), ("fail", "failed"), ("not-run", "not_run"), ("blocking", None), ("minor", None),
