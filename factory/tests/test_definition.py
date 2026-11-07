@@ -49,6 +49,16 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    def test_per_repository_node_needs_an_environment_per_code_repository(self):
+        def two_repos(f):
+            f["environments"]["engine"]["repositories"] += [{"repo": "o/web"}]
+            f["environments"]["web"] = {**f["environments"]["engine"], "repositories": [{"repo": "o/web", "main": True}]}
+        self.edit("factory.yaml", two_repos)
+        self.edit("workflow.yaml", lambda w: w["nodes"].update(implement=w["nodes"]["implement-medium"]))
+        self.assertEqual(self.errors(), [])
+        self.edit("factory.yaml", lambda f: f["environments"].pop("web"))
+        self.assertError("per-repo-env: o/web")
+
     def test_write_mode_compiles_from_the_default_settings(self):
         self.edit("factory.yaml", lambda f: f["defaults"]["settings"].update(write_mode="token"))
         self.assertEqual(self.errors(), [])
