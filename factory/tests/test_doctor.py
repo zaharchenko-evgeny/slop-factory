@@ -135,6 +135,16 @@ class DoctorTest(unittest.TestCase):
         doctor.file_tickets(REPO, failed, gh)
         self.assertEqual([c[:3] for c in gh.calls if c[:2] in (["issue", "create"], ["issue", "comment"])], [["issue", "comment", "7"]])
 
+    def test_missing_secret_ticket_says_where_and_what_to_set(self):
+        gh = FakeGh()
+        doctor.file_tickets(REPO, [{"probe": "env:ISSUES_TOKEN", "result": "missing", "detail": "engine",
+                                    "help": "Issues read/write"}], gh)
+        create = next(c for c in gh.calls if c[:2] == ["issue", "create"])
+        body = create[create.index("--body") + 1]
+        self.assertTrue(body.startswith("[factory] Set `ISSUES_TOKEN` in the Air environment of `engine`."), body)
+        self.assertIn("Issues read/write", body)
+        self.assertIn("as a secret", body)
+
     def test_denied_failure_ticket_comment_is_reported(self):
         title = "Doctor: write:comment fails"
         gh = FakeGh(deny=("issue comment",), open_tickets=[(7, title)])

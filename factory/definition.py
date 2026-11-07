@@ -97,6 +97,23 @@ def _parts(defn, name):
     return node, agent, role, env
 
 
+def environment_secrets(defn, env_name):
+    """{name: description} of the secrets `env_name` needs: those of the defaults and the environment, and those of
+    the role, agent and node of every node that runs in it. GH_TOKEN is Air's own and is left out."""
+    f, w = defn["factory"], defn["workflow"]
+    layers = [(f.get("defaults") or {}), ((f.get("environments") or {}).get(env_name) or {})]
+    for name in w.get("nodes") or {}:
+        node, agent, role, _ = _parts(defn, name)
+        if (node.get("environment") or (w.get("settings") or {}).get("environment")) == env_name:
+            layers += [role, agent, node]
+    out = {}
+    for layer in layers:
+        for k, v in (layer.get("env") or {}).items():
+            if (v or {}).get("secret") and k != "GH_TOKEN":
+                out[k] = (v or {}).get("description") or out.get(k) or ""
+    return dict(sorted(out.items()))
+
+
 def settings(defn, name):
     """Merged settings of a node: defaults -> environment -> role -> agent -> workflow settings -> node."""
     node, agent, role, env = _parts(defn, name)
@@ -477,9 +494,9 @@ def to_project(defn):
     environments = {}
     for en, e in envs.items():
         repos = sorted(e.get("repositories") or [], key=lambda r: not r.get("main"))
-        secrets = sorted(k for k, v in {**(defaults.get("env") or {}), **(e.get("env") or {})}.items()
-                         if (v or {}).get("secret") and k != "GH_TOKEN")
-        environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": secrets,
+        help_ = environment_secrets(defn, en)
+        environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": list(help_),
+                            "secret_help": help_,
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP}
 
     # Stages: every name the nodes use, plus the engine's PR facts.

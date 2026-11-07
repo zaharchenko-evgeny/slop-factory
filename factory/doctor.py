@@ -124,7 +124,8 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
         results.append({"probe": f"skill:{s}", "result": "ok" if found else "missing", "detail": env})
     declared = (nodes.get("environments") or {}).get(env) or {}
     for name in [*(declared.get("variables") or {}), *(declared.get("secrets") or [])]:
-        results.append({"probe": f"env:{name}", "result": "ok" if environ.get(name) else "missing", "detail": env})
+        results.append({"probe": f"env:{name}", "result": "ok" if environ.get(name) else "missing", "detail": env,
+                        "help": (declared.get("secret_help") or {}).get(name, "")})
     return results
 
 
@@ -215,11 +216,23 @@ def cleanup(repo, made, run):
     return out
 
 
+def env_ticket_body(r, run_id):
+    """The readable ticket for a variable that a person must set in Air (roles/_common.md layout)."""
+    name, env = r["probe"].split(":", 1)[1], r["detail"]
+    why = f"- The factory's `{env}` environment declares it" + (f": {r['help']}" if r.get("help") else ".")
+    return (f"[factory] Set `{name}` in the Air environment of `{env}`. Runs there fail without it.\n\n"
+            f"Why:\n{why}\n- The doctor found it missing or empty in that environment.\n\n"
+            f"How:\n1. In Air, open Environments, then the factory environment for `{env}`.\n"
+            f"2. Add the variable `{name}` as a secret. Leave the other variables as they are.\n"
+            f"3. The next doctor run checks it again.\n\nFactory-Run: {run_id}")
+
+
 def file_tickets(repo, failed, run, run_id="doctor"):
     """Open `Doctor: <probe> fails`, or comment on the open one."""
     for r in failed:
         title = f"Doctor: {r['probe']} fails"
-        body = f"[factory] `factory doctor` probe `{r['probe']}`: {r['result']}. {r['detail']}\n\nFactory-Run: {run_id}"
+        body = env_ticket_body(r, run_id) if r["probe"].startswith("env:") and r["result"] == "missing" else \
+            f"[factory] `factory doctor` probe `{r['probe']}`: {r['result']}. {r['detail']}\n\nFactory-Run: {run_id}"
         try:
             found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--search",
                                     f'"{title}" in:title', "--json", "number,title"]))
