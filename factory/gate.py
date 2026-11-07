@@ -258,13 +258,24 @@ def lesson_effects(ticket, node, payload):
     return [{"kind": "comment", "ticket": ticket, "value": body}, {"kind": "label", "ticket": ticket, "value": vocab.lesson()}]
 
 
+def agent_of(node):
+    """The agent of workflow node `node` in a definition team's factory (ADR-0021), else the node's own name."""
+    import definition
+    defn = definition.load(config_mod.team_root())
+    return ((defn["workflow"].get("nodes") or {}).get(node) or {}).get("agent", node)
+
+
 def comment_marker(node):
     """`<!-- factory:from <agent>[ reply] -->`: which agent wrote a comment, so a mention in it can be checked."""
     import definition
-    defn = definition.load(config_mod.team_root())
-    n = (defn["workflow"].get("nodes") or {}).get(node) or {}
-    reply = definition.settings(defn, node).get("mode") == "reply"
-    return f"<!-- factory:from {n.get('agent', node)}{' reply' if reply else ''} -->"
+    reply = definition.settings(definition.load(config_mod.team_root()), node).get("mode") == "reply"
+    return f"<!-- factory:from {agent_of(node)}{' reply' if reply else ''} -->"
+
+
+def node_mode(node):
+    """A definition team's node `settings.mode` (fix, update, reply, ...), or None (ADR-0021)."""
+    import definition
+    return definition.settings(definition.load(config_mod.team_root()), node).get("mode")
 
 
 def definition_team():
@@ -468,7 +479,12 @@ def mention_holds(agent, facts, tracker=None, ticket=None):
     marker = FROM.search(body)
     if not marker:
         return True  # a person
-    if marker[2] or marker[1] == agent:
+    if marker[2]:  # a reply asks no one, except an answer to an ask, which goes back to the asker (#591)
+        answer = ANSWER.search(body)
+        ask = next((c for c in comments if answer and (m := ASK.search(c.get("body") or "")) and m[1] == answer[1]), None)
+        asker = FROM.search(ask["body"]) if ask else None
+        return bool(asker and asker[1] == agent)
+    if marker[1] == agent:
         return False
     import definition
     return frozenset((marker[1], agent)) in definition.neighbours(definition.load(config_mod.team_root()))
@@ -562,6 +578,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
     if node.get("focuses"):  # one review tier per focus (roles.<role>.modes.<focus>.tier)
         tiers = [roles[role]["modes"][f]["tier"] for f in node["focuses"]]
     skills = config_mod.resolve(f"roles/{role}/skills.txt")
+    fixing = step in ("fix", "update") or (step is None and node_mode(name) in ("fix", "update"))
     return (NO_GO if why else GO), {
         "go": why is None, "reason": why, "ticket": event["ticket"], "node": name, "role": role,
         "tier": event.get("tier") if event.get("tier") in tiers else tiers[0],
@@ -569,9 +586,9 @@ def check(name, event, tracker, nodes, config, code_host=None):
         "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "status": status(facts), "outcomes": list(node["outcomes"]),
-        "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if step in ("fix", "update") else ()))],
+        "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if fixing else ()))],
         **({"mention": latest_mention(facts, tracker, event["ticket"])} if name.startswith("reply-") and definition_team() else {}),
-        "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and step in ("fix", "update")),
+        "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and fixing),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
         # one entry per repository of a ticket that changes several (ADR-0017), all on the ticket's one branch
         "checkouts": [{"repo": p["repo"], "branch": p["branch"] or branch} for p in facts.get("prs") or []],
@@ -651,11 +668,39 @@ def resolve(effect, payload, ticket):
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
+ASK = re.compile(r"<!-- factory:ask id=(\S+) from=(\S+) to=(\S+) hop=(\d+) -->")
+ANSWER = re.compile(r"<!-- factory:answer id=(\S+) -->")
+
+
+def ask_effects(name, node, out, payload, tracker, ticket, effects):
+    """#591: the comment an `ask` outcome posts. `@factory:<to>` wakes the target through the mention router, so it
+    runs in reply mode. Refused for a pair outside the outcome's `to` allowlist; over `limits.mention_hops` asks on
+    the ticket it posts one comment naming the limit and wakes nothing."""
+    to = str(payload.get("to") or "")
+    allowed = out.get("to") or []
+    if to not in allowed:
+        raise Bad(f"ask: `{to}` is not an agent this node may ask; allowed: {', '.join(allowed) or 'none'}")
+    facts = tracker.facts(ticket)
+    pr = facts.get("pr_comments")
+    if pr is None and hasattr(tracker, "pr_comments"):
+        pr = tracker.pr_comments(ticket)
+    asked = sum(1 for c in [*(facts.get("comments") or []), *(pr or [])]  # only the factory's own asks count
+                if c.get("author_is_bot") and (c.get("body") or "").startswith("[factory]") and ASK.search(c["body"]))
+    limit = config_mod.load().get("limits", {}).get("mention_hops", 3)
+    if asked >= limit:
+        return [{"kind": "comment", "ticket": ticket, "value": f"[factory] Ask refused: this ticket reached its limit of "
+                 f"{limit} asks (`limits.mention_hops`). Go on without asking."}]
+    who = f"{agent_of(name) if definition_team() else node.get('agent', name)} ({node.get('role')})"
+    marker = f"<!-- factory:ask id={ticket}-{asked + 1} from={name} to=reply-{to} hop={asked + 1} -->"
+    text = " ".join(str(payload["text"]).split())
+    return [{**effects[0], "value": f"[factory] **{who}:** @factory:{to} {text}\n{marker}"}]
+
+
 def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None, auto_merge=None):
     step = legacy_step(name)  # ADR-0021: a definition team's nodes have no engine-named behaviour
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
-        raise Bad(f"unknown outcome: {outcome}")
+        raise Bad(f"unknown outcome: {outcome}" + (" (a reply cannot ask)" if outcome == "ask" and name.startswith("reply-") else ""))
     if step == "review":
         if "verdict" in payload and outcome_of({"verdict": payload["verdict"]}) != outcome:
             raise Bad(f"review verdict {payload['verdict']!r} does not match outcome {outcome!r}")
@@ -691,6 +736,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
         payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
+    if outcome == "ask":
+        effects = ask_effects(name, node, out, payload, tracker, ticket, effects)
     if payload.get("agent_notes"):  # hidden notes for later agents ride on the review, the comments or the PR text
         try:
             notes = clean_notes(payload["agent_notes"])
@@ -859,7 +906,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             e["on"] = "pr" if asked and asked["on"] == "pr" else None
             if not e["on"]:
                 del e["on"]
-            if asked and asked.get("by"):
+            if (ask := ASK.search((asked or {}).get("body") or "")) and (asker := FROM.search(asked["body"])):
+                e["value"] = f"@factory:{asker[1]} {e['value']}\n<!-- factory:answer id={ask[1]} -->"  # #591: back to the asker
+            elif asked and asked.get("by"):
                 e["value"] = f"@{asked['by']} {e['value']}"
         if e["kind"] == "comment" and definition_team():
             e["value"] = f"{e['value']}\n\n{comment_marker(name)}"

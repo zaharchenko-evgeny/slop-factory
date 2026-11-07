@@ -7,6 +7,9 @@
   vendor-skills.py --check      fail when a copy differs from its hash or a skills.txt name has no copy
   vendor-skills.py              refresh every copy from its pinned source, then verify the hash
   vendor-skills.py --rehash     record the current hashes in the lock (after a deliberate change)
+
+An entry with `"vendored": false` has no copy in the repository: `fetch_pinned(name)` fetches it at its pin
+when a step needs it and checks the same hash.
 """
 import hashlib
 import json
@@ -38,7 +41,10 @@ def check(root=ROOT):
     errors = []
     for name, e in lock.items():
         d = vendor / name
-        if not (d / "SKILL.md").is_file():
+        if e.get("vendored") is False:
+            if d.exists():
+                errors.append(f"{name}: is pinned as not vendored, but {d.relative_to(root)} exists")
+        elif not (d / "SKILL.md").is_file():
             errors.append(f"{name}: no vendored copy")
         elif tree_hash(d) != e["sha256"]:
             errors.append(f"{name}: differs from the hash in skills.lock")
@@ -63,8 +69,23 @@ def fetch(e, tmp):
     return Path(tmp) / "src" / e["path"]
 
 
+def fetch_pinned(name, dest):
+    """Fetch the not-vendored skill `name` at its pin into the empty directory `dest`; returns its skill directory.
+    Raises RuntimeError when the fetch fails or the tree hash differs from skills.lock."""
+    e = load()[name]
+    try:
+        src = fetch(e, str(dest))
+    except (subprocess.CalledProcessError, OSError) as err:
+        raise RuntimeError(f"cannot fetch skill {name} at its pin ({e['source']}@{e.get('commit') or e.get('version')}): {err}")
+    if tree_hash(src) != e["sha256"]:
+        raise RuntimeError(f"skill {name} fetched at its pin differs from the hash in skills.lock")
+    return src
+
+
 def refresh():
     for name, e in load().items():
+        if e.get("vendored") is False:
+            continue
         with tempfile.TemporaryDirectory() as tmp:
             src = fetch(e, tmp)
             shutil.rmtree(VENDOR / name, ignore_errors=True)
@@ -74,6 +95,8 @@ def refresh():
 def rehash():
     data = json.loads(LOCK.read_text())
     for name, e in data["skills"].items():
+        if e.get("vendored") is False:
+            continue
         e["sha256"] = tree_hash(VENDOR / name)
     LOCK.write_text(json.dumps(data, indent=2) + "\n")
 

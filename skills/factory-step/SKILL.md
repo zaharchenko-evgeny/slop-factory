@@ -18,13 +18,15 @@ command (`command -v factory`), never `uv run` or a path into the engine.
 | collect the lessons agents reported | `factory retro collect`: the uncollected lesson comments, marked collected |
 | run the routine named in your settings | `factory <routine>` (`reconcile`, `doctor`) with no other arguments |
 | answer the mention that woke you (`mention` in the step's facts) | `factory end replied --reply "…"`: the gate posts it where the question was, to whoever asked |
+| ask another agent a question in the thread (only when the step lists `ask`) | `factory end ask --to <persona> --text "…"`: the gate posts it with `@factory:<persona>` and your run ends; a reply cannot ask; each ask counts against `limits.mention_hops` |
 | report your outcome | `factory end <outcome>`, as below |
 
 1. `factory begin` (the prompt gives its arguments) prints the facts, the
    branch and `outcomes`, the outcomes this step may report. Exit 10: do not
    act; report its `reason` and stop.
 2. As the last thing you do, run `factory end <outcome>` once, with the data
-   the role file asks for. Quote each value; repeat a list option per item:
+   the role file asks for. Quote each value; repeat a list option per item.
+   Each lesson for later runs goes in its own `--lesson`:
 
 | Data | Option |
 | --- | --- |
@@ -36,6 +38,7 @@ command (`command -v factory`), never `uv run` or a path into the engine.
 | new ticket (slice) | `--slice <file.md>`: first line the title, the rest the body |
 | proposed acceptance check | `--propose-check "<check>"` |
 | note for a later agent | `--note-for <role\|any>` with `--note-hint "…"`, `--note-repro "<cmd>"`, `--note-file <path>` (≤2,000 chars, no secrets) |
+| lesson for later runs | `--lesson "<project\|factory\|engine> <about> \| <text> \| evidence: <x>"` (evidence optional) |
 
 Example: `factory end <outcome> --summary "…" --blocking "B1 src/x.py:10 crashes on '' | case: x('') raises"`
 

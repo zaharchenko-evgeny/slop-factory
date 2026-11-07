@@ -62,6 +62,7 @@ gates:
 ci: { workflows: [quality-gates] }
 limits:
   remind_after_hours: 24
+  mention_hops: 3   # asks (`factory end ask`) per ticket; a reply cannot ask
   generated_paths:
     - factory/tests/fixtures/deploy/air-plan.json
     - factory/tests/fixtures/slop/**

@@ -150,6 +150,16 @@ def finding(text, severity):
     return {"id": parts[0], "file": parts[1], "finding": parts[2], "severity": severity, **({"case": case} if case else {})}
 
 
+def lesson(text):
+    """`<scope> <about> | <text>[ | evidence: <x>]`; scope is project, factory or engine."""
+    text, evidence = parted(text, " | evidence:", "lesson evidence") if " | evidence:" in text else (text, None)
+    head, body = parted(text, " | ", "a lesson")
+    scope, about = id_and(head, "--lesson '<scope> <about> | <text>'")
+    if scope not in ("project", "factory", "engine"):
+        raise ValueError(f"a lesson's scope is project, factory or engine: {scope!r}")
+    return {"scope": scope, "about": about, "text": body, **({"evidence": evidence} if evidence else {})}
+
+
 def slice_of(path):
     """A slice file: its first line is the title (a leading `#` is dropped), the rest is the ticket body."""
     title, _, body = Path(path).read_text().strip().partition("\n")
@@ -175,11 +185,11 @@ def handoff_of(a):
                for t in a.not_run]
     found = [finding(t, "blocking") for t in a.blocking] + [finding(t, "minor") for t in a.minor]
     for key, items in (("checks", checks), ("findings", found), ("slices", [slice_of(f) for f in a.slice]),
-                       ("proposed_checks", a.propose_check)):
+                       ("proposed_checks", a.propose_check), ("lessons", [lesson(t) for t in a.lesson])):
         if items:
             data[key] = data.get(key, []) + items
     data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate),
-                                   ("reply", a.reply)) if v})
+                                   ("reply", a.reply), ("to", a.to), ("text", a.text)) if v})
     addressed = json.loads(Path(a.addressed).read_text()) if a.addressed else []
     addressed += ["{}: fixed in {}".format(*id_and(t, "--fixed 'ID SHA'")) for t in a.fixed]
     addressed += ["{}: disputed — {}".format(*id_and(t, "--disputed 'ID REASON'")) for t in a.disputed]
@@ -199,11 +209,12 @@ def end_parser():
     p = argparse.ArgumentParser(prog="factory end", allow_abbrev=False)
     p.add_argument("outcome")
     for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "reply", "addressed", "disputed-focuses", "notes",
-                "note-for", "note-hint", "note-repro"):
+                "note-for", "note-hint", "note-repro", "to", "text"):
         p.add_argument(f"--{opt}")
     p.add_argument("--failing-check")
     for opt, dest in (("pass", "passed"), ("fail", "failed"), ("not-run", "not_run"), ("blocking", None), ("minor", None),
-                      ("fixed", None), ("disputed", None), ("slice", None), ("propose-check", None), ("note-file", None)):
+                      ("fixed", None), ("disputed", None), ("slice", None), ("propose-check", None), ("note-file", None),
+                      ("lesson", None)):
         p.add_argument(f"--{opt}", action="append", default=[], **({"dest": dest} if dest else {}))
     return p
 

@@ -107,6 +107,13 @@ class CountedRun:
 # repository use this secret (deploy.py adds it to WRITE_TOKEN_ENVS). It is read from the environment, never printed.
 WRITE_TOKEN = "FACTORY_WRITE_TOKEN"
 WRITE_TOKEN_ENVS = ("write", "ops")
+
+
+def token_env(env, config):
+    """Whether `env` writes project repositories with WRITE_TOKEN: it declares the secret (a definition team), or it
+    is one of WRITE_TOKEN_ENVS (the old layout)."""
+    declared = ((config.get("environments") or {}).get(env) or {}).get("secrets") or []
+    return WRITE_TOKEN in declared or env in WRITE_TOKEN_ENVS
 WRITE_VERBS = {"create", "edit", "merge", "review", "comment", "close", "reopen", "delete", "ready", "update-branch"}
 
 

@@ -35,9 +35,9 @@ Branch pattern: `{{ settings.branch_pattern }}`. Never hard-code these.
 ## Lessons
 
 When this run taught something the next run should know (a trap in the code, a missing doc,
-a check that misleads, a step of the factory that failed), add it to `lessons` in your result:
-one entry per lesson, with its `scope` (`project`, `factory` or `engine`), the `repo` or agent it
-is about, and the evidence (a file, a command, a link). The gate posts them as a comment on the
+a check that misleads, a step of the factory that failed), report each lesson with `--lesson` on
+`factory end`: one option per lesson, with its scope (`project`, `factory` or `engine`), the repo or
+agent it is about, and the evidence (a file, a command, a link). The gate posts them as a comment on the
 ticket and labels it `{{ settings.knowledge.lesson_label }}`; retro collects them. Leave it empty
 when nothing is worth keeping.
 
@@ -63,6 +63,16 @@ unrelated ticket.
 Write every comment, note, PR body, review finding and explanation that a person reads with the
 `simplified-technical-english` skill: short sentences, one idea per sentence, active voice, plain
 words. Keep code, names, commands and domain terms exactly as they are.
+
+A comment that asks a person for something (a blocked run, a question, a decision) uses this layout:
+
+1. One sentence: what happened and what you need from the reader.
+2. `Why:` at most three short bullets in plain words.
+3. `Options:` numbered, each one line; mark the one you suggest.
+4. Evidence (test names, counts, paths, command output) goes in a closed
+   `<details><summary>Details</summary>` block at the end, never in the visible text.
+
+Keep the visible part under about 12 lines. No chains of parentheses, no long lists of class or test names.
 
 ## Secrets
 
