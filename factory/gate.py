@@ -160,12 +160,14 @@ def from_trigger(d, code_host=None):
             d = d["data"]
             event_name = event_name or wrapper.get("eventType") or wrapper.get("event_name")
     pr, issue, review = d.get("pull_request"), d.get("issue"), d.get("review")
-    is_pr = isinstance(pr, dict) or str(event_name or "").startswith("pull_request")
+    pr_comment = isinstance(issue, dict) and isinstance(issue.get("pull_request"), dict) and not isinstance(pr, dict)
+    is_pr = isinstance(pr, dict) or pr_comment or str(event_name or "").startswith("pull_request")
     src = pr or issue or d
     number = src.get("number") if isinstance(src, dict) else None
     if not isinstance(number, int) or number < 1:
         raise MissingNumber("payload has no issue or PR number")
-    name = "pull_request_review" if review and is_pr else "pull_request" if is_pr else "issues"
+    name = "pull_request_review" if review and is_pr else "issue_comment" if pr_comment \
+        else "pull_request" if is_pr else "issues"  # a comment on a PR arrives as an issue event of its number
     if is_pr:
         ticket = pr_ticket(code_host, number, d.get("repository")) if code_host else None
         if ticket is None and not isinstance(code_host, GitHubCodeHost):  # a live lookup is the only source for GitHub
@@ -525,6 +527,9 @@ def check(name, event, tracker, nodes, config, code_host=None):
     why = matches(gated(name, node, facts), facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     notes = facts.get("agent_notes", [])
+    if comment_node(node):  # ADR-0023: what the comment node reads, after the cursor
+        facts["new_comments"] = [{k: c.get(k) for k in ("id", "on", "author", "author_is_bot", "at", "body")}
+                                 for c in new_comments(facts, tracker, event["ticket"])]
     facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
@@ -615,7 +620,7 @@ def resolve(effect, payload, ticket):
     if kind in ("comment", "create-issues"):
         out = {"kind": kind, "ticket": ticket, "value": field(arg)}
         return {**out, "on": on} if on else out
-    if kind == "park-behind-main-red":
+    if kind in ("park-behind-main-red", "route", "reply"):
         return {"kind": kind, "ticket": ticket, "value": field(arg)}
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
@@ -646,6 +651,89 @@ def ask_effects(name, node, out, payload, tracker, ticket, effects):
     marker = f"<!-- factory:ask id={ticket}-{asked + 1} from={name} to=reply-{to} hop={asked + 1} -->"
     text = " ".join(str(payload["text"]).split())
     return [{**effects[0], "value": f"[factory] **{who}:** @factory:{to} {text}\n{marker}"}]
+
+
+COMMENT_EFFECTS = ("route", "reply", "skip")  # the effects of the comment node's outcomes (ADR-0023)
+SEEN = re.compile(r"<!-- factory:comment-seen (\d+) -->")
+
+
+def comment_cursor(comments):
+    """The highest id in a `factory:comment-seen` marker of the factory's own comments (0: none)."""
+    return max((int(m[1]) for c in comments if c.get("author_is_bot") and (c.get("body") or "").startswith("[factory]")
+                and (m := SEEN.search(c["body"]))), default=0)
+
+
+def new_comments(facts, tracker=None, ticket=None):
+    """The comments on the ticket and its PR after the cursor, oldest first, `on` saying where each is. The factory's
+    own comments (a `factory:from` marker without an ask marker) are not input."""
+    pr = facts.get("pr_comments")
+    if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
+        pr = tracker.pr_comments(ticket)
+    found = [dict(c, on="ticket") for c in facts.get("comments") or []] + [dict(c, on="pr") for c in pr or []]
+    cursor = comment_cursor(found)
+    own = lambda c: FROM.search(c.get("body") or "") and not ASK.search(c.get("body") or "")
+    return sorted((c for c in found if int(c.get("id") or 0) > cursor and not own(c)), key=lambda c: int(c["id"]))
+
+
+def comment_node(node):
+    return any(next((k for k in e if k != "on"), None) in COMMENT_EFFECTS
+               for o in node["outcomes"].values() for e in (o or {}).get("effects") or [])
+
+
+def route_effects(to, facts, ticket, nodes, tier, clean):
+    """The effects that move the item to node `to`: its trigger label and the stage its `when` needs, both from
+    workflow.yaml. `clean` also drops the person's wait and the stale command labels. Refuses (Bad, nothing
+    written) an unknown node, one without a label trigger, or one whose `when` fails with the new stage and label."""
+    node = (nodes.get("nodes") or {}).get(to)
+    if node is None or node.get("enabled") is False:
+        raise Bad(f"route: unknown node `{to}`")
+    trigger = next((m for t in node.get("triggers") or [] if isinstance(t, str)
+                    and (m := re.fullmatch(r"(issues|pull_request)\.labeled (\S+)", t))), None)
+    if not trigger:
+        raise Bad(f"route: node `{to}` has no label trigger")
+    label, on = trigger[2].replace("<tier>", tier), "pr" if trigger[1] == "pull_request" else None
+    if "<" in label:
+        raise Bad(f"route: the trigger label of `{to}` needs a value: {label}")
+    when = node.get("when") or {}
+    stages = [when["stage"]] if isinstance(when.get("stage"), str) else list(when.get("stage") or [])
+    stage = facts["stage"] if facts["stage"] in stages or not stages else stages[0]
+    held = {**facts, "stage": stage, **{"pr_labels" if on else "attrs": [*facts.get("pr_labels" if on else "attrs", []), label]}}
+    if not holds({k: v for k, v in when.items() if k != "stage"}, held, {}):
+        raise Bad(f"route: node `{to}` does not match this item now (its `when` fails)")
+    out = clear_commands(ticket) + [{"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human(), **extra}
+                                    for extra in ({}, {"on": "pr"})] if clean else []
+    out.append({"kind": "label", "ticket": ticket, "value": label, **({"on": on} if on else {})})
+    if stage != facts["stage"]:
+        out.append({"kind": "stage", "ticket": ticket, "value": stage})
+    return out, stage
+
+
+def comment_moves(moves, name, payload, facts, tracker, nodes, ticket):
+    """(effects, after) for the comment node's route, reply and skip effects (ADR-0023). `effects` move the item;
+    `after` always runs: remove the wake label, react on a skipped comment, post a short reply with the cursor."""
+    fresh = new_comments(facts, tracker, ticket)
+    tier = payload.get("tier") or fix_tier(facts)
+    effects, summary = [], "Nothing to do."
+    for e in moves:
+        if e["kind"] == "skip":
+            if fresh:
+                effects.append({"kind": "react", "ticket": ticket, "value": "eyes", "comment": fresh[-1]["id"],
+                                **({"on": "pr"} if fresh[-1]["on"] == "pr" else {})})
+            continue
+        route = e["kind"] == "route"
+        to = e["value"] if route else f"reply-{e['value']}"
+        more, stage = route_effects(to, facts, ticket, nodes, tier, clean=route)
+        effects += more
+        summary = f"Moved to `{to}`, stage `{stage}`." if route else f"Asked `{e['value']}` to answer."
+    text = " ".join(str(payload.get("reply") or summary).split())
+    if fresh:
+        text += f"\n<!-- factory:comment-seen {fresh[-1]['id']} -->"
+    if definition_team():
+        text += f"\n\n{comment_marker(name)}"
+    after = [{"kind": "unlabel", "ticket": ticket, "value": vocab.comment(), **extra} for extra in ({}, {"on": "pr"})]
+    after.append({"kind": "comment", "ticket": ticket, "value": text, **({"on": "pr"} if fresh and fresh[-1]["on"] == "pr" else {}),
+                  **({"run_id": payload["run_id"]} if payload.get("run_id") else {})})
+    return effects, after
 
 
 def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked_pr_head=None, auto_merge=None):
@@ -704,6 +792,11 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
     if step in ("review", "join"):
         effects.append({"kind": "pr-notes-sync", "ticket": ticket, "value": ""})  # notes parked before the PR existed
     facts = tracker.facts(ticket)
+    comment_after = []
+    if any(e["kind"] in COMMENT_EFFECTS for e in effects):
+        moved, comment_after = comment_moves([e for e in effects if e["kind"] in COMMENT_EFFECTS], name, payload, facts,
+                                             tracker, nodes, ticket)
+        effects = [e for e in effects if e["kind"] not in COMMENT_EFFECTS] + moved
     if step == "finish" and outcome == "merged":
         effects.append({"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human()})
         checks = after_merge_checks(facts.get("body"))
@@ -834,7 +927,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
             human_effects += [{"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human(), "on": "pr"},
                               {"kind": "unassign", "ticket": ticket, "value": None, "on": "pr"}]
         effects[:0] = human_effects
-    after = [*after, *unblocked(effects, tracker, facts)]
+    after = [*after, *comment_after, *unblocked(effects, tracker, facts)]
     effects[:0] = group_unlabels(effects, facts)
     effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
     for e in effects:
