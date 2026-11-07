@@ -405,7 +405,7 @@ def latest_mention(facts, tracker=None, ticket=None):
     found += [dict(c, on="pr") for c in pr or []]
     found += [{"author": r.get("author"), "body": r.get("body"), "at": r.get("submitted_at"), "on": "pr"}
               for r in facts.get("reviews") or [] if r.get("body")]
-    found = [c for c in found if "@factory:" in (c.get("body") or "")]
+    found = [c for c in found if "@factory:" in strip_code(c.get("body") or "")]
     if not found:
         return None
     c = max(enumerate(found), key=lambda ic: (ic[1].get("at") or "", ic[0]))[1]
@@ -427,11 +427,16 @@ def mention_holds(agent, facts, tracker=None, ticket=None):
         return False
     latest = max(enumerate(comments), key=lambda ic: (ic[1].get("at") or "", ic[0]))[1]
     body = latest.get("body") or ""
-    if not re.search(rf"@factory:{re.escape(agent)}(?![\w-])", body):
+    if not re.search(rf"@factory:{re.escape(agent)}(?![\w-])", strip_code(body)):
         return False
     marker = FROM.search(body)
     if not marker:
-        return True  # a person
+        if REVIEW_MARKER.search(body):  # a review has no `factory:from`: its sender is the reviewer agent
+            marker = (None, "reviewer", None)
+        elif body.lstrip().startswith("[factory]"):
+            return False  # factory text without a marker asks no one
+        else:
+            return True  # a person
     if marker[2]:  # a reply asks no one, except an answer to an ask, which goes back to the asker (#591)
         answer = ANSWER.search(body)
         ask = next((c for c in comments if answer and (m := ASK.search(c.get("body") or "")) and m[1] == answer[1]), None)
@@ -445,6 +450,13 @@ def mention_holds(agent, facts, tracker=None, ticket=None):
 
 GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention"}
 FROM = re.compile(r"<!-- factory:from (\S+?)( reply)? -->")
+REVIEW_MARKER = re.compile(r"<!-- factory:review focus=\S+ ")
+CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+
+
+def strip_code(body):
+    """`body` without code blocks and inline code: a mention there is a quote, not an ask."""
+    return CODE.sub("", body)
 
 
 def fix_tier(facts, default="mid"):
