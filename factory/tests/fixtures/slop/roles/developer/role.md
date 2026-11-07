@@ -35,10 +35,21 @@ asks no one; to ask an agent, name `@factory:<agent>` in a comment another outco
    `{{ settings.commit_prefix | replace('{ticket}', '<ticket>') }}`. Do not push; the platform pushes the branch after the run.
    When the step's facts list `checkouts` (a ticket that changes several repositories), make each repository's
    part in its `/workspaces/<repo>` checkout on that branch and commit there too. The factory repository checkout
-   is read-only. If the platform does not push a checkout other than the main one (the engine's `docs/targets.md`),
-   hand off `blocked` and name the repository instead of leaving its commits behind.
+   is read-only. The platform pushes only the main checkout: publish the others as `Other project repositories`
+   says.
 7. Your final message becomes the PR body: write it with the `pr` skill (summary sketch, before/after
    evidence with every acceptance check, merge danger), and nothing else.
+
+## Other project repositories
+
+In `implement`, `fix` and `update` mode, for each other project checkout you committed in:
+
+- When `FACTORY_WRITE_TOKEN` is set (`write_mode: token`), push the ticket branch there and open or update its PR.
+  Never print the token, and never put it in a command that echoes it.
+  1. `git -c credential.helper= push "https://x-access-token:$FACTORY_WRITE_TOKEN@github.com/<owner>/<repo>" HEAD:<branch>`
+  2. `GH_TOKEN="$FACTORY_WRITE_TOKEN" gh pr create -R <owner>/<repo> --head <branch>`, or `gh pr edit` when the PR
+     exists. The body starts with `[factory]`, has `Refs <ticket URL>`, and ends with the `Factory-Run:` trailer.
+- Without the token, hand off `blocked` and name the repository instead of leaving its commits behind.
 
 ## Mode `fix`
 
@@ -83,21 +94,19 @@ Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
    generator instead of merging them by hand.
 4. Rerun the acceptance checks and the pre-review checks, and record them in
    `checks`.
-5. Hand off `outcome: resolved`. When the tier cannot resolve it, hand
-   off `outcome: escalate`; when no tier can, hand off `outcome: unresolvable`
-   with `--reason` listing the conflicting files.
+5. Hand off `outcome: resolved`. When you cannot resolve it, hand off
+   `outcome: unresolvable` with `--reason` listing the conflicting files.
 
-## Environment failures and nothing to fix
+## Baseline failures and nothing to fix
 
-- When a required check fails and fails identically on `origin/main` in Air
-  (reproduce it there), hand off `outcome: env-broken` with `failing_check`
-  naming the check. The gate opens or reuses `Main is red in Air: <check>`,
-  blocks the ticket behind it and moves it to `ready`. Use it in `implement`
-  and `fix` mode only for a failure you reproduced on `origin/main`.
+- When a required check fails and fails identically on `origin/main` (reproduce
+  it there), the failure is not yours: do not block on it. Run the tests of the
+  files you changed, record the check with
+  `--not-run '<check> | fails on origin/main: <failing tests>'`, report your done
+  outcome, and add `--lesson "engine <check> | fails on origin/main: <failing tests>"`.
 - In `fix` mode, when there is no blocking finding, no red CI and no conflict
-  for the head (a stale or duplicate fix label), hand off
-  `outcome: nothing-to-fix` with no commit. The gate removes the label and
-  reruns the join.
+  for the head (a stale or duplicate fix label), report your done outcome with
+  no commit; the review runs again at the same head.
 
 ## Rules
 

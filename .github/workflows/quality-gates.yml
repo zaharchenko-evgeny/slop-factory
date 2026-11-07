@@ -37,6 +37,8 @@ jobs:
       - name: Merge main
         if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
         run: git -c user.name=ci -c user.email=ci@example.invalid merge --no-edit origin/main
+      - name: notify-relay tests
+        run: uv run --quiet --project integrations/notify-relay --with pytest pytest integrations/notify-relay/tests
       - name: Check documentation references
         run: uv run --quiet factory/check_refs.py
       # test_slop_fixture_is_migrate_project_output regenerates fixtures/slop from the team commit in its SOURCE file.

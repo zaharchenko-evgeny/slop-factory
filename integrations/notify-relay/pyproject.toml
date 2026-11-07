@@ -1,0 +1,12 @@
+[project]
+name = "notify-relay"
+version = "0.1.0"
+description = "Stateless relay that POSTs notifier replies to the Air webhook (ADR-0022)"
+requires-python = ">=3.11"
+dependencies = ["httpx", "pyyaml"]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

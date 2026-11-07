@@ -201,12 +201,22 @@ class ApplyTest(unittest.TestCase):
     def test_dry_run_lists_declared_secret_missing_in_air_and_succeeds(self):
         self.plan["environments"][0]["secrets"] = ["HAVE", "YOUTRACK_TOKEN"]
         self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
-                        "personalSecrets": [{"name": "HAVE"}]}])
+                        "personalSecrets": [{"key": "HAVE", "description": "", "secretVersion": 1, "value": "***"}]}])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(self.run_deploy("--dry-run"), 0)
         self.assertIn("set by a person: read secret YOUTRACK_TOKEN", out.getvalue())
         self.assertNotIn("secret HAVE", out.getvalue())
+
+    def test_extra_personal_secret_plans_no_environment_update(self):
+        self.plan["environments"][0]["secrets"] = ["HAVE", "MISSING"]
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                        "personalSecrets": [{"key": "HAVE"}, {"key": "PERSONAL_EXTRA"}]}])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.run_deploy("--dry-run"), 0)
+        self.assertNotIn("(secrets)", out.getvalue())
+        self.assertIn("set by a person: read secret MISSING", out.getvalue())
 
     def test_apply_leaves_variable_air_cannot_delete_to_a_person_and_succeeds(self):
         self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
@@ -956,6 +966,29 @@ class PlanTest(unittest.TestCase):
         self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] ops"])  # reconcile's CI label sync
         self.assertNotIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] read"])
         self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
+
+    def test_token_write_mode_prompts_push_extra_project_repositories(self):
+        token = self.three_repositories(write_mode="token", team_repository="https://github.com/o/team")
+        per_repo = self.three_repositories(write_mode="per-repo", team_repository="https://github.com/o/team")
+        prompts = {a["name"]: a["prompt"] for a in token["automations"]}
+        per_repo_prompts = {a["name"]: a["prompt"] for a in per_repo["automations"]}
+        for node in ("implement-mid", "fix-mid", "update-mid"):
+            prompt = prompts[f"[Slop factory] {node}"]
+            self.assertIn("FACTORY_WRITE_TOKEN", prompt)
+            self.assertIn("git -c credential.helper= push", prompt)
+            self.assertIn("gh pr create` or `gh pr edit`", prompt)
+            self.assertIn("`[factory]`", prompt)
+            self.assertIn("Refs #<n>", prompt)
+            self.assertTrue(any(key.startswith(f"[Slop factory] {node} ") for key in per_repo_prompts))
+            self.assertFalse(any("FACTORY_WRITE_TOKEN" in value for key, value in per_repo_prompts.items()
+                                 if key.startswith(f"[Slop factory] {node} ")))
+        base = cfg.load()
+        team_project = {"name": "team", "url": "https://github.com/o/team", "role": "project",
+                        "default_branch": "main"}
+        config = {**base, "team_repository": team_project["url"], "write_mode": "token",
+                  "repositories": [*base["repositories"], team_project]}
+        prompt = deploy.checkout_instructions(deploy.repository(team_project), config, True)
+        self.assertIn("FACTORY_WRITE_TOKEN", prompt)
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(deploy.config_mod, "team_root", return_value=Path(d)):

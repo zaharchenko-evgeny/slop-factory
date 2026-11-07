@@ -44,7 +44,8 @@ class StartupTemplateTest(unittest.TestCase):
                               check=True).stdout
 
     def test_skills_are_those_of_the_environment_roles_plus_factory_step(self):
-        for name, src in TEAMS.items():
+        # A definition team (Slop) runs its own startup script and `factory setup` (ADR-0021), not this template's.
+        for name, src in {"engine/template-v1": TEAMS["engine/template-v1"]}.items():
             team = team_fixture(src, self.tmp)
             for env in ("read", "write", "ops"):
                 with self.subTest(team=name, env=env):

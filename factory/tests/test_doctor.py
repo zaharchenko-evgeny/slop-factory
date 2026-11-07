@@ -112,6 +112,12 @@ class ProjectWriteProbeTest(unittest.TestCase):
         self.assertEqual(gh.calls[0][2], gh.calls[1][2])
         self.assertEqual(gh.tokens, ["pat", "pat"])
 
+    def test_an_environment_that_declares_the_token_is_probed_whatever_its_name(self):
+        settings = {**self.SETTINGS, "environments": {"engine": {"secrets": ["FACTORY_WRITE_TOKEN"]}, "team": {"secrets": []}}}
+        got = doctor.project_write_probes(settings, "engine", FakeGh(), {"FACTORY_WRITE_TOKEN": "pat"})
+        self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])
+        self.assertEqual(doctor.project_write_probes(settings, "team", FakeGh(), {}), [])
+
     def test_denied_write_without_token_mode_is_reported_and_read_env_is_not_probed(self):
         settings = {**self.SETTINGS, "write_mode": "per-repo"}
         gh = FakeGh(deny=("label create",))
@@ -134,6 +140,16 @@ class DoctorTest(unittest.TestCase):
         gh.calls.clear()
         doctor.file_tickets(REPO, failed, gh)
         self.assertEqual([c[:3] for c in gh.calls if c[:2] in (["issue", "create"], ["issue", "comment"])], [["issue", "comment", "7"]])
+
+    def test_missing_secret_ticket_says_where_and_what_to_set(self):
+        gh = FakeGh()
+        doctor.file_tickets(REPO, [{"probe": "env:ISSUES_TOKEN", "result": "missing", "detail": "engine",
+                                    "help": "Issues read/write"}], gh)
+        create = next(c for c in gh.calls if c[:2] == ["issue", "create"])
+        body = create[create.index("--body") + 1]
+        self.assertTrue(body.startswith("[factory] Set `ISSUES_TOKEN` in the Air environment of `engine`."), body)
+        self.assertIn("Issues read/write", body)
+        self.assertIn("as a secret", body)
 
     def test_denied_failure_ticket_comment_is_reported(self):
         title = "Doctor: write:comment fails"
