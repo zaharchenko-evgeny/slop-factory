@@ -271,12 +271,10 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(desc["states"]["done"]["kind"], "final")
 
     def test_compiled_view_passes_engine_checks(self):
-        os.environ["FACTORY_TEAM"] = str(self.root)
-        try:
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"FACTORY_TEAM": str(self.root)}):  # restores the caller's value
             import config, nodes  # noqa: E401
             self.assertEqual(nodes.validate(nodes.load(), config.load()), [])
-        finally:
-            del os.environ["FACTORY_TEAM"]
 
     def test_a_ticket_walks_the_agent_only_flow(self):
         """triage -> ready -> in-dev -> in-review -> approved -> merged -> done on a memory tracker (ADR-0021)."""
