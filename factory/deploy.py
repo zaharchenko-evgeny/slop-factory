@@ -292,8 +292,11 @@ def script_prompt(name: str, main_repository: dict | None = None, config: dict |
                   webhook: bool = False) -> str:
     checkout = checkout_instructions(main_repository, config) if config else ""
     if name.startswith("doctor"):
-        prompt = ("Run the installed `factory doctor` command exactly once in the foreground with no arguments. "
-                  "Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. "
+        engine = name == "doctor-ops"
+        command = "`factory doctor --engine`" if engine else "`factory doctor`"
+        prompt = (f"Run the installed {command} command exactly once in the foreground with "
+                  + ("only the `--engine` argument. " if engine else "no arguments. ")
+                  + f"Do not use `uv run`, `--help` or add {'other ' if engine else ''}arguments. Report every JSON probe line and the command's exit code. "
                   "It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. "
                   "A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a "
                   "`report` probe line. You must not create, edit or close tickets yourself.")

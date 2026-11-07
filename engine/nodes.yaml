@@ -268,7 +268,7 @@ nodes:
     when: { always: true }
     role: script
     tier: cheap
-    run: uv run factory/cli.py doctor
+    run: uv run factory/cli.py doctor --engine
     output: read-only
     outcomes:
       probed: {}
