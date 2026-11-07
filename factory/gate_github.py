@@ -1167,7 +1167,9 @@ class GitHubGateTracker(DescriptorPort):
     def _review(self, n, e):
         """The reviewer's verdict as a COMMENT review on each PR of the ticket, pinned to that PR's own head. The
         rereview command label lives on the primary PR, which wakes the reviewer."""
-        views, focus = [(name, view, pr) for name, view, pr in self._views(n) if pr], e.get("focus")
+        # only open PRs: a merged PR in another repository is done, and its repository may not be writable here
+        views = [(name, view, pr) for name, view, pr in self._views(n) if pr and not pr.get("merged") and pr.get("state", "open") == "open"]
+        focus = e.get("focus")
         if not views or not focus:
             raise RuntimeError("review: needs a PR and a payload `focus`")
         _, first, primary = views[0]
