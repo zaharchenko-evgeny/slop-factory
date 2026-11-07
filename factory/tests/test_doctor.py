@@ -114,7 +114,7 @@ class ProjectWriteProbeTest(unittest.TestCase):
 
     def test_issues_token_probe_uses_the_issues_token_and_names_a_missing_secret(self):
         settings = {**self.SETTINGS, "write_mode": "per-repo", "issues_token_env": "FACTORY_ISSUES_TOKEN",
-                    "environments": {"read": {"secrets": ["FACTORY_ISSUES_TOKEN"]}}}
+                    "environments": {"read": {"secrets": []}}}  # deploy adds the issues token itself
         gh = FakeGh()
         got = doctor.project_write_probes(settings, "read", gh, {"FACTORY_ISSUES_TOKEN": "iss"})
         self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])

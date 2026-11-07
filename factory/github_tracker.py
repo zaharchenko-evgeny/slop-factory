@@ -113,8 +113,7 @@ def token_env(env, config):
     """Whether `env` writes project repositories with WRITE_TOKEN: it declares the secret (a definition team), or it
     is one of WRITE_TOKEN_ENVS (the old layout)."""
     declared = ((config.get("environments") or {}).get(env) or {}).get("secrets") or []
-    issues = config.get("issues_token_env")
-    return WRITE_TOKEN in declared or env in WRITE_TOKEN_ENVS or bool(issues and issues in declared)
+    return WRITE_TOKEN in declared or env in WRITE_TOKEN_ENVS
 WRITE_VERBS = {"create", "edit", "merge", "review", "comment", "close", "reopen", "delete", "ready", "update-branch"}
 
 
