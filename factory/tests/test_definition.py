@@ -238,6 +238,14 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(prompt="Scope it."))
         self.assertError("node-prompt: nodes.intake")
 
+    def test_compile_lists_the_writable_repositories_of_each_environment(self):
+        import definition
+        envs = definition.to_project(definition.load(self.root))[0]["environments"]
+        for name, env in envs.items():
+            with self.subTest(env=name):
+                self.assertTrue(set(env["writable"]) <= set(env["repositories"]))
+                self.assertIn(env["repositories"][0], env["writable"])  # the main repository is always writable
+
     def test_settings_merge_order(self):
         defn = definition.load(self.root)
         s = definition.settings(defn, "fix")
