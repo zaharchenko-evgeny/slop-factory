@@ -2,13 +2,7 @@
 name: walkthrough
 description: "Use when writing the Walkthrough section of a PR review: orient a person with no context on the change (views as Mermaid, where to look, how to verify and roll back)."
 metadata:
-  credits:
-    - skill: pr-walkthrough
-      author: Warp
-      url: "https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/pr-walkthrough/SKILL.md"
-    - skill: readout
-      author: Warp
-      url: "https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/readout/SKILL.md"
+  credits: "Warp, https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/pr-walkthrough/SKILL.md and https://github.com/warpdotdev/common-skills/blob/main/.agents/skills/readout/SKILL.md"
 ---
 
 A walkthrough gets a person who has none of the context to a decision on a PR quickly. It is the
