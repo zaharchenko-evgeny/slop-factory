@@ -1133,6 +1133,12 @@ class DefinitionPlanTest(unittest.TestCase):
                       "- idea (custom, from .mcp.json)\n", dev["prompt"])
         self.assertEqual(by["[Slop factory] intake"]["mcpConnectors"], [])
         self.assertNotIn("Your MCP servers", by["[Slop factory] intake"]["prompt"])
+        # a node with custom servers runs in an environment of its own that names the node
+        self.assertEqual(dev["environmentConfigId"], "[Slop factory] engine implement-medium")
+        envs = {e["name"]: e["variables"] for e in plan["environments"]}
+        self.assertEqual(envs["[Slop factory] engine implement-medium"],
+                         {"FACTORY_ENV": "engine", "FACTORY_NODE": "implement-medium"})
+        self.assertNotIn("FACTORY_NODE", envs["[Slop factory] engine"])
 
     def test_prompts_are_rendered(self):
         for name, a in self.by.items():

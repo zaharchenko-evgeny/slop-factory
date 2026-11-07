@@ -106,16 +106,14 @@ class SetupTest(unittest.TestCase):
                            checkout=checkout, node="intake")   # a node without custom servers: no file
         self.assertFalse((checkout / ".mcp.json").exists())
 
-    def test_mcp_json_of_an_environment_without_a_node_is_the_union_and_conflicts_fail(self):
+    def test_mcp_json_is_not_written_without_a_node(self):
         path = self.root / "factory.yaml"
         data = yaml.safe_load(path.read_text())
         data["roles"]["developer"]["mcp"] = {"a": {"command": "x"}}
-        data["agents"]["dev-strong"]["mcp"] = {"a": {"command": "y"}}
         path.write_text(yaml.safe_dump(data, sort_keys=False))
-        with self.assertRaises(SystemExit) as e:
-            team_setup.install(definition.load(self.root), "engine", self.home, lambda spec, tmp: self.src,
-                               run=lambda cmd, **kw: None, checkout=self.tmp)
-        self.assertIn("define MCP server a differently", str(e.exception))
+        team_setup.install(definition.load(self.root), "engine", self.home, lambda spec, tmp: self.src,
+                           run=lambda cmd, **kw: None, checkout=self.tmp)
+        self.assertFalse((self.tmp / ".mcp.json").exists())
 
     def test_refuses_an_invalid_definition(self):
         (self.root / "roles/router/role.md").unlink()

@@ -433,7 +433,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
     per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(config["repositories"]) > 1 \
         and not definition.present(config_mod.team_root())
     unscoped = set()  # environments some automation shares across the project
-    scoped = []  # (env, repository name) of the per-repository automations
+    scoped = []  # (env, repository name, node) of the per-repository or per-node automations
+    defn = definition.load(config_mod.team_root()) if definition.present(config_mod.team_root()) else None
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
@@ -459,9 +460,11 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
             scope_name = scope["name"] if scope else None
             env_scope = None if focus == "knowledge" else scope_name  # a knowledge review runs in the team's own environment
-            if env_scope:
-                if (env, scope_name) not in scoped:
-                    scoped.append((env, scope_name))
+            # A node with custom MCP servers runs in an environment of its own: setup writes `.mcp.json` per environment
+            env_node = name if defn and focus != "knowledge" and definition.mcp_custom(definition.mcp(defn, name)) else None
+            if env_scope or env_node:
+                if (env, env_scope, env_node) not in scoped:
+                    scoped.append((env, env_scope, env_node))
             else:
                 unscoped.add(env)
             automation = {
@@ -471,7 +474,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
-                "environmentConfigId": f"{prefix}{env}" + (f" {env_scope}" if env_scope else ""),
+                "environmentConfigId": f"{prefix}{env}" + (f" {env_scope}" if env_scope else "") + (f" {env_node}" if env_node else ""),
                 "mcpConnectors": mcp_connectors(n, config, focus),
                 "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
                     name, n, config, aname, focus, automation_repository, tier_arg or tier),
@@ -486,14 +489,14 @@ def plan_air(nodes: dict, config: dict) -> dict:
             automations.append(automation)
     envs = []
     token = config.get("write_mode") == "token" and len(config["repositories"]) > 1
-    for env, scope_name in [(e, None) for e in used if e in unscoped] + scoped:
+    for env, scope_name, node_name in [(e, None, None) for e in used if e in unscoped] + scoped:
         d = envs_def[env]
         repo = repos[scope_name] if scope_name else repos.get(d["repository"]) or primary
         envs.append({
-            "name": f"{prefix}{env}" + (f" {scope_name}" if scope_name else ""),
+            "name": f"{prefix}{env}" + (f" {scope_name}" if scope_name else "") + (f" {node_name}" if node_name else ""),
             "repository": repo["url"],
             "startup": d["startup"],
-            "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env},
+            "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env, **({"FACTORY_NODE": node_name} if node_name else {})},
             "secrets": [*d.get("secrets", []), *([WRITE_TOKEN_SECRET] if token and env in github_tracker.WRITE_TOKEN_ENVS else [])],
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),

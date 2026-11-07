@@ -104,6 +104,40 @@ roles:
   to `mcpConnectors`.
 - Variant A: `factory setup` (run by `.air/cloud/startup.sh`, before the agent) writes the custom entries to
   `.mcp.json` in the checkout. Nothing is committed. `${VAR}` references stay unexpanded; Air supplies the values from
+  the environment's secrets and variables. Setup runs per environment, so it writes only the entries of the node in
+  `FACTORY_NODE`, and no file when it is unset. Deploy plans an environment of its own for each node with custom
+  entries (`<env> <node>`, with `FACTORY_NODE=<node>`), so a node never sees the servers of another node.
+- `factory validate` reports `unknown-mcp-connector: <where>: <name>` for a name missing from
+  `targets.air.mcp_connectors`.
+- `deploy.py` writes each automation's `mcpConnectors` and adds a "Your MCP servers" section to its prompt. The
+  diff compares the field, so a connector added by hand in Air shows as a removal in `--dry-run`.
+- `factory deploy --target local` prints a warning for each role whose connectors are not provided locally.
+- A change of the create call needs a refreshed Air contract recording: the operator runs
+  `factory contracts refresh`.
+
+## MCP servers in the ADR-0021 layout
+
+One `mcp` map, keyed by the server name the agent sees, in `defaults`, an environment, a role, an agent or a
+node of `workflow.yaml`. The layers merge by key in that order; an entry replaces the inherited entry of the same
+key as a whole, and `null` removes it.
+
+```yaml
+roles:
+  developer:
+    mcp:
+      youtrack: { connector: internal-youtrack }       # Air connector -> the automation's mcpConnectors
+      idea: { command: npx, args: ["-y", "@jetbrains/mcp-proxy"], env: { IDE_PORT: "${IDE_PORT}" } }   # custom -> .mcp.json
+      docs: { url: "https://mcp.example/sse", headers: { Authorization: "Bearer ${DOCS_TOKEN}" } }
+      glean: null
+```
+
+- Air connector names: `confluence`, `datadog`, `figma`, `gitlab`, `google_calendar`, `grafana`, `jira`, `linear`,
+  `sentry`, `slack`, `teamcity`, `internal-teamcity`, `youtrack`, `internal-youtrack`, `internal-glean`.
+  `targets.air.mcp_connectors` in `factory.yaml` replaces this default list.
+- Custom entries (`command`/`args`/`env` or `url`/`headers`) have the `.mcp.json` `mcpServers` shape. They never go
+  to `mcpConnectors`.
+- Variant A: `factory setup` (run by `.air/cloud/startup.sh`, before the agent) writes the custom entries to
+  `.mcp.json` in the checkout. Nothing is committed. `${VAR}` references stay unexpanded; Air supplies the values from
   the environment's secrets and variables. Setup runs per environment: it writes the entries of the node in
   `FACTORY_NODE` when set, else the union of the nodes of that environment, and fails when two nodes define one
   server name differently. Deploy does not set `FACTORY_NODE` yet, so nodes of one environment share the file.
