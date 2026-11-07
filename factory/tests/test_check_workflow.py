@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
@@ -64,7 +65,14 @@ def test_installed_wheel_runs_the_check(tmp_path):
     names = {n.split(".data/data/", 1)[-1] for n in zipfile.ZipFile(wheel).namelist()}
     assert {"share/factory-engine/engine/defaults.yaml", "share/factory/statechart.py"} <= names  # #973
     env = {k: v for k, v in os.environ.items() if k not in ("FACTORY_ENGINE", "FACTORY_TEAM")}
-    done = subprocess.run(["uv", "run", "--no-project", "--with", str(wheel), "factory", "--team", str(FIXTURES / "../slop"),
+    team = tmp_path / "team"
+    shutil.copytree(ROOT / "factory/tests/fixtures/slop", team)
+    workflow_path = team / "workflow.yaml"
+    workflow = yaml.safe_load(workflow_path.read_text())
+    workflow["nodes"]["notify"].pop("environment", None)
+    workflow["nodes"]["notify-pr"].pop("environment", None)
+    workflow_path.write_text(yaml.safe_dump(workflow, sort_keys=False))
+    done = subprocess.run(["uv", "run", "--no-project", "--with", str(wheel), "factory", "--team", str(team),
                            "validate"], capture_output=True, text=True, env=env, cwd=tmp_path)
     assert done.returncode == 0, done.stderr  # the installed engine files load (#984)
     for name, code in (("../slop", 0), ("no-deadlock", 1)):
