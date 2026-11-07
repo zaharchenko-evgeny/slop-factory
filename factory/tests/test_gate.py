@@ -1908,6 +1908,15 @@ class MultiRepositoryTest(unittest.TestCase):
         self.assertEqual((facts["ci"], facts["round_head"], facts["heads"]), ("green", "h1", {"a": "h1", "b": "h2"}))
         self.assertEqual(gate.sweep_plan(facts, self.ON), ("merge", "merged", {}))
 
+    def test_merged_pr_ci_does_not_override_open_pr_ci(self):
+        facts = self.facts(self.pr("a", "h1", pr_state="merged", ci="none"), self.pr("b", "h2"))
+        self.assertEqual(facts["ci"], "green")
+
+    def test_merged_pr_approval_does_not_complete_open_review_round(self):
+        facts = self.facts(self.pr("a", "h1", pr_state="merged"), self.pr(
+            "b", "h2", round_complete=False, round_verdict=None, round_head=None), stage="in-review")
+        self.assertFalse(facts["round_complete"])
+
     def test_one_red_pr_makes_the_ticket_red_and_reopens_it(self):
         facts = self.facts(self.pr("a", "h1"), self.pr("b", "h2", ci="red"))
         self.assertEqual(facts["ci"], "red")

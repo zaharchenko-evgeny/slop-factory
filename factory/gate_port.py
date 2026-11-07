@@ -48,16 +48,17 @@ PR_DEFAULTS = {"head": None, "pr": None, "branch": None, "mergeable": None, "con
 
 def combine_prs(prs):
     """One ticket's PR facts over its PRs (`repo` plus the PR_DEFAULTS keys), in the ticket's repository order.
-    The first PR gives head, pr and branch. The ticket is approved only when every PR's round is complete with
-    approve at its own head; one PR with changes completes the round. One PR is returned as it is."""
+    The first PR gives head, pr and branch. Open PRs determine CI and review facts; when none are open, all PRs do.
+    The ticket is approved only when every included round approves at its own head. One PR is returned as it is."""
     if len(prs) == 1:
         return dict(prs[0])
+    active = [p for p in prs if p["pr_state"] == "open"] or prs
     union = lambda key: list(dict.fromkeys(x for p in prs for x in p.get(key) or []))
-    cis, states = [p["ci"] for p in prs], [p["pr_state"] for p in prs]
-    changes = any(p["round_complete"] and p["round_verdict"] == "changes" for p in prs)
-    complete = changes or all(p["round_complete"] for p in prs)
-    moved = next((f"{p['repo']}:{p['round_head']}" for p in prs if p["round_head"] not in (None, p["head"])), None)
-    reviewed = all(p["round_head"] is not None for p in prs)
+    cis, states = [p["ci"] for p in active], [p["pr_state"] for p in prs]
+    changes = any(p["round_complete"] and p["round_verdict"] == "changes" for p in active)
+    complete = changes or all(p["round_complete"] for p in active)
+    moved = next((f"{p['repo']}:{p['round_head']}" for p in active if p["round_head"] not in (None, p["head"])), None)
+    reviewed = all(p["round_head"] is not None for p in active)
     mergeable = [p["mergeable"] for p in prs]
     return {**{k: v for k, v in prs[0].items() if k != "repo"}, "heads": {p["repo"]: p["head"] for p in prs},
             "prs": [{k: p[k] for k in ("repo", "pr", "head", "branch", "pr_state", "ci", "round_complete",
@@ -68,8 +69,8 @@ def combine_prs(prs):
             "conflict": any(p["conflict"] for p in prs), "behind": any(p["behind"] for p in prs),
             "round_complete": complete,
             "round_verdict": "changes" if changes else "approve" if complete and all(
-                p["round_verdict"] == "approve" for p in prs) else None,
-            "round_head": moved or (prs[0]["head"] if reviewed else None),
+                p["round_verdict"] == "approve" for p in active) else None,
+            "round_head": moved or (active[0]["head"] if reviewed else None),
             "handed_to_fix": any(p["handed_to_fix"] for p in prs), "fix_rounds": max(p["fix_rounds"] for p in prs),
             "reviews": [{**r, "repo": p["repo"]} for p in prs for r in p["reviews"]],
             **{k: union(k) for k in ("requested_reviewers", "focus_missing", "ignored_reviews", "waiting_reviewers",
