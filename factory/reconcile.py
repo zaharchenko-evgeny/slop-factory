@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
+import definition
 import nodes as nodes_mod
 import vocab
 
@@ -174,12 +175,12 @@ def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress)
             progress(r)
 
 
-def send(tracker, n, nodes, stage, head, kind, label, on, why):
+def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="changes-requested"):
     def apply(**e):
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
     if kind == "conflict":
-        apply(kind="label", value=vocab.cmd("fix-<tier>", "cheap"), on="pr")
-        apply(kind="stage", value="changes-requested")
+        apply(kind="label", value=label or vocab.cmd("fix-<tier>", "cheap"), on="pr")
+        apply(kind="stage", value=fix_stage)
     elif kind == "blocked":
         apply(kind="label", value=vocab.needs_human())
         apply(kind="comment", value=f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets {vocab.stage('ready')}.")
@@ -188,6 +189,82 @@ def send(tracker, n, nodes, stage, head, kind, label, on, why):
         apply(kind="unlabel", value=label, on=on)
         apply(kind="label", value=label, on=on)
         apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} re-fired {label} ({why})")
+
+
+def _outcome_effects(node):
+    for oc in (node.get("outcomes") or {}).values():
+        yield (oc or {}).get("effects") or []
+
+
+def definition_recovery(defn, tracker_stages, needs_human, default):
+    """From the team's workflow.yaml: (fix, wakes). `fix` is (node, label, stage) of the node that runs in `fix` mode,
+    the stage being the one its label arrives with (a review outcome's effects); `wakes` is (node, label, timeout) per
+    label trigger of an agent node that an outcome of the node removes (a label no outcome removes proves nothing)."""
+    nodes, agents = defn["workflow"].get("nodes") or {}, defn["factory"].get("agents") or {}
+    skip = {needs_human, *tracker_stages.values()}
+    fix, wakes = None, []
+    for name, n in nodes.items():
+        if (agents.get(n.get("agent")) or {}).get("harness") in definition.NO_ROLE:
+            continue
+        removed = {e["unlabel"] for fx in _outcome_effects(n) for e in fx if "unlabel" in e}
+        for t in n.get("triggers") or []:
+            label = t.get("label") if isinstance(t, dict) else None
+            if label and label in removed and label not in skip:
+                wakes.append((name, label, n.get("timeout_minutes", default)))
+                if (n.get("settings") or {}).get("mode") == "fix" and fix is None:
+                    stage = next((e["stage"] for m in nodes.values() for fx in _outcome_effects(m)
+                                  if {"label": label, "on": "pr"} in fx for e in fx if "stage" in e), None)
+                    fix = (name, label, stage) if stage else None
+    return fix, wakes
+
+
+def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry_run=False, progress=None):
+    """ADR-0021 teams: the lost wakes `wake_ready` does not cover, read from the definition (no node, label or
+    stage name here). A conflicting PR in a fix-able stage with no fix label goes to fix; a waking label whose node
+    `when` holds and that outlived the node's timeout is re-fired once per head, the second miss blocks the ticket."""
+    import gate
+    now, results = now or datetime.now(timezone.utc), []
+    default = limits.get("run_timeout_minutes", 30)
+    fix, wakes = definition_recovery(defn, vocab._tracker()["stages"], vocab.needs_human(), default)
+    nodes = defn["workflow"]["nodes"]
+    listed = tracker.sweep_tickets([s for s in stages if stage_kinds.get(s) not in ("waiting", "final")], open_only=True)
+    gate.prefetch(tracker, listed)
+    for n in listed:
+        try:
+            facts = tracker.stale_facts(n)
+            stage, since, head = facts["stage"], facts.get("since"), (facts.get("head") or "")[:12]
+            if facts.get("issue_state", "open") != "open" or not since or vocab.needs_human() in facts.get("attrs", []):
+                continue
+            ago = lambda at: now - datetime.fromisoformat(at.replace("Z", "+00:00"))  # noqa: E731
+            step = None
+            on_pr = facts.get("pr_labels") or []
+            if (fix and facts.get("conflict") and facts.get("pr") and facts.get("pr_state") in (None, "none", "open")
+                    and fix[1] not in on_pr and gate.holds(nodes[fix[0]].get("when") or {}, facts, {})
+                    and ago(since) > timedelta(minutes=default)):
+                step = ("conflict", fix[0], fix[1], "pr", "the PR conflicts with main and has no fix label")
+            else:
+                for node, label, timeout in wakes:
+                    on = "issue" if label in facts.get("attrs", []) else "pr" if label in on_pr else None
+                    at = (facts.get("label_at") or {}).get(label)
+                    if on and at and ago(at) > timedelta(minutes=timeout) and gate.holds(nodes[node].get("when") or {}, facts, {}):
+                        step = ("refire", node, label, on, f"no {node} outcome")
+                        break
+            if step is None:
+                continue
+            kind, node, label, on, why = step
+            missed = sum(f"stage={stage} head={head} re-fired {label} (" in c for c in facts.get("recover_comments", []))
+            kind = "blocked" if kind == "refire" and missed else kind
+            r = {"ticket": n, "stage": stage, "node": node, "reconcile": kind, "why": why}
+            results.append(r)
+            if not dry_run:
+                send(tracker, n, None, stage, head, kind, label, on, why, fix_stage=fix[2] if fix else None)
+            if progress:
+                progress(r)
+        except Exception as e:  # one ticket failing does not stop the others
+            results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+            if progress:
+                progress(results[-1])
+    return results
 
 
 def wake_ready(tracker, minutes, now=None, dry_run=False):
@@ -221,11 +298,14 @@ def main(argv):
         from gate_github import GitHubGateTracker
         tracker = GitHubGateTracker.from_config()
     config = config_mod.load()
-    import definition
-    if definition.present(config_mod.team_root()):  # ADR-0021: only the waits the gate cannot see happen
+    if definition.present(config_mod.team_root()):  # ADR-0021: the waits the gate cannot see, from the definition
+        progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
         results = wake_ready(tracker, config["limits"].get("run_timeout_minutes", 30), dry_run=dry_run)
+        results += recover_definition(tracker, definition.load(config_mod.team_root()), config["tracker"]["stages"],
+                                      config["tracker"].get("stage_kinds", {}), config["limits"],
+                                      dry_run=dry_run, progress=progress)
         print(json.dumps({"dry_run": dry_run, "reconcile": results}))
-        return 0
+        return 1 if any("error" in r for r in results) else 0
     progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
     results, failed = reconcile(tracker, nodes_mod.load(), list(config["tracker"]["stages"]), config["limits"],
                                 stage_kinds=config["tracker"].get("stage_kinds", {}),

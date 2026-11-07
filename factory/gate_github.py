@@ -911,7 +911,7 @@ class GitHubGateTracker(DescriptorPort):
         return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
                 "command_pending": bool(latest_command and latest_command == latest_event),
                 "command_at": cmd and labeled.get(cmd), "commit_at": commit_at, "recover_comments": comments,
-                "review_labels": review_labels,
+                "review_labels": review_labels, "label_at": {x: at for (_, x), at in labeled.items()},
                 "ci_label": next((ci for ci in ("green", "red") if vocab.ci(f"ci-{ci}") in pr_labels
                                  and ci == f.get("ci")), None)}  # a label left over from an earlier head is not this head's CI
 

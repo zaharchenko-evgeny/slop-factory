@@ -225,5 +225,80 @@ class WakeReadyTest(unittest.TestCase):
         self.assertEqual([r["ticket"] for r in got], ["1"])   # 5 never had a blocker: left alone
 
 
+class RecoverDefinitionTest(unittest.TestCase):
+    """ADR-0021 team (fixtures/slop): the lost wakes come from workflow.yaml."""
+    SLOP = Path(__file__).resolve().parent / "fixtures/slop"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.previous = cfg._team
+        cfg.set_team(cls.SLOP)
+        import definition
+        cls.defn, cls.config = definition.load(cls.SLOP), cfg.load()
+
+    @classmethod
+    def tearDownClass(cls):
+        cfg.set_team(cls.previous)
+
+    def recover(self, ticket):
+        tr = MemoryTracker({1: ticket})
+        tracker = self.config["tracker"]
+        results = reconcile.recover_definition(tr, self.defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
+                                               self.config["limits"], now=NOW)
+        return tr, results
+
+    def pr(self, **kw):
+        return {"stage": "in-review", "pr": 5, "pr_state": "open", "head": "abc123def4567", "since": OLD,
+                "pr_labels": [], **kw}
+
+    def test_conflicting_in_review_pr_goes_to_fix(self):
+        t, results = self.recover(self.pr(conflict=True))
+        self.assertEqual([r["reconcile"] for r in results], ["conflict"])
+        self.assertEqual(logged(t, "label"), ['"factory:fix"'])
+        self.assertEqual(t.get_stage(t.tickets[1]), "changes-requested")
+
+    def test_conflict_uses_the_fix_stage_of_the_definition(self):
+        import copy
+        defn = copy.deepcopy(self.defn)
+        for n in defn["workflow"]["nodes"].values():
+            for oc in (n.get("outcomes") or {}).values():
+                for fx in (oc or {}).get("effects") or []:
+                    if fx.get("stage") == "changes-requested":
+                        fx["stage"] = "repair"
+        tr = MemoryTracker({1: self.pr(conflict=True)})
+        tracker = self.config["tracker"]
+        reconcile.recover_definition(tr, defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
+                                     self.config["limits"], now=NOW)
+        self.assertEqual(tr.get_stage(tr.tickets[1]), "repair")
+
+    def test_conflict_at_the_fix_round_cap_or_fresh_is_left_alone(self):
+        self.assertEqual(self.recover(self.pr(conflict=True, fix_rounds=3))[1], [])
+        self.assertEqual(self.recover(self.pr(conflict=True, since=FRESH))[1], [])
+
+    def test_review_label_without_review_refired_once_then_blocked(self):
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low", "factory:ci-green"],
+                         label_at={"factory:review-low": OLD, "factory:ci-green": OLD})
+        t, results = self.recover(ticket)
+        self.assertEqual([(r["node"], r["reconcile"]) for r in results], [("review-low", "refire")])
+        self.assertEqual(logged(t, "label"), ['"factory:review-low"'])  # removed, then added again
+        miss = logged(t, "comment")[0]
+        self.assertIn("head=abc123def456 re-fired factory:review-low (", miss)
+        ticket["log"] = [("comment", miss)]
+        t, results = self.recover(ticket)
+        self.assertEqual(results[0]["reconcile"], "blocked")
+        self.assertIn('"factory:needs-human"', logged(t, "label"))
+        self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
+
+    def test_review_label_without_green_ci_or_fresh_is_left_alone(self):
+        labels = {"pr_labels": ["factory:review-low"], "attrs": ["risk:low"], "label_at": {"factory:review-low": OLD}}
+        self.assertEqual(self.recover(self.pr(ci="pending", **labels))[1], [])
+        self.assertEqual(self.recover(self.pr(ci="green", **{**labels, "label_at": {"factory:review-low": FRESH}}))[1], [])
+
+    def test_needs_human_ticket_is_left_alone(self):
+        t, results = self.recover(self.pr(conflict=True, attrs=["factory:needs-human"]))
+        self.assertEqual(results, [])
+        self.assertEqual(logged(t, "label"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
