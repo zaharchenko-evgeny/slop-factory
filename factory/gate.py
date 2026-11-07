@@ -272,6 +272,12 @@ def comment_marker(node):
     return f"<!-- factory:from {agent_of(node)}{' reply' if reply else ''} -->"
 
 
+def node_mode(node):
+    """A definition team's node `settings.mode` (fix, update, reply, ...), or None (ADR-0021)."""
+    import definition
+    return definition.settings(definition.load(config_mod.team_root()), node).get("mode")
+
+
 def definition_team():
     """True when the team defines its factory in factory.yaml + workflow.yaml (ADR-0021)."""
     import definition
@@ -531,6 +537,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
     if node.get("focuses"):  # one review tier per focus (roles.<role>.modes.<focus>.tier)
         tiers = [roles[role]["modes"][f]["tier"] for f in node["focuses"]]
     skills = config_mod.resolve(f"roles/{role}/skills.txt")
+    fixing = step in ("fix", "update") or (step is None and node_mode(name) in ("fix", "update"))
     return (NO_GO if why else GO), {
         "go": why is None, "reason": why, "ticket": event["ticket"], "node": name, "role": role,
         "tier": event.get("tier") if event.get("tier") in tiers else tiers[0],
@@ -538,9 +545,9 @@ def check(name, event, tracker, nodes, config, code_host=None):
         "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "outcomes": list(node["outcomes"]),
-        "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if step in ("fix", "update") else ()))],
+        "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if fixing else ()))],
         **({"mention": latest_mention(facts, tracker, event["ticket"])} if name.startswith("reply-") and definition_team() else {}),
-        "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and step in ("fix", "update")),
+        "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and fixing),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
         # one entry per repository of a ticket that changes several (ADR-0017), all on the ticket's one branch
         "checkouts": [{"repo": p["repo"], "branch": p["branch"] or branch} for p in facts.get("prs") or []],
