@@ -180,6 +180,12 @@ class FakeSlack(ThreadingHTTPServer):
 
 class Hook(BaseHTTPRequestHandler):
     def do_POST(self):
+        if self.path == "/moved":
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(302)
+            self.send_header("Location", "/secret-path")
+            self.end_headers()
+            return
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.posts.append((self.headers["Content-Type"], body))
         self.send_response(self.server.status)
@@ -251,6 +257,19 @@ class SlackWorkflowTest(unittest.TestCase):
         self.assertIn("HTTP 400", str(ctx.exception))
         self.assertNotIn("secret-path", str(ctx.exception))
         self.assertNotIn("127.0.0.1", str(ctx.exception))
+
+    def test_redirect_fails_with_its_status(self):
+        with patch.dict(os.environ, {"TEST_NOTIFY_SLACK": self.url.replace("secret-path", "moved")}):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.apply(self.tracker())
+        self.assertIn("HTTP 302", str(ctx.exception))
+        self.assertEqual(self.hook.posts, [])
+
+    def test_malformed_url_error_does_not_hold_the_url(self):
+        with patch.dict(os.environ, {"TEST_NOTIFY_SLACK": "not-a-url/FAKE_SECRET"}):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.apply(self.tracker())
+        self.assertNotIn("FAKE_SECRET", str(ctx.exception))
 
     def test_ack_sends_nothing(self):
         self.assertFalse(notify.ack_all(SLACK, "ann", "slack-workflow", "req-1", "Got it"))
