@@ -964,7 +964,12 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(deploy.WRITE_TOKEN_SECRET, "FACTORY_WRITE_TOKEN")
         self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] write"])
         self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] ops"])  # reconcile's CI label sync
-        self.assertNotIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] read"])
+        self.assertNotIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] read"])  # a read agent never gets the PAT
+        gate = deploy.github_tracker.GATE_TOKEN
+        self.assertEqual(gate, "FACTORY_GATE_TOKEN")
+        self.assertIn(gate, envs["[Slop factory] read"])  # the gate's PR writes run in read
+        self.assertNotIn(gate, envs["[Slop factory] write"])
+        self.assertNotIn(gate, envs["[Slop factory] ops"])
         self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
 
     def test_token_write_mode_prompts_push_extra_project_repositories(self):

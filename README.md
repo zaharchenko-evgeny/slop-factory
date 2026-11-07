@@ -52,12 +52,14 @@ takes one file.
 `write_mode` says how the factory writes to the `role: project` repositories.
 `per-repo` (the default) deploys the write nodes once per repository. With
 `token`, `factory deploy` keeps one node set and adds the secret
-`FACTORY_WRITE_TOKEN` to the `write` and `ops` environments, never to `read`.
+`FACTORY_WRITE_TOKEN` to the `write` and `ops` environments, never to `read`. It adds a second secret,
+`FACTORY_GATE_TOKEN`, to `read` only: a fine-grained token with Pull requests and Issues write and no Contents, so the
+gate's reviews, labels and merges work in `read` and a read agent cannot push code (it can still approve, label and merge).
 A person sets it in Air to a fine-grained personal access token with Contents,
 Pull requests and Issues write on every project repository. Air's own token
 can write only the factory repository. While the token is set, each `gh` write
 that names a project repository runs with it as `GH_TOKEN`, for example a CI
-label or a merge. In `write` and `ops`, `factory doctor` runs one
+label or a merge. In `write`, `ops` and `read`, `factory doctor` runs one
 `write:label:<owner/repo>` probe per project repository and reports `fail`
 when the token is missing in `token` mode.
 

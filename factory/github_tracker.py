@@ -104,16 +104,23 @@ class CountedRun:
 
 
 # `write_mode: token`: Air's GitHub token writes only the factory repository, so writes to a `role: project`
-# repository use this secret (deploy.py adds it to WRITE_TOKEN_ENVS). It is read from the environment, never printed.
+# repository use a secret from the environment, never printed. `write` and `ops` carry WRITE_TOKEN (a PAT with
+# Contents, Pull requests and Issues write). `read` carries the narrower GATE_TOKEN (Pull requests and Issues write
+# only, no Contents), so the gate's reviews, labels and merges work there and a read agent cannot push code.
 WRITE_TOKEN = "FACTORY_WRITE_TOKEN"
+GATE_TOKEN = "FACTORY_GATE_TOKEN"
 WRITE_TOKEN_ENVS = ("write", "ops")
+GATE_TOKEN_ENVS = ("read",)
 
 
 def token_env(env, config):
-    """Whether `env` writes project repositories with WRITE_TOKEN: it declares the secret (a definition team), or it
-    is one of WRITE_TOKEN_ENVS (the old layout)."""
+    """The secret name `env` writes project repositories with, or None: the one it declares (a definition team), else
+    WRITE_TOKEN in WRITE_TOKEN_ENVS and GATE_TOKEN in GATE_TOKEN_ENVS in `write_mode: token` (the old layout)."""
     declared = ((config.get("environments") or {}).get(env) or {}).get("secrets") or []
-    return WRITE_TOKEN in declared or env in WRITE_TOKEN_ENVS
+    return next((t for t in (WRITE_TOKEN, GATE_TOKEN) if t in declared),
+                WRITE_TOKEN if env in WRITE_TOKEN_ENVS else GATE_TOKEN if env in GATE_TOKEN_ENVS and config.get("write_mode") == "token" else None)
+
+
 WRITE_VERBS = {"create", "edit", "merge", "review", "comment", "close", "reopen", "delete", "ready", "update-branch"}
 
 
@@ -142,14 +149,14 @@ def gh_writes(args):
 
 
 class ProjectWriteRun:
-    """Wrap a `gh` runner: a write to one of `repositories` runs with $FACTORY_WRITE_TOKEN as its GH_TOKEN, when
-    that is set; every other call, and every call without it, runs as before."""
+    """Wrap a `gh` runner: a write to one of `repositories` runs with $FACTORY_WRITE_TOKEN, else $FACTORY_GATE_TOKEN, as its GH_TOKEN,
+    when one is set; every other call, and every call without it, runs as before."""
 
     def __init__(self, run, repositories, environ=os.environ):
         self.run, self.repositories, self.environ = run, {r.lower() for r in repositories}, environ
 
     def __call__(self, args, **kw):
-        token = self.environ.get(WRITE_TOKEN)
+        token = self.environ.get(WRITE_TOKEN) or self.environ.get(GATE_TOKEN)
         if token and gh_writes(args) and (gh_target(args) or "").lower() in self.repositories:
             kw["token"] = token
         return self.run(args, **kw)

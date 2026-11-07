@@ -268,6 +268,21 @@ class ProjectWriteToken(unittest.TestCase):
         run(["pr", "edit", "2", "-R", "o/r", "--add-label", "x"])  # not a project repository
         self.assertEqual(calls, ["pat"] * 4 + [None] * 3)
 
+    def test_the_gate_token_is_used_when_there_is_no_write_token(self):
+        calls = []
+        run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", ["o/app"],
+                                             {"FACTORY_GATE_TOKEN": "gate"})
+        run(["pr", "merge", "2", "-R", "o/app", "--merge"])
+        run(["api", "repos/o/app/pulls/2/reviews", "-f", "event=COMMENT"])
+        run(["pr", "view", "2", "-R", "o/app"])
+        self.assertEqual(calls, ["gate", "gate", None])
+
+    def test_token_env_names_the_secret_of_each_environment(self):
+        self.assertEqual([github_tracker.token_env(e, {"write_mode": "token"}) for e in ("write", "ops", "read", "other")],
+                         ["FACTORY_WRITE_TOKEN", "FACTORY_WRITE_TOKEN", "FACTORY_GATE_TOKEN", None])
+        self.assertEqual(github_tracker.token_env("x", {"environments": {"x": {"secrets": ["FACTORY_GATE_TOKEN"]}}}),
+                         "FACTORY_GATE_TOKEN")
+
     def test_without_the_token_every_call_runs_as_before(self):
         calls = []
         run = github_tracker.ProjectWriteRun(lambda args, **kw: calls.append(kw) or "", ["o/app"], {})

@@ -1861,11 +1861,16 @@ class CiSyncCodeHostTest(unittest.TestCase):
                 host.edit_pr_labels("o/app", 1, add=["factory:ci-green"])
                 host.edit_pr_labels("o/main", 2, add=["factory:ci-green"])
                 GitHubGateTracker.from_config(path, run=run).run(["pr", "merge", "3", "-R", "o/app", "--merge"])
-            with patch.dict(os.environ):
+            with patch.dict(os.environ):  # `read`: only the narrower gate token
                 os.environ.pop("FACTORY_WRITE_TOKEN", None)
+                os.environ["FACTORY_GATE_TOKEN"] = "gate"
+                GitHubGateTracker.from_config(path, run=run).run(["pr", "merge", "4", "-R", "o/app", "--merge"])
+                GitHubGateTracker.from_config(path, run=run).run(["pr", "review", "4", "-R", "o/app", "--comment", "-b", "x"])
+                os.environ.pop("FACTORY_GATE_TOKEN")
                 host.edit_pr_labels("o/app", 1, add=["factory:ci-green"])
-        self.assertEqual(seen, [(["pr", "edit"], "o/app", "pat"), (["pr", "edit"], "o/main", None),
-                                (["pr", "merge"], "o/app", "pat"), (["pr", "edit"], "o/app", None)])
+        self.assertEqual([(a, r, t) for a, r, t in seen if t != "gate"][:4], [(["pr", "edit"], "o/app", "pat"),
+                         (["pr", "edit"], "o/main", None), (["pr", "merge"], "o/app", "pat"), (["pr", "edit"], "o/app", None)])
+        self.assertEqual([t for _, _, t in seen if t == "gate"], ["gate", "gate"])
 
 
 

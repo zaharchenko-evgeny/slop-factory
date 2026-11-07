@@ -112,6 +112,14 @@ class ProjectWriteProbeTest(unittest.TestCase):
         self.assertEqual(gh.calls[0][2], gh.calls[1][2])
         self.assertEqual(gh.tokens, ["pat", "pat"])
 
+    def test_read_probes_with_the_gate_token(self):
+        gh = FakeGh()
+        self.assertEqual(doctor.project_write_probes(self.SETTINGS, "read", gh, {})[0]["detail"],
+                         "FACTORY_GATE_TOKEN is not set (write_mode: token)")
+        got = doctor.project_write_probes(self.SETTINGS, "read", gh, {"FACTORY_GATE_TOKEN": "gate"})
+        self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])
+        self.assertEqual(gh.tokens, ["gate", "gate"])
+
     def test_an_environment_that_declares_the_token_is_probed_whatever_its_name(self):
         settings = {**self.SETTINGS, "environments": {"engine": {"secrets": ["FACTORY_WRITE_TOKEN"]}, "team": {"secrets": []}}}
         got = doctor.project_write_probes(settings, "engine", FakeGh(), {"FACTORY_WRITE_TOKEN": "pat"})
@@ -124,7 +132,7 @@ class ProjectWriteProbeTest(unittest.TestCase):
         got = doctor.project_write_probes(settings, "ops", gh, {})
         self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "denied")])
         self.assertEqual(gh.tokens, [None])
-        self.assertEqual(doctor.project_write_probes(self.SETTINGS, "read", gh, {}), [])
+        self.assertEqual(doctor.project_write_probes(settings, "read", gh, {}), [])
 
 
 class DoctorTest(unittest.TestCase):
