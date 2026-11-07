@@ -28,6 +28,8 @@ cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"
 import deploy  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
+import project  # noqa: E402
+import workflow  # noqa: E402
 from gate_port import MemoryTracker, TagTracker  # noqa: E402
 
 CONFIG = cfg.load()
@@ -45,6 +47,19 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_slop_ci_red_routes_to_fix_and_pending_ci_blocks_review(self):
+        team = ROOT / "factory/tests/fixtures/slop"
+        descriptor = project.load(team)
+        graph = workflow.to_nodes(descriptor, workflow.load(team, descriptor))
+
+        red = MemoryTracker({"7": {"stage": "in-review", "ci": "red"}})
+        status, outcome = gate.decide("ci-red", "7", red, graph, dry_run=True)
+        self.assertEqual((status, outcome["outcome"]), (gate.GO, "fix"))
+
+        pending = MemoryTracker({"7": {"stage": "in-review", "ci": "pending", "attrs": ["risk:high"]}})
+        status, _ = gate.check("review-high", {"id": "e1", "ticket": "7"}, pending, graph, CONFIG)
+        self.assertEqual(status, gate.NO_GO)
+
     def test_assignment_effect_resolves_owner_and_preserves_logins(self):
         self.assertEqual(gate.resolve({"assign": "owner", "on": "pr"}, {}, "7"),
                          {"kind": "assign", "ticket": "7", "value": cfg.owner(CONFIG), "on": "pr"})
