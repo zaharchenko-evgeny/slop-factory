@@ -152,11 +152,15 @@ def tracker_repositories(defn):
     return [full_name(r) for r in listed if isinstance(r, str)]
 
 
+def _has_event_trigger(node):
+    return any(isinstance(t, dict) and not {"schedule", "webhook"} & t.keys() for t in node.get("triggers") or [])
+
+
 def node_listens(defn, name):
     """Full names of the ticket repositories node `name` listens to: `tracker` is the first one, `tickets` (the
     default) all of them. A node with no event trigger (schedule, webhook, manual) listens to nothing: `[]`."""
     node = _parts(defn, name)[0]
-    if not any(isinstance(t, dict) and not {"schedule", "webhook"} & t.keys() for t in node.get("triggers") or []):
+    if not _has_event_trigger(node):
         return []
     tickets = tracker_repositories(defn)
     listens = node.get("listens", "tickets")
@@ -423,8 +427,9 @@ def _listens_errors(defn, where, node):
 def _event_errors(defn, name, node):
     """`writes-not-heard` and `schedule-writes-several` of node `name`."""
     where, writes = f"nodes.{name}", node_writes(defn, name)
+    listens = node_listens(defn, name)
     errs = [f"writes-not-heard: {where}: writes {r} but does not listen to it" for r in writes
-            if node_listens(defn, name) and r not in node_listens(defn, name)]
+            if _has_event_trigger(node) and r not in listens]
     if len(writes) > 1 and any(isinstance(t, dict) and "schedule" in t for t in node.get("triggers") or []):
         errs.append(f"schedule-writes-several: {where}: a scheduled node writes at most one repository")
     return errs

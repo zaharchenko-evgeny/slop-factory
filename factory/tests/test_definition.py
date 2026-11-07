@@ -195,6 +195,11 @@ class DefinitionTest(unittest.TestCase):
         self._two_ticket_repositories()
         self.assertEqual(self.errors(), [])
 
+    def test_event_node_with_empty_listens_writing_a_repository_is_refused(self):
+        node = self._full_nodes()[0]
+        self.edit("workflow.yaml", lambda w: w["nodes"][node].update(listens=[], writes=[OTHER]))
+        self.assertError("writes-not-heard: nodes.%s: writes %s" % (node, OTHER))
+
     def test_scheduled_node_writing_two_repositories_is_refused(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["implement-small"].update(writes="all", triggers=[{"schedule": "0 * * * *"}]))
         self.assertError("schedule-writes-several: nodes.implement-small")
