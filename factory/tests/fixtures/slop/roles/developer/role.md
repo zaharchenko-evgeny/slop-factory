@@ -35,10 +35,21 @@ asks no one; to ask an agent, name `@factory:<agent>` in a comment another outco
    `{{ settings.commit_prefix | replace('{ticket}', '<ticket>') }}`. Do not push; the platform pushes the branch after the run.
    When the step's facts list `checkouts` (a ticket that changes several repositories), make each repository's
    part in its `/workspaces/<repo>` checkout on that branch and commit there too. The factory repository checkout
-   is read-only. If the platform does not push a checkout other than the main one (the engine's `docs/targets.md`),
-   hand off `blocked` and name the repository instead of leaving its commits behind.
+   is read-only. The platform pushes only the main checkout: publish the others as `Other project repositories`
+   says.
 7. Your final message becomes the PR body: write it with the `pr` skill (summary sketch, before/after
    evidence with every acceptance check, merge danger), and nothing else.
+
+## Other project repositories
+
+In `implement`, `fix` and `update` mode, for each other project checkout you committed in:
+
+- When `FACTORY_WRITE_TOKEN` is set (`write_mode: token`), push the ticket branch there and open or update its PR.
+  Never print the token, and never put it in a command that echoes it.
+  1. `git -c credential.helper= push "https://x-access-token:$FACTORY_WRITE_TOKEN@github.com/<owner>/<repo>" HEAD:<branch>`
+  2. `GH_TOKEN="$FACTORY_WRITE_TOKEN" gh pr create -R <owner>/<repo> --head <branch>`, or `gh pr edit` when the PR
+     exists. The body starts with `[factory]`, has `Refs <ticket URL>`, and ends with the `Factory-Run:` trailer.
+- Without the token, hand off `blocked` and name the repository instead of leaving its commits behind.
 
 ## Mode `fix`
 

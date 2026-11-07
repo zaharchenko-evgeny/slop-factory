@@ -26,6 +26,7 @@ defaults:
     commit_prefix: "#{ticket} "
     bot_login: "jetbrains-air[bot]"
     confirm_external_writes: true
+    write_mode: token             # developers push slop-eval-factory branches with FACTORY_WRITE_TOKEN (#653)
     confirm_external_writes_scope: []
     knowledge:                    # the knowledge base: an additional repository of the environments that read it
       repo: zaharchenko-evgeny/slop-eval-factory
@@ -144,10 +145,13 @@ agents:
 # Environments: where agents run. One repository is `main`; the others are additional.
 environments:
   engine:                         # tickets and PRs of the engine
+    env:
+      FACTORY_WRITE_TOKEN: { required: true, secret: true,
+                             description: "GitHub token, Contents, Pull requests and Issues write on slop-eval-factory; pushes and PRs there" }
     repositories:
       - repo: zaharchenko-evgeny/slop-factory
         main: true                # branches, PRs and the node's output apply here
-      - repo: zaharchenko-evgeny/slop-eval-factory   # the knowledge base, read-only: no Air automation changes the factory
+      - repo: zaharchenko-evgeny/slop-eval-factory   # the team repository; developers push its branches with FACTORY_WRITE_TOKEN
     ci: { workflow: quality-gates }   # `ci: failed` = Air workflow_run.failed for this workflow
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               "*.blob.core.windows.net", pypi.org, files.pythonhosted.org, registry.npmjs.org]
