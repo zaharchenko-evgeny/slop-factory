@@ -630,7 +630,7 @@ class ProjectPlanTest(unittest.TestCase):
                          sorted(str(Path(p).relative_to(tmp)) for p in written))
 
     def test_definition_with_two_code_repositories_plans_per_repository_automations(self):
-        """#895: `implement` runs once per code repository, in the environment where it is `main`; the router node (`intake`) stays one."""
+        """#895: the tiered `implement-*` and `review-*` nodes and `fix` run once per code repository, in the environment where it is `main`; the router node (`intake`) stays one."""
         before = cfg.team_root()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "team"
@@ -639,7 +639,6 @@ class ProjectPlanTest(unittest.TestCase):
             engine = f["environments"]["engine"]
             engine["repositories"] = [{"repo": "o/api", "main": True}, {"repo": "o/web"}]
             f["environments"]["web"] = {**engine, "repositories": [{"repo": "o/web", "main": True}, {"repo": "o/api"}]}
-            w["nodes"]["implement"] = w["nodes"]["implement-medium"]
             for n, d in (("factory.yaml", f), ("workflow.yaml", w)):
                 (root / n).write_text(yaml.safe_dump(d, sort_keys=False))
             try:
@@ -650,11 +649,13 @@ class ProjectPlanTest(unittest.TestCase):
         by_name = {a["name"]: a for a in plan["automations"]}
         envs = {e["name"]: e["repository"] for e in plan["environments"]}
         for repo, env in (("api", "engine"), ("web", "web")):
-            a = by_name[f"[Slop factory] implement {repo}"]
+            for node in ("implement-small", "implement-medium", "implement-large", "review-low", "review-high", "fix"):
+                self.assertIn(f"[Slop factory] {node} {repo}", by_name)
+            a = by_name[f"[Slop factory] implement-medium {repo}"]
             self.assertEqual(a["repository"]["fullName"], f"o/{repo}")
             self.assertEqual(a["environmentConfigId"], f"[Slop factory] {env}")
             self.assertEqual(envs[a["environmentConfigId"]], f"https://github.com/o/{repo}")
-        self.assertNotIn("[Slop factory] implement", by_name)
+        self.assertNotIn("[Slop factory] implement-medium", by_name)
         self.assertEqual([n for n in by_name if n.startswith("[Slop factory] intake")], ["[Slop factory] intake"])
 
     def test_mention_allowlist(self):

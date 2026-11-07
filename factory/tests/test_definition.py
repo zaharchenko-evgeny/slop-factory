@@ -54,7 +54,6 @@ class DefinitionTest(unittest.TestCase):
             f["environments"]["engine"]["repositories"] += [{"repo": "o/web"}]
             f["environments"]["web"] = {**f["environments"]["engine"], "repositories": [{"repo": "o/web", "main": True}]}
         self.edit("factory.yaml", two_repos)
-        self.edit("workflow.yaml", lambda w: w["nodes"].update(implement=w["nodes"]["implement-medium"]))
         self.assertEqual(self.errors(), [])
         self.edit("factory.yaml", lambda f: f["environments"].pop("web"))
         self.assertError("per-repo-env: o/web")

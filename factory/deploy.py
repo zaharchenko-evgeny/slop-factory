@@ -450,7 +450,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
-        scopes = code_scopes if per_repo and name in PER_REPO else [None]
+        scopes = code_scopes if per_repo and definition.per_repo_node(name) else [None]
         for scope, (aname, tier_arg, tier, focus) in [(sc, v) for sc in scopes
                                                       for v in variants(name, n, roles, agents.get(name))]:
             env = next((e for r, e in code_envs.items() if scope and definition.full_name(r) == definition.full_name(scope["url"])),
