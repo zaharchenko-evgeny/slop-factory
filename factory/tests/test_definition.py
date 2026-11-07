@@ -48,6 +48,18 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    def test_assignment_effects_validate_and_compile_unchanged(self):
+        effects = [{"assign": "owner", "on": "pr"}, {"unassign": "all"}]
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(effects=effects))
+        self.assertEqual(self.errors(), [])
+        _, workflow = definition.to_project(definition.load(self.root))
+        self.assertEqual(workflow["nodes"]["intake"]["outcomes"]["ready"]["effects"], effects)
+
+    def test_assignment_effect_rejects_non_string_values(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(
+            effects=[{"assign": 3}]))
+        self.assertError("bad-effect: nodes.intake.ready: assign")
+
     def test_missing_owner_fails(self):
         self.edit("factory.yaml", lambda f: f.pop("owner"))
         self.assertIn("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)", self.errors())

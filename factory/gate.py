@@ -597,6 +597,8 @@ def resolve(effect, payload, ticket):
         out = {"kind": kind, "ticket": ticket, "value": re.sub(r"<([^>]+)>", lambda m: str(field(m[1])), arg)}
         return {**out, "on": on} if on else out
     if kind in ("assign", "unassign"):
+        if kind == "assign" and arg == "owner":
+            arg = config_mod.owner()
         out = {"kind": kind, "ticket": ticket, "value": arg}
         return {**out, "on": on} if on else out
     if kind in ("comment", "create-issues"):

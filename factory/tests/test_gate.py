@@ -45,6 +45,12 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_assignment_effect_resolves_owner_and_preserves_logins(self):
+        self.assertEqual(gate.resolve({"assign": "owner", "on": "pr"}, {}, "7"),
+                         {"kind": "assign", "ticket": "7", "value": cfg.owner(CONFIG), "on": "pr"})
+        self.assertEqual(gate.resolve({"assign": ["a", "b"]}, {}, "7"),
+                         {"kind": "assign", "ticket": "7", "value": ["a", "b"]})
+
     def test_label_guard_falls_back(self):
         """ADR-0021: an outcome's `if` guard that fails applies its `else`; without one the outcome is refused."""
         graph = copy.deepcopy(NODES)
