@@ -1736,6 +1736,26 @@ class TwoRepositoryFactsTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"FACTORY_ENV": ""}):
             self.assertIsNone(self.tracker(TwoRepositoryGh())._with_writable(c).writable)
 
+    def test_every_multi_repository_effect_writes_only_open_writable_prs(self):
+        """Each effect that walks the ticket's PRs, against the other PR open, merged or read-only (#994)."""
+        effects = {"review": eff("review", "approve", focus="full", summary="ok"),
+                   "update-branch": eff("update-branch", "match-head", heads={"primary": "h1", "other": "h9"}),
+                   "merge": eff("merge", "match-head", heads={"primary": "h1", "other": "h9"})}
+        for state in ("open", "merged", "read-only"):
+            for kind, e in effects.items():
+                with self.subTest(other=state, effect=kind):
+                    gh = TwoRepositoryGh()
+                    gh.other_merged = state == "merged"
+                    gh.other_behind = 1
+                    tr = self.readonly_tracker(gh) if state == "read-only" else self.tracker(gh)
+                    if kind == "merge" and state == "read-only":
+                        with self.assertRaises(RuntimeError):
+                            tr.apply(e)
+                    else:
+                        tr.apply(e)
+                    wrote_other = any(TwoRepositoryGh.OTHER in " ".join(w) for w in gh.writes)
+                    self.assertEqual(wrote_other, state == "open")
+
     def test_a_pr_event_from_the_other_repository_finds_its_ticket(self):
         host = M_GH.GitHubCodeHost(REPO, TwoRepositoryGh())
         self.assertEqual(gate.pr_ticket(host, 11, {"full_name": TwoRepositoryGh.OTHER}), 7)
