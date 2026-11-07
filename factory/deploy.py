@@ -880,7 +880,7 @@ def environment_detail(x: dict) -> dict:
     if isinstance(x.get("variables"), list):
         x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
     if "personalSecrets" in x:
-        x["secrets"] = [s["name"] for s in x.pop("personalSecrets")]
+        x["secrets"] = [s.get("key") or s["name"] for s in x.pop("personalSecrets")]  # Air lists them by `key`
     return x
 
 

@@ -201,7 +201,7 @@ class ApplyTest(unittest.TestCase):
     def test_dry_run_lists_declared_secret_missing_in_air_and_succeeds(self):
         self.plan["environments"][0]["secrets"] = ["HAVE", "YOUTRACK_TOKEN"]
         self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
-                        "personalSecrets": [{"name": "HAVE"}]}])
+                        "personalSecrets": [{"key": "HAVE", "description": "", "secretVersion": 1, "value": "***"}]}])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(self.run_deploy("--dry-run"), 0)
