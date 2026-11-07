@@ -307,8 +307,27 @@ def wake_ready(tracker, minutes, now=None, dry_run=False):
     return out
 
 
-def main(argv):
+def main(argv, run=None):
+    """`factory reconcile`; a crash opens or updates `Doctor: reconcile fails`, and a clean run closes it (#845)."""
     argv = config_mod.pop_team(argv)
+    if "--dry-run" in argv or any(a.startswith("memory:") for a in argv):
+        return reconcile_main(argv)
+    import doctor
+    import github_tracker
+    run = run or github_tracker.gh
+    settings = config_mod.load()
+    repo = settings["tracker"].get("repository") or settings["code_host"]["repository"]
+    try:
+        code = reconcile_main(argv)
+    except Exception as e:
+        doctor.file_tickets(repo, [{"probe": "reconcile", "result": "fail", "detail": f"{type(e).__name__}: {e}"[:500]}],
+                            run, run_id=RUN)
+        raise
+    doctor.close_ticket(repo, "reconcile", run, run_id=RUN)
+    return code
+
+
+def reconcile_main(argv):
     dry_run = "--dry-run" in argv
     spec = next((a[7:] for a in argv if a.startswith("memory:")), None)
     if spec:
