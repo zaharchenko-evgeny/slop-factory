@@ -526,6 +526,7 @@ class ApplyTest(unittest.TestCase):
               mock.patch.object(deploy, "diff", side_effect=[changed, []]),
               mock.patch.object(deploy, "apply_diff") as apply,
               mock.patch.object(deploy, "write_files", return_value=0),
+              mock.patch.object(deploy, "sync_comment_wake_files", return_value=0),
               mock.patch("github_tracker.GitHubTracker.from_config") as issues,
               mock.patch("gate_github.GitHubGateTracker.from_config") as gate_issues):
             self.assertEqual(deploy.main(["--apply"]), 0)
