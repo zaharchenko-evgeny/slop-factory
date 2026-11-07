@@ -616,10 +616,10 @@ def notify_config():
 
 
 def latest_run(comments):
-    """The `Factory-Run:` value of the latest `[factory]` stage comment (not a notify comment), else None."""
+    """The `Factory-Run:` value of the latest `[factory]` stage comment (not a notify or lesson comment), else None."""
     for c in reversed(comments or []):
         body = c.get("body") or ""
-        if body.startswith("[factory]") and "<!-- factory:notify " not in body and (m := re.search(r"(?m)^Factory-Run:\s*(\S+)\s*$", body)):
+        if body.startswith("[factory]") and "<!-- factory:notify " not in body and LESSON_MARKER not in body and (m := re.search(r"(?m)^Factory-Run:\s*(\S+)\s*$", body)):
             return m[1]
     return None
 
