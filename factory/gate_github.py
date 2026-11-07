@@ -21,7 +21,7 @@ import yaml
 import config
 import github_graphql
 from gate_port import PR_DEFAULTS, DescriptorPort, child_attrs, child_links, child_order, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
-from github_tracker import CountedRun, ProjectWriteRun, gh, project_repositories
+from github_tracker import CountedRun, ProjectWriteRun, gh, project_repositories, random_color
 import vocab
 from youtrack_tracker import YouTrackTicketStore
 
@@ -523,9 +523,11 @@ class GitHubGateTracker(DescriptorPort):
             return
         # Ensure labels exist before the new plan can wake CI or an automation.
         known = {x["name"] for x in self._list("labels?per_page=100")}
+        specs = after.get("label_specs") or {}
         for label in after["labels"]:
             if label not in known:
-                self.run(["api", f"repos/{self.repo}/labels", "-f", f"name={label}", "-f", "color=ededed"])
+                color = (specs.get(label) or {}).get("color") or random_color()
+                self.run(["api", f"repos/{self.repo}/labels", "-f", f"name={label}", "-f", f"color={color}"])
         title = "Deploy needed"
         existing = next((i for i in self._list("issues?state=open&per_page=100")
                          if "pull_request" not in i and i.get("title") == title), None)

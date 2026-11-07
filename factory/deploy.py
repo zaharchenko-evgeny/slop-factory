@@ -506,7 +506,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     if tags or fields:  # keeps a GitHub plan (and its fixture) unchanged
         tag_plan = {**tag_plan, **field_plan, "tag_tracker": config["tracker"]}
     return {"prefix": prefix, "automations": automations, "environments": envs, "labels": labels(nodes, config),
-            "label_repositories": label_repos, "label_specs": label_specs(config),
+            "label_repositories": label_repos, "label_specs": label_specs(nodes, config),
             "owned_label_prefixes": owned_label_prefixes(config),
             **tag_plan, "files": actions_files(nodes, config)}
 
@@ -564,8 +564,7 @@ jobs:
 """
 
 
-LABEL_COLOR = "ededed"
-COMPLEXITY_SPEC = {"color": "fbca04", "description": "Size grade set by intake; chooses the developer tier"}
+COMPLEXITY_DESCRIPTION = "Size grade set by intake; chooses the developer tier"
 
 
 def owned_label_prefixes(config: dict) -> list[str]:
@@ -576,9 +575,34 @@ def owned_label_prefixes(config: dict) -> list[str]:
     return sorted({ready.partition(":")[0] + ":", "complexity:", *(r.partition(":")[0] + ":" for r in risks)})
 
 
-def label_specs(config: dict) -> dict:
-    """{label: {color, description}} the repositories should carry; names come from `labels()`."""
-    return {"complexity:" + c: COMPLEXITY_SPEC for c in ("small", "medium", "large")}
+def label_specs(nodes: dict, config: dict) -> dict:
+    """{label: {color[, description]}} the repositories should carry. A label's color comes from its role (stage name
+    or stage kind, risk, CI fact, group) in `labels.colors` of the config, then `labels.overrides`; a label with no
+    mapped color has no entry and gets a random one when created. Every label of `labels()` that has no other role is a
+    command."""
+    t, c = config.get("tracker") or {}, config.get("labels") or {}
+    colors, kinds = c.get("colors") or {}, t.get("stage_kinds") or {}
+    group, out = colors.get("groups") or {}, {}
+
+    def put(label, color):
+        if label and color:
+            out.setdefault(label, {"color": color})
+    for key, label in (t.get("stages") or {}).items():
+        put(label, (colors.get("stages") or {}).get(key) or (colors.get("stage_kinds") or {}).get(kinds.get(key)))
+    for key, label in (t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).items():
+        put(label, (colors.get("risk") or {}).get(key))
+    for key, label in (t.get("pr_fact_labels") or {}).items():
+        put(label, (colors.get("pr_facts") or {}).get(key))
+    put(t.get("needs_human_label"), group.get("needs-human"))
+    put(t.get("map_label"), group.get("map"))
+    for size in ("small", "medium", "large"):
+        out[f"complexity:{size}"] = {**({"color": group["complexity"]} if group.get("complexity") else {}),
+                                     "description": COMPLEXITY_DESCRIPTION}
+    for label in [*labels(nodes, config), t.get("review_trigger"), t.get("hold_label")]:
+        put(label, group.get("command"))
+    for label, color in (c.get("overrides") or {}).items():
+        out[label] = {**out.get(label, {}), "color": str(color).lower()}
+    return out
 
 
 def label_tracker(repo: str, run=None):
@@ -588,14 +612,17 @@ def label_tracker(repo: str, run=None):
 def reconcile_labels(plan: dict, run=None) -> list[tuple]:
     """(action, repository, label, changed fields) per required label to create or update, and per factory-owned
     label no longer required to remove, in each repository of `plan["label_repositories"]` independently."""
-    out, owned = [], tuple(plan.get("owned_label_prefixes") or [])
+    out, owned, random_colors = [], tuple(plan.get("owned_label_prefixes") or []), {}
     for repo in plan.get("label_repositories") or []:
         have = label_tracker(repo, run).list_labels()
         for name in plan["labels"]:
-            want = {"color": LABEL_COLOR, "description": "", **(plan.get("label_specs") or {}).get(name, {})}
+            spec = {"description": "", **(plan.get("label_specs") or {}).get(name, {})}
             if name not in have:
+                want = {"color": spec.get("color") or random_colors.setdefault(name, github_tracker.random_color()),
+                        "description": spec["description"]}
                 out.append(("create", repo, name, want))
-            elif changed := [k for k in want if have[name][k] != want[k]]:
+            elif changed := [k for k in ("color", "description") if k in spec and have[name][k] != spec[k]]:
+                want = {"color": have[name]["color"], "description": have[name]["description"], **spec}
                 out.append(("update", repo, name, want, changed))
         out += [("remove", repo, name, None) for name in sorted(have) if name.startswith(owned) and name not in plan["labels"]]
     return out

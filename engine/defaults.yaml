@@ -73,3 +73,28 @@ limits:
     - engine/template-v1/skills/**
     - engine/template-v1/workflows/delivery.md
     - engine/template-v1/workflows/delivery.yaml
+# Label colors (GitHub hex) the deploy and the gate give a label by its role, not by its name, so a team's renamed or
+# added labels still get one. `stages` is keyed by the stage name in `tracker.stages`, then `stage_kinds` by
+# `tracker.stage_kinds`. A team overrides single labels under `overrides` (`{factory:blocked: "000000"}`); a label
+# with no color here is created with a random one and never recolored.
+labels:
+  colors:
+    stages:
+      draft: cfd3d7
+      triage: d4c5f9
+      ready: c2e0c6
+      in-dev: 1d76db
+      in-review: 5319e7
+      changes-requested: e99695
+      approved: 0e8a16
+      done: ededed
+      not-actionable: ededed
+      split: bfdadc
+      needs-answers: fbca04
+      investigating: fbca04
+      blocked: b60205
+    stage_kinds: { waiting: fbca04, active: 1d76db, final: ededed }
+    risk: { low: e6f4ea, high: f9d0c4 }
+    pr_facts: { ci-green: 2da44e, ci-red: d73a4a }
+    groups: { command: c5def5, complexity: fbca04, needs-human: d93f0b, map: "000000" }
+  overrides: {}

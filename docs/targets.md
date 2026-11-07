@@ -47,6 +47,25 @@ Open (#459): whether Air pushes a branch or opens a PR from an additional reposi
 project repository needs its developer to push that branch itself, or it is split into one ticket per
 repository.
 
+## Label colors
+
+`factory deploy` creates and recolors factory labels by role, with the defaults of `labels.colors` in
+`engine/defaults.yaml`. The gate uses the same colors for a label it creates at a merge. A role, not a name, picks the
+color, so a renamed or added label keeps a sensible one.
+
+| Role | Color | Labels |
+| --- | --- | --- |
+| Stage (by stage name; a stage with no color uses its stage kind) | draft `cfd3d7`, triage `d4c5f9`, ready `c2e0c6`, in-dev `1d76db`, in-review `5319e7`, changes-requested `e99695`, approved `0e8a16`, split `bfdadc`, needs-answers and investigating `fbca04`, blocked `b60205`, done and not-actionable `ededed` | `tracker.stages` |
+| Stage kind (fallback) | waiting `fbca04`, active `1d76db`, final `ededed` | `tracker.stage_kinds` |
+| Command | `c5def5` | every other label of the deploy plan, `review_trigger`, `hold_label` |
+| CI fact | `2da44e` green, `d73a4a` red | `tracker.pr_fact_labels` |
+| Risk | `e6f4ea` low, `f9d0c4` high | `tracker.risk_labels` |
+| Group | `complexity:*` `fbca04`, needs-human `d93f0b`, map `000000` | |
+| Other | random 6-digit hex, chosen at create | any label with no mapped color |
+
+A team overrides one label in `factory.yaml` with `labels: {overrides: {"factory:blocked": "000000"}}`. Deploy never
+recolors an existing label that has no mapped color, so a random color stays stable.
+
 ## MCP connectors
 
 An Air automation takes `mcpConnectors`, the MCP servers its agent gets (for example `youtrack`, `slack`).
