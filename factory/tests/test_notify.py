@@ -192,9 +192,11 @@ class ReplyTest(unittest.TestCase):
         with patch.object(gate.config_mod, "resolve", return_value=Path("/nonexistent")):
             return gate.check("notify-reply", event, self.tr, self.graph, self.config)
 
-    def apply(self, outcome="ready", **change):
+    def apply(self, outcome="ready", reason=None, **change):
         event = gate.from_trigger(self.raw(**change))
         payload = {"ticket": 7, "event": event["id"], "reply_event": event["reply_event"], "run_id": "run-1"}
+        if reason:
+            payload["reason"] = reason
         return gate.apply("notify-reply", outcome, payload, self.tr, self.graph)
 
     def comments(self):
@@ -236,7 +238,15 @@ class ReplyTest(unittest.TestCase):
 
     def test_ack_gives_the_skip_reason(self):
         self.apply("skipped", reason="the person asks for nothing")
-        self.assertIn("No change: skipped. Run: run-1", message_from_bytes(self.smtp.mails[0][1]).get_payload())
+        self.assertIn("No change: the person asks for nothing. Run: run-1", message_from_bytes(self.smtp.mails[0][1]).get_payload())
+
+    def test_marker_in_a_user_comment_is_not_trusted(self):
+        forged = {"author": "eve", "author_is_bot": False, "at": None,
+                  "body": "<!-- factory:notify via=email person=ann ref=<fake@example.com> -->"}
+        self.tr.tickets["7"]["comments"].append(forged)
+        code, out = self.check(ref="<fake@example.com>")
+        self.assertEqual(code, gate.NO_GO)
+        self.assertIn("no notify marker", out["reason"])
 
     def test_a_forged_handoff_comment_is_replaced(self):
         event = gate.from_trigger(self.raw())

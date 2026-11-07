@@ -509,7 +509,9 @@ def verify_reply(reply, tracker, ticket):
     pr = facts.get("pr_comments")
     if pr is None and hasattr(tracker, "pr_comments"):
         pr = tracker.pr_comments(ticket)
-    found = {m.groups() for c in [*(facts.get("comments") or []), *(pr or [])] for m in NOTIFY_MARKER.finditer(c.get("body") or "")}
+    found = {m.groups() for c in [*(facts.get("comments") or []), *(pr or [])]
+             if c.get("author_is_bot") and (c.get("body") or "").startswith("[factory]")  # only the factory's own comments count
+             for m in NOTIFY_MARKER.finditer(c["body"])}
     if (reply["via"], reply["ref"]) not in found:
         return None, f"reply: no notify marker for ref `{reply['ref']}` via {reply['via']} on #{ticket}"
     return login, None
