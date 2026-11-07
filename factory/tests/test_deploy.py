@@ -957,6 +957,29 @@ class PlanTest(unittest.TestCase):
         self.assertNotIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] read"])
         self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
 
+    def test_token_write_mode_prompts_push_extra_project_repositories(self):
+        token = self.three_repositories(write_mode="token", team_repository="https://github.com/o/team")
+        per_repo = self.three_repositories(write_mode="per-repo", team_repository="https://github.com/o/team")
+        prompts = {a["name"]: a["prompt"] for a in token["automations"]}
+        per_repo_prompts = {a["name"]: a["prompt"] for a in per_repo["automations"]}
+        for node in ("implement-mid", "fix-mid", "update-mid"):
+            prompt = prompts[f"[Slop factory] {node}"]
+            self.assertIn("FACTORY_WRITE_TOKEN", prompt)
+            self.assertIn("git -c credential.helper= push", prompt)
+            self.assertIn("gh pr create` or `gh pr edit`", prompt)
+            self.assertIn("`[factory]`", prompt)
+            self.assertIn("Refs #<n>", prompt)
+            self.assertTrue(any(key.startswith(f"[Slop factory] {node} ") for key in per_repo_prompts))
+            self.assertFalse(any("FACTORY_WRITE_TOKEN" in value for key, value in per_repo_prompts.items()
+                                 if key.startswith(f"[Slop factory] {node} ")))
+        base = cfg.load()
+        team_project = {"name": "team", "url": "https://github.com/o/team", "role": "project",
+                        "default_branch": "main"}
+        config = {**base, "team_repository": team_project["url"], "write_mode": "token",
+                  "repositories": [*base["repositories"], team_project]}
+        prompt = deploy.checkout_instructions(deploy.repository(team_project), config, True)
+        self.assertIn("FACTORY_WRITE_TOKEN", prompt)
+
     def test_deploy_writes_no_file_outside_the_factory_repository(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(deploy.config_mod, "team_root", return_value=Path(d)):
             with contextlib.redirect_stdout(io.StringIO()):
