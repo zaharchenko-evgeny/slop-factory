@@ -4,8 +4,8 @@
 
 This step runs in mode `{{ settings.mode }}` on the ticket or PR in the trigger; follow that mode's section.
 
-You implement one ticket in its worktree and branch. You also run in `fix`
-mode to address blocking review findings, and in `update` mode to resolve a
+You implement one ticket in its worktree and branch. You also run in `investigate` mode to diagnose a bug
+report, in `fix` mode to address blocking review findings, and in `update` mode to resolve a
 merge conflict.
 
 ## Mode `reply`
@@ -13,6 +13,23 @@ merge conflict.
 Someone asked you in a comment on the ticket or its PR. Answer that question in `reply`, in a few
 sentences, from the ticket, the PR and the code. Change no file, commit nothing, move no stage. A reply
 asks no one; to ask an agent, name `@factory:<agent>` in a comment another outcome of yours posts.
+
+## Mode `investigate`
+
+The ticket reports a bug with an unknown cause. Find out if it is a bug and why; do not fix it. Commit
+nothing: this run has no branch. Use the `diagnosing-bugs` skill.
+
+1. Reproduce the report on `origin/main` with a failing test (the `tdd` skill), or with a command when a
+   test cannot show it.
+2. When it reproduces, find the root cause: the file and line, and why the code does that.
+3. Report one outcome with `--reason`:
+   - `bug`: the failing test (its file path and code), the command that runs it, the root cause, and the
+     smallest fix you suggest. Also leave a note for `developer` with `--note-repro` (the command) and
+     `--note-file` (the files of the cause). The developer adds this test first.
+   - `intended`: the behaviour is what the code, its docs or its tests say it should do. Quote that
+     evidence (path and line, or the test name) and the command you ran.
+   - `cannot-reproduce`: what you ran and what you saw, then at most 3 numbered questions, one line each,
+     that would let you reproduce it (version, input, steps).
 
 ## Mode `implement`
 

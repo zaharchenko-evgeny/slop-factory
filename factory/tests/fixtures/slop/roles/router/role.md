@@ -19,6 +19,9 @@ the workflow publish. Start no sub-agents.
 Input: a request (free text or a tracker issue).
 
 1. Classify it: `feature`, `bug`, `investigation`, `review` or `docs`.
+   A `bug` whose cause and fix are not yet known (no comment from `investigate` gives them) goes to
+   `bug`: a developer reproduces and diagnoses it first. A bug ticket that already names the cause and
+   the fix, or an investigation comment that does, goes through the steps below like a feature.
 2. For a ticket in stage `triage`, check the definition of ready: acceptance
    checks, affected repositories, and a size estimate. If anything is missing,
    recommend stage `blocked` with the question to ask the human.
@@ -90,3 +93,4 @@ estimate:
 - `grill`: the reason (what to answer), and any proposed acceptance checks.
 - `split`: the slices, in delivery order.
 - `not-actionable`: the reason.
+- `bug`: no data; the next step reproduces the bug.
