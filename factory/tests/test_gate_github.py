@@ -1704,6 +1704,13 @@ class TwoRepositoryFactsTest(unittest.TestCase):
         self.assertEqual(posted, [(f"repos/{REPO}/pulls/5/reviews", "commit_id=h1"),
                                   ("repos/o/other/pulls/11/reviews", "commit_id=h9")])
 
+    def test_review_skips_a_merged_pr_in_the_other_repository(self):
+        gh = TwoRepositoryGh()
+        gh.other_merged = True
+        self.tracker(gh).apply(eff("review", "approve", focus="full", summary="ok"))
+        posted = [w[3] for w in gh.writes if w[:3] == ["api", "-X", "POST"] and w[3].endswith("/reviews")]
+        self.assertEqual(posted, [f"repos/{REPO}/pulls/5/reviews"])
+
     def test_a_pr_event_from_the_other_repository_finds_its_ticket(self):
         host = M_GH.GitHubCodeHost(REPO, TwoRepositoryGh())
         self.assertEqual(gate.pr_ticket(host, 11, {"full_name": TwoRepositoryGh.OTHER}), 7)
