@@ -88,8 +88,9 @@ def holds(when, facts, event):
             return facts.get("pr_state", "none") == want
         if key == "always":
             return bool(want)
-        if key == "label":  # ADR-0021: every label listed is on the ticket
-            return all(x in facts.get("attrs", []) for x in (want if isinstance(want, list) else [want]))
+        if key == "label":  # ADR-0021: every label listed is on the ticket or its PR (an `on: pr` label)
+            have = set(facts.get("attrs") or []) | set(facts.get("pr_labels") or [])
+            return all(x in have for x in (want if isinstance(want, list) else [want]))
         if key == "pr":
             value(want, ("open", "merged", "behind", "conflicting", "none"))
             return {"open": facts.get("pr_state") == "open", "merged": facts.get("pr_state") == "merged",

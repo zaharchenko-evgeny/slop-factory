@@ -79,6 +79,10 @@ class GateTest(unittest.TestCase):
         with self.assertRaises(gate.Bad):
             gate.guard_holds({"colour": "red"}, f)
         self.assertTrue(gate.guard_holds({"children": "closed"}, {**f, "children_open": 0}))
+        # A label that an effect puts `on: pr` counts too: factory:needs-human waits on the PR.
+        self.assertTrue(gate.guard_holds({"label": "factory:needs-human"}, {**f, "pr_labels": ["factory:needs-human"]}))
+        self.assertTrue(gate.guard_holds({"label": ["risk:low", "factory:needs-human"]},
+                                         {**f, "pr_labels": ["factory:needs-human"]}))
 
     def test_merge_effect_keeps_its_invariants(self):
         """ADR-0021: for a definition team, `merge` is refused without an approval at head, with red CI, or behind."""
