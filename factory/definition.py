@@ -562,6 +562,7 @@ def to_project(defn):
         "workflow": WORKFLOW,
         "states": states,
         "commands": commands,
+        **({"write_mode": dset["write_mode"]} if dset.get("write_mode") else {}),
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
         "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},
