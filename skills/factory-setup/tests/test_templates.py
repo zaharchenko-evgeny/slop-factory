@@ -95,14 +95,24 @@ class Templates(unittest.TestCase):
             self.assertEqual(definition.warnings(defn), [])
             self.assertEqual(defn["factory"]["tracker"]["repository"], "zaharchenko-evgeny/slop-factory")
 
-    def test_statechart_skill_is_pinned_and_vendored(self):
+    def test_statechart_skill_is_pinned_and_fetched_not_vendored(self):
         spec = importlib.util.spec_from_file_location("vendor_skills", ROOT / "scripts/vendor-skills.py")
         vs = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(vs)
         pin = vs.load()["statechart"]
         self.assertEqual((pin["source"], pin["commit"], pin["path"]),
                          ("cursor/plugins", "519d36aa9895", "pstack/skills/statechart"))
-        self.assertEqual(vs.check(), [])  # the vendored folder matches the pin's sha256
+        self.assertEqual(vs.check(), [])
+        self.assertFalse((ROOT / "engine/template-v1/skills/statechart").exists())
+        with tempfile.TemporaryDirectory() as tmp:  # the fetched folder matches the pin's sha256
+            self.assertTrue((statechart.skill_dir(tmp) / "SKILL.md").is_file())
+
+    def test_statechart_step_stops_when_the_pin_cannot_be_fetched(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "url./nonexistent/.insteadOf", "GIT_CONFIG_VALUE_0": "https://github.com/"}):
+            with self.assertRaisesRegex(RuntimeError, "cannot fetch skill statechart at its pin"):
+                statechart.skill_dir(tmp)
 
     def test_rendered_template_breaks_no_statechart_rule(self):
         workflow = yaml.safe_load(render.render_project(ANSWERS)["workflow.yaml"])

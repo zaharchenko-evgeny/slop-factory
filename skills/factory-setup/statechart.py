@@ -2,7 +2,8 @@
 """Check a workflow.yaml with the pinned `statechart` skill (skills.lock; TLC runs the spec).
 
 `model(workflow)` turns the stages and node outcomes into a TLA+ spec, `check(workflow)` runs the skill on
-it and returns `(broken rules, Mermaid chart)`. Python only builds the spec; TLC and the chart come from the skill.
+it and returns `(broken rules, Mermaid chart)`. Python only builds the spec; TLC and the chart come from the skill, which is fetched at its pin when the
+step runs (not vendored). When it cannot be fetched at the pin, `check` raises RuntimeError and the step stops.
 Needs Node 22.18+ and Java 11+; TLC's jar (`TLA2TOOLS` overrides) is downloaded once and checked by sha256.
 
 Model: one variable, the ticket's `stage`. A node outcome that sets a stage is a step from the stages its `when` and
@@ -11,6 +12,7 @@ an outcome sets is declared, so a ticket has exactly one stage label), MovingNod
 stage has a step out, reachable or not), NoDeadlock (TLC's own check), DoneReachable (`done` is reachable from `triage`).
 """
 import hashlib
+import importlib.util
 import os
 import re
 import subprocess
@@ -22,10 +24,18 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-SKILL = ROOT / "engine/template-v1/skills/statechart"
 TLC_URL = "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar"
 TLC_SHA = "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 RULES = ("OneStageLabel", "MovingNode", "NoDeadlock", "DoneReachable")
+
+
+def skill_dir(dest):
+    """The statechart skill fetched at its pin (skills.lock, not vendored) into `dest`, checked by its sha256.
+    Raises RuntimeError when it cannot be fetched or the hash differs."""
+    spec = importlib.util.spec_from_file_location("vendor_skills", ROOT / "scripts/vendor-skills.py")
+    vs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vs)
+    return vs.fetch_pinned("statechart", dest)
 
 
 def tlc_jar():
@@ -131,12 +141,13 @@ def check(workflow):
 
 def _run(workflow):
     spec, cfg, view = model(workflow)
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as fetched:
         tmp = Path(tmp)
+        skill = skill_dir(fetched)
         (tmp / "Workflow.tla").write_text(spec)
         (tmp / "Workflow.cfg").write_text(cfg)
         (tmp / "view.mjs").write_text(view)
-        run = subprocess.run([str(SKILL / "scripts/statechart"), "Workflow.tla", "--config", "Workflow.cfg",
+        run = subprocess.run([str(skill / "scripts/statechart"), "Workflow.tla", "--config", "Workflow.cfg",
                               "--view", "view.mjs", "--out", "out"], cwd=tmp, capture_output=True, text=True,
                              env={**os.environ, "TLA2TOOLS": tlc_jar()})
         report = (tmp / "out/report.md")
