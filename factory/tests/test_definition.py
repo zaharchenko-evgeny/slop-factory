@@ -49,6 +49,16 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    def test_role_secret_reaches_the_environments_of_its_nodes_only(self):
+        self.edit("factory.yaml", lambda f: f["roles"]["router"].update(
+            env={"ISSUES_TOKEN": {"required": True, "secret": True, "description": "Issues read/write"}}))
+        self.assertEqual(self.errors(), [])
+        project, _ = definition.to_project(definition.load(self.root))
+        engine, team = project["environments"]["engine"], project["environments"]["team"]
+        self.assertIn("ISSUES_TOKEN", engine["secrets"])  # intake (router) runs in the default environment
+        self.assertEqual(engine["secret_help"]["ISSUES_TOKEN"], "Issues read/write")
+        self.assertNotIn("ISSUES_TOKEN", team["secrets"])
+
     def test_assignment_effects_validate_and_compile_unchanged(self):
         effects = [{"assign": "owner", "on": "pr"}, {"unassign": "all"}]
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(effects=effects))
