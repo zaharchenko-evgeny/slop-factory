@@ -121,6 +121,10 @@ checks:
     stage: pre-review
     mode: blocking
     run: python3 scripts/vendor-skills.py --check
+  - name: test-suite              # every test file, so main cannot go red outside CI (#912)
+    stage: pre-review
+    mode: blocking
+    run: uv run --quiet --with pytest pytest -q -p no:cacheprovider factory/tests skills/factory-setup/tests
   - name: state-machine
     stage: pre-review
     mode: blocking

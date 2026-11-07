@@ -126,6 +126,7 @@ class ReconcileTest(unittest.TestCase):
     def test_custom_stage_kind_from_config(self):
         kinds = {**CONFIG["tracker"]["stage_kinds"], "investigating": "active"}
         nodes = copy.deepcopy(NODES)
+        del nodes["nodes"]["investigate"]  # the custom node alone owns this stage
         nodes["nodes"]["custom"] = {"role": "script", "triggers": ["issues.labeled factory:custom"],
                                     "when": {"stage": "investigating"}, "outcomes": {"x": {}}, "timeout_minutes": 5}
         t, results, _ = run({"stage": "investigating", "since": OLD}, nodes, stage_kinds=kinds)
@@ -296,6 +297,43 @@ class RecoverDefinitionTest(unittest.TestCase):
         t, results = self.recover(self.pr(conflict=True, attrs=["factory:needs-human"]))
         self.assertEqual(results, [])
         self.assertEqual(logged(t, "label"), [])
+
+    def test_bad_ticket_is_reported_once_and_does_not_stop_recovery(self):
+        class BadTicketTracker(MemoryTracker):
+            def stale_facts(self, ticket):
+                if ticket == 1:
+                    raise ValueError("ticket names unknown repositories: fixture")
+                return super().stale_facts(ticket)
+
+        tracker = BadTicketTracker({1: {"stage": "ready"},
+                                    2: {**self.pr(ci="green", attrs=["risk:low"],
+                                                  pr_labels=["factory:review-low"],
+                                                  label_at={"factory:review-low": OLD})}})
+        config = self.config["tracker"]
+        results = reconcile.recover_definition(tracker, self.defn, list(config["stages"]),
+                                               config.get("stage_kinds", {}), self.config["limits"], now=NOW)
+        self.assertEqual([(r["ticket"], r.get("error"), r.get("reconcile")) for r in results],
+                         [(1, "ValueError: ticket names unknown repositories: fixture", None),
+                          (2, None, "refire")])
+        self.assertEqual(sum("ticket facts failed" in value for kind, value in tracker.tickets[1]["log"]
+                             if kind == "comment"), 1)
+        reconcile.recover_definition(tracker, self.defn, list(config["stages"]), config.get("stage_kinds", {}),
+                                     self.config["limits"], now=NOW)
+        self.assertEqual(sum("ticket facts failed" in value for kind, value in tracker.tickets[1]["log"]
+                             if kind == "comment"), 1)
+
+    def test_bad_ticket_dry_run_does_not_post_a_comment(self):
+        class BadTicketTracker(MemoryTracker):
+            def stale_facts(self, ticket):
+                raise ValueError("ticket names unknown repositories: fixture")
+
+        tracker = BadTicketTracker({1: {"stage": "ready"}})
+        config = self.config["tracker"]
+        results = reconcile.recover_definition(tracker, self.defn, list(config["stages"]),
+                                               config.get("stage_kinds", {}), self.config["limits"],
+                                               now=NOW, dry_run=True)
+        self.assertIn("error", results[0])
+        self.assertEqual(tracker.tickets[1].get("log", []), [])
 
 
 if __name__ == "__main__":

@@ -1045,9 +1045,9 @@ class PlanTest(unittest.TestCase):
                 self.assertNotIn(word, prompt)
         self.assertIn("(behaviour focus)", a["[Slop factory] review-behaviour"])
         self.assertIn("- ponytail: Lazy senior dev mode", a["[Slop factory] implement-mid"])
-        intake = a["[Slop factory] intake"]  # `bug` is disabled in the graph
+        intake = a["[Slop factory] intake"]
         self.assertIn("- `grill`:", intake)
-        self.assertNotIn("- `bug`:", intake)
+        self.assertIn("- `bug`:", intake)
 
     def test_webhook_node_plans_a_webhook_trigger_with_the_node_output(self):
         graph = nodes.load()
@@ -1095,7 +1095,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["prefix"], "[Slop factory] ")
         self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
         pilot = {f"[Slop factory] {x}" for x in (
-            "intake", "start", "join", "finish", "reopen", "merge", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
+            "intake", "start", "investigate", "join", "finish", "reopen", "merge", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
             "reconcile",
             *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
             *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}
