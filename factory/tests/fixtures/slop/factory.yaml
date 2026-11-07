@@ -119,7 +119,7 @@ roles:
 # + access + settings. `gate` and `human` have no role.
 agents:
   human:          { harness: human }                               # a person; never deployed
-  router:         { role: router, model: luna, access: read-only }
+  router:         { role: router, model: sonnet, access: read-only }        # judges answers; luna re-asked answered questions (#782)
   dispatcher:     { role: dispatcher, model: luna, access: read-only }
   dev-cheap:      { role: developer, model: luna, access: full }
   dev:            { role: developer, model: sonnet, reasoning: high, access: full, mentionable: true,
