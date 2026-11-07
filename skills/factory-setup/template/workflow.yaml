@@ -43,11 +43,11 @@ nodes:
     output: read-only
     settings: { max_changed_lines: 400, max_repositories: 3 }
     outcomes:
-      small-low:      { effects: [{ label: "complexity:small" },  { unlabel: "risk:high" }, { label: "risk:low" },  { stage: ready }] }
-      small-high:     { effects: [{ label: "complexity:small" },  { unlabel: "risk:low" }, { label: "risk:high" }, { stage: ready }] }
-      medium-low:     { effects: [{ label: "complexity:medium" }, { unlabel: "risk:high" }, { label: "risk:low" },  { stage: ready }] }
-      medium-high:    { effects: [{ label: "complexity:medium" }, { unlabel: "risk:low" }, { label: "risk:high" }, { stage: ready }] }
-      large-high:     { effects: [{ label: "complexity:large" },  { unlabel: "risk:low" }, { label: "risk:high" }, { stage: ready }] }
+      small-low:      { effects: [{ label: "complexity:small" },  { label: "risk:low" },  { stage: ready }] }
+      small-high:     { effects: [{ label: "complexity:small" },  { label: "risk:high" }, { stage: ready }] }
+      medium-low:     { effects: [{ label: "complexity:medium" }, { label: "risk:low" },  { stage: ready }] }
+      medium-high:    { effects: [{ label: "complexity:medium" }, { label: "risk:high" }, { stage: ready }] }
+      large-high:     { effects: [{ label: "complexity:large" },  { label: "risk:high" }, { stage: ready }] }
       ready:          { effects: [{ stage: ready }] }               # no estimate: dispatch makes one
       grill:          { effects: [{ comment: questions }, { stage: needs-answers }] }
       split:          { effects: [{ create-issues: children }, { stage: split }] }
@@ -73,8 +73,8 @@ nodes:
     output: create-pr
     settings: { mode: implement }
     outcomes:
-      done-low:   { effects: [{ unlabel: "factory:implement-small" }, { unlabel: "risk:high" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
-      done-high:  { effects: [{ unlabel: "factory:implement-small" }, { unlabel: "risk:low" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      done-low:   { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high:  { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       error:      { effects: [{ unlabel: "factory:implement-small" }, { label: "factory:implement-medium" }] }   # retry on a stronger model
       blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
 
@@ -85,8 +85,8 @@ nodes:
     output: create-pr
     settings: { mode: implement }
     outcomes:
-      done-low:   { effects: [{ unlabel: "factory:implement-medium" }, { unlabel: "risk:high" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
-      done-high:  { effects: [{ unlabel: "factory:implement-medium" }, { unlabel: "risk:low" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      done-low:   { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high:  { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       error:      { effects: [{ unlabel: "factory:implement-medium" }, { label: "factory:implement-large" }] }
       blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
 
@@ -97,8 +97,8 @@ nodes:
     output: create-pr
     settings: { mode: implement }
     outcomes:
-      done-low:   { effects: [{ unlabel: "factory:implement-large" }, { unlabel: "risk:high" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
-      done-high:  { effects: [{ unlabel: "factory:implement-large" }, { unlabel: "risk:low" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      done-low:   { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high:  { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
 
   # --- Review: one review per ticket, chosen by risk; starts on green CI (red CI goes to ci-red) -----
@@ -109,9 +109,9 @@ nodes:
     output: read-only
     settings: { focus: [behaviour] }
     outcomes:
-      approve-low:   { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { unlabel: "risk:high" }, { label: "risk:low" },
+      approve-low:   { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "risk:low" },
                                 { label: "factory:automerge", on: pr }, { stage: approved }] }
-      approve-risky: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { unlabel: "risk:low" }, { label: "risk:high" },
+      approve-risky: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "risk:high" },
                                 { label: "factory:needs-human" }, { stage: approved }] }   # merge risk medium or high: a person merges
       changes:       { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-low" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
 
@@ -122,9 +122,9 @@ nodes:
     output: read-only
     settings: { focus: [full, structure-security] }
     outcomes:
-      approve-low:   { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { unlabel: "risk:high" }, { label: "risk:low" },
+      approve-low:   { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "risk:low" },
                                 { label: "factory:automerge", on: pr }, { stage: approved }] }
-      approve-risky: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { unlabel: "risk:low" }, { label: "risk:high" },
+      approve-risky: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "risk:high" },
                                 { label: "factory:needs-human" }, { stage: approved }] }   # merge risk medium or high: a person merges
       changes:       { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-high" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
 
@@ -145,8 +145,8 @@ nodes:
     output: push-to-source
     settings: { mode: fix, fix_rounds: 3 }
     outcomes:
-      done-low:  { effects: [{ unlabel: "factory:fix" }, { unlabel: "risk:high" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
-      done-high: { effects: [{ unlabel: "factory:fix" }, { unlabel: "risk:low" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
+      done-low:  { effects: [{ unlabel: "factory:fix" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
+      done-high: { effects: [{ unlabel: "factory:fix" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       blocked:   { effects: [{ unlabel: "factory:fix" }, { comment: reason }, { stage: blocked }] }
 
   update:                         # a merge conflict
