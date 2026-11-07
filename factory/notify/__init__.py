@@ -1,12 +1,13 @@
 """Notifier adapters (ADR-0022): the gate sends a message through a channel and gets back a `ref` naming the thread.
 
 An adapter class has `send(person, message) -> ref` and `ack(person, ref, text)`. `person` is the entry of
-`notify.people` plus its `login`; `message` is `{issue, pr, problem, links, options, recommended}`. Secrets are read
+`notify.people` plus its `login`; `message` is `{issue, pr, problem, links, options, recommended}` plus the `url` of the issue or PR and the `run_url`
+the gate adds. An adapter without `ack` (slack-workflow) cannot take replies. Secrets are read
 from the env var a `notify.adapters.<name>` entry names, never from the file.
 """
-from . import smtp
+from . import slack_workflow, smtp
 
-ADAPTERS = {"email": smtp.EmailAdapter}
+ADAPTERS = {"email": smtp.EmailAdapter, "slack-workflow": slack_workflow.SlackWorkflowAdapter}
 MARKER = "<!-- factory:notify via={via} person={person} ref={ref} -->"
 
 
@@ -62,6 +63,15 @@ def send_all(config, message, people=None):
     return sent, errors
 
 
+def ack_all(config, login, via, ref, text):
+    """`notify: ack`: tell `login` in the thread `ref` on adapter `via`. An adapter without `ack` is skipped; returns whether it sent."""
+    adapter = ADAPTERS[via](config["adapters"][via])
+    if not hasattr(adapter, "ack"):
+        return False
+    adapter.ack({**(config.get("people") or {})[login], "login": login}, ref, text)
+    return True
+
+
 def config_errors(config):
     """`notify` config problems, as `code: text` lines: an unknown adapter, a missing address."""
     errs = []
@@ -80,4 +90,4 @@ def config_errors(config):
     return errs
 
 
-__all__ = ["ADAPTERS", "config_errors", "marker", "render", "send_all", "validate_message"]
+__all__ = ["ADAPTERS", "ack_all", "config_errors", "marker", "render", "send_all", "validate_message"]

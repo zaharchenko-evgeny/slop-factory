@@ -608,7 +608,16 @@ def notify_config():
     return config
 
 
-def notify_effects(effects, tracker, ticket, name):
+def latest_run(comments):
+    """The `Factory-Run:` value of the latest `[factory]` stage comment (not a notify comment), else None."""
+    for c in reversed(comments or []):
+        body = c.get("body") or ""
+        if body.startswith("[factory]") and "<!-- factory:notify " not in body and (m := re.search(r"(?m)^Factory-Run:\s*(\S+)\s*$", body)):
+            return m[1]
+    return None
+
+
+def notify_effects(effects, tracker, ticket, name, run_id=None):
     """Replace each `notify` effect with the one `[factory]` comment ADR-0022 asks for: the rendered text and one
     `factory:notify` marker per send. The comment is posted even when a send failed (it lists the sends that went
     out); the failures then raise. Returns the effects, the failures and the notify comments alone. A retry sends
@@ -618,9 +627,13 @@ def notify_effects(effects, tracker, ticket, name):
         if e["kind"] != "notify":
             out.append(e)
             continue
+        facts = tracker.facts(ticket)
         message = {**e["value"]["message"], "pr": ""}
         if e.get("on") == "pr":
-            message["pr"] = tracker.facts(ticket).get("pr") or ""
+            message["pr"] = facts.get("pr") or ""
+        repo = getattr(tracker, "pr_repo" if message["pr"] else "repo", None)
+        message["url"] = f"https://github.com/{repo}/{'pull' if message['pr'] else 'issues'}/{message['pr'] or ticket}" if repo else ""
+        message["run_url"] = latest_run(facts.get("comments")) or run_id or ""
         try:
             sent, errors = notifiers.send_all(notify_config(), message, e["value"]["people"])
         except ValueError as err:
@@ -773,7 +786,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if why:
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
-    effects, failures, posted = notify_effects(effects, tracker, ticket, name)
+    effects, failures, posted = notify_effects(effects, tracker, ticket, name, payload.get("run_id"))
     if failures:  # keep the markers of the sends that went out; skip the stage change and the other effects
         for e in posted:
             tracker.apply(e)
