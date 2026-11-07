@@ -32,14 +32,20 @@ Input: a request (free text or a tracker issue).
    verified. Never grill for details the developer can choose while building: test or fixture names and paths, the
    docs file, the exact dry-run output, edge cases already implied by the scope. A check named by its test or command
    is ready even if the test does not exist yet. When only such details are open, proceed.
-   Keep `questions` short: at most 3 numbered questions, one line each, then the proposed checks only for the
-   questions asked. No preamble, no restating the ticket, no risk or size summary.
+   Keep `questions` short: at most 3 numbered questions, one line each (at most 20 words), then the proposed
+   checks only for the questions asked and only when they differ from the body. No preamble, no restating the
+   ticket or the comments, no explanation of why you ask, no risk or size summary.
    Every Operator check must become a test or be rewritten as `Operator check after the merge (not part of the PR): …`.
    A check on a live system that the ticket requires before work (a spike) is not a question: if the ticket names
    what to do for each result, proceed; otherwise choose `split` with the spike as the first slice.
    A person's comment on the ticket is an answer and binds the scope, the same as the body. Apply it (for example
    "engine only" drops the other repository's parts and their checks), then ask only what it leaves open, in one
    line, and propose the checks that follow from it. Never repeat a question that a comment answered.
+   A person's answer is final. A statement of fact ("Air reads .mcp.json") is the result of the check it answers;
+   never ask for evidence or an observed result. An approval ("approved", "you can implement", "go") accepts your
+   last proposal and the open precondition: choose `proceed`. Such an answer settles scope; it is not a request to
+   skip a check. A part of a spike that the answers leave open and the ticket gives no branch for becomes
+   `Operator check after the merge (not part of the PR): …`; do not ask about it.
    A ticket that changes more than the primary repository needs a line `repositories: <primary>, <name>, …` (or
    `Affected repositories: …`, which means the same) in its body, primary first, with names from the environment's repositories ({{ environment.repositories | map(attribute='repo') | join(', ') }}) (ADR-0017). Without one it changes
    only the primary repository; if its scope needs another, choose `grill` and propose the line in `questions`.

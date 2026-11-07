@@ -43,11 +43,11 @@ nodes:
     output: read-only
     settings: { max_changed_lines: 400, max_repositories: 3 }
     outcomes:
-      small-low:      { effects: [{ label: "complexity:small" },  { label: "risk:low" },  { stage: ready }] }
-      small-high:     { effects: [{ label: "complexity:small" },  { label: "risk:high" }, { stage: ready }] }
+      small-low:      { effects: [{ label: "complexity:small" }, { label: "risk:low" },  { stage: ready }] }
+      small-high:     { effects: [{ label: "complexity:small" }, { label: "risk:high" }, { stage: ready }] }
       medium-low:     { effects: [{ label: "complexity:medium" }, { label: "risk:low" },  { stage: ready }] }
       medium-high:    { effects: [{ label: "complexity:medium" }, { label: "risk:high" }, { stage: ready }] }
-      large-high:     { effects: [{ label: "complexity:large" },  { label: "risk:high" }, { stage: ready }] }
+      large-high:     { effects: [{ label: "complexity:large" }, { label: "risk:high" }, { stage: ready }] }
       ready:          { effects: [{ stage: ready }] }               # no estimate: dispatch makes one
       grill:          { effects: [{ comment: questions }, { stage: needs-answers }] }
       split:          { effects: [{ create-issues: children }, { stage: split }] }

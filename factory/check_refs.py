@@ -30,7 +30,7 @@ def repository_name():
 REPO = repository_name()
 ALLOW = {
     # Illustrative names used by the superseded state chart and old design docs.
-    "factory.yaml", "setup.sh", "CLAUDE.md", "skills.txt", "startup.sh", "role.md", "docs/automations/",
+    "factory.yaml", ".mcp.json", "setup.sh", "CLAUDE.md", "skills.txt", "startup.sh", "role.md", "docs/automations/",
     ".factory/",
     "knowledge/<repo>/", ".factory/runs/<n>/report.md", "<dir>/SKILL.md", "deploy/", "secrets/",
     "policies", "summary.json", "conftest", "~/Downloads/factory.md", "cursor/plugins", "mattpocock/skills",

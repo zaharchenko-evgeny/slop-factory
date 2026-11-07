@@ -54,6 +54,12 @@ def _add_mentions(defn):
     askable = [a for a, spec in agents.items() if (spec or {}).get("mentionable")]
     if not askable or ROUTER in nodes:
         return
+    pairs = neighbours(defn)
+    for n in nodes.values():  # an `ask` outcome (#591): the agents its agent may ask, the deploy-time allowlist
+        if n.get("agent") in askable and n.get("mention") is not False and not n.get("generated") \
+                and not all(isinstance(t, dict) and "schedule" in t for t in n.get("triggers") or [None]):
+            to = sorted(b for b in askable if frozenset((n["agent"], b)) in pairs)
+            n.setdefault("outcomes", {}).setdefault("ask", {"to": to, "effects": [{"comment": "text"}]})
     agents.setdefault("mention-router", {"run": "decide", "model": (f.get("defaults") or {}).get("model"),
                                          "access": "read-only", "generated": True})
     nodes[ROUTER] = {"agent": "mention-router", "generated": True,
@@ -99,6 +105,106 @@ def settings(defn, name):
                   defn["workflow"].get("settings"), node.get("settings")):
         out = merge(out, layer)
     return out
+
+
+AIR_CONNECTORS = ("confluence", "datadog", "figma", "gitlab", "google_calendar", "grafana", "jira", "linear", "sentry",
+                  "slack", "teamcity", "internal-teamcity", "youtrack", "internal-youtrack", "internal-glean")
+CUSTOM_KEYS = ("command", "args", "env", "url", "headers")  # the `.mcp.json` `mcpServers` entry shape
+SECRET_KEY = re.compile(r"token|secret|password|passwd|api[_-]?key|authorization|credential", re.I)
+SECRET_VALUE = re.compile(r"ghp_\w|github_pat_|sk-\w|xox[abp]-|AKIA[0-9A-Z]{8}|[A-Za-z0-9+/_-]{32,}")
+REF = re.compile(r"\$\{(\w+)\}")
+
+
+def _mcp_layers(defn, name):
+    """[(where, mcp map, env names declared there or outside it)] of node `name`, in merge order: defaults ->
+    environment -> role -> agent -> node."""
+    node, agent, role, env = _parts(defn, name)
+    f = defn["factory"]
+    env_name = node.get("environment") or (defn["workflow"].get("settings") or {}).get("environment")
+    raw = [("defaults", f.get("defaults") or {}), (f"environments.{env_name}", env), (f"roles.{agent.get('role')}", role),
+           (f"agents.{node.get('agent')}", agent), (f"nodes.{name}", node)]
+    declared, out = set(), []
+    for where, layer in raw:
+        declared = declared | set(layer.get("env") or {})
+        out.append((where, layer.get("mcp") or {}, declared))
+    return out
+
+
+def mcp(defn, name):
+    """{server name: entry} of node `name`: the layers merged by key, a `null` entry removing the inherited one."""
+    out = {}
+    for _, layer, _ in _mcp_layers(defn, name):
+        for key, entry in layer.items():
+            if entry is None:
+                out.pop(key, None)
+            else:
+                out[key] = entry
+    return out
+
+
+def mcp_connectors(entries):
+    """The Air connector ids of the `connector` entries, for the automation's `mcpConnectors`."""
+    return [e["connector"] for e in entries.values() if "connector" in e]
+
+
+def mcp_custom(entries):
+    """{server name: entry} of the custom entries: the content of `.mcp.json` `mcpServers`."""
+    return {k: e for k, e in entries.items() if "connector" not in e}
+
+
+def _strings(x):
+    if isinstance(x, str):
+        yield x
+    elif isinstance(x, dict):
+        for v in x.values():
+            yield from _strings(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from _strings(v)
+
+
+def _secret_literals(entry):
+    """The `env` and `headers` keys whose value looks like a secret and is not a `${VAR}` reference."""
+    bad = []
+    for field in ("env", "headers"):
+        for k, v in (entry.get(field) or {}).items():
+            rest = re.sub(r"^(Bearer|Basic|Token)\b\s*", "", REF.sub("", str(v)).strip(), flags=re.I)
+            if rest and (SECRET_KEY.search(k) or SECRET_VALUE.search(rest)):
+                bad.append(f"{field}.{k}")
+    return bad
+
+
+def _mcp_errors(defn):
+    f, w = defn["factory"], defn["workflow"]
+    known = set(((f.get("targets") or {}).get("air") or {}).get("mcp_connectors") or AIR_CONNECTORS)
+    raw = [("defaults", (f.get("defaults") or {}).get("mcp"))]
+    for section, owner in (("environments", f), ("roles", f), ("agents", f), ("nodes", w)):
+        raw += [(f"{section}.{n}", (spec or {}).get("mcp")) for n, spec in (owner.get(section) or {}).items()]
+    errs = []
+    for where, layer in raw:
+        for key, e in (layer or {}).items():
+            at = f"{where}.mcp.{key}"
+            if e is None:
+                continue
+            if not isinstance(e, dict):
+                errs.append(f"bad-mcp-entry: {at}: expected a mapping or null")
+                continue
+            custom = [k for k in CUSTOM_KEYS if k in e]
+            if "connector" in e and custom:
+                errs.append(f"mcp-mixed-entry: {at}: `connector` with {', '.join(custom)}")
+            elif "connector" in e:
+                if e["connector"] not in known:
+                    errs.append(f"unknown-mcp-connector: {at}: {e['connector']}")
+            elif not ({"command", "url"} & set(e)):
+                errs.append(f"bad-mcp-entry: {at}: needs `connector`, `command` or `url`")
+            errs += [f"mcp-literal-secret: {at}.{k}: use a ${{VAR}} reference" for k in _secret_literals(e)]
+    for name in w.get("nodes") or {}:
+        for where, layer, declared in _mcp_layers(defn, name):
+            for key, e in layer.items():
+                missing = sorted({v for s in _strings(e) for v in REF.findall(s)} - declared)
+                errs += [f"mcp-undeclared-env: {where}.mcp.{key}: ${{{v}}} is declared by no `env` at this or an outer layer"
+                         for v in missing]
+    return list(dict.fromkeys(errs))
 
 
 def _jinja(defn):
@@ -246,6 +352,15 @@ def errors(defn):
             errs += [f"unknown-guard: {where}.{o}: {k}" for k in (oc.get("if") or {}) if k not in GUARDS]
             errs += [f"unknown-effect: {where}.{o}: {next(k for k in e if k != 'on')}" for e in oc.get("effects") or []
                      if next((k for k in e if k != "on"), None) not in EFFECTS]
+            for effect in oc.get("effects") or []:
+                if isinstance(effect, dict) and ("assign" in effect or "unassign" in effect):
+                    key = "assign" if "assign" in effect else "unassign"
+                    value = effect[key]
+                    valid = isinstance(value, str) or (isinstance(value, list) and all(isinstance(v, str) for v in value))
+                    if key == "unassign":
+                        valid = valid or value == "all"
+                    if not valid:
+                        errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins")
             prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
             by_target = {}
             for effect in oc.get("effects") or []:
@@ -268,7 +383,7 @@ def errors(defn):
                 render(defn, name)
             except __import__("jinja2").TemplateError as e:
                 errs.append(f"render: {where}: {e}")
-    return errs
+    return errs + _mcp_errors(defn)
 
 
 def warnings(defn):
@@ -291,7 +406,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed", ("pr", "commented"): "pr commented",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red")
+           "request-reviewers", "park-behind-main-red", "assign", "unassign")
 
 
 def _name(label, prefix):
@@ -409,11 +524,15 @@ def to_project(defn):
     for name, n in nodes.items():
         wf_nodes[name] = _node(name, n, agents, role_of, prefix, schedules, envs, default_env, sorted(used),
                                {c for c, v in commands.items() if "pr_label" in v["store"]})
+        connectors = mcp_connectors(mcp(defn, name))
+        if connectors:  # Air's `mcpConnectors`; the custom servers go to `.mcp.json` at setup (team_setup)
+            wf_nodes[name]["mcp"] = connectors
 
     merge_settings = next(((v.get("settings") or {}) for v in nodes.values()
                            if "max_risk" in (v.get("settings") or {})), {})
     fix_rounds = next((v["settings"]["fix_rounds"] for v in nodes.values() if "fix_rounds" in (v.get("settings") or {})), None)
     team = team_url(defn["root"])
+    air = (f.get("targets") or {}).get("air") or {}
     descriptor = {
         "engine": 1,
         **({"team_repository": team} if team else {}),
@@ -428,7 +547,8 @@ def to_project(defn):
         "commands": commands,
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
-        "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models}}},
+        "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},
+                           "mcp_connectors": list(air.get("mcp_connectors") or AIR_CONNECTORS)}},
         "roles": roles,
         "limits": {**(wset.get("limits") or {}), **({"fix_rounds": fix_rounds} if fix_rounds else {})},
         "gates": {"auto_merge": {"enabled": bool(merge_settings.get("auto_merge", True)),
@@ -516,7 +636,7 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
             res["ci"] = ci if isinstance(ci, list) else [ci]
         if guard:
             res["if"] = guard  # label, pr, review, blockers, children: the gate checks them (gate.guard_holds)
-        for k in ("else", "enabled"):
+        for k in ("else", "enabled", "to"):
             if k in oc:
                 res[k] = oc[k]
         if "effects" in oc:

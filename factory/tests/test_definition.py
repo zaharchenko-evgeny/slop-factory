@@ -4,6 +4,7 @@
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/definition.py (ADR-0021). Run: uv run factory/tests/test_definition.py"""
+import json
 import os
 import shutil
 import subprocess
@@ -47,6 +48,18 @@ class DefinitionTest(unittest.TestCase):
     def test_fixture_is_valid(self):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
+
+    def test_assignment_effects_validate_and_compile_unchanged(self):
+        effects = [{"assign": "owner", "on": "pr"}, {"unassign": "all"}]
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(effects=effects))
+        self.assertEqual(self.errors(), [])
+        _, workflow = definition.to_project(definition.load(self.root))
+        self.assertEqual(workflow["nodes"]["intake"]["outcomes"]["ready"]["effects"], effects)
+
+    def test_assignment_effect_rejects_non_string_values(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(
+            effects=[{"assign": 3}]))
+        self.assertError("bad-effect: nodes.intake.ready: assign")
 
     def test_missing_owner_fails(self):
         self.edit("factory.yaml", lambda f: f.pop("owner"))
@@ -134,6 +147,67 @@ class DefinitionTest(unittest.TestCase):
         body = self.root / "roles/router/role.md"
         body.write_text(body.read_text() + "\nLimit {{ settings.nope }}\n")
         self.assertError("render: nodes.intake")
+
+    MCP = {"youtrack": {"connector": "internal-youtrack"},
+           "idea": {"command": "npx", "args": ["-y", "@jetbrains/mcp-proxy"], "env": {"IDE_PORT": "${IDE_PORT}"}},
+           "docs": {"url": "https://mcp.example/sse", "headers": {"Authorization": "Bearer ${DOCS_TOKEN}"}}}
+
+    def add_mcp(self, layer="roles.developer", servers=None, env=("IDE_PORT", "DOCS_TOKEN")):
+        """Put `servers` on `layer` ("roles.developer", "agents.dev", "defaults") and declare `env` in defaults."""
+        def change(f):
+            f["defaults"].setdefault("env", {}).update({v: {"required": False} for v in env})
+            top, _, name = layer.partition(".")
+            (f["defaults"] if top == "defaults" else f[top][name])["mcp"] = servers if servers is not None else self.MCP
+        self.edit("factory.yaml", change)
+
+    def test_mcp_merges_by_key_across_layers_and_null_removes(self):
+        self.add_mcp("defaults", {"glean": {"connector": "internal-glean"}, "docs": {"url": "https://old.example/sse"}})
+        self.add_mcp("roles.developer")
+        self.edit("factory.yaml", lambda f: f["agents"]["dev"].update(mcp={"slack": {"connector": "slack"}, "docs": None}))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["implement-medium"].update(mcp={"glean": None}))
+        defn = definition.load(self.root)
+        self.assertEqual(sorted(definition.mcp(defn, "implement-medium")), ["idea", "slack", "youtrack"])
+        self.assertEqual(sorted(definition.mcp(defn, "implement-small")), ["docs", "glean", "idea", "youtrack"])  # other agent
+        self.assertEqual(definition.mcp(defn, "implement-small")["docs"], self.MCP["docs"])   # role replaces default's entry whole
+        self.assertEqual(definition.mcp_connectors(definition.mcp(defn, "implement-small")), ["internal-glean", "internal-youtrack"])
+        self.assertEqual(sorted(definition.mcp_custom(definition.mcp(defn, "implement-small"))), ["docs", "idea"])
+
+    def test_mcp_connectors_reach_the_compiled_node(self):
+        self.add_mcp()
+        _, wf = definition.to_project(definition.load(self.root))
+        self.assertEqual(wf["nodes"]["implement-medium"]["mcp"], ["internal-youtrack"])
+        self.assertNotIn("mcp", wf["nodes"]["intake"])
+
+    def test_mcp_valid_servers_pass_validate(self):
+        self.add_mcp()
+        self.assertEqual(self.errors(), [])
+
+    def test_mcp_validate_unknown_connector(self):
+        self.add_mcp(servers={"x": {"connector": "nope"}})
+        self.assertError("unknown-mcp-connector: roles.developer.mcp.x: nope")
+        self.edit("factory.yaml", lambda f: f.setdefault("targets", {}).update(air={"mcp_connectors": ["nope"]}))
+        self.assertEqual(self.errors(), [])   # the list in `targets.air.mcp_connectors` replaces the default
+
+    def test_mcp_validate_undeclared_env(self):
+        self.add_mcp(env=("IDE_PORT",))
+        self.assertError("mcp-undeclared-env: roles.developer.mcp.docs: ${DOCS_TOKEN}")
+        self.add_mcp()   # now declared
+        self.assertEqual(self.errors(), [])
+        self.edit("workflow.yaml", lambda w: w["nodes"]["fix"].update(mcp={"d": {"url": "https://x.example/${HOST}"}}))
+        self.assertError("mcp-undeclared-env: nodes.fix.mcp.d: ${HOST}")
+        self.edit("workflow.yaml", lambda w: w["nodes"]["fix"].update(env={"HOST": {"required": False}}))   # the node's own env
+        self.assertEqual(self.errors(), [])
+
+    def test_mcp_validate_literal_secret(self):
+        self.add_mcp(servers={"docs": {"url": "https://x.example", "headers": {"Authorization": "Bearer abc123"}},
+                              "idea": {"command": "x", "env": {"PLAIN": "ghp_abcdef123456"}}})
+        errs = self.errors()
+        self.assertIn("mcp-literal-secret: roles.developer.mcp.docs.headers.Authorization: use a ${VAR} reference", errs)
+        self.assertIn("mcp-literal-secret: roles.developer.mcp.idea.env.PLAIN: use a ${VAR} reference", errs)
+
+    def test_mcp_validate_mixed_entry(self):
+        self.add_mcp(servers={"x": {"connector": "slack", "command": "npx"}})
+        self.assertError("mcp-mixed-entry: roles.developer.mcp.x")
 
     def test_nodes_have_no_prompt(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(prompt="Scope it."))
@@ -316,6 +390,36 @@ class DefinitionTest(unittest.TestCase):
             self.assertNotIn("factory:reply-dev", t.facts("7")["attrs"])
             t.pr_comments = lambda ticket: [{"author": "bot", "body": reply["value"], "at": "3"}]
             self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "none")  # a reply asks no one
+        finally:
+            config.set_team(before)
+
+    def test_ask_is_an_outcome_of_every_mentionable_node_and_the_answer_returns_to_the_asker(self):
+        import config
+        import gate
+        import nodes as nodes_mod
+        from gate_port import MemoryTracker
+        before = config._team
+        config.set_team(self.root)
+        try:
+            n = nodes_mod.load()
+            agents = {k: v.get("agent") for k, v in definition.load(self.root)["workflow"]["nodes"].items()}
+            for name, node in n["nodes"].items():
+                self.assertEqual("ask" in node["outcomes"], agents[name] in ("dev", "reviewer") and not name.startswith("reply-"), name)
+            self.assertEqual(n["nodes"]["implement-medium"]["outcomes"]["ask"]["to"], ["reviewer"])
+            t = MemoryTracker({"7": {"stage": "in-dev"}})
+            gate.apply("implement-medium", "ask", {"ticket": "7", "to": "reviewer", "text": "Is X in scope?"}, t, n)
+            ask = next(json.loads(v) for k, v in t.tickets["7"]["log"] if k == "comment")
+            self.assertTrue(ask.startswith("[factory] **dev (developer):** @factory:reviewer Is X in scope?\n"))
+            self.assertEqual(t.facts("7")["stage"], "in-dev")
+            t.tickets["7"]["comments"] = [{"author": "bot", "body": ask, "at": "1"}]
+            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "reply-reviewer")   # the target wakes
+            t.tickets["7"]["log"].clear()
+            with self.assertRaises(gate.Bad):
+                gate.apply("reply-reviewer", "ask", {"ticket": "7", "to": "dev", "text": "?"}, t, n)
+            gate.apply("reply-reviewer", "replied", {"ticket": "7", "reply": "Yes."}, t, n)
+            answer = next(json.loads(v) for k, v in t.tickets["7"]["log"] if k == "comment")
+            t.tickets["7"]["comments"].append({"author": "bot", "body": answer, "at": "2"})
+            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "reply-dev")        # the asker wakes
         finally:
             config.set_team(before)
 

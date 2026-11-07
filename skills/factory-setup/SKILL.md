@@ -26,6 +26,11 @@ the user approves a plan. The layout is the engine's ADR-0021:
 - `workflow.yaml` says how it works: stages, shared settings (limits) and the
   nodes in delivery order. A node is an agent + an environment + triggers +
   outcomes; the gate applies an outcome's effects.
+- `assign` takes a GitHub login, a list of logins or `owner` (the top-level
+  `factory.yaml` owner). `unassign` takes the same values or `all`. With
+  `on: pr`, `assign` targets every open PR. Without `on`, it targets the ticket.
+  Assigning a ticket in `ready` hides it from the frontier because the frontier
+  skips assigned tickets.
 - Labels before the first `:` form groups. Adding one value removes the others on the same ticket or PR ([ADR-0021](../../docs/adr/0021-definition-layout.md)).
 - `roles/<role>/role.md` holds a role's instructions (Jinja, rendered with the
   node's settings); `roles/<role>/setup.sh` installs the role's tools.

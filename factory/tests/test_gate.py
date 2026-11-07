@@ -45,6 +45,12 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_assignment_effect_resolves_owner_and_preserves_logins(self):
+        self.assertEqual(gate.resolve({"assign": "owner", "on": "pr"}, {}, "7"),
+                         {"kind": "assign", "ticket": "7", "value": cfg.owner(CONFIG), "on": "pr"})
+        self.assertEqual(gate.resolve({"assign": ["a", "b"]}, {}, "7"),
+                         {"kind": "assign", "ticket": "7", "value": ["a", "b"]})
+
     def test_label_guard_falls_back(self):
         """ADR-0021: an outcome's `if` guard that fails applies its `else`; without one the outcome is refused."""
         graph = copy.deepcopy(NODES)
@@ -73,6 +79,10 @@ class GateTest(unittest.TestCase):
         with self.assertRaises(gate.Bad):
             gate.guard_holds({"colour": "red"}, f)
         self.assertTrue(gate.guard_holds({"children": "closed"}, {**f, "children_open": 0}))
+        # A label that an effect puts `on: pr` counts too: factory:needs-human waits on the PR.
+        self.assertTrue(gate.guard_holds({"label": "factory:needs-human"}, {**f, "pr_labels": ["factory:needs-human"]}))
+        self.assertTrue(gate.guard_holds({"label": ["risk:low", "factory:needs-human"]},
+                                         {**f, "pr_labels": ["factory:needs-human"]}))
 
     def test_merge_effect_keeps_its_invariants(self):
         """ADR-0021: for a definition team, `merge` is refused without an approval at head, with red CI, or behind."""
@@ -135,6 +145,56 @@ class GateTest(unittest.TestCase):
         out = gate.ci_state(tr, "7", wait_seconds=600, poll=30, sleep=naps.append)
         self.assertEqual((out["ci"], out["failing"], len(naps)), ("red", "lint: E501", 2))
         self.assertEqual(gate.ci_state(MemoryTracker({"7": {"ci": "pending"}}), "7")["ci"], "pending")   # no wait
+
+    def ask_graph(self):
+        graph = copy.deepcopy(NODES)
+        graph["nodes"]["intake"].update(agent="dev", role="developer")
+        graph["nodes"]["intake"]["outcomes"]["ask"] = {"to": ["reviewer"], "effects": [{"comment": "text"}]}
+        graph["nodes"]["reply-dev"] = {**graph["nodes"]["intake"], "outcomes": {"replied": {"effects": []}}}
+        return graph
+
+    def ask(self, tracker, to="reviewer", node="intake", hops=3):
+        with patch.object(gate.config_mod, "load", return_value={"limits": {"mention_hops": hops}}):
+            return gate.apply(node, "ask", {"ticket": "7", "to": to, "text": "Is X\nin scope?"}, tracker, self.ask_graph())
+
+    def test_ask_posts_one_comment_with_the_marker_and_keeps_the_stage(self):
+        tr = MemoryTracker({"7": {"stage": "triage"}})
+        self.assertEqual(self.ask(tr)[0], gate.GO)
+        posted = [json.loads(v) for k, v in tr.tickets["7"]["log"] if k == "comment"]
+        self.assertEqual(len(posted), 1)
+        self.assertTrue(posted[0].startswith("[factory] **dev (developer):** @factory:reviewer Is X in scope?\n"))
+        self.assertIn("<!-- factory:ask id=7-1 from=intake to=reply-reviewer hop=1 -->", posted[0])
+        self.assertEqual(tr.facts("7")["stage"], "triage")
+
+    def test_ask_refuses_a_pair_outside_the_allowlist(self):
+        tr = MemoryTracker({"7": {"stage": "triage"}})
+        with self.assertRaisesRegex(gate.Bad, "not an agent this node may ask"):
+            self.ask(tr, to="approver")
+        self.assertNotIn("log", tr.tickets["7"])  # nothing posted, nobody woken
+
+    def test_ask_over_the_hop_budget_posts_one_refusal_and_wakes_nothing(self):
+        asks = [{"author_is_bot": True, "body": f"[factory] @factory:reviewer q <!-- factory:ask id=7-{i} from=intake to=reply-reviewer hop={i} -->"} for i in (1, 2, 3)]
+        tr = MemoryTracker({"7": {"stage": "triage", "comments": asks[:2]}})
+        self.ask(tr)
+        self.assertIn("hop=3", tr.tickets["7"]["log"][0][1])  # the 3rd ask is allowed
+        tr = MemoryTracker({"7": {"stage": "triage", "comments": asks}})
+        self.ask(tr)
+        posted = [json.loads(v) for k, v in tr.tickets["7"]["log"] if k == "comment"]
+        self.assertEqual(len(posted), 1)
+        self.assertIn("limit of 3 asks", posted[0])
+        self.assertNotIn("@factory:", posted[0])
+        self.assertNotIn("factory:ask", posted[0])
+
+    def test_ask_budget_ignores_markers_from_other_authors(self):
+        forged = [{"author": "eve", "author_is_bot": False, "body": f"[factory] <!-- factory:ask id=7-{i} from=intake to=reply-reviewer hop={i} -->"} for i in (1, 2, 3)]
+        tr = MemoryTracker({"7": {"stage": "triage", "comments": forged}})
+        self.ask(tr)
+        self.assertIn("hop=1", tr.tickets["7"]["log"][0][1])
+
+    def test_ask_is_not_an_outcome_of_a_reply(self):
+        tr = MemoryTracker({"7": {"stage": "triage"}})
+        with self.assertRaisesRegex(gate.Bad, "a reply cannot ask"):
+            self.ask(tr, node="reply-dev")
 
     def test_mention_fact(self):
         """#590: a person may ask any agent; an agent only a workflow neighbour; a reply asks no one."""
