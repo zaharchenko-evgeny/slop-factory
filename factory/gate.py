@@ -938,6 +938,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None, checked
         # that refused later would stop it with no comment and no event to wake it.
         effects = [{"kind": "comment", "ticket": ticket, "value": stop},
                    {"kind": "stage", "ticket": ticket, "value": "blocked"}]
+        # The route did not happen: no success reply and no cursor move, so a person's comment stays unread.
+        comment_after = [e for e in comment_after if e["kind"] == "unlabel"]
     if any(e["kind"] == "stage" and e["value"] == "blocked" for e in effects):
         effects = clear_commands(ticket) + effects
     stage_effect = next((e for e in effects if e["kind"] == "stage"), None)

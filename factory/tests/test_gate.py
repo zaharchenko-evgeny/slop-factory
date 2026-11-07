@@ -307,6 +307,18 @@ class GateTest(unittest.TestCase):
         self.assertIn("<!-- factory:comment-seen 5 -->", posted[0])
         self.assertIn("factory:comment", tr.facts("7")["attrs"])  # woken again for comment 6
 
+    def test_comment_route_stopped_by_the_spend_guard_keeps_the_input_pending(self):
+        tr = self.approved_pr(agent_runs=8, run_cap=8)
+        with patch.object(gate, "commands", return_value=("factory:fix",)):
+            self.comment_run(tr, "route", to="fix", reply="Sent to the fixer.")
+        facts = tr.facts("7")
+        self.assertEqual(facts["stage"], "blocked")
+        self.assertNotIn("factory:comment", facts["attrs"])
+        posted = [json.loads(v) for k, v in tr.tickets["7"]["log"] if k == "comment"]
+        self.assertEqual(len(posted), 1)
+        self.assertNotIn("Sent to the fixer.", posted[0])
+        self.assertNotIn("factory:comment-seen", posted[0])
+
     def test_mention_fact(self):
         """#590: a person may ask any agent; an agent only a workflow neighbour; a reply asks no one."""
         pairs = {frozenset(("dev", "reviewer"))}
