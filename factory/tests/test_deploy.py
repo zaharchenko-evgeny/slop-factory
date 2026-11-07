@@ -1271,7 +1271,7 @@ class DefinitionPlanTest(unittest.TestCase):
                          "https://github.com/zaharchenko-evgeny/slop-eval-factory")
         for label in ("factory:implement-small", "factory:review-high", "factory:knowledge-review", "factory:done",
                       "factory:automerge", "risk:low", "complexity:large",
-                      "factory:lesson"):
+                      "factory:lesson", "factory:comment"):
             self.assertIn(label, self.plan["labels"])
         for label in ("factory:reply-dev", "factory:reply-reviewer", "factory:needs-human"):  # generated reply and needs-human labels
             self.assertIn(label, self.plan["labels"])
