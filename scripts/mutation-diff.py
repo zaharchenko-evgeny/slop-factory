@@ -82,7 +82,10 @@ def mutate(tree, index, variant):
     return ast.unparse(ast.fix_missing_locations(tree))
 
 
-def passes(cmd, seconds, env):
+def passes(cmd, deadline, env):
+    seconds = deadline - time.monotonic()
+    if seconds <= 0:
+        return False  # No time left counts as caught.
     try:
         return subprocess.run(cmd, capture_output=True, timeout=seconds, env=env).returncode == 0
     except subprocess.TimeoutExpired:
@@ -90,16 +93,17 @@ def passes(cmd, seconds, env):
 
 
 def survives(cmds, seconds, env):
-    """True when every command passes. The commands run in parallel."""
+    """True when every command passes. The commands run in parallel and share one deadline of `seconds`."""
+    deadline = time.monotonic() + seconds
     with ThreadPoolExecutor(min(len(cmds), os.cpu_count() or 1)) as pool:
-        return all(pool.map(lambda cmd: passes(cmd, seconds, env), cmds))
+        return all(pool.map(lambda cmd: passes(cmd, deadline, env), cmds))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", required=True, help="commit to diff against, as in `git diff <base>...HEAD`")
     parser.add_argument("--budget", type=int, default=600, help="total seconds for all mutants")
-    parser.add_argument("--timeout", type=int, default=180, help="seconds per mutant")
+    parser.add_argument("--timeout", type=int, default=60, help="seconds per mutant")
     parser.add_argument("--test-cmd", help="one command that runs the tests; default: one pytest process per factory/tests file")
     args = parser.parse_args()
 
@@ -116,8 +120,9 @@ def main():
     cache = tempfile.mkdtemp()
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPYCACHEPREFIX": cache}
     # Tests must pass before mutation, or every mutant would look caught. A command that is red here is left out.
+    baseline_deadline = time.monotonic() + max(args.budget, args.timeout)
     with ThreadPoolExecutor(min(len(cmds), os.cpu_count() or 1)) as pool:
-        green = [cmd for cmd, ok in zip(cmds, pool.map(lambda c: passes(c, max(args.budget, args.timeout), env), cmds)) if ok]
+        green = [cmd for cmd, ok in zip(cmds, pool.map(lambda c: passes(c, baseline_deadline, env), cmds)) if ok]
     if not green:
         print("cannot run: the tests fail or time out without any mutation", file=sys.stderr)
         return 1

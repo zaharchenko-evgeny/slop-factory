@@ -9,7 +9,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -118,6 +120,14 @@ class EndToEndTest(unittest.TestCase):
             self.git(root, "commit", "-q", "--allow-empty", "-m", "base")
             result = self.run_script(root, "HEAD", f"{sys.executable} -c 'raise SystemExit(1)'")
             self.assertEqual(result.returncode, 1)
+
+    def test_one_deadline_bounds_all_commands_of_a_mutant(self):
+        slow = [sys.executable, "-c", "import time; time.sleep(5)"]
+        started = time.monotonic()
+        with unittest.mock.patch.object(os, "cpu_count", return_value=1):
+            survived = mutation_diff.survives([slow] * 3, 0.5, os.environ.copy())
+        self.assertFalse(survived)
+        self.assertLess(time.monotonic() - started, 1.0)
 
 
 if __name__ == "__main__":
