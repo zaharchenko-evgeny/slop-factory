@@ -69,6 +69,16 @@ class NodesTest(unittest.TestCase):
             self.assertIsNotNone(m, f"{doc} has no nodes-chart block")
             self.assertEqual(m.group(1), want, f"stale: run nodes.py chart and update {doc}")
 
+    def test_bug_path_goes_through_investigate(self):
+        graph = nodes.load()["nodes"]
+        self.assertEqual(graph["intake"]["outcomes"]["bug"]["effects"], [{"stage": "investigating"}])
+        investigate = graph["investigate"]
+        self.assertNotIn("enabled", investigate)
+        self.assertEqual(investigate["when"], {"stage": "investigating"})
+        stages = {o: [e["stage"] for e in v["effects"] if "stage" in e] for o, v in investigate["outcomes"].items()}
+        self.assertEqual(stages, {"bug": ["in-dev"], "intended": ["not-actionable"],
+                                  "cannot-reproduce": ["needs-answers"]})
+
     def test_chart_marks_planned_nodes_dashed_and_lists_triggers(self):
         c = nodes.chart(nodes.load())
         self.assertIn("on: issue +factory:ready", c)
