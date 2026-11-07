@@ -32,7 +32,8 @@ RULES = ("OneStageLabel", "MovingNode", "NoDeadlock", "DoneReachable")
 def skill_dir(dest):
     """The statechart skill fetched at its pin (skills.lock, not vendored) into `dest`, checked by its sha256.
     Raises RuntimeError when it cannot be fetched or the hash differs."""
-    spec = importlib.util.spec_from_file_location("vendor_skills", ROOT / "scripts/vendor-skills.py")
+    script = next(p for p in (ROOT / "scripts/vendor-skills.py", Path(__file__).resolve().parent / "vendor-skills.py") if p.is_file())
+    spec = importlib.util.spec_from_file_location("vendor_skills", script)
     vs = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(vs)
     return vs.fetch_pinned("statechart", dest)

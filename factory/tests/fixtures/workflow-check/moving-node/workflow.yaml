@@ -1,0 +1,6 @@
+# Breaks MovingNode: the active stage `orphan` has a node, but no outcome moves out of it.
+stages: { final: [done] }
+nodes:
+  intake: { agent: router, triggers: [{ stage: triage }], when: { stage: triage },
+            outcomes: { ready: { effects: [{ stage: done }] } } }
+  idle: { agent: clerk, triggers: [{ stage: orphan }], when: { stage: orphan } }
