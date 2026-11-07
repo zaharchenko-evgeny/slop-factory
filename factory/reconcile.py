@@ -195,10 +195,43 @@ def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress)
             progress(r)
 
 
+def fact_value(key, facts):
+    """The fact a `when` key reads, as text for a person."""
+    if key == "fix-rounds":
+        return f"{facts.get('fix_rounds')}/{facts.get('fix_cap')}"
+    if key == "label":
+        return ", ".join(sorted({*(facts.get("attrs") or []), *(facts.get("pr_labels") or [])})) or "none"
+    return facts.get({"blockers": "blockers_open", "pr-state": "pr_state"}.get(key, key))
+
+
+def stuck_label(wakes, nodes, facts, on_pr, ago):
+    """A waking label older than 2 timeouts that wakes no node: every node it triggers has a `when` that fails."""
+    import gate
+    by_label = {}
+    for node, label, timeout in wakes:
+        by_label.setdefault(label, []).append((node, timeout))
+    for label, woken in by_label.items():
+        on = "issue" if label in facts.get("attrs", []) else "pr" if label in on_pr else None
+        at = (facts.get("label_at") or {}).get(label)
+        if not on or not at or ago(at) <= timedelta(minutes=2 * max(t for _, t in woken)):
+            continue
+        if any(gate.holds(nodes[node].get("when") or {}, facts, {}) for node, _ in woken):
+            continue
+        guards = [f"{node} when.{k}: want {v}, have {fact_value(k, facts)}" for node, _ in woken
+                  for k, v in (nodes[node].get("when") or {}).items() if not gate.holds({k: v}, facts, {})]
+        return ("stuck", woken[0][0], label, on, f"{label} wakes no node. Why: {'; '.join(guards)}")
+    return None
+
+
 def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="changes-requested"):
     def apply(**e):
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
-    if kind == "conflict":
+    if kind == "stuck":
+        apply(kind="label", value=vocab.needs_human())
+        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} stuck: {why}\nOptions: fix the cause and set "
+                                    f"{vocab.stage('ready')}, or remove `{label}` and move the ticket by hand.")
+        apply(kind="stage", value="blocked")
+    elif kind == "conflict":
         apply(kind="label", value=label or vocab.cmd("fix-<tier>", "cheap"), on="pr")
         apply(kind="stage", value=fix_stage)
     elif kind == "blocked":
@@ -269,9 +302,13 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
                     if on and at and ago(at) > timedelta(minutes=timeout) and gate.holds(nodes[node].get("when") or {}, facts, {}):
                         step = ("refire", node, label, on, f"no {node} outcome")
                         break
+                if step is None and not facts.get("blockers_open"):
+                    step = stuck_label(wakes, nodes, facts, on_pr, ago)
             if step is None:
                 continue
             kind, node, label, on, why = step
+            if kind == "stuck" and any(f"stage={stage} head={head} stuck:" in c for c in facts.get("recover_comments", [])):
+                continue
             missed = sum(f"stage={stage} head={head} re-fired {label} (" in c for c in facts.get("recover_comments", []))
             kind = "blocked" if kind == "refire" and missed else kind
             r = {"ticket": n, "stage": stage, "node": node, "reconcile": kind, "why": why}
