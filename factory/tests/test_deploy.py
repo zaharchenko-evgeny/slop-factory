@@ -53,6 +53,29 @@ def definition_plan(edit_factory=None, edit_workflow=None, source="fixtures/slop
             cfg.set_team(before)
 
 
+def youtrack_plan(edit, edit_nodes=None):
+    """The Air plan of fixtures/slop's definition config after `edit` made it a YouTrack team (and `edit_nodes`
+    changed its compiled nodes): the compiled config (states, commands, tracker) is where the stage and command
+    stores live (ADR-0021)."""
+    before = cfg.team_root()
+    cfg.set_team(HERE / "fixtures/slop")
+    try:
+        conf = copy.deepcopy(cfg.load())
+        conf["tracker"] = {"adapter": "youtrack", "url": "https://y.example", "project": "LME"}
+        edit(conf)
+        compiled = copy.deepcopy(nodes.load())
+        if edit_nodes:
+            edit_nodes(compiled)
+        return deploy.plan_air(compiled, conf)
+    finally:
+        cfg.set_team(before)
+
+
+def tag_store(conf):
+    conf["states"]["ready"]["store"] = {"tag": "factory:ready"}
+    conf["commands"]["implement-medium"]["store"] = {"tag": "factory:implement-medium"}
+
+
 FAKE_SERVER = r"""
 import json, sys
 state, kind = sys.argv[1], sys.argv[2]  # state file: {"items": [...], "calls": [...]}
@@ -661,6 +684,15 @@ class ProjectPlanTest(unittest.TestCase):
         envs = {e["name"]: e["repository"] for e in plan["environments"]}
         self.assertEqual(envs["[Slop factory] team"], "https://github.com/o/other")
         self.assertEqual(envs["[Slop factory] engine"], "https://github.com/zaharchenko-evgeny/slop-factory")
+
+    def test_youtrack_tracker_renders_ticket_triggers_as_youtrack_events(self):
+        def edit_nodes(compiled):
+            compiled["nodes"]["implement-medium"]["triggers"] = ["youtrack.tagAdded factory:implement-medium"]
+        a = {x["spec"]["node"]: x for x in youtrack_plan(tag_store, edit_nodes)["automations"]}
+        self.assertIn({"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated",
+                       "filters": {"tagAdded": "factory:implement-medium"}}, a["implement-medium"]["triggers"])
+        self.assertEqual({t["source"] for t in a["fix"]["triggers"]}, {"github"})
+        self.assertEqual(deploy.trigger("youtrack.fieldChanged State=In Progress", None)["filters"], {"State": "In Progress"})
 
     def test_hand_added_connector_is_a_removal(self):
         planned = {"name": "[F] a", "mcpConnectors": []}
@@ -1324,6 +1356,13 @@ class YouTrackTagsTest(unittest.TestCase):
     PLAN = {"tags": TAGS, "owned_tag_prefixes": ["factory:"], "tag_tracker": {"url": "https://y.example", "project": "LME"},
             "labels": [], "label_repositories": [], "owned_label_prefixes": []}
 
+    def test_required_tags_come_from_the_compiled_definition(self):
+        plan = youtrack_plan(tag_store)
+        self.assertIn("factory:ready", plan["tags"])
+        self.assertIn("factory:implement-medium", plan["tags"])
+        self.assertFalse([t for t in plan["tags"] if "<" in t])
+        self.assertEqual(plan["owned_tag_prefixes"], ["factory:"])
+
     def run_deploy(self, mode, allow_delete, have, shared=()):
         fake = FakeTags(have, shared)
         out, err = io.StringIO(), io.StringIO()
@@ -1390,6 +1429,14 @@ class YouTrackFieldValuesTest(unittest.TestCase):
         return code, out.getvalue(), err.getvalue(), fake.writes
 
     HAVE = {"factory:ready": ("1", False), "factory:done": ("2", False), "factory:old": ("3", False), "Open": ("4", False)}
+
+    def test_plan_collects_field_values_with_final_states_resolved(self):
+        def edit(conf):
+            conf["states"]["ready"]["store"] = {"field": {"name": "State", "value": "factory:ready"}}
+            conf["states"]["done"]["store"] = {"field": {"name": "State", "value": "factory:done"}}
+        plan = youtrack_plan(edit)
+        self.assertEqual(plan["fields"], {"State": {"factory:ready": False, "factory:done": True}})
+        self.assertEqual(plan["owned_field_prefixes"], ["factory:"])
 
     def test_dry_run_reports_missing_changed_and_obsolete_values_without_writing(self):
         have = {k: v for k, v in self.HAVE.items() if k != "factory:ready"}
