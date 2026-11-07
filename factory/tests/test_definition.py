@@ -575,5 +575,60 @@ class SlopBugPathTest(unittest.TestCase):
         self.assertEqual(t.facts("7")["stage"], "needs-answers")
 
 
+class PlanTest(unittest.TestCase):
+    """`definition.plan`: the sweep's start, merge, finish, reopen and join decisions from the node graph."""
+    ON = {"enabled": True, "max_risk": "high"}
+
+    def setUp(self):
+        import nodes as nodes_mod
+        self.graph = nodes_mod.load(ROOT.parent / "engine/nodes.yaml")
+        self.base = {"ticket": 1, "pr": 5, "pr_state": "open", "head": "h1", "ci": "green", "round_complete": True,
+                     "round_verdict": "approve", "round_head": "h1", "risk": "low", "blockers_open": 0,
+                     "attrs": ["complexity:medium"], "pr_labels": [], "reviews": []}
+
+    def plan(self, **facts):
+        return definition.plan(self.graph, {**self.base, **facts}, self.ON, "mid")
+
+    def test_start_a_ready_ticket_with_its_complexity_tier(self):
+        self.assertEqual(self.plan(stage="ready", pr_state="none"), ("start", "started", {"tier": "mid"}))
+        self.assertIsNone(self.plan(stage="ready", pr_state="none", blockers_open=1))
+        self.assertIsNone(self.plan(stage="ready", pr_state="none", issue_state="closed"))
+
+    def test_merge_an_approved_green_head_and_update_a_behind_one(self):
+        self.assertEqual(self.plan(stage="approved"), ("merge", "merged", {}))
+        self.assertEqual(self.plan(stage="approved", behind=True), ("merge", "updated", {}))
+        self.assertIsNone(self.plan(stage="approved", ci="pending"))
+
+    def test_finish_a_merged_pr_a_conflict_an_answer_and_done_children(self):
+        self.assertEqual(self.plan(stage="approved", pr_state="merged"), ("finish", "merged", {}))
+        self.assertIsNone(self.plan(stage="done", pr_state="merged"))  # a final stage has nothing to finish
+        self.assertEqual(self.plan(stage="approved", conflict=True), ("finish", "conflict", {}))
+        self.assertEqual(self.plan(stage="needs-answers", pr_state="none", answered=True), ("finish", "answered", {}))
+        kids = [{"number": 2, "state": "closed", "blocked": False, "not_planned": False}]
+        self.assertEqual(self.plan(stage="split", pr_state="none", children=kids), ("finish", "children-done", {}))
+        kids.append({"number": 3, "state": "open", "blocked": True, "not_planned": False})
+        self.assertEqual(self.plan(stage="split", pr_state="none", children=kids)[:2], ("finish", "child-blocked"))
+
+    def test_reopen_an_approved_ticket_with_a_new_head_or_red_ci(self):
+        self.assertEqual(self.plan(stage="approved", head="h2"), ("reopen", "reopened", {}))
+        self.assertEqual(self.plan(stage="approved", ci="red"), ("reopen", "reopened", {}))
+
+    def test_join_a_complete_round_and_ask_waiting_reviewers_again(self):
+        self.assertEqual(self.plan(stage="in-review")[:2], ("join", "approved"))
+        self.assertEqual(self.plan(stage="in-review", round_verdict="changes")[:2], ("join", "changes"))
+        self.assertEqual(self.plan(stage="in-review", waiting_reviewers=["behaviour"], round_complete=False),
+                         ("join", "waiting", {}))
+        self.assertIsNone(self.plan(stage="in-review", round_complete=False))
+
+    def test_a_decision_needs_its_outcome_in_the_graph(self):
+        del self.graph["nodes"]["merge"]["outcomes"]["merged"]
+        self.assertIsNone(self.plan(stage="approved"))
+
+    def test_decisions_do_not_read_ci_labels(self):
+        labels = ["factory:ci-red", "factory:ci-green"]
+        self.assertEqual(self.plan(stage="approved", pr_labels=labels), ("merge", "merged", {}))
+        self.assertEqual(self.plan(stage="approved", ci="pending", pr_labels=labels, ci_label="green"), None)
+
+
 if __name__ == "__main__":
     unittest.main()
