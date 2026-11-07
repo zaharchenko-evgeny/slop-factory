@@ -177,15 +177,10 @@ jobs:
       - name: Mutate the changed lines
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          FACTORY_TEAM: factory/tests/fixtures/team
         run: |
-          set -o pipefail
-          {
-            echo '## Surviving mutants'
-            echo '```'
-            uv run --quiet python scripts/mutation-diff.py --base "$BASE_SHA"
-            echo '```'
-          } > mutation.md || { cat mutation.md; exit 1; }
-          cat mutation.md >> "$GITHUB_STEP_SUMMARY"
+          survivors=$(uv run --quiet python scripts/mutation-diff.py --base "$BASE_SHA") || exit 1
+          printf '## Surviving mutants\n```\n%s\n```\n' "$survivors" >> "$GITHUB_STEP_SUMMARY"
 
   # The CI label is the result of every job: it runs last, so the run is about to complete when the label wakes a
   # reviewer or the join, and they read the same result from the workflow runs instead of `pending`.

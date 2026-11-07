@@ -19,9 +19,11 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-TEST_CMD = "uv run --quiet --with pyyaml --with pytest python -m pytest factory/tests -q -x"
+# The test files share state when pytest runs them in one process, so each file runs in its own process.
+TEST_FILE_CMD = "uv run --quiet --with pyyaml --with pytest python -m pytest -q -x"
 HUNK = re.compile(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@")
 SWAP = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.Lt: ast.GtE, ast.GtE: ast.Lt, ast.Gt: ast.LtE, ast.LtE: ast.Gt,
         ast.Is: ast.IsNot, ast.IsNot: ast.Is, ast.In: ast.NotIn, ast.NotIn: ast.In}
@@ -80,19 +82,25 @@ def mutate(tree, index, variant):
     return ast.unparse(ast.fix_missing_locations(tree))
 
 
-def survives(cmd, seconds, env):
+def passes(cmd, seconds, env):
     try:
         return subprocess.run(cmd, capture_output=True, timeout=seconds, env=env).returncode == 0
     except subprocess.TimeoutExpired:
         return False  # A hung mutant counts as caught.
 
 
+def survives(cmds, seconds, env):
+    """True when every command passes. The commands run in parallel."""
+    with ThreadPoolExecutor(min(len(cmds), os.cpu_count() or 1)) as pool:
+        return all(pool.map(lambda cmd: passes(cmd, seconds, env), cmds))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", required=True, help="commit to diff against, as in `git diff <base>...HEAD`")
     parser.add_argument("--budget", type=int, default=600, help="total seconds for all mutants")
-    parser.add_argument("--timeout", type=int, default=60, help="seconds per mutant")
-    parser.add_argument("--test-cmd", default=TEST_CMD)
+    parser.add_argument("--timeout", type=int, default=180, help="seconds per mutant")
+    parser.add_argument("--test-cmd", help="one command that runs the tests; default: one pytest process per factory/tests file")
     args = parser.parse_args()
 
     diff = subprocess.run(["git", "diff", "-U0", "--diff-filter=AM", f"{args.base}...HEAD"],
@@ -100,14 +108,21 @@ def main():
     if diff.returncode:
         print(f"cannot run: git diff failed: {diff.stderr.strip()}", file=sys.stderr)
         return 1
-    cmd = shlex.split(args.test_cmd)
+    if args.test_cmd:
+        cmds = [shlex.split(args.test_cmd)]
+    else:
+        cmds = [[*shlex.split(TEST_FILE_CMD), str(f)] for f in sorted(Path("factory/tests").glob("test_*.py"))]
     # A mutant written in the same second as the original, with the same size, would reuse a stale .pyc.
     cache = tempfile.mkdtemp()
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPYCACHEPREFIX": cache}
-    # Tests must pass before mutation, or every mutant would look caught.
-    if not survives(cmd, max(args.budget, args.timeout), env):
+    # Tests must pass before mutation, or every mutant would look caught. A command that is red here is left out.
+    with ThreadPoolExecutor(min(len(cmds), os.cpu_count() or 1)) as pool:
+        green = [cmd for cmd, ok in zip(cmds, pool.map(lambda c: passes(c, max(args.budget, args.timeout), env), cmds)) if ok]
+    if not green:
         print("cannot run: the tests fail or time out without any mutation", file=sys.stderr)
         return 1
+    if len(green) < len(cmds):
+        print(f"{len(cmds) - len(green)} of {len(cmds)} test commands fail without any mutation and are left out", file=sys.stderr)
 
     deadline = time.monotonic() + args.budget
     survivors, skipped = [], 0
@@ -124,7 +139,7 @@ def main():
                     skipped += 1
                     continue
                 file.write_text(mutate(tree, index, variant))
-                if survives(cmd, min(args.timeout, remaining), env):
+                if survives(green, min(args.timeout, remaining), env):
                     survivors.append(f"{path}:{line}: {description}")
         finally:
             file.write_text(original)

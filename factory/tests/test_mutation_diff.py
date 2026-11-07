@@ -105,6 +105,7 @@ class EndToEndTest(unittest.TestCase):
             # A check that reads the code catches the comparison mutant.
             check = f"{sys.executable} -c \"import sys; sys.path.insert(0, 'factory'); import m; assert m.f(9) == 0 and m.f(1) == 1\""
             result = self.run_script(root, "HEAD~1", check)
+            self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn("comparison", result.stdout)
             self.assertEqual((root / "factory/m.py").read_text().count("a > 5"), 1)
 
