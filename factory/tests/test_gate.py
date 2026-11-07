@@ -66,6 +66,14 @@ class GateTest(unittest.TestCase):
         with self.assertRaises(gate.Bad):
             gate.apply("intake", "cheap", {"ticket": "7"}, MemoryTracker({"7": {"stage": "triage"}}), graph)
 
+    def test_confirmed_bug_starts_implementation(self):
+        """#161: investigate's `bug` outcome moves the ticket to in-dev and adds the implement label that wakes `implement`."""
+        tr = MemoryTracker({"7": {"stage": "investigating"}})
+        gate.apply("investigate", "bug", {"ticket": "7", "diagnosis": "d", "tier": "mid"}, tr, NODES)
+        facts = tr.facts("7")
+        self.assertEqual(facts["stage"], "in-dev")
+        self.assertIn("factory:implement-mid", facts["attrs"])
+
     def test_guard_facts(self):
         f = {"attrs": ["risk:low"], "pr_state": "open", "behind": True, "conflict": False, "ci": "green",
              "head": "h2", "blockers_open": 0, "stage": "in-review",

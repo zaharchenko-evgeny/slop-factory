@@ -128,6 +128,7 @@ class ReconcileTest(unittest.TestCase):
     def test_custom_stage_kind_from_config(self):
         kinds = {**CONFIG["tracker"]["stage_kinds"], "investigating": "active"}
         nodes = copy.deepcopy(NODES)
+        del nodes["nodes"]["investigate"]  # the custom node alone owns this stage
         nodes["nodes"]["custom"] = {"role": "script", "triggers": ["issues.labeled factory:custom"],
                                     "when": {"stage": "investigating"}, "outcomes": {"x": {}}, "timeout_minutes": 5}
         t, results, _ = run({"stage": "investigating", "since": OLD}, nodes, stage_kinds=kinds)
