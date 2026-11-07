@@ -7,8 +7,8 @@ Needs Node 22.18+ and Java 11+; TLC's jar (`TLA2TOOLS` overrides) is downloaded 
 
 Model: one variable, the ticket's `stage`. A node outcome that sets a stage is a step from the stages its `when` and
 `if` allow (an outcome that needs a PR starts only in the stages after a `create-pr` node). Nodes that only a person starts (every trigger `manual`) are not steps. Rules: OneStageLabel (every stage
-an outcome sets is declared, so a ticket has exactly one stage label), MovingNode (every non-final, non-waiting
-stage has a step out), NoDeadlock (TLC's own check), DoneReachable (`done` is reachable from `triage`).
+an outcome sets is declared, so a ticket has exactly one stage label), MovingNode (every declared non-final, non-waiting
+stage has a step out, reachable or not), NoDeadlock (TLC's own check), DoneReachable (`done` is reachable from `triage`).
 """
 import hashlib
 import os
@@ -121,6 +121,15 @@ def model(workflow):
 
 def check(workflow):
     """Run the statechart skill on `workflow` (a parsed workflow.yaml): ([broken rule names], chart text)."""
+    broken, chart = _run(workflow)
+    # TLC sees reachable stages only; a declared active stage that no step leaves also breaks MovingNode.
+    moves, declared, final, waiting = steps(workflow)
+    if (declared - set(final) - set(waiting) - set().union(*(g for _, _, g, _ in moves))) and "MovingNode" not in broken:
+        broken = [r for r in RULES if r in {*broken, "MovingNode"}]
+    return broken, chart
+
+
+def _run(workflow):
     spec, cfg, view = model(workflow)
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)

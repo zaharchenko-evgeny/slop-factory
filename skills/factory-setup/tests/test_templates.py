@@ -38,6 +38,14 @@ nodes:
   finish: { agent: clerk, triggers: [{ pr: merged }], outcomes: { done: { if: { stage: approved }, effects: [{ stage: done }] } } }
 """
 
+ORPHAN = """
+stages: { final: [done] }
+nodes:
+  intake: { agent: router, triggers: [{ stage: triage }], when: { stage: triage },
+            outcomes: { ready: { effects: [{ stage: done }] } } }
+  idle: { agent: clerk, triggers: [{ stage: orphan }], when: { stage: orphan } }
+"""
+
 
 def files(root):
     return [f for f in root.rglob("*") if f.is_file() and "__pycache__" not in f.parts]
@@ -105,6 +113,9 @@ class Templates(unittest.TestCase):
         self.assertIn("NoDeadlock", broken)
         self.assertIn("MovingNode", broken)
         self.assertIn("DoneReachable", broken)
+
+    def test_unreachable_active_stage_without_way_out_breaks_moving_node(self):
+        self.assertEqual(statechart.check(yaml.safe_load(ORPHAN))[0], ["MovingNode"])
 
     def test_undeclared_stage_breaks_one_stage_label(self):
         workflow = yaml.safe_load(STUCK.replace("stage: review", "stage: reveiw"))
