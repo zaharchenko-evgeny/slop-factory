@@ -71,7 +71,7 @@ Decision:
    webhook of a `notify-reply` node:
 
    ```json
-   {"issue": 859, "pr": 860, "via": "slack", "user": "U123", "text": "…", "ref": "…"}
+   {"issue": 859, "pr": 860, "via": "telegram", "user": "U123", "text": "…", "ref": "…"}
    ```
 
    The relay keeps no state and judges nothing. It does not check the user, the
