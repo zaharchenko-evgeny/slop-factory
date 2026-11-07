@@ -60,7 +60,8 @@ without changing the workflow.
 - A team changes roles, rules or triggers only in its factory repository and
   redeploys; the engine changes only for engine code.
 - Air's own multi-repository checkout is reused, so there are no per-repository
-  automation copies.
+  automation copies. *Superseded in part by ADR-0024:* a node with `writes`
+  gets one automation per written repository.
 - Whether Air pushes and opens PRs from an additional repository must be
   probed before multi-repository tickets ship. Until it is proven, the
   developer pushes extra branches itself, or a ticket changes one repository
