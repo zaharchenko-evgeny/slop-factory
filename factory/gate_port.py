@@ -28,8 +28,9 @@ def ticket_repositories(body, names, primary):
     if not m:
         return [primary]
     # `owner/repo` names the repository whose name is `repo` (the router writes the full name)
+    repositories = re.sub(r"\s*\([^)]*\)", "", m[1])
     want = list(dict.fromkeys(x if x in names or x.rsplit("/", 1)[-1] not in names else x.rsplit("/", 1)[-1]
-                              for x in re.split(r"[,\s]+", m[1]) if x))
+                              for x in re.split(r"[,\s]+", repositories) if x))
     unknown = [x for x in want if x not in names]
     if unknown or not want:
         raise ValueError(f"ticket names unknown repositories: {', '.join(unknown) or m[1]}")
