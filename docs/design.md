@@ -91,6 +91,12 @@ act on the same subject (ticket or PR). Script and routine nodes, and nodes
 with `mention: false`, are never mentionable. Each node spec lists the
 personas its agent may address, and `factory begin` prints them.
 
+## 4b. Notifiers (ADR-0022)
+
+A person can get an actionable message in Slack, email or Telegram and answer in
+that thread. Adapters send; the gate alone sends and applies replies
+([0022-notifiers](adr/0022-notifiers.md)).
+
 ## 5. Flows
 
 Feature or bug:
