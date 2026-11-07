@@ -850,6 +850,8 @@ def same(key: str, have, want) -> bool:
         return sorted(have or []) == sorted(want or [])
     if key == "domains":
         return set(want or []) <= set(have or [])
+    if key == "secrets":  # deploy cannot set or delete one: a missing one is `set by a person`, an extra one is theirs
+        return True
     if key == "variables":  # Air cannot delete a variable: an extra one is a by-hand removal, not a difference
         return all(k in (have or {}) and have[k] == v for k, v in (want or {}).items())
     return have == want
