@@ -443,6 +443,7 @@ def mention_holds(agent, facts, tracker=None, ticket=None):
     return frozenset((marker[1], agent)) in definition.neighbours(definition.load(config_mod.team_root()))
 
 
+REMOTE_FIRST = ("review", "merge", "update-branch")  # effects that write to a code host and can fail there
 GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention"}
 FROM = re.compile(r"<!-- factory:from (\S+?)( reply)? -->")
 
@@ -859,7 +860,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         effects[:0] = human_effects
     after = [*after, *comment_after, *unblocked(effects, tracker, facts)]
     effects[:0] = group_unlabels(effects, facts)
-    effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
+    # Remote writes that can fail first, the stage change last: a failed review POST then leaves the labels and the
+    # stage as they were, instead of a ticket with its risk label removed and no node to wake it (#998).
+    effects.sort(key=lambda e: 0 if e["kind"] in REMOTE_FIRST else 2 if e["kind"] == "stage" else 1)
     for e in effects:
         if e["kind"] == "stage":
             e["event"] = payload.get("event")

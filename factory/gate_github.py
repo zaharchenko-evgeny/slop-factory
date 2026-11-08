@@ -8,6 +8,7 @@ A marker `<!-- factory:review focus=<f> round=<n> verdict=approve|changes -->` c
 """
 import copy
 import json
+import os
 import re
 import subprocess
 import sys
@@ -419,6 +420,7 @@ class GitHubGateTracker(DescriptorPort):
         # {name: owner/repo} of the descriptor's repositories, the primary first; the primary is the code host
         self.repositories = dict(repositories or {"primary": None})
         self.repositories[next(iter(self.repositories))] = self.pr_repo
+        self.writable = None  # repository names this environment may write; None: every one (#994)
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, CountedRun(run)
         # the ticket side: every ticket read and write goes through it (GitHub issues unless a store is given)
         self.tickets = tickets or GitHubTicketStore(repo, self.run)
@@ -448,7 +450,14 @@ class GitHubGateTracker(DescriptorPort):
                    (c.get("ci") or {}).get("workflows") or ["quality-gates"],
                    (c.get("code_host") or {}).get("repository"),
                    {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,
-                   repository_names(c), tickets, (c.get("reviews") or {}).get("required"))
+                   repository_names(c), tickets, (c.get("reviews") or {}).get("required"))._with_writable(c)
+
+    def _with_writable(self, c):
+        """The writable repositories of the environment in FACTORY_ENV, from the compiled definition (#994)."""
+        env = ((c.get("environments") or {}).get(os.environ.get("FACTORY_ENV") or "") or {})
+        if "writable" in env:
+            self.writable = set(env["writable"]) | {next(iter(self.repositories))}
+        return self
 
     # --- reads
     def _api(self, path, *flags, repo=None):
@@ -908,7 +917,7 @@ class GitHubGateTracker(DescriptorPort):
         latest_event = max([e["at"] or "" for _, e in events] + [commit_at or ""])
         latest_command = max((e["at"] for e in command_events), default="")
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
-        comments = [c["body"] for c in self.tickets.comments(n) if c["body"].startswith(("[factory] recover:", "[factory] reconcile:"))
+        comments = [c["body"] for c in self.tickets.comments(n) if c["body"].startswith(("[factory] recover:", "[factory] reconcile:", "[factory] end failed:"))
                     and c["at"] >= stage_at]
         return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
                 "command_pending": bool(latest_command and latest_command == latest_event),
@@ -1045,6 +1054,9 @@ class GitHubGateTracker(DescriptorPort):
             return self.tickets.park(n, value, self.stages["triage"])
         if kind == "merge":  # the primary last: only its merge event wakes `finish` (Air triggers on its repository)
             views, wrote = self._views(n), False
+            readonly = [f"{name} #{pr['number']}" for name, _, pr in views if pr and not pr["merged"] and not self._may_write(name)]
+            if readonly:  # refuse before any merge: a half-merged ticket is worse than none
+                raise RuntimeError(f"merge: {', '.join(readonly)} is read-only in this environment; a person merges it")
             for name, view, pr in views[1:] + views[:1]:
                 if pr is None:
                     raise RuntimeError(f"merge: no PR for ticket {n} in {name}")
@@ -1057,7 +1069,7 @@ class GitHubGateTracker(DescriptorPort):
         if kind == "update-branch":  # a merge commit of the base into the PR branch; refused when the head moved
             views, wrote = self._views(n), False
             for name, view, pr in views:
-                if pr is None or pr["merged"]:
+                if pr is None or pr["merged"] or not self._may_write(name):
                     continue
                 head = self._judged_head(e, name, views) or pr["head"]["sha"]
                 if len(views) > 1 and view._api(f"compare/{pr['base']['ref']}...{head}", repo=view.pr_repo)["behind_by"] == 0:
@@ -1066,6 +1078,9 @@ class GitHubGateTracker(DescriptorPort):
                 wrote = True
             return wrote
         raise ValueError(f"unknown effect: {kind}")
+
+    def _may_write(self, name):
+        return self.writable is None or name in self.writable
 
     def _views(self, n):
         """(repository name, view, PR or None) per repository of ticket `n`, in the ticket's order (ADR-0017)."""
@@ -1167,7 +1182,10 @@ class GitHubGateTracker(DescriptorPort):
     def _review(self, n, e):
         """The reviewer's verdict as a COMMENT review on each PR of the ticket, pinned to that PR's own head. The
         rereview command label lives on the primary PR, which wakes the reviewer."""
-        views, focus = [(name, view, pr) for name, view, pr in self._views(n) if pr], e.get("focus")
+        # only open PRs in repositories this environment may write: a merged PR is done, a read-only one is not ours
+        views = [(name, view, pr) for name, view, pr in self._views(n)
+                 if pr and not pr.get("merged") and pr.get("state", "open") == "open" and self._may_write(name)]
+        focus = e.get("focus")
         if not views or not focus:
             raise RuntimeError("review: needs a PR and a payload `focus`")
         _, first, primary = views[0]
