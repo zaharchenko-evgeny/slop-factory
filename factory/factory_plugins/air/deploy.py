@@ -459,16 +459,8 @@ def repository_urls(plan: dict) -> list[str]:
                                if isinstance(a.get("repository"), dict) and a["repository"].get("browseUrl")])) or [""]
 
 
-def youtrack_workflow_command(plan: dict) -> list[str] | None:
-    tracker = plan.get("tag_tracker") or {}
-    if tracker.get("adapter") != "youtrack":
-        return None
-    return ["npx", "--yes", "@jetbrains/youtrack-scripting", "upload", "factory/youtrack/comment-wake",
-            "--host", tracker["url"]]
-
-
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None, yt_run=None,
-           config=None, workflow_run=subprocess.run) -> int:
+           config=None) -> int:
     """Write only to Air, to repository labels (through `run`, a `gh` runner) and to the tracker's own setup (through
     `yt_run` for YouTrack): deploy never creates, edits or closes a tracker ticket. `config` selects the plugins that
     provision the labels (github when None) and the tracker setup (every plugin's, for what the plan names, when None)."""
@@ -487,10 +479,6 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print(line)
     for line in extra_variables(plan, state[1]):
         print(line)
-    workflow_command = youtrack_workflow_command(plan)
-    token_env = (plan.get("tag_tracker") or {}).get("token_env", "YOUTRACK_TOKEN")
-    if workflow_command:
-        print("step YouTrack workflow upload: " + shlex.join(workflow_command) + f" --token ${token_env}")
     label_changes = core.reconcile_labels(plan, run, config)
     # the tracker's own setup beside the labels (youtrack: tags and field values), from the `deploy.tracker` hooks;
     # without a config, every plugin's hook sets up what the plan names
@@ -518,19 +506,6 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
             print(line, file=sys.stderr)
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
-    if workflow_command:
-        token = os.environ.get(token_env)
-        if not token:
-            print(f"error: set {token_env} to upload the YouTrack workflow", file=sys.stderr)
-            return 1
-        try:
-            workflow_run([*workflow_command, "--token", token], check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"error: YouTrack workflow upload failed with exit code {e.returncode}", file=sys.stderr)
-            return 1
-        except OSError as e:
-            print(f"error: YouTrack workflow upload failed: {e}", file=sys.stderr)
-            return 1
     core.provision_labels(plan, removals, "remove", run, config)
     for p in trackers:
         for line in p.remove():

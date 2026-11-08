@@ -8,7 +8,7 @@ Module._load = function (request, parent, isMain) {
   }
   return originalLoad.call(this, request, parent, isMain);
 };
-require('../youtrack/comment-wake/comment-wake.js');
+require('../factory_plugins/youtrack/comment-wake/comment-wake.js');
 Module._load = originalLoad;
 
 const cases = [

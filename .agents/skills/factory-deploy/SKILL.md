@@ -35,7 +35,7 @@ applies the plan and changes no code.
 5. Run `factory --team <team-repo> deploy --dry-run` again: it must print `unchanged`.
 6. Run each `[Slop factory] doctor*` automation once (air-automations MCP) and report its probe lines. A failed probe has opened or updated its `Doctor: <probe> fails` ticket.
 
-For a YouTrack tracker, the dry run also lists the comment-wake workflow upload. Apply runs the supported
+For a YouTrack tracker with the comments plugin on, the dry run also lists the comment-wake workflow upload. Apply runs the supported
 `@jetbrains/youtrack-scripting` CLI with the configured token environment variable. Attach the uploaded workflow to
 the project once in Project settings → Workflows.
 

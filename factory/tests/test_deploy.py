@@ -33,6 +33,7 @@ from factory_plugins.air import deploy as air  # noqa: E402
 import nodes
 from factory_plugins.github import tracker as github_tracker  # noqa: E402
 from factory_plugins.github import wake as github_wake  # noqa: E402
+from factory_plugins.youtrack import wake as youtrack_wake  # noqa: E402
 import definition  # noqa: E402
 import workflow  # noqa: E402
 
@@ -742,10 +743,16 @@ class ProjectPlanTest(unittest.TestCase):
 
     def test_mentionable_agents_get_a_reply_node(self):
         """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node and
-        the mention router; the others do not. With it off (the fixture as it is, ADR-0025) none deploy."""
+        the mention router; the others do not. With it off (ADR-0025) none deploy. The fixture has it on (#1083)."""
         def comments_on(f):
             f["plugins"] = ["comments"]
+
+        def comments_off(f):
+            f.pop("plugins", None)
+            f.pop("modules", None)
         plan = definition_plan(edit_factory=comments_on)
+        self.assertEqual({a["spec"]["node"] for a in plan["automations"]},
+                         {a["spec"]["node"] for a in definition_plan()["automations"]})
         nodes_ = {a["spec"]["node"] for a in plan["automations"]}
         self.assertTrue({"mentions", "reply-dev", "reply-reviewer"} <= nodes_)
         self.assertFalse({"reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
@@ -755,7 +762,7 @@ class ProjectPlanTest(unittest.TestCase):
             comments_on(f)
             for spec in f["agents"].values():
                 spec.pop("mentionable", None)
-        for edit in (none_mentionable, None):
+        for edit in (none_mentionable, comments_off):
             plan = definition_plan(edit_factory=edit)
             nodes_ = {a["spec"]["node"] for a in plan["automations"]}
             self.assertFalse({n for n in nodes_ if n == "mentions" or n.startswith("reply-")})
@@ -1537,51 +1544,60 @@ class YouTrackTagsTest(unittest.TestCase):
         self.assertNotIn("tag bug", out)
         self.assertEqual(writes, [])
 
-    def test_youtrack_comment_rule_dry_run_lists_upload_and_never_runs_it(self):
-        plan = {**self.PLAN, "tag_tracker": {"adapter": "youtrack", "url": "https://yt.example",
-                                               "token_env": "TRACKER_TOKEN"}}
-        fake = FakeTags({"factory:ready": "1"})
-        runner = mock.Mock()
+    COMMENT_CONFIG = {"plugins": ["comments"], "repositories": [],
+                      "tracker": {"adapter": "youtrack", "url": "https://yt.example", "token_env": "TRACKER_TOKEN"}}
+
+    def upload(self, apply, config=None, runner=None):
         out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
-                mock.patch.object(air, "read_state", return_value=([], [])), \
-                mock.patch.dict(os.environ, {"TRACKER_TOKEN": "secret-value"}):
-            code = air.deploy("--dry-run", False,
-                                 {**plan, "prefix": "p", "environments": [], "automations": []},
-                                 None, None, yt_run=fake, workflow_run=runner)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = youtrack_wake.sync_wake_files(config or self.COMMENT_CONFIG, None, apply, workflow_run=runner,
+                                                 environ={"TRACKER_TOKEN": "secret-value"})
+        return code, out.getvalue(), err.getvalue()
+
+    def test_youtrack_comment_rule_dry_run_lists_upload_and_never_runs_it(self):
+        runner = mock.Mock()
+        code, out, _ = self.upload(False, runner=runner)
         self.assertEqual(code, 0)
-        self.assertIn("npx --yes @jetbrains/youtrack-scripting upload factory/youtrack/comment-wake --host https://yt.example --token $TRACKER_TOKEN", out.getvalue())
-        self.assertNotIn("secret-value", out.getvalue())
+        self.assertIn("npx --yes @jetbrains/youtrack-scripting upload " + str(youtrack_wake.WORKFLOW) +
+                      " --host https://yt.example --token $TRACKER_TOKEN", out)
+        self.assertNotIn("secret-value", out)
+        runner.assert_not_called()
+        self.assertEqual(youtrack_wake.WORKFLOW, ROOT / "factory/factory_plugins/youtrack/comment-wake")
+        self.assertTrue((youtrack_wake.WORKFLOW / "comment-wake.js").is_file())
+        out = io.StringIO()  # the core's `deploy.files` dispatch reaches the youtrack plugin's hook
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(deploy.sync_wake_files(self.COMMENT_CONFIG, None, False), 0)
+        self.assertIn("step YouTrack workflow upload: ", out.getvalue())
+
+    def test_youtrack_comment_rule_needs_the_comments_plugin(self):
+        runner = mock.Mock()
+        code, out, _ = self.upload(True, config={**self.COMMENT_CONFIG, "plugins": []}, runner=runner)
+        self.assertEqual((code, out), (0, ""))
         runner.assert_not_called()
 
     def test_youtrack_comment_rule_apply_runs_upload_with_named_secret(self):
-        plan = {**self.PLAN, "tag_tracker": {"adapter": "youtrack", "url": "https://yt.example",
-                                               "token_env": "TRACKER_TOKEN"}}
         runner = mock.Mock()
-        with contextlib.redirect_stdout(io.StringIO()), mock.patch.dict(os.environ, {"TRACKER_TOKEN": "secret-value"}), \
-                mock.patch.object(air, "read_state", return_value=([], [])):
-            code = air.deploy("--apply", False,
-                                 {**plan, "prefix": "p", "environments": [], "automations": []},
-                                 None, None, yt_run=FakeTags({"factory:ready": "1"}), workflow_run=runner)
+        code, _, _ = self.upload(True, runner=runner)
         self.assertEqual(code, 0)
         runner.assert_called_once_with(["npx", "--yes", "@jetbrains/youtrack-scripting", "upload",
-                                        "factory/youtrack/comment-wake", "--host", "https://yt.example",
+                                        str(youtrack_wake.WORKFLOW), "--host", "https://yt.example",
                                         "--token", "secret-value"], check=True)
 
-    def test_youtrack_comment_rule_upload_failure_does_not_print_secret(self):
-        plan = {**self.PLAN, "tag_tracker": {"adapter": "youtrack", "url": "https://yt.example",
-                                               "token_env": "TRACKER_TOKEN"}}
-        runner = mock.Mock(side_effect=subprocess.CalledProcessError(1, ["npx", "--token", "secret-value"]))
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
-                mock.patch.dict(os.environ, {"TRACKER_TOKEN": "secret-value"}), \
-                mock.patch.object(air, "read_state", return_value=([], [])):
-            code = air.deploy("--apply", False,
-                                 {**plan, "prefix": "p", "environments": [], "automations": []},
-                                 None, None, yt_run=FakeTags({"factory:ready": "1"}), workflow_run=runner)
+    def test_youtrack_comment_rule_apply_without_token_fails(self):
+        runner = mock.Mock()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = youtrack_wake.sync_wake_files(self.COMMENT_CONFIG, None, True, workflow_run=runner, environ={})
         self.assertEqual(code, 1)
-        self.assertIn("YouTrack workflow upload failed with exit code 1", err.getvalue())
-        self.assertNotIn("secret-value", out.getvalue() + err.getvalue())
+        self.assertIn("error: set TRACKER_TOKEN to upload the YouTrack workflow", err.getvalue())
+        runner.assert_not_called()
+
+    def test_youtrack_comment_rule_upload_failure_does_not_print_secret(self):
+        runner = mock.Mock(side_effect=subprocess.CalledProcessError(1, ["npx", "--token", "secret-value"]))
+        code, out, err = self.upload(True, runner=runner)
+        self.assertEqual(code, 1)
+        self.assertIn("YouTrack workflow upload failed with exit code 1", err)
+        self.assertNotIn("secret-value", out + err)
 
     def test_apply_creates_missing_tags_and_refuses_removal_without_allow_delete(self):
         code, _, err, writes = self.run_deploy("--apply", False, {"factory:ready": "1", "factory:old": "2"})

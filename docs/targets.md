@@ -148,9 +148,10 @@ roles:
 
 ## YouTrack workflow
 
-For a YouTrack tracker, `factory deploy --dry-run` lists the comment-wake workflow upload. Apply uses the
+For a YouTrack tracker with the comments plugin on (`plugins: [comments]`), `factory deploy --dry-run` lists the
+comment-wake workflow upload (the youtrack plugin's `deploy.files` hook). Apply uses the
 [@jetbrains/youtrack-scripting](https://www.npmjs.com/package/@jetbrains/youtrack-scripting) upload command with
-`npx --yes`, `factory/youtrack/comment-wake`, `--host <tracker url>` and `--token $<token_env>`.
+`npx --yes`, `factory/factory_plugins/youtrack/comment-wake`, `--host <tracker url>` and `--token $<token_env>`.
 Set the named token as an environment variable before apply. Attach the uploaded workflow to the project once in
 YouTrack under Project settings → Workflows.
 

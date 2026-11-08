@@ -31,7 +31,7 @@ Selected by `tracker.adapter` in `factory.yaml`.
   stay `source: github`.
 - `factory doctor` checks the token variable, the project and every mapped tag and field value (read-only; it reports
   a missing one and never creates it). `uv run scripts/youtrack_probe.py <ISSUE>` loads one issue read-only.
-- `factory deploy` uploads `factory/youtrack/comment-wake/` with the supported
+- While the comments plugin is on, `factory deploy` uploads `factory/factory_plugins/youtrack/comment-wake/` with the supported
   `@jetbrains/youtrack-scripting` CLI. Attach the workflow to the project once in Project settings → Workflows.
 
 ## GitHub Issues (`github-issues`)
