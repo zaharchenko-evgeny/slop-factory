@@ -1,6 +1,6 @@
 # ADR-0026: Engine plugins: events in, records out, effects
 
-Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068, #1069, #1070, #1071). Amends
+Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068, #1069, #1070, #1071, #1072). Amends
 ADR-0025 and ADR-0004.
 
 ## Context
@@ -307,3 +307,21 @@ with #1069 environments) through `find`, with three query kinds the GitHub
 tracker adds: `labeled`, `prs` and `closed`. These make the same `gh` calls
 the poll made: one paged search for every watched label, `/events` only for
 an id that does not decode, and the `pr list` and `issue list` reads.
+
+`air` (#1072) is the second surface plugin. `factory/deploy.py` keeps the
+target-neutral plan: node specs, prompts, triggers, variants, the compiled
+automation and the tracker labels. `factory_plugins/air/deploy.py` holds the
+Air automation and environment shapes (`plan_air`), the live state, diff and
+apply through the `Mcp` client and the REST `Backend`, and the secret and
+variable checks. `factory_plugins/air/contracts.py` (formerly
+`factory/contracts.py`) serves and refreshes the recordings, which stay in
+`factory/tests/contracts/` beside the GitHub ones the tests read. `AirSurface`
+provides surface `air`; the CLI words are `deploy --target air` and
+`contracts`. `factory deploy` with no `--target` runs the deploy of
+`surface:`, else of `air` as before (`plan` is always Air's). A surface
+answers `outputs()`: Air the five `outputBehaviour` values of its contract,
+`local` `read-only`, `create-pr` and `push-to-source`. `factory validate`
+reports `unsupported-output` for a deployed node whose `output:` the
+surface (`surface:`, else every selected surface once `targets.air` is set)
+does not support; a team with neither is not checked. Validation imports only
+the surface class, never the Air deploy code.

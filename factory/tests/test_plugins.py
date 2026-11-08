@@ -212,7 +212,7 @@ class LazinessTest(unittest.TestCase):
                     pass
                 """)
         self.assertEqual(mods, ["factory_plugins",
-                                *(f"factory_plugins.{p}" for p in ("claude", "codex", "comments", "github", "junie", "local",
+                                *(f"factory_plugins.{p}" for p in ("air", "claude", "codex", "comments", "github", "junie", "local",
                                                                     "notify", "notify_email", "pi", "space", "youtrack"))])
 
     def test_notify_on_imports_its_code_only_when_called(self):
@@ -244,6 +244,27 @@ class LazinessTest(unittest.TestCase):
             """)
         self.assertIn("factory_plugins.github", mods)
         self.assertEqual([m for m in mods if m.startswith("factory_plugins.github.")], [])
+
+    def test_air_code_only_when_deploy_uses_it(self):
+        """#1072: the core modules, the registry with the air surface on and `factory validate`'s output check load the
+        air declaration and its surface class at most; the Air deploy code and the contracts load when deploy runs."""
+        core = self.imported(FIXTURES / "v2", """
+            import plugins
+            registry = plugins.registry(config.load(), use=(("surface", "air"),))
+            assert registry.is_on("air"), registry.names
+            registry.impls("surface"); plugins.owners()
+            deploy.labels(nodes.load(), config.load())
+            """)
+        validated = self.imported(FIXTURES / "v2", "assert deploy.output_errors(nodes.load(), config.load()) == []")
+        deployed = self.imported(FIXTURES / "v2", """
+            import plugins
+            plugins.registry({}, use=(("surface", "air"),)).command("deploy --target air")
+            """)
+        self.assertIn("factory_plugins.air", core)
+        self.assertEqual([m for m in core if m.startswith("factory_plugins.air.")], [])
+        self.assertEqual([m for m in validated if m.startswith("factory_plugins.air.")], ["factory_plugins.air.surface"])
+        self.assertIn("factory_plugins.air.deploy", deployed)
+        self.assertNotIn("factory_plugins.air.contracts", deployed)
 
     def test_youtrack_code_only_when_selected_and_used(self):
         """#1069: a GitHub team, and the deploy plan, doctor probes and registry of any team, load the youtrack
@@ -332,6 +353,53 @@ class LazinessTest(unittest.TestCase):
         self.assertIn("factory_plugins.codex.runner", used)
         self.assertFalse({"factory_plugins.claude.runner", "factory_plugins.junie.runner", "factory_plugins.pi.runner"} & set(used))
         self.assertFalse([m for m in used if m.startswith("factory_plugins.github.")])  # no tracker until a poll
+
+
+class SurfaceTest(unittest.TestCase):
+    """#1072: a node's `output:` against its surface's `outputs()`, and `factory deploy` routed to the team's surface."""
+
+    GRAPH = {"nodes": {"implement": {"role": "dev", "output": "push-to-new-branch"},
+                       "review": {"role": "reviewer", "output": "read-only"},
+                       "approve": {"role": "human", "output": "anything"},
+                       "old": {"role": "dev", "enabled": False, "output": "anything"}}}
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT))
+        import deploy
+        self.deploy = deploy
+
+    def test_air_serves_every_output_of_its_contract(self):
+        from factory_plugins.air.surface import AirSurface
+        schema = json.loads((ROOT / "tests/contracts/air-mcp.json").read_text())["servers"]["air-automations"]["tools"]
+        create = next(t for t in schema if t["name"] == "create_automation")["inputSchema"]
+        enum = create["properties"]["triggerVcs"]["items"]["properties"]["outputBehaviour"]["enum"]
+        self.assertEqual(AirSurface().outputs(), set(enum))
+
+    def test_output_checked_against_the_surface(self):
+        air = {"targets": {"air": {"models": {}}}}
+        self.assertEqual(self.deploy.output_errors(self.GRAPH, air), [])
+        errs = self.deploy.output_errors(self.GRAPH, {**air, "surface": "local"})
+        self.assertEqual(len(errs), 1)
+        self.assertIn("nodes.implement: output 'push-to-new-branch' is not supported by surface local", errs[0])
+        self.assertIn("unknown-surface", self.deploy.output_errors(self.GRAPH, {"surface": "moon"})[0])
+
+    def test_no_surface_no_check(self):
+        self.assertEqual(self.deploy.surface_name({}), None)
+        self.assertEqual(self.deploy.output_errors({"nodes": {"x": {"role": "dev", "output": "bogus"}}}, {}), [])
+
+    def test_deploy_runs_the_configured_surface(self):
+        calls = []
+        with patch.object(self.deploy.config_mod, "load", return_value={"surface": "local"}), \
+                patch("factory_plugins.local.surface.deploy", lambda argv: calls.append(("local", argv)) or 0), \
+                patch("factory_plugins.air.deploy.main", lambda argv: calls.append(("air", argv)) or 0):
+            self.assertEqual(self.deploy.main(["--apply"]), 0)
+            self.assertEqual(self.deploy.main(["--target", "air", "--dry-run"]), 0)
+            self.assertEqual(self.deploy.main(["plan", "--target", "air"]), 0)
+        with patch.object(self.deploy.config_mod, "load", return_value={}), \
+                patch("factory_plugins.air.deploy.main", lambda argv: calls.append(("air", argv)) or 0):
+            self.assertEqual(self.deploy.main(["--dry-run"]), 0)  # no `surface:`: Air, as before
+        self.assertEqual(calls, [("local", ["--apply"]), ("air", ["--dry-run"]), ("air", ["plan", "--target", "air"]),
+                                 ("air", ["--dry-run"])])
 
 
 if __name__ == "__main__":

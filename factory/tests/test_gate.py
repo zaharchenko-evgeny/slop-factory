@@ -25,6 +25,7 @@ import config as cfg  # noqa: E402
 import project_mode  # noqa: E402
 cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"))
 import deploy  # noqa: E402
+from factory_plugins.air import deploy as air  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
 import definition  # noqa: E402
@@ -506,7 +507,7 @@ class GateTest(unittest.TestCase):
         self.assertIsNone(tr.deploy_ticket)
 
     def test_new_labels_created_at_merge(self):
-        plan = deploy.plan_air(NODES, CONFIG)
+        plan = air.plan_air(NODES, CONFIG)
         self.assertIn("factory:needs-human", plan["labels"])
 
     def test_low_risk_wakes_full_only(self):

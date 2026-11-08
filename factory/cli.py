@@ -318,12 +318,13 @@ def validate():
             import project
             import workflow
             errs = [f"compiled: {e}" for e in config.validate() or
-                    workflow.validate(project.load(config.team_root()), workflow.load(config.team_root()))]
+                    workflow.validate(project.load(config.team_root()), workflow.load(config.team_root())) or
+                    deploy.output_errors(nodes.load(), config.load())]
         print("\n".join([*errs, *(f"warning: {w}" for w in definition.warnings(defn)), *([] if errs else ["factory: ok"])]))
         return 1 if errs else 0
     errs = config.validate()
     if not errs:
-        errs = nodes.validate(nodes.load(), config.load())
+        errs = nodes.validate(nodes.load(), config.load()) or deploy.output_errors(nodes.load(), config.load())
     print("\n".join(errs) or "factory: ok")
     return 1 if errs else 0
 
@@ -422,7 +423,8 @@ def plugin_command(word):
 
 def surface_command(surface, word):
     """The function (argv) -> exit code behind CLI word `word` of surface `surface` (`local`: `run`,
-    `deploy --target local`). Using it turns its plugin on, whatever the config selects."""
+    `deploy --target local`; `air`: `deploy --target air`, `contracts`). Using it turns its plugin on, whatever the
+    config selects."""
     import plugins
     return plugins.registry({}, use=(("surface", surface),)).command(word)
 
@@ -464,8 +466,7 @@ def _main(argv):
     if cmd == "deploy":
         return deploy.main(rest)
     if cmd == "contracts":
-        from contracts import main as contracts_main
-        return contracts_main(rest)
+        return surface_command("air", "contracts")(rest)
     if cmd == "chart":
         return nodes.main(["chart", *rest])
     if cmd == "migrate" and rest[:1] == ["workflow"]:
