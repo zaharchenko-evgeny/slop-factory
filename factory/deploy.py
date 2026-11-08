@@ -367,7 +367,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
                     "foreground, and wait until it exits. Copy only that one number. It applies "
                     "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
                     "Report its JSON output." + INSTALLED_FACTORY)
-        text = definition.render(defn, name).strip()
+        text = definition.render(defn, name, (main_repository or {}).get("fullName")).strip()
         skills = definition.skill_lines(defn, role)
         servers = [f"{k} (Air connector {e['connector']})" if "connector" in e else f"{k} (custom, from .mcp.json)"
                    for k, e in definition.mcp(defn, name).items()]
@@ -502,10 +502,25 @@ def label_specs(nodes: dict, config: dict) -> dict:
     return out
 
 
+def label_plan(nodes: dict, config: dict, tickets=()) -> dict[str, list[str]]:
+    """{repository: [labels]} for a definition with `tracker.repositories` (ADR-0024). Every ticket repository (those,
+    then `tickets`) gets the tracker schema's labels and the hold and review-trigger labels; the tracker (the first one)
+    also gets the map label. A project repository that holds no tickets maps to `[]`, so `reconcile_labels` removes
+    the factory-owned labels it still has."""
+    t = config.get("tracker") or {}
+    tickets = list(dict.fromkeys([*(definition.full_name(r) for r in t.get("repositories") or []), *tickets]))
+    common = sorted({*tracker_schema(nodes, config).labels,
+                     *(x for x in (t.get("hold_label"), t.get("review_trigger")) if x)})
+    out = {r: [*common, *([t["map_label"]] if i == 0 and t.get("map_label") else [])] for i, r in enumerate(tickets)}
+    for r in config.get("repositories") or []:
+        out.setdefault(repository(r)["fullName"], [])
+    return {r: sorted(set(ls)) for r, ls in out.items()}
+
+
 def reconcile_labels(plan: dict, run=None, config=None) -> list[tuple]:
     """(action, repository, label, changed fields) per required label to create or update, and per factory-owned
     label no longer required to remove, from the selected plugins' `deploy.labels` hooks (github: each repository of
-    `plan["label_repositories"]` independently)."""
+    the plan's `label_plan`, else of `label_repositories`, independently)."""
     schema = TrackerSchema.from_plan(plan)
     return [c for hook in plugins.registry(config).hook("deploy.labels") for c in hook(schema, run)]
 
