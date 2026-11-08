@@ -21,62 +21,17 @@ import yaml
 
 import config
 import github_graphql
-from gate_port import PR_DEFAULTS, DescriptorPort, child_attrs, child_links, child_order, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
+from gate_port import DescriptorPort, child_attrs, child_links, child_order, ticket_from_ref, ticket_repositories
 from github_tracker import CountedRun, ProjectWriteRun, gh, project_repositories, random_color
+import derive
+from derive import clean_notes, notes_block, parse_notes, redact  # noqa: F401  (the agent notes, ADR-0026)
+from ports.records import Lazy, PrRecord, TicketRecord
+from ports.system import Query, Subject
 import vocab
 from youtrack_tracker import MissingRepository, YouTrackTicketStore, repo_stage_tags
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
-NOTE_FIELDS, NOTE_FOR, NOTE_MAX = ("for", "files", "repro", "hint", "context"), ("fixer", "reviewer", "developer", "any"), 2000
 NOTES_PARKED = "[factory] Agent notes for the PR description"  # ticket comment that holds them until the PR exists
-NOTES = re.compile(r"<!-- factory:agent-notes\s*(\{.*?\})\s*-->", re.S)
-SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)|\bAIza[\w-]{35}\b|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{20,}"
-                    r"|\bgithub_pat_\w{20,}|\bxox[abprs]-[\w-]{10,}|\bsk-[A-Za-z0-9_-]{20,}"
-                    r'|(?i:\b(?:api[_-]?key|secret|token|passw(?:or)?d)\b\s*[:=]\s*(?:"[^"]*"|[^\s",]+))', re.S)
-
-
-def redact(v):
-    """`v` with secret-looking text redacted in every string, before any serialisation."""
-    if isinstance(v, str):
-        return SECRET.sub("[redacted]", v)
-    if isinstance(v, list):
-        return [redact(x) for x in v]
-    if isinstance(v, dict):
-        return {k: redact(x) for k, x in v.items()}
-    return v
-
-
-def clean_notes(raw):
-    """The notes object of one block: known fields only, secret-looking text redacted; ValueError when it is no
-    object, `for` is unknown or it serialises past NOTE_MAX characters after redaction."""
-    if not isinstance(raw, dict):
-        raise ValueError("agent notes: needs an object")
-    notes = {k: raw[k] for k in NOTE_FIELDS if k in raw}
-    if notes.get("for") not in NOTE_FOR:
-        raise ValueError(f"agent notes: `for` is one of {', '.join(NOTE_FOR)}")
-    notes = {k: redact(v) for k, v in notes.items()}
-    if len(json.dumps(notes)) > NOTE_MAX:
-        raise ValueError(f"agent notes: over {NOTE_MAX} characters")
-    return notes
-
-
-def notes_block(notes):
-    """The hidden block of cleaned notes; `<` and `>` are JSON-escaped so no text can close the comment early."""
-    body = json.dumps(notes).replace("<", "\\u003c").replace(">", "\\u003e")
-    return f"<!-- factory:agent-notes\n{body}\n-->"
-
-
-def parse_notes(body, login="", kind="User"):
-    """The valid notes blocks of `body`, only from a bot author: a person's text is no source of notes."""
-    if kind != "Bot" and not login.endswith("[bot]"):
-        return []
-    out = []
-    for m in NOTES.finditer(body or ""):
-        try:
-            out.append(clean_notes(json.loads(m[1])))
-        except ValueError:
-            pass
-    return out
 
 
 def gate_clear(n):
@@ -729,31 +684,65 @@ class GitHubGateTracker(DescriptorPort):
         except Exception:  # unknown means the new head needs a review
             return False
 
-    def _carry_approvals(self, reviews, pr):
-        """An agent approval of an earlier commit counts at `head` after a clean merge of the base (marked `carried`)."""
-        head, clean = pr["head"]["sha"], {}
-        for r in reviews:
-            if r["agent"] and r["verdict"] == "approve" and r["commit_id"] != head:
-                if clean.setdefault(r["commit_id"], self._clean_base_advance(r["commit_id"], head, pr)):
-                    r.update(commit_id=head, carried=True)
-        return reviews
-
     def _can_write(self, login):
         """Write access to the code host (see `GitHubTicketStore.can_write`)."""
         return self.github.can_write(login, self.pr_repo)
 
-    def _agent_runs(self, n, pr, issue_events=None):
-        """Developer runs started for ticket `n` since a person last set `factory:ready`: each `labeled` event
-        of a command label (`factory:implement-*`, `fix-*`, `update-*`) on the issue or its PR after it. A
-        person's `ready` starts a fresh budget. Reviews follow pushes, so this bounds them too."""
-        cmds = (vocab.prefix("implement-<tier>"), vocab.prefix("fix-<tier>"), vocab.prefix("update-<tier>"))
-        events = {t: issue_events if t == n and issue_events is not None
-                  else self.tickets.events(n) if t == n else self._pr_events(t)
-                  for t in [n] + ([pr] if pr else [])}
-        name = lambda e: (e.get("value") or "") if e.get("kind") == "labeled" else ""
-        since = self._since = max((e.get("at") or "" for e in events[n] if name(e) == self.stages.get("ready")),
-                                  default="")
-        return sum(1 for es in events.values() for e in es if name(e).startswith(cmds) and (e.get("at") or "") >= since)
+    # --- records (ADR-0026): the facts are derived from them in the core (factory/derive.py)
+    def rules(self):
+        return derive.Rules(self.stages, self.risk_labels, self.required, self.fix_cap, self.run_cap, self.trusted)
+
+    def read(self, subject, want=frozenset()):
+        """The TicketRecord of ticket `subject.id`, or the PrRecord of its PR in repository `subject.repo` (None
+        without one). `want` "behind" reads how far the PR's base is ahead of its head."""
+        if subject.kind == "ticket":
+            return self._ticket_record(subject.id)
+        if subject.kind == "pr":
+            view = self._view(subject.repo)
+            pr = view._pr(subject.id)
+            return view._pr_record(pr, subject.repo, want) if pr else None
+        raise ValueError(f"read: unknown subject {subject.kind}")
+
+    def find(self, query):
+        """`children`: the sub-tickets of `query.of`; `stage`: the tickets holding one of the stages `query.values`."""
+        if query.kind == "children":
+            return self.tickets.children(query.of)
+        if query.kind == "stage":
+            return self.sweep_tickets(query.values, query.open_only)
+        raise ValueError(f"find: unknown query {query.kind}")
+
+    def _view(self, name):
+        """This tracker on repository `name` of the descriptor (the primary when None)."""
+        repo = self.repositories[name] if name is not None else self.pr_repo
+        return self if repo == self.pr_repo else self._on(repo)
+
+    def _ticket_record(self, n):
+        issue = self.tickets.issue(n)
+        events = self.tickets.events(n)
+        blockers = self.tickets.open_blockers(n)
+        return TicketRecord(n, issue["title"], issue["body"], issue["state"], issue["close_reason"], issue["author"],
+                            issue["updated_at"], issue["attrs"], issue["assignees"], events, self.tickets.comments(n),
+                            blockers, Lazy(self.tickets.can_answer))
+
+    def _pr_record(self, pr, name, want=frozenset()):
+        """The record of PR `pr` (the REST body) in this view's repository, descriptor name `name`."""
+        head, user = pr["head"]["sha"], pr.get("user") or {}
+        comments = [{"id": c.get("id"), "author": (c.get("user") or {}).get("login", ""),
+                     "author_type": (c.get("user") or {}).get("type", ""), "body": c.get("body"), "at": c.get("created_at")}
+                    for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)]
+        behind = None
+        if "behind" in want and pr.get("state") == "open":
+            behind = self._api(f"compare/{pr['base']['ref']}...{head}", repo=self.pr_repo)["behind_by"] > 0
+        return PrRecord(name, pr["number"], head, base=pr["base"]["ref"], branch=pr["head"]["ref"], state=pr.get("state"),
+                        merged=bool(pr.get("merged")), mergeable=pr.get("mergeable"),
+                        labels=[x["name"] for x in pr.get("labels", [])],
+                        requested_reviewers=[u["login"] for u in pr.get("requested_reviewers") or []],
+                        body=pr.get("body"), author=user.get("login", ""), author_type=user.get("type", ""),
+                        updated_at=pr.get("updated_at"), reviews=self._reviews(pr), comments=comments,
+                        events=self._pr_events(pr["number"]), ci=self._ci(head),
+                        commit_date=self._api(f"commits/{head}", repo=self.pr_repo)["commit"]["committer"]["date"],
+                        can_write=Lazy(self._can_write),
+                        clean_advance=Lazy(lambda old: self._clean_base_advance(old, head, pr)), behind=behind)
 
     def parent(self, n):
         """The parent issue number of sub-issue `n`, else None."""
@@ -775,108 +764,14 @@ class GitHubGateTracker(DescriptorPort):
         issue = self.tickets.issue(n)
         return issue["state"] == "closed" and issue["close_reason"] == "not_planned"
 
-    def _fix_writes(self, pr):
-        """Times the join started a fix round on `pr`: each `labeled factory:fix-*` event (the fix node removes
-        the label when it finishes, so every round adds it again)."""
-        return [e["at"] for e in self._pr_events(pr)
-                if e["kind"] == "labeled" and (e["value"] or "").startswith(vocab.prefix("fix-<tier>"))]
-
-    def _earlier(self, r, head, fix_writes):
-        """True when change request `r` was counted by an earlier round: it names an older commit and a join
-        started a fix round at or after it, so the fix was given it. A request sent during a fix, or with no
-        fix round after it, counts now. Without any join write (a person pushed by hand), the push of the
-        current head ends the earlier round."""
-        if r["commit_id"] == head:
-            return False
-        at = r["submitted_at"] or ""
-        if fix_writes:
-            return any(t >= at for t in fix_writes)
-        return at <= self._api(f"commits/{head}", repo=self.pr_repo)["commit"]["committer"]["date"]
-
-    def _round(self, reviews, required, head, requested, ci, pr=None):
-        """(complete, verdict, ignored, waiting) of the round at `head`. `waiting`: people whose change request a
-        fix already received and who have not decided again; the round stays open until they do. The round is marked agent reviews of every required focus at
-        head, no requested reviewer left (GitHub drops a person on review and adds them back on a re-request), CI
-        concluded. A person (with write access) or trusted bot blocks with a latest CHANGES_REQUESTED on head or
-        submitted since the round started; COMMENTED never counts."""
-        at_head = {r["focus"]: r for r in reviews if r["agent"] and r["commit_id"] == head}
-        others = {r["author"]: r for r in reviews if not r["agent"] and r["verdict"]
-                  and (r["author"] in self.trusted if r["bot"] else self._can_write(r["author"]))}
-        ignored = [r["author"] for r in reviews if r["bot"] and not r["agent"] and r["author"] not in self.trusted]
-        if ci == "red":  # a red head needs a fix whatever the reviews say; reviewers only start on green
-            return True, "changes", ignored, []
-        complete = all(x in at_head for x in required) and not requested and ci == "green"
-        if not complete:
-            return False, None, ignored, []
-        late = [r for r in others.values() if r["verdict"] == "changes"]
-        if any(r["commit_id"] != head for r in late):
-            writes = self._fix_writes(pr) if pr is not None else []
-            # A request a fix already received stays open until its author decides again: the round waits.
-            # A trusted bot cannot be asked again, so its handled request counts as resolved instead.
-            waiting = [r["author"] for r in late if self._earlier(r, head, writes) and not r["bot"]]
-            late = [r for r in late if not (r["bot"] and self._earlier(r, head, writes))]
-            if waiting:
-                return False, None, ignored, waiting
-        changes = ci == "red" or any(at_head[x]["verdict"] != "approve" for x in required) or bool(late)
-        return True, "changes" if changes else "approve", ignored, []
-
     def facts(self, n):
-        issue = self.tickets.issue(n)
-        labels = issue["attrs"]
-        by_label = {v: k for k, v in self.stages.items()}
-        events = self.tickets.events(n)
-        actor_events = [e for e in events if e["kind"] in ("labeled", "unlabeled", "closed", "reopened")]
-        # The stage is the stage label added last (a person's factory:ready on a running ticket wins over the
-        # label it replaces); `apply` of the stage effect removes the others.
-        # Order by event position, not timestamp: the events list is chronological and timestamps can tie.
-        added = {}
-        for i, e in enumerate(events):
-            if e["kind"] == "labeled":
-                added[e["value"]] = i
-        stage = max((x for x in labels if x in by_label), key=lambda x: added.get(x, -1), default=None)
-        stage = by_label.get(stage, "none")
-        blockers = self.tickets.open_blockers(n)
-        body = issue["body"]
-        risk = "low" if self.risk_labels["low"] in labels else "high"
-        required, pr = self.required[risk], self._pr(n)
-        f = {"stage": stage, "attrs": [x for x in labels if x not in by_label],
-             "assignees": issue["assignees"], "blockers_open": len(blockers),
-             "head": None, "pr": None, "mergeable": None, "conflict": False, "ci": "none", "reviews": [], "requested_reviewers": [],
-             "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
-             "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
-             "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none", "pending_rereviews": [],
-             "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
-             "handed_to_fix": False, "risk": risk, "behind": False,
-             "issue_state": issue["state"], "updated_at": issue["updated_at"],
-             "event_actor": actor_events[-1]["actor"] if actor_events else None,
-             "title": issue["title"], "body": body, "author": issue["author"], "branch": None}
-        since = getattr(self, "_since", "")  # a person's factory:ready starts fresh
-        comments = self.tickets.comments(n)
-        f["comments"] = comments
-        got = [(c["at"], notes) for c in comments if c["at"] >= since
-               for notes in parse_notes(c["body"], "", "Bot" if c["author_is_factory"] else "User")]
-        if stage == "needs-answers":
-            waiting = [e for e in events if e["kind"] == "labeled" and e["value"] == self.stages["needs-answers"]]
-            if waiting and comments:
-                started = waiting[-1]["at"] or ""
-                ready = [e for e in events if e["kind"] == "labeled" and e["value"] in (self.stages["triage"], self.stages["ready"])]
-                setter = ready[-1]["actor"] if ready else None
-                f["answered"] = any(c["at"] > started and not c["author_is_bot"] and
-                                    (c["author"] == setter or self.tickets.can_answer(c["author"]))
-                                    for c in comments)
-        if stage == "split":
-            f.update(children=[{"number": k["number"], "state": k["state"], "not_planned": k["not_planned"],
-                                "blocked": k["state"] != "closed" and self.stages["blocked"] in k["attrs"]}
-                               for k in self.tickets.children(n)])
-        parts = []
-        for name in ticket_repositories(body, list(self.repositories), next(iter(self.repositories))):
-            view = self if self.repositories[name] == self.pr_repo else self._on(self.repositories[name])
-            found = pr if view is self else view._pr(n)
-            part, notes = view._pr_facts(found, required, stage) if found else ({}, [])
-            parts.append({**PR_DEFAULTS, **part, "repo": name})
-            got += notes
-        f.update({k: v for k, v in combine_prs(parts).items() if k != "repo"})
-        f["agent_notes"] = [n for _, n in sorted(got, key=lambda t: t[0], reverse=True)]
+        ticket = self.read(Subject("ticket", n))
+        stage = derive.stage(ticket, self.stages)
+        children = self.find(Query("children", of=n)) if stage == "split" else None
+        want = derive.pr_want(stage)
+        names = ticket_repositories(ticket.body, list(self.repositories), next(iter(self.repositories)))
+        prs = [(name, self.read(Subject("pr", n, name), want)) for name in names]
+        f, self._since = derive.facts(ticket, prs, self.rules(), children)
         return f
 
     def _on(self, repo):
@@ -884,42 +779,6 @@ class GitHubGateTracker(DescriptorPort):
         view = copy.copy(self)
         view.pr_repo = repo
         return view
-
-    def _pr_facts(self, pr, required, stage):
-        """(PR_DEFAULTS keys, agent notes) of the ticket's PR `pr` in this view's repository."""
-        head, reviews = pr["head"]["sha"], self._carry_approvals(self._reviews(pr), pr)
-        pr_labels = {x["name"] for x in pr.get("labels", [])}
-        pending_rereviews = [focus for focus in required if vocab.cmd("rereview-<focus>", focus) in pr_labels]
-        latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
-        heads = {latest[x]["commit_id"] for x in required if x in latest}
-        requested = [u["login"] for u in pr.get("requested_reviewers") or []]
-        ci = self._ci(head)
-        since = getattr(self, "_since", "")  # a person's factory:ready starts a fresh round count
-        writes = [t for t in self._fix_writes(pr["number"]) if t >= since]
-        latest_review = max((r.get("submitted_at") or "" for r in reviews if r["commit_id"] == head), default="")
-        commit_date = self._api(f"commits/{head}", repo=self.pr_repo)["commit"]["committer"]["date"]
-        complete, verdict, ignored, waiting = self._round(reviews, required, head, requested, ci, pr["number"])
-        notes = (self._notes(self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo), "created_at", since)
-                 + self._notes(self._list(f"pulls/{pr['number']}/reviews", repo=self.pr_repo), "submitted_at", since)
-                 + self._notes([pr], "updated_at", since))  # the PR body is edited after creation
-        behind = (stage == "approved" and pr.get("state") == "open"  # only the merge gates read it
-                  and self._api(f"compare/{pr['base']['ref']}...{head}", repo=self.pr_repo)["behind_by"] > 0)
-        return {"branch": pr["head"]["ref"], "handed_to_fix": bool(writes) and max(writes) > max(latest_review, commit_date),
-                "behind": behind,
-                "pr_state": "merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open",
-                "pr": pr["number"], "head": head, "mergeable": pr.get("mergeable"), "conflict": pr.get("mergeable") is False,
-                "ci": ci, "reviews": reviews, "requested_reviewers": requested, "round_verdict": verdict,
-                "ignored_reviews": ignored, "waiting_reviewers": waiting, "pending_rereviews": pending_rereviews,
-                "pr_labels": sorted(pr_labels),
-                "focus_missing": [x for x in required if latest.get(x, {}).get("commit_id") != head],
-                "round_complete": complete,
-                "round_head": heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                "fix_rounds": fix_round_count(reviews, since)}, notes  # same-head dispute rereviews count as a new round
-
-    def _notes(self, items, stamp, since):
-        """(time, notes) of the bot-written items (comments, reviews, a PR) from `since` on."""
-        return [(x.get(stamp) or "", n) for x in items if (x.get(stamp) or "") >= since
-                for n in parse_notes(x.get("body"), (x.get("user") or {}).get("login", ""), (x.get("user") or {}).get("type", ""))]
 
     def stale_facts(self, n):
         """facts plus what the stale sweep needs: `since` (last label or commit event, ISO), the command label

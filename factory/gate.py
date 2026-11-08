@@ -38,7 +38,8 @@ if __name__ == "__main__":  # run as a script: `import gate` (a plugin's code) m
     sys.modules.setdefault("gate", sys.modules[__name__])
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
-from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
+from derive import clean_notes  # noqa: E402
+from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker  # noqa: E402
 from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
 from github_tracker import project_repositories  # noqa: E402
