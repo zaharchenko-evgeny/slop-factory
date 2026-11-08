@@ -1,0 +1,6 @@
+# Breaks NoDeadlock: `intake` moves a ticket to `review`, and no node moves it out of `review`.
+stages: { final: [done], waiting: [blocked] }
+nodes:
+  intake: { agent: router, triggers: [{ stage: triage }], when: { stage: triage },
+            outcomes: { ready: { effects: [{ stage: review }] } } }
+  finish: { agent: clerk, triggers: [{ pr: merged }], outcomes: { done: { if: { stage: approved }, effects: [{ stage: done }] } } }

@@ -27,6 +27,7 @@ cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"
 import deploy  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
+import definition  # noqa: E402
 from gate_port import MemoryTracker, TagTracker  # noqa: E402
 
 CONFIG = cfg.load()
@@ -44,6 +45,71 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_slop_ci_red_routes_to_fix_and_pending_ci_blocks_review(self):
+        graph = definition.nodes(definition.load(ROOT / "factory/tests/fixtures/slop"))
+
+        red = MemoryTracker({"7": {"stage": "in-review", "ci": "red"}})
+        status, outcome = gate.decide("ci-red", "7", red, graph, dry_run=True)
+        self.assertEqual((status, outcome["outcome"]), (gate.GO, "fix"))
+
+        pending = MemoryTracker({"7": {"stage": "in-review", "ci": "pending", "attrs": ["risk:high"]}})
+        status, _ = gate.check("review-high", {"id": "e1", "ticket": "7"}, pending, graph, CONFIG)
+        self.assertEqual(status, gate.NO_GO)
+
+    def test_partial_outcome_failure_reports_effects_that_landed(self):
+        graph = {"nodes": {"review": {"when": {}, "outcomes": {"changes": {"effects": [
+            {"review": "request-changes-at-head"}, {"unlabel": "factory:review-x", "on": "pr"}]}}}}}
+
+        class FailsAfterReview(MemoryTracker):
+            def apply(self, effect):
+                if effect["kind"] == "unlabel":
+                    raise RuntimeError("unlabel failed")
+                if effect["kind"] == "comment":
+                    self.report = effect
+                return super().apply(effect)
+
+        tr = FailsAfterReview({"7": {"stage": "in-review", "head": "abc"}})
+        with self.assertRaisesRegex(RuntimeError, "unlabel failed"):
+            gate.apply("review", "changes", {"ticket": "7", "focus": "x", "round": 1,
+                                                "run_id": "run-1"}, tr, graph)
+        comments = [json.loads(v) for kind, v in tr.tickets["7"]["log"] if kind == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("review", comments[0])
+        self.assertEqual((tr.report["on"], tr.report["run_id"]), ("pr", "run-1"))
+
+    def test_sweep_plan_replays_stale_review_marker_instead_of_refiring(self):
+        facts = {"stage": "in-review", "head": "abc", "pr_labels": ["factory:review-x"],
+                 "reviews": [{"agent": True, "focus": "x", "verdict": "changes", "commit_id": "abc", "round": 2}]}
+        self.assertEqual(gate.sweep_plan(facts),
+                         ("review", "changes", {"focus": "x", "round": 2, "review_replay": True}))
+
+    def test_definition_replay_uses_review_node_and_marker_outcome(self):
+        node = {"triggers": [{"label": "factory:review-high"}], "outcomes": {
+            "approve-low": {"effects": [{"review": "approve-at-head"}]},
+            "approve-risky": {"effects": [{"review": "approve-at-head"}]},
+            "changes": {"effects": [{"review": "request-changes-at-head"}]}}}
+        graph = {"nodes": {"review-high": node}}
+        review = {"agent": True, "focus": "review-high", "verdict": "approve", "commit_id": "abc", "round": 1}
+        facts = {"stage": "in-review", "head": "abc", "pr_labels": ["factory:review-high"], "reviews": [review]}
+        with patch("gate.definition_team", return_value=True):
+            self.assertIsNone(gate.stale_review_plan(facts, graph))  # two approvals: an unnamed one is not guessed
+            facts["reviews"] = [{**review, "outcome": "approve-risky"}]
+            self.assertEqual(gate.stale_review_plan(facts, graph)[:2], ("review-high", "approve-risky"))
+            facts["reviews"] = [{**review, "verdict": "changes"}]
+            self.assertEqual(gate.stale_review_plan(facts, graph)[:2], ("review-high", "changes"))
+            self.assertIsNone(gate.stale_review_plan({**facts, "pr_labels": []}, graph))
+
+    def test_assignment_effect_resolves_the_payload_field(self):
+        self.assertEqual(gate.resolve({"assign": {"field": "assignee"}}, {"assignee": "bob"}, "7"),
+                         {"kind": "assign", "ticket": "7", "value": "bob"})
+        self.assertEqual(gate.resolve({"assign": {"field": "assignee"}, "on": "pr"}, {"assignee": ["a", "b"]}, "7"),
+                         {"kind": "assign", "ticket": "7", "value": ["a", "b"], "on": "pr"})
+
+    def test_assignment_field_missing_or_empty_fails(self):
+        for payload in ({}, {"assignee": ""}, {"assignee": "  "}, {"assignee": []}, {"assignee": [""]}, {"assignee": 3}):
+            with self.subTest(payload=payload), self.assertRaises(gate.Bad):
+                gate.resolve({"assign": {"field": "assignee"}}, payload, "7")
+
     def test_assignment_effect_resolves_owner_and_preserves_logins(self):
         self.assertEqual(gate.resolve({"assign": "owner", "on": "pr"}, {}, "7"),
                          {"kind": "assign", "ticket": "7", "value": cfg.owner(CONFIG), "on": "pr"})
@@ -980,20 +1046,20 @@ class TriggerTest(unittest.TestCase):
         gate.apply("join", "changes", {"ticket": "7", "event": "e", "tier": "mid"}, tr, NODES)
         self.assertEqual(tr.tickets["7"]["stage"], "blocked")
         self.assertIn(["label", '"factory:needs-human"'], tr.tickets["7"]["log"])
-        self.assertEqual(tr.tickets["7"]["assignees"], [CONFIG["notify"]["github_user"]])
+        self.assertEqual(tr.tickets["7"].get("assignees", []), [])
 
-    def test_needs_answers_assigns_ticket_author(self):
+    def test_needs_answers_assigns_nobody(self):
         tr = MemoryTracker({"7": {"stage": "triage", "author": "ticket-author"}})
         gate.apply("intake", "grill", {"ticket": "7", "questions": "[factory] Which API?"}, tr, NODES)
         self.assertIn(["label", '"factory:needs-human"'], tr.tickets["7"]["log"])
-        self.assertEqual(tr.tickets["7"]["assignees"], ["ticket-author"])
+        self.assertEqual(tr.tickets["7"].get("assignees", []), [])
 
     def test_label_removed_when_stage_changes(self):
         tr = MemoryTracker({"7": {"stage": "blocked", "attrs": ["factory:needs-human"],
                                    "assignees": [CONFIG["notify"]["github_user"]]}})
         gate.apply("human", "ready", {"ticket": "7", "actor": "human"}, tr, NODES)
         self.assertNotIn("factory:needs-human", tr.tickets["7"]["attrs"])
-        self.assertEqual(tr.tickets["7"]["assignees"], [])
+        self.assertEqual(tr.tickets["7"].get("assignees", []), [])
 
     def test_blocked_ticket_marks_its_pr(self):
         effects = []
@@ -1004,7 +1070,7 @@ class TriggerTest(unittest.TestCase):
         tr = Capture({"7": {"stage": "in-dev", "pr": 42}})
         gate.apply("implement", "blocked", {"ticket": "7", "reason": "[factory] blocked"}, tr, NODES)
         self.assertIn({"kind": "label", "ticket": "7", "value": "factory:needs-human", "on": "pr"}, effects)
-        self.assertIn({"kind": "assign", "ticket": "7", "value": CONFIG["notify"]["github_user"], "on": "pr"}, effects)
+        self.assertEqual([e for e in effects if e["kind"] == "assign"], [])
 
     def test_resume_clears_pr_mark(self):
         effects = []
@@ -1207,7 +1273,7 @@ class StaleSweepTest(unittest.TestCase):
         tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "issue_state": "open"}})
         self.assertEqual([r["recover"] for r in res], ["human"])
         self.assertIn(["label", '"factory:needs-human"'], tr.tickets[3]["log"])
-        self.assertEqual(tr.tickets[3]["assignees"], [CONFIG["notify"]["github_user"]])
+        self.assertEqual(tr.tickets[3].get("assignees", []), [])
 
     def test_recover_preserves_existing_reviewer_wait(self):
         tr, res = self.sweep({3: {"stage": "in-review", "since": self.OLD, "issue_state": "open",
@@ -1944,6 +2010,52 @@ class CiSyncTest(unittest.TestCase):
         self.assertEqual((results[0]["repo"], results[1]["added"], host.edits), ("o/missing", [self.GREEN], []))
 
 
+class StatusTests(unittest.TestCase):
+    def review(self, body, head="a", verdict="changes", rnd=1, focus="behaviour"):
+        return {"agent": True, "verdict": verdict, "commit_id": head, "focus": focus, "round": rnd, "body": body}
+
+    def test_open_lists_b1_and_drops_it_once_a_later_review_resolves_it(self):
+        first = self.review("[factory] x\n\n**B1** a.py:3 — crashes on empty input\nmore\n\n<!-- m -->")
+        facts = {"reviews": [first], "stage": "changes-requested", "pr": 9, "head": "a", "ci": "green", "fix_rounds": 1, "fix_cap": 3}
+        st = gate.status(facts)
+        self.assertEqual(st["reviews"]["behaviour"]["open"], [{"id": "B1", "text": "a.py:3 — crashes on empty input"}])
+        self.assertEqual((st["stage"], st["pr"], st["fix_rounds"], st["fix_cap"]), ("changes-requested", 9, 1, 3))
+        kept = gate.status({**facts, "reviews": [first, self.review("B1 is not resolved yet.", "b", rnd=2)]})
+        self.assertEqual([f["id"] for f in kept["reviews"]["behaviour"]["open"]], ["B1"])
+        later = self.review("[factory] B1 is resolved.", "b", verdict="approve", rnd=2)
+        st = gate.status({**facts, "reviews": [first, later]})
+        self.assertEqual(st["reviews"]["behaviour"], {"round": 2, "verdict": "approve", "head": "b", "open": []})
+
+    def test_status_is_short_and_names_failing_ci(self):
+        body = "\n".join(f"**B{i}** f.py:{i} — " + "x" * 400 for i in range(1, 9))
+        st = gate.status({"reviews": [self.review(body)], "ci": "red", "ci_failure": {"job": "lint", "step": "ruff", "log": "l"}})
+        self.assertEqual(st["ci"], {"state": "red", "failing": ["lint"]})
+        self.assertLess(len(json.dumps(st)), 2000)
+
+    def test_status_stays_under_the_limit_with_many_open_findings(self):
+        body = "\n".join(f"**B{i}** f.py:{i} — issue" for i in range(1, 101))
+        st = gate.status({"reviews": [self.review(body)]})
+        review = st["reviews"]["behaviour"]
+        self.assertLess(len(json.dumps(st)), 2000)
+        self.assertEqual(len(review["open"]) + review["omitted"], 100)
+
+    def test_begin_of_a_fix_run_includes_status(self):
+        tracker = MemoryTracker({7: {"stage": "changes-requested", "head": "abc", "pr": 9, "pr_state": "open", "ci": "green",
+                                     "round_complete": True, "fix_rounds": 0, "fix_cap": 3,
+                                     "reviews": [self.review("**B1** a.py:1 — bad", "abc")]}})
+        payload = {"eventType": "pull_request.labeled", "data": {"action": "labeled", "number": 9}}
+        path = Path(tempfile.mkdtemp()) / "e.json"
+        path.write_text(json.dumps(payload))
+        host = type("Host", (), {"ticket_for_pr": lambda self, number: 7})()
+        out = StringIO()
+        with patch.object(gate.GitHubCodeHost, "from_config", return_value=host), \
+                patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), redirect_stdout(out):
+            gate.main(["check", "--node", "fix", "--event", str(path)])
+        st = json.loads(out.getvalue())["status"]
+        self.assertEqual(st["reviews"]["behaviour"]["open"][0]["id"], "B1")
+        self.assertEqual(st["stage"], "changes-requested")
+
+
 class DefinitionDeliveryTest(unittest.TestCase):
     """The delivery scenarios of the removed name-keyed tests, on the definition fixture (ADR-0021): each outcome of
     `fixtures/v2/workflow.yaml` does what its effects say, and the gate refuses it when its guards do not hold."""
@@ -2040,7 +2152,7 @@ class DefinitionDeliveryTest(unittest.TestCase):
         t = tr.tickets["7"]
         self.assertEqual((status, t["stage"]), (gate.GO, "blocked"))
         self.assertIn("[factory] stuck", self.log(tr, "comment")[0])
-        self.assertEqual(t["assignees"], [cfg.owner(self.config)])
+        self.assertEqual(t.get("assignees", []), [])
 
     def test_review_changes_asks_for_a_fix_and_a_moved_head_is_refused(self):
         tr, status, _ = self.apply("review-high", "changes", {"stage": "in-review"}, head="old")

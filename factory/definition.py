@@ -394,6 +394,23 @@ def errors(defn):
         errs.append(f"bad-blockers: workflow.yaml: `blockers` is `start` or `merge`, not {w['blockers']!r}")
     default_env = (w.get("settings") or {}).get("environment")
     code = code_repos(defn)
+    tracker_repo = full_name((f.get("tracker") or {}).get("repository") or "")
+    tracker_name = (f.get("tracker") or {}).get("repository")
+    pr_labels = {}
+    for source in nodes.values():
+        source_env = envs.get(source.get("environment") or default_env) or {}
+        source_repo = next((r.get("repo") for r in source_env.get("repositories") or [] if r.get("main")), "")
+        for outcome in (source.get("outcomes") or {}).values():
+            for effect in (outcome or {}).get("effects") or []:
+                if isinstance(effect, dict) and effect.get("on") == "pr" and ("label" in effect or "unlabel" in effect):
+                    label = effect.get("label") or effect.get("unlabel")
+                    pr_labels.setdefault(label, set()).add(full_name(source_repo))
+    for source_env in envs.values():
+        if (source_env or {}).get("ci"):
+            source_repo = next((r.get("repo") for r in source_env.get("repositories") or [] if r.get("main")), "")
+            for state in ("green", "red"):
+                label = f"{(w.get('stages') or {}).get('label_prefix', 'factory:')}ci-{state}"
+                pr_labels.setdefault(label, set()).add(full_name(source_repo))
     if len(code) > 1 and any(per_repo_node(n) for n in nodes) \
             and ((f.get("defaults") or {}).get("settings") or {}).get("write_mode", "per-repo") == "per-repo":
         errs += [f"per-repo-env: {r}: a per-repository node needs an environment where it is `main`"
@@ -405,6 +422,22 @@ def errors(defn):
             continue
         human = (agents[n["agent"]] or {}).get("harness") == "human"
         env = n.get("environment") or default_env
+        if not human and env in envs:
+            main_repo = next((r.get("repo") for r in (envs.get(env) or {}).get("repositories") or []
+                              if r.get("main")), "")
+            main_name = full_name(main_repo)
+            for trigger in n.get("triggers") or []:
+                if trigger == "manual" or isinstance(trigger, dict) and ("schedule" in trigger or "webhook" in trigger):
+                    continue
+                pr_label = trigger.get("label") if isinstance(trigger, dict) else None
+                code_event = isinstance(trigger, dict) and next(iter(trigger), None) in ("pr", "ci")
+                pr_event = code_event or isinstance(trigger, dict) and pr_label in pr_labels
+                source_repos = pr_labels.get(pr_label)
+                if (source_repos and main_name not in source_repos) or (not pr_event and main_name != tracker_repo) \
+                        or (code_event and main_name not in {full_name(r) for r in code}):
+                    errs.append(f"deaf-trigger: {where}: environment {env} main repository {main_repo} "
+                                f"does not match tracker {tracker_name}")
+                    break
         if n.get("generated") is not True and name == ROUTER or (name.startswith("reply-") and not n.get("generated")):
             errs.append(f"reserved-node: {where}: `{ROUTER}` and `reply-<agent>` are generated from `mentionable`")
         if (agents[n["agent"]] or {}).get("run") not in (None, "decide"):
@@ -435,10 +468,12 @@ def errors(defn):
                     key = "assign" if "assign" in effect else "unassign"
                     value = effect[key]
                     valid = isinstance(value, str) or (isinstance(value, list) and all(isinstance(v, str) for v in value))
+                    if key == "assign":
+                        valid = valid or (isinstance(value, dict) and set(value) == {"field"} and isinstance(value["field"], str))
                     if key == "unassign":
                         valid = valid or value == "all"
                     if not valid:
-                        errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins")
+                        errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins" + (" or {field: <name>}" if key == "assign" else ""))
             for effect in oc.get("effects") or []:
                 if isinstance(effect, dict) and "notify" in effect:
                     errs += _notify_effect_errors(where, o, effect["notify"], f.get("notify"))
@@ -577,6 +612,8 @@ def to_project(defn):
         repos = sorted(e.get("repositories") or [], key=lambda r: not r.get("main"))
         help_ = environment_secrets(defn, en)
         environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": list(help_),
+                            # where the gate may write in this environment: the main repository, or `write: true` (#994)
+                            "writable": [names[r["repo"]] for r in repos if r.get("main") or r.get("write")],
                             "secret_help": help_,
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP}
 
@@ -633,6 +670,7 @@ def to_project(defn):
         "states": states,
         "commands": commands,
         **({"write_mode": dset["write_mode"]} if dset.get("write_mode") else {}),
+        **({"issues_token_env": dset["issues_token_env"]} if dset.get("issues_token_env") else {}),
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
         "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},
