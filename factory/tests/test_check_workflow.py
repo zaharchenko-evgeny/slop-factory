@@ -7,6 +7,7 @@
 Run: uv run --with pytest pytest factory/tests/test_check_workflow.py (TLC and Node run; the first run downloads the pinned jar)."""
 import contextlib
 import io
+import os
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,13 @@ def test_missing_workflow_exits_2():
 def test_installed_wheel_runs_the_check(tmp_path):
     subprocess.run(["uv", "build", "--wheel", "--out-dir", str(tmp_path), str(ROOT)], check=True, capture_output=True)
     wheel = next(tmp_path.glob("*.whl"))
+    import zipfile
+    names = {n.split(".data/data/", 1)[-1] for n in zipfile.ZipFile(wheel).namelist()}
+    assert {"share/factory-engine/engine/defaults.yaml", "share/factory/statechart.py"} <= names  # #973
+    env = {k: v for k, v in os.environ.items() if k not in ("FACTORY_ENGINE", "FACTORY_TEAM")}
+    done = subprocess.run(["uv", "run", "--no-project", "--with", str(wheel), "factory", "--team", str(FIXTURES / "../slop"),
+                           "validate"], capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert done.returncode == 0, done.stderr  # the installed engine files load (#984)
     for name, code in (("../slop", 0), ("no-deadlock", 1)):
         run = subprocess.run(["uv", "run", "--no-project", "--with", str(wheel), "factory", "check-workflow",
                               str(FIXTURES / name)], capture_output=True, text=True)

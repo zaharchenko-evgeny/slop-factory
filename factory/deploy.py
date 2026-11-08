@@ -506,6 +506,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             automations.append(automation)
     envs = []
     token = config.get("write_mode") == "token" and len(config["repositories"]) > 1
+    issues_token = config.get("issues_token_env")  # the gate's issue, label and comment writes to project repositories
     for env, scope_name, node_name in [(e, None, None) for e in used if e in unscoped] + scoped:
         d = envs_def[env]
         repo = repos[scope_name] if scope_name else repos.get(d["repository"]) or primary
@@ -515,7 +516,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env, **({"FACTORY_NODE": node_name} if node_name else {})},
             "secrets": list(dict.fromkeys([*d.get("secrets", []),
-                                           *([WRITE_TOKEN_SECRET] if token and github_tracker.token_env(env, config) else [])])),
+                                           *([WRITE_TOKEN_SECRET] if token and github_tracker.token_env(env, config) else []),
+                                           *([issues_token] if issues_token and len(config["repositories"]) > 1 else [])])),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
@@ -756,7 +758,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
     out.add(vocab.needs_human())
     out.add(vocab.lesson())  # ADR-0021: a ticket with uncollected lessons
-    out.add(vocab.comment())  # comment-wake-label.sh adds it; a missing label makes `gh issue edit` fail
+    out.add(vocab.comment())  # ADR-0023: scripts/comment-wake-label.sh adds it; the comment node removes it
     out |= {vocab.ci("ci-green"), vocab.ci("ci-red")}  # CI writes them (scripts/ci-state-label.sh); reconcile reads
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
@@ -1202,7 +1204,8 @@ def main(argv: list[str]) -> int:
         servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
-            run = github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config))
+            run = github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config),
+                                                    issues_token_env=config.get("issues_token_env"))
             code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run)
             if code:
                 return code

@@ -19,8 +19,19 @@ def _find_engine():
     """FACTORY_ENGINE, else this checkout, else the assets an installed tool ships under its prefix."""
     if os.environ.get("FACTORY_ENGINE"):
         return Path(os.environ["FACTORY_ENGINE"])
+    if (_HERE / NODES).exists():
+        return _HERE
     installed = Path(sys.prefix) / "share/factory-engine"
-    return _HERE if (_HERE / NODES).exists() or not installed.exists() else installed
+    if installed.exists():
+        return installed
+    try:  # an overlay install (`uv run --with <wheel>`): the data files sit beside the package, not under sys.prefix
+        from importlib import metadata
+        hit = next((f for f in metadata.files("slop-factory") or [] if str(f).endswith("share/factory-engine/" + NODES)), None)
+        if hit:
+            return Path(hit.locate()).resolve().parents[len(Path(NODES).parts) - 1]
+    except metadata.PackageNotFoundError:
+        pass
+    return _HERE
 
 
 ENGINE_ROOT = _find_engine()
