@@ -26,9 +26,30 @@ import nodes as nodes_mod
 import vocab
 
 PREFIX = "[factory] reconcile:"
+SYSTEMIC_MISSES = 3  # second misses in one run that mean the factory, not the tickets, is broken
 RUN = "reconcile"
 LOST_FINISH = ("approved", "in-review", "changes-requested")
 RED_TITLE = re.compile(r"Main is red(?: in Air)?: (.+)")
+FACTS_ERROR = f"{PREFIX} ticket facts failed:"
+
+
+def ticket_error(tracker, number, error, dry_run=False):
+    """Report a ticket-local read failure once, without preventing the next ticket from running."""
+    result = {"ticket": number, "error": f"{type(error).__name__}: {error}"}
+    if dry_run:
+        return result
+    try:
+        store = getattr(tracker, "tickets", None)
+        if hasattr(store, "comments"):
+            comments = [c["body"] for c in store.comments(number)]
+        else:
+            comments = [json.loads(value) for kind, value in store[number].get("log", []) if kind == "comment"]
+        if not any(comment.startswith(FACTS_ERROR) for comment in comments):
+            tracker.apply({"ticket": number, "run_id": RUN, "kind": "comment",
+                           "value": f"{FACTS_ERROR} {result['error']}"})
+    except Exception as comment_error:
+        result["comment_error"] = f"{type(comment_error).__name__}: {comment_error}"
+    return result
 
 
 def wakes(nodes, facts):
@@ -123,6 +144,20 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 if age <= timedelta(minutes=default):
                     continue
             else:
+                replay = gate.stale_review_plan(facts) if stage == "in-review" else None
+                if replay:
+                    node, outcome, payload = replay
+                    if age <= timedelta(minutes=nodes["nodes"][node].get("timeout_minutes", default)):
+                        continue
+                    r = {"ticket": n, "stage": stage, "node": node, "outcome": outcome,
+                         "reconcile": "reapply", "why": "review marker landed at the head; finish its outcome"}
+                    results.append(r)
+                    if not dry_run:
+                        _, out = gate.apply(node, outcome, {"ticket": n, **payload, "run_id": RUN}, tracker, nodes)
+                        r.update(applied=out["applied"], written=out.get("written", []))
+                    if progress:
+                        progress(r)
+                    continue
                 step = next((w for w in wakes(nodes, facts)
                              if age > timedelta(minutes=nodes["nodes"][w[0]].get("timeout_minutes", default))), None)
                 stale_reviews = [label for label, at in facts.get("review_labels", [])
@@ -148,7 +183,7 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 progress(r)
         except Exception as e:  # one ticket failing does not stop the others
             failed = True
-            results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+            results.append(ticket_error(tracker, n, e, dry_run))
             if progress:
                 progress(results[-1])
     return results, failed
@@ -175,10 +210,58 @@ def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress)
             progress(r)
 
 
+def fact_value(key, facts):
+    """The fact a `when` key reads, as text for a person."""
+    if key == "fix-rounds":
+        return f"{facts.get('fix_rounds')}/{facts.get('fix_cap')}"
+    if key == "label":
+        return ", ".join(sorted({*(facts.get("attrs") or []), *(facts.get("pr_labels") or [])})) or "none"
+    return facts.get({"blockers": "blockers_open", "pr-state": "pr_state"}.get(key, key))
+
+
+def stuck_label(wakes, nodes, facts, on_pr, ago):
+    """A waking label older than 2 timeouts that wakes no node: every node it triggers has a `when` that fails."""
+    import gate
+    by_label = {}
+    for node, label, timeout in wakes:
+        by_label.setdefault(label, []).append((node, timeout))
+    for label, woken in by_label.items():
+        on = "issue" if label in facts.get("attrs", []) else "pr" if label in on_pr else None
+        at = (facts.get("label_at") or {}).get(label)
+        if not on or not at or ago(at) <= timedelta(minutes=2 * max(t for _, t in woken)):
+            continue
+        if any(gate.holds(nodes[node].get("when") or {}, facts, {}) for node, _ in woken):
+            continue
+        guards = [f"{node} when.{k}: want {v}, have {fact_value(k, facts)}" for node, _ in woken
+                  for k, v in (nodes[node].get("when") or {}).items() if not gate.holds({k: v}, facts, {})]
+        return ("stuck", woken[0][0], label, on, f"{label} wakes no node. Why: {'; '.join(guards)}")
+    return None
+
+
+def last_end_failure(facts, node, head):
+    """The error block of the last `[factory] end failed:` comment for `node` at `head`, else None (#997)."""
+    for c in reversed(facts.get("recover_comments", [])):
+        if c.startswith("[factory] end failed:") and f"node={node} " in c and f"head={head} " in c:
+            body = c.split("\n", 1)[1] if "\n" in c else ""
+            return body.split("The outcome did not land")[0].strip() or "no error output"
+    return None
+
+
 def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="changes-requested"):
     def apply(**e):
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
-    if kind == "conflict":
+    if kind == "end-failed":
+        apply(kind="label", value=vocab.needs_human())
+        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} end failed, not re-fired: {why}\n"
+                                    f"Options: fix the cause (a new head, a token, a setting), then set {vocab.stage('ready')} "
+                                    f"or re-add `{label}`.")
+        apply(kind="stage", value="blocked")
+    elif kind == "stuck":
+        apply(kind="label", value=vocab.needs_human())
+        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} stuck: {why}\nOptions: fix the cause and set "
+                                    f"{vocab.stage('ready')}, or remove `{label}` and move the ticket by hand.")
+        apply(kind="stage", value="blocked")
+    elif kind == "conflict":
         apply(kind="label", value=label or vocab.cmd("fix-<tier>", "cheap"), on="pr")
         apply(kind="stage", value=fix_stage)
     elif kind == "blocked":
@@ -228,6 +311,7 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
     fix, wakes = definition_recovery(defn, vocab._tracker()["stages"], vocab.needs_human(), default)
     nodes = defn["workflow"]["nodes"]
     listed = tracker.sweep_tickets([s for s in stages if stage_kinds.get(s) not in ("waiting", "final")], open_only=True)
+    pending = []
     gate.prefetch(tracker, listed)
     for n in listed:
         try:
@@ -238,6 +322,19 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             ago = lambda at: now - datetime.fromisoformat(at.replace("Z", "+00:00"))  # noqa: E731
             step = None
             on_pr = facts.get("pr_labels") or []
+            replay = gate.stale_review_plan(facts, defn["workflow"]) if stage == "in-review" else None
+            if replay:  # the review landed at this head but its outcome did not finish: apply it, never re-fire the reviewer
+                node, outcome, payload = replay
+                if ago(since) > timedelta(minutes=nodes[node].get("timeout_minutes", default)):
+                    r = {"ticket": n, "stage": stage, "node": node, "outcome": outcome, "reconcile": "reapply",
+                         "why": "review marker landed at the head; finish its outcome"}
+                    results.append(r)
+                    if not dry_run:
+                        _, out = gate.apply(node, outcome, {"ticket": n, **payload, "run_id": RUN}, tracker, defn["workflow"])
+                        r.update(applied=out["applied"], written=out.get("written", []))
+                    if progress:
+                        progress(r)
+                continue
             if (fix and facts.get("conflict") and facts.get("pr") and facts.get("pr_state") in (None, "none", "open")
                     and fix[1] not in on_pr and gate.holds(nodes[fix[0]].get("when") or {}, facts, {})
                     and ago(since) > timedelta(minutes=default)):
@@ -249,22 +346,71 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
                     if on and at and ago(at) > timedelta(minutes=timeout) and gate.holds(nodes[node].get("when") or {}, facts, {}):
                         step = ("refire", node, label, on, f"no {node} outcome")
                         break
+                if step is None and not facts.get("blockers_open"):
+                    step = stuck_label(wakes, nodes, facts, on_pr, ago)
             if step is None:
                 continue
             kind, node, label, on, why = step
+            if kind == "stuck" and any(f"stage={stage} head={head} stuck:" in c for c in facts.get("recover_comments", [])):
+                continue
+            failed = last_end_failure(facts, node, head)
+            if failed and kind == "refire":  # #997: a retry on this head fails the same way; a person fixes the cause
+                if any(f"stage={stage} head={head} end failed" in c for c in facts.get("recover_comments", [])):
+                    continue
+                kind, why = "end-failed", f"`factory end` of {node} failed on this head:\n{failed}"
+            elif failed and kind == "stuck":
+                why = f"{why}\nLast error of {node} on this head:\n{failed}"
             missed = sum(f"stage={stage} head={head} re-fired {label} (" in c for c in facts.get("recover_comments", []))
             kind = "blocked" if kind == "refire" and missed else kind
             r = {"ticket": n, "stage": stage, "node": node, "reconcile": kind, "why": why}
             results.append(r)
-            if not dry_run:
-                send(tracker, n, None, stage, head, kind, label, on, why, fix_stage=fix[2] if fix else None)
-            if progress:
-                progress(r)
+            pending.append((r, (tracker, n, None, stage, head, kind, label, on, why), fix[2] if fix else None))
         except Exception as e:  # one ticket failing does not stop the others
-            results.append({"ticket": n, "error": f"{type(e).__name__}: {e}"})
+            results.append(ticket_error(tracker, n, e, dry_run))
             if progress:
                 progress(results[-1])
+    # Many second misses in one run are one factory failure (a broken install, #973), not a fault of each ticket:
+    # re-fire them all and let reconcile_main open one Doctor ticket, instead of blocking every ticket (#985).
+    systemic = sum(r["reconcile"] == "blocked" for r, _, _ in pending) >= SYSTEMIC_MISSES
+    for r, args, fix_stage in pending:
+        if systemic and r["reconcile"] == "blocked":
+            r.update(reconcile="refire", systemic=True)
+            args = (*args[:5], "refire", *args[6:])
+        if not dry_run:
+            send(*args, fix_stage=fix_stage)
+        if progress:
+            progress(r)
     return results
+
+
+def wake_approved(tracker, nodes, minutes, now=None, dry_run=False):
+    """`blockers: merge`: an `approved` ticket that had blockers, all now closed, whose merge label is older than
+    `minutes` did not merge (a blocker closed by hand, or the wake was lost): re-fire the merge node's label."""
+    if gate_blockers(nodes) != "merge":
+        return []
+    now, out = now or datetime.now(timezone.utc), []
+    for n in tracker.sweep_tickets(["approved"], open_only=True):
+        facts = tracker.stale_facts(n)
+        had = tracker.blocked_by(n) if hasattr(tracker, "blocked_by") else facts.get("blocked_by") or []
+        if facts["stage"] != "approved" or facts.get("blockers_open") or not had or facts.get("issue_state", "open") != "open":
+            continue
+        for node, label, on, why in wakes(nodes, facts):
+            at = (facts.get("label_at") or {}).get(label) or facts.get("stage_at")
+            if (nodes["nodes"][node].get("when") or {}).get("blockers") != "closed" or not at or \
+                    now - datetime.fromisoformat(at.replace("Z", "+00:00")) < timedelta(minutes=minutes):
+                continue
+            if not dry_run:
+                send(tracker, n, nodes, "approved", (facts.get("head") or "")[:12], "refire", label, on,
+                     "the last blocker closed")
+            out.append({"ticket": n, "node": node, "outcome": "refire", "label": label,
+                        "why": "approved, unblocked and not merged"})
+            break
+    return out
+
+
+def gate_blockers(nodes):
+    import gate
+    return gate.blockers_mode(nodes)
 
 
 def wake_ready(tracker, minutes, now=None, dry_run=False):
@@ -287,8 +433,46 @@ def wake_ready(tracker, minutes, now=None, dry_run=False):
     return out
 
 
-def main(argv):
+def main(argv, run=None):
+    """`factory reconcile`; a crash opens or updates `Doctor: reconcile fails`, and a clean run closes it (#845)."""
     argv = config_mod.pop_team(argv)
+    if "--dry-run" in argv or any(a.startswith("memory:") for a in argv):
+        return reconcile_main(argv)
+    import doctor
+    import github_tracker
+    run = run or github_tracker.gh
+    settings = config_mod.load()
+    repo = settings["tracker"].get("repository") or settings["code_host"]["repository"]
+    try:
+        code = reconcile_main(argv)
+    except Exception as e:
+        doctor.file_tickets(repo, [{"probe": "reconcile", "result": "fail", "detail": f"{type(e).__name__}: {e}"[:500]}],
+                            run, run_id=RUN)
+        raise
+    doctor.close_ticket(repo, "reconcile", run, run_id=RUN)
+    return code
+
+
+def report_systemic(config, systemic, run=None):
+    """Open `Doctor: runs end without an outcome` (no new comment while it is open), or close it when no run missed."""
+    import doctor
+    import github_tracker
+    run = run or github_tracker.gh
+    repo = config["tracker"].get("repository") or config["code_host"]["repository"]
+    probe = "runs-without-outcome"
+    if not systemic:
+        return doctor.close_ticket(repo, probe, run, run_id=RUN)
+    title = f"Doctor: {probe} fails"
+    found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--search", f'"{title}" in:title',
+                            "--json", "number,title"]))
+    if not any(i["title"] == title for i in found):
+        listed = ", ".join(f"#{r['ticket']} {r['node']}" for r in systemic)
+        doctor.file_tickets(repo, [{"probe": probe, "result": "fail", "detail": f"{len(systemic)} runs ended twice "
+                                    f"without an outcome in one reconcile: {listed}. Reconcile re-fired them instead of "
+                                    f"blocking each; check the install or the environment first (#973)."}], run, run_id=RUN)
+
+
+def reconcile_main(argv):
     dry_run = "--dry-run" in argv
     spec = next((a[7:] for a in argv if a.startswith("memory:")), None)
     if spec:
@@ -300,10 +484,14 @@ def main(argv):
     config = config_mod.load()
     if definition.present(config_mod.team_root()):  # ADR-0021: the waits the gate cannot see, from the definition
         progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
-        results = wake_ready(tracker, config["limits"].get("run_timeout_minutes", 30), dry_run=dry_run)
+        minutes = config["limits"].get("run_timeout_minutes", 30)
+        results = wake_ready(tracker, minutes, dry_run=dry_run)
+        results += wake_approved(tracker, nodes_mod.load(), minutes, dry_run=dry_run)
         results += recover_definition(tracker, definition.load(config_mod.team_root()), config["tracker"]["stages"],
                                       config["tracker"].get("stage_kinds", {}), config["limits"],
                                       dry_run=dry_run, progress=progress)
+        if not dry_run and not spec:
+            report_systemic(config, [r for r in results if r.get("systemic")])
         print(json.dumps({"dry_run": dry_run, "reconcile": results}))
         return 1 if any("error" in r for r in results) else 0
     progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731

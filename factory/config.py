@@ -19,8 +19,19 @@ def _find_engine():
     """FACTORY_ENGINE, else this checkout, else the assets an installed tool ships under its prefix."""
     if os.environ.get("FACTORY_ENGINE"):
         return Path(os.environ["FACTORY_ENGINE"])
+    if (_HERE / NODES).exists():
+        return _HERE
     installed = Path(sys.prefix) / "share/factory-engine"
-    return _HERE if (_HERE / NODES).exists() or not installed.exists() else installed
+    if installed.exists():
+        return installed
+    try:  # an overlay install (`uv run --with <wheel>`): the data files sit beside the package, not under sys.prefix
+        from importlib import metadata
+        hit = next((f for f in metadata.files("slop-factory") or [] if str(f).endswith("share/factory-engine/" + NODES)), None)
+        if hit:
+            return Path(hit.locate()).resolve().parents[len(Path(NODES).parts) - 1]
+    except metadata.PackageNotFoundError:
+        pass
+    return _HERE
 
 
 ENGINE_ROOT = _find_engine()
@@ -76,9 +87,9 @@ def pop_team(argv):
 
 
 def is_project(root=None):
-    """A project team: `factory.project.yaml` (ADR-0016), or `factory.yaml` + `workflow.yaml` (ADR-0021)."""
+    """A project team: `factory.yaml` + `workflow.yaml` (ADR-0021)."""
     root = Path(root or team_root())
-    return (root / PROJECT_DESCRIPTOR).is_file() or all((root / f).is_file() for f in ("factory.yaml", "workflow.yaml"))
+    return all((root / f).is_file() for f in ("factory.yaml", "workflow.yaml"))
 
 
 def merge(defaults, descriptor):
@@ -95,10 +106,13 @@ def descriptor():
 
 def load():
     root = team_root()
-    if is_project(root):
-        import project
-        return project.legacy_config(project.load(root))
     defaults = yaml.safe_load((engine_root() / "engine/defaults.yaml").read_text()) or {}
+    import definition
+    if definition.present(root):
+        return merge(defaults, definition.config(definition.load(root)))
+    if (root / PROJECT_DESCRIPTOR).is_file() and not (root / DESCRIPTOR).is_file():
+        raise SystemExit(f"factory: {root / PROJECT_DESCRIPTOR} is the old project layout; the engine reads "
+                         "factory.yaml + workflow.yaml (ADR-0021)")
     return merge(defaults, descriptor())
 
 

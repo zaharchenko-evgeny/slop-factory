@@ -196,21 +196,11 @@ nodes:
   # --- Notifications --------------------------------------------------------------------------
   notify:                         # a state that needs the owner: the agent writes one message, or skips
     agent: notify
-    environment: team
     triggers: [{ stage: blocked }, { stage: needs-answers }, { label: "factory:needs-human" }]
     output: read-only
     outcomes:
       notified: { effects: [{ comment: message }] }
       skipped:  {}
-
-  walkthrough:                    # an approved PR a person must merge: one comment that orients them, no review
-    agent: walkthrough
-    triggers: [{ label: "factory:needs-human" }]
-    when: { stage: approved }
-    output: read-only
-    outcomes:
-      posted:  { effects: [{ comment: summary, on: pr }] }
-      skipped: {}
 
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
   retro:

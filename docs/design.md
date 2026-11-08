@@ -91,6 +91,12 @@ act on the same subject (ticket or PR). Script and routine nodes, and nodes
 with `mention: false`, are never mentionable. Each node spec lists the
 personas its agent may address, and `factory begin` prints them.
 
+## 4b. Notifiers (ADR-0022)
+
+A person can get an actionable message in Slack, email or Telegram and answer in
+that thread. Adapters send; the gate alone sends and applies replies
+([0022-notifiers](adr/0022-notifiers.md)).
+
 ## 5. Flows
 
 Feature or bug:
@@ -170,20 +176,27 @@ per repository.
 
 ## 9. Repositories and branches
 
-- A ticket names every affected repository. The developer runs in a
-  multi-repo environment and opens one PR per repository, each linked to the
-  ticket. The ticket reaches `done` when all its PRs are merged.
+- A ticket names every affected repository. A node declares the repositories
+  it writes (`writes`, ADR-0024). The developer runs once per written
+  repository and opens that repository's PR, linked to the ticket. The ticket
+  reaches `done` when all its PRs are merged. (Superseded in part by ADR-0024:
+  the multi-repo environment with one `main`.)
 - Repository roles (ADR-0017): `factory.project.yaml` marks exactly one
   repository `role: primary`; the others are `role: project`. An Air project
-  automation runs in the primary repository and checks out the other project
-  repositories and the factory repository (read-only) as additional
-  repositories. Retro, distill, the knowledge review and the ops nodes run in
+  automation checks out the project repositories and the factory repository
+  (read-only); the repository it writes is its main (ADR-0024, which
+  supersedes in part ADR-0017). Retro, distill, the knowledge review and the ops nodes run in
   the factory repository.
 - The team repository may also be listed as a `role: project` repository, so
   the factory delivers tickets that change it (ADR-0019,
   [0019-team-repository-is-a-project](adr/0019-team-repository-is-a-project.md)).
   Agents read team files from a pristine copy of its default branch, never
   from the checkout they edit.
+- Blockers (workflow key `blockers`): `start` (default) holds a `ready` ticket until every blocker is
+  closed. `merge` starts work at once, so tickets of several repositories develop in parallel; the merge waits
+  until every blocker is closed (`when: blockers: closed` on the merge node). When a blocker closes, `gate.py
+  sweep` merges each `approved` ticket it blocked, and `factory reconcile` re-fires the merge label of one it
+  missed. A node runs on open blockers unless its `when` says `blockers: closed`.
 - Base branch: ticket override (`base:<branch>`) or the repository default in
   `factory.yaml`.
 - Branch name pattern from `factory.yaml`, default `ez/{ticket}-{slug}`.
@@ -346,7 +359,7 @@ See the [auto-approve and auto-merge recipe](recipes/auto-approve.md) for how to
 | Topic | What to verify |
 | --- | --- |
 | Workflows in projects | Whether an Air workflow can run in the project, or only in the personal workspace |
-| Multi-repo automations | Whether automations push to additional repositories (#459 probes it); fallback is the developer pushing extra branches itself, or one repository per ticket |
+| Multi-repo automations | Whether automations push to additional repositories (#459 probes it); ADR-0024 replaces the fallback with one automation per written repository |
 | Branch protection | Whether a bot approval can satisfy each repository's rules; own-PR approval is not allowed by GitHub |
 | Air Mate | Starting runs from Slack depends on AREX-148; until then the router creates a ticket |
 | Air GitHub app | Access to the personal factory repository |

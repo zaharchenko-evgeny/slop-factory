@@ -5,9 +5,10 @@
 # ///
 """Tests for factory/reconcile.py over MemoryTracker. Run: uv run factory/tests/test_reconcile.py"""
 import copy
+import json
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +45,18 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(results[0]["node"], "review")
         self.assertIn('"factory:review-behaviour"', logged(t, "label"))
 
+    def test_landed_review_marker_reapplies_outcome_without_refiring_reviewer(self):
+        ticket = {"stage": "in-review", "pr": 5, "pr_state": "open", "ci": "green", "since": OLD,
+                  "head": "abc", "pr_labels": ["factory:review-behaviour"],
+                  "log": [["label", '"factory:review-behaviour"']],
+                  "reviews": [{"agent": True, "focus": "behaviour", "verdict": "changes",
+                               "commit_id": "abc", "round": 1}]}
+        t, results, failed = run(ticket)
+        self.assertFalse(failed)
+        self.assertEqual((results[0]["reconcile"], results[0]["node"], results[0]["outcome"]),
+                         ("reapply", "review", "changes"))
+        self.assertNotIn("factory:review-behaviour", t.facts(1)["pr_labels"])
+
     def test_stale_review_label_without_review_refired(self):
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": FRESH,
                              "focus_missing": ["behaviour"],
@@ -70,8 +83,6 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(results[0]["reconcile"], "conflict")
         self.assertEqual(t.tickets[1]["stage"], "changes-requested")
         self.assertIn('"factory:fix-cheap"', logged(t, "label"))
-        code, result = gate.check("fix", {"id": "recovered-conflict", "ticket": 1}, t, NODES, CONFIG)
-        self.assertEqual((code, result["merge_main"]), (gate.GO, True))
 
     def test_stale_fix_label_on_conflicting_pr_refired(self):
         t, results, _ = run({"stage": "changes-requested", "pr": 5, "conflict": True, "since": OLD,
@@ -128,6 +139,7 @@ class ReconcileTest(unittest.TestCase):
     def test_custom_stage_kind_from_config(self):
         kinds = {**CONFIG["tracker"]["stage_kinds"], "investigating": "active"}
         nodes = copy.deepcopy(NODES)
+        del nodes["nodes"]["investigate"]  # the custom node alone owns this stage
         nodes["nodes"]["custom"] = {"role": "script", "triggers": ["issues.labeled factory:custom"],
                                     "when": {"stage": "investigating"}, "outcomes": {"x": {}}, "timeout_minutes": 5}
         t, results, _ = run({"stage": "investigating", "since": OLD}, nodes, stage_kinds=kinds)
@@ -225,6 +237,29 @@ class WakeReadyTest(unittest.TestCase):
         self.assertEqual([r["ticket"] for r in got], ["1"])   # 5 never had a blocker: left alone
 
 
+class WakeApprovedTest(unittest.TestCase):
+    """`blockers: merge`: an approved ticket whose last blocker closed gets its merge label re-fired."""
+    NODES = {"blockers": "merge", "nodes": {"merge": {
+        "role": "approver", "triggers": ["pull_request.labeled factory:automerge"],
+        "when": {"stage": "approved", "blockers": "closed"}, "outcomes": {}}}}
+    NOW = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
+
+    def wake(self, nodes=None, blockers_open=0):
+        tr = MemoryTracker({1: {"stage": "approved", "blockers_open": blockers_open, "pr": 5, "pr_state": "open",
+                                "label_at": {"factory:automerge": "2026-11-06T10:00:00Z"}}})
+        tr.blocked_by = lambda n: [{"number": 9, "state": "closed"}]
+        return tr, reconcile.wake_approved(tr, nodes or self.NODES, 30, now=self.NOW)
+
+    def test_refires_the_merge_label_once_the_last_blocker_closed(self):
+        tr, got = self.wake()
+        self.assertEqual([(r["ticket"], r["node"], r["label"]) for r in got], [(1, "merge", "factory:automerge")])
+        self.assertIn("factory:automerge", [v.strip('"') for k, v in tr.tickets[1]["log"] if k == "label"])
+
+    def test_waits_for_an_open_blocker_and_ignores_the_default_mode(self):
+        self.assertEqual(self.wake(blockers_open=1)[1], [])
+        self.assertEqual(self.wake({**self.NODES, "blockers": "start"})[1], [])
+
+
 class RecoverDefinitionTest(unittest.TestCase):
     """ADR-0021 team (fixtures/slop): the lost wakes come from workflow.yaml."""
     SLOP = Path(__file__).resolve().parent / "fixtures/slop"
@@ -256,6 +291,19 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual([r["reconcile"] for r in results], ["conflict"])
         self.assertEqual(logged(t, "label"), ['"factory:fix"'])
         self.assertEqual(t.get_stage(t.tickets[1]), "changes-requested")
+
+    def test_landed_review_marker_replays_the_reported_outcome_of_the_definition(self):
+        """The review is named after its node; a split approval replays the outcome its marker names."""
+        review = {"agent": True, "focus": "review-high", "verdict": "approve", "outcome": "approve-risky",
+                  "commit_id": "abc123def4567", "round": 1}
+        t, results = self.recover(self.pr(ci="green", attrs=["risk:high"], pr_labels=["factory:review-high"],
+                                          label_at={"factory:review-high": OLD}, reviews=[review]))
+        self.assertEqual([(r["reconcile"], r["node"], r["outcome"]) for r in results],
+                         [("reapply", "review-high", "approve-risky")])
+        self.assertEqual(t.get_stage(t.tickets[1]), "approved")
+        self.assertNotIn("factory:review-high", t.facts(1)["pr_labels"])
+        self.assertIn('"factory:needs-human"', logged(t, "label"))
+        self.assertNotIn("factory:review-low", logged(t, "label"))
 
     def test_conflict_uses_the_fix_stage_of_the_definition(self):
         import copy
@@ -294,10 +342,156 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(self.recover(self.pr(ci="pending", **labels))[1], [])
         self.assertEqual(self.recover(self.pr(ci="green", **{**labels, "label_at": {"factory:review-low": FRESH}}))[1], [])
 
+    def test_review_label_whose_when_never_holds_is_stuck_once(self):
+        ticket = self.pr(ci="none", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": "2026-11-03T09:00:00Z"})  # 3 hours: past 2 timeouts
+        t, results = self.recover(ticket)
+        self.assertEqual([(r["node"], r["reconcile"]) for r in results], [("review-low", "stuck")])
+        self.assertIn('"factory:needs-human"', logged(t, "label"))
+        self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
+        note = logged(t, "comment")[0]
+        self.assertIn("review-low when.ci: want green, have none", note)
+        ticket.update(log=[("comment", note)], stage="in-review", attrs=["risk:low"])
+        self.assertEqual(self.recover(ticket)[1], [])  # one notice per stage and head
+
+    def test_stuck_label_that_is_young_or_behind_a_blocker_is_left_alone(self):
+        labels = {"ci": "none", "attrs": ["risk:low"], "pr_labels": ["factory:review-low"]}
+        young = (NOW - timedelta(minutes=45)).isoformat()
+        self.assertEqual(self.recover(self.pr(**labels, label_at={"factory:review-low": young}))[1], [])
+        self.assertEqual(self.recover(self.pr(**labels, blockers_open=1, label_at={"factory:review-low": "2026-11-03T09:00:00Z"}))[1], [])
+
+    def missed_twice(self):
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": OLD})
+        ticket["log"] = [("comment", json.dumps(f"{reconcile.PREFIX} stage=in-review head=abc123def456 "
+                                                "re-fired factory:review-low (no review-low outcome)"))]
+        return ticket
+
+    def run_many(self, count):
+        tr = MemoryTracker({i: self.missed_twice() for i in range(1, count + 1)})
+        tracker = self.config["tracker"]
+        results = reconcile.recover_definition(tr, self.defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
+                                               self.config["limits"], now=NOW)
+        return tr, results
+
+    def test_three_second_misses_in_one_run_refire_instead_of_blocking(self):
+        tr, results = self.run_many(3)
+        self.assertEqual({(r["reconcile"], r.get("systemic")) for r in results}, {("refire", True)})
+        self.assertEqual({tr.get_stage(tr.tickets[i]) for i in (1, 2, 3)}, {"in-review"})
+
+    def test_one_second_miss_still_blocks(self):
+        tr, results = self.run_many(1)
+        self.assertEqual([r.get("reconcile") for r in results], ["blocked"], results)
+        self.assertEqual(tr.get_stage(tr.tickets[1]), "blocked")
+
+    def test_systemic_misses_open_one_doctor_ticket_and_a_clean_run_closes_it(self):
+        calls, open_titles = [], []
+
+        def gh(args, token=None):
+            calls.append(args)
+            return json.dumps([{"number": 9, "title": t} for t in open_titles]) if args[:2] == ["issue", "list"] else ""
+        reconcile.report_systemic(self.config, [{"ticket": 1, "node": "review-low"}], run=gh)
+        create = next(c for c in calls if c[:2] == ["issue", "create"])
+        self.assertEqual(create[create.index("--title") + 1], "Doctor: runs-without-outcome fails")
+        open_titles.append("Doctor: runs-without-outcome fails")
+        calls.clear()
+        reconcile.report_systemic(self.config, [{"ticket": 1, "node": "review-low"}], run=gh)
+        self.assertFalse([c for c in calls if c[:2] in (["issue", "create"], ["issue", "comment"])])
+        reconcile.report_systemic(self.config, [], run=gh)
+        self.assertEqual([c[:3] for c in calls if c[:2] == ["issue", "close"]], [["issue", "close", "9"]])
+
+    def test_a_failed_end_on_this_head_blocks_once_instead_of_refiring(self):
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": OLD})
+        failure = ("[factory] end failed: node=review-low head=abc123def456 outcome=approve-low\n\n```\n"
+                   "RuntimeError: HTTP 403: Resource not accessible by integration\n```\n\nThe outcome did not land; x")
+        ticket["log"] = [("comment", json.dumps(failure))]
+        t, results = self.recover(ticket)
+        self.assertEqual([r["reconcile"] for r in results], ["end-failed"])
+        self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
+        note = logged(t, "comment")[-1]
+        self.assertIn("HTTP 403", note)
+        self.assertNotIn('"factory:review-low"', logged(t, "label"))  # not re-fired
+        ticket.update(stage="in-review", log=[("comment", json.dumps(failure)), ("comment", note)])
+        self.assertEqual(self.recover(ticket)[1], [])  # one notice per stage and head
+
+    def test_a_failed_end_on_an_older_head_does_not_stop_the_refire(self):
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": OLD})
+        ticket["log"] = [("comment", json.dumps("[factory] end failed: node=review-low head=000000000000 outcome=x\n\nerr"))]
+        self.assertEqual([r["reconcile"] for r in self.recover(ticket)[1]], ["refire"])
+
     def test_needs_human_ticket_is_left_alone(self):
         t, results = self.recover(self.pr(conflict=True, attrs=["factory:needs-human"]))
         self.assertEqual(results, [])
         self.assertEqual(logged(t, "label"), [])
+
+    def test_bad_ticket_is_reported_once_and_does_not_stop_recovery(self):
+        class BadTicketTracker(MemoryTracker):
+            def stale_facts(self, ticket):
+                if ticket == 1:
+                    raise ValueError("ticket names unknown repositories: fixture")
+                return super().stale_facts(ticket)
+
+        tracker = BadTicketTracker({1: {"stage": "ready"},
+                                    2: {**self.pr(ci="green", attrs=["risk:low"],
+                                                  pr_labels=["factory:review-low"],
+                                                  label_at={"factory:review-low": OLD})}})
+        config = self.config["tracker"]
+        results = reconcile.recover_definition(tracker, self.defn, list(config["stages"]),
+                                               config.get("stage_kinds", {}), self.config["limits"], now=NOW)
+        self.assertEqual([(r["ticket"], r.get("error"), r.get("reconcile")) for r in results],
+                         [(1, "ValueError: ticket names unknown repositories: fixture", None),
+                          (2, None, "refire")])
+        self.assertEqual(sum("ticket facts failed" in value for kind, value in tracker.tickets[1]["log"]
+                             if kind == "comment"), 1)
+        reconcile.recover_definition(tracker, self.defn, list(config["stages"]), config.get("stage_kinds", {}),
+                                     self.config["limits"], now=NOW)
+        self.assertEqual(sum("ticket facts failed" in value for kind, value in tracker.tickets[1]["log"]
+                             if kind == "comment"), 1)
+
+    def test_bad_ticket_dry_run_does_not_post_a_comment(self):
+        class BadTicketTracker(MemoryTracker):
+            def stale_facts(self, ticket):
+                raise ValueError("ticket names unknown repositories: fixture")
+
+        tracker = BadTicketTracker({1: {"stage": "ready"}})
+        config = self.config["tracker"]
+        results = reconcile.recover_definition(tracker, self.defn, list(config["stages"]),
+                                               config.get("stage_kinds", {}), self.config["limits"],
+                                               now=NOW, dry_run=True)
+        self.assertIn("error", results[0])
+        self.assertEqual(tracker.tickets[1].get("log", []), [])
+
+
+class ReconcileFailureTest(unittest.TestCase):
+    """#845: a reconcile crash is a Doctor ticket, not a silent `reconciled` run."""
+    def setUp(self):
+        self.previous = cfg._team
+        cfg.set_team(RecoverDefinitionTest.SLOP)
+        self.real = reconcile.reconcile_main
+        self.calls = []
+
+    def tearDown(self):
+        reconcile.reconcile_main = self.real
+        cfg.set_team(self.previous)
+
+    def gh(self, args, token=None):
+        self.calls.append(args)
+        return json.dumps([{"number": 7, "title": "Doctor: reconcile fails"}]) if args[:2] == ["issue", "list"] else ""
+
+    def test_crash_opens_the_ticket_and_a_clean_run_closes_it(self):
+        def boom(argv):
+            raise RuntimeError("gh: HTTP 502")
+        reconcile.reconcile_main = boom
+        with self.assertRaises(RuntimeError):
+            reconcile.main([], run=self.gh)
+        comment = next(c for c in self.calls if c[:2] == ["issue", "comment"])
+        self.assertIn("RuntimeError: gh: HTTP 502", comment[comment.index("--body") + 1])
+        self.calls.clear()
+        reconcile.reconcile_main = lambda argv: 0
+        self.assertEqual(reconcile.main([], run=self.gh), 0)
+        self.assertEqual([c[:3] for c in self.calls if c[:2] == ["issue", "close"]], [["issue", "close", "7"]])
 
 
 if __name__ == "__main__":

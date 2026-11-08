@@ -25,6 +25,7 @@ defaults:
     branch_pattern: "ez/{ticket}-{slug}"
     commit_prefix: "#{ticket} "
     bot_login: "jetbrains-air[bot]"
+    issues_token_env: FACTORY_ISSUES_TOKEN   # the gate's issue, label and comment writes to slop-eval-factory (slop-factory#652)
     confirm_external_writes: true
     confirm_external_writes_scope: []
     knowledge:                    # the knowledge base: an additional repository of the environments that read it
@@ -86,10 +87,6 @@ roles:
     description: Moves a ticket that waits for a person to triage or ready after the person comments
     skills: []
     mcp: {}
-  walkthrough:
-    description: Orients a person on a PR that waits for them, without reviewing it
-    skills: [walkthrough, merge-risk]
-    mcp: {}
   retro:
     description: Collects lessons from tickets and merges them into the knowledge base
     skills: [retro]
@@ -99,6 +96,7 @@ roles:
     skills:
       - ponytail-review           # a name from `skills`
       - merge-risk
+      - walkthrough               # the Walkthrough section of the review body
       # - adr-reading: { path: roles/reviewer/skills/adr-reading }      # a role-only local skill
       # - security-review: { source: "github:owner/repo@<sha>", path: skills/security-review, sha256: ... }
     mcp: {}
@@ -118,6 +116,9 @@ roles:
     description: Scopes a ticket, sets risk and complexity, or asks, splits, or rejects it
     skills: [to-tickets]
     mcp: {}
+    env:
+      FACTORY_ISSUES_TOKEN: { required: true, secret: true,
+                              description: "GitHub token, Issues read/write on every repository; the router opens per-repository tickets" }
 
 # Agents: a role (above; roles/<role>/: role.md, setup.sh) + a model
 # + access + settings. `gate` and `human` have no role.
@@ -126,8 +127,7 @@ agents:
   router:         { role: router, model: sonnet, access: read-only }        # judges answers; luna re-asked answered questions (#782)
   dispatcher:     { role: dispatcher, model: luna, access: read-only }
   dev-cheap:      { role: developer, model: luna, access: full }
-  dev:            { role: developer, model: sonnet, reasoning: high, access: full, mentionable: true,
-                    settings: { size_stop_factor: 1.5 } }          # stop and propose a split past 1.5x the estimate
+  dev:            { role: developer, model: sonnet, reasoning: high, access: full, mentionable: true }
   dev-strong:     { role: developer, model: sonnet, reasoning: max, access: full }
   reviewer:       { role: reviewer, model: sol, access: read-only, mentionable: true }   # @factory:reviewer
   reviewer-cheap: { role: reviewer, model: luna, access: read-only }
@@ -137,7 +137,6 @@ agents:
   retro:          { role: retro, model: sonnet, access: full }
   notify:         { role: notify, model: luna, access: read-only }
   resume:         { role: resume, model: luna, access: read-only }
-  walkthrough:    { role: walkthrough, model: sol, access: read-only }
 
 # Environments: where agents run. One repository is `main`; the others are additional.
 environments:
@@ -145,7 +144,7 @@ environments:
     repositories:
       - repo: zaharchenko-evgeny/slop-factory
         main: true                # branches, PRs and the node's output apply here
-      - repo: zaharchenko-evgeny/slop-eval-factory   # the knowledge base, read-only: no Air automation changes the factory
+      - repo: zaharchenko-evgeny/slop-eval-factory   # the team repository, read-only here: a person changes it locally
     ci: { workflow: quality-gates }   # `ci: failed` = Air workflow_run.failed for this workflow
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               "*.blob.core.windows.net", pypi.org, files.pythonhosted.org, registry.npmjs.org]

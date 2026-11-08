@@ -38,12 +38,22 @@ nodes:
   human-reply:                    # a person comments on a ticket or PR that waits for them: resume it
     agent: resume
     triggers: [{ ticket: commented }, { pr: commented }]
-    when: { label: "factory:needs-human" }   # only waiting tickets; the stage effect removes the label
+    when: { label: "factory:needs-human" }   # the label is on the PR (`on: pr`); resuming removes it
     output: read-only
     outcomes:
-      triage:  { if: { stage: "!done" }, effects: [{ stage: triage }] }
-      ready:   { if: { stage: "!done" }, effects: [{ stage: ready }] }
+      triage:  { if: { stage: "!done" }, effects: [{ unlabel: "factory:needs-human", on: pr }, { stage: triage }] }
+      ready:   { if: { stage: "!done" }, effects: [{ unlabel: "factory:needs-human", on: pr }, { stage: ready }] }
       skipped: {}                 # a factory comment, or the person asks for nothing
+
+  ticket-reply:                   # a person answers a ticket that waits in blocked or needs-answers: resume it
+    agent: resume
+    triggers: [{ ticket: commented }]
+    when: { stage: [blocked, needs-answers] }
+    output: read-only
+    outcomes:
+      triage:  { effects: [{ stage: triage }] }
+      ready:   { effects: [{ stage: ready }] }
+      skipped: {}
 
   # --- Triage: scope, estimate when it can ------------------------------------------------------
   intake:
@@ -51,7 +61,7 @@ nodes:
     triggers: [{ stage: triage }]
     when: { stage: triage }
     output: read-only
-    settings: { max_changed_lines: 400, max_repositories: 3 }
+    settings: { max_repositories: 3 }
     outcomes:
       small-low:      { effects: [{ label: "complexity:small" },  { label: "risk:low" },  { stage: ready }] }
       small-high:     { effects: [{ label: "complexity:small" },  { label: "risk:high" }, { stage: ready }] }
@@ -62,6 +72,19 @@ nodes:
       grill:          { effects: [{ comment: questions }, { stage: needs-answers }] }
       split:          { effects: [{ create-issues: children }, { stage: split }] }
       not-actionable: { effects: [{ comment: reason }, { stage: not-actionable }] }
+      bug:            { effects: [{ stage: investigating }] }       # a bug report with an unknown cause
+
+  # --- Investigate: a bug report -> reproduced and diagnosed, or rejected with evidence ----------
+  investigate:
+    agent: dev
+    triggers: [{ stage: investigating }]
+    when: { stage: investigating }
+    output: read-only
+    settings: { mode: investigate }
+    outcomes:
+      bug:              { effects: [{ comment: reason }, { label: "factory:implement-medium" }, { stage: in-dev }] }
+      intended:         { effects: [{ comment: reason }, { stage: not-actionable }] }   # the evidence is in the comment
+      cannot-reproduce: { effects: [{ comment: reason }, { stage: needs-answers }] }
 
   # --- Ready: estimate if needed, start the developer the size needs ----------------------------
   dispatch:
@@ -159,6 +182,13 @@ nodes:
       done-high: { effects: [{ unlabel: "factory:fix" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       blocked:   { effects: [{ unlabel: "factory:fix" }, { comment: reason }, { stage: blocked }] }
 
+  rounds-out:                     # a fix label at the fix cap: no round left, a person decides (notify tells them)
+    agent: clerk
+    triggers: [{ label: "factory:fix" }]
+    when: { stage: [in-review, changes-requested, approved], fix-rounds: at-cap }
+    outcomes:
+      blocked: { effects: [{ unlabel: "factory:fix", on: pr }, { stage: blocked }] }
+
   update:                         # a merge conflict
     agent: dev-cheap
     triggers: [{ label: "factory:update" }]
@@ -207,7 +237,6 @@ nodes:
   # --- Notifications --------------------------------------------------------------------------
   notify:                         # a state that needs the owner: the agent writes one message, or skips
     agent: notify
-    environment: team
     triggers: [{ stage: blocked }, { stage: needs-answers }]
     output: read-only
     outcomes:
@@ -216,21 +245,11 @@ nodes:
 
   notify-pr:                      # a PR that waits for the owner: the message goes on the PR
     agent: notify
-    environment: team
     triggers: [{ label: "factory:needs-human" }]
     output: read-only
     outcomes:
       notified: { effects: [{ comment: message, on: pr }] }
       skipped:  {}
-
-  walkthrough:                    # an approved PR a person must merge: one comment that orients them, no review
-    agent: walkthrough
-    triggers: [{ label: "factory:needs-human" }]
-    when: { stage: approved }
-    output: read-only
-    outcomes:
-      posted:  { effects: [{ comment: summary, on: pr }] }
-      skipped: {}
 
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
   retro:

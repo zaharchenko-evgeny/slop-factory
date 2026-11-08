@@ -8,6 +8,7 @@
     "engine": {"type": ["integer", "string"]},
     "team_repository": {"type": "string"},
     "write_mode": {"enum": ["per-repo", "token"], "default": "per-repo"},
+    "issues_token_env": {"type": "string", "description": "Variable that holds the token for the gate's issue, label and comment writes to project repositories (#652)."},
     "engine_repository": {"type": "string", "default": "https://github.com/zaharchenko-evgeny/slop-factory.git"},
     "project": {
       "type": "object",
@@ -48,7 +49,8 @@
         "hold_label": {"type": "string"},
         "pr_fact_labels": {"type": "object", "additionalProperties": {"type": "string"}},
         "needs_human_label": {"type": "string"},
-        "lesson_label": {"type": "string"}
+        "lesson_label": {"type": "string"},
+        "comment_label": {"type": "string"}
       }
     },
     "repositories": {
@@ -75,8 +77,10 @@
         "additionalProperties": false,
         "properties": {
           "repositories": {"type": "array", "items": {"type": "string"}},
+          "writable": {"type": "array", "items": {"type": "string"}},
           "domains": {"type": "array", "items": {"type": "string"}},
           "secrets": {"type": "array", "items": {"type": "string"}},
+          "secret_help": {"type": "object", "additionalProperties": {"type": "string"}},
           "variables": {"type": "object", "additionalProperties": {"type": "string"}},
           "vm": {"type": "string"},
           "startup": {"type": "string"}

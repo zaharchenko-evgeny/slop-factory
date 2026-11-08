@@ -15,13 +15,46 @@ WORKFLOW = "workflow.yaml"
 ROLES = "roles"
 NO_ROLE = ("script", "human")  # harnesses that run no role
 GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention")  # the facts a guard reads (gate.GUARD_KEYS)
+# Nodes planned once per code repository when `write_mode` is `per-repo`: Air pushes only to an automation's own repository.
+PER_REPO = ("implement", "fix", "update", "review", "join", "merge", "finish")
+TIER_SUFFIXES = ("-small", "-medium", "-large", "-low", "-high")  # a tiered node: `implement-medium`, `review-high`
 STARTUP = ".air/cloud/startup.sh"  # Air runs it from the checkout; it runs `factory setup` (ADR-0021)
+
+
+def per_repo_node(name):
+    """True when a node (or its tiered form, `implement-medium`) is planned once per code repository."""
+    return name.removesuffix(next((t for t in TIER_SUFFIXES if name.endswith(t)), "")) in PER_REPO
 
 
 def present(root):
     """True when `root` holds a definition in this layout."""
     root = Path(root)
     return (root / FACTORY).is_file() and (root / WORKFLOW).is_file()
+
+
+def full_name(url):
+    """`owner/repo` of a repository URL or name."""
+    return "/".join(str(url).removesuffix(".git").rstrip("/").split("/")[-2:])
+
+
+def code_repos(defn):
+    """The code repositories of a definition, in order: those its environments list, less the team repository (the
+    one that holds the definition) and the knowledge base."""
+    f = defn["factory"]
+    knowledge = (((f.get("defaults") or {}).get("settings") or {}).get("knowledge") or {}).get("repo")
+    skip = {full_name(u) for u in (team_url(defn["root"]), knowledge) if u}
+    repos = [r["repo"] for e in (f.get("environments") or {}).values() for r in (e or {}).get("repositories") or []]
+    return [r for r in dict.fromkeys(repos) if full_name(r) not in skip]
+
+
+def per_repo_envs(defn):
+    """{code repository: the first environment where it is `main`} for the repositories that have one."""
+    out = {}
+    for name, e in (defn["factory"].get("environments") or {}).items():
+        for r in (e or {}).get("repositories") or []:
+            if r.get("main"):
+                out.setdefault(r["repo"], name)
+    return {r: out[r] for r in code_repos(defn) if r in out}
 
 
 def _keys(x):
@@ -54,6 +87,12 @@ def _add_mentions(defn):
     askable = [a for a, spec in agents.items() if (spec or {}).get("mentionable")]
     if not askable or ROUTER in nodes:
         return
+    pairs = neighbours(defn)
+    for n in nodes.values():  # an `ask` outcome (#591): the agents its agent may ask, the deploy-time allowlist
+        if n.get("agent") in askable and n.get("mention") is not False and not n.get("generated") \
+                and not all(isinstance(t, dict) and "schedule" in t for t in n.get("triggers") or [None]):
+            to = sorted(b for b in askable if frozenset((n["agent"], b)) in pairs)
+            n.setdefault("outcomes", {}).setdefault("ask", {"to": to, "effects": [{"comment": "text"}]})
     agents.setdefault("mention-router", {"run": "decide", "model": (f.get("defaults") or {}).get("model"),
                                          "access": "read-only", "generated": True})
     nodes[ROUTER] = {"agent": "mention-router", "generated": True,
@@ -91,6 +130,23 @@ def _parts(defn, name):
     return node, agent, role, env
 
 
+def environment_secrets(defn, env_name):
+    """{name: description} of the secrets `env_name` needs: those of the defaults and the environment, and those of
+    the role, agent and node of every node that runs in it. GH_TOKEN is Air's own and is left out."""
+    f, w = defn["factory"], defn["workflow"]
+    layers = [(f.get("defaults") or {}), ((f.get("environments") or {}).get(env_name) or {})]
+    for name in w.get("nodes") or {}:
+        node, agent, role, _ = _parts(defn, name)
+        if (node.get("environment") or (w.get("settings") or {}).get("environment")) == env_name:
+            layers += [role, agent, node]
+    out = {}
+    for layer in layers:
+        for k, v in (layer.get("env") or {}).items():
+            if (v or {}).get("secret") and k != "GH_TOKEN":
+                out[k] = (v or {}).get("description") or out.get(k) or ""
+    return dict(sorted(out.items()))
+
+
 def settings(defn, name):
     """Merged settings of a node: defaults -> environment -> role -> agent -> workflow settings -> node."""
     node, agent, role, env = _parts(defn, name)
@@ -99,6 +155,106 @@ def settings(defn, name):
                   defn["workflow"].get("settings"), node.get("settings")):
         out = merge(out, layer)
     return out
+
+
+AIR_CONNECTORS = ("confluence", "datadog", "figma", "gitlab", "google_calendar", "grafana", "jira", "linear", "sentry",
+                  "slack", "teamcity", "internal-teamcity", "youtrack", "internal-youtrack", "internal-glean")
+CUSTOM_KEYS = ("command", "args", "env", "url", "headers")  # the `.mcp.json` `mcpServers` entry shape
+SECRET_KEY = re.compile(r"token|secret|password|passwd|api[_-]?key|authorization|credential", re.I)
+SECRET_VALUE = re.compile(r"ghp_\w|github_pat_|sk-\w|xox[abp]-|AKIA[0-9A-Z]{8}|[A-Za-z0-9+/_-]{32,}")
+REF = re.compile(r"\$\{(\w+)\}")
+
+
+def _mcp_layers(defn, name):
+    """[(where, mcp map, env names declared there or outside it)] of node `name`, in merge order: defaults ->
+    environment -> role -> agent -> node."""
+    node, agent, role, env = _parts(defn, name)
+    f = defn["factory"]
+    env_name = node.get("environment") or (defn["workflow"].get("settings") or {}).get("environment")
+    raw = [("defaults", f.get("defaults") or {}), (f"environments.{env_name}", env), (f"roles.{agent.get('role')}", role),
+           (f"agents.{node.get('agent')}", agent), (f"nodes.{name}", node)]
+    declared, out = set(), []
+    for where, layer in raw:
+        declared = declared | set(layer.get("env") or {})
+        out.append((where, layer.get("mcp") or {}, declared))
+    return out
+
+
+def mcp(defn, name):
+    """{server name: entry} of node `name`: the layers merged by key, a `null` entry removing the inherited one."""
+    out = {}
+    for _, layer, _ in _mcp_layers(defn, name):
+        for key, entry in layer.items():
+            if entry is None:
+                out.pop(key, None)
+            else:
+                out[key] = entry
+    return out
+
+
+def mcp_connectors(entries):
+    """The Air connector ids of the `connector` entries, for the automation's `mcpConnectors`."""
+    return [e["connector"] for e in entries.values() if "connector" in e]
+
+
+def mcp_custom(entries):
+    """{server name: entry} of the custom entries: the content of `.mcp.json` `mcpServers`."""
+    return {k: e for k, e in entries.items() if "connector" not in e}
+
+
+def _strings(x):
+    if isinstance(x, str):
+        yield x
+    elif isinstance(x, dict):
+        for v in x.values():
+            yield from _strings(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from _strings(v)
+
+
+def _secret_literals(entry):
+    """The `env` and `headers` keys whose value looks like a secret and is not a `${VAR}` reference."""
+    bad = []
+    for field in ("env", "headers"):
+        for k, v in (entry.get(field) or {}).items():
+            rest = re.sub(r"^(Bearer|Basic|Token)\b\s*", "", REF.sub("", str(v)).strip(), flags=re.I)
+            if rest and (SECRET_KEY.search(k) or SECRET_VALUE.search(rest)):
+                bad.append(f"{field}.{k}")
+    return bad
+
+
+def _mcp_errors(defn):
+    f, w = defn["factory"], defn["workflow"]
+    known = set(((f.get("targets") or {}).get("air") or {}).get("mcp_connectors") or AIR_CONNECTORS)
+    raw = [("defaults", (f.get("defaults") or {}).get("mcp"))]
+    for section, owner in (("environments", f), ("roles", f), ("agents", f), ("nodes", w)):
+        raw += [(f"{section}.{n}", (spec or {}).get("mcp")) for n, spec in (owner.get(section) or {}).items()]
+    errs = []
+    for where, layer in raw:
+        for key, e in (layer or {}).items():
+            at = f"{where}.mcp.{key}"
+            if e is None:
+                continue
+            if not isinstance(e, dict):
+                errs.append(f"bad-mcp-entry: {at}: expected a mapping or null")
+                continue
+            custom = [k for k in CUSTOM_KEYS if k in e]
+            if "connector" in e and custom:
+                errs.append(f"mcp-mixed-entry: {at}: `connector` with {', '.join(custom)}")
+            elif "connector" in e:
+                if e["connector"] not in known:
+                    errs.append(f"unknown-mcp-connector: {at}: {e['connector']}")
+            elif not ({"command", "url"} & set(e)):
+                errs.append(f"bad-mcp-entry: {at}: needs `connector`, `command` or `url`")
+            errs += [f"mcp-literal-secret: {at}.{k}: use a ${{VAR}} reference" for k in _secret_literals(e)]
+    for name in w.get("nodes") or {}:
+        for where, layer, declared in _mcp_layers(defn, name):
+            for key, e in layer.items():
+                missing = sorted({v for s in _strings(e) for v in REF.findall(s)} - declared)
+                errs += [f"mcp-undeclared-env: {where}.mcp.{key}: ${{{v}}} is declared by no `env` at this or an outer layer"
+                         for v in missing]
+    return list(dict.fromkeys(errs))
 
 
 def _jinja(defn):
@@ -172,6 +328,27 @@ def _skill_spec_errors(where, spec):
     return [] if spec.get("path") else [f"bad-skill: {where}: needs `path` or `source`"]
 
 
+def _notify_errors(config):
+    import notify
+    return notify.config_errors(config) if isinstance(config, dict) else []
+
+
+def _notify_effect_errors(where, outcome, spec, config):
+    """A `notify` effect is `message` or `{message: message, people: [logins]}`, and needs `notify` config."""
+    errs = []
+    if not config:
+        errs.append(f"missing-notify: {where}.{outcome}: a `notify` effect needs `notify` config in factory.yaml")
+    body = spec if isinstance(spec, dict) else {"message": spec}
+    people = body.get("people")
+    if body.get("message") != "message" or set(body) - {"message", "people"} \
+            or not (people is None or isinstance(people, list) and all(isinstance(p, str) for p in people)):
+        errs.append(f"bad-effect: {where}.{outcome}: notify must be `message` or `{{message: message, people: [logins]}}`")
+    elif config:
+        known = (config or {}).get("people") or {}
+        errs += [f"unknown-person: {where}.{outcome}: {p} is not in notify.people" for p in people or [] if p not in known]
+    return errs
+
+
 def errors(defn):
     f, w = defn["factory"], defn["workflow"]
     errs = []
@@ -213,7 +390,31 @@ def errors(defn):
                 errs.append(f"write-token: environments.{e}: {r.get('repo')} is writable without `token_env`")
             if r.get("token_env") and r["token_env"] not in declared:
                 errs.append(f"undeclared-env: environments.{e}: {r['token_env']}")
+    if w.get("blockers", "start") not in ("start", "merge"):
+        errs.append(f"bad-blockers: workflow.yaml: `blockers` is `start` or `merge`, not {w['blockers']!r}")
     default_env = (w.get("settings") or {}).get("environment")
+    code = code_repos(defn)
+    tracker_repo = full_name((f.get("tracker") or {}).get("repository") or "")
+    tracker_name = (f.get("tracker") or {}).get("repository")
+    pr_labels = {}
+    for source in nodes.values():
+        source_env = envs.get(source.get("environment") or default_env) or {}
+        source_repo = next((r.get("repo") for r in source_env.get("repositories") or [] if r.get("main")), "")
+        for outcome in (source.get("outcomes") or {}).values():
+            for effect in (outcome or {}).get("effects") or []:
+                if isinstance(effect, dict) and effect.get("on") == "pr" and ("label" in effect or "unlabel" in effect):
+                    label = effect.get("label") or effect.get("unlabel")
+                    pr_labels.setdefault(label, set()).add(full_name(source_repo))
+    for source_env in envs.values():
+        if (source_env or {}).get("ci"):
+            source_repo = next((r.get("repo") for r in source_env.get("repositories") or [] if r.get("main")), "")
+            for state in ("green", "red"):
+                label = f"{(w.get('stages') or {}).get('label_prefix', 'factory:')}ci-{state}"
+                pr_labels.setdefault(label, set()).add(full_name(source_repo))
+    if len(code) > 1 and any(per_repo_node(n) for n in nodes) \
+            and ((f.get("defaults") or {}).get("settings") or {}).get("write_mode", "per-repo") == "per-repo":
+        errs += [f"per-repo-env: {r}: a per-repository node needs an environment where it is `main`"
+                 for r in code if r not in per_repo_envs(defn)]
     for name, n in nodes.items():
         where = f"nodes.{name}"
         if n.get("agent") not in agents:
@@ -221,6 +422,22 @@ def errors(defn):
             continue
         human = (agents[n["agent"]] or {}).get("harness") == "human"
         env = n.get("environment") or default_env
+        if not human and env in envs:
+            main_repo = next((r.get("repo") for r in (envs.get(env) or {}).get("repositories") or []
+                              if r.get("main")), "")
+            main_name = full_name(main_repo)
+            for trigger in n.get("triggers") or []:
+                if trigger == "manual" or isinstance(trigger, dict) and ("schedule" in trigger or "webhook" in trigger):
+                    continue
+                pr_label = trigger.get("label") if isinstance(trigger, dict) else None
+                code_event = isinstance(trigger, dict) and next(iter(trigger), None) in ("pr", "ci")
+                pr_event = code_event or isinstance(trigger, dict) and pr_label in pr_labels
+                source_repos = pr_labels.get(pr_label)
+                if (source_repos and main_name not in source_repos) or (not pr_event and main_name != tracker_repo) \
+                        or (code_event and main_name not in {full_name(r) for r in code}):
+                    errs.append(f"deaf-trigger: {where}: environment {env} main repository {main_repo} "
+                                f"does not match tracker {tracker_name}")
+                    break
         if n.get("generated") is not True and name == ROUTER or (name.startswith("reply-") and not n.get("generated")):
             errs.append(f"reserved-node: {where}: `{ROUTER}` and `reply-<agent>` are generated from `mentionable`")
         if (agents[n["agent"]] or {}).get("run") not in (None, "decide"):
@@ -246,6 +463,18 @@ def errors(defn):
             errs += [f"unknown-guard: {where}.{o}: {k}" for k in (oc.get("if") or {}) if k not in GUARDS]
             errs += [f"unknown-effect: {where}.{o}: {next(k for k in e if k != 'on')}" for e in oc.get("effects") or []
                      if next((k for k in e if k != "on"), None) not in EFFECTS]
+            for effect in oc.get("effects") or []:
+                if isinstance(effect, dict) and ("assign" in effect or "unassign" in effect):
+                    key = "assign" if "assign" in effect else "unassign"
+                    value = effect[key]
+                    valid = isinstance(value, str) or (isinstance(value, list) and all(isinstance(v, str) for v in value))
+                    if key == "unassign":
+                        valid = valid or value == "all"
+                    if not valid:
+                        errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins")
+            for effect in oc.get("effects") or []:
+                if isinstance(effect, dict) and "notify" in effect:
+                    errs += _notify_effect_errors(where, o, effect["notify"], f.get("notify"))
             prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
             by_target = {}
             for effect in oc.get("effects") or []:
@@ -268,7 +497,7 @@ def errors(defn):
                 render(defn, name)
             except __import__("jinja2").TemplateError as e:
                 errs.append(f"render: {where}: {e}")
-    return errs
+    return errs + _mcp_errors(defn) + _notify_errors(f.get("notify"))
 
 
 def warnings(defn):
@@ -291,7 +520,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed", ("pr", "commented"): "pr commented",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red")
+           "request-reviewers", "park-behind-main-red", "assign", "unassign", "notify", "route", "reply", "skip")
 
 
 def _name(label, prefix):
@@ -337,9 +566,26 @@ def _pr_woken(n):
     return any(isinstance(t, dict) and next(iter(t)) in ("pr", "ci") for t in n.get("triggers") or [])
 
 
+def _used_stages(w):
+    """Every stage name the workflow's nodes and `stages:` mention."""
+    stages, used = w.get("stages") or {}, set()
+    for n in (w.get("nodes") or {}).values():
+        used |= {t["stage"] for t in n.get("triggers") or [] if isinstance(t, dict) and "stage" in t}
+        if (n.get("when") or {}).get("stage"):
+            st = n["when"]["stage"]
+            used |= set(st if isinstance(st, list) else [st])
+        for oc in (n.get("outcomes") or {}).values():
+            used |= {e["stage"] for e in (oc or {}).get("effects") or [] if "stage" in e}
+            st = ((oc or {}).get("if") or {}).get("stage")
+            used |= set(st if isinstance(st, list) else [st] if st and not str(st).startswith("!") else [])
+    used |= {s for k in ("final", "waiting") for s in stages.get(k) or []}  # declared stages count too
+    used.discard("none")
+    return used
+
+
 def to_project(defn):
-    """(project descriptor, format-2 workflow) of the definition, for `project.legacy_config` and
-    `workflow.to_nodes`. The definition must have no `errors`."""
+    """(project descriptor, format-2 workflow) of the definition, for the project loaders (`project.load`,
+    `workflow.load`) and `config`. The definition must have no `errors`."""
     f, w = defn["factory"], defn["workflow"]
     nodes, agents, envs = w.get("nodes") or {}, f.get("agents") or {}, f.get("environments") or {}
     models = f.get("models") or {}
@@ -362,24 +608,15 @@ def to_project(defn):
     environments = {}
     for en, e in envs.items():
         repos = sorted(e.get("repositories") or [], key=lambda r: not r.get("main"))
-        secrets = sorted(k for k, v in {**(defaults.get("env") or {}), **(e.get("env") or {})}.items()
-                         if (v or {}).get("secret") and k != "GH_TOKEN")
-        environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": secrets,
+        help_ = environment_secrets(defn, en)
+        environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": list(help_),
+                            # where the gate may write in this environment: the main repository, or `write: true` (#994)
+                            "writable": [names[r["repo"]] for r in repos if r.get("main") or r.get("write")],
+                            "secret_help": help_,
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP}
 
     # Stages: every name the nodes use, plus the engine's PR facts.
-    used = set()
-    for n in nodes.values():
-        used |= {t["stage"] for t in n.get("triggers") or [] if isinstance(t, dict) and "stage" in t}
-        if (n.get("when") or {}).get("stage"):
-            st = n["when"]["stage"]
-            used |= set(st if isinstance(st, list) else [st])
-        for oc in (n.get("outcomes") or {}).values():
-            used |= {e["stage"] for e in (oc or {}).get("effects") or [] if "stage" in e}
-            st = ((oc or {}).get("if") or {}).get("stage")
-            used |= set(st if isinstance(st, list) else [st] if st and not str(st).startswith("!") else [])
-    used |= {s for k in ("final", "waiting") for s in stages.get(k) or []}  # declared stages count too
-    used.discard("none")
+    used = _used_stages(w)
     kind = {s: k for k in ("final", "waiting") for s in stages.get(k) or []}
     states = {s: {"kind": kind.get(s, "active"), "store": {"label": f"{prefix}{s}"}} for s in sorted(used)}
     states["pr-merged"] = {"kind": "final", "store": {"pr": "merged"}}
@@ -409,11 +646,15 @@ def to_project(defn):
     for name, n in nodes.items():
         wf_nodes[name] = _node(name, n, agents, role_of, prefix, schedules, envs, default_env, sorted(used),
                                {c for c, v in commands.items() if "pr_label" in v["store"]})
+        connectors = mcp_connectors(mcp(defn, name))
+        if connectors:  # Air's `mcpConnectors`; the custom servers go to `.mcp.json` at setup (team_setup)
+            wf_nodes[name]["mcp"] = connectors
 
     merge_settings = next(((v.get("settings") or {}) for v in nodes.values()
                            if "max_risk" in (v.get("settings") or {})), {})
     fix_rounds = next((v["settings"]["fix_rounds"] for v in nodes.values() if "fix_rounds" in (v.get("settings") or {})), None)
     team = team_url(defn["root"])
+    air = (f.get("targets") or {}).get("air") or {}
     descriptor = {
         "engine": 1,
         **({"team_repository": team} if team else {}),
@@ -426,9 +667,12 @@ def to_project(defn):
         "workflow": WORKFLOW,
         "states": states,
         "commands": commands,
+        **({"write_mode": dset["write_mode"]} if dset.get("write_mode") else {}),
+        **({"issues_token_env": dset["issues_token_env"]} if dset.get("issues_token_env") else {}),
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
-        "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models}}},
+        "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},
+                           "mcp_connectors": list(air.get("mcp_connectors") or AIR_CONNECTORS)}},
         "roles": roles,
         "limits": {**(wset.get("limits") or {}), **({"fix_rounds": fix_rounds} if fix_rounds else {})},
         "gates": {"auto_merge": {"enabled": bool(merge_settings.get("auto_merge", True)),
@@ -440,6 +684,7 @@ def to_project(defn):
     }
     return descriptor, {"format": 2, "adapters": {"ticket": (f.get("tracker") or {}).get("adapter", "github-issues"),
                                                   "pr": "github"},
+                        **({"blockers": w["blockers"]} if w.get("blockers") else {}),
                         "schedules": schedules,
                         "webhooks": {k: {"description": (v or {}).get("description", k)}
                                      for k, v in (f.get("webhooks") or {}).items()},
@@ -516,7 +761,7 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
             res["ci"] = ci if isinstance(ci, list) else [ci]
         if guard:
             res["if"] = guard  # label, pr, review, blockers, children: the gate checks them (gate.guard_holds)
-        for k in ("else", "enabled"):
+        for k in ("else", "enabled", "to"):
             if k in oc:
                 res[k] = oc[k]
         if "effects" in oc:
@@ -524,3 +769,127 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
         outcomes[o] = res
     out["outcomes"] = outcomes
     return out
+
+
+# --- The shapes the gate reads, straight from the definition -------------------------------------
+# `nodes(defn)` is engine/nodes.yaml's shape: triggers as event strings, `when.stage`, stage and label effects.
+EVENTS = {("pr", "reviewed"): "pull_request_review.submitted", ("pr", "pushed"): "pull_request.synchronize",
+          ("pr", "opened"): "pull_request.opened", ("pr", "merged"): "pull_request.merged",
+          ("pr", "commented"): "issue_comment.created", ("ticket", "closed"): "issues.closed",
+          ("ticket", "commented"): "issues.comment"}
+
+
+def _trigger(t, name, prefix, on_pr, schedules, env):
+    """A trigger of a definition node as the gate's event string; a schedule is recorded in `schedules`."""
+    if t == "manual":
+        return "manual"
+    (k, v), = t.items()
+    if k == "stage":
+        return f"issues.labeled {prefix}{v}"
+    if k == "label":
+        return f"{'pull_request' if v in on_pr else 'issues'}.labeled {v}"
+    if k == "schedule":
+        key = name if name not in schedules or schedules[name]["cron"] == v else f"{name}-{len(schedules)}"
+        schedules[key] = {"cron": v}
+        return f"schedule {key}"
+    if k == "webhook":
+        return f"webhook {v}"
+    if k == "ci":
+        return f"workflow_run {(env.get('ci') or {}).get('workflow', 'quality-gates')}"
+    return EVENTS[(k, v)]
+
+
+def _outcome(oc, on_pr, all_stages):
+    oc = dict(oc or {})
+    guard = dict(oc.pop("if", None) or {})
+    out = {}
+    st = guard.pop("stage", None)
+    if st is not None:
+        out["from"] = [s for s in all_stages if s != st[1:]] if isinstance(st, str) and st.startswith("!") \
+            else st if isinstance(st, list) else [st]
+    if "ci" in guard:
+        ci = guard.pop("ci")
+        out["ci"] = ci if isinstance(ci, list) else [ci]
+    if guard:
+        out["if"] = guard  # label, pr, review, blockers, children: the gate checks them (gate.guard_holds)
+    for k in ("else", "enabled", "to"):
+        if k in oc:
+            out[k] = oc[k]
+    if "effects" in oc:
+        out["effects"] = [_label_effect(e, on_pr) for e in oc["effects"]]
+    return out
+
+
+def _label_effect(e, on_pr):
+    """A label is on the PR when any effect puts it there; `comment` with `on: mention` stays as written."""
+    key = next(k for k in e if k != "on")
+    if key in ("label", "unlabel"):
+        return {key: e[key], **({"on": "pr"} if e[key] in on_pr else {})}
+    return dict(e)
+
+
+def nodes(defn):
+    """The gate's node graph of the definition (nodes, schedules, webhooks, adapters, environments). The definition
+    must have no `errors`."""
+    f, w = defn["factory"], defn["workflow"]
+    agents, envs, defaults = f.get("agents") or {}, f.get("environments") or {}, f.get("defaults") or {}
+    wset = w.get("settings") or {}
+    prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
+    default_env, all_stages = wset.get("environment"), sorted(_used_stages(w))
+    primary = next(r["repo"] for r in envs[default_env]["repositories"] if r.get("main"))
+    on_pr = {f"{prefix}ci-green", f"{prefix}ci-red"}
+    for n in (w.get("nodes") or {}).values():
+        for oc in (n.get("outcomes") or {}).values():
+            on_pr |= {e.get("label") or e.get("unlabel") for e in (oc or {}).get("effects") or []
+                      if ("label" in e or "unlabel" in e) and e.get("on") == "pr"}
+    environments = {}
+    for en, e in envs.items():
+        repos = sorted(e.get("repositories") or [], key=lambda r: not r.get("main"))
+        secrets = sorted(k for k, v in {**(defaults.get("env") or {}), **(e.get("env") or {})}.items()
+                         if (v or {}).get("secret") and k != "GH_TOKEN")
+        environments[en] = {"repository": "primary" if repos and repos[0]["repo"] == primary else repos[0]["repo"].split("/")[-1],
+                            "secrets": secrets, "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"),
+                            "startup": STARTUP}
+    schedules, out = {}, {}
+    for name, n in (w.get("nodes") or {}).items():
+        a = agents[n["agent"]]
+        role = {"script": "script", "human": "human"}.get(a.get("harness")) or a.get("role") or n["agent"]
+        env_name = n.get("environment") or default_env
+        when = dict(n.get("when") or {}) or {"always": True}
+        triggers = [_trigger(t, name, prefix, on_pr, schedules, envs.get(env_name) or {}) for t in n.get("triggers") or []]
+        node = {"env": env_name} if role != "human" else {}
+        node.update(triggers=triggers, when={"actor": "human"} if role == "human" else when, role=role)
+        if role == "script":
+            node["run"] = n.get("run") or a.get("run")
+        if role not in ("script", "human"):
+            node["tier"] = n.get("model") or a.get("model")
+        if role != "human":
+            node["output"] = n.get("output", "read-only")
+        pr_woken = any(isinstance(t, dict) and (next(iter(t)) in ("pr", "ci") or ("label" in t and t["label"] in on_pr))
+                       for t in n.get("triggers") or [])
+        if pr_woken and "ci" not in node["when"]:
+            node["ci-independent"] = True
+        if n.get("triggers") and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"]):
+            node["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
+        if n.get("enabled") is False:
+            node["enabled"] = False
+        node["outcomes"] = {o: _outcome(oc, on_pr, all_stages) for o, oc in (n.get("outcomes") or {}).items()}
+        connectors = mcp_connectors(mcp(defn, name))
+        if connectors:  # Air's `mcpConnectors`; the custom servers go to `.mcp.json` at setup (team_setup)
+            node["mcp"] = connectors
+        out[name] = node
+    return {"adapters": {"ticket": (f.get("tracker") or {}).get("adapter", "github-issues"), "pr": "github"},
+            "environments": environments, "schedules": schedules,
+            "webhooks": {k: {"description": (v or {}).get("description", k)} for k, v in (f.get("webhooks") or {}).items()},
+            "nodes": out}
+
+
+def config(defn):
+    """The engine config of the definition, to merge over engine/defaults.yaml: its project descriptor, with the
+    tracker's `stages`, `stage_kinds` and `commands` that the gate reads."""
+    descriptor = to_project(defn)[0]
+    states = {name: s for name, s in descriptor["states"].items() if "label" in s["store"]}
+    return {**descriptor, "tracker": {**descriptor["tracker"],
+                                      "stages": {name: s["store"]["label"] for name, s in states.items()},
+                                      "stage_kinds": {name: s["kind"] for name, s in states.items()},
+                                      "commands": {name: c["store"] for name, c in descriptor["commands"].items()}}}

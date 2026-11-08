@@ -28,7 +28,7 @@ under `repositories[]` with `role: primary` (exactly one) or `role: project`.
 A ticket names the repositories it changes; the router fills this in, and the
 default is the primary repository.
 
-**Air repositories.** One automation set serves all repositories:
+**Air repositories.** *Superseded in part by ADR-0024.* One automation set serves all repositories:
 
 - A project automation runs in the primary repository. The other project
   repositories and the factory repository are its additional repositories.
@@ -37,7 +37,7 @@ default is the primary repository.
   change the factory itself or run outside a ticket: retro, distill, the
   knowledge review and the ops nodes (notify, reconcile, doctor-ops).
 
-**One branch name across repositories.** Every PR of a ticket uses
+**One branch name across repositories.** *Superseded in part by ADR-0024.* Every PR of a ticket uses
 `ez/<n>-<slug>`, so `ticket_from_ref` still finds its ticket. The ticket is
 approved only when every PR is approved and green at its own head; `merge`
 merges them in the ticket's repository order, each with `--match-head-commit`;
@@ -60,7 +60,8 @@ without changing the workflow.
 - A team changes roles, rules or triggers only in its factory repository and
   redeploys; the engine changes only for engine code.
 - Air's own multi-repository checkout is reused, so there are no per-repository
-  automation copies.
+  automation copies. *Superseded in part by ADR-0024:* a node with `writes`
+  gets one automation per written repository.
 - Whether Air pushes and opens PRs from an additional repository must be
   probed before multi-repository tickets ship. Until it is proven, the
   developer pushes extra branches itself, or a ticket changes one repository

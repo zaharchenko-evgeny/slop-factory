@@ -1,0 +1,7 @@
+# Breaks DoneReachable: tickets cycle between `triage` and `work`; no outcome sets `done`.
+stages: { final: [done], waiting: [blocked] }
+nodes:
+  intake: { agent: router, triggers: [{ stage: triage }], when: { stage: triage },
+            outcomes: { ready: { effects: [{ stage: work }] } } }
+  work: { agent: developer, triggers: [{ stage: work }], when: { stage: work },
+          outcomes: { back: { effects: [{ stage: triage }] } } }

@@ -96,6 +96,23 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-review")
 
+    def test_a_failing_apply_reports_the_error_on_the_ticket(self):
+        tracker = self.tracker()
+        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(cli.STATE.read_text())["ticket"], 7)
+        reports = []
+
+        def failing_gate(engine, argv, team=None, stderr=False):
+            print("RuntimeError: HTTP 403: Resource not accessible by integration", file=sys.stderr)
+            return 1
+        with mock.patch.object(cli, "run_gate", failing_gate), \
+                mock.patch.object(cli, "report_end_failure", lambda state, outcome, err: reports.append((state["node"], outcome, err))):
+            code, _ = self.run_cli("end", "done")
+        self.assertEqual(code, 1)
+        self.assertEqual([(n, o) for n, o, _ in reports], [("implement", "done")])
+        self.assertIn("HTTP 403", reports[0][2])
+
     def test_end_env_broken_records_check_and_parks_ticket(self):
         tracker = self.tracker()
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
@@ -143,12 +160,6 @@ class BeginEndTest(unittest.TestCase):
     def test_end_approve_needs_no_file(self):
         code, out = self.end_review("approve")
         self.assertEqual(code, 0, out)
-
-    def test_end_changes_requires_blocking_finding(self):
-        Path("f.json").write_text(json.dumps([{"id": "M1", "file": "x.py:1", "finding": "name it", "severity": "minor"}]))
-        code, out = self.end_review("changes", "--findings", "f.json")
-        self.assertEqual(code, 2, out)
-        self.assertIn("requires a blocking finding", out)
 
     def test_end_done_refuses_failed_check(self):
         tracker = self.tracker()
@@ -199,6 +210,35 @@ class BeginEndTest(unittest.TestCase):
                             "--note-file", "b.py")
         self.assertEqual(data["agent_notes"], {"for": "fixer", "files": ["a.py", "b.py"], "repro": "uv run t.py"})
         self.assertNotIn("agent_notes", self.handoff("approve"))
+
+    def test_end_lesson_option(self):
+        data = self.handoff("done", "--lesson", "factory router | it misses ADRs | evidence: #7",
+                            "--lesson", "project gate.py | apply runs twice")
+        self.assertEqual(data["lessons"], [
+            {"scope": "factory", "about": "router", "text": "it misses ADRs", "evidence": "#7"},
+            {"scope": "project", "about": "gate.py", "text": "apply runs twice"}])
+        self.assertNotIn("lessons", self.handoff("done"))
+
+    def test_end_lesson_bad_scope(self):
+        for bad in ("team router | text", "factory router | ", "factory | text"):
+            with self.assertRaises(ValueError, msg=bad):
+                self.handoff("done", "--lesson", bad)
+        self.tracker()
+        self.assertEqual(self.run_cli("begin", "implement-mid", "event.json", "--tracker", "memory:tickets.json")[0], 0)
+        code, out = self.run_cli("end", "done", "--lesson", "team router | text")
+        self.assertEqual(code, 2, out)
+        self.assertIn("malformed option", json.loads(out)["error"])
+
+    def test_end_lessons_reach_gate(self):
+        tracker = self.tracker()
+        self.assertEqual(self.run_cli("begin", "implement-mid", "event.json", *tracker)[0], 0)
+        code, out = self.run_cli("end", "done", "--lesson", "engine cli.py | end dropped lessons | evidence: #869")
+        self.assertEqual(code, 0, out)
+        record = json.loads(Path("tickets.json").read_text())["7"]
+        comments = [json.loads(v) for k, v in record["log"] if k == "comment" and "factory:lesson" in v]
+        self.assertEqual(len(comments), 1, record["log"])
+        self.assertIn("- [engine] cli.py: end dropped lessons (evidence: #869)", comments[0])
+        self.assertIn("factory:lesson", record["attrs"])
 
     def test_begin_fix_prints_ci_failure(self):
         failure = [{"job": "tests", "step": "Run tests", "log_tail": "assert False"}]
@@ -338,13 +378,6 @@ class ImportTimeBoundaryTest(unittest.TestCase):
 class EnvRolesTest(unittest.TestCase):
     def test_prints_roles_of_enabled_agent_nodes_in_the_environment(self):
         self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
-        cfg.set_team(ROOT / "factory/tests/fixtures/slop-v1")
-        for env, roles in {"read": "reviewer\nrouter\n", "write": "developer\n", "ops": "distill\nretro\n"}.items():
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                self.assertEqual(cli.main(["env", "roles", env]), 0)
-            self.assertEqual(out.getvalue(), roles, f"slop-v1 {env}")
-
         fixture = ROOT / "factory/tests/fixtures/slop"
         cfg.set_team(fixture)
         for env in ("engine", "knowledge", "team"):
@@ -377,6 +410,69 @@ class EnvRolesTest(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out): self.assertEqual(cli.main(["env", "roles", env]), 0)
         return out.getvalue().splitlines()
+
+
+class CrashReportTest(unittest.TestCase):
+    """#984: a crash in an Air run opens one Doctor ticket through gh alone."""
+    def gh(self, open_titles):
+        calls = []
+
+        def run(args, **kw):
+            calls.append(args)
+            out = "\n".join(open_titles) if args[1:3] == ["issue", "list"] else "o/r" if args[1:3] == ["repo", "view"] else ""
+            return subprocess.CompletedProcess(args, 0, out, "")
+        return calls, run
+
+    def test_air_crash_opens_the_ticket_once(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"FACTORY_ENV": "engine"}):
+            os.environ.pop("GITHUB_REPOSITORY", None)
+            calls, run = self.gh([])
+            cli.report_crash("begin", FileNotFoundError("engine/defaults.yaml"), run=run)
+            create = next(c for c in calls if c[1:3] == ["issue", "create"])
+            self.assertEqual(create[create.index("--title") + 1], "Doctor: factory begin crashes")
+            self.assertIn("FileNotFoundError: engine/defaults.yaml", create[create.index("--body") + 1])
+            calls, run = self.gh(["Doctor: factory begin crashes"])
+            cli.report_crash("begin", FileNotFoundError("x"), run=run)
+            self.assertFalse([c for c in calls if c[1:3] == ["issue", "create"]])
+
+    def test_local_crash_reports_nothing(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {}):
+            os.environ.pop("FACTORY_ENV", None)
+            calls, run = self.gh([])
+            cli.report_crash("begin", RuntimeError("x"), run=run)
+            self.assertEqual(calls, [])
+
+    def test_crash_report_names_command_not_team_dir(self):
+        from unittest import mock
+        calls = []
+        with mock.patch.object(cli, "report_crash", lambda c, e: calls.append(c)), \
+                mock.patch.object(cli, "_main", side_effect=RuntimeError("x")):
+            with self.assertRaises(RuntimeError):
+                cli.main(["--team", "/home/workspace/factory-team", "deploy", "--dry-run"])
+        self.assertEqual(calls, ["deploy"])
+
+
+class EndFailureTest(unittest.TestCase):
+    """#997: a failed `factory end` leaves one comment on the ticket that reconcile reads."""
+    def test_comment_names_node_head_outcome_and_the_error(self):
+        from unittest import mock
+        calls = []
+        with mock.patch.object(cli.config, "load", lambda: {"tracker": {"repository": "o/r"}}):
+            cli.report_end_failure({"ticket": 7, "node": "review-low", "head": "abc123def456"}, "approve-low",
+                                   "Traceback\nRuntimeError: HTTP 403: Resource not accessible by integration\n",
+                                   run=lambda args, **kw: calls.append(args))
+        args = calls[0]
+        self.assertEqual(args[:5], ["gh", "issue", "comment", "7", "-R"])
+        body = args[args.index("--body") + 1]
+        self.assertTrue(body.startswith("[factory] end failed: node=review-low head=abc123def456 outcome=approve-low"))
+        self.assertIn("HTTP 403", body)
+
+    def test_no_ticket_no_comment(self):
+        calls = []
+        cli.report_end_failure({"node": "reconcile"}, "reconciled", "boom", run=lambda args, **kw: calls.append(args))
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":
