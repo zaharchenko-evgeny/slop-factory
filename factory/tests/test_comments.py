@@ -85,6 +85,20 @@ class DefinitionModuleTest(unittest.TestCase):
         self.edit(definition.FACTORY, lambda f: f.update(modules=["comments", "chat"]))
         self.assertIn("unknown-module: modules: chat", definition.errors(definition.load(self.root)))
 
+    def test_modules_must_be_a_list(self):
+        self.edit(definition.FACTORY, lambda f: f.update(modules="comments"))
+        defn = definition.load(self.root)
+        self.assertFalse(definition.module_on(defn, "comments"))
+        errs = [e for e in definition.errors(defn) if "module" in e]
+        self.assertEqual(errs, ["bad-modules: factory.yaml: `modules` must be a list, for example [comments]"])
+
+    def test_off_refuses_a_hand_written_ask_outcome(self):
+        self.off()
+        self.edit(definition.WORKFLOW, lambda w: w["nodes"]["intake"]["outcomes"].update(
+            ask={"effects": [{"comment": "text"}]}))
+        self.assertIn("module-off: nodes.intake.ask: ask needs modules: [comments]",
+                      definition.errors(definition.load(self.root)))
+
     def test_reserved_names_are_free_while_off(self):
         def reply_node(w):
             w["nodes"]["reply-x"] = {**w["nodes"]["intake"]}
@@ -136,6 +150,22 @@ class GateModuleTest(unittest.TestCase):
         errs = nodes.validate(graph, config)
         self.assertIn("unknown-effect: comment.route: {'route': 'to'} (needs modules: [comments])", errs)
         self.assertFalse([e for e in nodes.validate(graph, {**config, "modules": ["comments"]}) if "comment.route" in e])
+
+
+class ScriptTest(unittest.TestCase):
+    def test_a_refused_ask_exits_bad_when_the_gate_runs_as_a_script(self):
+        """`uv run factory/gate.py apply`: the module's `gate.Bad` is the script's own, so a refusal exits 2, not 1."""
+        import json
+        import os
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "t.json").write_text(json.dumps({"7": {"stage": "triage"}}))
+            (Path(d) / "p.json").write_text(json.dumps({"ticket": "7", "to": "nobody", "text": "q"}))
+            done = subprocess.run([sys.executable, str(ROOT / "gate.py"), "apply", "--node", "implement-medium",
+                                   "--outcome", "ask", "--payload", f"{d}/p.json", "--tracker", f"memory:{d}/t.json"],
+                                  capture_output=True, text=True, env={**os.environ, "FACTORY_TEAM": str(FIXTURES / "v2")})
+        self.assertEqual(done.returncode, gate.BAD, done.stdout + done.stderr)
+        self.assertEqual(json.loads(done.stdout)["error"], "ask: `nobody` is not an agent this node may ask; allowed: reviewer")
 
 
 class PackagingTest(unittest.TestCase):

@@ -30,9 +30,8 @@ def new_comments(facts, tracker=None, ticket=None):
     """The comments on the ticket and its PR after the cursor, oldest first, `on` saying where each is. The factory's
     own comments (a `factory:from` marker without an ask marker) are not input."""
     from gate import FROM
-    pr = facts.get("pr_comments")
-    if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
-        pr = tracker.pr_comments(ticket)
+    from comments.mentions import pr_comments
+    pr = pr_comments(facts, tracker, ticket)
     found = [dict(c, on="ticket") for c in facts.get("comments") or []] + [dict(c, on="pr") for c in pr or []]
     seen = cursor(found)
     own = lambda c: FROM.search(c.get("body") or "") and not ASK.search(c.get("body") or "")

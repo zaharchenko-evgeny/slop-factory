@@ -772,8 +772,9 @@ def labels(nodes: dict, config: dict) -> list[str]:
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
     out.add(vocab.needs_human())
     out.add(vocab.lesson())  # ADR-0021: a ticket with uncollected lessons
-    if comments_on(config):
-        out.add(vocab.comment())  # ADR-0023: scripts/comment-wake-label.sh adds it; the comment node removes it
+    # ADR-0023: scripts/comment-wake-label.sh adds it; the comment node removes it. Kept while the comments module is
+    # off (ADR-0025): a wake workflow an earlier deploy installed still adds it, and fails once the label is gone.
+    out.add(vocab.comment())
     out |= {vocab.ci("ci-green"), vocab.ci("ci-red")}  # CI writes them (scripts/ci-state-label.sh); reconcile reads
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]

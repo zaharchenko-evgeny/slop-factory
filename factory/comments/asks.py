@@ -14,10 +14,9 @@ def effects(name, node, out, payload, tracker, ticket, effects):
     allowed = out.get("to") or []
     if to not in allowed:
         raise gate.Bad(f"ask: `{to}` is not an agent this node may ask; allowed: {', '.join(allowed) or 'none'}")
+    from comments.mentions import pr_comments
     facts = tracker.facts(ticket)
-    pr = facts.get("pr_comments")
-    if pr is None and hasattr(tracker, "pr_comments"):
-        pr = tracker.pr_comments(ticket)
+    pr = pr_comments(facts, tracker, ticket)
     asked = sum(1 for c in [*(facts.get("comments") or []), *(pr or [])]  # only the factory's own asks count
                 if c.get("author_is_factory") and (c.get("body") or "").startswith("[factory]") and ASK.search(c["body"]))
     limit = gate.config_mod.load().get("limits", {}).get("mention_hops", 3)

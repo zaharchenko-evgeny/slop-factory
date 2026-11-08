@@ -720,7 +720,7 @@ class ProjectPlanTest(unittest.TestCase):
             plan = definition_plan(edit_factory=edit)
             nodes_ = {a["spec"]["node"] for a in plan["automations"]}
             self.assertFalse({n for n in nodes_ if n == "mentions" or n.startswith("reply-")})
-        self.assertNotIn("factory:comment", plan["labels"])  # no wake rule adds it while the module is off
+        self.assertIn("factory:comment", plan["labels"])  # kept while off: a wake workflow installed earlier still adds it
 
     def test_mcp_connectors_come_from_node_then_agent_then_role(self):
         def edit_factory(f):

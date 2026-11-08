@@ -70,7 +70,8 @@ def errors(defn, no_role):
     return errs
 
 
-def _pr_comments(facts, tracker, ticket):
+def pr_comments(facts, tracker, ticket):
+    """The PR comments in `facts`, else read from the tracker (None when it has none)."""
     pr = facts.get("pr_comments")
     if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
         pr = tracker.pr_comments(ticket)
@@ -80,7 +81,7 @@ def _pr_comments(facts, tracker, ticket):
 def latest(facts, tracker=None, ticket=None):
     """{by, body, at, on, url} of the latest comment or review on the ticket or its PR that names @factory:, else None."""
     found = [dict(c, on="ticket") for c in facts.get("comments") or []]
-    found += [dict(c, on="pr") for c in _pr_comments(facts, tracker, ticket) or []]
+    found += [dict(c, on="pr") for c in pr_comments(facts, tracker, ticket) or []]
     found += [{"author": r.get("author"), "body": r.get("body"), "at": r.get("submitted_at"), "on": "pr"}
               for r in facts.get("reviews") or [] if r.get("body")]
     found = [c for c in found if "@factory:" in (c.get("body") or "")]
@@ -99,7 +100,7 @@ def holds(agent, facts, tracker=None, ticket=None):
     from gate import FROM
     from comments.asks import ANSWER, ASK
     comments = list(facts.get("comments") or [])
-    comments += _pr_comments(facts, tracker, ticket) or []
+    comments += pr_comments(facts, tracker, ticket) or []
     comments += [{"body": r.get("body") or "", "at": r.get("submitted_at") or r.get("at")}
                  for r in facts.get("reviews") or [] if r.get("body")]  # a reviewer asks in its review
     if not comments:

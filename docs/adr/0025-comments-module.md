@@ -34,8 +34,10 @@ workflow.
    - a `mention` guard, an `on: mention` effect, or a `route`, `reply` or
      `skip` effect is a `module-off` validation error, and the gate refuses
      it;
-   - deploy creates no `factory:comment` label and installs no comment wake
-     files.
+   - deploy installs no comment wake files. It keeps the `factory:comment`
+     label: a wake workflow that an earlier deploy installed still adds it,
+     and would fail on every comment once the label is gone. #1057 slice 2
+     removes installed wake files and then the label.
 4. The `factory:from` marker stays in the core. Notify, reviews and lessons
    write it too.
 

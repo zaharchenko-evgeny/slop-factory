@@ -34,6 +34,8 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+if __name__ == "__main__":  # run as a script: `import gate` (the comments module) must get this module, and its `Bad`
+    sys.modules.setdefault("gate", sys.modules[__name__])
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 import notify as notifiers  # noqa: E402
@@ -485,7 +487,9 @@ def guard_holds(guard, facts, tracker=None, ticket=None):
     if "children" in guard and "children_open" not in facts and tracker is not None and hasattr(tracker, "children"):
         kids = tracker.children(ticket) or []
         facts = {**facts, "children_open": sum(1 for c in kids if c.get("state") == "open")}
-    unknown = set(guard) - GUARD_KEYS - (set(comments.GUARDS) if comments_on() else set())
+    unknown = set(guard) - GUARD_KEYS
+    if unknown & set(comments.GUARDS) and comments_on():  # read the config only for a guard of the module
+        unknown -= set(comments.GUARDS)
     if unknown:
         raise Bad(f"unknown guard: {', '.join(sorted(unknown))}" + module_off(unknown & set(comments.GUARDS)))
     if "mention" in guard:

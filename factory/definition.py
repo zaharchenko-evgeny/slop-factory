@@ -80,7 +80,8 @@ def load(root):
 
 def module_on(defn, name):
     """True when the team's factory.yaml turns on engine module `name` (`modules: [comments]`, ADR-0025)."""
-    return name in (defn["factory"].get("modules") or [])
+    modules = defn["factory"].get("modules") or []
+    return isinstance(modules, list) and name in modules
 
 
 def merge(base, over):
@@ -421,6 +422,8 @@ def errors(defn):
                      if k in (*comments.GUARDS, *comments.EFFECTS) and not on]
             errs += [f"module-off: {where}.{o}: `on: mention` needs modules: [{comments.NAME}]"
                      for e in oc.get("effects") or [] if e.get("on") == "mention" and not on]
+            if o == "ask" and not on:  # the gate refuses an `ask` outcome while the module is off
+                errs.append(f"module-off: {where}.ask: ask needs modules: [{comments.NAME}]")
             errs += [f"unknown-guard: {where}.{o}: {k}" for k in guards if k not in comments.GUARDS]
             errs += [f"unknown-effect: {where}.{o}: {k}" for k in kinds if k not in EFFECTS and k not in comments.EFFECTS]
             for effect in oc.get("effects") or []:
@@ -462,7 +465,10 @@ def errors(defn):
     if on:
         from comments import mentions
         errs += mentions.errors(defn, NO_ROLE)
-    errs += [f"unknown-module: modules: {m}" for m in f.get("modules") or [] if m != comments.NAME]
+    if not isinstance(f.get("modules") or [], list):
+        errs.append(f"bad-modules: factory.yaml: `modules` must be a list, for example [{comments.NAME}]")
+    else:
+        errs += [f"unknown-module: modules: {m}" for m in f.get("modules") or [] if m != comments.NAME]
     return errs + _mcp_errors(defn) + _notify_errors(f.get("notify"))
 
 
