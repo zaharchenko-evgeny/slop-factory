@@ -30,7 +30,7 @@ by hand, see the `factory-delivery` skill.
 | Retro, distill, knowledge review, ops nodes (notify, reconcile, doctor-ops) | the factory repository | every project repository in the descriptor, at its `default_branch` |
 
 The prompt's "Project checkout" section names each checkout under `/workspaces/<name>`.
-`deploy.py` writes `additionalRepositories` through the Air REST API (`Backend.set_additional`), because
+The Air surface (`factory/factory_plugins/air/deploy.py`) writes `additionalRepositories` through the Air REST API (`Backend.set_additional`), because
 the automations MCP does not expose it.
 
 ### Delivering to the team repository (ADR-0019)
@@ -75,7 +75,7 @@ replaces its mode's, and a mode's replaces its role's. No list means no connecto
 
 - `factory validate` reports `unknown-mcp-connector: <where>: <name>` for a name missing from
   `targets.air.mcp_connectors`.
-- `deploy.py` writes each automation's `mcpConnectors` and adds a "Your MCP servers" section to its prompt. The
+- The Air surface (`factory/factory_plugins/air/deploy.py`) writes each automation's `mcpConnectors` and adds a "Your MCP servers" section to its prompt. The
   diff compares the field, so a connector added by hand in Air shows as a removal in `--dry-run`.
 - `factory deploy --target local` prints a warning for each role whose connectors are not provided locally.
 - A change of the create call needs a refreshed Air contract recording: the operator runs
@@ -109,7 +109,7 @@ roles:
   entries (`<env> <node>`, with `FACTORY_NODE=<node>`), so a node never sees the servers of another node.
 - `factory validate` reports `unknown-mcp-connector: <where>: <name>` for a name missing from
   `targets.air.mcp_connectors`.
-- `deploy.py` writes each automation's `mcpConnectors` and adds a "Your MCP servers" section to its prompt. The
+- The Air surface (`factory/factory_plugins/air/deploy.py`) writes each automation's `mcpConnectors` and adds a "Your MCP servers" section to its prompt. The
   diff compares the field, so a connector added by hand in Air shows as a removal in `--dry-run`.
 - `factory deploy --target local` prints a warning for each role whose connectors are not provided locally.
 - A change of the create call needs a refreshed Air contract recording: the operator runs

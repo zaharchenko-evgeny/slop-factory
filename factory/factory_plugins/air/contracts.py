@@ -13,7 +13,7 @@ import re
 import sys
 from pathlib import Path
 
-DIR = Path(__file__).resolve().parent / "tests/contracts"
+DIR = Path(__file__).resolve().parents[2] / "tests/contracts"  # factory/tests/contracts: the tests read them there
 SECRET = re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w+|sk-[A-Za-z0-9-]{20,}|eyJ[\w-]{20,}\.[\w-]{10,}"
                     r"|Bearer\s+[\w.~+/=-]{8,}")
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
@@ -117,10 +117,10 @@ def serve(recording, server):
 
 def refresh(path=DIR / "air-mcp.json"):
     import config
-    import deploy
+    from factory_plugins.air.deploy import Mcp
     rec = json.loads(Path(path).read_text())
-    clients = {"air-automations": deploy.Mcp(os.environ["FACTORY_MCP_AIR_AUTOMATIONS"]),
-               "air-cloud": deploy.Mcp(os.environ["FACTORY_MCP_AIR_CLOUD"])}
+    clients = {"air-automations": Mcp(os.environ["FACTORY_MCP_AIR_AUTOMATIONS"]),
+               "air-cloud": Mcp(os.environ["FACTORY_MCP_AIR_CLOUD"])}
     try:
         for name, client in clients.items():
             rec["servers"][name]["tools"] = redact(client.rpc("tools/list", {})["tools"])

@@ -31,7 +31,9 @@ Each team keeps settings in `factory.descriptor.yaml`. The descriptor supports
 these top-level keys, defined by `engine/descriptor.schema.json`:
 `engine`, `project`, `repositories`, `branch_pattern`, `commit_prefix`,
 `team_repository`, `tracker`, `vcs` (alias `code_host`), `owner`, `notify` (v1: `github_user`), `targets`, `models`, `roles`,
-`limits`, `gates`, `ci`, `knowledge`, `nodes`, `reviews`, `checks`, and `plugins` (alias `modules`;
+`limits`, `gates`, `ci`, `knowledge`, `nodes`, `reviews`, `checks`, `surface` (where the nodes run: `air`, the
+default when `targets.air` is set, or `local`; `factory deploy` with no `--target` deploys there and `factory validate`
+checks each node `output:` against it), and `plugins` (alias `modules`;
 engine plugins to turn on: `comments` turns on mentions, agent asks and the comment node, ADR-0025, ADR-0026;
 `notify` turns on the `notify` effect and `factory notify test <login>`, and `notify_email` its email channel, ADR-0022).
 

@@ -29,7 +29,7 @@ are derived from this wrapper and GitHub's documented webhook payloads, and say 
 
 `pull_request.labeled`, `pull_request.merged` and `issues.closed` are derived (built from the recorded `issues.labeled`
 and `pull_request_review.submitted` wrappers). `uv run --quiet factory/tests/test_contracts.py` checks them, and that the fake MCP
-server (`factory/contracts.py serve`) rejects any tool or argument absent from `air-mcp.json`.
+server (`factory/factory_plugins/air/contracts.py serve`) rejects any tool or argument absent from `air-mcp.json`.
 
 `factory contracts refresh` is **operator-only**: it needs your Air OAuth (`FACTORY_MCP_AIR_AUTOMATIONS`,
 `FACTORY_MCP_AIR_CLOUD`), never run it from an agent or CI. It re-records the tool lists and the read-only responses into

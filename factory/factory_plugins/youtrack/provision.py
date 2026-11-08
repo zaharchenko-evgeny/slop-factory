@@ -4,7 +4,7 @@ ones no longer required (a tag still used by another project's issues stays); it
 
 Hooks: `deploy.plan` adds the plan keys (`tags`, `fields`, their owned prefixes, `tag_tracker`), `deploy.repo_tags`
 names the per-repository stage tags a trigger listens to, and `deploy.tracker` returns the `Provisioner` that
-`deploy.deploy` drives between its label steps.
+the Air deploy (`factory_plugins.air.deploy.deploy`) drives between its label steps.
 """
 from factory_plugins.youtrack.store import MissingField, YouTrackTicketStore, repo_stage_tags
 

@@ -22,7 +22,7 @@ sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
 import test_gate_github as contract  # noqa: E402
 import config as cfg  # noqa: E402
-import deploy  # noqa: E402
+from factory_plugins.air import deploy as air  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
 import plugins  # noqa: E402
@@ -280,7 +280,7 @@ class DeployTest(unittest.TestCase):
             for name in [*SUBSYSTEMS, "web"]:
                 compiled["environments"][name] = {**compiled["environments"]["engine"], "repository": name}
             compiled["nodes"]["implement-medium"]["triggers"] = ["youtrack.tagAdded factory:implement-medium"]
-            return deploy.plan_air(compiled, conf)
+            return air.plan_air(compiled, conf)
         finally:
             cfg.set_team(before)
 
