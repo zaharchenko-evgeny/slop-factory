@@ -3,6 +3,7 @@
 name: Slop factory
 engine: slop-factory@3            # the pinned engine package; the engine's bootstrap installs it
 owner: zaharchenko-evgeny   # the GitHub login the notify node tells
+plugins: [comments]         # ADR-0025, ADR-0026: mentions, asks and the comment node
 tracker:
   adapter: github-issues
   repository: zaharchenko-evgeny/slop-factory
@@ -105,8 +106,8 @@ roles:
     skills: [to-tickets]
     mcp: {}
 
-# Agents: a role (above; roles/<role>/: role.md, setup.sh) + a model. `mentionable: true`: @factory:<agent>
-# in a comment or review asks it; deploy adds its reply step (#590).
+# Agents: a role (above; roles/<role>/: role.md, setup.sh) + a model. `mentionable: true` (module `comments`):
+# @factory:<agent> in a comment or review asks it; deploy adds its reply step (#590).
 # + access + settings. `gate` and `human` have no role.
 agents:
   human:          { harness: human }                               # a person; never deployed

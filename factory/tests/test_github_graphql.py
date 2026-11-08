@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import github_graphql as g  # noqa: E402
+from factory_plugins.github import graphql as g  # noqa: E402
 
 BOT = {"login": "jetbrains-air", "__typename": "Bot"}
 PERSON = {"login": "ez", "__typename": "User"}

@@ -318,12 +318,13 @@ def validate():
             import project
             import workflow
             errs = [f"compiled: {e}" for e in config.validate() or
-                    workflow.validate(project.load(config.team_root()), workflow.load(config.team_root()))]
+                    workflow.validate(project.load(config.team_root()), workflow.load(config.team_root())) or
+                    deploy.output_errors(nodes.load(), config.load())]
         print("\n".join([*errs, *(f"warning: {w}" for w in definition.warnings(defn)), *([] if errs else ["factory: ok"])]))
         return 1 if errs else 0
     errs = config.validate()
     if not errs:
-        errs = nodes.validate(nodes.load(), config.load())
+        errs = nodes.validate(nodes.load(), config.load()) or deploy.output_errors(nodes.load(), config.load())
     print("\n".join(errs) or "factory: ok")
     return 1 if errs else 0
 
@@ -409,6 +410,32 @@ def report_crash(cmd, error, run=subprocess.run):
         print(f"factory: could not report the crash: {e}", file=sys.stderr)
 
 
+def plugin_command(word):
+    """The function (argv) -> exit code a turned-on plugin adds as CLI word `word` (ADR-0026), else None. A team
+    whose config cannot be read has no plugin words: the help is printed instead."""
+    import plugins
+    try:
+        settings = config.load()
+    except (Exception, SystemExit):
+        return None
+    return plugins.registry(settings).command(word)
+
+
+def surface_command(surface, word):
+    """The function (argv) -> exit code behind CLI word `word` of surface `surface` (`local`: `run`,
+    `deploy --target local`; `air`: `deploy --target air`, `contracts`). Using it turns its plugin on, whatever the
+    config selects."""
+    import plugins
+    return plugins.registry({}, use=(("surface", surface),)).command(word)
+
+
+def tool_command(word):
+    """The function (argv) -> exit code behind the CLI word of a development tool plugin (`chart`). Using it turns
+    the plugin on, whatever the config selects."""
+    import plugins
+    return plugins.registry({}, use=(("tool", word),)).command(word)
+
+
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
     try:
@@ -437,21 +464,18 @@ def _main(argv):
     load_engine(HERE)
     if team:
         config.set_team(team)
-    if cmd in ("check", "apply", "sweep", "ci-sync", "decide", "ci"):
+    if cmd in ("check", "apply", "sweep", "decide", "ci"):
         return gate.main([cmd, *rest])
     if cmd == "deploy" and rest[:2] == ["--target", "local"]:
-        from local import deploy as local_deploy
-        return local_deploy(rest[2:])
+        return surface_command("local", "deploy --target local")(rest[2:])
     if cmd == "run":
-        from local import main as local_main
-        return local_main(rest)
+        return surface_command("local", "run")(rest)
     if cmd == "deploy":
         return deploy.main(rest)
     if cmd == "contracts":
-        from contracts import main as contracts_main
-        return contracts_main(rest)
+        return surface_command("air", "contracts")(rest)
     if cmd == "chart":
-        return nodes.main(["chart", *rest])
+        return tool_command("chart")(rest)
     if cmd == "migrate" and rest[:1] == ["workflow"]:
         from workflow import main as workflow_main
         return workflow_main(["migrate", *rest[1:]])
@@ -480,6 +504,8 @@ def _main(argv):
     if cmd == "reconcile":
         from reconcile import main as reconcile_main
         return reconcile_main(rest)
+    if cmd and not cmd.startswith("-") and (command := plugin_command(cmd)):
+        return command(rest)
     print(__doc__)
     return 0 if cmd in ("-h", "--help") else 2
 

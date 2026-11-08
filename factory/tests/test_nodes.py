@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 import nodes  # noqa: E402
+from factory_plugins.chart import render  # noqa: E402
 
 CONFIG = cfg.load()
 
@@ -63,7 +64,7 @@ class NodesTest(unittest.TestCase):
         self.assertIn("stage-without-kind: orphan", nodes.validate(nodes.load(), config))
 
     def test_chart_is_current(self):
-        want = nodes.block(nodes.load())
+        want = render.block(nodes.load())
         for doc in ("docs/statechart.md", "docs/statechart-proposed.md"):
             m = re.search(r"<!-- nodes-chart -->\n(.*?)<!-- /nodes-chart -->", (ROOT / doc).read_text(), re.S)
             self.assertIsNotNone(m, f"{doc} has no nodes-chart block")
@@ -80,7 +81,7 @@ class NodesTest(unittest.TestCase):
                                   "cannot-reproduce": ["needs-answers"]})
 
     def test_chart_marks_planned_nodes_dashed_and_lists_triggers(self):
-        c = nodes.chart(nodes.load())
+        c = render.chart(nodes.load())
         self.assertIn("on: issue +factory:ready", c)
         self.assertIn("on: PR +factory:ci-green", c)
         self.assertRegex(c, r'N_adopt\[.*\]:::planned')
