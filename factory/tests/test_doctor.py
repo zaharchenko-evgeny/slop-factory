@@ -147,6 +147,22 @@ class ProjectWriteProbeTest(unittest.TestCase):
 
 
 class DoctorTest(unittest.TestCase):
+    def test_run_log_requests_latest_successful_run(self):
+        api_calls = []
+        run_calls = []
+
+        def api(path):
+            api_calls.append(path)
+            return json.dumps({"workflow_runs": [{"id": 7}]})
+
+        def run(args):
+            run_calls.append(args)
+            return "log line"
+
+        self.assertEqual(doctor.run_log(api, run, REPO), "log line")
+        self.assertEqual(api_calls, [f"repos/{REPO}/actions/runs?per_page=1&status=success"])
+        self.assertEqual(run_calls, [["run", "view", "7", "-R", REPO, "--log"]])
+
     def test_denied_write_reported_and_ticket_opened(self):
         gh = FakeGh(deny=("dependencies/blocked_by",))
         got = run(gh)
