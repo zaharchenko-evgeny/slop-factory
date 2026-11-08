@@ -11,7 +11,9 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
-import github_graphql
+from ports.system import Effect
+
+CLOSED_HOURS = 48  # a ticket closed on merge while its finish run was lost (#567) is found for this long
 
 
 def ticket_from_ref(ref):
@@ -195,7 +197,7 @@ class DescriptorPort:
 
 class TicketStore(Protocol):
     """The ticket side of a tracker: tickets by id, read and written with their own system. A GitHub tracker keeps
-    pull requests, CI, reviews and merges apart (CodeHost) so a second ticket system can supply the tickets.
+    pull requests, CI, reviews and merges apart (Vcs) so a second ticket system can supply the tickets.
     `attrs` are the labels or tags of a ticket, stage ones included; `at` is an ISO time. Writes return True
     when they wrote, the others nothing."""
     def issue(self, n) -> dict: ...
@@ -222,8 +224,9 @@ class TicketStore(Protocol):
     def can_answer(self, login) -> bool: ...  # whether `login` may answer a question the factory asked
 
 
-class CodeHost(Protocol):
+class Vcs(Protocol):
     """Where the pull requests live; a tracker's tickets need not be on the same host."""
+    def event(self, payload) -> object: ...  # the ports.system.Event of a PR payload, else None
     def ticket_for_pr(self, number, repository=None): ...
 
 
@@ -269,6 +272,13 @@ class MemoryCodeHost:
         pr = next((p for p in self.prs.get(repository, []) if p["number"] == number), None)
         return ticket_from_ref(pr.get("branch")) if pr else None
 
+    def event(self, payload):
+        """The Event of a payload {number, repository?, action?} naming one of `prs`, else None."""
+        from ports.system import Event
+        ticket = self.ticket_for_pr(payload.get("number"), payload.get("repository"))
+        return None if ticket is None else Event(ticket, "pull_request", payload.get("action"), payload.get("number"),
+                                                 payload.get("repository"), payload)
+
     def factory_prs(self, repository):
         return [{k: p[k] for k in ("number", "head", "labels")} for p in self.prs[repository]
                 if ticket_from_ref(p.get("branch")) is not None]
@@ -286,8 +296,10 @@ class MemoryCodeHost:
         self.edits.append((repository, number, list(add), list(remove)))
 
 
-class MemoryTracker(DescriptorPort):
-    """Integer ids, stage in its own field. `fail_on` makes the effect kind raise."""
+class MemorySystem(DescriptorPort):
+    """The tracker and code host in memory (the System contract, factory/ports/system.py): integer ids, stage in
+    its own field, facts read straight from the record. `fail_on` makes the effect kind raise."""
+    name = "memory"
 
     def __init__(self, tickets=None, fail_on=None, project=None):
         self.tickets, self.fail_on, self.project = tickets or {}, fail_on, project
@@ -319,6 +331,49 @@ class MemoryTracker(DescriptorPort):
     def not_planned(self, ticket):
         return (self.tickets.get(ticket) or self.tickets.get(str(ticket)) or {}).get("state_reason") == "not_planned"
 
+    # --- events in, records out (ADR-0026)
+    def event(self, payload):
+        """The event of a payload {ticket, event_name?, action?, pr?}, else None without a ticket."""
+        from ports.system import Event
+        ticket = payload.get("ticket")
+        if ticket is None and payload.get("pr") is not None:
+            ticket = self.ticket_for_pr(payload["pr"], payload.get("repository"))
+        if ticket is None:
+            return None
+        return Event(ticket, payload.get("event_name") or "event", payload.get("action"), payload.get("pr"),
+                     payload.get("repository"), payload)
+
+    def read(self, subject, want=frozenset()):
+        """The record of a ticket, or of its PR in repository `subject.repo` (the record's `prs`, else its `pr`).
+        The comments, reviews and labels the effects wrote read back with the record's own."""
+        from ports.records import PrRecord, TicketRecord
+        t = self._t(subject.id)
+        if subject.kind == "ticket":
+            written = [{"author": "factory", "author_is_bot": True, "author_is_factory": True, "body": json.loads(v), "at": None}
+                       for k, v in t.get("log", []) if k == "comment"]
+            return TicketRecord(subject.id, t.get("title", ""), t.get("body", ""), t.get("issue_state", "open"),
+                                t.get("state_reason"), t.get("author"), t.get("updated_at"), list(t.get("attrs", [])),
+                                list(t.get("assignees", [])), comments=list(t.get("comments", [])) + written,
+                                blockers_open=list(t.get("blocked_by", [])),
+                                children=list(t.get("children", [])) if "children" in want else None)
+        if subject.kind == "pr":
+            prs = t.get("prs") or ([{"repo": subject.repo, "pr": t["pr"], "head": t.get("head")}] if t.get("pr") else [])
+            p = next((p for p in prs if subject.repo in (None, p.get("repo"))), None)
+            if p is None:
+                return None
+            return PrRecord(p.get("repo") or "primary", p["pr"], p.get("head"), branch=t.get("branch"),
+                            merged=p.get("pr_state", t.get("pr_state")) == "merged", labels=list(t.get("pr_labels", [])),
+                            reviews=list(t.get("reviews", [])) + [r for r in t.get("posted", []) if r.get("repo") in (None, p.get("repo"))],
+                            ci=p.get("ci", t.get("ci", "none")), behind=bool(t.get("behind")) if "behind" in want else None)
+        raise ValueError(f"read: unknown subject {subject.kind}")
+
+    def find(self, query):
+        if query.kind == "children":
+            return list(self._t(query.of).get("children", []))
+        if query.kind == "stage":
+            return self.sweep_tickets(query.values, query.open_only)
+        raise ValueError(f"find: unknown query {query.kind}")
+
     def facts(self, ticket):
         t = self._t(ticket)
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
@@ -341,37 +396,47 @@ class MemoryTracker(DescriptorPort):
                 "recover_comments": [c for c in sent if c.startswith(("[factory] recover:", "[factory] reconcile:", "[factory] end failed:"))]}
 
     def apply(self, effect):
+        import effects
         if effect["kind"] == self.fail_on:
             raise RuntimeError(f"effect failed: {effect['kind']}")
+        return effects.apply(self, effect)
+
+    # --- the effect handlers: (system, effect, ctx) -> wrote
+    def _fx_stage(self, effect, ctx):  # `stage` and `seen`: the stage field and the event ids seen
         t, kind, value = self._t(effect["ticket"]), effect["kind"], effect["value"]
-        if kind in ("stage", "seen"):
-            seen, wrote = t.setdefault("seen", []), False
-            if kind == "stage" and self.get_stage(t) != value:
-                self.set_stage(t, value)
-                wrote = True
-            ev = effect.get("event") if kind == "stage" else value
-            if ev is not None and ev not in seen:
-                seen.append(ev)
-                wrote = True
-            return wrote
-        if kind == "park-behind-main-red":  # open or reuse `Main is red in Air: <check>`, block this ticket by it, wait in ready
-            title = f"Main is red in Air: {value}"
-            red = next((i for i, x in self.tickets.items() if x.get("title") == title and x.get("state", "open") == "open"), None)
-            wrote = red is None
-            if wrote:
-                red = f"red-{value}"
-                self.tickets[red] = {"title": title, "stage": "triage", "state": "open"}
-            if red not in t.setdefault("blocked_by", []):
-                t["blocked_by"].append(red)
-                t["blockers_open"] = t.get("blockers_open", 0) + 1
-                wrote = True
-            return wrote
-        if kind == "set-field":
-            fields = t.setdefault("fields", {})
-            if all(fields.get(k) == v for k, v in value.items()):
-                return False
-            fields.update(value)
-            return True
+        seen, wrote = t.setdefault("seen", []), False
+        if kind == "stage" and self.get_stage(t) != value:
+            self.set_stage(t, value)
+            wrote = True
+        ev = effect.get("event") if kind == "stage" else value
+        if ev is not None and ev not in seen:
+            seen.append(ev)
+            wrote = True
+        return wrote
+
+    def _fx_park(self, effect, ctx):  # open or reuse `Main is red in Air: <check>`, block this ticket by it, wait in ready
+        t, value = self._t(effect["ticket"]), effect["value"]
+        title = f"Main is red in Air: {value}"
+        red = next((i for i, x in self.tickets.items() if x.get("title") == title and x.get("state", "open") == "open"), None)
+        wrote = red is None
+        if wrote:
+            red = f"red-{value}"
+            self.tickets[red] = {"title": title, "stage": "triage", "state": "open"}
+        if red not in t.setdefault("blocked_by", []):
+            t["blocked_by"].append(red)
+            t["blockers_open"] = t.get("blockers_open", 0) + 1
+            wrote = True
+        return wrote
+
+    def _fx_set_field(self, effect, ctx):
+        fields, value = self._t(effect["ticket"]).setdefault("fields", {}), effect["value"]
+        if all(fields.get(k) == v for k, v in value.items()):
+            return False
+        fields.update(value)
+        return True
+
+    def _fx_assign(self, effect, ctx):
+        t, kind, value = self._t(effect["ticket"]), effect["kind"], effect["value"]
         if kind == "assign":
             people = value if isinstance(value, list) else [value]
             if t.get("assignees", []) == people:
@@ -379,25 +444,32 @@ class MemoryTracker(DescriptorPort):
             t["assignees"] = people
             t.setdefault("log", []).append([kind, json.dumps(value, sort_keys=True)])
             return True
-        if kind == "unassign":
-            people = t.get("assignees", [])
-            if not people:
-                return False
-            t["assignees"] = []
-            t.setdefault("log", []).append([kind, json.dumps(people, sort_keys=True)])
-            return True
-        if kind == "merge" and len(t.get("prs") or []) > 1:  # the other repositories first, the primary last
-            todo = [p for p in t["prs"][1:] + t["prs"][:1] if p.get("pr_state") != "merged"]
-            for p in todo:
-                p["pr_state"] = "merged"
-                t.setdefault("log", []).append([kind, json.dumps({"repo": p["repo"], "head": (effect.get("heads") or {}).get(p["repo"])},
-                                                                  sort_keys=True)])
-            return bool(todo)
-        # label, unlabel, comment, review, create-issues, merge, join: a set of applied values
+        people = t.get("assignees", [])
+        if not people:
+            return False
+        t["assignees"] = []
+        t.setdefault("log", []).append([kind, json.dumps(people, sort_keys=True)])
+        return True
+
+    def _fx_merge(self, effect, ctx):  # the other repositories first, the primary last
+        import effects
+        t = self._t(effect["ticket"])
+        if len(t.get("prs") or []) <= 1:
+            return self._fx_log(effect, ctx)
+        todo = [p for p in effects.primary_last(t["prs"]) if p.get("pr_state") != "merged"]
+        for p in todo:
+            p["pr_state"] = "merged"
+            t.setdefault("log", []).append(["merge", json.dumps({"repo": p["repo"], "head": (effect.get("heads") or {}).get(p["repo"])},
+                                                                 sort_keys=True)])
+        return bool(todo)
+
+    def _fx_unlabel(self, effect, ctx):
+        return self._drop(self._t(effect["ticket"]), effect["value"])
+
+    def _fx_log(self, effect, ctx):  # label, comment, review, create-issues, merge, join: a set of applied values
+        t, kind, value = self._t(effect["ticket"]), effect["kind"], effect["value"]
         log = t.setdefault("log", [])
         entry = [kind, json.dumps(value, sort_keys=True)]
-        if kind == "unlabel":
-            return self._drop(t, value)
         if entry in log:
             return False
         log.append(entry)
@@ -405,6 +477,9 @@ class MemoryTracker(DescriptorPort):
             t["attrs"].append(value)
         if kind == "label" and effect.get("on") == "pr" and value not in t.setdefault("pr_labels", []):
             t["pr_labels"].append(value)
+        if kind == "review":  # pinned to the head it was posted at, as a code host keeps it
+            t.setdefault("posted", []).append({"agent": True, "focus": effect.get("focus"), "commit_id": t.get("head"),
+                                               "verdict": "approve" if str(value).startswith("approve") else "changes"})
         return True
 
     def _drop(self, t, value):
@@ -427,8 +502,18 @@ class MemoryTracker(DescriptorPort):
             t["pr_labels"] = [x for x in t["pr_labels"] if x != value]
         return present or len(t["attrs"]) != len(attrs)
 
+    effects = (
+        Effect("stage", "ticket", _fx_stage), Effect("seen", "ticket", _fx_stage),
+        Effect("park-behind-main-red", "ticket", _fx_park), Effect("set-field", "ticket", _fx_set_field),
+        Effect("assign", "ticket", _fx_assign), Effect("unassign", "ticket", _fx_assign),
+        Effect("unlabel", "ticket", _fx_unlabel), Effect("unlabel", "pr", _fx_unlabel),
+        Effect("review", "pr", _fx_log, remote=True), Effect("update-branch", "pr", _fx_log, remote=True),
+        Effect("merge", "pr", _fx_merge, remote=True),
+        Effect("*", "ticket", _fx_log),
+    )
 
-class TagTracker(MemoryTracker):
+
+class TagTracker(MemorySystem):
     """String ids (PROJ-1), stage held as a `stage:<name>` tag among the other tags, as in YouTrack."""
 
     def get_stage(self, t):
@@ -515,8 +600,8 @@ class MemoryTicketStore:
                  "attrs": list(t["attrs"])} for i, t in self.tickets.items() if t["parent"] == n]
 
     def tickets_by_stage(self, attrs, open_only=False, now=None):
-        """Open tickets and, unless `open_only`, those closed within `github_graphql.CLOSED_HOURS` of `now`."""
-        since = (now or datetime.now(timezone.utc)) - timedelta(hours=github_graphql.CLOSED_HOURS)
+        """Open tickets and, unless `open_only`, those closed within `CLOSED_HOURS` of `now`."""
+        since = (now or datetime.now(timezone.utc)) - timedelta(hours=CLOSED_HOURS)
 
         def listed(t):
             if t["state"] == "open":

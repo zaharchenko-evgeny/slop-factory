@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Tests for factory/gate_github.py with a stubbed gh. Run: uv run factory/tests/test_gate_github.py"""
+"""Tests for factory/factory_plugins/github/gate.py with a stubbed gh. Run: uv run factory/tests/test_gate_github.py"""
 import json
 import os
 import re
@@ -23,10 +23,10 @@ import config as cfg  # noqa: E402
 import project_mode  # noqa: E402
 cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"))
 import gate  # noqa: E402
-import gate_github as M_GH  # noqa: E402
+from factory_plugins.github import gate as M_GH  # noqa: E402
 import gate_port as M_PORT  # noqa: E402
 import nodes  # noqa: E402
-from gate_github import GitHubGateTracker  # noqa: E402
+from factory_plugins.github.gate import GitHubGateTracker  # noqa: E402
 
 CONFIG = cfg.load()
 STAGES, BOT, REPO = CONFIG["tracker"]["stages"], CONFIG["targets"]["air"]["bot_login"], "o/r"
@@ -683,7 +683,7 @@ class EffectsTest(unittest.TestCase):
             gate.clean_notes({"for": "any", "context": "x" * 2000})
         with self.assertRaises(ValueError):
             gate.clean_notes({"for": "boss"})
-        tracker = gate.MemoryTracker({"7": {"stage": "in-dev"}})
+        tracker = gate.MemorySystem({"7": {"stage": "in-dev"}})
         with self.assertRaises(gate.Bad):
             gate.apply("implement", "done", {"ticket": 7, "agent_notes": {"for": "any", "hint": "x" * 2000}},
                        tracker, nodes.load())
@@ -744,7 +744,7 @@ class EffectsTest(unittest.TestCase):
             if path.endswith("commits/m1"):
                 return json.dumps({"parents": [{"sha": "p1"}]})
             raise AssertionError(args)
-        with patch("gate_github.deploy_plan_at", return_value={"automations": [], "environments": [], "labels": [], "files": {}}):
+        with patch("factory_plugins.github.gate.deploy_plan_at", return_value={"automations": [], "environments": [], "labels": [], "files": {}}):
             GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
         self.assertEqual(len(calls), 2)
 
@@ -767,7 +767,7 @@ class EffectsTest(unittest.TestCase):
         before = {"automations": [], "environments": [], "labels": [], "files": {}}
         after = {"automations": [], "environments": [], "labels": ["factory:mapped", "team:unmapped"], "files": {},
                  "label_specs": {"factory:mapped": {"color": "0e8a16"}}}
-        with patch("gate_github.deploy_plan_at", side_effect=[before, after]):
+        with patch("factory_plugins.github.gate.deploy_plan_at", side_effect=[before, after]):
             GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
         colors = {c[c.index("-f") + 1][5:]: c[c.index("-f") + 3][6:] for c in calls
                   if "-f" in c and c[c.index("-f") + 1].startswith("name=")}
@@ -792,7 +792,7 @@ class EffectsTest(unittest.TestCase):
             return "{}"
         before = {"automations": [], "environments": [], "labels": [], "files": {}}
         after = {"automations": [{"name": "new"}], "environments": [], "labels": ["factory:new"], "files": {}}
-        with patch("gate_github.deploy_plan_at", side_effect=[before, after]):
+        with patch("factory_plugins.github.gate.deploy_plan_at", side_effect=[before, after]):
             GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
         self.assertTrue(any("repos/o/r/labels" in c and "name=factory:new" in c and "color=ededed" not in c for c in calls))
         self.assertTrue(any(c[:2] == ["issue", "create"] and "Deploy needed" in c for c in calls))
@@ -1538,8 +1538,8 @@ class SweepCallCountTest(unittest.TestCase):
         gh = FakeGh(labels=("factory:in-review", "risk:low"))
         tracker = tr(lambda args, **kw: calls.append(args) or gh(args, **kw))
         out = io.StringIO()
-        with patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), \
-                patch.object(gate.GitHubCodeHost, "from_config", return_value=None), \
+        with patch.object(M_GH.GitHubGateTracker, "from_config", return_value=tracker), \
+                patch.object(M_GH.GitHubCodeHost, "from_config", return_value=None), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             gate.main(["sweep", "--issue", "7", "--dry-run"])
         self.assertEqual(json.loads(out.getvalue().splitlines()[-1]), {"github_calls": len(calls)})
@@ -1928,7 +1928,7 @@ class CiSyncCodeHostTest(unittest.TestCase):
 
 class GateTrackerChildrenTest(unittest.TestCase):
     def test_children_come_from_the_tickets(self):
-        from gate_github import GitHubGateTracker
+        from factory_plugins.github.gate import GitHubGateTracker
         g = GitHubGateTracker.__new__(GitHubGateTracker)
         g.tickets = type("T", (), {"children": lambda self, n: [{"number": 2, "state": "closed"}]})()
         self.assertEqual(g.children(1), [{"number": 2, "state": "closed"}])   # the children guard can hold
@@ -1942,8 +1942,8 @@ if __name__ == "__main__":
         import io
         from unittest.mock import patch
         tracker = tr(FakeGh(labels=("factory:in-review", "risk:low")))
-        with patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), \
-                patch.object(gate.GitHubCodeHost, "from_config", return_value=None) as host, \
+        with patch.object(M_GH.GitHubGateTracker, "from_config", return_value=tracker), \
+                patch.object(M_GH.GitHubCodeHost, "from_config", return_value=None) as host, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             gate.main(["sweep", "--issue", "7", "--dry-run"])
         self.assertIs(host.call_args.kwargs["run"], tracker.run)
