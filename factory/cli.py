@@ -62,13 +62,16 @@ def from_main():
     return root
 
 
-def run_gate(engine, argv, team=None):
-    """The gate, as main's own executable when `engine` is a main worktree, so a pull request cannot replace it."""
+def run_gate(engine, argv, team=None, stderr=False):
+    """The gate, as main's own executable when `engine` is a main worktree, so a pull request cannot replace it.
+    `stderr`: pass its error output through sys.stderr too, so `end` can quote it."""
     if not engine:
         return gate.main(argv)
     done = subprocess.run([sys.executable, str(Path(engine) / "factory/gate.py"), "--team", team or engine, *argv],
-                          stdout=subprocess.PIPE, text=True)
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE if stderr else None, text=True)
     print(done.stdout, end="")  # through sys.stdout, so callers can capture it
+    if stderr:
+        print(done.stderr, end="", file=sys.stderr)
     return done.returncode
 
 
@@ -121,7 +124,10 @@ def begin(argv, team=None):
                         str(config.team_root()))
     print(out.getvalue(), end="")
     if code == 0:
-        state["handoff_path"] = json.loads(out.getvalue())["handoff_path"]
+        checked = json.loads(out.getvalue())
+        state["handoff_path"] = checked["handoff_path"]
+        state["ticket"] = checked.get("ticket")  # for the `end failed` comment (#997)
+        state["head"] = ((checked.get("context") or {}).get("head") or "")[:12]
         STATE.write_text(json.dumps(state))
     return code
 
@@ -247,8 +253,38 @@ def end(argv, team=None):
     handoff.parent.mkdir(parents=True, exist_ok=True)
     handoff.write_text(json.dumps(data))
     config.set_team(state["team"])
-    return run_gate(state["engine"], ["apply", "--node", state["node"], "--event", state["event"], "--handoff",
-                                      str(handoff), *gate_args(state)], state["team"])
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        try:
+            code = run_gate(state["engine"], ["apply", "--node", state["node"], "--event", state["event"], "--handoff",
+                                              str(handoff), *gate_args(state)], state["team"], stderr=True)
+        except Exception as e:  # the in-process gate (no main worktree) raises instead of exiting
+            print(f"{type(e).__name__}: {e}", file=sys.stderr)
+            code = 1
+    sys.stderr.write(err.getvalue())
+    if code not in (0, 10):
+        report_end_failure(state, a.outcome, err.getvalue())
+    return code
+
+
+END_FAILED = "[factory] end failed:"
+
+
+def report_end_failure(state, outcome, error, run=subprocess.run):
+    """One ticket comment naming the node, head, outcome and the error's last lines, so reconcile and a person see
+    why the outcome did not land, and that a retry on this head fails the same way (#997)."""
+    if not state.get("ticket"):
+        return
+    tail = "\n".join(line for line in error.strip().splitlines()[-5:])[:1500] or "no error output"
+    body = (f"{END_FAILED} node={state['node']} head={state.get('head') or 'none'} outcome={outcome}\n\n```\n{tail}\n```\n\n"
+            f"The outcome did not land; a retry on this head fails the same way until the cause is fixed.\n\n"
+            f"Factory-Run: {os.environ.get('FACTORY_NODE') or state['node']}")
+    try:
+        repo = config.load()["tracker"].get("repository")
+        run(["gh", "issue", "comment", str(state["ticket"]), *(["-R", repo] if repo else []), "--body", body],
+            capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        print(f"factory: could not report the failed end: {e}", file=sys.stderr)
 
 
 def validate():
