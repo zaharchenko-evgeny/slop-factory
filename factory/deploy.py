@@ -680,10 +680,10 @@ def reconcile_labels(plan: dict, run=None) -> list[tuple]:
     for repo in plan.get("label_repositories") or []:
         have = label_tracker(repo, run).list_labels()
         for name in plan["labels"]:
-            spec = {"description": "", **(plan.get("label_specs") or {}).get(name, {})}
+            spec = (plan.get("label_specs") or {}).get(name, {})
             if name not in have:
                 want = {"color": spec.get("color") or random_colors.setdefault(name, github_tracker.random_color()),
-                        "description": spec["description"]}
+                        "description": spec.get("description", "")}
                 out.append(("create", repo, name, want))
             elif changed := [k for k in ("color", "description") if k in spec and have[name][k] != spec[k]]:
                 want = {"color": have[name]["color"], "description": have[name]["description"], **spec}

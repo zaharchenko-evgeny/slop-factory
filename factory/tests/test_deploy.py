@@ -1338,7 +1338,15 @@ class LabelsTest(unittest.TestCase):
                          [("remove", "o/tracker", "factory:old"),
                           ("create", "o/code", "complexity:medium"), ("update", "o/code", "factory:ready"),
                           ("create", "o/code", "risk:low")])
-        self.assertEqual(got[-2][4], ["color", "description"])
+        self.assertEqual(got[-2][4], ["color"])
+
+    def test_label_without_planned_description_converges(self):
+        plan = {"labels": ["factory:ready"], "label_repositories": ["o/tracker"],
+                "owned_label_prefixes": ["factory:"], "label_specs": {"factory:ready": {"color": "c2e0c6"}}}
+        run = fake_labels({"o/tracker": {"factory:ready": ("c2e0c6", "Factory: run triage")}})
+
+        self.assertEqual(deploy.reconcile_labels(plan, run=run), [])
+        self.assertEqual(deploy.reconcile_labels(plan, run=run), [])
 
     def run_deploy(self, mode, allow_delete, have):
         run = fake_labels({"o/tracker": have, "o/code": have})
