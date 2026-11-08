@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Tests for factory/local.py, the local target. Run: uv run factory/tests/test_local.py"""
+"""Tests for factory/factory_plugins/local/surface.py, the local target. Run: uv run factory/tests/test_local.py"""
 import base64
 import contextlib
 import datetime
@@ -22,8 +22,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-import local  # noqa: E402
+from factory_plugins.github import graphql  # noqa: E402
+from factory_plugins.local import surface as local  # noqa: E402
 import nodes  # noqa: E402
+import plugins  # noqa: E402
 
 FIXTURE = ROOT / "factory/tests/fixtures/team"
 URL = "https://github.com/zaharchenko-evgeny/slop-factory"
@@ -83,6 +85,15 @@ class LocalDeployTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("missing harness: `junie` (junie) is not on PATH", out)
         self.assertNotIn("`claude`", out)
+
+    def test_an_unknown_harness_is_missing_with_the_known_ones(self):
+        path = self.team / "factory.descriptor.yaml"
+        d = yaml.safe_load(path.read_text())
+        d["roles"]["reviewer"]["harness"] = "aider"
+        path.write_text(yaml.safe_dump(d))
+        code, out = self.deploy(Machine(origins={"slop-factory": URL}))
+        self.assertEqual(code, 1)
+        self.assertIn("missing harness: unknown-agent: harness: aider: no selected plugin provides this agent", out)
 
     def test_gh_not_logged_in_refuses(self):
         code, out = self.deploy(Machine(logged_in=False, origins={"slop-factory": URL}))
@@ -287,12 +298,12 @@ class RunLocalTest(unittest.TestCase):
         self.assertEqual(local.local_models({"models": {"mid": "b"}}), {"mid": "b"})
 
     def test_junie_runs_the_task_headless(self):
-        argv = local.harness_argv("junie", "anthropic/claude-x", True, "PROMPT")
+        argv = local.runner("junie").command("PROMPT", "anthropic/claude-x", True)
         self.assertEqual(argv, ["junie", "--task", "PROMPT", "--model", "claude-x", "--output-format", "json"])
 
     def test_the_claude_prompt_is_not_taken_as_an_allowed_tool(self):
         for write in (False, True):
-            argv = local.harness_argv("claude-code", "anthropic/claude-x", write, "PROMPT")
+            argv = local.runner("claude-code").command("PROMPT", "anthropic/claude-x", write)
             self.assertEqual(argv[:3], ["claude", "-p", "PROMPT"])
             self.assertEqual(argv.count("PROMPT"), 1)
 
@@ -366,6 +377,55 @@ class RunLocalTest(unittest.TestCase):
         self.assertEqual(subprocess.run(["git", "-C", str(tree), "status", "--porcelain"], capture_output=True, text=True).stdout, "")
 
 
+class RunnerTest(unittest.TestCase):
+    """#1071: the harnesses are agent runner plugins (ports/agent.py)."""
+    TOOLS_RO = "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(factory:*)"
+    ARGV = {  # (harness, write) -> the argv `harness_argv` built before #1071, for model anthropic/claude-x
+        ("claude-code", True): ["claude", "-p", "P", "--output-format", "json", "--model", "claude-x", "--allowedTools",
+                                "Bash,Read,Edit,Write,Grep,Glob", "--permission-mode", "acceptEdits"],
+        ("claude-code", False): ["claude", "-p", "P", "--output-format", "json", "--model", "claude-x", "--allowedTools", TOOLS_RO],
+        ("codex", True): ["codex", "exec", "--json", "-m", "claude-x", "--sandbox", "workspace-write",
+                          "-c", "sandbox_workspace_write.network_access=true", "P"],
+        ("junie", True): ["junie", "--task", "P", "--model", "claude-x", "--output-format", "json"],
+        ("pi", True): ["pi", "-p", "--model", "anthropic/claude-x", "P"],
+    }
+
+    def test_argv_is_unchanged_for_every_harness(self):
+        for (harness, write), want in self.ARGV.items():
+            self.assertEqual(local.runner(harness).command("P", "anthropic/claude-x", write), want, harness)
+        for harness in ("codex", "junie", "pi"):  # read-only nodes run the same argv in these harnesses
+            self.assertEqual(local.runner(harness).command("P", "anthropic/claude-x", False), self.ARGV[(harness, True)])
+
+    def test_cli_and_skill_dir_per_harness(self):
+        got = {h: (local.runner(h).cli, local.runner(h).skill_dir) for h in ("claude-code", "claude", "codex", "junie", "pi")}
+        self.assertEqual(got, {"claude-code": ("claude", ".claude/skills"), "claude": ("claude", ".claude/skills"),
+                               "codex": ("codex", ".agents/skills"), "junie": ("junie", ".agents/skills"),
+                               "pi": ("pi", ".agents/skills")})
+
+    def test_the_model_alias_harness_picks_the_runner(self):
+        config = {"models": {"mid": {"harness": "codex", "model": "gpt-x"}, "cheap": {"harness": "claude", "model": "s"},
+                             "old": "anthropic/claude-x"}, "roles": {"developer": {}, "reviewer": {"harness": "pi"}}}
+        self.assertEqual(local.role_harness(config, "developer", None, "mid"), "codex")
+        self.assertEqual(local.runner(local.role_harness(config, "developer", None, "mid"), config).name, "codex")
+        self.assertEqual(local.runner(local.role_harness(config, "developer", None, "cheap"), config).name, "claude-code")
+        self.assertEqual(local.role_harness(config, "reviewer", None, "mid"), "pi")  # the role's own harness wins
+        self.assertEqual(local.role_harness(config, "developer", None, "old"), "claude-code")
+        self.assertEqual(local.local_model(config, "mid"), "gpt-x")
+        self.assertEqual(local.local_model(config, "old"), "anthropic/claude-x")
+        self.assertEqual([p for p in plugins.selected(config) if p in ("claude", "codex", "junie", "pi")], ["claude", "codex"])
+
+    def test_an_unknown_harness_names_the_known_ones(self):
+        with self.assertRaises(ValueError) as e:
+            local.runner("aider")
+        self.assertEqual(str(e.exception), "unknown-agent: harness: aider: no selected plugin provides this agent "
+                                           "(known: claude, claude-code, codex, junie, pi)")
+
+    def test_a_missing_binary_is_a_failed_probe(self):
+        probe = local.runner("codex").probe(which=lambda name: None)
+        self.assertEqual((probe.ok, probe.result, probe.detail), (False, "missing", "`codex` (codex) is not on PATH"))
+        self.assertTrue(local.runner("codex").probe(which=lambda name: f"/bin/{name}").ok)
+
+
 class CronTest(unittest.TestCase):
     def test_minute_17_is_due_at_10_17_and_not_at_10_18(self):
         at = lambda m: datetime.datetime(2026, 1, 1, 10, m)  # noqa: E731
@@ -397,7 +457,7 @@ class PollTest(unittest.TestCase):
         gh = GitHub(prs={"factory:review-full": [{"number": 5, "headRefName": "ez/7-add-x"}]})
         plan = [{"triggers": self.labeled(("pull_request.labeled", "factory:review-full"))}]
         [(eid, _, payload)] = local.poll(plan, "zaharchenko-evgeny/slop-factory", gh)
-        self.assertEqual(eid, f"labeled:{local.graphql.rest_id(node_id(105))}")
+        self.assertEqual(eid, f"labeled:{graphql.rest_id(node_id(105))}")
         self.assertEqual(payload["pull_request"], {"number": 5, "head": {"ref": "ez/7-add-x"}})
 
     def test_an_undecodable_node_id_falls_back_to_events(self):

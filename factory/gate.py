@@ -201,15 +201,16 @@ def is_github(code_host):
     return module is not None and isinstance(code_host, module.GitHubCodeHost)
 
 
-def tracker_of(config):
+def tracker_of(config, **runners):
     """The gate tracker of `config`, from the plugin that provides `tracker.adapter` (ADR-0026): github-issues from
-    the github plugin, youtrack from the youtrack plugin (its tickets in YouTrack, its pull requests on the vcs)."""
+    the github plugin, youtrack from the youtrack plugin (its tickets in YouTrack, its pull requests on the vcs).
+    `runners` are passed to `from_config` (the local poll's `gh`, tests)."""
     t = config.get("tracker")
     name = (t.get("adapter") if isinstance(t, dict) else None) or "github-issues"
     tracker_cls = plugins.registry(config).impl("tracker", name)
     if tracker_cls is None:
         raise ValueError(f"tracker.adapter {name}: no selected plugin provides this tracker")
-    return tracker_cls.from_config()
+    return tracker_cls.from_config(**runners)
 
 
 def env_descriptor(config, env):

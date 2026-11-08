@@ -438,6 +438,11 @@ class GitHubGateTracker(DescriptorPort):
                    {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,
                    repository_names(c), tickets, (c.get("reviews") or {}).get("required"))._with_scope(t)._with_writable(c)
 
+    @classmethod
+    def for_repository(cls, repo, run=gh):
+        """The reads of repository `repo` alone, without a descriptor: the local surface's poll of one repository."""
+        return cls(repo, {}, None, run=run)
+
     def _with_scope(self, t):
         """The scope of tracker block `t` on the GitHub issues (a store of another system takes its own)."""
         if t.get("scope") and isinstance(self.tickets, GitHubTicketStore):
@@ -748,12 +753,70 @@ class GitHubGateTracker(DescriptorPort):
         raise ValueError(f"read: unknown subject {subject.kind}")
 
     def find(self, query):
-        """`children`: the sub-tickets of `query.of`; `stage`: the tickets holding one of the stages `query.values`."""
+        """`children`: the sub-tickets of `query.of`; `stage`: the tickets holding one of the stages `query.values`;
+        `labeled`, `prs`, `closed`: the local surface's poll of this repository (`_labeled`, `_recent_prs`,
+        `_recently_closed`)."""
         if query.kind == "children":
             return self.tickets.children(query.of)
         if query.kind == "stage":
             return self.sweep_tickets(query.values, query.open_only)
+        if query.kind == "labeled":
+            return self._labeled(query.values)
+        if query.kind == "prs":
+            return self._recent_prs(*query.values)
+        if query.kind == "closed":
+            return self._recently_closed()
         raise ValueError(f"find: unknown query {query.kind}")
+
+    def _lines(self, *args):
+        return [json.loads(x) for x in self.run(list(args)).splitlines() if x.strip()]
+
+    def _labeled(self, watched):
+        """Each open issue and PR carrying a watched label, as {number, pr, branch, label, event}: `watched` holds
+        (`issue`|`pr`, label) pairs and `event` is GitHub's REST id of the item's latest `labeled` event of that label.
+        All labels are read by one paged search (10 nodes a page); the id comes from the node id, or from `/events`
+        when it does not decode or the timeline was paged past."""
+        watched = set(watched)
+        labels = sorted({label for _, label in watched})
+        if not labels:
+            return []
+        items, after = [], None
+        while True:
+            page = json.loads(self.run(["api", "graphql", "-f", f"query={graphql.POLL}", "-f",
+                                        f"q={graphql.poll_query(self.repo, labels)}", *(["-f", f"after={after}"] if after else [])]))
+            page = page["data"]["search"]
+            items += page["nodes"]
+            if not page["pageInfo"]["hasNextPage"]:
+                break
+            after = page["pageInfo"]["endCursor"]
+        out = []
+        for item in items:
+            n, pr = item["number"], item["__typename"] == "PullRequest"
+            ids = graphql.labeled_events(item)
+            for label in (x["name"] for x in item["labels"]["nodes"]):
+                if ("pr" if pr else "issue", label) not in watched:
+                    continue
+                rid = ids.get(label) if ids is not None else None
+                if rid is None:  # an undecodable id, or a timeline paged past what was read: the REST read
+                    found = [e["id"] for e in self._lines("api", "--paginate", f"repos/{self.repo}/issues/{n}/events", "--jq",
+                                                          '.[] | select(.event == "labeled") | {id, name: .label.name}')
+                             if e["name"] == label]
+                    rid = found[-1] if found else None
+                if rid is not None:
+                    out.append({"number": n, "pr": pr, "branch": item.get("headRefName"), "label": label, "event": rid})
+        return out
+
+    def _recent_prs(self, state):
+        """The 20 latest PRs in `state` (`merged` or `open`), as {number, branch, head}."""
+        return [{"number": x["number"], "branch": x["headRefName"], "head": x["headRefOid"]}
+                for x in self._lines("pr", "list", "-R", self.repo, "--state", state, "--limit", "20",
+                                     "--json", "number,headRefName,headRefOid", "--jq", ".[]")]
+
+    def _recently_closed(self):
+        """The 20 latest closed issues, as {number, closed_at}."""
+        return [{"number": x["number"], "closed_at": x["closedAt"]}
+                for x in self._lines("issue", "list", "-R", self.repo, "--state", "closed", "--limit", "20",
+                                     "--json", "number,closedAt", "--jq", ".[]")]
 
     def _view(self, name):
         """This tracker on repository `name` of the descriptor (the primary when None)."""

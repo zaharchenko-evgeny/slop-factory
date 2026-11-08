@@ -5,9 +5,10 @@ nothing else: code is named as `"module:function"` strings and imported only whe
 node imports the engine from main's worktree, so it also runs main's plugin code; a plugin that is off costs the core
 one import of its declaration.
 
-- `selected(config)`: the plugins a config turns on: `plugins:` (alias `modules:`), the systems, surface and agent
-  runners it names, and every `requires`, closed.
-- `registry(config)`: the selection's effects, guards, triggers, outcomes, hooks, implementations and commands
+- `selected(config, use)`: the plugins a config turns on: `plugins:` (alias `modules:`), the systems, surface and agent
+  runners it names, the ones a command uses (`use`: `deploy --target local` uses the local surface, a local run its
+  agent runner), and every `requires`, closed.
+- `registry(config, use)`: the selection's effects, guards, triggers, outcomes, hooks, implementations and commands
   (cached per selection).
 - `owner(key, of)`: the plugin, on or off, that owns a workflow key; `refusal(where, key)` is the one message used
   when it is off.
@@ -135,10 +136,11 @@ def implied(config):
     return [IMPLIED[i][n] for i, n in names if isinstance(n, str) and n in IMPLIED[i]]
 
 
-def selected(config):
+def selected(config, use=()):
     """The sorted names of the plugins `config` turns on, every `requires` included. Unknown names are left out
-    (`errors` reports them)."""
-    todo = [n for n in [*listed(config), *implied(config)] if n in KNOWN]
+    (`errors` reports them). `use`: (interface, name) pairs a command uses, whose plugins are on for it."""
+    used = [IMPLIED[i][n] for i, n in use if n in IMPLIED.get(i, {})]
+    todo = [n for n in [*listed(config), *implied(config), *used] if n in KNOWN]
     out = set()
     while todo:
         name = todo.pop()
@@ -231,9 +233,9 @@ def _registry(names):
     return Registry(names)
 
 
-def registry(config):
-    """The registry of the plugins `config` turns on, cached per selection."""
-    return _registry(selected(config))
+def registry(config, use=()):
+    """The registry of the plugins `config` turns on (and those `use` names), cached per selection."""
+    return _registry(selected(config, use))
 
 
 def reset():

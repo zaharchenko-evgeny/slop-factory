@@ -420,6 +420,13 @@ def plugin_command(word):
     return plugins.registry(settings).command(word)
 
 
+def surface_command(surface, word):
+    """The function (argv) -> exit code behind CLI word `word` of surface `surface` (`local`: `run`,
+    `deploy --target local`). Using it turns its plugin on, whatever the config selects."""
+    import plugins
+    return plugins.registry({}, use=(("surface", surface),)).command(word)
+
+
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
     try:
@@ -451,11 +458,9 @@ def _main(argv):
     if cmd in ("check", "apply", "sweep", "decide", "ci"):
         return gate.main([cmd, *rest])
     if cmd == "deploy" and rest[:2] == ["--target", "local"]:
-        from local import deploy as local_deploy
-        return local_deploy(rest[2:])
+        return surface_command("local", "deploy --target local")(rest[2:])
     if cmd == "run":
-        from local import main as local_main
-        return local_main(rest)
+        return surface_command("local", "run")(rest)
     if cmd == "deploy":
         return deploy.main(rest)
     if cmd == "contracts":
