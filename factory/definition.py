@@ -490,7 +490,7 @@ def errors(defn):
     pr_labels = {}
     for source in nodes.values():
         source_env = envs.get(source.get("environment") or default_env) or {}
-        source_repo = next((r.get("repo") for r in source_env.get("repositories") or [] if r.get("main")), "")
+        source_repo = _primary(defn, source_env) if source_env.get("repositories") else ""
         for outcome in (source.get("outcomes") or {}).values():
             for effect in (outcome or {}).get("effects") or []:
                 if isinstance(effect, dict) and effect.get("on") == "pr" and ("label" in effect or "unlabel" in effect):
@@ -498,7 +498,7 @@ def errors(defn):
                     pr_labels.setdefault(label, set()).add(full_name(source_repo))
     for source_env in envs.values():
         if (source_env or {}).get("ci"):
-            source_repo = next((r.get("repo") for r in source_env.get("repositories") or [] if r.get("main")), "")
+            source_repo = _primary(defn, source_env) if source_env.get("repositories") else ""
             for state in ("green", "red"):
                 label = f"{(w.get('stages') or {}).get('label_prefix', 'factory:')}ci-{state}"
                 pr_labels.setdefault(label, set()).add(full_name(source_repo))
@@ -514,8 +514,8 @@ def errors(defn):
         human = (agents[n["agent"]] or {}).get("harness") == "human"
         env = n.get("environment") or default_env
         if not human and env in envs:
-            main_repo = next((r.get("repo") for r in (envs.get(env) or {}).get("repositories") or []
-                              if r.get("main")), "")
+            env_repos = (envs.get(env) or {}).get("repositories") or []
+            main_repo = _primary(defn, envs.get(env)) if env_repos else ""  # no `main`: the tracker (ADR-0024)
             main_name = full_name(main_repo)
             for trigger in n.get("triggers") or []:
                 if trigger == "manual" or isinstance(trigger, dict) and ("schedule" in trigger or "webhook" in trigger):
