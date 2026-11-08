@@ -1227,7 +1227,6 @@
     "factory:approved",
     "factory:ci-green",
     "factory:ci-red",
-    "factory:comment",
     "factory:implement-cheap",
     "factory:implement-mid",
     "factory:implement-strong",

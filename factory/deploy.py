@@ -30,6 +30,7 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import comments
 import config as config_mod
 import definition
 import github_tracker
@@ -558,11 +559,19 @@ def actions_files(nodes: dict, config: dict) -> dict:
     return files
 
 
+def comments_on(config: dict) -> bool:
+    """True when the team turns on the comments module (`modules: [comments]`, ADR-0025)."""
+    return comments.NAME in (config.get("modules") or [])
+
+
 COMMENT_WAKE_FILES = (".github/workflows/comment-wake-label.yml", "scripts/comment-wake-label.sh")
 
 
 def sync_comment_wake_files(config: dict, run, apply: bool) -> int:
-    """Install the comment wake workflow and its script in every configured GitHub project repository."""
+    """Install the comment wake workflow and its script in every configured GitHub project repository, when the team
+    turns on the comments module (ADR-0025)."""
+    if not comments_on(config):
+        return 0
     files = {path: (ROOT / path).read_text() for path in COMMENT_WAKE_FILES}
     repositories = [r for r in config.get("repositories", []) if "github.com" in r["url"]]
     for repo in repositories:
@@ -763,7 +772,8 @@ def labels(nodes: dict, config: dict) -> list[str]:
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
     out.add(vocab.needs_human())
     out.add(vocab.lesson())  # ADR-0021: a ticket with uncollected lessons
-    out.add(vocab.comment())  # ADR-0023: scripts/comment-wake-label.sh adds it; the comment node removes it
+    if comments_on(config):
+        out.add(vocab.comment())  # ADR-0023: scripts/comment-wake-label.sh adds it; the comment node removes it
     out |= {vocab.ci("ci-green"), vocab.ci("ci-red")}  # CI writes them (scripts/ci-state-label.sh); reconcile reads
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
