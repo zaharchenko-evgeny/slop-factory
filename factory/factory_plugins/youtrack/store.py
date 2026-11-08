@@ -4,6 +4,8 @@ Attrs are tag names. Every request goes through one runner `run(method, path, bo
 stub it; fields are always requested with `fields=`. A tag missing in YouTrack is created by setup, never here.
 Links follow YouTrack's defaults: `Depend` (INWARD: this ticket depends on the listed ones, OUTWARD: they depend
 on it) and `Subtask` (INWARD: the listed ticket is the parent, OUTWARD: the listed tickets are the children).
+The store declares the ticket effects it applies itself (`effects`, handlers in factory_plugins/youtrack/effects.py)
+and the descriptor store kinds it holds states and commands in.
 """
 import json
 import os
@@ -12,6 +14,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 from gate_port import CLOSED_HOURS, child_links, child_order
+from ports.system import Effect
 
 ISSUE_FIELDS = ("idReadable,summary,description,resolved,updated,reporter(login),tags(id,name),"
                 "customFields(name,value(name,login)),links(direction,linkType(name),issues(idReadable,resolved,tags(name)))")
@@ -79,6 +82,16 @@ class YouTrackTicketStore:
     `writers` the logins that may answer a question the factory asked. With `repository_field`, the stage tags in
     `repo_stages` are stored as `<tag>-<repo>` (the repository is the field's value, one of `repositories`) and read
     back as `<tag>`."""
+
+    state_kinds, command_kinds = ("field", "tag"), ("tag",)  # a state is a field value or a tag, a command a tag
+    # (system, effect, ctx) -> wrote, on the gate tracker that holds this store as its `tickets`: a stage is a tag (per
+    # repository with `repository_field`) or the state field's value; a label and a `set-field` are tags.
+    effects = (
+        Effect("stage", "ticket", "factory_plugins.youtrack.effects:stage"),
+        Effect("label", "ticket", "factory_plugins.youtrack.effects:tag"),
+        Effect("unlabel", "ticket", "factory_plugins.youtrack.effects:tag"),
+        Effect("set-field", "ticket", "factory_plugins.youtrack.effects:set_field"),
+    )
 
     def __init__(self, run, state_field=None, done_state="Done", project=None, bots=(), writers=(), assignee_field="Assignee",
                  repository_field=None, repo_stages=(), repositories=()):

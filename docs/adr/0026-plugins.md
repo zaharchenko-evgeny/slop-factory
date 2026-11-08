@@ -1,6 +1,6 @@
 # ADR-0026: Engine plugins: events in, records out, effects
 
-Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068). Amends
+Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068, #1069). Amends
 ADR-0025 and ADR-0004.
 
 ## Context
@@ -152,7 +152,7 @@ Remaining gaps:
   relies on GitHub refusing the second PUT.
 - A system without `effects` keeps the old remote kinds (`effects.REMOTE`).
 
-Later slices move YouTrack (#1069), Space (#1070), the local surface and
+Later slices move YouTrack (#1069, below), Space (#1070), the local surface and
 agent runners (#1071) and Air (#1072) into plugins.
 
 `github` (#1068) is the first system plugin. `factory_plugins/github/` holds
@@ -176,8 +176,23 @@ loads the implementation the registry names. Its hooks:
 - `doctor.probes` runs the repository, wake-file and project-write probes.
 - `reconcile.passes` runs the CI label sync, and `ci-sync` is its command.
 
-The doctor's ticket filing and engine probes still call `gh` directly, and a
-`youtrack` team still reads PRs through `GitHubGateTracker` until #1069.
+The doctor's ticket filing and its frontier read still call `gh` directly.
+
+`youtrack` (#1069) is the second system plugin. `factory_plugins/youtrack/`
+holds `store.py` (formerly `factory/youtrack_tracker.py`) and provides
+tracker `youtrack`; `tracker.adapter: youtrack` selects it. YouTrack holds no
+pull requests, so `YouTrackTracker.from_config` builds the store from a
+tracker config block and asks the selected vcs class for the gate tracker
+over it (`GitHubCodeHost.gate_tracker`): the github plugin no longer imports
+YouTrack code, and `gate.tracker_of` has no fallback. The store declares its
+ticket effects (`stage`, `label`, `unlabel`, `set-field`) and its store kinds;
+the gate tracker takes them from any store. `set-field` stays a
+`<field>:<value>` tag, since the gate reads the attribute (the `risk` fact)
+back from the tags. Its hooks: `deploy.plan` (the `tags` and `fields` plan
+keys), `deploy.repo_tags` (the per-repository stage tags of the triggers),
+`deploy.tracker` (the tag and field-value provisioner the deploy drives
+between its label steps) and `doctor.probes`. The #892 comment wake rule had
+not merged and was not ported.
 
 `notify` (#1066) is the second feature plugin. Its declaration names the
 `notify` effect on `ticket` and `pr`, the `notify` CLI word

@@ -19,7 +19,7 @@ import project  # noqa: E402
 from factory_plugins.github.gate import GitHubGateTracker  # noqa: E402
 from gate_port import MemorySystem, UnsupportedStore  # noqa: E402
 from test_youtrack_tracker import FakeYouTrack  # noqa: E402
-from youtrack_tracker import YouTrackTicketStore  # noqa: E402
+from factory_plugins.youtrack.store import YouTrackTicketStore  # noqa: E402
 
 FIXTURE = ROOT / "tests/fixtures/project"
 YOUTRACK = ROOT / "tests/fixtures/project-youtrack"

@@ -30,7 +30,6 @@ from derive import clean_notes, notes_block, parse_notes, redact  # noqa: F401  
 from ports.records import Lazy, PrRecord, TicketRecord
 from ports.system import Effect, Event, Query, Subject
 import vocab
-from youtrack_tracker import MissingRepository, YouTrackTicketStore, repo_stage_tags
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
 NOTES_PARKED = "[factory] Agent notes for the PR description"  # ticket comment that holds them until the PR exists
@@ -88,6 +87,12 @@ class GitHubCodeHost:
         c = yaml.safe_load(Path(path).read_text()) if path else config.load()
         return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"],
                    ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env")))
+
+    @staticmethod
+    def gate_tracker(c, tickets, run=gh):
+        """The gate tracker of a team whose tickets live in another system (`tickets`, a TicketStore built by that
+        system's plugin) and whose pull requests live here, in `code_host.repository`; `c` is the loaded descriptor."""
+        return GitHubGateTracker.from_config(run=run, tickets=tickets, descriptor=c)
 
     def ticket_for_pr(self, number, repository=None):
         """Resolve a PR number to its ticket from the live head ref, else the live title; `repository` (owner/repo)
@@ -394,26 +399,22 @@ class GitHubGateTracker(DescriptorPort):
         # the ticket side: every ticket read and write goes through it (GitHub issues unless a store is given)
         self.tickets = tickets or GitHubTicketStore(repo, self.run, bot_login)
         self.github = self.tickets if tickets is None else GitHubTicketStore(repo, self.run, bot_login)  # the code host's REST reads
-        if tickets:  # YouTrack: states are a field or tags, commands tags; its `repo` is the code host
-            self.state_kinds, self.command_kinds = ("field", "tag"), ("tag", "pr_label")
+        if tickets:  # another ticket system: its store kinds, and the ticket effects it declares replace these; `repo` is the code host
+            self.state_kinds = tuple(getattr(tickets, "state_kinds", self.state_kinds))
+            self.command_kinds = (*getattr(tickets, "command_kinds", ("label",)), "pr_label")
+            self.effects = (*type(self).effects, *getattr(tickets, "effects", ()))  # a later (kind, target) wins
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
     @classmethod
-    def from_config(cls, path=None, run=gh):
-        c = yaml.safe_load(Path(path).read_text()) if path else config.load()
+    def from_config(cls, path=None, run=gh, tickets=None, descriptor=None):
+        """From the descriptor at `path` (else `descriptor`, else the team's). With `tickets` (another system's
+        TicketStore) the tickets live there and the pull requests in `code_host.repository`."""
+        c = descriptor if descriptor is not None else yaml.safe_load(Path(path).read_text()) if path else config.load()
         bot = ((c.get("targets") or {}).get("air") or {}).get("bot_login")
         if not bot:
             raise ValueError("descriptor: targets.air.bot_login is not set")
         t, code_repo = c["tracker"], (c.get("code_host") or {}).get("repository")
-        tickets, repo = None, t.get("repository")
-        if t.get("adapter", "github-issues") == "youtrack":
-            if not code_repo:
-                raise ValueError("descriptor: code_host.repository is required with tracker.adapter youtrack")
-            field = next((s["store"]["field"]["name"] for s in (c.get("states") or {}).values()
-                          if isinstance((s.get("store") or {}).get("field"), dict)), None)
-            tickets = YouTrackTicketStore.from_config(t, state_field=field, bots=t.get("bot_logins") or (),
-                                                      repo_stages=repo_stage_tags(c), repositories=list(repository_names(c) or []))
-            repo = code_repo
+        repo = code_repo if tickets is not None else t.get("repository")
         return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"],
                    ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env")),
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
@@ -857,11 +858,7 @@ class GitHubGateTracker(DescriptorPort):
     def _fx_stage(self, e, ctx):
         n, value = e["ticket"], e["value"]
         want, have = self.stages[value], [x for x in self._issue_once(n, ctx)["attrs"] if x in self.stages.values()]
-        try:
-            return have != [want] and self.tickets.set_stage(n, want, have)
-        except MissingRepository as err:  # no repository to wake: say so and wait for a person
-            self.tickets.comment(n, f"[factory] Blocked: {err}")
-            return self.tickets.set_stage(n, self.stages["blocked"], have) or True
+        return have != [want] and self.tickets.set_stage(n, want, have)
 
     @staticmethod
     def _gone(labels, value):

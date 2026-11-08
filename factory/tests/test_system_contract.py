@@ -3,13 +3,15 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""The system contract (factory/tests/system_contract.py) for the in-memory systems and for GitHub over a stubbed gh
-that keeps what was written. Run: uv run factory/tests/test_system_contract.py"""
+"""The system contract (factory/tests/system_contract.py) for the in-memory systems, for GitHub over a stubbed gh that
+keeps what was written, and for YouTrack tickets (a stubbed REST runner that keeps them) with GitHub pull requests.
+Run: uv run factory/tests/test_system_contract.py"""
 import json
 import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
@@ -18,7 +20,9 @@ import test_gate_github as G  # noqa: E402  (sets the team the GitHub tracker re
 from test_gate_github import BOT, M, REPO, STAGES, FakeGh, GitHubGateTracker, review  # noqa: E402
 from system_contract import SystemContract  # noqa: E402
 import derive  # noqa: E402
+import effects  # noqa: E402
 from factory_plugins.github import gate as gate_github  # noqa: E402
+from factory_plugins.youtrack.store import YouTrackTicketStore  # noqa: E402
 from gate_port import MemorySystem, TagTracker  # noqa: E402
 
 LABELS = ["factory:in-review", "risk:low", "factory:fix-mid"]
@@ -134,6 +138,125 @@ class GitHubContractTest(SystemContract, unittest.TestCase):
         t = GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh)
         t.gh = gh
         return t
+
+
+class ContractYouTrack:
+    """Enough of YouTrack's REST API for the contract, keeping what the store writes: issues with tags, custom fields
+    (`State: Done` resolves), comments, `subtask of` and `depends on` commands, and created issues. A tag exists once
+    it is named (deploy creates the definition's tags before the gate runs)."""
+
+    def __init__(self, attrs):
+        self.issues, self.tags, self.writes = {}, {}, []
+        self._new("7", "Ticket 7", "the scope", attrs)
+
+    def _new(self, n, summary, description, attrs=()):
+        self.issues[n] = {"summary": summary, "description": description, "resolved": None, "tags": list(attrs),
+                          "fields": {}, "comments": [], "parent": None, "depends": []}
+        return n
+
+    def _tag(self, name):
+        return self.tags.setdefault(name, f"id:{name}")
+
+    def _links(self, n):
+        ref = lambda m: {"idReadable": m, "resolved": self.issues[m]["resolved"],  # noqa: E731
+                         "tags": [{"name": t} for t in self.issues[m]["tags"]]}
+        i = self.issues[n]
+        return [{"direction": "INWARD", "linkType": {"name": "Depend"}, "issues": [ref(m) for m in i["depends"]]},
+                {"direction": "OUTWARD", "linkType": {"name": "Depend"},
+                 "issues": [ref(m) for m, x in self.issues.items() if n in x["depends"]]},
+                {"direction": "INWARD", "linkType": {"name": "Subtask"}, "issues": [ref(i["parent"])] if i["parent"] else []},
+                {"direction": "OUTWARD", "linkType": {"name": "Subtask"},
+                 "issues": [ref(m) for m, x in self.issues.items() if x["parent"] == n]}]
+
+    def _issue(self, n):
+        i = self.issues[n]
+        return {"idReadable": n, "summary": i["summary"], "description": i["description"], "resolved": i["resolved"],
+                "updated": 1, "reporter": {"login": "alice"}, "tags": [{"id": self._tag(t), "name": t} for t in i["tags"]],
+                "customFields": [{"name": k, "value": v} for k, v in i["fields"].items()], "links": self._links(n)}
+
+    def _query(self, query):
+        if query.startswith("subtask of: "):
+            return [{"idReadable": m, "summary": x["summary"]} for m, x in self.issues.items()
+                    if x["parent"] == query.split(": ", 1)[1]]
+        if query.startswith("#Unresolved summary: {"):
+            title = query[len("#Unresolved summary: {"):-1]
+            return [{"idReadable": m, "summary": x["summary"]} for m, x in self.issues.items()
+                    if x["summary"] == title and not x["resolved"]]
+        return []
+
+    def __call__(self, method, path, body=None):
+        url, q = urlsplit(path), parse_qs(urlsplit(path).query)
+        parts = url.path.split("/")[2:]
+        if method != "GET":
+            self.writes.append((method, url.path, body))
+        if parts == ["tags"]:
+            if "query" in q:
+                self._tag(q["query"][0])
+            return [{"id": i, "name": t} for t, i in self.tags.items() if "query" not in q or t == q["query"][0]]
+        if parts == ["issues"]:
+            if method == "POST":
+                return {"idReadable": self._new(f"T-{900 + len(self.issues)}", body["summary"], body["description"])}
+            return self._query(q.get("query", [""])[0])
+        n, rest = parts[1], parts[2:]
+        i = self.issues[n]
+        if not rest:
+            if method == "GET":
+                return self._issue(n)
+            for f in body["customFields"]:
+                i["fields"][f["name"]] = f["value"]
+                if f["name"] == "State":
+                    i["resolved"] = 1 if (f["value"] or {}).get("name") == "Done" else None
+            return {}
+        if rest == ["activities"]:
+            return []
+        if rest == ["comments"]:
+            if method == "POST":
+                i["comments"].append({"text": body["text"], "created": 1767225600000 + len(i["comments"]),
+                                      "author": {"login": BOT}})
+                return {}
+            return list(i["comments"])
+        if rest[0] == "tags":
+            if method == "POST":
+                i["tags"].append(next(t for t, x in self.tags.items() if x == body["id"]))
+            else:
+                i["tags"] = [t for t in i["tags"] if self.tags[t] != rest[1]]
+            return {}
+        if rest == ["execute"]:
+            verb, _, other = body["query"].rpartition(" ")
+            if verb == "subtask of":
+                i["parent"] = other
+            elif verb == "depends on" and other not in i["depends"]:
+                i["depends"].append(other)
+            return {}
+        raise AssertionError(path)
+
+
+class YouTrackContractTest(SystemContract, unittest.TestCase):
+    """The youtrack plugin's tracker: its tickets in YouTrack (the store's own effects: stage, tags, set-field), its
+    pull requests on GitHub."""
+    SETUP = {
+        ("join", "ticket"): GitHubContractTest.SETUP[("join", "ticket")],
+        ("request-reviewers", "pr"): GitHubContractTest.SETUP[("request-reviewers", "pr")],
+        ("pr-notes-sync", "pr"): lambda s: s.tickets.comment(
+            7, f"{gate_github.NOTES_PARKED}\n\n{derive.notes_block({'for': 'fixer', 'hint': 'h'})}"),
+    }
+    NO_WRITE = GitHubContractTest.NO_WRITE
+    EXEMPT = GitHubContractTest.EXEMPT
+    setUp = GitHubContractTest.setUp
+
+    def make(self):
+        gh, yt = ContractGh(), ContractYouTrack([STAGES["in-review"], "risk:low", "factory:fix-mid"])
+        t = GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh, tickets=YouTrackTicketStore(yt, bots=[BOT]))
+        t.gh, t.yt = gh, yt
+        return t
+
+    def test_ticket_effects_are_the_stores_and_write_youtrack(self):
+        s = self.make()
+        mine = {k for k, x in effects.registry(s).items() if str(x.apply).startswith("factory_plugins.youtrack.")}
+        self.assertEqual(mine, {("stage", "ticket"), ("label", "ticket"), ("unlabel", "ticket"), ("set-field", "ticket")})
+        self.assertTrue(s.apply({"ticket": 7, "kind": "set-field", "value": {"risk": "high"}}))
+        self.assertEqual(s.yt.issues["7"]["tags"], [STAGES["in-review"], "factory:fix-mid", "risk:high"])
+        self.assertEqual([w for w in s.gh.writes if "labels" in str(w)], [])
 
 
 if __name__ == "__main__":

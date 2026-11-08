@@ -24,6 +24,7 @@ cfg.set_team(HERE / "fixtures/team")
 import doctor  # noqa: E402
 import nodes  # noqa: E402
 from factory_plugins.github import probes as github_probes  # noqa: E402
+from factory_plugins.youtrack import probes as youtrack_probes  # noqa: E402
 
 REPO = "o/r"
 
@@ -88,14 +89,14 @@ class YouTrackDoctorTest(unittest.TestCase):
                     "states": {"in-dev": {"store": {"field": {"name": "State", "value": "In Progress"}}}},
                     "commands": {"implement-<tier>": {"store": {"tag": "factory:implement-<tier>"}},
                                  "close": {"store": {"tag": "close"}}}}
-        got = {r["probe"]: r["result"] for r in doctor.youtrack_probes(settings, ["mid"], {"YOUTRACK_TOKEN": "x"}, yt)}
+        got = {r["probe"]: r["result"] for r in youtrack_probes.youtrack_probes(settings, ["mid"], {"YOUTRACK_TOKEN": "x"}, yt)}
         self.assertEqual(got, {"youtrack:token:YOUTRACK_TOKEN": "ok", "youtrack:project:LME": "ok",
                                "youtrack:tag:close": "missing", "youtrack:tag:factory:implement-mid": "ok",
                                "youtrack:field:State=In Progress": "ok"})
         self.assertEqual(set(calls), {"GET"})
 
     def test_unset_token_is_missing(self):
-        got = doctor.youtrack_probes({"tracker": {"url": "u", "project": "LME"}}, [], {})
+        got = youtrack_probes.youtrack_probes({"tracker": {"url": "u", "project": "LME"}}, [], {})
         self.assertEqual([r["result"] for r in got], ["missing"])
 
 

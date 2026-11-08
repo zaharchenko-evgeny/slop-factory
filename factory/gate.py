@@ -185,13 +185,13 @@ def is_github(code_host):
 
 
 def tracker_of(config):
-    """The gate tracker of `config`, from the plugin that provides `tracker.adapter` (ADR-0026). The github plugin's
-    tracker also builds the YouTrack store until the youtrack plugin (#1069)."""
+    """The gate tracker of `config`, from the plugin that provides `tracker.adapter` (ADR-0026): github-issues from
+    the github plugin, youtrack from the youtrack plugin (its tickets in YouTrack, its pull requests on the vcs)."""
     t = config.get("tracker")
-    tracker_cls = plugins.registry(config).impl("tracker", (t.get("adapter") if isinstance(t, dict) else None)
-                                                or "github-issues")
+    name = (t.get("adapter") if isinstance(t, dict) else None) or "github-issues"
+    tracker_cls = plugins.registry(config).impl("tracker", name)
     if tracker_cls is None:
-        from factory_plugins.github.gate import GitHubGateTracker as tracker_cls
+        raise ValueError(f"tracker.adapter {name}: no selected plugin provides this tracker")
     return tracker_cls.from_config()
 
 

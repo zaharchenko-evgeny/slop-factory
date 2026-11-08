@@ -12,7 +12,7 @@ from factory_plugins.github import tracker as github_tracker
 from factory_plugins.github import wake
 
 
-def probes(settings, env, run, *, repo, risk_label, run_id="doctor", environ=os.environ):
+def probes(settings, env, run, *, repo, risk_label, run_id="doctor", environ=os.environ, **_):
     """Hook `doctor.probes`: the repository probes, the comment wake files and the project write token."""
     results = repo_probes(repo, run, risk_label, run_id)
     try:
