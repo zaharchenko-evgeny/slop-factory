@@ -30,7 +30,7 @@ command (`command -v factory`), never `uv run` or a path into the engine.
 
 | Data | Option |
 | --- | --- |
-| reason, summary, size estimate, reply, message | `--reason "…"`, `--summary "…"`, `--size-estimate "~120"`, `--reply "…"`, `--message "…"` |
+| reason, summary, size estimate, reply, message, assignee | `--reason "…"`, `--summary "…"`, `--size-estimate "~120"`, `--reply "…"`, `--message "…"`, `--assignee <login>` |
 | failing check on `origin/main` | `--failing-check "<check>"` with `env-broken` |
 | acceptance check result | `--pass "<check>"`, `--fail "<check>"`, `--not-run "<check> \| <why>"` |
 | finding | `--blocking "<id> <file:line> <finding> \| case: <repro>"`, `--minor "<id> <file:line> <finding>"` |
