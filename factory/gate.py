@@ -515,7 +515,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
     if comment_node(node):  # ADR-0023: what the comment node reads, after the cursor
         listed = new_comments(facts, tracker, event["ticket"])
         save_comment_input(event["ticket"], listed)
-        facts["new_comments"] = [{k: c.get(k) for k in ("id", "on", "author", "author_is_bot", "at", "body")}
+        facts["new_comments"] = [{k: c.get(k) for k in ("id", "on", "author", "author_is_bot", "author_is_factory", "at", "body")}
                                  for c in listed]
     facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
     role, roles = node["role"], config["roles"]
@@ -657,7 +657,7 @@ def ask_effects(name, node, out, payload, tracker, ticket, effects):
     if pr is None and hasattr(tracker, "pr_comments"):
         pr = tracker.pr_comments(ticket)
     asked = sum(1 for c in [*(facts.get("comments") or []), *(pr or [])]  # only the factory's own asks count
-                if c.get("author_is_bot") and (c.get("body") or "").startswith("[factory]") and ASK.search(c["body"]))
+                if c.get("author_is_factory") and (c.get("body") or "").startswith("[factory]") and ASK.search(c["body"]))
     limit = config_mod.load().get("limits", {}).get("mention_hops", 3)
     if asked >= limit:
         return [{"kind": "comment", "ticket": ticket, "value": f"[factory] Ask refused: this ticket reached its limit of "
@@ -672,10 +672,10 @@ COMMENT_EFFECTS = ("route", "reply", "skip")  # the effects of the comment node'
 SEEN = re.compile(r"<!-- factory:comment-seen (\d+) -->")
 
 
-def comment_cursor(comments, bot=None):
-    """The highest id in a `factory:comment-seen` marker of the factory's own comments (0: none). With the tracker's
-    `bot` login known, only that author counts; another integration cannot move the cursor."""
-    return max((int(m[1]) for c in comments if (c.get("author") == bot if bot else c.get("author_is_bot"))
+def comment_cursor(comments):
+    """The highest id in a `factory:comment-seen` marker of the factory's own comments (0: none). Only
+    `author_is_factory` counts; another integration cannot move the cursor."""
+    return max((int(m[1]) for c in comments if c.get("author_is_factory")
                 and (c.get("body") or "").startswith("[factory]") and (m := SEEN.search(c["body"]))), default=0)
 
 
@@ -686,7 +686,7 @@ def new_comments(facts, tracker=None, ticket=None):
     if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
         pr = tracker.pr_comments(ticket)
     found = [dict(c, on="ticket") for c in facts.get("comments") or []] + [dict(c, on="pr") for c in pr or []]
-    cursor = comment_cursor(found, getattr(tracker, "bot", None))
+    cursor = comment_cursor(found)
     own = lambda c: FROM.search(c.get("body") or "") and not ASK.search(c.get("body") or "")
     return sorted((c for c in found if int(c.get("id") or 0) > cursor and not own(c)), key=lambda c: int(c["id"]))
 
