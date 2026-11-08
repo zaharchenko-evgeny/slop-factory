@@ -11,7 +11,6 @@ No model and no Air quota: the expected next step of each ticket comes from engi
 (a node's `timeout_minutes` overrides it) gets its label once; a second miss sets `blocked` and `factory:needs-human`.
 A closed ticket in a PR stage with a merged PR is finished (its `finish` run was lost).
 A ticket in a waiting stage, closed, or already marked `factory:needs-human` is left alone.
-Each pass also runs the CI label sync (`gate.py ci-sync`) over the `role: project` repositories (not with memory:FILE).
 """
 import json
 import re
@@ -161,9 +160,9 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 step = next((w for w in wakes(nodes, facts)
                              if age > timedelta(minutes=nodes["nodes"][w[0]].get("timeout_minutes", default))), None)
                 stale_reviews = [label for label, at in facts.get("review_labels", [])
-                                 if label.startswith((vocab.prefix("review-<focus>"), vocab.prefix("rereview-<focus>")))
+                                 if label.startswith(vocab.prefix("review-<focus>"))
                                  and now - datetime.fromisoformat(at.replace("Z", "+00:00")) > timedelta(minutes=default)]
-                stale_focuses = {label.removeprefix(vocab.prefix("review-<focus>")).removeprefix(vocab.prefix("rereview-<focus>"))
+                stale_focuses = {label.removeprefix(vocab.prefix("review-<focus>"))
                                  for label in stale_reviews}
                 stale_step = next((w for w in wakes(nodes, facts)
                                    if w[0] == "review" and w[1].removeprefix(vocab.prefix("review-<focus>")) in stale_focuses), None)
@@ -499,13 +498,6 @@ def reconcile_main(argv):
                                 stage_kinds=config["tracker"].get("stage_kinds", {}),
                                 dry_run=dry_run, progress=progress)
     out = {"dry_run": dry_run, "reconcile": results}
-    if not spec:
-        import gate
-        try:
-            out["ci_sync"], sync_failed = gate.run_ci_sync(dry_run, progress)
-        except Exception as e:  # the reconcile results above are still reported
-            out["ci_sync"], sync_failed = [{"error": f"{type(e).__name__}: {e}"}], True
-        failed = failed or sync_failed
     print(json.dumps(out))
     return 1 if failed else 0
 

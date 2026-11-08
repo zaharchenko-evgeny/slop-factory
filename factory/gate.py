@@ -12,9 +12,6 @@ Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py sweep [--tracker github] [--dry-run] [--stale] [--event FILE | --issue N] (no agent: lists the tickets itself,
                                                                  one stage per ticket;
                                                                  --stale also re-fires nodes whose run died silently)
-       gate.py ci-sync [--dry-run]   (factory:ci-green / factory:ci-red on the open factory PRs of every `role: project`
-                                      repository, from their head check runs and commit statuses; `factory reconcile`
-                                      runs it on its schedule)
 Exit 0 go / done, 10 no go (stale, duplicate or the node no longer matches), 2 bad event, payload, node
 or outcome, 1 a failing effect (the stage is untouched: it is the last effect).
 An event is JSON {id, ticket, head?, actor?}. A payload is JSON {ticket, event?, head?, actor?, ...}
@@ -37,10 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 import notify as notifiers  # noqa: E402
-from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
+from gate_github import GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
 from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
-from github_tracker import project_repositories  # noqa: E402
 import vocab  # noqa: E402
 import definition  # noqa: E402
 
@@ -68,7 +64,7 @@ def holds(when, facts, event):
         if key == "focus":
             miss = facts["focus_missing"]
             focus = event.get("focus", miss[0] if miss else None)
-            return focus in miss or event.get("rereview") == focus
+            return focus in miss
         if key == "round":
             value(want, ("complete", "complete-at-head"))
             return facts["round_complete"] and (want != "complete-at-head" or facts["round_head"] == facts["head"])
@@ -504,14 +500,6 @@ def fix_tier(facts, default="mid"):
     return default
 
 
-def review_wake_labels(facts, completed_head=None):
-    """The per-focus reviewer commands needed for this green PR head."""
-    ci = "green" if completed_head and facts.get("head") == completed_head else facts.get("ci")
-    if facts.get("stage") != "in-review" or ci != "green":
-        return []
-    return [vocab.cmd("review-<focus>", focus) for focus in facts.get("focus_missing", [])]
-
-
 def branch_of(facts, config):
     """The ticket's branch: the PR's head, else `branch_pattern` from the issue title."""
     if facts.get("branch"):
@@ -552,11 +540,6 @@ def check(name, event, tracker, nodes, config, code_host=None):
         if facts.get("heads"):
             event["heads"] = facts["heads"]
         event["actor"] = facts.get("event_actor")
-        pending = facts.get("pending_rereviews", [])
-        labels = facts.get("pr_labels", [])
-        event["rereview"] = next(iter(pending), None) or next(
-            (x.removeprefix(vocab.prefix("rereview-<focus>")) for x in labels
-             if x.startswith(vocab.prefix("rereview-<focus>"))), None)
     why = matches(node, facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     notes = facts.get("agent_notes", [])
@@ -1065,16 +1048,9 @@ def join_decision(facts):
     """The join's outcome and payload, or None while the round is open. Uses the adapter's `round_verdict`,
     which counts every required agent focus, human change requests and CI. A fix label takes the ticket's
     complexity tier (mid when unlabelled)."""
-    rereviewed = has_dispute_rereview(facts)
-    if (facts.get("handed_to_fix") and not rereviewed) or facts.get("pending_rereviews") \
-            or not facts.get("round_complete") or facts.get("round_verdict") is None:
+    if facts.get("handed_to_fix") or not facts.get("round_complete") or facts.get("round_verdict") is None:
         return None  # an open round, or a head whose round already went to a fix (its push comes next)
     return ("changes" if facts["round_verdict"] == "changes" else "approved"), {"tier": fix_tier(facts)}
-
-
-def has_dispute_rereview(facts):
-    return any(r.get("agent") and r.get("rereview") and r.get("commit_id") == facts.get("head")
-               for r in facts.get("reviews", []))
 
 
 RISK_RANK = {"low": 0, "high": 1}
@@ -1127,44 +1103,6 @@ def blockers_mode(nodes):
     if mode not in ("start", "merge"):
         raise Bad(f"bad blockers mode {mode!r}: allowed start, merge")
     return mode
-
-
-def sweep_plan(facts, auto_merge=None, default_tier="mid", blockers="start", start_waits=False):
-    """(node, outcome, payload) of the first outcome whose facts hold, else None."""
-    stage = facts["stage"]
-    if stage == "in-review" and (replay := stale_review_plan(facts)):
-        return replay
-    waits = blockers == "merge" and facts.get("blockers_open")  # approved, but a blocker is still open
-    if facts.get("pr_state") == "merged" and config_mod.load()["tracker"]["stage_kinds"].get(stage) != "final":
-        comments = facts.get("comments", [])
-        return ("finish", "merged", {}) if not after_merge_checks(facts.get("body")) \
-            or not after_merge_comment(comments) or after_merge_complete(comments) else None
-    if stage == "ready" and (blockers == "merge" and not start_waits or not facts.get("blockers_open")) \
-            and facts.get("issue_state", "open") == "open":
-        return "start", "started", {"tier": fix_tier(facts, default_tier)}
-    if stage == "needs-answers" and facts.get("answered"):
-        return "finish", "answered", {}
-    if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
-        return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
-    if stage == "approved" and facts.get("pr_state") == "open" \
-            and ((facts.get("round_head") is not None and facts.get("head") != facts.get("round_head"))
-                 or facts.get("ci") == "red"):
-        return "reopen", "reopened", {}
-    if stage == "approved" and not waits and (m := merge_decision(facts, auto_merge)):
-        return "merge", *m
-    if stage == "split" and (kids := facts.get("children")):
-        if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
-            what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)
-            return "finish", "child-blocked", {"reason": f"[factory] Blocked: child tickets need a person: {what}. "
-                                                         f"Fix them, then set {vocab.stage('ready')} on this ticket."}
-        if all(c["state"] == "closed" for c in kids):
-            return "finish", "children-done", {}
-    if stage == "in-review" and facts.get("waiting_reviewers") and (
-            not facts.get("handed_to_fix") or has_dispute_rereview(facts)):
-        return "join", "waiting", {}  # ask them again; nothing moves until they decide
-    if stage == "in-review" and (j := join_decision(facts)):
-        return "join", *j
-    return None
 
 
 def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, default_tier="mid", progress=None,
@@ -1411,72 +1349,9 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
     return results, failed
 
 
-def head_ci(checks):
-    """(green|red|pending|none, latest result time) of a head's check runs and commit statuses, each
-    {conclusion, at} with conclusion None while it runs. One failure is red, as the gate's `ci` fact reads it."""
-    done = [c["conclusion"] for c in checks]
-    at = max((c["at"] for c in checks if c.get("at")), default=None)
-    if not done:
-        return "none", at
-    if any(c in BAD_CI for c in done):
-        return "red", at
-    return ("green" if all(c in GOOD_CI for c in done) else "pending"), at
-
-
-def ci_sync_pr(code_host, repository, pr, dry_run=False):
-    """Set `factory:ci-green` or `factory:ci-red` on one factory PR {number, head, labels} from its head checks; a
-    head with no result yet (pending, or no checks) keeps its labels. A label added before the head's latest result
-    belongs to an earlier head: it is removed and added again, because re-adding a present label fires no event.
-    The scheduled `ci_sync` calls this per PR; the event path (a finished check, after the #365 probe) calls it for one PR."""
-    ci, at = head_ci(code_host.head_checks(repository, pr["head"]))
-    r = {"repo": repository, "pr": pr["number"], "head": pr["head"], "ci": ci, "added": [], "removed": []}
-    if ci not in ("green", "red"):
-        return r
-    want, other = vocab.ci(f"ci-{ci}"), vocab.ci("ci-red" if ci == "green" else "ci-green")
-    stale = want in pr["labels"] and bool(at) and (code_host.label_added_at(repository, pr["number"], want) or "") < at
-    if want in pr["labels"] and not stale:
-        r["removed"] = [other] if other in pr["labels"] else []
-    else:
-        r["removed"], r["added"] = [x for x in (other, want) if x in pr["labels"]], [want]
-    if not dry_run and (r["added"] or r["removed"]):
-        code_host.edit_pr_labels(repository, pr["number"], add=r["added"], remove=r["removed"])
-    return r
-
-
-def ci_sync(code_host, repositories, dry_run=False, progress=None):
-    """The CI label of every open factory PR in `repositories` (the `role: project` ones: the factory repository
-    labels its own PRs from quality-gates). Returns (results, failed); one PR failing does not stop the others."""
-    results, failed = [], False
-    for repository in repositories:
-        try:
-            prs = code_host.factory_prs(repository)
-        except Exception as e:
-            failed = True
-            results.append({"repo": repository, "error": f"{type(e).__name__}: {e}"})
-            continue
-        for pr in prs:
-            try:
-                r = ci_sync_pr(code_host, repository, pr, dry_run)
-            except Exception as e:
-                failed, r = True, {"repo": repository, "pr": pr["number"], "error": f"{type(e).__name__}: {e}"}
-            results.append(r)
-            if progress:
-                progress(r)
-    return results, failed
-
-
-def run_ci_sync(dry_run=False, progress=None):
-    """`ci-sync` (manual) and each `factory reconcile` pass (scheduled): the descriptor's project repositories on
-    GitHub. Another code host has no sync yet: nothing is read."""
-    config = config_mod.load()
-    if (config.get("code_host") or {}).get("adapter") == "space":
-        return [], False
-    return ci_sync(GitHubCodeHost.from_config(), project_repositories(config), dry_run, progress)
-
-
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "ci-sync", "decide", "ci"])
+    p.add_argument("cmd", choices=["check", "apply", "sweep", "decide", "ci"])
     p.add_argument("--wait", action="store_true")
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
@@ -1492,16 +1367,11 @@ def main(argv):
     p.add_argument("--spec")
     p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
     p.add_argument("--tier")
-    p.add_argument("--completed-head")  # CI's terminal label step runs before Actions marks its workflow completed
     try:
         a = p.parse_args(config_mod.pop_team(argv))
     except SystemExit:
         return BAD
     path = ""
-    if a.cmd == "ci-sync":
-        results, failed = run_ci_sync(a.dry_run, lambda r: print(json.dumps(r), file=sys.stderr, flush=True))
-        print(json.dumps({"dry_run": a.dry_run, "ci_sync": results}))
-        return FAILED if failed else GO
     code_host = None
     try:
         kind, _, path = (a.tracker or "github").partition(":")
@@ -1535,15 +1405,6 @@ def main(argv):
             status, out = decide(a.node, ticket, tracker, nodes, dry_run=a.dry_run)
             print(json.dumps(out))
             return status
-        if a.cmd == "wake-reviewers":
-            if not a.issue:
-                raise Bad("wake-reviewers needs --issue TICKET")
-            facts = tracker.facts(a.issue)
-            labels = review_wake_labels(facts, a.completed_head)
-            for label in labels:
-                tracker.apply({"ticket": a.issue, "kind": "label", "value": label, "on": "pr"})
-            print(json.dumps({"ticket": a.issue, "labels": labels}))
-            return GO
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):
                 raise Bad("sweep needs --tracker github")

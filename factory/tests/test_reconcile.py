@@ -60,7 +60,7 @@ class ReconcileTest(unittest.TestCase):
     def test_stale_review_label_without_review_refired(self):
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": FRESH,
                              "focus_missing": ["behaviour"],
-                             "review_labels": [("factory:rereview-behaviour", OLD)]})
+                             "review_labels": [("factory:review-behaviour", OLD)]})
         self.assertEqual(results[0]["node"], "review")
         self.assertIn('"factory:review-behaviour"', logged(t, "label"))
 
@@ -207,21 +207,6 @@ class ReconcileTest(unittest.TestCase):
         t, results, _ = run({"stage": "ready", "since": "2026-11-03T11:54:00Z"}, nodes)
         self.assertEqual(results[0]["node"], "custom")
         self.assertIn('"factory:custom"', logged(t, "label"))
-
-    def test_each_scheduled_pass_runs_the_ci_label_sync(self):
-        import contextlib
-        import io
-        import json
-        from unittest.mock import patch
-        out, synced = io.StringIO(), {"repo": "o/app", "pr": 1, "ci": "green"}
-        with patch("gate_github.GitHubGateTracker.from_config", return_value=MemoryTracker({})), \
-                patch.object(gate, "run_ci_sync", return_value=([synced], False)) as sync, \
-                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(reconcile.main(["--dry-run"]), 0)
-        self.assertTrue(sync.call_args.args[0])  # the pass's --dry-run
-        self.assertEqual(json.loads(out.getvalue())["ci_sync"], [synced])
-
-
 
 class WakeReadyTest(unittest.TestCase):
     def test_refires_only_unblocked_ready_tickets_that_waited(self):

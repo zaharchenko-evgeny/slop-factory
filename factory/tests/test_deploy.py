@@ -990,11 +990,11 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["files"], {})
         self.assertFalse((ROOT / ".github/workflows/factory-reconcile.yml").exists())
 
-    def test_ci_label_sync_runs_in_the_factory_repository_with_no_project_workflow(self):
+    def test_reconcile_runs_in_the_factory_repository_with_no_project_workflow(self):
         base = cfg.load()
         other = {"name": "other", "url": "https://github.com/o/other", "default_branch": "main", "role": "project"}
         plan = deploy.plan_air(nodes.load(), {**base, "repositories": [*base["repositories"], other]})
-        a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] reconcile")  # each pass runs gate.ci_sync
+        a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] reconcile")
         self.assertEqual(a["repository"]["fullName"], "zaharchenko-evgeny/slop-factory")
         self.assertEqual(plan["files"], {})  # no workflow or check file under any repository's .github/
 

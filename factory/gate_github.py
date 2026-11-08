@@ -107,8 +107,8 @@ def deploy_plan_at(revision):
             subprocess.run(["git", "worktree", "remove", "--force", path], check=True,
                            capture_output=True, text=True)
 
-MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))?(?: rereview=(1))?(?: outcome=([\w-]+))? -->")
-FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
+DEFAULT_REQUIRED = {"low": ["full"], "high": ["behaviour", "structure-security"]}  # v1 teams without `reviews.required`
+MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))?(?: outcome=([\w-]+))? -->")
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
 GOOD_CI = {"success", "neutral", "skipped"}
 WRITE = {"admin", "maintain", "write"}  # repository roles with write access
@@ -137,39 +137,6 @@ class GitHubCodeHost:
         when the PR is in another of the ticket's repositories."""
         pr = json.loads(self.run(["api", f"repos/{repository or self.repo}/pulls/{number}"]))
         return ticket_from_ref((pr.get("head") or {}).get("ref")) or ticket_from_ref(pr.get("title"))
-
-    # --- the CI label sync (gate.ci_sync); `repository` is owner/repo
-    def _list(self, path):
-        return [json.loads(x) for x in self.run(["api", "--paginate", path, "--jq", ".[]"]).splitlines() if x.strip()]
-
-    def factory_prs(self, repository):
-        """[{number, head, labels}] of the open PRs from a factory branch `ez/<ticket>-*` of `repository`, never a fork's."""
-        return [{"number": p["number"], "head": p["head"]["sha"], "labels": [x["name"] for x in p.get("labels") or []]}
-                for p in self._list(f"repos/{repository}/pulls?state=open&per_page=100")
-                if ticket_from_ref(p["head"]["ref"]) is not None
-                and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == repository.lower()]
-
-    def head_checks(self, repository, sha):
-        """[{conclusion, at}] of the latest check runs and commit statuses at `sha`; conclusion None while one runs."""
-        runs = [json.loads(x) for x in self.run(["api", "--paginate", f"repos/{repository}/commits/{sha}/check-runs?per_page=100",
-                                                 "--jq", ".check_runs[]"]).splitlines() if x.strip()]
-        statuses = json.loads(self.run(["api", f"repos/{repository}/commits/{sha}/status"])).get("statuses") or []
-        return ([{"conclusion": r.get("conclusion") if r.get("status") == "completed" else None, "at": r.get("completed_at")}
-                 for r in runs]
-                + [{"conclusion": None if s["state"] == "pending" else "success" if s["state"] == "success" else "failure",
-                    "at": s.get("updated_at")} for s in statuses])
-
-    def label_added_at(self, repository, number, label):
-        """When `label` was last added to PR `number`, else None."""
-        return max((e["at"] for e in normalise_events(self._list(f"repos/{repository}/issues/{number}/events?per_page=100"))
-                    if e["kind"] == "labeled" and e["value"] == label), default=None)
-
-    def edit_pr_labels(self, repository, number, add=(), remove=()):
-        """Remove, then add, in two writes: a label removed and added in one edit fires no `labeled` event."""
-        for flag, labels in (("--remove-label", remove), ("--add-label", add)):
-            if labels:
-                self.run(["pr", "edit", str(number), "-R", repository, *[x for label in labels for x in (flag, label)]])
-
 
 def normalise_events(raw):
     """GitHub issue events as `{kind, value, actor, at}`: `kind` is the event name (`labeled`, `unlabeled`,
@@ -411,7 +378,7 @@ class GitHubGateTracker(DescriptorPort):
                  ci_workflows=("quality-gates",), pr_repo=None, project=None, repositories=None, tickets=None,
                  required=None):
         self.trusted, self.run_cap, self.ci_workflows = set(trusted_bots), run_cap, set(ci_workflows)
-        self.required = {**FOCUSES, **(required or {})}  # review focuses by risk; `reviews.required` overrides
+        self.required = {**DEFAULT_REQUIRED, **(required or {})}  # review focuses by risk; `reviews.required` overrides
         import definition
         if definition.present(config.team_root()):  # ADR-0021: no focuses; workflow.yaml names the reviews
             self.required = {risk: [] for risk in self.required}
@@ -666,7 +633,7 @@ class GitHubGateTracker(DescriptorPort):
             verdict = (m[3] if agent else {"APPROVED": "approve", "CHANGES_REQUESTED": "changes"}.get(r["state"]))
             out.append({"author": r["user"]["login"], "state": r["state"], "commit_id": r["commit_id"],
                         "focus": m[1] if m else None, "round": int(m[2]) if m else None,
-                        "rereview": bool(m and m[4]), "outcome": m[5] if m else None,
+                        "outcome": m[4] if m else None,
                         "verdict": verdict, "agent": agent, "assoc": r.get("author_association"), "submitted_at": r.get("submitted_at"),
                         "bot": r["user"].get("type") == "Bot" or r["user"]["login"].endswith("[bot]")})
             out[-1]["findings"] = re.findall(r"^\*\*([A-Z]\d+)\*\*", r.get("body") or "", re.M)
@@ -816,7 +783,7 @@ class GitHubGateTracker(DescriptorPort):
              "head": None, "pr": None, "mergeable": None, "conflict": False, "ci": "none", "reviews": [], "requested_reviewers": [],
              "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
              "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
-             "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none", "pending_rereviews": [],
+             "fix_cap": self.fix_cap, "due": False, "seen": [], "pr_state": "none",
              "agent_runs": self._agent_runs(n, pr["number"] if pr else None, events), "run_cap": self.run_cap,
              "handed_to_fix": False, "risk": risk, "behind": False,
              "issue_state": issue["state"], "updated_at": issue["updated_at"],
@@ -861,7 +828,6 @@ class GitHubGateTracker(DescriptorPort):
         """(PR_DEFAULTS keys, agent notes) of the ticket's PR `pr` in this view's repository."""
         head, reviews = pr["head"]["sha"], self._carry_approvals(self._reviews(pr), pr)
         pr_labels = {x["name"] for x in pr.get("labels", [])}
-        pending_rereviews = [focus for focus in required if vocab.cmd("rereview-<focus>", focus) in pr_labels]
         latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
         heads = {latest[x]["commit_id"] for x in required if x in latest}
         requested = [u["login"] for u in pr.get("requested_reviewers") or []]
@@ -881,12 +847,12 @@ class GitHubGateTracker(DescriptorPort):
                 "pr_state": "merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open",
                 "pr": pr["number"], "head": head, "mergeable": pr.get("mergeable"), "conflict": pr.get("mergeable") is False,
                 "ci": ci, "reviews": reviews, "requested_reviewers": requested, "round_verdict": verdict,
-                "ignored_reviews": ignored, "waiting_reviewers": waiting, "pending_rereviews": pending_rereviews,
+                "ignored_reviews": ignored, "waiting_reviewers": waiting,
                 "pr_labels": sorted(pr_labels),
                 "focus_missing": [x for x in required if latest.get(x, {}).get("commit_id") != head],
                 "round_complete": complete,
                 "round_head": heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-                "fix_rounds": fix_round_count(reviews, since)}, notes  # same-head dispute rereviews count as a new round
+                "fix_rounds": fix_round_count(reviews, since)}, notes
 
     def _notes(self, items, stamp, since):
         """(time, notes) of the bot-written items (comments, reviews, a PR) from `since` on."""
@@ -906,7 +872,7 @@ class GitHubGateTracker(DescriptorPort):
                     labeled[(t, e["value"])] = max(e["at"], labeled.get((t, e["value"]), ""))
         pr_labels = f.get("pr_labels", [])
         review_labels = [(x, labeled.get((pr, x), "")) for x in pr_labels
-                         if x.startswith((vocab.prefix("review-<focus>"), vocab.prefix("rereview-<focus>"))) and labeled.get((pr, x))]
+                         if x.startswith(vocab.prefix("review-<focus>")) and labeled.get((pr, x))]
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
         cmd = next(((t, x) for t, x in have if x.startswith((vocab.prefix("implement-<tier>"), vocab.prefix("fix-<tier>"), vocab.prefix("update-<tier>"), vocab.prefix("review-<focus>")))), None)
         command_labels = (vocab.stage("ready"), vocab.stage("triage"), vocab.prefix("implement-<tier>"), vocab.prefix("fix-<tier>"),
@@ -1138,11 +1104,8 @@ class GitHubGateTracker(DescriptorPort):
         f = self.facts(n)
         for who in f["ignored_reviews"]:
             print(f"join: ignored unmarked bot review by {who}", file=sys.stderr)
-        rereviewed = any(r["agent"] and r["rereview"] and r["commit_id"] == f["head"] for r in f["reviews"])
-        if f["handed_to_fix"] and not rereviewed:
+        if f["handed_to_fix"]:
             return False  # this head already went to a fix; its push starts the next round
-        if f["pending_rereviews"]:
-            return False  # every disputed focus gets its same-head review before the round can move
         if f["stage"] == "in-review" and f["waiting_reviewers"]:
             return self._rerequest(n, f["waiting_reviewers"])  # nothing moves until they decide again
         if not f["round_complete"] or f["stage"] != "in-review":
@@ -1155,8 +1118,6 @@ class GitHubGateTracker(DescriptorPort):
             for e in gate_clear(n):
                 self.apply(e)
             return self.apply({"ticket": n, "kind": "stage", "value": "blocked"})
-        if rereviewed:
-            self.apply({"ticket": n, "kind": "unlabel", "value": vocab.cmd("fix-<tier>", "*"), "on": "pr"})
         wrote = self.apply({"ticket": n, "kind": "label", "value": vocab.cmd("fix-<tier>", tier), "on": "pr"})
         return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote
 
@@ -1185,28 +1146,23 @@ class GitHubGateTracker(DescriptorPort):
         return f"\n\n{notes_block(e['notes'])}" if e.get("notes") else ""
 
     def _review(self, n, e):
-        """The reviewer's verdict as a COMMENT review on each PR of the ticket, pinned to that PR's own head. The
-        rereview command label lives on the primary PR, which wakes the reviewer."""
+        """The reviewer's verdict as a COMMENT review on each PR of the ticket, pinned to that PR's own head. """
         # only open PRs in repositories this environment may write: a merged PR is done, a read-only one is not ours
         views = [(name, view, pr) for name, view, pr in self._views(n)
                  if pr and not pr.get("merged") and pr.get("state", "open") == "open" and self._may_write(name)]
         focus = e.get("focus")
         if not views or not focus:
             raise RuntimeError("review: needs a PR and a payload `focus`")
-        _, first, primary = views[0]
-        rereview = vocab.cmd("rereview-<focus>", focus) in first._labels(primary["number"], repo=first.pr_repo)
         facts, wrote = self.facts(n), False
         for name, view, pr in views:
-            wrote |= view._post_review(pr, e, focus, rereview, [r for r in facts["reviews"] if r.get("repo", name) == name],
+            wrote |= view._post_review(pr, e, focus, [r for r in facts["reviews"] if r.get("repo", name) == name],
                                        self._since)
-        if wrote and rereview:
-            first._edit(primary["number"], remove=[vocab.cmd("rereview-<focus>", focus)], on="pr")
         return wrote
 
-    def _post_review(self, pr, e, focus, rereview, reviews, since):
+    def _post_review(self, pr, e, focus, reviews, since):
         head = pr["head"]["sha"]
         existing = [r for r in self._reviews(pr) if r["agent"] and r["focus"] == focus and r["commit_id"] == head]
-        if existing and (not rereview or any(r["rereview"] for r in existing)):
+        if existing:
             return False
         earlier_change_heads = {r["commit_id"] for r in reviews
                                 if r["agent"] and r["verdict"] == "changes"
@@ -1215,7 +1171,7 @@ class GitHubGateTracker(DescriptorPort):
         rnd = e.get("round") or len(earlier_change_heads) + 1
         verdict = "approve" if e["value"].startswith("approve") else "changes"
         outcome = f" outcome={e['outcome']}" if e.get("outcome") else ""
-        marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict}{' rereview=1' if rereview else ''}{outcome} -->"
+        marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict}{outcome} -->"
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
         defang = lambda t: str(t).replace("<!--", "<!\u200b--")  # noqa: E731  # prose never carries a marker
         lines = [defang(f"**{x['id']}** {x['file']} — {x['finding']}") for x in found]

@@ -77,12 +77,6 @@ class GateTest(unittest.TestCase):
         self.assertIn("review", comments[0])
         self.assertEqual((tr.report["on"], tr.report["run_id"]), ("pr", "run-1"))
 
-    def test_sweep_plan_replays_stale_review_marker_instead_of_refiring(self):
-        facts = {"stage": "in-review", "head": "abc", "pr_labels": ["factory:review-x"],
-                 "reviews": [{"agent": True, "focus": "x", "verdict": "changes", "commit_id": "abc", "round": 2}]}
-        self.assertEqual(gate.sweep_plan(facts),
-                         ("review", "changes", {"focus": "x", "round": 2, "review_replay": True}))
-
     def test_definition_replay_uses_review_node_and_marker_outcome(self):
         node = {"triggers": [{"label": "factory:review-high"}], "outcomes": {
             "approve-low": {"effects": [{"review": "approve-at-head"}]},
@@ -491,54 +485,6 @@ class GateTest(unittest.TestCase):
     def test_new_labels_created_at_merge(self):
         plan = deploy.plan_air(NODES, CONFIG)
         self.assertIn("factory:needs-human", plan["labels"])
-
-    def test_low_risk_wakes_full_only(self):
-        facts = {"stage": "in-review", "ci": "green", "focus_missing": ["full"]}
-        self.assertEqual(gate.review_wake_labels(facts), ["factory:review-full"])
-
-    def test_ci_completion_wakes_matching_head_while_workflow_is_still_running(self):
-        with tempfile.TemporaryDirectory() as d:
-            tracker = Path(d, "tickets.json")
-            tracker.write_text(json.dumps({"7": {"stage": "in-review", "ci": "pending", "head": "abc",
-                                                   "focus_missing": ["full"]}}))
-            out = StringIO()
-            with redirect_stdout(out):
-                self.assertEqual(gate.main(["wake-reviewers", "--issue", "7", "--completed-head", "abc",
-                                            "--tracker", f"memory:{tracker}"]), 0)
-            self.assertEqual(json.loads(out.getvalue())["labels"], ["factory:review-full"])
-            out = StringIO()
-            with redirect_stdout(out):
-                self.assertEqual(gate.main(["wake-reviewers", "--issue", "7", "--completed-head", "stale",
-                                            "--tracker", f"memory:{tracker}"]), 0)
-            self.assertEqual(json.loads(out.getvalue())["labels"], [])
-
-    def test_high_risk_wakes_two_focuses(self):
-        facts = {"stage": "in-review", "ci": "green", "focus_missing": ["behaviour", "structure-security"]}
-        self.assertEqual(gate.review_wake_labels(facts),
-                         ["factory:review-behaviour", "factory:review-structure-security"])
-
-    def test_reviewed_focus_not_woken_again(self):
-        facts = {"stage": "in-review", "ci": "green", "focus_missing": ["structure-security"]}
-        self.assertEqual(gate.review_wake_labels(facts), ["factory:review-structure-security"])
-
-    def test_review_check_reads_rereview_focus_from_tracker_facts(self):
-        tracker = MemoryTracker({"7": {
-            "stage": "in-review", "head": "abc", "ci": "green",
-            "focus_missing": [], "pending_rereviews": ["behaviour"],
-        }})
-        event = {"id": "pull_request:7:labeled", "ticket": 7,
-                 "event_name": "pull_request", "action": "labeled", "focus": "behaviour"}
-
-        code, result = gate.check("review", event, tracker, NODES, CONFIG)
-
-        self.assertEqual(code, gate.GO)
-        self.assertTrue(result["go"])
-
-    def test_writer_answer_resumes_needs_answers(self):
-        self.assertEqual(gate.sweep_plan({"stage": "needs-answers", "answered": True}), ("finish", "answered", {}))
-
-    def test_bot_comment_does_not_resume(self):
-        self.assertIsNone(gate.sweep_plan({"stage": "needs-answers", "answered": False}))
 
     def test_verdict_approve_and_approved_both_approve(self):
         for verdict in ("approve", "approved"):
@@ -1355,37 +1301,6 @@ class ConflictTest(unittest.TestCase):
         self.assertEqual(tr.tickets[7]["stage"], "changes-requested")
         self.assertNotIn("log", tr.tickets[8])
 
-    def test_dispute_rereview_sweep_approves_or_starts_a_new_fix_round(self):
-        original = {"agent": True, "focus": "full", "verdict": "changes", "commit_id": "abc",
-                    "findings": ["B1"]}
-        for verdict, expected in (("approve", "approved"), ("changes", "changes-requested")):
-            rereview = {**original, "verdict": verdict, "rereview": True}
-            tr, (results, failed) = self.sweep({7: {"stage": "in-review", "head": "abc", "handed_to_fix": True,
-                                                    "round_complete": True, "round_verdict": verdict,
-                                                    "reviews": [original, rereview], "ci": "green",
-                                                    "attrs": ["risk:low", "complexity:small"],
-                                                    "labels": ["factory:fix-mid"]}})
-            self.assertFalse(failed)
-            self.assertEqual(tr.tickets[7]["stage"], expected)
-
-        pending = {"agent": True, "focus": "full", "verdict": "approve", "commit_id": "abc", "rereview": True}
-        self.assertEqual(gate.sweep_plan({"stage": "in-review", "head": "abc", "handed_to_fix": True,
-                                          "round_complete": False, "waiting_reviewers": ["alice"],
-                                          "reviews": [pending]}), ("join", "waiting", {}))
-
-    def test_dispute_join_requires_agent_and_all_requested_focuses(self):
-        untrusted = {"agent": False, "focus": "behaviour", "verdict": "approve", "commit_id": "abc",
-                     "rereview": True}
-        facts = {"stage": "in-review", "head": "abc", "handed_to_fix": True, "round_complete": True,
-                 "round_verdict": "approve", "reviews": [untrusted]}
-        self.assertIsNone(gate.join_decision(facts))
-
-        facts.update(handed_to_fix=False, pending_rereviews=["structure-security"])
-        self.assertIsNone(gate.join_decision(facts))
-        tr, (results, failed) = self.sweep({7: {**facts, "stage": "in-review", "ci": "green"}})
-        self.assertFalse(failed)
-        self.assertEqual((results, tr.tickets[7]["stage"]), ([], "in-review"))
-
     def test_unresolvable_update_blocks_with_files(self):
         tr = MemoryTracker({7: {"stage": "changes-requested", "attrs": ["factory:update-cheap"]}})
         reason = "[factory] Blocked: merge conflict in factory/gate.py, engine/nodes.yaml"
@@ -1492,7 +1407,7 @@ class AutoMergeTest(unittest.TestCase):
         self.assertEqual(results, [("merge", "merged")])
         self.assertEqual(self.log(tr, "merge"), ["match-head"])
 
-    def test_merge_after_update_branch_without_rereview(self):
+    def test_merge_after_update_branch_without_new_review(self):
         tr, results = self.sweep(behind=True, head="h2", round_head="h2")  # facts carry a clean-merge approval to the new head
         self.assertEqual(results, [("merge", "updated")])
         tr, results = self.sweep(head="h2", round_head="h2")
@@ -1797,7 +1712,7 @@ class RecalibratedBlocksTest(unittest.TestCase):
 
     def test_finding_free_round_not_counted(self):
         def review(head, findings):
-            return {"agent": True, "verdict": "changes", "commit_id": head, "rereview": False, "findings": findings}
+            return {"agent": True, "verdict": "changes", "commit_id": head, "findings": findings}
         tr = MemoryTracker({"7": {"stage": "in-review", "reviews": [
             review("a", []), review("b", ["M1"]), review("c", ["B1", "M1"])]}})
         self.assertEqual(tr.facts("7")["fix_rounds"], 1)
@@ -1842,7 +1757,7 @@ class MultiRepositoryTest(unittest.TestCase):
     def test_both_approved_and_green_merge(self):
         facts = self.facts(self.pr("a", "h1"), self.pr("b", "h2"))
         self.assertEqual((facts["ci"], facts["round_head"], facts["heads"]), ("green", "h1", {"a": "h1", "b": "h2"}))
-        self.assertEqual(gate.sweep_plan(facts, self.ON), ("merge", "merged", {}))
+        self.assertEqual(definition.plan(NODES, facts, self.ON), ("merge", "merged", {}))
 
     def test_merged_pr_ci_does_not_override_open_pr_ci(self):
         facts = self.facts(self.pr("a", "h1", pr_state="merged", ci="none"), self.pr("b", "h2"))
@@ -1856,12 +1771,12 @@ class MultiRepositoryTest(unittest.TestCase):
     def test_one_red_pr_makes_the_ticket_red_and_reopens_it(self):
         facts = self.facts(self.pr("a", "h1"), self.pr("b", "h2", ci="red"))
         self.assertEqual(facts["ci"], "red")
-        self.assertEqual(gate.sweep_plan(facts, self.ON)[:2], ("reopen", "reopened"))
+        self.assertEqual(definition.plan(NODES, facts, self.ON)[:2], ("reopen", "reopened"))
 
     def test_a_pr_pushed_after_its_review_reopens_and_never_merges(self):
         facts = self.facts(self.pr("a", "h1"), self.pr("b", "h3", round_head="h2"))
         self.assertIsNone(gate.merge_decision(facts, self.ON))
-        self.assertEqual(gate.sweep_plan(facts, self.ON)[:2], ("reopen", "reopened"))
+        self.assertEqual(definition.plan(NODES, facts, self.ON)[:2], ("reopen", "reopened"))
 
     def test_join_waits_for_every_pr_and_one_change_request_completes_the_round(self):
         open_round = self.facts(self.pr("a", "h1"), self.pr("b", "h2", round_complete=False, round_verdict=None,
@@ -1873,9 +1788,9 @@ class MultiRepositoryTest(unittest.TestCase):
     def test_finish_waits_until_every_pr_merged(self):
         partly = self.facts(self.pr("a", "h1", pr_state="merged"), self.pr("b", "h2"))
         self.assertEqual(partly["pr_state"], "open")
-        self.assertNotEqual(gate.sweep_plan(partly, self.ON)[:2], ("finish", "merged"))
+        self.assertNotEqual(definition.plan(NODES, partly, self.ON)[:2], ("finish", "merged"))
         both = self.facts(self.pr("a", "h1", pr_state="merged"), self.pr("b", "h2", pr_state="merged"))
-        self.assertEqual(gate.sweep_plan(both, self.ON), ("finish", "merged", {}))
+        self.assertEqual(definition.plan(NODES, both, self.ON), ("finish", "merged", {}))
 
     def test_sweep_merges_the_other_repository_first_then_finishes(self):
         tr = MemoryTracker({7: {"stage": "approved", "risk": "low", "prs": [self.pr("a", "h1"), self.pr("b", "h2")]}})
@@ -1947,7 +1862,7 @@ class RepoSplitTest(unittest.TestCase):
 
         def plan():
             kids = [{**c, "blocked": False} for c in store.children(n)]
-            return gate.sweep_plan({"stage": "split", "children": kids, "comments": []}, None)
+            return definition.plan(NODES, {"stage": "split", "children": kids, "comments": []})
 
         for t in ("API", "Client"):
             store.close(ids[t])
@@ -1962,52 +1877,6 @@ class RepoSplitTest(unittest.TestCase):
         code, _ = gate.apply("intake", "proceed", {"ticket": 7, **PAYLOAD, **gate.intake_fields(h)}, tr, NODES)
         self.assertEqual((code, tr.tickets[7]["stage"]), (gate.GO, "ready"))
         self.assertNotIn("create-issues", [k for k, _ in tr.tickets[7].get("log", [])])
-
-
-class CiSyncTest(unittest.TestCase):
-    """The scheduled CI label sync of the project repositories' factory PRs (gate.ci_sync)."""
-    GREEN, RED = "factory:ci-green", "factory:ci-red"
-
-    def host(self):
-        from gate_port import MemoryCodeHost
-        pr = lambda n, head, labels=(), labeled_at=None, branch=None: {  # noqa: E731
-            "number": n, "branch": branch or f"ez/{n}-x", "head": head, "labels": list(labels), "labeled_at": labeled_at or {}}
-        ok = lambda at="2026-11-05T10:00:00Z": {"conclusion": "success", "at": at}  # noqa: E731
-        return MemoryCodeHost(
-            {"o/app": [pr(1, "a1"), pr(2, "a2", [self.GREEN]), pr(3, "a3", [self.GREEN]), pr(4, "a4", branch="feature")],
-             "o/web": [pr(5, "w5", [self.GREEN], {self.GREEN: "2026-11-05T10:05:00Z"}),
-                       pr(6, "w6", [self.GREEN], {self.GREEN: "2026-11-05T09:00:00Z"}), pr(7, "w7")]},
-            {"a1": [ok(), {"conclusion": "neutral", "at": None}],  # a check run and a commit status
-             "a2": [ok(), {"conclusion": "failure", "at": "2026-11-05T10:01:00Z"}],
-             "a3": [ok(), {"conclusion": None, "at": None}], "a4": [ok()],
-             "w5": [ok()], "w6": [ok()]}, now="2026-11-05T11:00:00Z")
-
-    def test_sync_sets_ci_label_from_head_checks(self):
-        repos = gate.project_repositories({"repositories": [
-            {"name": "main", "url": "https://github.com/o/main", "role": "primary"},
-            {"name": "app", "url": "https://github.com/o/app", "role": "project"},
-            {"name": "web", "url": "https://github.com/o/web/", "role": "project"}]})
-        self.assertEqual(repos, ["o/app", "o/web"])
-        host = self.host()
-        results, failed = gate.ci_sync(host, repos)
-        self.assertFalse(failed)
-        self.assertEqual([(r["repo"], r["pr"], r["ci"]) for r in results],  # PR 4 is no factory branch
-                         [("o/app", 1, "green"), ("o/app", 2, "red"), ("o/app", 3, "pending"),
-                          ("o/web", 5, "green"), ("o/web", 6, "green"), ("o/web", 7, "none")])
-        self.assertEqual(host.edits, [("o/app", 1, [self.GREEN], []), ("o/app", 2, [self.RED], [self.GREEN]),
-                                      # labelled before the head's result: an earlier head's label, set again
-                                      ("o/web", 6, [self.GREEN], [self.GREEN])])
-        labels = {(repo, p["number"]): p["labels"] for repo, prs in host.prs.items() for p in prs}
-        self.assertEqual(labels[("o/app", 3)], [self.GREEN])  # pending: no change
-        self.assertEqual(labels[("o/web", 5)], [self.GREEN])  # labelled after this head's result: no change
-        gate.ci_sync(host, repos)
-        self.assertEqual(len(host.edits), 3)  # a second pass writes nothing
-
-    def test_sync_dry_run_writes_nothing_and_one_failing_repository_does_not_stop_the_others(self):
-        host = self.host()
-        results, failed = gate.ci_sync(host, ["o/missing", "o/app"], dry_run=True)
-        self.assertTrue(failed)
-        self.assertEqual((results[0]["repo"], results[1]["added"], host.edits), ("o/missing", [self.GREEN], []))
 
 
 class StatusTests(unittest.TestCase):

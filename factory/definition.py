@@ -943,7 +943,7 @@ def plan(graph, facts, auto_merge=None, default_tier="mid", blockers="start", st
         elif all(c["state"] == "closed" for c in kids) and allowed("finish", "children-done"):
             return "finish", "children-done", {}
     if stage == "in-review" and allowed("join", "waiting") and facts.get("waiting_reviewers") and (
-            not facts.get("handed_to_fix") or gate.has_dispute_rereview(facts)):
+            not facts.get("handed_to_fix")):
         return "join", "waiting", {}  # ask them again; nothing moves until they decide
     if stage == "in-review" and allowed("join", "approved") and (j := gate.join_decision(facts)):
         return "join", *j

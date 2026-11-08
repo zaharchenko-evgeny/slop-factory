@@ -19,7 +19,6 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
        factory migrate project TEAM [--out DIR]    (copy a v2 team checkout's descriptor and workflow, with its commit in SOURCE)
        factory env roles ENV                       (the roles of the enabled agent nodes that run in ENV, one per line)
        factory sweep --main ...                    (the gate's sweep from main's graph)
-       factory ci-sync [--dry-run]                 (the CI labels of the project repositories' factory PRs; reconcile runs it)
        factory deploy --target local [--apply] | factory run --local [--once] [--dry-run]   (the local target, ADR-0017)
 """
 import argparse
@@ -429,7 +428,7 @@ def _main(argv):
     load_engine(HERE)
     if team:
         config.set_team(team)
-    if cmd in ("check", "apply", "sweep", "ci-sync", "decide", "ci"):
+    if cmd in ("check", "apply", "sweep", "decide", "ci"):
         return gate.main([cmd, *rest])
     if cmd == "deploy" and rest[:2] == ["--target", "local"]:
         from local import deploy as local_deploy

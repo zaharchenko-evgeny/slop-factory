@@ -43,7 +43,7 @@ def ticket_repositories(body, names, primary):
 PR_DEFAULTS = {"head": None, "pr": None, "branch": None, "mergeable": None, "conflict": False, "ci": "none",
                "reviews": [], "requested_reviewers": [], "focus_missing": [], "round_complete": False,
                "round_verdict": None, "round_head": None, "ignored_reviews": [], "waiting_reviewers": [],
-               "pending_rereviews": [], "pr_labels": [], "fix_rounds": 0, "pr_state": "none",
+               "pr_labels": [], "fix_rounds": 0, "pr_state": "none",
                "handed_to_fix": False, "behind": False}
 
 
@@ -75,7 +75,7 @@ def combine_prs(prs):
             "handed_to_fix": any(p["handed_to_fix"] for p in prs), "fix_rounds": max(p["fix_rounds"] for p in prs),
             "reviews": [{**r, "repo": p["repo"]} for p in prs for r in p["reviews"]],
             **{k: union(k) for k in ("requested_reviewers", "focus_missing", "ignored_reviews", "waiting_reviewers",
-                                     "pending_rereviews", "pr_labels")}}
+                                     "pr_labels")}}
 
 
 class Tracker(Protocol):
@@ -84,10 +84,10 @@ class Tracker(Protocol):
 
 
 def fix_round_count(reviews, since=""):
-    """Rounds a fix answers: an agent change request, per head and dispute rereview, since the person's last
+    """Rounds a fix answers: an agent change request, per head, since the person's last
     `factory:ready`, with at least one blocking finding (id `B<n>`). A round with none (a verdict bug,
     environment noise) is not counted against `limits.fix_rounds`."""
-    return len({(r["commit_id"], r.get("rereview")) for r in reviews
+    return len({r["commit_id"] for r in reviews
                 if r.get("agent") and r.get("verdict") == "changes" and (r.get("submitted_at") or "") >= since
                 and any(str(i).startswith("B") for i in r.get("findings", []))})
 
@@ -242,37 +242,15 @@ def child_attrs(child):
 
 
 class MemoryCodeHost:
-    """The CI label sync's code host (gate.ci_sync) in memory: `prs` {owner/repo: [{number, branch, head, labels,
-    labeled_at: {label: at}}]}, `checks` {sha: [{conclusion, at}]}; `edits` records each label write, added at `now`."""
+    """The code host in memory: `prs` {owner/repo: [{number, branch}]}."""
 
-    def __init__(self, prs=None, checks=None, now=None):
-        self.prs, self.checks, self.edits = prs or {}, checks or {}, []
-        self.now = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    def _pr(self, repository, number):
-        return next(p for p in self.prs[repository] if p["number"] == number)
+    def __init__(self, prs=None):
+        self.prs = prs or {}
 
     def ticket_for_pr(self, number, repository=None):
         """The ticket of the factory branch of PR `number` in `repository` (None: no such PR here)."""
         pr = next((p for p in self.prs.get(repository, []) if p["number"] == number), None)
         return ticket_from_ref(pr.get("branch")) if pr else None
-
-    def factory_prs(self, repository):
-        return [{k: p[k] for k in ("number", "head", "labels")} for p in self.prs[repository]
-                if ticket_from_ref(p.get("branch")) is not None]
-
-    def head_checks(self, repository, sha):
-        return list(self.checks.get(sha, []))
-
-    def label_added_at(self, repository, number, label):
-        return (self._pr(repository, number).get("labeled_at") or {}).get(label)
-
-    def edit_pr_labels(self, repository, number, add=(), remove=()):
-        pr = self._pr(repository, number)
-        pr["labels"] = [x for x in pr["labels"] if x not in remove] + list(add)
-        pr.setdefault("labeled_at", {}).update(dict.fromkeys(add, self.now))
-        self.edits.append((repository, number, list(add), list(remove)))
-
 
 class MemoryTracker(DescriptorPort):
     """Integer ids, stage in its own field. `fail_on` makes the effect kind raise."""
@@ -311,7 +289,7 @@ class MemoryTracker(DescriptorPort):
         t = self._t(ticket)
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
                 "round_verdict": None, "round_head": None, "attrs": [], "agent_runs": 0, "run_cap": 8, "handed_to_fix": False,
-                "pending_rereviews": [], "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False, "conflict": False,
+                "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False, "conflict": False,
                 "pr_state": "none", "risk": "high", "behind": False, "answered": False, "updated_at": None,
                 "review_labels": [], "assignees": []}
         t = {**t, "fix_rounds": fix_round_count(t["reviews"])} if "reviews" in t and "fix_rounds" not in t else t
