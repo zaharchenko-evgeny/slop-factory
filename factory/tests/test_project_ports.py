@@ -16,10 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 import project  # noqa: E402
-from gate_github import GitHubGateTracker  # noqa: E402
-from gate_port import MemoryTracker, UnsupportedStore  # noqa: E402
+from factory_plugins.github.gate import GitHubGateTracker  # noqa: E402
+from gate_port import MemorySystem, UnsupportedStore  # noqa: E402
 from test_youtrack_tracker import FakeYouTrack  # noqa: E402
-from youtrack_tracker import YouTrackTicketStore  # noqa: E402
+from factory_plugins.youtrack.store import YouTrackTicketStore  # noqa: E402
 
 FIXTURE = ROOT / "tests/fixtures/project"
 YOUTRACK = ROOT / "tests/fixtures/project-youtrack"
@@ -27,7 +27,7 @@ ISSUE = json.loads((YOUTRACK / "issue.json").read_text())
 
 
 def tracker(**ticket):
-    return MemoryTracker({7: {"stage": "draft", **ticket}}, project=project.load(FIXTURE))
+    return MemorySystem({7: {"stage": "draft", **ticket}}, project=project.load(FIXTURE))
 
 
 class ProjectPortsTest(unittest.TestCase):
@@ -95,7 +95,7 @@ class ProjectPortsTest(unittest.TestCase):
     def test_command_templates_fill_their_placeholder(self):
         descriptor = project.load(FIXTURE)
         descriptor["commands"]["implement-<tier>"] = {"store": {"label": "factory:implement-<tier>"}}
-        t = MemoryTracker({7: {"stage": "ready"}}, project=descriptor)
+        t = MemorySystem({7: {"stage": "ready"}}, project=descriptor)
         self.assertTrue(t.add_command(7, "implement-mid"))
         self.assertEqual(t.commands(7), ["implement-mid"])
         self.assertTrue(t.remove_command(7, "implement-*"))
@@ -118,7 +118,7 @@ class ProjectPortsTest(unittest.TestCase):
 
     def test_no_project_is_a_clear_error(self):
         with self.assertRaisesRegex(ValueError, "no project descriptor"):
-            MemoryTracker({7: {"stage": "ready"}}).state(7)
+            MemorySystem({7: {"stage": "ready"}}).state(7)
 
 
 

@@ -1,7 +1,7 @@
 """Batched GitHub GraphQL reads for the gate, returned in the REST shapes the gate already reads.
 
 `search_query` lists the factory's tickets in one paged search: open tickets with a stage label, plus tickets closed in
-the last `CLOSED_HOURS`. `batch_query` reads, for up to `BATCH` tickets at once, each ticket's issue, events, comments
+the last `gate_port.CLOSED_HOURS`. `batch_query` reads, for up to `BATCH` tickets at once, each ticket's issue, events, comments
 and native blockers; `to_rest` turns one ticket of its answer into the bodies of `issues/{n}`, `issues/{n}/events`,
 `issues/{n}/comments` and `issues/{n}/dependencies/blocked_by`, or leaves out a part GraphQL did not return in full.
 """
@@ -9,8 +9,9 @@ import base64
 import re
 from datetime import datetime, timedelta, timezone
 
+from gate_port import CLOSED_HOURS
+
 BATCH = 10  # 5 Nov: a 38-ticket query answered every timeline with totalCount 0 and no error; 10 matched REST
-CLOSED_HOURS = 48  # a ticket closed on merge while its finish run was lost (#567) is found for this long
 # The timeline item types REST /issues/{n}/events also returns: comments and cross-references are not events there.
 # Project events are left out: reading them needs the read:project scope, and the factory uses no GitHub project.
 EVENT_TYPES = ("ASSIGNED_EVENT CLOSED_EVENT COMMENT_DELETED_EVENT "
@@ -39,12 +40,14 @@ def rest_event(typename):
     return REST_NAMES.get(typename) or re.sub(r"(?<!^)(?=[A-Z])", "_", typename.removesuffix("Event")).lower()
 
 
-def search_query(repo, labels, now=None, closed_hours=CLOSED_HOURS):
-    """The two search strings (open, recently closed) for issues of `repo` with any of `labels`."""
+def search_query(repo, labels, now=None, closed_hours=CLOSED_HOURS, scope_label=None):
+    """The two search strings (open, recently closed) for issues of `repo` with any of `labels` (and, for an
+    environment's scope, `scope_label` too)."""
     any_label = ",".join(f'"{x}"' for x in labels)
+    scoped = f' label:"{scope_label}"' if scope_label else ""
     since = ((now or datetime.now(timezone.utc)) - timedelta(hours=closed_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return [f"repo:{repo} is:issue is:open label:{any_label}",
-            f"repo:{repo} is:issue is:closed closed:>={since} label:{any_label}"]
+    return [f"repo:{repo} is:issue is:open label:{any_label}{scoped}",
+            f"repo:{repo} is:issue is:closed closed:>={since} label:{any_label}{scoped}"]
 
 
 SEARCH = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){"

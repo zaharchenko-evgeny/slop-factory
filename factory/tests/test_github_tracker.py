@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Unit tests for factory/github_tracker.py with a stubbed gh. Run: uv run factory/tests/test_github_tracker.py"""
+"""Unit tests for factory/factory_plugins/github/tracker.py with a stubbed gh. Run: uv run factory/tests/test_github_tracker.py"""
 import json
 import os
 import re
@@ -20,8 +20,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
-import github_tracker  # noqa: E402
-from github_tracker import ClaimError, CountedRun, GitHubTracker, RateLimited  # noqa: E402
+from factory_plugins.github import tracker as github_tracker  # noqa: E402
+from factory_plugins.github.tracker import ClaimError, CountedRun, GitHubTracker, RateLimited  # noqa: E402
 
 STAGES = cfg.load()["tracker"]["stages"]
 REPO = "o/r"
@@ -301,7 +301,8 @@ class Counted(unittest.TestCase):
         self.assertEqual(run.calls, 3)
 
     def test_sweep_of_one_issue_reads_only_issues_linked_to_it(self):
-        import gate_github, gate
+        import gate
+        from factory_plugins.github import gate as gate_github
         seen = []  # 20 other open ready tickets exist, but the gh calls below answer for #7 only
 
         def run(args):
@@ -320,7 +321,7 @@ class Counted(unittest.TestCase):
 
 class MemoTest(unittest.TestCase):
     def test_reads_by_sha_and_the_pr_list_reach_gh_once_and_a_write_drops_them(self):
-        import github_tracker
+        from factory_plugins.github import tracker as github_tracker
         calls = []
         run = github_tracker.CountedRun(lambda args, **kw: (calls.append(args), "{}")[1])
         sha = "a" * 40

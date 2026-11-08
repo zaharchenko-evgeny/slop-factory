@@ -29,33 +29,53 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ENGINE = Path(__file__).resolve().parents[2]  # factory/: the core modules are imported by bare name
+sys.path.insert(0, str(ENGINE))
 import config as config_mod  # noqa: E402
 import deploy as deploy_mod  # noqa: E402
-import github_graphql as graphql  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
+import plugins  # noqa: E402
 from gate_port import ticket_from_ref  # noqa: E402
+from ports.system import Query  # noqa: E402
 
-HARNESS_CLI = {"claude-code": "claude", "codex": "codex", "junie": "junie", "pi": "pi"}
 
-
-def role_harness(config, role, focus=None):
-    """The harness a role runs in on the local target: its mode's, else the role's, else `targets.local.harness`.
+def role_harness(config, role, focus=None, tier=None):
+    """The harness a role runs in on the local target: its mode's, else the role's, else the `harness` of its tier's
+    model alias (`models.<alias>: {harness, model}`), else `targets.local.harness`, else claude-code.
     Air ignores it: there the platform runs the agent with `targets.air.models`."""
     r = (config.get("roles") or {}).get(role) or {}
     mode = ((r.get("modes") or {}).get(focus) or {}) if focus else {}
     local = (config.get("targets") or {}).get("local") or {}
-    return mode.get("harness") or r.get("harness") or local.get("harness") or "claude-code"
+    alias = local_models(config).get(tier) if tier else None
+    return (mode.get("harness") or r.get("harness") or (alias.get("harness") if isinstance(alias, dict) else None)
+            or local.get("harness") or "claude-code")
 
 
 def local_models(config):
     """Tier -> model on the local target: `targets.local.models` (the older top-level `models` still works)."""
     return ((config.get("targets") or {}).get("local") or {}).get("models") or config.get("models") or {}
+
+
+def local_model(config, tier):
+    """The model of `tier` on the local target: a `provider/model` string, or the `model` of a `{harness, model}` alias."""
+    m = local_models(config)[tier]
+    return m["model"] if isinstance(m, dict) else m
+
+
+def runner(harness, config=None):
+    """The agent runner (ports/agent.py) of `harness`, from the runner plugin that provides it: running a role in a
+    harness turns its plugin on (`claude-code` and `claude`: claude; `codex`, `junie`, `pi`). ValueError naming the
+    known harnesses for any other name."""
+    cls = plugins.registry(config or {}, use=(("agent", harness),)).impl("agent", harness)
+    if cls is None:
+        raise ValueError(plugins.impl_error(config or {}, "agent", harness, "harness"))
+    return cls()
+
+
 STATE, SEEN, WORKTREES = Path(".factory/local.json"), Path(".factory/local/seen.json"), Path(".factory/worktrees")
 TRIES_FILE = Path(".factory/local/tries.json")  # failed runs per event that are tried again
-FACTORY = ["uv", "run", "--quiet", str(Path(__file__).resolve().parent / "cli.py")]
+FACTORY = ["uv", "run", "--quiet", str(ENGINE / "cli.py")]
 WRITE_OUTPUTS = ("create-pr", "push-to-source")
-SKILL_DIR = {"claude-code": ".claude/skills", "codex": ".agents/skills", "pi": ".agents/skills", "junie": ".agents/skills"}
 
 
 def plan_local(nodes, config):
@@ -112,7 +132,8 @@ def install_skills(run, role, harness, tree):
     """Copy the role's skills (`roles/<role>/skills.txt`) and `factory-step` into the harness's project skill
     directory of the worktree `tree`, and keep that directory out of git."""
     listed = config_mod.resolve(f"roles/{role}/skills.txt")
-    target = tree / SKILL_DIR[harness]
+    skill_dir = runner(harness).skill_dir
+    target = tree / skill_dir
     sources = [config_mod.resolve(f"skills/{x}") for x in (listed.read_text().split() if listed.exists() else [])]
     for src in [*sources, config_mod.engine_root() / "skills/factory-step"]:
         shutil.copytree(src, target / src.name, dirs_exist_ok=True)
@@ -121,7 +142,7 @@ def install_skills(run, role, harness, tree):
         exclude = tree / path
         exclude.parent.mkdir(parents=True, exist_ok=True)
         text = exclude.read_text() if exclude.exists() else ""
-        line = SKILL_DIR[harness].split("/")[0] + "/skills/"
+        line = skill_dir.split("/")[0] + "/skills/"
         if line not in text.split():
             exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + line + "\n")
 
@@ -135,14 +156,19 @@ def same_repository(url, origin):
 def checks(config, run=subprocess.run, which=shutil.which):
     """(missing items, the state `--apply` records)."""
     local = (config.get("targets") or {}).get("local") or {}
-    harnesses = sorted({role_harness(config, e["role"], e["focus"]) for e in plan_local(nodes_mod.load(), config)
+    harnesses = sorted({role_harness(config, e["role"], e["focus"], e["tier"]) for e in plan_local(nodes_mod.load(), config)
                         if e["role"] != "script"} or {role_harness(config, None)})
     team = config_mod.team_root()
     workspace = Path(os.path.expanduser(local.get("workspace") or str(team.parent)))
     missing, login, checkouts = [], None, {}
     for harness in harnesses:
-        if not which(HARNESS_CLI[harness]):
-            missing.append(f"harness: `{HARNESS_CLI[harness]}` ({harness}) is not on PATH")
+        try:
+            probe = runner(harness, config).probe(which)
+        except ValueError as e:
+            missing.append(f"harness: {e}")
+            continue
+        if not probe.ok:
+            missing.append(f"harness: {probe.detail}")
     if not which("factory"):
         missing.append("factory: not on PATH (the agent runs `factory begin` and `factory end`; `uv tool install` the engine)")
     if not which("gh"):
@@ -182,8 +208,8 @@ def deploy(argv, run=subprocess.run, which=shutil.which):
             print(f"warning: role {role}: MCP connectors not provided locally: {', '.join(dict.fromkeys(names))}")
     print(f"local: {len(plan)} automations, harnesses {', '.join(state['harnesses'])}, checkouts {', '.join(state['checkouts'])}")
     if "--apply" in argv:
-        STATE.parent.mkdir(parents=True, exist_ok=True)
-        STATE.write_text(json.dumps({**state, "automations": [p["automation"] for p in plan]}, indent=2) + "\n")
+        surface = LocalSurface()
+        surface.apply({**surface.diff(plan, surface.read_state()), "record": state})
         print(f"wrote {STATE}")
     return 0
 
@@ -199,52 +225,56 @@ def lines(run, *args):
     return [json.loads(x) for x in done.stdout.splitlines() if x.strip()]
 
 
-def label_items(run, repo, labels):
-    """Every open issue and PR of `repo` carrying one of `labels`, from the paged poll search (10 nodes a page)."""
-    items, after = [], None
-    while True:
-        args = ["api", "graphql", "-f", f"query={graphql.POLL}", "-f", f"q={graphql.poll_query(repo, labels)}"]
-        done = sh(run, ["gh", *args, *(["-f", f"after={after}"] if after else [])])
+def gh_runner(run):
+    """`run` (subprocess.run's shape) as a tracker's `gh` runner: the arguments after `gh`, stdout back, a
+    RuntimeError on failure."""
+    def call(args, timeout=None, token=None):
+        done = run(["gh", *args], capture_output=True, text=True,
+                   **({"env": {**os.environ, "GH_TOKEN": token}} if token else {}))
         if done.returncode:
-            raise RuntimeError(f"gh api graphql: {done.stderr.strip()}")
-        page = json.loads(done.stdout)["data"]["search"]
-        items += page["nodes"]
-        if not page["pageInfo"]["hasNextPage"]:
-            return items
-        after = page["pageInfo"]["endCursor"]
+            raise RuntimeError(f"gh {' '.join(args[:3])}: {done.stderr.strip()}")
+        return done.stdout
+    return call
 
 
-def poll(plan, repo, run):
-    """(event id, plan entry, Air-like trigger payload) for each event the plan's triggers name, from GitHub reads.
-    A label event's id is GitHub's id of its latest `labeled` event, so a label added again is a new event.
-    All watched labels are read by one search; the REST id comes from the node id, or from `/events` when it does not decode."""
+def trackers(config, run):
+    """The trackers the poll reads, their `gh` calls made through `run`: the team's tracker (`gate.tracker_of`), or
+    with environments that have their own trackers (#1069) each environment's (`scopes.ScopedTracker`), one per
+    repository. Built per poll, so no read is answered from an earlier poll's memory."""
+    import gate
+    import scopes
+    gh = gh_runner(run)
+    if scopes.project_envs(config):
+        scoped = scopes.ScopedTracker(config, lambda c, env: gate.env_systems(c, env, run=gh), os.environ.get("FACTORY_ENV"))
+        found = [scoped.systems(env)[0] for env in scoped.candidates()]
+    else:
+        found = [gate.tracker_of(config, run=gh)]
+    return list({getattr(t, "repo", id(t)): t for t in found}.values())
+
+
+def poll(plan, source, run=None):
+    """(event id, plan entry, Air-like trigger payload) for each event the plan's triggers name, from the trackers'
+    `find` (`labeled`, `prs`, `closed`; ports/system.py Query). `source` is the trackers, or a repository read
+    through the GitHub tracker with `run`. A label event's id is the tracker's id of its latest `labeled` event, so a
+    label added again is a new event. All watched labels are read by one search per tracker."""
+    if isinstance(source, str):
+        source = [plugins.registry({}).impl("tracker", "github-issues").for_repository(source, gh_runner(run))]
     events, cache, labeled, watch = [], {}, {}, {}
 
-    def read(*args):
-        if args not in cache:
-            cache[args] = lines(run, *args)
-        return cache[args]
+    def find(query):
+        if query not in cache:
+            cache[query] = [x for t in source for x in t.find(query)]
+        return cache[query]
     for entry in plan:
         for t in entry["triggers"]:
             kind, label = t["eventType"], t["filters"].get("label")
             if kind in ("issues.labeled", "pull_request.labeled") and label:
-                watch[(kind, label)] = True
-    for item in label_items(run, repo, sorted({label for _, label in watch})) if watch else []:
-        n, pr = item["number"], item["__typename"] == "PullRequest"
-        ids = graphql.labeled_events(item)
-        for label in (x["name"] for x in item["labels"]["nodes"]):
-            key = ("pull_request.labeled" if pr else "issues.labeled", label)
-            if key not in watch:
-                continue
-            rid = ids.get(label) if ids is not None else None
-            if rid is None:  # an undecodable id, or a timeline paged past what was read: today's REST read
-                found = [e["id"] for e in read("api", "--paginate", f"repos/{repo}/issues/{n}/events", "--jq",
-                                              '.[] | select(.event == "labeled") | {id, name: .label.name}')
-                         if e["name"] == label]
-                rid = found[-1] if found else None
-            if rid is not None:
-                body = {"pull_request": {"number": n, "head": {"ref": item["headRefName"]}}} if pr else {"issue": {"number": n}}
-                labeled.setdefault(key, []).append((f"labeled:{rid}", {"eventType": key[0], "action": "labeled", "label": {"name": label}, **body}))
+                watch[("pr" if kind.startswith("pull_request") else "issue", label)] = True
+    for item in find(Query("labeled", values=tuple(sorted(watch)))) if watch else []:
+        n, label = item["number"], item["label"]
+        key = ("pull_request.labeled" if item["pr"] else "issues.labeled", label)
+        body = {"pull_request": {"number": n, "head": {"ref": item["branch"]}}} if item["pr"] else {"issue": {"number": n}}
+        labeled.setdefault(key, []).append((f"labeled:{item['event']}", {"eventType": key[0], "action": "labeled", "label": {"name": label}, **body}))
     for entry in plan:
         for t in entry["triggers"]:
             kind, label = t["eventType"], t["filters"].get("label")
@@ -252,33 +282,16 @@ def poll(plan, repo, run):
                 events += [(eid, entry, payload) for eid, payload in labeled.get((kind, label), [])]
             elif kind in ("pull_request.merged", "pull_request.synchronize"):
                 merged = kind.endswith("merged")
-                for item in read("pr", "list", "-R", repo, "--state", "merged" if merged else "open", "--limit", "20",
-                                 "--json", "number,headRefName,headRefOid", "--jq", ".[]"):
-                    pr = {"number": item["number"], "head": {"ref": item["headRefName"], "sha": item["headRefOid"]}}
-                    events.append((f"merged:{item['number']}" if merged else f"sync:{item['number']}:{item['headRefOid']}", entry,
+                for item in find(Query("prs", values=("merged" if merged else "open",))):
+                    pr = {"number": item["number"], "head": {"ref": item["branch"], "sha": item["head"]}}
+                    events.append((f"merged:{item['number']}" if merged else f"sync:{item['number']}:{item['head']}", entry,
                                    {"eventType": kind, "action": "closed" if merged else "synchronize",
                                     "pull_request": {**pr, **({"merged": True} if merged else {})}}))
             elif kind == "issues.closed":
-                for item in read("issue", "list", "-R", repo, "--state", "closed", "--limit", "20", "--json", "number,closedAt", "--jq", ".[]"):
-                    events.append((f"closed:{item['number']}:{item['closedAt']}", entry,
+                for item in find(Query("closed")):
+                    events.append((f"closed:{item['number']}:{item['closed_at']}", entry,
                                    {"eventType": kind, "action": "closed", "issue": {"number": item["number"]}}))
     return events
-
-
-def harness_argv(harness, model, write, prompt):
-    """The headless run of a harness (skills/factory-setup/references/harnesses.md); read-only nodes get no edit tools."""
-    if harness == "claude-code":
-        tools = "Bash,Read,Edit,Write,Grep,Glob" if write else \
-            "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(factory:*)"
-        # the prompt comes first: `--allowedTools` takes every following word that is not an option
-        return ["claude", "-p", prompt, "--output-format", "json", "--model", model.split("/")[-1], "--allowedTools", tools,
-                *(["--permission-mode", "acceptEdits"] if write else [])]
-    if harness == "codex":  # `factory begin` and `end` call GitHub, so even a reviewer's sandbox needs the network
-        return ["codex", "exec", "--json", "-m", model.split("/")[-1], "--sandbox", "workspace-write",
-                "-c", "sandbox_workspace_write.network_access=true", prompt]
-    if harness == "junie":  # Junie keeps its terminal tools; a read-only node is held by the gate and by no push
-        return ["junie", "--task", prompt, "--model", model.split("/")[-1], "--output-format", "json"]
-    return ["pi", "-p", "--model", model, prompt]
 
 
 def worktree(run, checkout, path, start, branch=None):
@@ -330,10 +343,10 @@ def run_event(entry, payload, state, config, graph, run):
     others = "".join(f"\n- `{name}`: `{path}`" for name, path in trees.items() if name != primary)
     prompt = deploy_mod.agent_prompt(entry["node"], node, config, entry["automation"], entry["focus"]) + (
         f"\n\nThe ticket's other repositories are checked out on its branch:{others}" if others else "")
-    model = local_models(config)[entry["tier"]]
-    harness = role_harness(config, node["role"], entry["focus"])
+    model = local_model(config, entry["tier"])
+    harness = role_harness(config, node["role"], entry["focus"], entry["tier"])
     install_skills(run, node["role"], harness, trees[primary])
-    done = sh(run, harness_argv(harness, model, write, prompt), cwd=trees[primary],
+    done = sh(run, runner(harness, config).command(prompt, model, write), cwd=trees[primary],
               env={**os.environ, "FACTORY_TEAM": state["factory"]})
     if done.returncode:
         return f"harness failed: {(done.stdout + done.stderr).strip()[-300:]}"
@@ -383,7 +396,7 @@ def main(argv, run=subprocess.run, sleep=time.sleep, now=lambda: datetime.now(ti
     tries = json.loads(TRIES_FILE.read_text()) if TRIES_FILE.exists() else {}
     while True:
         try:
-            events = poll(plan, config["tracker"]["repository"], run)
+            events = poll(plan, trackers(config, run))
         except (RuntimeError, ValueError) as e:  # GitHub unreachable or rate limited: try again next poll
             print(json.dumps({"poll failed": str(e)[-300:]}), flush=True)
             if "--once" in argv:
@@ -420,6 +433,33 @@ def main(argv, run=subprocess.run, sleep=time.sleep, now=lambda: datetime.now(ti
         if "--once" in argv:
             return 0
         sleep(state.get("poll_seconds", 60))
+
+
+class LocalSurface:
+    """The local surface (ports/surface.py): this laptop's loop, recorded in `.factory/local.json`."""
+    name = "local"
+
+    def plan(self, nodes, config):
+        return plan_local(nodes, config)
+
+    def read_state(self):
+        return json.loads(STATE.read_text()) if STATE.exists() else None
+
+    def diff(self, plan, state):
+        """The automations to add and remove, and the full list `apply` records."""
+        want, have = [p["automation"] for p in plan], set((state or {}).get("automations") or [])
+        return {"add": [a for a in want if a not in have], "remove": sorted(have - set(want)), "automations": want}
+
+    def apply(self, diff):
+        """Record the laptop (`diff["record"]`, the deploy checks' state, else the recorded one) with the plan's
+        automations."""
+        record = diff.get("record") or self.read_state() or {}
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        STATE.write_text(json.dumps({**record, "automations": diff["automations"]}, indent=2) + "\n")
+
+    def outputs(self):
+        """A write output pushes the node's branch (and, for create-pr, opens the PR); every other is read-only."""
+        return {"read-only", *WRITE_OUTPUTS}
 
 
 if __name__ == "__main__":
