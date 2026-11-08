@@ -217,7 +217,7 @@ def consistency(tracker, stages, limits, now, dry_run, results, progress):
         if comment:
             if any(c.startswith(comment) for c in tracker.comment_bodies(n, pr)):
                 return
-            effects = [*effects, {"kind": "comment", "value": comment, "on": on}]
+            effects = [*effects, {"kind": "comment", "value": comment, "on": on, **({"pr": pr} if pr else {})}]
         results.append(r)
         if not dry_run:
             for e in effects:

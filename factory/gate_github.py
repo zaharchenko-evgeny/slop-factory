@@ -1074,7 +1074,10 @@ class GitHubGateTracker(DescriptorPort):
             if e.get("run_id") and "Factory-Run:" not in body:
                 body += f"\n\nFactory-Run: {e['run_id']}"
             target = e.get("on") or "issue"
-            pr = self._pr(n) if target == "pr" else None
+            if target == "pr" and e.get("pr"):  # an explicit PR (reconcile: one comment per open PR)
+                pr = self._api(f"pulls/{e['pr']}", repo=self.pr_repo)
+            else:
+                pr = self._pr(n) if target == "pr" else None
             if target == "pr" and pr is None:
                 raise RuntimeError(f"comment: no PR for ticket {n}")
             if pr is None:

@@ -621,5 +621,30 @@ class GitHubConsistencyViewTest(unittest.TestCase):
         self.assertEqual(view["orphan_prs"], [{"number": 13, "ticket": 3}])
 
 
+class GitHubOrphanCommentTargetTest(unittest.TestCase):
+    """An `orphan-pr` comment lands on the PR it names, not on the ticket's newest open PR."""
+
+    def test_comment_goes_to_the_named_pr_for_each_open_pr(self):
+        from gate_github import GitHubGateTracker
+        calls = []
+
+        def gh(args, **kw):
+            if args[:2] == ["issue", "comment"]:
+                calls.append(args[2])
+                return ""
+            path = next(a for a in args if a.startswith("repos/"))
+            if path.startswith("repos/o/r/pulls?"):
+                return "\n".join(json.dumps({"number": k, "state": "open", "head": {"ref": "ez/3-a", "repo": {"full_name": "o/r"}}})
+                                 for k in (11, 12))
+            if path.startswith("repos/o/r/pulls/"):
+                return json.dumps({"number": int(path.rsplit("/", 1)[1]), "state": "open", "mergeable": True})
+            return ""
+
+        tracker = GitHubGateTracker("o/r", {}, "bot", run=gh)
+        for number in (11, 12):
+            tracker.apply({"ticket": 3, "kind": "comment", "value": f"[factory] orphan {number}", "on": "pr", "pr": number})
+        self.assertEqual(calls, ["11", "12"])
+
+
 if __name__ == "__main__":
     unittest.main()
