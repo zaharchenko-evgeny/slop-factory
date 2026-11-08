@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -251,6 +252,70 @@ class DoctorTest(unittest.TestCase):
         got = run(FakeGh(deny=("run view",)))
         self.assertEqual(got["read:actions-run-logs"]["result"], "denied")
 
+
+
+class FakeGate:
+    """A gate tracker with fixed facts per ticket."""
+
+    def __init__(self, facts):
+        self._facts = facts
+
+    def sweep_tickets(self, stages, open_only=False):
+        return [n for n, f in self._facts.items() if f["stage"] in stages]
+
+    def facts(self, n):
+        return self._facts[n]
+
+    stale_facts = facts
+
+
+class EngineProbeTest(unittest.TestCase):
+    def test_ci_label_against_ci_fact_names_ticket_and_both_values(self):
+        gate = FakeGate({7: {"stage": "in-review", "ci": "none", "pr_labels": ["factory:ci-green"]}})
+        got = doctor.facts_probe(gate, ["in-review"], lambda: [])
+        self.assertEqual(got["result"], "fail")
+        self.assertIn("#7 ci: gate fact none, GitHub label factory:ci-green", got["detail"])
+
+    def test_merged_pr_before_merged_stage_and_missing_frontier_fail(self):
+        gate = FakeGate({8: {"stage": "approved", "ci": "green", "pr_state": "merged", "pr": 3, "pr_labels": []},
+                         9: {"stage": "ready", "blockers_open": 0, "assignees": []}})
+        got = doctor.facts_probe(gate, ["approved", "ready"], lambda: [])
+        self.assertIn("#8 stage: gate fact approved, GitHub PR #3 merged", got["detail"])
+        self.assertIn("#9 frontier", got["detail"])
+        self.assertEqual(doctor.facts_probe(gate, ["approved", "ready"], lambda: [9])["detail"].count("#9"), 0)
+
+    def test_matching_facts_pass(self):
+        gate = FakeGate({7: {"stage": "in-review", "ci": "green", "pr_labels": ["factory:ci-green"]}})
+        self.assertEqual(doctor.facts_probe(gate, ["in-review"], lambda: [])["result"], "ok")
+
+    def test_deploy_drift_allows_only_label_description_updates(self):
+        labels = "update label factory:ready in o/r (description)\nunchanged\n"
+        self.assertEqual(doctor.drift_probe(lambda: (labels, 0))["result"], "ok")
+        got = doctor.drift_probe(lambda: (labels + "update automation [factory:review] (prompt)\n", 0))
+        self.assertEqual((got["result"], got["detail"]), ("fail", "update automation [factory:review] (prompt)"))
+        self.assertEqual(doctor.drift_probe(lambda: ("update label x in o/r (color, description)\n", 0))["result"], "fail")
+        self.assertEqual(doctor.drift_probe(lambda: ("", 1))["result"], "fail")
+
+    def test_probe_that_passes_again_closes_its_ticket_with_a_comment(self):
+        gh = FakeGh(open_tickets=[(5, "Doctor: factory:facts fails"), (6, "Doctor: deploy:drift fails")])
+        doctor.report_engine(REPO, [{"probe": "factory:facts", "result": "ok", "detail": ""},
+                                    {"probe": "deploy:drift", "result": "fail", "detail": "x"}], gh)
+        closes = [c for c in gh.calls if c[:2] == ["issue", "close"]]
+        self.assertEqual([c[2] for c in closes], ["5"])
+        self.assertIn("passes again", closes[0][closes[0].index("--comment") + 1])
+        self.assertTrue(any(c[:3] == ["issue", "comment", "6"] for c in gh.calls))
+
+    def test_stuck_ticket_is_listed_with_its_failing_guard(self):
+        old = {"ready": "2026-01-01T00:00:00Z"}
+        facts = {"stage": "ready", "attrs": ["factory:ready"], "label_at": {"factory:ready": "2026-01-01T00:00:00Z"},
+                 "ci": "none", "blockers_open": 0}
+        nodes = {"dev": {"when": {"stage": "in-dev"}}}
+        now = datetime(2026, 1, 1, 7, tzinfo=timezone.utc)
+        got = doctor.stuck_tickets(FakeGate({4: facts}), [4], [("dev", "factory:ready", 30)], nodes, now)
+        self.assertEqual([n for n, _ in got], [4])
+        self.assertIn("dev when.stage", got[0][1])
+        soon = datetime(2026, 1, 1, 5, tzinfo=timezone.utc)
+        self.assertEqual(doctor.stuck_tickets(FakeGate({4: facts}), [4], [("dev", "factory:ready", 30)], nodes, soon), [])
 
 
 class SkillInstalledTest(unittest.TestCase):

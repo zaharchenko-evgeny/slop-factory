@@ -577,6 +577,8 @@ def to_project(defn):
         repos = sorted(e.get("repositories") or [], key=lambda r: not r.get("main"))
         help_ = environment_secrets(defn, en)
         environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": list(help_),
+                            # where the gate may write in this environment: the main repository, or `write: true` (#994)
+                            "writable": [names[r["repo"]] for r in repos if r.get("main") or r.get("write")],
                             "secret_help": help_,
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP}
 

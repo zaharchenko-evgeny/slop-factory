@@ -76,6 +76,7 @@
         "additionalProperties": false,
         "properties": {
           "repositories": {"type": "array", "items": {"type": "string"}},
+          "writable": {"type": "array", "items": {"type": "string"}},
           "domains": {"type": "array", "items": {"type": "string"}},
           "secrets": {"type": "array", "items": {"type": "string"}},
           "secret_help": {"type": "object", "additionalProperties": {"type": "string"}},

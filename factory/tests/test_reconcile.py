@@ -45,6 +45,18 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(results[0]["node"], "review")
         self.assertIn('"factory:review-behaviour"', logged(t, "label"))
 
+    def test_landed_review_marker_reapplies_outcome_without_refiring_reviewer(self):
+        ticket = {"stage": "in-review", "pr": 5, "pr_state": "open", "ci": "green", "since": OLD,
+                  "head": "abc", "pr_labels": ["factory:review-behaviour"],
+                  "log": [["label", '"factory:review-behaviour"']],
+                  "reviews": [{"agent": True, "focus": "behaviour", "verdict": "changes",
+                               "commit_id": "abc", "round": 1}]}
+        t, results, failed = run(ticket)
+        self.assertFalse(failed)
+        self.assertEqual((results[0]["reconcile"], results[0]["node"], results[0]["outcome"]),
+                         ("reapply", "review", "changes"))
+        self.assertNotIn("factory:review-behaviour", t.facts(1)["pr_labels"])
+
     def test_stale_review_label_without_review_refired(self):
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": FRESH,
                              "focus_missing": ["behaviour"],
@@ -280,6 +292,19 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(logged(t, "label"), ['"factory:fix"'])
         self.assertEqual(t.get_stage(t.tickets[1]), "changes-requested")
 
+    def test_landed_review_marker_replays_the_reported_outcome_of_the_definition(self):
+        """The review is named after its node; a split approval replays the outcome its marker names."""
+        review = {"agent": True, "focus": "review-high", "verdict": "approve", "outcome": "approve-risky",
+                  "commit_id": "abc123def4567", "round": 1}
+        t, results = self.recover(self.pr(ci="green", attrs=["risk:high"], pr_labels=["factory:review-high"],
+                                          label_at={"factory:review-high": OLD}, reviews=[review]))
+        self.assertEqual([(r["reconcile"], r["node"], r["outcome"]) for r in results],
+                         [("reapply", "review-high", "approve-risky")])
+        self.assertEqual(t.get_stage(t.tickets[1]), "approved")
+        self.assertNotIn("factory:review-high", t.facts(1)["pr_labels"])
+        self.assertIn('"factory:needs-human"', logged(t, "label"))
+        self.assertNotIn("factory:review-low", logged(t, "label"))
+
     def test_conflict_uses_the_fix_stage_of_the_definition(self):
         import copy
         defn = copy.deepcopy(self.defn)
@@ -334,6 +359,67 @@ class RecoverDefinitionTest(unittest.TestCase):
         young = (NOW - timedelta(minutes=45)).isoformat()
         self.assertEqual(self.recover(self.pr(**labels, label_at={"factory:review-low": young}))[1], [])
         self.assertEqual(self.recover(self.pr(**labels, blockers_open=1, label_at={"factory:review-low": "2026-11-03T09:00:00Z"}))[1], [])
+
+    def missed_twice(self):
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": OLD})
+        ticket["log"] = [("comment", json.dumps(f"{reconcile.PREFIX} stage=in-review head=abc123def456 "
+                                                "re-fired factory:review-low (no review-low outcome)"))]
+        return ticket
+
+    def run_many(self, count):
+        tr = MemoryTracker({i: self.missed_twice() for i in range(1, count + 1)})
+        tracker = self.config["tracker"]
+        results = reconcile.recover_definition(tr, self.defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
+                                               self.config["limits"], now=NOW)
+        return tr, results
+
+    def test_three_second_misses_in_one_run_refire_instead_of_blocking(self):
+        tr, results = self.run_many(3)
+        self.assertEqual({(r["reconcile"], r.get("systemic")) for r in results}, {("refire", True)})
+        self.assertEqual({tr.get_stage(tr.tickets[i]) for i in (1, 2, 3)}, {"in-review"})
+
+    def test_one_second_miss_still_blocks(self):
+        tr, results = self.run_many(1)
+        self.assertEqual([r.get("reconcile") for r in results], ["blocked"], results)
+        self.assertEqual(tr.get_stage(tr.tickets[1]), "blocked")
+
+    def test_systemic_misses_open_one_doctor_ticket_and_a_clean_run_closes_it(self):
+        calls, open_titles = [], []
+
+        def gh(args, token=None):
+            calls.append(args)
+            return json.dumps([{"number": 9, "title": t} for t in open_titles]) if args[:2] == ["issue", "list"] else ""
+        reconcile.report_systemic(self.config, [{"ticket": 1, "node": "review-low"}], run=gh)
+        create = next(c for c in calls if c[:2] == ["issue", "create"])
+        self.assertEqual(create[create.index("--title") + 1], "Doctor: runs-without-outcome fails")
+        open_titles.append("Doctor: runs-without-outcome fails")
+        calls.clear()
+        reconcile.report_systemic(self.config, [{"ticket": 1, "node": "review-low"}], run=gh)
+        self.assertFalse([c for c in calls if c[:2] in (["issue", "create"], ["issue", "comment"])])
+        reconcile.report_systemic(self.config, [], run=gh)
+        self.assertEqual([c[:3] for c in calls if c[:2] == ["issue", "close"]], [["issue", "close", "9"]])
+
+    def test_a_failed_end_on_this_head_blocks_once_instead_of_refiring(self):
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": OLD})
+        failure = ("[factory] end failed: node=review-low head=abc123def456 outcome=approve-low\n\n```\n"
+                   "RuntimeError: HTTP 403: Resource not accessible by integration\n```\n\nThe outcome did not land; x")
+        ticket["log"] = [("comment", json.dumps(failure))]
+        t, results = self.recover(ticket)
+        self.assertEqual([r["reconcile"] for r in results], ["end-failed"])
+        self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
+        note = logged(t, "comment")[-1]
+        self.assertIn("HTTP 403", note)
+        self.assertNotIn('"factory:review-low"', logged(t, "label"))  # not re-fired
+        ticket.update(stage="in-review", log=[("comment", json.dumps(failure)), ("comment", note)])
+        self.assertEqual(self.recover(ticket)[1], [])  # one notice per stage and head
+
+    def test_a_failed_end_on_an_older_head_does_not_stop_the_refire(self):
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": OLD})
+        ticket["log"] = [("comment", json.dumps("[factory] end failed: node=review-low head=000000000000 outcome=x\n\nerr"))]
+        self.assertEqual([r["reconcile"] for r in self.recover(ticket)[1]], ["refire"])
 
     def test_needs_human_ticket_is_left_alone(self):
         t, results = self.recover(self.pr(conflict=True, attrs=["factory:needs-human"]))

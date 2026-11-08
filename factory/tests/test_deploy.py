@@ -867,9 +867,14 @@ class PlanTest(unittest.TestCase):
         automations = {a["name"]: a for a in plan["automations"]}
         for name in ("doctor", "doctor-write", "doctor-ops"):
             prompt = automations[f"[Slop factory] {name}"]["prompt"]
-            self.assertIn("Run the installed `factory doctor` command exactly once", prompt)
-            self.assertIn("in the foreground with no arguments", prompt)
-            self.assertIn("Do not use `uv run`, `--help` or add arguments", prompt)
+            if name == "doctor-ops":
+                self.assertIn("Run the installed `factory doctor --engine` command exactly once", prompt)
+                self.assertIn("in the foreground with only the `--engine` argument", prompt)
+                self.assertIn("Do not use `uv run`, `--help` or add other arguments", prompt)
+            else:
+                self.assertIn("Run the installed `factory doctor` command exactly once", prompt)
+                self.assertIn("in the foreground with no arguments", prompt)
+                self.assertIn("Do not use `uv run`, `--help` or add arguments", prompt)
             self.assertIn("every JSON probe line", prompt)
             self.assertIn("exit code", prompt)
             self.assertIn("temporary probe issue", prompt)
