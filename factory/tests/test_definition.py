@@ -138,6 +138,39 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["notify"]["triggers"].append({"webhook": "nope"}))
         self.assertError("unknown-webhook: nodes.notify: nope")
 
+    def test_event_node_in_non_tracker_environment_is_deaf_trigger(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team"))
+        self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
+
+    def test_pr_label_node_outside_pr_repository_is_deaf_trigger(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["automerge"]["outcomes"]["needs-human"]["effects"][-1].update(on="pr"))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(
+            environment="team", triggers=[{"label": "factory:needs-human"}]))
+        self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
+
+    def test_pr_and_ci_triggers_outside_code_repositories_are_deaf_triggers(self):
+        for trigger in ({"pr": "merged"}, {"ci": "failed"}):
+            self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team", triggers=[trigger]))
+            self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
+
+    def test_scheduled_node_in_any_environment_is_fine(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(environment="team"))
+        self.assertEqual(self.errors(), [])
+
+    def test_pr_label_node_in_pr_repository_environment_is_fine(self):
+        def add_pr_repository(factory):
+            factory["environments"]["engine"]["repositories"].append({"repo": "owner/web"})
+            factory["environments"]["web"] = {"repositories": [{"repo": "owner/web", "main": True}]}
+        self.edit("factory.yaml", add_pr_repository)
+        self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(
+            environment="web", outcomes={**w["nodes"]["retro"]["outcomes"],
+                                         "proposed": {"effects": [{"label": "factory:knowledge-review", "on": "pr"},
+                                                                      {"label": "factory:review-low", "on": "pr"}]}}))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["review-low"].update(
+            environment="web", triggers=[{"label": "factory:review-low"}]))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["knowledge-review"].update(environment="web"))
+        self.assertEqual(self.errors(), [])
+
     def test_one_main_repository(self):
         self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(main=True))
         self.assertError("main-repository: environments.engine")
@@ -331,6 +364,20 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(prompt="Scope it."))
         self.assertError("node-prompt: nodes.intake")
 
+    def test_compile_lists_the_writable_repositories_of_each_environment(self):
+        import definition
+        envs = definition.to_project(definition.load(self.root))[0]["environments"]
+        for name, env in envs.items():
+            with self.subTest(env=name):
+                self.assertTrue(set(env["writable"]) <= set(env["repositories"]))
+                self.assertIn(env["repositories"][0], env["writable"])  # the main repository is always writable
+
+    def test_issues_token_env_setting_passes_validation(self):
+        self.edit("factory.yaml", lambda f: f["defaults"].setdefault("settings", {}).update(issues_token_env="FACTORY_ISSUES_TOKEN"))
+        run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
+                             text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
+        self.assertEqual((run.returncode, run.stdout.strip()), (0, "factory: ok"), run.stdout + run.stderr)
+
     def test_settings_merge_order(self):
         defn = definition.load(self.root)
         s = definition.settings(defn, "fix")
@@ -521,6 +568,31 @@ class DefinitionTest(unittest.TestCase):
                     with self.subTest(node=node, conflict=conflict):
                         code, out = gate.check(node, {"id": "e1", "ticket": "7"}, t, n, config.load())
                         self.assertEqual((code, out["merge_main"]), (gate.GO, want))
+        finally:
+            config.set_team(before)
+
+    def test_a_failed_review_write_leaves_labels_and_stage_as_they_were(self):
+        import config
+        import gate
+        import nodes as nodes_mod
+        from gate_port import MemoryTracker
+        before = config._team
+        config.set_team(ROOT / "tests/fixtures/slop")  # its review outcomes replace the risk label (#998)
+        try:
+            n = nodes_mod.load()
+            t = MemoryTracker({"7": {"stage": "in-review", "pr": 5, "head": "h1", "ci": "green", "attrs": ["risk:low"],
+                                     "pr_labels": ["factory:review-low"]}})
+            apply = t.apply
+
+            def failing(e):
+                if e["kind"] == "review":
+                    raise RuntimeError("HTTP 403: Resource not accessible by integration")
+                return apply(e)
+            t.apply = failing
+            with self.assertRaises(RuntimeError):
+                gate.apply("review-low", "approve-risky", {"ticket": "7", "summary": "ok"}, t, n)
+            f = t.facts("7")
+            self.assertEqual((f["stage"], "risk:low" in f["attrs"]), ("in-review", True))
         finally:
             config.set_team(before)
 

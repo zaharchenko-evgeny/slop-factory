@@ -96,6 +96,23 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-review")
 
+    def test_a_failing_apply_reports_the_error_on_the_ticket(self):
+        tracker = self.tracker()
+        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(cli.STATE.read_text())["ticket"], 7)
+        reports = []
+
+        def failing_gate(engine, argv, team=None, stderr=False):
+            print("RuntimeError: HTTP 403: Resource not accessible by integration", file=sys.stderr)
+            return 1
+        with mock.patch.object(cli, "run_gate", failing_gate), \
+                mock.patch.object(cli, "report_end_failure", lambda state, outcome, err: reports.append((state["node"], outcome, err))):
+            code, _ = self.run_cli("end", "done")
+        self.assertEqual(code, 1)
+        self.assertEqual([(n, o) for n, o, _ in reports], [("implement", "done")])
+        self.assertIn("HTTP 403", reports[0][2])
+
     def test_end_env_broken_records_check_and_parks_ticket(self):
         tracker = self.tracker()
         code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
@@ -426,6 +443,27 @@ class CrashReportTest(unittest.TestCase):
             calls, run = self.gh([])
             cli.report_crash("begin", RuntimeError("x"), run=run)
             self.assertEqual(calls, [])
+
+
+class EndFailureTest(unittest.TestCase):
+    """#997: a failed `factory end` leaves one comment on the ticket that reconcile reads."""
+    def test_comment_names_node_head_outcome_and_the_error(self):
+        from unittest import mock
+        calls = []
+        with mock.patch.object(cli.config, "load", lambda: {"tracker": {"repository": "o/r"}}):
+            cli.report_end_failure({"ticket": 7, "node": "review-low", "head": "abc123def456"}, "approve-low",
+                                   "Traceback\nRuntimeError: HTTP 403: Resource not accessible by integration\n",
+                                   run=lambda args, **kw: calls.append(args))
+        args = calls[0]
+        self.assertEqual(args[:5], ["gh", "issue", "comment", "7", "-R"])
+        body = args[args.index("--body") + 1]
+        self.assertTrue(body.startswith("[factory] end failed: node=review-low head=abc123def456 outcome=approve-low"))
+        self.assertIn("HTTP 403", body)
+
+    def test_no_ticket_no_comment(self):
+        calls = []
+        cli.report_end_failure({"node": "reconcile"}, "reconciled", "boom", run=lambda args, **kw: calls.append(args))
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":
