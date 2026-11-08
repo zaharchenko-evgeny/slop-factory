@@ -392,6 +392,56 @@ def _resolved_ids(body):
     return ids
 
 
+def _open_blocking(reviews, focus):
+    """Blocking finding ids still open in the agent reviews of `focus`: a `B<n>` stays open until a later review of
+    the focus says it is resolved or approves."""
+    open_ids = set()
+    for r in reviews:
+        if not r.get("agent") or (r.get("focus") or "review") != (focus or "review"):
+            continue
+        open_ids -= _resolved_ids(r.get("body") or "")
+        if r.get("verdict") == "approve":
+            open_ids.clear()
+        open_ids |= {str(i) for i in r.get("findings") or [] if str(i).startswith("B")}
+    return open_ids
+
+
+def rereview_scope(effects, payload, facts, focus, tracker, ticket):
+    """Why a re-review's change request is refused, or None (#1048). On a re-review (the focus has an agent review at
+    an earlier head), each blocking finding must continue an open earlier finding (its id), sit on a file whose PR
+    patch changed since the last reviewed head (within the fix's hunks when the line is known), or say why the earlier round could not see it (`unseen`). Anything
+    else belonged in the earlier round: report it as minor. Skipped when the patches cannot be compared."""
+    if not any(e["kind"] == "review" and str(e["value"]).startswith("request-changes") for e in effects):
+        return None
+    focus = focus or payload.get("focus")
+    head = facts.get("head")
+    blocking = [f for f in payload.get("findings") or [] if isinstance(f, dict) and f.get("severity") == "blocking"]
+    earlier = [r for r in facts.get("reviews") or [] if r.get("agent") and (r.get("focus") or "review") == (focus or "review")
+               and r.get("commit_id") and r.get("commit_id") != head]
+    if not blocking or not earlier or not head or not hasattr(tracker, "changed_since"):
+        return None
+    changed = tracker.changed_since(ticket, earlier[-1]["commit_id"])
+    if changed is None:
+        return None
+    open_ids = _open_blocking(facts.get("reviews") or [], focus)
+    def touched(location):  # `path[:line]` within a changed hunk (3 lines of margin), or anywhere in a changed file
+        path, _, line = str(location or "").partition(":")
+        if path not in changed:
+            return False
+        hunks, line = changed[path] if isinstance(changed, dict) else None, line.split("-")[0].split(":")[0]
+        if hunks is None or not line.isdigit():
+            return True
+        return any(a - 3 <= int(line) <= b + 3 for a, b in hunks)
+    out = [f for f in blocking if str(f.get("id")) not in open_ids and not f.get("unseen") and not touched(f.get("file"))]
+    if not out:
+        return None
+    named = ", ".join(f"{f.get('id')} ({str(f.get('file') or '').split(':')[0]})" for f in out)
+    return (f"re-review scope: {named}: new blocking findings on code the fix did not change since "
+            f"{earlier[-1]['commit_id'][:12]}. The earlier round should have raised them. Report each as `--minor` "
+            f"(a follow-up), keep the id of the open earlier finding it continues, or append "
+            f"`| unseen: <why the earlier round could not see it>`.")
+
+
 def status(facts, limit=2000, cut=160):
     """The short computed `status` of `factory begin`: stage, PR, CI, fix rounds and, per review focus, the latest
     review with its open blocking findings (a `B<n>` finding stays open until a later review of the focus says it is resolved)."""
@@ -872,6 +922,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             if e["kind"] in ("review", "comment"):
                 e["notes"] = notes
     facts = tracker.facts(ticket)
+    if scope := rereview_scope(effects, payload, facts, focus, tracker, ticket):
+        raise Bad(scope)
     comment_after = []
     if any(e["kind"] in COMMENT_EFFECTS for e in effects):
         moved, comment_after = comment_moves([e for e in effects if e["kind"] in COMMENT_EFFECTS], name, payload, facts,

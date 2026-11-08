@@ -149,14 +149,17 @@ def id_and(text, form):
 
 
 def finding(text, severity):
-    """`<id> <file> <finding> [| case: <repro>]`; a blocking finding needs its case."""
+    """`<id> <file> <finding> [| case: <repro>] [| unseen: <why an earlier round could not see it>]`; a blocking
+    finding needs its case. `unseen` lets a re-review raise a new blocking finding on a file the fix did not change."""
+    text, unseen = parted(text, " | unseen:", "finding unseen") if " | unseen:" in text else (text, None)
     text, case = parted(text, " | case:", "finding case") if " | case:" in text else (text, None)
     parts = text.split(None, 2)
     if len(parts) < 3:
         raise ValueError(f"a finding is `<id> <file> <finding>`: {text!r}")
     if severity == "blocking" and not case:
         raise ValueError(f"a blocking finding needs `| case: <repro>`: {text!r}")
-    return {"id": parts[0], "file": parts[1], "finding": parts[2], "severity": severity, **({"case": case} if case else {})}
+    return {"id": parts[0], "file": parts[1], "finding": parts[2], "severity": severity, **({"case": case} if case else {}),
+            **({"unseen": unseen} if unseen else {})}
 
 
 def lesson(text):
@@ -201,6 +204,11 @@ def handoff_of(a):
                                    ("reply", a.reply), ("to", a.to), ("text", a.text), ("message", a.message), ("assignee", a.assignee),
                                    ("problem", a.problem),
                                    ("recommended", a.recommended)) if v is not None and v != ""})
+    for item in a.field:  # `--field KEY=VALUE`: any payload field without its own option (#1048)
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip():
+            raise ValueError(f"expected --field KEY=VALUE: {item!r}")
+        data[key.strip().replace("-", "_")] = value
     for key, items in (("links", [dict(zip(("title", "url"), parted(t, " | ", "--link 'TITLE | URL'"))) for t in a.link]),
                        ("options", a.option)):
         if items:
@@ -230,7 +238,7 @@ def end_parser():
     p.add_argument("--failing-check")
     for opt, dest in (("pass", "passed"), ("fail", "failed"), ("not-run", "not_run"), ("blocking", None), ("minor", None),
                       ("fixed", None), ("disputed", None), ("slice", None), ("propose-check", None), ("note-file", None),
-                      ("lesson", None), ("link", None), ("option", None)):
+                      ("lesson", None), ("link", None), ("option", None), ("field", None)):
         p.add_argument(f"--{opt}", action="append", default=[], **({"dest": dest} if dest else {}))
     return p
 
