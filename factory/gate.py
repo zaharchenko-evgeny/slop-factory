@@ -42,6 +42,7 @@ from gate_space import SpaceCodeHost, from_config as space_from_config, space_ev
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
 from github_tracker import project_repositories  # noqa: E402
 import vocab  # noqa: E402
+import definition  # noqa: E402
 
 ROOT = nodes_mod.ROOT
 GO, NO_GO, BAD, FAILED = 0, 10, 2, 1
@@ -1181,7 +1182,7 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
         for _ in range(4):  # a ticket's longest walk: in-review, approved, done
             try:
                 facts = tracker.facts(n)
-                plan = sweep_plan(facts, auto_merge, default_tier, mode, start_waits)
+                plan = definition.plan(nodes, facts, auto_merge, default_tier, mode, start_waits)
                 if plan is None or (n, facts["stage"]) in seen:
                     if progress:
                         progress({"ticket": n, "stage": facts["stage"], "outcome": "skipped"})

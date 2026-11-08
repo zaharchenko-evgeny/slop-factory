@@ -895,3 +895,56 @@ def config(defn):
                                       "stages": {name: s["store"]["label"] for name, s in states.items()},
                                       "stage_kinds": {name: s["kind"] for name, s in states.items()},
                                       "commands": {name: c["store"] for name, c in descriptor["commands"].items()}}}
+
+
+# --- The sweep's decisions, read from the node graph ------------------------------------------------
+def _allows(graph, node, outcome, stage):
+    """True when the graph's `node` has `outcome` and it may run from `stage` (its `from`, when it lists any)."""
+    out = ((graph.get("nodes") or {}).get(node) or {}).get("outcomes", {}).get(outcome)
+    return out is not None and out.get("enabled") is not False and (not out.get("from") or stage in out["from"])
+
+
+def plan(graph, facts, auto_merge=None, default_tier="mid", blockers="start", start_waits=False):
+    """(node, outcome, payload) of the first start, merge, finish, reopen or join decision whose facts hold and whose
+    outcome the node graph (`nodes(defn)` or the engine's graph) allows from the ticket's stage, else None. Nothing
+    here reads a CI label: `ci` is the fact of the workflow runs at the head."""
+    import gate  # lazily: the gate imports this module
+    stage, pr_open = facts["stage"], facts.get("pr_state") == "open"
+    waits = blockers == "merge" and facts.get("blockers_open")  # approved, but a blocker is still open
+
+    def allowed(node, outcome):
+        return _allows(graph, node, outcome, stage)
+
+    if facts.get("pr_state") == "merged" and allowed("finish", "merged"):  # `from` lists every stage but the final ones
+        comments = facts.get("comments", [])
+        return ("finish", "merged", {}) if not gate.after_merge_checks(facts.get("body")) \
+            or not gate.after_merge_comment(comments) or gate.after_merge_complete(comments) else None
+    if stage == "ready" and allowed("start", "started") \
+            and (blockers == "merge" and not start_waits or not facts.get("blockers_open")) \
+            and facts.get("issue_state", "open") == "open":
+        return "start", "started", {"tier": gate.fix_tier(facts, default_tier)}
+    if facts.get("answered") and allowed("finish", "answered"):
+        return "finish", "answered", {}
+    if pr_open and facts.get("conflict") and allowed("finish", "conflict"):
+        return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
+    if pr_open and allowed("reopen", "reopened") \
+            and ((facts.get("round_head") is not None and facts.get("head") != facts.get("round_head"))
+                 or facts.get("ci") == "red"):
+        return "reopen", "reopened", {}
+    if not waits and allowed("merge", "merged") and (m := gate.merge_decision(facts, auto_merge)) \
+            and allowed("merge", m[0]):
+        return "merge", *m
+    if (kids := facts.get("children")):
+        if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
+            if allowed("finish", "child-blocked"):
+                what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)
+                return "finish", "child-blocked", {"reason": f"[factory] Blocked: child tickets need a person: {what}. "
+                                                             f"Fix them, then set {gate.vocab.stage('ready')} on this ticket."}
+        elif all(c["state"] == "closed" for c in kids) and allowed("finish", "children-done"):
+            return "finish", "children-done", {}
+    if stage == "in-review" and allowed("join", "waiting") and facts.get("waiting_reviewers") and (
+            not facts.get("handed_to_fix") or gate.has_dispute_rereview(facts)):
+        return "join", "waiting", {}  # ask them again; nothing moves until they decide
+    if stage == "in-review" and allowed("join", "approved") and (j := gate.join_decision(facts)):
+        return "join", *j
+    return None
