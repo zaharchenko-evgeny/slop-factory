@@ -1,6 +1,6 @@
 # ADR-0026: Engine plugins: events in, records out, effects
 
-Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068, #1069, #1070, #1071, #1072). Amends
+Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068, #1069, #1070, #1071, #1072, #1073). Amends
 ADR-0025 and ADR-0004.
 
 ## Context
@@ -54,6 +54,8 @@ every adapter: the stage policy, the merge gates, idempotency and the
    - every tracker named by `environments.<env>.tracker.adapter`;
    - the `surface:`;
    - the runner of every `models.<alias>.harness`;
+   - the plugin of a surface, runner or development tool that a command uses
+     (`use`): `deploy --target local`, `factory chart`;
    - every `requires`, closed transitively.
 
    `plugins.KNOWN` lists every planned plugin. A planned plugin with no
@@ -99,12 +101,13 @@ every adapter: the stage policy, the merge gates, idempotency and the
    #1068 (`deploy.labels`, `deploy.provision`, `deploy.secrets`, `deploy.run`,
    `deploy.plan_files`).
 9. **Core commands** stay in `cli.py`: `begin`, `end`, `check`, `apply`,
-   `sweep`, `decide`, `ci`, `deploy`, `run`, `contracts`,
-   `chart`, `migrate`, `upgrade`, `check-workflow`, `validate`, `retro`,
-   `setup`, `env`, `doctor` and `reconcile`. `ci-sync` is the github
-   plugin's command (#1068); later slices move `run` and
-   `deploy --target local` into their plugins. `cli` asks the registry for a
-   word it does not know before it prints help.
+   `sweep`, `decide`, `ci`, `deploy`, `migrate`, `upgrade`,
+   `check-workflow`, `validate`, `retro`, `setup`, `env`, `doctor` and
+   `reconcile`. `ci-sync` is the github plugin's command (#1068); `run` and
+   `deploy --target local` are the local plugin's (#1071), `contracts` and
+   `deploy --target air` the air plugin's (#1072), and `chart` the chart
+   plugin's (#1073). `cli` asks the registry for a word it does not know
+   before it prints help.
 
 ## Consequences
 
@@ -216,7 +219,8 @@ Remaining gaps:
 - A system without `effects` keeps the old remote kinds (`effects.REMOTE`).
 
 Later slices move YouTrack (#1069, below), Space (#1070), the local surface and
-agent runners (#1071) and Air (#1072) into plugins.
+agent runners (#1071), Air (#1072) and the stage chart (#1073) into plugins;
+`retro` stays in the core (#1073, below).
 
 `github` (#1068) is the first system plugin. `factory_plugins/github/` holds
 `gate.py`, `tracker.py` and `graphql.py` (formerly `factory/gate_github.py`,
@@ -325,3 +329,27 @@ reports `unsupported-output` for a deployed node whose `output:` the
 surface (`surface:`, else every selected surface once `targets.air` is set)
 does not support; a team with neither is not checked. Validation imports only
 the surface class, never the Air deploy code.
+
+### chart and retro
+
+#1073 decides the last two commands.
+
+- **`chart` is a feature plugin.** It is development tooling: it renders the
+  stage statechart, the Mermaid chart and node table of `docs/statechart.md`
+  and `docs/statechart-proposed.md`, and no node, gate step or deploy reads
+  it. `factory_plugins/chart/render.py` holds the code that was in
+  `factory/nodes.py` (`chart`, `table`, `block`, `trigger_text`, `writes`,
+  `planned`), and the plugin adds the CLI word `chart`. A team need not list
+  it: like a surface, the command that uses it turns it on
+  (`plugins.registry(config, use=(("tool", "chart"),))`), so `factory chart`
+  and `uv run factory/nodes.py chart` print the same output as before, and
+  `plugins: [chart]` is accepted but changes nothing. Without the command
+  the core imports only its declaration; `nodes.py validate` never loads the
+  renderer. The generated docs blocks did not change.
+- **`retro` stays in the core.** It collects the lessons every role writes
+  (ADR-0021): the gate turns a result's `lessons` into one marked comment and
+  the lesson label after every outcome it applies (`gate.lesson_effects`),
+  and `retro collect` reads those comments back. Moving retro into a plugin
+  would need a core-to-plugin hook for that `lesson` effect on every applied
+  outcome, while the lessons are written whether or not a team runs the
+  retro node. `factory retro`, `retro.py` and the `retro` node are unchanged.

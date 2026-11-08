@@ -212,8 +212,8 @@ class LazinessTest(unittest.TestCase):
                     pass
                 """)
         self.assertEqual(mods, ["factory_plugins",
-                                *(f"factory_plugins.{p}" for p in ("air", "claude", "codex", "comments", "github", "junie", "local",
-                                                                    "notify", "notify_email", "pi", "space", "youtrack"))])
+                                *(f"factory_plugins.{p}" for p in ("air", "chart", "claude", "codex", "comments", "github", "junie",
+                                                                    "local", "notify", "notify_email", "pi", "space", "youtrack"))])
 
     def test_notify_on_imports_its_code_only_when_called(self):
         with tempfile.TemporaryDirectory() as d:
@@ -353,6 +353,28 @@ class LazinessTest(unittest.TestCase):
         self.assertIn("factory_plugins.codex.runner", used)
         self.assertFalse({"factory_plugins.claude.runner", "factory_plugins.junie.runner", "factory_plugins.pi.runner"} & set(used))
         self.assertFalse([m for m in used if m.startswith("factory_plugins.github.")])  # no tracker until a poll
+
+    def test_chart_code_only_when_the_chart_command_is_used(self):
+        """#1073: the core, the CLI, `nodes.py validate` and the registry load the chart declaration at most, and no
+        config turns the plugin on; `factory chart` and `nodes.py chart` turn it on and load its renderer."""
+        idle = self.imported(FIXTURES / "v2", """
+            import cli, plugins
+            registry = plugins.registry(config.load())
+            assert not registry.is_on("chart"), registry.names
+            plugins.owners(); registry.command("chart")
+            nodes.validate(nodes.load(), config.load())
+            """)
+        self.assertIn("factory_plugins.chart", idle)
+        self.assertEqual([m for m in idle if m.startswith("factory_plugins.chart.")], [])
+        resolved = self.imported(FIXTURES / "v2", 'import cli; assert cli.tool_command("chart") is not None')
+        self.assertIn("factory_plugins.chart.render", resolved)
+        drawn = self.imported(FIXTURES / "v2", """
+            import contextlib, io
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                assert nodes.main(["chart"]) == 0
+            assert out.getvalue().startswith("```mermaid"), out.getvalue()[:80]
+            """)
+        self.assertIn("factory_plugins.chart.render", drawn)
 
 
 class SurfaceTest(unittest.TestCase):
