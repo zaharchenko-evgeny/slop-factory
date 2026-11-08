@@ -616,13 +616,20 @@ def notify_config():
 
 
 def latest_run(comments):
-    """The `Factory-Run:` value of the latest `[factory]` stage comment (not a notify, lesson or reconcile comment), else None."""
+    """The `Factory-Run:` value of the latest `[factory]` stage comment, else None. Skipped: notify, lesson, reconcile
+    and recover comments, and the comment node's and `reply-<agent>` runs' comments, which answer without a stage move."""
     for c in reversed(comments or []):
         body = c.get("body") or ""
         if body.startswith("[factory]") and not body.startswith(("[factory] recover:", "[factory] reconcile:")) \
-                and "<!-- factory:notify " not in body and LESSON_MARKER not in body and (m := re.search(r"(?m)^Factory-Run:\s*(\S+)\s*$", body)):
+                and "<!-- factory:notify " not in body and LESSON_MARKER not in body and not _answer_comment(body) \
+                and (m := re.search(r"(?m)^Factory-Run:\s*(\S+)\s*$", body)):
             return m[1]
     return None
+
+
+def _answer_comment(body):
+    """A comment that answers a comment or an ask: the comment node's (cursor marker) or a reply run's (`reply` from marker)."""
+    return "<!-- factory:comment-seen " in body or any(m[2] for m in FROM.finditer(body))
 
 
 def notify_effects(effects, tracker, ticket, name, run_id=None):

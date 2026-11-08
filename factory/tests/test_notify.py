@@ -257,6 +257,14 @@ class SlackWorkflowTest(unittest.TestCase):
         self.apply(self.tracker([self.stage_comment("https://air/run/stage"), reconcile]), run_id="https://air/run/notify")
         self.assertEqual({b["run_url"] for _, b in self.hook.posts}, {"https://air/run/stage"})
 
+    def test_run_url_skips_reply_and_comment_node_comments(self):
+        reply = {"author": "bot", "author_is_bot": True, "at": None,
+                 "body": "[factory] The answer.\n<!-- factory:from dev reply -->\n\nFactory-Run: https://air/run/reply"}
+        routed = {"author": "bot", "author_is_bot": True, "at": None,
+                  "body": "[factory] Asked `dev` to answer.\n<!-- factory:comment-seen 7 -->\n\nFactory-Run: https://air/run/comment"}
+        self.apply(self.tracker([self.stage_comment("https://air/run/stage"), reply, routed]), run_id="https://air/run/notify")
+        self.assertEqual({b["run_url"] for _, b in self.hook.posts}, {"https://air/run/stage"})
+
     def test_run_url_falls_back_to_the_notify_run(self):
         self.apply(self.tracker(), run_id="https://air/run/notify")
         self.assertEqual({b["run_url"] for _, b in self.hook.posts}, {"https://air/run/notify"})
