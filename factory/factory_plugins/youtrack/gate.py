@@ -10,6 +10,7 @@ from pathlib import Path
 import yaml
 
 import config
+import definition
 import plugins
 from factory_plugins.youtrack.store import YouTrackTicketStore, repo_stage_tags
 
@@ -25,12 +26,17 @@ def repository_names(c):
     return [r["name"] for r in sorted(c.get("repositories") or [], key=lambda r: r.get("role") != "primary")]
 
 
+def full_names(c):
+    """{owner/repo: name} of the descriptor's repositories."""
+    return {definition.full_name(r["url"]): r["name"] for r in c.get("repositories") or [] if r.get("url")}
+
+
 def store(c, tracker=None, run=None):
     """The YouTrack store of descriptor `c`, from the tracker config block `tracker` (default `c["tracker"]`)."""
     t = c["tracker"] if tracker is None else tracker
     return YouTrackTicketStore.from_config(t, run, state_field=state_field(c), bots=t.get("bot_logins") or (),
                                            repo_stages=repo_stage_tags({**c, "tracker": t}),
-                                           repositories=repository_names(c))
+                                           repositories=repository_names(c), full_names=full_names(c))
 
 
 class YouTrackTracker:

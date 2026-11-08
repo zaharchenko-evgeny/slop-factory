@@ -24,6 +24,7 @@ import config as config_mod
 import definition
 import plugins
 import project as project_mod
+import scopes as scopes_mod
 import vocab
 from ports.system import TrackerSchema
 
@@ -417,22 +418,30 @@ def scope_filter(trig: dict, block: dict) -> dict:
     return trig
 
 
-def linked_project(config: dict, repo: dict | None) -> str | None:
-    """The YouTrack project that `tracker.projects` links to repository `repo`, else None."""
-    projects = (config.get("tracker") or {}).get("projects") or {}
-    return next((p for p, r in projects.items() if repo and r == repository(repo)["fullName"]), None)
+def team_definition() -> dict | None:
+    """The team's definition (ADR-0021), else None (a descriptor team)."""
+    return definition.load(config_mod.team_root()) if definition.present(config_mod.team_root()) else None
 
 
-def unlistened_projects(nodes: dict, config: dict) -> list[str]:
-    """`unlinked-project` per project of `tracker.projects` that no node listens to: only a per-repository node with a
-    YouTrack ticket trigger gets a copy limited to a project, and only a project repository gets a copy."""
-    projects = (config.get("tracker") or {}).get("projects") or {}
-    listens = config.get("write_mode", "per-repo") == "per-repo" and len(config.get("repositories") or []) > 1 and any(
-        definition.per_repo_node(k) and any(str(t).startswith("youtrack.") for t in n.get("triggers") or [])
-        for k, n in nodes["nodes"].items() if n.get("enabled") is not False and n["role"] != "human")
-    names = {repository(r)["fullName"] for r in config.get("repositories") or []}
-    return [f"unlinked-project: tracker.projects.{p}: no node listens to project {p} ({r})"
-            for p, r in projects.items() if not (listens and r in names)]
+def code_scopes(config: dict, defn: dict | None) -> list[dict]:
+    """The repositories a per-repository node may get a copy for: a definition's code repositories (`main` in an
+    environment), else every repository."""
+    if not defn:
+        return config["repositories"]
+    code = {definition.full_name(c) for c in definition.per_repo_envs(defn)}
+    return [r for r in config["repositories"] if definition.full_name(r["url"]) in code]
+
+
+def node_scopes(nodes: dict, config: dict, defn: dict | None) -> dict:
+    """{node: its copies' repositories, [None] for one automation} of every node deploy plans (#895): with
+    `write_mode: per-repo` and more than one code repository a per-repository node gets one copy per code repository,
+    except in the default environment when environments have their own trackers (#1069: it runs once per project)."""
+    scopes = code_scopes(config, defn)
+    per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(scopes) > 1
+    trackers = scopes_mod.project_envs(config)
+    default_env = default_environment(nodes, defn) if trackers else None
+    return {name: scopes if per_repo and definition.per_repo_node(name) and not (trackers and n["env"] == default_env) else [None]
+            for name, n in nodes["nodes"].items() if n.get("enabled") is not False and n["role"] != "human" and not n.get("runner")}
 
 
 def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
@@ -607,12 +616,12 @@ def surface_name(config: dict) -> str | None:
 
 
 def output_errors(nodes: dict, config: dict) -> list[str]:
-    """`unsupported-output` per deployed node whose `output:` its surface cannot serve: the configured `surface:`, else
-    every surface the selection provides once `targets.air` turns on `air`. No surface: nothing is checked."""
+    """The `deploy.errors` of the selected plugins (youtrack: `tracker.projects`), then `unsupported-output` per deployed
+    node whose `output:` its surface cannot serve: the configured `surface:`, else every surface the selection provides
+    once `targets.air` turns on `air`. No surface: no output is checked."""
+    errs = [e for hook in plugins.registry(config).hook("deploy.errors") for e in hook(nodes, config)]
     name = surface_name(config)
-    if not name:
-        return []
-    return unlistened_projects(nodes, config) + _output_errors(nodes, config, name)
+    return errs + (_output_errors(nodes, config, name) if name else [])
 
 
 def _output_errors(nodes: dict, config: dict, name: str) -> list[str]:

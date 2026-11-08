@@ -82,7 +82,8 @@
         },
         "projects": {
           "type": "object",
-          "additionalProperties": {"type": "string"}
+          "propertyNames": {"minLength": 1},
+          "additionalProperties": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"}
         },
         "token_env": {
           "type": "string"
