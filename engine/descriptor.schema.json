@@ -105,7 +105,7 @@
       }
     },
     "owner": {"type": "string"},
-    "plugins": {"type": "array", "items": {"enum": ["comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi"]}, "description": "Engine plugins to turn on (ADR-0026): `comments` reacts to comments (mentions, asks, the comment node). Systems, surfaces and agent runners turn on implicitly."},
+    "plugins": {"type": "array", "items": {"enum": ["comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi"]}, "description": "Engine plugins to turn on (ADR-0026): `comments` reacts to comments (mentions, asks, the comment node); `notify` sends the `notify` effect and adds `factory notify test`; `notify_email` is its email channel (and turns on `notify`). Systems, surfaces and agent runners turn on implicitly."},
     "modules": {"type": "array", "items": {"enum": ["comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi"]}, "description": "The ADR-0025 name of `plugins`."},
     "notify": {
       "type": "object",

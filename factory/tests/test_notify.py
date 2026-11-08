@@ -3,8 +3,9 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
-"""Tests for the notifiers (ADR-0022): the email adapter against a fake SMTP server, the `notify` effect of the gate and
-its validation. Run: uv run factory/tests/test_notify.py"""
+"""Tests for the notify and notify_email plugins (ADR-0022, ADR-0026): the email notifier against a fake SMTP server,
+the `notify` effect of the gate, its validation, `factory notify test` and the refusals while the plugin is off.
+Run: uv run factory/tests/test_notify.py"""
 import copy
 import json
 import os
@@ -23,15 +24,19 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
+import cli  # noqa: E402
+import config  # noqa: E402
 import definition  # noqa: E402
 import gate  # noqa: E402
-import notify  # noqa: E402
+import plugins  # noqa: E402
+from factory_plugins.notify_email.smtp import EmailAdapter  # noqa: E402
 from gate_port import MemoryTracker  # noqa: E402
 
 FIXTURE = ROOT / "tests/fixtures/v2"
 CONFIG = {"adapters": {"email": {"smtp_env": "TEST_NOTIFY_SMTP"}},
           "people": {"ann": {"via": ["email"], "email": "ann@example.com"},
                      "bob": {"via": ["email"], "email": "bob@example.com"}}}
+ON = {"plugins": ["comments", "notify_email"]}  # notify_email turns on notify
 FIELDS = {"problem": "Tests fail\non main", "links": [{"title": "PR", "url": "https://example.com/pr/1"}],
           "options": ["Retry", "Close"], "recommended": 0}
 
@@ -85,9 +90,10 @@ class NotifyTest(unittest.TestCase):
         env = patch.dict(os.environ, {"TEST_NOTIFY_SMTP": f"smtp://127.0.0.1:{self.smtp.server_address[1]}?from=factory@example.com"})
         env.start()
         self.addCleanup(env.stop)
-        cfg = patch.object(gate, "notify_config", return_value=CONFIG)
-        cfg.start()
-        self.addCleanup(cfg.stop)
+        for p in (patch("factory_plugins.notify.notifiers.team_config", return_value=CONFIG),
+                  patch("gate.plugin_registry", return_value=plugins.registry(ON))):
+            p.start()
+            self.addCleanup(p.stop)
         self.graph = {"nodes": {"notify": {"agent": "notify", "role": "notify", "when": {}, "outcomes": {
             "notified": {"effects": [{"notify": "message"}]},
             "pr-only": {"effects": [{"notify": {"message": "message", "people": ["bob"]}, "on": "pr"}]}}}}}
@@ -142,13 +148,13 @@ class NotifyTest(unittest.TestCase):
     def test_failed_send_is_reported_and_the_other_send_is_marked(self):
         tr = MemoryTracker({"7": {"stage": "blocked"}})
         self.graph["nodes"]["notify"]["outcomes"]["notified"]["effects"].append({"stage": "done"})
-        real = notify.ADAPTERS["email"].send
+        real = EmailAdapter.send
 
         def flaky(self, person, message):
             if person["login"] == "ann":
                 raise OSError("refused")
             return real(self, person, message)
-        with patch.object(notify.ADAPTERS["email"], "send", flaky):
+        with patch.object(EmailAdapter, "send", flaky):
             with self.assertRaisesRegex(RuntimeError, "ann via email: OSError: refused"):
                 self.apply("notified", tr)
         (comment,) = self.comments(tr)
@@ -157,10 +163,70 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual(tr.tickets["7"]["stage"], "blocked")
 
     def test_ack_replies_in_the_thread(self):
-        adapter = notify.ADAPTERS["email"](CONFIG["adapters"]["email"])
+        adapter = EmailAdapter(CONFIG["adapters"]["email"])
         adapter.ack({"login": "ann", "email": "ann@example.com"}, "<abc@example.com>", "Got it")
         mail = message_from_bytes(self.smtp.mails[0][1])
         self.assertEqual(mail["In-Reply-To"], "<abc@example.com>")
+
+    def test_the_email_notifier_comes_from_the_registry(self):
+        registry = plugins.registry({"plugins": ["notify_email"]})
+        self.assertTrue(registry.is_on("notify"))  # notify_email requires it
+        self.assertIs(registry.impl("notifier", "email"), EmailAdapter)
+        self.assertEqual(registry.impls("notifier"), ["email"])
+        self.assertIsNone(plugins.registry({"plugins": ["notify"]}).impl("notifier", "email"))
+
+    def test_a_notify_effect_is_refused_while_the_plugin_is_off(self):
+        tr = MemoryTracker({"7": {"stage": "blocked"}})
+        with patch("gate.plugin_registry", return_value=plugins.registry({})):
+            with self.assertRaisesRegex(gate.Bad, r"module-off: nodes.notify.notified: notify needs plugins: \[notify\]"):
+                self.apply("notified", tr)
+            with self.assertRaisesRegex(gate.Bad, r"module-off: nodes.notify.pr-only: notify needs plugins: \[notify\]"):
+                self.apply("pr-only", tr)
+        self.assertEqual((self.smtp.mails, tr.tickets["7"].get("log", [])), ([], []))
+
+    def test_a_send_through_a_notifier_that_is_off_fails(self):
+        tr = MemoryTracker({"7": {"stage": "blocked"}})
+        with patch("gate.plugin_registry", return_value=plugins.registry({"plugins": ["notify"]})):
+            with self.assertRaisesRegex(RuntimeError, "ann via email: LookupError: no notifier `email` is turned on"):
+                self.apply("notified", tr)
+        self.assertEqual(self.smtp.mails, [])
+
+
+class CommandTest(unittest.TestCase):
+    """`factory notify test <login>`, the word the notify plugin adds to the CLI."""
+
+    def setUp(self):
+        self.smtp = FakeSmtp()
+        self.addCleanup(self.smtp.close)
+        for p in (patch.dict(os.environ, {"TEST_NOTIFY_SMTP": f"smtp://127.0.0.1:{self.smtp.server_address[1]}"}),
+                  patch("factory_plugins.notify.notifiers.team_config", return_value=CONFIG),
+                  patch("builtins.print")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def run_cli(self, *argv, settings=ON):
+        with patch.object(config, "load", return_value=settings):
+            return cli._main(["notify", *argv])
+
+    def test_sends_a_test_message_to_one_person(self):
+        self.assertEqual(self.run_cli("test", "ann"), 0)
+        self.assertEqual([r for r, _ in self.smtp.mails], [["ann@example.com"]])
+        self.assertIn("[factory #test] Test message from the factory to ann",
+                      " ".join(message_from_bytes(self.smtp.mails[0][1])["Subject"].split()))
+
+    def test_unknown_person_and_bad_usage(self):
+        self.assertEqual(self.run_cli("test", "eve"), 2)
+        self.assertEqual(self.run_cli("test"), 2)
+        self.assertEqual(self.run_cli("send", "ann"), 2)
+        self.assertEqual(self.smtp.mails, [])
+
+    def test_a_failed_send_exits_1(self):
+        with patch.object(EmailAdapter, "send", side_effect=OSError("refused")):
+            self.assertEqual(self.run_cli("test", "ann"), 1)
+
+    def test_the_word_is_unknown_while_the_plugin_is_off(self):
+        self.assertEqual(self.run_cli("test", "ann", settings={}), 2)  # the help, as for any unknown word
+        self.assertEqual(self.smtp.mails, [])
 
 
 class ValidateTest(unittest.TestCase):
@@ -169,6 +235,7 @@ class ValidateTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp)
         self.root = self.tmp / "team"
         shutil.copytree(FIXTURE, self.root)
+        self.edit("factory.yaml", lambda f: f.update(ON))
 
     def edit(self, name, change):
         path = self.root / name
@@ -216,6 +283,22 @@ class ValidateTest(unittest.TestCase):
         self.assertError("unknown-person: nodes.notify.notified: eve")
         self.notify_effect("nope")
         self.assertError("bad-effect: nodes.notify.notified")
+
+    def test_block_and_effect_are_refused_while_the_plugin_is_off(self):
+        self.configure()
+        self.notify_effect()
+        self.edit("factory.yaml", lambda f: f.update(plugins=["comments"]))
+        errs = self.errors()
+        self.assertIn("module-off: factory.yaml: notify needs plugins: [notify]", errs)
+        self.assertIn("module-off: nodes.notify.notified: notify needs plugins: [notify]", errs)
+        self.assertFalse([e for e in errs if e.startswith(("unknown-adapter", "missing-"))], errs)
+
+    def test_a_notifier_whose_plugin_is_off(self):
+        self.configure()
+        self.edit("factory.yaml", lambda f: f.update(plugins=["comments", "notify"]))
+        errs = self.errors()
+        self.assertIn("module-off: notify.adapters.email: email needs plugins: [notify_email]", errs)
+        self.assertIn("module-off: notify.people.ann.via: email needs plugins: [notify_email]", errs)
 
 
 if __name__ == "__main__":

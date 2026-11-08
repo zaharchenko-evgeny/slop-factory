@@ -30,6 +30,7 @@ class Plugin:
     hooks: dict = field(default_factory=dict)  # hook name -> "mod:function"
     requires: tuple = ()  # plugins turned on with this one
     agent_keys: tuple = ()  # agent settings in factory.yaml that only this plugin reads (comments: mentionable)
+    config_keys: tuple = ()  # top-level factory.yaml keys that only this plugin reads (notify: notify)
 
 
 # Every planned plugin (#1064), so a team may list one before its slice lands: a planned plugin with no package yet
@@ -42,7 +43,7 @@ IMPLIED = {"tracker": {"github-issues": "github", "github": "github", "youtrack"
            "surface": {"air": "air", "local": "local"},
            "agent": {"claude": "claude", "claude-code": "claude", "codex": "codex", "junie": "junie", "pi": "pi"}}
 LISTS = ("plugins", "modules")  # `modules:` is the ADR-0025 name of `plugins:`
-CATEGORIES = ("effect", "guard", "trigger", "outcome", "agent", "command")
+CATEGORIES = ("effect", "guard", "trigger", "outcome", "agent", "command", "config")
 
 
 def refusal(where, key, plugin=None):
@@ -77,7 +78,7 @@ def keys(plugin):
     the trigger: the effect kind stays the core's."""
     out = {("guard", k) for k in plugin.guards} | {("trigger", k) for k in plugin.triggers}
     out |= {("outcome", k) for k in plugin.outcomes} | {("agent", k) for k in plugin.agent_keys}
-    out |= {("command", k) for k in plugin.commands}
+    out |= {("command", k) for k in plugin.commands} | {("config", k) for k in plugin.config_keys}
     return out | {("effect", kind) for kind, target in plugin.effects if target not in plugin.triggers}
 
 
@@ -200,6 +201,10 @@ class Registry:
         spec = next((p.provides[interface][name] for p in self.plugins.values()
                      if name in (p.provides.get(interface) or {})), None)
         return load(spec) if spec else None
+
+    def impls(self, interface):
+        """The names of every `interface` the selected plugins provide, sorted; nothing is imported."""
+        return sorted({n for p in self.plugins.values() for n in p.provides.get(interface) or {}})
 
     def command(self, word):
         """The function behind CLI word `word`, imported now; None when no selected plugin adds it."""

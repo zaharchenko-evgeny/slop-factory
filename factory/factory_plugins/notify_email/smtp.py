@@ -1,4 +1,4 @@
-"""The email adapter: SMTP from the URL in the env var `notify.adapters.email.smtp_env`.
+"""The email notifier (`ports.notifier.Notifier`): SMTP from the URL in the env var `notify.adapters.email.smtp_env`.
 
 URL: `smtp://[user:password@]host[:port][?from=<address>]` (`smtps://` for TLS from the start). The `Message-ID`
 of a send is its `ref`; `ack` replies in that thread.
@@ -10,8 +10,12 @@ from email.message import EmailMessage
 from email.utils import make_msgid
 from urllib.parse import parse_qs, unquote, urlparse
 
+from factory_plugins.notify.notifiers import render
+
 
 class EmailAdapter:
+    name = "email"
+
     def __init__(self, config):
         env = config.get("smtp_env")
         url = os.environ.get(env or "")
@@ -22,6 +26,12 @@ class EmailAdapter:
             raise ValueError(f"env var `{env}` is not an smtp:// or smtps:// URL")
         self.sender = (parse_qs(self.url.query).get("from") or [None])[0] \
             or (unquote(self.url.username) if self.url.username and "@" in unquote(self.url.username) else "factory@localhost")
+
+    @staticmethod
+    def validate(settings, person):
+        if person.get("email"):
+            return []
+        return [f"missing-address: notify.people.{person['login']}: no `email` address for the adapter in `via`"]
 
     def _deliver(self, mail):
         tls = self.url.scheme == "smtps"
@@ -40,7 +50,6 @@ class EmailAdapter:
         return mail
 
     def send(self, person, message):
-        from . import render  # the package imports this module first
         mail = self._mail(person, f"[factory #{message['issue']}] {message['problem']}", render(message))
         self._deliver(mail)
         return mail["Message-ID"]

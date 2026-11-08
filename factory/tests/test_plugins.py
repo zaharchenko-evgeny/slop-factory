@@ -79,10 +79,10 @@ class SelectionTest(FakePlugins):
         self.assertEqual(plugins.errors({}), [])
 
     def test_a_planned_plugin_without_a_package_turns_on_nothing(self):
-        """KNOWN lists every planned plugin, so `plugins: [notify]` validates before its slice lands."""
-        registry = plugins.registry({"plugins": ["notify"]})
-        self.assertTrue(registry.is_on("notify"))
-        self.assertEqual(plugins.errors({"plugins": ["notify"]}), [])
+        """KNOWN lists every planned plugin, so `plugins: [junie]` validates before its slice lands."""
+        registry = plugins.registry({"plugins": ["junie"]})
+        self.assertTrue(registry.is_on("junie"))
+        self.assertEqual(plugins.errors({"plugins": ["junie"]}), [])
         self.assertEqual((registry.hook("definition.load"), registry.impl("notifier", "email")), ([], None))
 
     def test_requires_is_closed_transitively(self):
@@ -106,6 +106,10 @@ class OwnershipTest(FakePlugins):
         self.assertIsNone(plugins.owner("comment", "effect"))  # `comment` `on: mention`: the target is the plugin's
         self.assertIsNone(plugins.owner("label"))
         self.assertIsNone(plugins.owner("route", "outcome"))  # categories are apart: an outcome may be called `route`
+
+    def test_the_notify_keys(self):
+        self.assertEqual({plugins.owner("notify", of) for of in ("effect", "command", "config")}, {"notify"})
+        self.assertIsNone(plugins.owner("notify", "agent"))  # an agent or node may be called `notify`
 
     def test_a_key_with_two_owners_is_a_registry_error(self):
         self.plugin("aa", "guards={'mention': 'x:y'}")
@@ -207,7 +211,19 @@ class LazinessTest(unittest.TestCase):
                 except gate.Bad:
                     pass
                 """)
-        self.assertEqual(mods, ["factory_plugins", "factory_plugins.comments"])
+        self.assertEqual(mods, ["factory_plugins", *(f"factory_plugins.{p}" for p in ("comments", "notify", "notify_email"))])
+
+    def test_notify_on_imports_its_code_only_when_called(self):
+        with tempfile.TemporaryDirectory() as d:
+            team = Path(d) / "team"
+            shutil.copytree(FIXTURES / "v2", team)
+            path = team / "factory.yaml"
+            path.write_text(path.read_text().replace("plugins: [comments]", "plugins: [comments, notify_email]"))
+            loaded = self.imported(team, "definition.load(config.team_root()); gate.plugin_registry()")
+            checked = self.imported(team, "definition.errors(definition.load(config.team_root()))")
+        self.assertFalse([m for m in loaded if m.startswith(("factory_plugins.notify.", "factory_plugins.notify_email."))])
+        self.assertLessEqual({"factory_plugins.notify.checks", "factory_plugins.notify.notifiers"}, set(checked))
+        self.assertFalse({"factory_plugins.notify.effect", "factory_plugins.notify.command"} & set(checked))
 
     def test_on_imports_what_the_core_calls(self):
         mods = self.imported(FIXTURES / "v2", "defn = definition.load(config.team_root())")

@@ -34,6 +34,7 @@ every adapter: the stage policy, the merge gates, idempotency and the
        hooks={},      # hook name -> "mod:function"
        requires=(),   # plugins turned on with this one
        agent_keys=(), # agent settings only this plugin reads
+       config_keys=(),# top-level factory.yaml keys only this plugin reads
    )
    ```
 
@@ -59,8 +60,9 @@ every adapter: the stage policy, the merge gates, idempotency and the
    An unknown name is `unknown-plugin`; a value that is not a list is
    `bad-plugins`.
 4. **Ownership.** Each workflow key has one owner: an effect kind, a guard
-   fact, an `on:` target (trigger), a marker outcome, an agent setting or a
-   CLI word. Two owners of one key are an error when the registry loads.
+   fact, an `on:` target (trigger), a marker outcome, an agent setting, a
+   top-level `factory.yaml` key or a CLI word. Two owners of one key are an
+   error when the registry loads.
    Nodes never name a plugin. They use keys, and the registry finds the
    owner.
 5. **One refusal format.** A key whose plugin is off is refused by
@@ -91,8 +93,8 @@ every adapter: the stage policy, the merge gates, idempotency and the
 8. **Hook points** are the only places the core calls a plugin:
    `definition.load`, `definition.errors`, `definition.warnings`,
    `gate.step_context`, the `guards` of `gate.guard_holds`, `gate.outcome`,
-   the effect registry, `deploy.schema`, `deploy.files`, `doctor.probes`
-   and `reconcile.passes`.
+   `gate.send`, the effect registry, `deploy.schema`, `deploy.files`,
+   `doctor.probes` and `reconcile.passes`.
 9. **Core commands** stay in `cli.py`: `begin`, `end`, `check`, `apply`,
    `sweep`, `ci-sync`, `decide`, `ci`, `deploy`, `run`, `contracts`,
    `chart`, `migrate`, `upgrade`, `check-workflow`, `validate`, `retro`,
@@ -115,6 +117,20 @@ A team's `modules: [comments]` keeps working. The engine default is
 Until #1067 adds the effect registry with the core policies, the gate calls
 a plugin's effect handler in the shape it had before: the comment node's
 handler turns its effects into core effects, and an `on: mention` handler
-rewrites one effect. Later slices move notify (#1066), GitHub (#1068),
+rewrites one effect. Later slices move GitHub (#1068),
 YouTrack (#1069), Space (#1070), the local surface and agent runners
 (#1071) and Air (#1072) onto the registry.
+
+`notify` (#1066) is the second feature plugin. Its declaration names the
+`notify` effect on `ticket` and `pr`, the `notify` CLI word
+(`factory notify test <login>`), the `notify` config key, and the
+`definition.errors` and `gate.send` hooks. Its effect handler reads the
+message from the payload before anything is written; `gate.send` sends it
+once the outcome is sure to apply, after the gate's match check. The core
+posts the `[factory]` comments of the sends that went out even when one
+failed, then raises. A channel is a separate plugin that provides a
+`notifier`, the `ports.notifier.Notifier` slot (ADR-0022: `name`,
+`validate`, `send`, optional `ack`); `notify_email` provides `email` and
+requires `notify`. A `notify:` block, a `notify` effect or a notifier whose
+plugin is off is `module-off`, so a team turns notify on with
+`plugins: [notify, notify_email]` (`notify_email` alone turns on both).

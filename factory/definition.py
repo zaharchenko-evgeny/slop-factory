@@ -331,27 +331,6 @@ def _skill_spec_errors(where, spec):
     return [] if spec.get("path") else [f"bad-skill: {where}: needs `path` or `source`"]
 
 
-def _notify_errors(config):
-    import notify
-    return notify.config_errors(config) if isinstance(config, dict) else []
-
-
-def _notify_effect_errors(where, outcome, spec, config):
-    """A `notify` effect is `message` or `{message: message, people: [logins]}`, and needs `notify` config."""
-    errs = []
-    if not config:
-        errs.append(f"missing-notify: {where}.{outcome}: a `notify` effect needs `notify` config in factory.yaml")
-    body = spec if isinstance(spec, dict) else {"message": spec}
-    people = body.get("people")
-    if body.get("message") != "message" or set(body) - {"message", "people"} \
-            or not (people is None or isinstance(people, list) and all(isinstance(p, str) for p in people)):
-        errs.append(f"bad-effect: {where}.{outcome}: notify must be `message` or `{{message: message, people: [logins]}}`")
-    elif config:
-        known = (config or {}).get("people") or {}
-        errs += [f"unknown-person: {where}.{outcome}: {p} is not in notify.people" for p in people or [] if p not in known]
-    return errs
-
-
 def _writes_errors(where, node, agent, env):
     repos = (env or {}).get("repositories") or []
     writes = node.get("writes")
@@ -521,9 +500,6 @@ def errors(defn):
                         valid = valid or value == "all"
                     if not valid:
                         errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins" + (" or {field: <name>}" if key == "assign" else ""))
-            for effect in oc.get("effects") or []:
-                if isinstance(effect, dict) and "notify" in effect:
-                    errs += _notify_effect_errors(where, o, effect["notify"], f.get("notify"))
             prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
             by_target = {}
             for effect in oc.get("effects") or []:
@@ -547,9 +523,11 @@ def errors(defn):
             except __import__("jinja2").TemplateError as e:
                 errs.append(f"render: {where}: {e}")
     for check in registry.hook("definition.errors"):
-        errs += check(defn)  # comments: a mentionable agent needs a role; `mentions` and `reply-*` are reserved
+        errs += check(defn)  # comments: a mentionable agent needs a role; notify: its config and effects
+    errs += [plugins.refusal("factory.yaml", k, owner) for k in f  # a block only a plugin reads (`notify:`)
+             if (owner := plugins.owner(k, "config")) and not registry.is_on(owner)]
     errs += plugins.errors(f)
-    return errs + _mcp_errors(defn) + _notify_errors(f.get("notify"))
+    return errs + _mcp_errors(defn)
 
 
 def _plugin_key_errors(registry, where, outcome, guards, kinds, effects):
@@ -594,7 +572,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed", ("pr", "commented"): "pr commented",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red", "assign", "unassign", "notify")  # and the plugins' effects
+           "request-reviewers", "park-behind-main-red", "assign", "unassign")  # and the plugins' effects
 
 
 def _name(label, prefix):

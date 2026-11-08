@@ -126,7 +126,8 @@ def validate(nodes, config):
                 elif "on" in e:
                     target = e["on"]
                     if target in ("issue", "pr"):
-                        ok = keys[0] in ("label", "unlabel", "comment")
+                        ok = keys[0] in ("label", "unlabel", "comment") \
+                            or registry.effect(keys[0], {"issue": "ticket"}.get(target, target)) is not None  # notify
                     else:  # a plugin's target: only an effect it declares there (#590: `comment` `on: mention`)
                         ok = isinstance(target, str) and target in registry.triggers() \
                             and registry.effect(keys[0], target) is not None
