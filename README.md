@@ -31,8 +31,8 @@ Each team keeps settings in `factory.descriptor.yaml`. The descriptor supports
 these top-level keys, defined by `engine/descriptor.schema.json`:
 `engine`, `project`, `repositories`, `branch_pattern`, `commit_prefix`,
 `team_repository`, `tracker`, `code_host`, `owner`, `notify` (v1: `github_user`), `targets`, `models`, `roles`,
-`limits`, `gates`, `ci`, `knowledge`, `nodes`, `reviews`, `checks`, and `modules`
-(opt-in engine modules: `comments` turns on mentions, agent asks and the comment node, ADR-0025).
+`limits`, `gates`, `ci`, `knowledge`, `nodes`, `reviews`, `checks`, and `plugins` (alias `modules`;
+engine plugins to turn on: `comments` turns on mentions, agent asks and the comment node, ADR-0025, ADR-0026).
 
 ### Project descriptor
 

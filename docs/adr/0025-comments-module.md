@@ -1,7 +1,9 @@
 # ADR-0025: Comment reactions are an opt-in engine module
 
 Status: accepted, requested by #1057 (slice 1). Amends ADR-0023 and the
-mention and ask parts of ADR-0021 (#590, #591).
+mention and ask parts of ADR-0021 (#590, #591). Amended by ADR-0026: the
+module is the `comments` plugin in `factory/factory_plugins/comments/`, and
+`plugins:` is the key (`modules:` stays as its alias).
 
 ## Context
 

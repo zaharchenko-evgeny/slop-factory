@@ -34,7 +34,7 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-if __name__ == "__main__":  # run as a script: `import gate` (the comments module) must get this module, and its `Bad`
+if __name__ == "__main__":  # run as a script: `import gate` (a plugin's code) must get this module, and its `Bad`
     sys.modules.setdefault("gate", sys.modules[__name__])
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
@@ -45,7 +45,7 @@ from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
 from github_tracker import project_repositories  # noqa: E402
 import vocab  # noqa: E402
 import definition  # noqa: E402
-import comments  # noqa: E402  (its names only; the feature code is imported when the module is on, ADR-0025)
+import plugins  # noqa: E402  (ADR-0026: a plugin's code is imported when the core calls it)
 
 ROOT = nodes_mod.ROOT
 GO, NO_GO, BAD, FAILED = 0, 10, 2, 1
@@ -488,30 +488,27 @@ def guard_holds(guard, facts, tracker=None, ticket=None):
         kids = tracker.children(ticket) or []
         facts = {**facts, "children_open": sum(1 for c in kids if c.get("state") == "open")}
     unknown = set(guard) - GUARD_KEYS
-    if unknown & set(comments.GUARDS) and comments_on():  # read the config only for a guard of the module
-        unknown -= set(comments.GUARDS)
-    if unknown:
-        raise Bad(f"unknown guard: {', '.join(sorted(unknown))}" + module_off(unknown & set(comments.GUARDS)))
-    if "mention" in guard:
-        from comments import mentions
-        if not mentions.holds(guard["mention"], facts, tracker, ticket):
+    if not unknown:
+        return holds(guard, facts, {})
+    if unknown - {k for k in unknown if plugins.owner(k, "guard")}:
+        raise Bad(f"unknown guard: {', '.join(sorted(k for k in unknown if not plugins.owner(k, 'guard')))}")
+    registry = plugin_registry()  # read the config only for a guard a plugin owns
+    off = sorted(k for k in unknown if not registry.is_on(plugins.owner(k, "guard")))
+    if off:
+        raise Bad("; ".join(registry.refusal("guard", k, "guard") for k in off))
+    for k in sorted(unknown):
+        if not plugins.load(registry.guards()[k])(guard[k], facts, tracker, ticket):
             return False
-        guard = {k: v for k, v in guard.items() if k != "mention"}
-    return holds(guard, facts, {})
+    return holds({k: v for k, v in guard.items() if k not in unknown}, facts, {})
 
 
-def comments_on():
-    """True when the team turns on the comments module (`modules: [comments]`, ADR-0025)."""
-    return comments.NAME in (config_mod.load().get("modules") or [])
-
-
-def module_off(used):
-    """The note a refusal adds when `used` (guards, effects, outcomes) needs the comments module, which is off."""
-    return f" ({', '.join(sorted(used))} needs `modules: [{comments.NAME}]`)" if used else ""
+def plugin_registry():
+    """The registry of the plugins the team turns on (`plugins:`, ADR-0026)."""
+    return plugins.registry(config_mod.load())
 
 
 REMOTE_FIRST = ("review", "merge", "update-branch")  # effects that write to a code host and can fail there
-GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket"}  # comments.GUARDS: the module's
+GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket"}  # and the plugins' guards
 FROM = re.compile(r"<!-- factory:from (\S+?)( reply)? -->")
 
 
@@ -579,12 +576,9 @@ def check(name, event, tracker, nodes, config, code_host=None):
     why = matches(node, facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     notes = facts.get("agent_notes", [])
-    mention = {}
-    if comments_on():
-        from comments import mentions, node as comment_node
-        comment_node.step_input(node, facts, tracker, event["ticket"])  # ADR-0023: the comments after the cursor
-        if name.startswith("reply-") and definition_team():
-            mention = {"mention": mentions.latest(facts, tracker, event["ticket"])}
+    extra = {}  # what the plugins add to the step (comments: the comment node's input, a reply's `mention`)
+    for step_context in plugin_registry().hook("gate.step_context"):
+        extra.update(step_context(name, node, facts, tracker, event["ticket"]) or {})
     facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
@@ -600,7 +594,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "status": status(facts), "outcomes": list(node["outcomes"]),
         "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if fixing else ()))],
-        **mention,
+        **extra,
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and fixing),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
         # one entry per repository of a ticket that changes several (ADR-0017), all on the ticket's one branch
@@ -745,13 +739,16 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
         payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
-    used = {e["kind"] for e in effects if e["kind"] in comments.EFFECTS} | ({"ask"} if outcome == "ask" else set()) \
-        | {"on: mention" for e in effects if e.get("on") == "mention"}
-    if used and not comments_on():
-        raise Bad(f"outcome {outcome}: the comments module is off" + module_off(used))
-    if outcome == "ask":
-        from comments import asks
-        effects = asks.effects(name, node, out, payload, tracker, ticket, effects)
+    # ADR-0026: the effects, `on:` targets and outcome a plugin owns; the config is read only when there are some
+    owns = plugins.owner(outcome, "outcome")
+    used = {(outcome, owns)} | {(e["kind"], plugins.owner(e["kind"], "effect")) for e in effects if e.get("on") is None}
+    used |= {(f"`on: {e['on']}`", plugins.owner(e["on"], "trigger")) for e in effects if isinstance(e.get("on"), str)}
+    used = sorted((k, p) for k, p in used if p)
+    registry = plugin_registry() if used else plugins.registry({})
+    if off := [(k, p) for k, p in used if not registry.is_on(p)]:
+        raise Bad("; ".join(plugins.refusal(f"nodes.{name}.{outcome}", k, p) for k, p in off))
+    for hook in registry.hook("gate.outcome", owns) if owns else []:  # comments: the `ask` outcome's comment
+        effects = hook(name, outcome, node, out, payload, tracker, ticket, effects)
     if payload.get("agent_notes"):  # hidden notes for later agents ride on the review, the comments or the PR text
         try:
             notes = clean_notes(payload["agent_notes"])
@@ -763,12 +760,15 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     facts = tracker.facts(ticket)
     if scope := rereview_scope(effects, payload, facts, focus, tracker, ticket):
         raise Bad(scope)
-    comment_after = []
-    if any(e["kind"] in comments.EFFECTS for e in effects):
-        from comments import node as comment_node
-        moved, comment_after = comment_node.moves([e for e in effects if e["kind"] in comments.EFFECTS], name, payload,
-                                                  facts, tracker, nodes, ticket)
-        effects = [e for e in effects if e["kind"] not in comments.EFFECTS] + moved
+    comment_after = []  # what a plugin's effects must write after the stage change (the comment node's reply)
+    handlers = {}  # a plugin's effects, by handler: it turns them into core effects (comments: route, reply, skip)
+    for e in effects:
+        if e.get("on") is None and (spec := registry.effect(e["kind"])):
+            handlers.setdefault(spec, []).append(e)
+    for spec, mine in handlers.items():
+        moved, later = plugins.load(spec)(mine, name, payload, facts, tracker, nodes, ticket)
+        effects = [e for e in effects if all(e is not m for m in mine)] + moved
+        comment_after += later
     after = []  # effects that must follow the stage change
     starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(commands())]
     stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith(vocab.prefix("fix-<tier>")) for e in starts))
@@ -821,9 +821,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
                 e["heads"] = facts["heads"]  # one per repository of a multi-repository ticket
         if e["kind"] == "comment" and payload.get("run_id"):
             e["run_id"] = payload["run_id"]
-        if e["kind"] == "comment" and e.get("on") == "mention":  # #590: answer where, and whom, the question came from
-            from comments import mentions
-            mentions.reply_target(e, facts, tracker, ticket)
+        if isinstance(e.get("on"), str) and (spec := registry.effect(e["kind"], e["on"])):  # a plugin's target
+            plugins.load(spec)(e, facts, tracker, ticket)  # #590 `on: mention`: answer where, and whom, it was asked
         if e["kind"] == "comment" and definition_team():
             e["value"] = f"{e['value']}\n\n{comment_marker(name)}"
         if e["kind"] == "review" and definition_team():

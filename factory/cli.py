@@ -409,6 +409,17 @@ def report_crash(cmd, error, run=subprocess.run):
         print(f"factory: could not report the crash: {e}", file=sys.stderr)
 
 
+def plugin_command(word):
+    """The function (argv) -> exit code a turned-on plugin adds as CLI word `word` (ADR-0026), else None. A team
+    whose config cannot be read has no plugin words: the help is printed instead."""
+    import plugins
+    try:
+        settings = config.load()
+    except (Exception, SystemExit):
+        return None
+    return plugins.registry(settings).command(word)
+
+
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
     try:
@@ -480,6 +491,8 @@ def _main(argv):
     if cmd == "reconcile":
         from reconcile import main as reconcile_main
         return reconcile_main(rest)
+    if cmd and not cmd.startswith("-") and (command := plugin_command(cmd)):
+        return command(rest)
     print(__doc__)
     return 0 if cmd in ("-h", "--help") else 2
 

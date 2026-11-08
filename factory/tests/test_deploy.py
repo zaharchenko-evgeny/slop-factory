@@ -553,13 +553,13 @@ class CommentWakeDeployTest(unittest.TestCase):
             writes.append(endpoint)
             return "{}"
 
-        settings = {"modules": ["comments"], "repositories": [
+        settings = {"plugins": ["comments"], "repositories": [
             {"name": "main", "url": "https://github.com/o/main", "role": "primary"},
             {"name": "app", "url": "https://github.com/o/app", "role": "project"},
         ]}
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            self.assertEqual(deploy.sync_comment_wake_files({**settings, "modules": []}, gh, True), 0)
+            self.assertEqual(deploy.sync_comment_wake_files({**settings, "plugins": []}, gh, True), 0)
             self.assertEqual(writes, [])  # ADR-0025: the module is off
             self.assertEqual(deploy.sync_comment_wake_files(settings, gh, True), 0)
             self.assertEqual(deploy.sync_comment_wake_files(settings, gh, True), 0)
@@ -705,7 +705,7 @@ class ProjectPlanTest(unittest.TestCase):
         """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node and
         the mention router; the others do not. With it off (the fixture as it is, ADR-0025) none deploy."""
         def comments_on(f):
-            f["modules"] = ["comments"]
+            f["plugins"] = ["comments"]
         plan = definition_plan(edit_factory=comments_on)
         nodes_ = {a["spec"]["node"] for a in plan["automations"]}
         self.assertTrue({"mentions", "reply-dev", "reply-reviewer"} <= nodes_)

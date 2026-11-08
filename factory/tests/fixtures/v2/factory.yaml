@@ -3,7 +3,7 @@
 name: Slop factory
 engine: slop-factory@3            # the pinned engine package; the engine's bootstrap installs it
 owner: zaharchenko-evgeny   # the GitHub login the notify node tells
-modules: [comments]         # ADR-0025: mentions, asks and the comment node
+plugins: [comments]         # ADR-0025, ADR-0026: mentions, asks and the comment node
 tracker:
   adapter: github-issues
   repository: zaharchenko-evgeny/slop-factory

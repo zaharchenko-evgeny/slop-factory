@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
-"""Tests for the opt-in comments module (ADR-0025): off by default, on with `modules: [comments]`.
+"""Tests for the opt-in comments plugin (ADR-0025, ADR-0026): off by default, on with `plugins: [comments]`.
 Run: uv run factory/tests/test_comments.py"""
 import copy
 import shutil
@@ -25,6 +25,7 @@ cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"
 import definition  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
+import plugins  # noqa: E402
 from gate_port import MemoryTracker  # noqa: E402
 
 FIXTURES = ROOT / "tests/fixtures"
@@ -46,11 +47,11 @@ class DefinitionModuleTest(unittest.TestCase):
         path.write_text(yaml.safe_dump(data, sort_keys=False))
 
     def off(self):
-        self.edit(definition.FACTORY, lambda f: f.pop("modules"))
+        self.edit(definition.FACTORY, lambda f: f.pop("plugins"))
 
     def test_slop_fixture_has_the_module_off(self):
         defn = definition.load(FIXTURES / "slop")
-        self.assertFalse(definition.module_on(defn, "comments"))
+        self.assertFalse(plugins.registry(defn["factory"]).is_on("comments"))
         self.assertFalse({n for n in defn["workflow"]["nodes"] if n == "mentions" or n.startswith("reply-")})
         self.assertNotIn("mention-router", defn["factory"]["agents"])
 
@@ -64,8 +65,8 @@ class DefinitionModuleTest(unittest.TestCase):
         self.assertFalse({n for n in off["workflow"]["nodes"] if n == "mentions" or n.startswith("reply-")})
         self.assertNotIn("ask", off["workflow"]["nodes"]["implement-medium"]["outcomes"])
         self.assertEqual([w for w in definition.warnings(off) if w.startswith("module-off")],
-                         ["module-off: agents.dev: mentionable needs modules: [comments]",
-                          "module-off: agents.reviewer: mentionable needs modules: [comments]"])
+                         ["module-off: agents.dev: mentionable needs plugins: [comments]",
+                          "module-off: agents.reviewer: mentionable needs plugins: [comments]"])
         self.assertEqual(definition.errors(off), [])
 
     def test_off_refuses_the_module_guard_and_effects(self):
@@ -77,26 +78,33 @@ class DefinitionModuleTest(unittest.TestCase):
         self.assertFalse([e for e in definition.errors(definition.load(self.root)) if e.startswith(("module-off", "unknown-"))])
         self.off()
         errs = [e for e in definition.errors(definition.load(self.root)) if e.startswith(("module-off", "unknown-"))]
-        self.assertEqual(sorted(errs), ["module-off: nodes.comment.answered: `on: mention` needs modules: [comments]",
-                                        "module-off: nodes.comment.asked: mention needs modules: [comments]",
-                                        "module-off: nodes.comment.route: route needs modules: [comments]"])
+        self.assertEqual(sorted(errs), ["module-off: nodes.comment.answered: `on: mention` needs plugins: [comments]",
+                                        "module-off: nodes.comment.asked: mention needs plugins: [comments]",
+                                        "module-off: nodes.comment.route: route needs plugins: [comments]"])
 
     def test_unknown_module(self):
-        self.edit(definition.FACTORY, lambda f: f.update(modules=["comments", "chat"]))
-        self.assertIn("unknown-module: modules: chat", definition.errors(definition.load(self.root)))
+        self.edit(definition.FACTORY, lambda f: f.update(plugins=["comments", "chat"]))
+        self.assertIn("unknown-plugin: plugins: chat", definition.errors(definition.load(self.root)))
 
     def test_modules_must_be_a_list(self):
-        self.edit(definition.FACTORY, lambda f: f.update(modules="comments"))
+        self.edit(definition.FACTORY, lambda f: f.update(plugins="comments"))
         defn = definition.load(self.root)
-        self.assertFalse(definition.module_on(defn, "comments"))
-        errs = [e for e in definition.errors(defn) if "module" in e]
-        self.assertEqual(errs, ["bad-modules: factory.yaml: `modules` must be a list, for example [comments]"])
+        self.assertFalse(plugins.registry(defn["factory"]).is_on("comments"))
+        errs = [e for e in definition.errors(defn) if "plugins" in e]
+        self.assertEqual(errs, ["bad-plugins: factory.yaml: `plugins` must be a list, for example [comments]"])
+
+    def test_modules_is_an_alias_of_plugins(self):
+        """A team that turned the module on with ADR-0025's `modules:` keeps it on."""
+        self.edit(definition.FACTORY, lambda f: f.update(modules=f.pop("plugins")))
+        defn = definition.load(self.root)
+        self.assertIn("mentions", defn["workflow"]["nodes"])
+        self.assertFalse([e for e in definition.errors(defn) if e.startswith(("module-off", "unknown-", "bad-"))])
 
     def test_off_refuses_a_hand_written_ask_outcome(self):
         self.off()
         self.edit(definition.WORKFLOW, lambda w: w["nodes"]["intake"]["outcomes"].update(
             ask={"effects": [{"comment": "text"}]}))
-        self.assertIn("module-off: nodes.intake.ask: ask needs modules: [comments]",
+        self.assertIn("module-off: nodes.intake.ask: ask needs plugins: [comments]",
                       definition.errors(definition.load(self.root)))
 
     def test_reserved_names_are_free_while_off(self):
@@ -111,15 +119,15 @@ class DefinitionModuleTest(unittest.TestCase):
         before = cfg._team
         cfg.set_team(self.root)
         try:
-            self.assertEqual(cfg.load()["modules"], ["comments"])
+            self.assertEqual(cfg.load()["plugins"], ["comments"])
             self.off()
-            self.assertEqual(cfg.load()["modules"], [])
+            self.assertEqual(cfg.load()["plugins"], [])
         finally:
             cfg.set_team(before)
 
 
 class GateModuleTest(unittest.TestCase):
-    """The gate refuses the module's guard, effects and `ask` while the module is off."""
+    """The gate refuses the plugin's guard, effects and `ask` while the plugin is off."""
 
     def graph(self):
         graph = copy.deepcopy(nodes.load())
@@ -128,28 +136,37 @@ class GateModuleTest(unittest.TestCase):
         return graph
 
     def test_off_by_default(self):
-        self.assertEqual(cfg.load()["modules"], [])
-        self.assertFalse(gate.comments_on())
+        self.assertEqual(cfg.load()["plugins"], [])
+        self.assertFalse(gate.plugin_registry().is_on("comments"))
 
     def test_off_refuses_comment_effects_and_asks(self):
         tr = MemoryTracker({"7": {"stage": "triage"}})
-        with self.assertRaisesRegex(gate.Bad, r"comments module is off \(route needs `modules: \[comments\]`\)"):
+        with self.assertRaisesRegex(gate.Bad, r"^module-off: nodes.comment.route: route needs plugins: \[comments\]$"):
             gate.apply("comment", "route", {"ticket": "7", "to": "fix"}, tr, self.graph())
-        with self.assertRaisesRegex(gate.Bad, r"comments module is off \(ask needs"):
+        with self.assertRaisesRegex(gate.Bad, r"^module-off: nodes.comment.ask: ask needs plugins: \[comments\]$"):
             gate.apply("comment", "ask", {"ticket": "7", "to": "reviewer", "text": "?"}, tr, self.graph())
         self.assertNotIn("log", tr.tickets["7"])
 
     def test_off_refuses_the_mention_guard(self):
-        with self.assertRaisesRegex(gate.Bad, r"unknown guard: mention \(mention needs `modules: \[comments\]`\)"):
+        with self.assertRaisesRegex(gate.Bad, r"^module-off: guard: mention needs plugins: \[comments\]$"):
             gate.guard_holds({"mention": "dev"}, {"comments": [{"body": "@factory:dev ?"}]})
-        with patch("gate.comments_on", return_value=True):
+        with self.assertRaisesRegex(gate.Bad, r"^unknown guard: nope$"):
+            gate.guard_holds({"nope": "dev"}, {})
+        with patch("gate.plugin_registry", return_value=plugins.registry({"plugins": ["comments"]})):
             self.assertTrue(gate.guard_holds({"mention": "dev"}, {"comments": [{"body": "@factory:dev ?"}]}))
 
     def test_graph_validation_names_the_module(self):
         graph, config = self.graph(), cfg.load()
         errs = nodes.validate(graph, config)
-        self.assertIn("unknown-effect: comment.route: {'route': 'to'} (needs modules: [comments])", errs)
+        self.assertIn("module-off: comment.route: route needs plugins: [comments]", errs)
+        self.assertFalse([e for e in nodes.validate(graph, {**config, "plugins": ["comments"]}) if "comment.route" in e])
         self.assertFalse([e for e in nodes.validate(graph, {**config, "modules": ["comments"]}) if "comment.route" in e])
+
+    def test_graph_validation_rejects_internal_ticket_target(self):
+        graph = self.graph()
+        graph["nodes"]["comment"]["outcomes"]["route"]["effects"][0]["on"] = "ticket"
+        errs = nodes.validate(graph, {**cfg.load(), "plugins": ["comments"]})
+        self.assertTrue(any("bad `on`" in e for e in errs), errs)
 
 
 class ScriptTest(unittest.TestCase):
@@ -171,7 +188,8 @@ class ScriptTest(unittest.TestCase):
 class PackagingTest(unittest.TestCase):
     def test_the_module_ships_with_the_engine(self):
         pyproject = tomllib.loads((ROOT.parent / "pyproject.toml").read_text())
-        self.assertIn("comments", pyproject["tool"]["setuptools"]["packages"])
+        self.assertLessEqual({"plugins", "factory_plugins", "factory_plugins.comments"},
+                             set(pyproject["tool"]["setuptools"]["packages"]))
 
 
 if __name__ == "__main__":

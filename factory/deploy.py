@@ -30,11 +30,11 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import comments
 import config as config_mod
 import definition
 import github_tracker
 import nodes as nodes_mod
+import plugins
 import project as project_mod
 import vocab
 import youtrack_tracker
@@ -559,20 +559,16 @@ def actions_files(nodes: dict, config: dict) -> dict:
     return files
 
 
-def comments_on(config: dict) -> bool:
-    """True when the team turns on the comments module (`modules: [comments]`, ADR-0025)."""
-    return comments.NAME in (config.get("modules") or [])
-
-
 COMMENT_WAKE_FILES = (".github/workflows/comment-wake-label.yml", "scripts/comment-wake-label.sh")
 
 
 def sync_comment_wake_files(config: dict, run, apply: bool) -> int:
-    """Install the comment wake workflow and its script in every configured GitHub project repository, when the team
-    turns on the comments module (ADR-0025)."""
-    if not comments_on(config):
+    """Install the files the plugins' `deploy.files` hooks name (the comments plugin: the comment wake workflow and its
+    script, ADR-0025) in every configured GitHub project repository."""
+    paths = [p for hook in plugins.registry(config).hook("deploy.files") for p in hook(config)]
+    if not paths:
         return 0
-    files = {path: (ROOT / path).read_text() for path in COMMENT_WAKE_FILES}
+    files = {path: (ROOT / path).read_text() for path in dict.fromkeys(paths)}
     repositories = [r for r in config.get("repositories", []) if "github.com" in r["url"]]
     for repo in repositories:
         name = repository(repo)["fullName"]
