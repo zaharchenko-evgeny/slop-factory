@@ -2077,7 +2077,7 @@ class ReviewLoopTest(unittest.TestCase):
                              for i, f, extra in findings]}
 
     def scope(self, payload, facts, changed):
-        return gate.rereview_scope(self.REQUEST, payload, facts, "low", self.Host(changed), "7")
+        return gate.later_round_scope(self.REQUEST, payload, facts, "low", self.Host(changed), "7")
 
     def test_rereview_new_blocking_on_unchanged_file_is_refused(self):
         why = self.scope(self.payload(("B2", "factory/a.py:3", {})), self.facts("**B1** x"), {"factory/b.py": None})
@@ -2091,7 +2091,7 @@ class ReviewLoopTest(unittest.TestCase):
             with self.subTest(finding=finding):
                 self.assertIsNone(self.scope(self.payload(finding), facts, {"factory/b.py": None}))
 
-    def test_rereview_scope_is_the_fix_hunks_when_the_line_is_known(self):
+    def test_later_round_scope_is_the_fix_hunks_when_the_line_is_known(self):
         facts, changed = self.facts("**B1** x"), {"factory/a.py": [(10, 20)]}
         self.assertIsNone(self.scope(self.payload(("B2", "factory/a.py:22", {})), facts, changed))  # margin
         self.assertIsNone(self.scope(self.payload(("B2", "factory/a.py", {})), facts, changed))  # no line: the file
@@ -2110,7 +2110,7 @@ class ReviewLoopTest(unittest.TestCase):
 
     def test_approve_is_not_scoped(self):
         approve = [{"kind": "review", "value": "approve-at-head", "ticket": "7"}]
-        self.assertIsNone(gate.rereview_scope(approve, self.payload(("B2", "a.py", {})), self.facts("**B1** x"), "low",
+        self.assertIsNone(gate.later_round_scope(approve, self.payload(("B2", "a.py", {})), self.facts("**B1** x"), "low",
                                               self.Host({}), "7"))
 
     @staticmethod

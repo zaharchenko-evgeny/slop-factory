@@ -402,7 +402,7 @@ def _open_blocking(reviews, focus):
     return open_ids
 
 
-def rereview_scope(effects, payload, facts, focus, tracker, ticket):
+def later_round_scope(effects, payload, facts, focus, tracker, ticket):
     """Why a re-review's change request is refused, or None (#1048). On a re-review (the focus has an agent review at
     an earlier head), each blocking finding must continue an open earlier finding (its id), sit on a file whose PR
     patch changed since the last reviewed head (within the fix's hunks when the line is known), or say why the earlier round could not see it (`unseen`). Anything
@@ -905,7 +905,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             if e["kind"] in ("review", "comment"):
                 e["notes"] = notes
     facts = tracker.facts(ticket)
-    if scope := rereview_scope(effects, payload, facts, focus, tracker, ticket):
+    if scope := later_round_scope(effects, payload, facts, focus, tracker, ticket):
         raise Bad(scope)
     comment_after = []
     if any(e["kind"] in COMMENT_EFFECTS for e in effects):
