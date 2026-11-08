@@ -357,6 +357,11 @@ class GateTest(unittest.TestCase):
         self.assertFalse(self._mention("run:\n~~~text\n@factory:dev\n~~~"))
         self.assertFalse(self._mention("run:\n~~~~text\n~~~\n@factory:dev\n~~~~"))
         self.assertFalse(self._mention("run:\n````\n```\n@factory:dev\n````"))
+        self.assertFalse(self._mention("run:\n```\nx = '```' + y\n@factory:dev\n```"))  # a fence run inside a code line
+        self.assertFalse(self._mention("run:\n```\n@factory:dev"))  # an unclosed fence runs to the end
+        self.assertFalse(self._mention("ask ``a ` @factory:dev`` here"))
+        self.assertTrue(self._mention("run:\n```\ncode\n```\n@factory:dev please look"))
+        self.assertTrue(self._mention("a ``` b\n@factory:dev please look"))  # not a fence: not at line start
         self.assertIsNone(gate.latest_mention({"comments": [{"body": "see `@factory:dev`", "at": "1"}], "pr_comments": []}))
 
     def test_label_group_holds_one_value(self):

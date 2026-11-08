@@ -451,12 +451,27 @@ def mention_holds(agent, facts, tracker=None, ticket=None):
 GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention"}
 FROM = re.compile(r"<!-- factory:from (\S+?)( reply)? -->")
 REVIEW_MARKER = re.compile(r"<!-- factory:review focus=\S+ ")
-CODE = re.compile(r"(`{3,}+|~{3,}+).*?\1|`[^`\n]*`", re.S)  # a fence closes with the same run it opened with
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+INLINE_CODE = re.compile(r"(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
 
 
 def strip_code(body):
-    """`body` without code blocks and inline code: a mention there is a quote, not an ask."""
-    return CODE.sub("", body)
+    """`body` without fenced code blocks and inline code: a mention there is a quote, not an ask. Fences follow
+    CommonMark: an opening line of 3+ backticks or tildes, closed only by a line of the same character, at least as
+    long, with nothing after it; an unclosed fence runs to the end."""
+    kept, fence = [], None
+    for line in body.split("\n"):
+        if fence:
+            m = FENCE.match(line)
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line[m.end():].strip():
+                fence = None
+            continue
+        m = FENCE.match(line)
+        if m and not (m.group(1)[0] == "`" and "`" in line[m.end():]):
+            fence = m.group(1)
+            continue
+        kept.append(line)
+    return INLINE_CODE.sub("", "\n".join(kept))
 
 
 def fix_tier(facts, default="mid"):
