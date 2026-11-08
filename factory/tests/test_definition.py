@@ -205,6 +205,10 @@ class DefinitionTest(unittest.TestCase):
         self.edit("factory.yaml", empty)
         self.assertError("empty-environment: environments.engine")
 
+    def test_malformed_writes_is_bad_writes_not_a_crash(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["implement-small"].update(writes=7))
+        self.assertError("bad-writes: nodes.implement-small")
+
     def _two_ticket_repositories(self):
         self.edit("factory.yaml", lambda f: f["tracker"].update(repositories=[MAIN, OTHER]))
         return definition.load(self.root)

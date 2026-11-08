@@ -138,7 +138,9 @@ def node_writes(defn, name):
     listed = [full_name(r["repo"]) for r in env.get("repositories") or []]
     if writes == "all":
         return listed
-    wanted = {full_name(r) for r in writes or [] if isinstance(r, str)}
+    if not isinstance(writes, list):  # malformed: `factory validate` reports `bad-writes`
+        return []
+    wanted = {full_name(r) for r in writes if isinstance(r, str)}
     return [r for r in listed if r in wanted]
 
 
