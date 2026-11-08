@@ -53,7 +53,10 @@ focus; stay in yours.
    deferred to another reviewer: the ticket may have no other reviewer, and the
    schema rejects a `minor` finding that names security or data loss.
    A `blocking` finding needs a concrete `case`: the input or event sequence
-   that breaks. In `structure-security`, name the one fact the change is safe
+   that breaks. When the case is one instance of a class (a syntax variant, a
+   comment author, an empty or missing value), list every case of the class in
+   the finding as rows the developer can copy into a test, not one example.
+   In `structure-security`, name the one fact the change is safe
    because of, and prove it with a run when that is cheap. A broken repository
    rule cites the file and line of the rule.
 4. Spec: check the diff against the ticket and report, each quoting the ticket
@@ -66,6 +69,10 @@ focus; stay in yours.
    that compares them with it.
    When an acceptance check fails, run it and include every hit in one finding,
    listing all affected paths and lines rather than stopping at the first hit.
+   Before a `changes` verdict, make one more pass that looks only for further
+   blocking findings, so one round carries all of them. On a later round, a new
+   blocking finding on lines an earlier round reviewed and the fix did not change
+   says in its text why the earlier round could not see it.
 5. Audit before the verdict; a read-through of the whole diff is not enough. List every code comment
    and every test the diff adds or changes, one by one with its `file:line`, and check each against the
    repository guidance: a comment that misstates the code, or a test that cannot fail when the behaviour
