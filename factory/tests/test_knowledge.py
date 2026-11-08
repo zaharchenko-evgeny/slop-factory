@@ -16,12 +16,12 @@ import os  # noqa: E402
 os.environ["FACTORY_TEAM"] = str(ROOT / "factory/tests/fixtures/team")  # the fixture team, as CI; an Air run points it at the real team
 import knowledge  # noqa: E402
 import nodes  # noqa: E402
-from gate_port import MemoryTracker  # noqa: E402
+from gate_port import MemorySystem  # noqa: E402
 
 
 class RetroTest(unittest.TestCase):
     def test_two_done_tickets_write_two_entries_once(self):
-        tr = MemoryTracker({1: {"stage": "done", "title": "A", "fix_rounds": 2}, 2: {"stage": "done", "title": "B"},
+        tr = MemorySystem({1: {"stage": "done", "title": "A", "fix_rounds": 2}, 2: {"stage": "done", "title": "B"},
                             3: {"stage": "in-review", "title": "C"}})
         inbox = {}
         self.assertEqual(knowledge.retro_entries(tr, [1, 2, 3], inbox), ["retro-1.md", "retro-2.md"])

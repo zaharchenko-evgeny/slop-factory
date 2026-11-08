@@ -20,7 +20,7 @@ import cli  # noqa: E402
 import config  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
-from gate_port import MemoryTracker  # noqa: E402
+from gate_port import MemorySystem  # noqa: E402
 
 DESCRIPTOR = yaml.safe_load((ROOT / "factory/tests/fixtures/team" / config.DESCRIPTOR).read_text())
 
@@ -42,7 +42,7 @@ class TeamRootTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = team(tmp, files={"roles/reviewer/role.md": "# mine\n"})
             config.set_team(root)
-            tracker = MemoryTracker({"7": {"stage": "in-review", "head": "abc", "ci": "green", "blockers_open": 0}})
+            tracker = MemorySystem({"7": {"stage": "in-review", "head": "abc", "ci": "green", "blockers_open": 0}})
             _, out = gate.check("review", {"id": "e1", "ticket": "7"}, tracker, nodes.load(), config.load())
             self.assertEqual(Path(out["role_file"]), root / "roles/reviewer/role.md")
             self.assertEqual(config.resolve("roles/router/role.md"), root / "roles/router/role.md")

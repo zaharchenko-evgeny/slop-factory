@@ -4,6 +4,12 @@ A small relay that runs outside Air. It reads replies to factory emails over IMA
 one to the Air webhook of the `notify-reply` node ([ADR-0022](../../docs/adr/0022-notifiers.md)).
 It opens outbound connections only and listens on no port. It keeps no state.
 
+The mails it answers are sent by the engine's `notify_email` plugin
+(`factory/factory_plugins/notify_email/`), with the `[factory #<n>]` subject and the `Message-ID` `ref` that
+the `notify` plugin (`factory/factory_plugins/notify/`) records in its `factory:notify` markers. A team turns
+both on with `plugins: [notify, notify_email]` in its `factory.yaml`, and checks a person's channel with
+`factory notify test <login>`. The relay stays a separate deployable: it imports nothing from the engine.
+
 For each unseen mail the relay does this:
 
 1. Take the issue number from the `[factory #<n>]` subject and the `ref` from `In-Reply-To`.

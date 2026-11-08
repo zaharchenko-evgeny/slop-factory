@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
-# ///
 """GitHub Issues tracker adapter: the factory operations of docs/agents/issue-tracker.md.
 
 Stage = the one `tracker.stages` label, claim = assignee, blockers = native issue
@@ -14,7 +9,6 @@ nobody else who can comment can set the vars.
 
 """
 import json
-import sys
 import os
 import random
 import re
@@ -24,11 +18,9 @@ from pathlib import Path
 
 import yaml
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import config  # noqa: E402
-import vocab  # noqa: E402
+import config
+import vocab
 
-ROOT = Path(__file__).resolve().parent.parent
 RED = "Main is red"  # title prefix of the owner ticket of a red base branch
 
 

@@ -12,9 +12,6 @@ Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py sweep [--tracker github] [--dry-run] [--stale] [--event FILE | --issue N] (no agent: lists the tickets itself,
                                                                  one stage per ticket;
                                                                  --stale also re-fires nodes whose run died silently)
-       gate.py ci-sync [--dry-run]   (factory:ci-green / factory:ci-red on the open factory PRs of every `role: project`
-                                      repository, from their head check runs and commit statuses; `factory reconcile`
-                                      runs it on its schedule)
 Exit 0 go / done, 10 no go (stale, duplicate or the node no longer matches), 2 bad event, payload, node
 or outcome, 1 a failing effect (the stage is untouched: it is the last effect).
 An event is JSON {id, ticket, head?, actor?}. A payload is JSON {ticket, event?, head?, actor?, ...}
@@ -22,10 +19,11 @@ plus one field per outcome effect that needs data (the error names the field).
 `check --event` also takes the raw trigger payload (an `issues`, `pull_request` or `pull_request_review`
 event): the ticket is the issue number or the `<n>` of the PR branch `ez/<n>-*` (none: exit 10).
 `--tracker memory:FILE` runs on a JSON file {ticket: record} with the in-memory fake; `--tracker github`
-uses factory/gate_github.py (bot login from `targets.air.bot_login`).
+uses factory/factory_plugins/github/gate.py (bot login from `targets.air.bot_login`).
 """
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -34,18 +32,22 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+if __name__ == "__main__":  # run as a script: `import gate` (a plugin's code) must get this module, and its `Bad`
+    sys.modules.setdefault("gate", sys.modules[__name__])
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
-import notify as notifiers  # noqa: E402
-from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
-from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
-from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
-from github_tracker import project_repositories  # noqa: E402
+from derive import clean_notes, review_at_head  # noqa: E402
+import effects as effects_mod  # noqa: E402
+from gate_tracker import OnVcs, hosts_prs, overlay  # noqa: E402
+from gate_port import MemorySystem, ticket_from_ref  # noqa: E402
 import vocab  # noqa: E402
 import definition  # noqa: E402
+import plugins  # noqa: E402  (ADR-0026: a plugin's code is imported when the core calls it)
+import scopes  # noqa: E402
 
 ROOT = nodes_mod.ROOT
 GO, NO_GO, BAD, FAILED = 0, 10, 2, 1
+SKIP = "skip: {ticket} outside every environment scope"  # #1069: the one line of a step on no environment's ticket
 AGENT_KEYS = ("agent", "persona", "mentions", "mentions_on")  # node spec fields of a project with `agents:`
 
 
@@ -143,16 +145,28 @@ def pr_ticket(code_host, number, repository=None):
     return code_host.ticket_for_pr(number, name) if name else code_host.ticket_for_pr(number)
 
 
+def vcs_trigger(d, code_host=None):
+    """`{kind, number, action, repository, ticket}` of a payload a vcs plugin reads itself (the code host's own
+    `trigger`, then the `gate.trigger` hook of the selected plugins: space's merge requests), else None."""
+    own = getattr(code_host, "trigger", None) if code_host is not None else None
+    for parse in [*([own] if callable(own) else []), *plugin_registry().hook("gate.trigger")]:
+        ev = parse(d)
+        if ev is not None:
+            return ev
+    return None
+
+
 def from_trigger(d, code_host=None):
     """Extract the event kind and ticket number; tracker facts supply mutable metadata."""
     event_name = d.get("eventType") or d.get("event_name")
-    if str(event_name or "").startswith("space.") or isinstance(d.get("merge_request"), dict) \
-            or isinstance((d.get("data") or {}).get("merge_request"), dict):
-        ev = space_event(d)
-        ticket = ev["ticket"] or (code_host.ticket_for_pr(ev["number"], ev["project"]) if code_host and ev["project"] else None)
+    ev = vcs_trigger(d, code_host)
+    if ev is not None:
+        ticket = ev["ticket"] or (code_host.ticket_for_pr(ev["number"], ev["repository"])
+                                  if code_host and ev["repository"] else None)
         if ticket is None:
-            raise NoTicket(f"merge request {ev['number']} is not on an ez/<n>- branch")
-        return {"id": f"merge_request:{ticket}:{ev['action']}", "ticket": ticket, "event_name": "pull_request", "action": ev["action"]}
+            raise NoTicket(f"{ev['kind'].replace('_', ' ')} {ev['number']} is not on an ez/<n>- branch")
+        return {"id": f"{ev['kind']}:{ticket}:{ev['action']}", "ticket": ticket, "event_name": "pull_request",
+                "action": ev["action"]}
     if not any(isinstance(d.get(key), dict) for key in ("pull_request", "issue", "review")):
         if isinstance(d.get("data"), dict):
             wrapper = d
@@ -169,7 +183,7 @@ def from_trigger(d, code_host=None):
         else "pull_request" if is_pr else "issues"  # a comment on a PR arrives as an issue event of its number
     if is_pr:
         ticket = pr_ticket(code_host, number, d.get("repository")) if code_host else None
-        if ticket is None and not isinstance(code_host, GitHubCodeHost):  # a live lookup is the only source for GitHub
+        if ticket is None and not is_github(code_host):  # a live lookup is the only source for GitHub
             ticket = ticket_from_ref(((pr or {}).get("head") or {}).get("ref")) or ticket_from_ref((pr or {}).get("title"))
         if ticket is None:
             raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
@@ -177,6 +191,86 @@ def from_trigger(d, code_host=None):
         ticket = number
     action = d.get("action") or "event"
     return {"id": f"{name}:{ticket}:{action}", "ticket": ticket, "event_name": name, "action": action}
+
+
+def is_github(code_host):
+    """Whether `code_host` is the github plugin's vcs; a plugin module never imported built none."""
+    if isinstance(code_host, scopes.ScopedTracker):  # environments with their own trackers: the vcs a PR is looked up on
+        code_host = code_host.vcs_for()[1]
+    module = sys.modules.get("factory_plugins.github.gate")
+    return module is not None and isinstance(code_host, module.GitHubCodeHost)
+
+
+def tracker_of(config, **runners):
+    """The gate tracker of `config`, from the plugin that provides `tracker.adapter` (ADR-0026): github-issues from
+    the github plugin, youtrack from the youtrack plugin (its tickets in YouTrack, its pull requests on the vcs).
+    `runners` are passed to `from_config` (the local poll's `gh`, tests)."""
+    t = config.get("tracker")
+    name = (t.get("adapter") if isinstance(t, dict) else None) or "github-issues"
+    tracker_cls = plugins.registry(config).impl("tracker", name)
+    if tracker_cls is None:
+        raise ValueError(f"tracker.adapter {name}: no selected plugin provides this tracker")
+    return tracker_cls.from_config(**runners)
+
+
+def env_descriptor(config, env):
+    """The descriptor of project environment `env` (#1069): its merged tracker block as `tracker`, its repositories
+    (its main one the primary) as `repositories`, and its main repository as the code host of its pull requests."""
+    by_name = {r["name"]: r for r in config.get("repositories") or []}
+    names = [n for n in ((config.get("environments") or {}).get(env) or {}).get("repositories") or [] if n in by_name]
+    repos = [{**by_name[n], "role": "primary" if i == 0 else "project"} for i, n in enumerate(names)] \
+        or config.get("repositories") or []
+    main = next((r["url"] for r in repos if r.get("role") == "primary"), None)
+    out = {**{k: v for k, v in config.items() if k != "vcs"}, "tracker": scopes.project_envs(config)[env],
+           "repositories": repos, "code_host": config_mod.vcs(config, env)}  # the environment's vcs (#1070)
+    if main:
+        out["code_host"] = {**out["code_host"], "repository": "/".join(main.rstrip("/").split("/")[-2:])}
+    return out
+
+
+def vcs_class(config, block, where="vcs"):
+    """The class the selected plugin provides for vcs block `block` (github when it names none)."""
+    name = block.get("adapter") or "github"
+    why = plugins.impl_error(config, "vcs", name, where)
+    if why:
+        raise ValueError(why)
+    return plugins.registry(config).impl("vcs", name)
+
+
+def beside(tracker, vcs):
+    """(tracker, vcs), the tracker an `OnVcs` when the vcs applies its own PR effects (gate_tracker.py)."""
+    return (OnVcs.of(tracker, vcs) if hosts_prs(vcs) else tracker), vcs
+
+
+def env_systems(config, env, **runners):
+    """The (tracker, vcs) of project environment `env`, from the plugins that provide them; `runners` are passed to
+    both `from_config` (tests stub them)."""
+    c = env_descriptor(config, env)
+    block = c["tracker"]
+    tracker_cls = plugins.registry(config).impl("tracker", scopes.adapter(block))
+    if tracker_cls is None:
+        raise ValueError(f"environments.{env}.tracker.adapter {scopes.adapter(block)}: no selected plugin provides this tracker")
+    tracker = tracker_cls.from_config(descriptor=c, **runners)
+    vcs_cls = vcs_class(config, config_mod.vcs(c), f"environments.{env}.vcs")
+    return beside(tracker, vcs_cls.from_config(descriptor=c, **({"run": tracker.run} if hasattr(tracker, "run") else {})))
+
+
+def systems(config):
+    """The (tracker, vcs) of `config`, from the plugins that provide them; the vcs is the run's environment's
+    (FACTORY_ENV: its own `vcs:` over the top-level one, #1070). With environments that have their own trackers
+    (#1069), both are one `scopes.ScopedTracker`: each ticket goes to its environment's tracker, the run's environment
+    first."""
+    env = os.environ.get("FACTORY_ENV")
+    if scopes.project_envs(config):
+        scoped = scopes.ScopedTracker(config, env_systems, env)
+        return scoped, scoped
+    tracker = tracker_of(config)
+    block = config_mod.vcs(config, env)
+    vcs_cls = vcs_class(config, block, f"environments.{env}.vcs" if block != config_mod.vcs(config) else "vcs")
+    own = {} if block == config_mod.vcs(config) else \
+        {"descriptor": {**{k: v for k, v in config.items() if k != "vcs"}, "code_host": block}}
+    run = {"run": tracker.run} if hasattr(tracker, "run") else {}  # one runner, so github_calls counts both
+    return beside(tracker, vcs_cls.from_config(**own, **run))
 
 
 def read(path, what, raw=False, code_host=None):
@@ -320,19 +414,14 @@ def decide(name, ticket, tracker, nodes, dry_run=False):
     return NO_GO, {"outcome": None, "applied": False, "reason": "no outcome's guards hold"}
 
 
-def merge_refused(effects, facts):
+def merge_refused(effects, facts, tracker=None):
     """ADR-0021: a `merge` effect keeps its own invariants, whatever chose it: the current head is approved by the
-    agent reviews at it, none asks for changes, CI is green there and the branch is not behind. None when it may
-    merge, else the reason. The old layout's merge node checks its gates before it gets here."""
+    agent reviews at it, none asks for changes, CI is green there and the branch is not behind (the merge's `needs`,
+    factory/effects.py). None when it may merge, else the reason. The old layout's merge node checks its gates before
+    it gets here."""
     if not any(e["kind"] == "merge" for e in effects) or not definition_team():
         return None
-    if review_at_head(facts) != "approve":
-        return "merge refused: no approving review at the current head"
-    if facts.get("ci") != "green":
-        return f"merge refused: CI is {facts.get('ci')} at the current head"
-    if facts.get("behind"):
-        return "merge refused: the branch is behind its base (update it first)"
-    return None
+    return effects_mod.refused(effects, facts, tracker)
 
 
 def unblocked(effects, tracker, facts):
@@ -372,14 +461,6 @@ def group_unlabels(effects, facts):
         out += [{"kind": "unlabel", "ticket": e["ticket"], "value": x, **({"on": e["on"]} if e.get("on") else {})}
                 for x in have if x.startswith(f"{group}:") and x != e["value"]]
     return out
-
-
-def review_at_head(facts):
-    """`approve` when agent reviews at the current head all approve, `changes` when one asks for changes, else `none`."""
-    verdicts = [r.get("verdict") for r in facts.get("reviews") or [] if r.get("agent") and r.get("commit_id") == facts.get("head")]
-    if not verdicts:
-        return "none"
-    return "changes" if any(v != "approve" for v in verdicts) else "approve"
 
 
 def _resolved_ids(body):
@@ -485,64 +566,26 @@ def guard_holds(guard, facts, tracker=None, ticket=None):
         kids = tracker.children(ticket) or []
         facts = {**facts, "children_open": sum(1 for c in kids if c.get("state") == "open")}
     unknown = set(guard) - GUARD_KEYS
-    if unknown:
-        raise Bad(f"unknown guard: {', '.join(sorted(unknown))}")
-    if "mention" in guard:
-        if not mention_holds(guard["mention"], facts, tracker, ticket):
+    if not unknown:
+        return holds(guard, facts, {})
+    if unknown - {k for k in unknown if plugins.owner(k, "guard")}:
+        raise Bad(f"unknown guard: {', '.join(sorted(k for k in unknown if not plugins.owner(k, 'guard')))}")
+    registry = plugin_registry()  # read the config only for a guard a plugin owns
+    off = sorted(k for k in unknown if not registry.is_on(plugins.owner(k, "guard")))
+    if off:
+        raise Bad("; ".join(registry.refusal("guard", k, "guard") for k in off))
+    for k in sorted(unknown):
+        if not plugins.load(registry.guards()[k])(guard[k], facts, tracker, ticket):
             return False
-        guard = {k: v for k, v in guard.items() if k != "mention"}
-    return holds(guard, facts, {})
+    return holds({k: v for k, v in guard.items() if k not in unknown}, facts, {})
 
 
-def latest_mention(facts, tracker=None, ticket=None):
-    """{by, body, at, on, url} of the latest comment or review on the ticket or its PR that names @factory:, else None."""
-    found = [dict(c, on="ticket") for c in facts.get("comments") or []]
-    pr = facts.get("pr_comments")
-    if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
-        pr = tracker.pr_comments(ticket)
-    found += [dict(c, on="pr") for c in pr or []]
-    found += [{"author": r.get("author"), "body": r.get("body"), "at": r.get("submitted_at"), "on": "pr"}
-              for r in facts.get("reviews") or [] if r.get("body")]
-    found = [c for c in found if "@factory:" in (c.get("body") or "")]
-    if not found:
-        return None
-    c = max(enumerate(found), key=lambda ic: (ic[1].get("at") or "", ic[0]))[1]
-    return {"by": c.get("author"), "body": c.get("body"), "at": c.get("at"), "on": c["on"], "url": c.get("url")}
+def plugin_registry():
+    """The registry of the plugins the team turns on (`plugins:`, ADR-0026)."""
+    return plugins.registry(config_mod.load())
 
 
-def mention_holds(agent, facts, tracker=None, ticket=None):
-    """ADR-0021 #590: the latest comment on the ticket or its PR names `@factory:<agent>`, and may ask it. A person
-    may ask any agent; an agent (its comment's `factory:from` marker) only a neighbour in workflow.yaml; a reply
-    never asks anyone, so two agents cannot answer each other forever."""
-    comments = list(facts.get("comments") or [])
-    pr_comments = facts.get("pr_comments")
-    if pr_comments is None and tracker is not None and hasattr(tracker, "pr_comments"):
-        pr_comments = tracker.pr_comments(ticket)
-    comments += pr_comments or []
-    comments += [{"body": r.get("body") or "", "at": r.get("submitted_at") or r.get("at")}
-                 for r in facts.get("reviews") or [] if r.get("body")]  # a reviewer asks in its review
-    if not comments:
-        return False
-    latest = max(enumerate(comments), key=lambda ic: (ic[1].get("at") or "", ic[0]))[1]
-    body = latest.get("body") or ""
-    if not re.search(rf"@factory:{re.escape(agent)}(?![\w-])", body):
-        return False
-    marker = FROM.search(body)
-    if not marker:
-        return True  # a person
-    if marker[2]:  # a reply asks no one, except an answer to an ask, which goes back to the asker (#591)
-        answer = ANSWER.search(body)
-        ask = next((c for c in comments if answer and (m := ASK.search(c.get("body") or "")) and m[1] == answer[1]), None)
-        asker = FROM.search(ask["body"]) if ask else None
-        return bool(asker and asker[1] == agent)
-    if marker[1] == agent:
-        return False
-    import definition
-    return frozenset((marker[1], agent)) in definition.neighbours(definition.load(config_mod.team_root()))
-
-
-REMOTE_FIRST = ("review", "merge", "update-branch")  # effects that write to a code host and can fail there
-GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention"}
+GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket"}  # and the plugins' guards
 FROM = re.compile(r"<!-- factory:from (\S+?)( reply)? -->")
 
 
@@ -592,10 +635,10 @@ def check(name, event, tracker, nodes, config, code_host=None):
     if "id" not in event:
         raise Bad("malformed event: needs `id`")
     facts = tracker.facts(event["ticket"])
-    if isinstance(code_host, SpaceCodeHost):  # Space owns the merge request: its CI and review facts replace the tracker's
-        space = code_host.facts(event["ticket"])
-        if space["pr"] is not None:
-            facts = {**facts, **{k: space[k] for k in ("pr", "head", "branch", "pr_state", "ci", "dry_run", "pr_labels", "reviews", "round_complete", "round_verdict", "round_head")}}
+    if isinstance(code_host, scopes.ScopedTracker):  # the vcs of the ticket's environment
+        code_host = code_host.vcs_for()[1]
+    if code_host is not tracker and getattr(tracker, "vcs", None) is not code_host:
+        facts = overlay(facts, code_host, event["ticket"])  # a vcs that owns its merge requests (space): its facts win
     if "event_name" in event:
         event["id"] = f"{event['event_name']}:{event['ticket']}:{event['action']}:{facts.get('updated_at', '')}"
         event["head"] = facts.get("head")
@@ -610,11 +653,9 @@ def check(name, event, tracker, nodes, config, code_host=None):
     why = matches(node, facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     notes = facts.get("agent_notes", [])
-    if comment_node(node):  # ADR-0023: what the comment node reads, after the cursor
-        listed = new_comments(facts, tracker, event["ticket"])
-        save_comment_input(event["ticket"], listed)
-        facts["new_comments"] = [{k: c.get(k) for k in ("id", "on", "author", "author_is_bot", "author_is_factory", "at", "body")}
-                                 for c in listed]
+    extra = {}  # what the plugins add to the step (comments: the comment node's input, a reply's `mention`)
+    for step_context in plugin_registry().hook("gate.step_context"):
+        extra.update(step_context(name, node, facts, tracker, event["ticket"]) or {})
     facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
@@ -630,7 +671,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "status": status(facts), "outcomes": list(node["outcomes"]),
         "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if fixing else ()))],
-        **({"mention": latest_mention(facts, tracker, event["ticket"])} if name.startswith("reply-") and definition_team() else {}),
+        **extra,
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and fixing),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
         # one entry per repository of a ticket that changes several (ADR-0017), all on the ticket's one branch
@@ -695,189 +736,10 @@ def resolve(effect, payload, ticket):
         return {**out, "on": on} if on else out
     if kind in ("park-behind-main-red", "route", "reply"):
         return {"kind": kind, "ticket": ticket, "value": field(arg)}
-    if kind == "notify":  # `notify: message` or `notify: {message: message, people: [logins]}` (ADR-0022)
-        message = {"issue": ticket, "problem": field("problem"), "links": payload.get("links", []), "options": payload.get("options", []), "recommended": payload.get("recommended")}
-        try:
-            notifiers.validate_message(message)
-        except ValueError as e:
-            raise Bad(f"notify: {e}")
-        return {"kind": kind, "ticket": ticket, "value": {"message": message, "people": arg.get("people") if isinstance(arg, dict) else None},
-                **({"on": on} if on else {})}
+    if plugins.owner(kind, "effect"):  # a plugin's effect (notify): its handler reads the payload (ADR-0026)
+        out = {"kind": kind, "ticket": ticket, "value": arg}
+        return {**out, "on": on} if on else out
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
-
-
-ASK = re.compile(r"<!-- factory:ask id=(\S+) from=(\S+) to=(\S+) hop=(\d+) -->")
-ANSWER = re.compile(r"<!-- factory:answer id=(\S+) -->")
-
-
-def notify_config():
-    """`notify` of the team's factory.yaml; Bad when the team has none."""
-    import definition
-    config = (definition.load(config_mod.team_root())["factory"] or {}).get("notify")
-    if not config:
-        raise Bad("notify: the team's factory.yaml has no `notify` config")
-    return config
-
-
-def notify_effects(effects, tracker, ticket, name):
-    """Replace each `notify` effect with the one `[factory]` comment ADR-0022 asks for: the rendered text and one
-    `factory:notify` marker per send. The comment is posted even when a send failed (it lists the sends that went
-    out); the failures then raise. Returns the effects, the failures and the notify comments alone. A retry sends
-    again: nothing reads the markers."""
-    out, failures, posted = [], [], []
-    for e in effects:
-        if e["kind"] != "notify":
-            out.append(e)
-            continue
-        message = {**e["value"]["message"], "pr": ""}
-        if e.get("on") == "pr":
-            message["pr"] = tracker.facts(ticket).get("pr") or ""
-        try:
-            sent, errors = notifiers.send_all(notify_config(), message, e["value"]["people"])
-        except ValueError as err:
-            raise Bad(str(err))
-        failures += errors
-        if sent:
-            body = "[factory] " + notifiers.render(message) + "\n\nNotified: " + ", ".join(f"{p} via {v}" for v, p, _ in sent)
-            body += "".join("\n" + notifiers.marker(v, p, r) for v, p, r in sent)
-            if definition_team():
-                body += f"\n\n{comment_marker(name)}"
-            posted.append({"kind": "comment", "ticket": ticket, "value": body, **({"on": e["on"]} if e.get("on") else {})})
-            out.append(posted[-1])
-    return out, failures, posted
-
-
-def ask_effects(name, node, out, payload, tracker, ticket, effects):
-    """#591: the comment an `ask` outcome posts. `@factory:<to>` wakes the target through the mention router, so it
-    runs in reply mode. Refused for a pair outside the outcome's `to` allowlist; over `limits.mention_hops` asks on
-    the ticket it posts one comment naming the limit and wakes nothing."""
-    to = str(payload.get("to") or "")
-    allowed = out.get("to") or []
-    if to not in allowed:
-        raise Bad(f"ask: `{to}` is not an agent this node may ask; allowed: {', '.join(allowed) or 'none'}")
-    facts = tracker.facts(ticket)
-    pr = facts.get("pr_comments")
-    if pr is None and hasattr(tracker, "pr_comments"):
-        pr = tracker.pr_comments(ticket)
-    asked = sum(1 for c in [*(facts.get("comments") or []), *(pr or [])]  # only the factory's own asks count
-                if c.get("author_is_factory") and (c.get("body") or "").startswith("[factory]") and ASK.search(c["body"]))
-    limit = config_mod.load().get("limits", {}).get("mention_hops", 3)
-    if asked >= limit:
-        return [{"kind": "comment", "ticket": ticket, "value": f"[factory] Ask refused: this ticket reached its limit of "
-                 f"{limit} asks (`limits.mention_hops`). Go on without asking."}]
-    who = f"{agent_of(name) if definition_team() else node.get('agent', name)} ({node.get('role')})"
-    marker = f"<!-- factory:ask id={ticket}-{asked + 1} from={name} to=reply-{to} hop={asked + 1} -->"
-    text = " ".join(str(payload["text"]).split())
-    return [{**effects[0], "value": f"[factory] **{who}:** @factory:{to} {text}\n{marker}"}]
-
-
-COMMENT_EFFECTS = ("route", "reply", "skip")  # the effects of the comment node's outcomes (ADR-0023)
-SEEN = re.compile(r"<!-- factory:comment-seen (\d+) -->")
-
-
-def comment_cursor(comments):
-    """The highest id in a `factory:comment-seen` marker of the factory's own comments (0: none). Only
-    `author_is_factory` counts; another integration cannot move the cursor."""
-    return max((int(m[1]) for c in comments if c.get("author_is_factory")
-                and (c.get("body") or "").startswith("[factory]") and (m := SEEN.search(c["body"]))), default=0)
-
-
-def new_comments(facts, tracker=None, ticket=None):
-    """The comments on the ticket and its PR after the cursor, oldest first, `on` saying where each is. The factory's
-    own comments (a `factory:from` marker without an ask marker) are not input."""
-    pr = facts.get("pr_comments")
-    if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
-        pr = tracker.pr_comments(ticket)
-    found = [dict(c, on="ticket") for c in facts.get("comments") or []] + [dict(c, on="pr") for c in pr or []]
-    cursor = comment_cursor(found)
-    own = lambda c: FROM.search(c.get("body") or "") and not ASK.search(c.get("body") or "")
-    return sorted((c for c in found if int(c.get("id") or 0) > cursor and not own(c)), key=lambda c: int(c["id"]))
-
-
-def comment_input_path(ticket):
-    return Path(".factory") / "check" / f"{ticket}-comments.json"
-
-
-def save_comment_input(ticket, comments):
-    """The newest comment id the step's context lists: `apply` acknowledges nothing after it."""
-    path = comment_input_path(ticket)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"ticket": ticket, "last": max((int(c["id"]) for c in comments), default=0)}))
-
-
-def comment_input_last(ticket):
-    """The saved id, or None when no `check` ran (every comment is then input)."""
-    try:
-        state = json.loads(comment_input_path(ticket).read_text())
-        return int(state["last"]) if str(state.get("ticket")) == str(ticket) else None
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-
-
-def comment_node(node):
-    return any(next((k for k in e if k != "on"), None) in COMMENT_EFFECTS
-               for o in node["outcomes"].values() for e in (o or {}).get("effects") or [])
-
-
-def route_effects(to, facts, ticket, nodes, tier, clean):
-    """The effects that move the item to node `to`: its trigger label and the stage its `when` needs, both from
-    workflow.yaml. `clean` also drops the person's wait and the stale command labels. Refuses (Bad, nothing
-    written) an unknown node, one without a label trigger, or one whose `when` fails with the new stage and label."""
-    node = (nodes.get("nodes") or {}).get(to)
-    if node is None or node.get("enabled") is False:
-        raise Bad(f"route: unknown node `{to}`")
-    trigger = next((m for t in node.get("triggers") or [] if isinstance(t, str)
-                    and (m := re.fullmatch(r"(issues|pull_request)\.labeled (\S+)", t))), None)
-    if not trigger:
-        raise Bad(f"route: node `{to}` has no label trigger")
-    label, on = trigger[2].replace("<tier>", tier), "pr" if trigger[1] == "pull_request" else None
-    if "<" in label:
-        raise Bad(f"route: the trigger label of `{to}` needs a value: {label}")
-    when = node.get("when") or {}
-    stages = [when["stage"]] if isinstance(when.get("stage"), str) else list(when.get("stage") or [])
-    stage = facts["stage"] if facts["stage"] in stages or not stages else stages[0]
-    held = {**facts, "stage": stage, **{"pr_labels" if on else "attrs": [*facts.get("pr_labels" if on else "attrs", []), label]}}
-    if not holds({k: v for k, v in when.items() if k != "stage"}, held, {}):
-        raise Bad(f"route: node `{to}` does not match this item now (its `when` fails)")
-    out = clear_commands(ticket) + [{"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human(), **extra}
-                                    for extra in ({}, {"on": "pr"})] if clean else []
-    out.append({"kind": "label", "ticket": ticket, "value": label, **({"on": on} if on else {})})
-    if stage != facts["stage"]:
-        out.append({"kind": "stage", "ticket": ticket, "value": stage})
-    return out, stage
-
-
-def comment_moves(moves, name, payload, facts, tracker, nodes, ticket):
-    """(effects, after) for the comment node's route, reply and skip effects (ADR-0023). `effects` move the item;
-    `after` always runs: remove the wake label, react on a skipped comment, post a short reply with the cursor."""
-    found = new_comments(facts, tracker, ticket)
-    last = comment_input_last(ticket)
-    fresh = [c for c in found if last is None or int(c["id"]) <= last]  # what the step read
-    later = {c["on"] for c in found if c not in fresh}  # arrived during the run: still pending
-    tier = payload.get("tier") or fix_tier(facts)
-    effects, summary = [], "Nothing to do."
-    for e in moves:
-        if e["kind"] == "skip":
-            if fresh:
-                effects.append({"kind": "react", "ticket": ticket, "value": "eyes", "comment": fresh[-1]["id"],
-                                **({"on": "pr"} if fresh[-1]["on"] == "pr" else {})})
-            continue
-        route = e["kind"] == "route"
-        to = e["value"] if route else f"reply-{e['value']}"
-        more, stage = route_effects(to, facts, ticket, nodes, tier, clean=route)
-        effects += more
-        summary = f"Moved to `{to}`, stage `{stage}`." if route else f"Asked `{e['value']}` to answer."
-    text = " ".join(str(payload.get("reply") or summary).split())
-    if fresh:
-        text += f"\n<!-- factory:comment-seen {fresh[-1]['id']} -->"
-    if definition_team():
-        text += f"\n\n{comment_marker(name)}"
-    after = [{"kind": "unlabel", "ticket": ticket, "value": vocab.comment(), **extra} for extra in ({}, {"on": "pr"})]
-    after += [{"kind": "label", "ticket": ticket, "value": vocab.comment(), **({"on": "pr"} if on == "pr" else {})}
-              for on in sorted(later)]  # the label added again wakes the node for the later comments
-    after.append({"kind": "comment", "ticket": ticket, "value": text, **({"on": "pr"} if fresh and fresh[-1]["on"] == "pr" else {}),
-                  **({"run_id": payload["run_id"]} if payload.get("run_id") else {})})
-    return effects, after
 
 
 def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
@@ -911,8 +773,17 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
         payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
-    if outcome == "ask":
-        effects = ask_effects(name, node, out, payload, tracker, ticket, effects)
+    # ADR-0026: the effects, `on:` targets and outcome a plugin owns; the config is read only when there are some
+    owns = plugins.owner(outcome, "outcome")
+    used = {(outcome, owns)} | {(e["kind"], plugins.owner(e["kind"], "effect")) for e in effects
+                                if plugins.owner(e.get("on"), "trigger") is None}  # `on: pr` too, not `on: mention`
+    used |= {(f"`on: {e['on']}`", plugins.owner(e["on"], "trigger")) for e in effects if isinstance(e.get("on"), str)}
+    used = sorted((k, p) for k, p in used if p)
+    registry = plugin_registry() if used else plugins.registry({})
+    if off := [(k, p) for k, p in used if not registry.is_on(p)]:
+        raise Bad("; ".join(plugins.refusal(f"nodes.{name}.{outcome}", k, p) for k, p in off))
+    for hook in registry.hook("gate.outcome", owns) if owns else []:  # comments: the `ask` outcome's comment
+        effects = hook(name, outcome, node, out, payload, tracker, ticket, effects)
     if payload.get("agent_notes"):  # hidden notes for later agents ride on the review, the comments or the PR text
         try:
             notes = clean_notes(payload["agent_notes"])
@@ -924,11 +795,13 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     facts = tracker.facts(ticket)
     if scope := rereview_scope(effects, payload, facts, focus, tracker, ticket):
         raise Bad(scope)
-    comment_after = []
-    if any(e["kind"] in COMMENT_EFFECTS for e in effects):
-        moved, comment_after = comment_moves([e for e in effects if e["kind"] in COMMENT_EFFECTS], name, payload, facts,
-                                             tracker, nodes, ticket)
-        effects = [e for e in effects if e["kind"] not in COMMENT_EFFECTS] + moved
+    comment_after = []  # what a plugin's effects must write after the stage change (the comment node's reply)
+    # A plugin's effects, by handler: it turns them into core effects (comments: route, reply, skip) or reads their
+    # payload before anything is written (notify on the ticket or its PR)
+    for spec, mine in effects_mod.plugin_handlers(registry, effects).items():
+        moved, later = plugins.load(spec)(mine, name, payload, facts, tracker, nodes, ticket)
+        effects = [e for e in effects if all(e is not m for m in mine)] + moved
+        comment_after += later
     after = []  # effects that must follow the stage change
     starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(commands())]
     stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith(vocab.prefix("fix-<tier>")) for e in starts))
@@ -961,9 +834,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         effects[:0] = human_effects
     after = [*after, *comment_after, *unblocked(effects, tracker, facts)]
     effects[:0] = group_unlabels(effects, facts)
-    # Remote writes that can fail first, the stage change last: a failed review POST then leaves the labels and the
-    # stage as they were, instead of a ticket with its risk label removed and no node to wake it (#998).
-    effects.sort(key=lambda e: 0 if e["kind"] in REMOTE_FIRST else 2 if e["kind"] == "stage" else 1)
+    effects = effects_mod.order(tracker, effects)  # remote writes first, the stage change last (#998)
     for e in effects:
         if e["kind"] == "stage":
             e["event"] = payload.get("event")
@@ -981,19 +852,10 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
                 e["heads"] = facts["heads"]  # one per repository of a multi-repository ticket
         if e["kind"] == "comment" and payload.get("run_id"):
             e["run_id"] = payload["run_id"]
-        if e["kind"] == "comment" and e.get("on") == "mention":  # #590: answer where, and whom, the question came from
-            asked = latest_mention(facts, tracker, ticket)
-            e["on"] = "pr" if asked and asked["on"] == "pr" else None
-            if not e["on"]:
-                del e["on"]
-            if (ask := ASK.search((asked or {}).get("body") or "")) and (asker := FROM.search(asked["body"])):
-                e["value"] = f"@factory:{asker[1]} {e['value']}\n<!-- factory:answer id={ask[1]} -->"  # #591: back to the asker
-            elif asked and asked.get("by"):
-                e["value"] = f"@{asked['by']} {e['value']}"
-        if e["kind"] == "comment" and definition_team():
-            e["value"] = f"{e['value']}\n\n{comment_marker(name)}"
-        if e["kind"] == "review" and definition_team():
-            e["summary"] = f"{e.get('summary') or ''}\n\n{comment_marker(name)}"
+        if spec := effects_mod.plugin_target(registry, e):  # a plugin's target
+            plugins.load(spec)(e, facts, tracker, ticket)  # #590 `on: mention`: answer where, and whom, it was asked
+        if e["kind"] in ("comment", "review") and definition_team():
+            effects_mod.mark(e, comment_marker(name))
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
     replay = (payload.get("review_replay") and facts.get("stage") == "in-review"
@@ -1001,11 +863,14 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
                                                                "round": payload.get("round"),
                                                                "review_replay": True}))
     why = (None if replay else matches(node, facts, {**payload, "id": payload.get("event")}, out)) \
-        or merge_refused(effects, facts)
+        or merge_refused(effects, facts, tracker)
     if why:
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
-    effects, failures, posted = notify_effects(effects, tracker, ticket, name)
+    failures, posted = [], []
+    for send in registry.hook("gate.send"):  # notify: the sends, each effect replaced by its `[factory]` comment
+        effects, failed, sent = send(effects, tracker, ticket, name)
+        failures, posted = failures + failed, posted + sent
     if failures:  # keep the markers of the sends that went out; skip the stage change and the other effects
         for e in posted:
             tracker.apply(e)
@@ -1269,6 +1134,10 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                     done_tickets.append(n)
                 if node == "finish" and outcome in ("merged", "children-done") and hasattr(tracker, "parent") and (p := tracker.parent(n)):
                     queue.append(p)
+            except scopes.OutOfScope:  # no environment's ticket: nothing to do (#1069)
+                if progress:
+                    progress({"ticket": n, "outcome": "skipped", "why": SKIP.format(ticket=n)})
+                break
             except Exception as e:  # one ticket failing does not stop the others
                 failed = True
                 r = {"ticket": n, "error": f"{type(e).__name__}: {e}", **({"kind": e.kind} if hasattr(e, "kind") else {})}
@@ -1283,6 +1152,8 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
             try:
                 dependents = tracker.blocking(source)
                 not_planned = hasattr(tracker, "not_planned") and tracker.not_planned(source)
+            except scopes.OutOfScope:  # no environment's ticket wakes nothing (#1069)
+                continue
             except Exception as e:  # a tracker lookup must not fail the whole sweep
                 results.append({"ticket": source, "error": f"{type(e).__name__}: {e}"})
                 continue
@@ -1463,72 +1334,9 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
     return results, failed
 
 
-def head_ci(checks):
-    """(green|red|pending|none, latest result time) of a head's check runs and commit statuses, each
-    {conclusion, at} with conclusion None while it runs. One failure is red, as the gate's `ci` fact reads it."""
-    done = [c["conclusion"] for c in checks]
-    at = max((c["at"] for c in checks if c.get("at")), default=None)
-    if not done:
-        return "none", at
-    if any(c in BAD_CI for c in done):
-        return "red", at
-    return ("green" if all(c in GOOD_CI for c in done) else "pending"), at
-
-
-def ci_sync_pr(code_host, repository, pr, dry_run=False):
-    """Set `factory:ci-green` or `factory:ci-red` on one factory PR {number, head, labels} from its head checks; a
-    head with no result yet (pending, or no checks) keeps its labels. A label added before the head's latest result
-    belongs to an earlier head: it is removed and added again, because re-adding a present label fires no event.
-    The scheduled `ci_sync` calls this per PR; the event path (a finished check, after the #365 probe) calls it for one PR."""
-    ci, at = head_ci(code_host.head_checks(repository, pr["head"]))
-    r = {"repo": repository, "pr": pr["number"], "head": pr["head"], "ci": ci, "added": [], "removed": []}
-    if ci not in ("green", "red"):
-        return r
-    want, other = vocab.ci(f"ci-{ci}"), vocab.ci("ci-red" if ci == "green" else "ci-green")
-    stale = want in pr["labels"] and bool(at) and (code_host.label_added_at(repository, pr["number"], want) or "") < at
-    if want in pr["labels"] and not stale:
-        r["removed"] = [other] if other in pr["labels"] else []
-    else:
-        r["removed"], r["added"] = [x for x in (other, want) if x in pr["labels"]], [want]
-    if not dry_run and (r["added"] or r["removed"]):
-        code_host.edit_pr_labels(repository, pr["number"], add=r["added"], remove=r["removed"])
-    return r
-
-
-def ci_sync(code_host, repositories, dry_run=False, progress=None):
-    """The CI label of every open factory PR in `repositories` (the `role: project` ones: the factory repository
-    labels its own PRs from quality-gates). Returns (results, failed); one PR failing does not stop the others."""
-    results, failed = [], False
-    for repository in repositories:
-        try:
-            prs = code_host.factory_prs(repository)
-        except Exception as e:
-            failed = True
-            results.append({"repo": repository, "error": f"{type(e).__name__}: {e}"})
-            continue
-        for pr in prs:
-            try:
-                r = ci_sync_pr(code_host, repository, pr, dry_run)
-            except Exception as e:
-                failed, r = True, {"repo": repository, "pr": pr["number"], "error": f"{type(e).__name__}: {e}"}
-            results.append(r)
-            if progress:
-                progress(r)
-    return results, failed
-
-
-def run_ci_sync(dry_run=False, progress=None):
-    """`ci-sync` (manual) and each `factory reconcile` pass (scheduled): the descriptor's project repositories on
-    GitHub. Another code host has no sync yet: nothing is read."""
-    config = config_mod.load()
-    if (config.get("code_host") or {}).get("adapter") == "space":
-        return [], False
-    return ci_sync(GitHubCodeHost.from_config(), project_repositories(config), dry_run, progress)
-
-
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "ci-sync", "decide", "ci"])
+    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "decide", "ci"])
     p.add_argument("--wait", action="store_true")
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
@@ -1550,22 +1358,14 @@ def main(argv):
     except SystemExit:
         return BAD
     path = ""
-    if a.cmd == "ci-sync":
-        results, failed = run_ci_sync(a.dry_run, lambda r: print(json.dumps(r), file=sys.stderr, flush=True))
-        print(json.dumps({"dry_run": a.dry_run, "ci_sync": results}))
-        return FAILED if failed else GO
     code_host = None
     try:
         kind, _, path = (a.tracker or "github").partition(":")
         if kind == "github" and not path:
-            tracker = GitHubGateTracker.from_config()
-            if (config_mod.load().get("code_host") or {}).get("adapter") == "space":
-                code_host = space_from_config(config_mod.load())
-            else:
-                code_host = GitHubCodeHost.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {}))  # one runner, so github_calls counts both
+            tracker, code_host = systems(config_mod.load())
         elif kind == "memory" and path:
             try:
-                tracker = MemoryTracker(dict(json.loads(Path(path).read_text())))
+                tracker = MemorySystem(dict(json.loads(Path(path).read_text())))
                 code_host = tracker  # the memory tracker also maps a PR number to its ticket
             except (OSError, ValueError, TypeError) as e:
                 raise Bad(f"malformed --tracker file: {e}")
@@ -1676,6 +1476,10 @@ def main(argv):
                 payload, out_name = read(a.payload or "", "payload"), a.outcome or ""
             code, out = apply(a.node, out_name, payload, tracker, nodes, a.focus, a.tier)
             path and Path(path).write_text(json.dumps(tracker.tickets))
+    except scopes.OutOfScope as e:  # #1069: a ticket of no environment is left alone; a check must not go
+        reason = SKIP.format(ticket=e.args[0])
+        print(json.dumps({"go": False, "reason": reason} if a.cmd == "check" else {"skipped": True, "reason": reason}))
+        return NO_GO if a.cmd == "check" else GO
     except NoTicket as e:
         print(json.dumps({"go": False, "reason": str(e)}))
         return NO_GO
