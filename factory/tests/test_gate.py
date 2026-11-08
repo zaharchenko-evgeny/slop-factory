@@ -27,6 +27,7 @@ cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"
 import deploy  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
+import definition  # noqa: E402
 from gate_port import MemoryTracker, TagTracker  # noqa: E402
 
 CONFIG = cfg.load()
@@ -44,6 +45,17 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_slop_ci_red_routes_to_fix_and_pending_ci_blocks_review(self):
+        graph = definition.nodes(definition.load(ROOT / "factory/tests/fixtures/slop"))
+
+        red = MemoryTracker({"7": {"stage": "in-review", "ci": "red"}})
+        status, outcome = gate.decide("ci-red", "7", red, graph, dry_run=True)
+        self.assertEqual((status, outcome["outcome"]), (gate.GO, "fix"))
+
+        pending = MemoryTracker({"7": {"stage": "in-review", "ci": "pending", "attrs": ["risk:high"]}})
+        status, _ = gate.check("review-high", {"id": "e1", "ticket": "7"}, pending, graph, CONFIG)
+        self.assertEqual(status, gate.NO_GO)
+
     def test_partial_outcome_failure_reports_effects_that_landed(self):
         graph = {"nodes": {"review": {"when": {}, "outcomes": {"changes": {"effects": [
             {"review": "request-changes-at-head"}, {"unlabel": "factory:review-x", "on": "pr"}]}}}}}
