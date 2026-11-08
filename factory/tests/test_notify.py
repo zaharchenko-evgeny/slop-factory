@@ -187,6 +187,12 @@ class ReplyTest(unittest.TestCase):
     def raw(self, **change):
         return {"issue": 7, "pr": 0, "via": "email", "user": "ann@example.com", "text": "try\nagain", "ref": self.REF, **change}
 
+    def test_ack_shows_no_bare_run_id(self):
+        effects = [{"kind": "stage", "value": "ready"}]
+        self.assertEqual(gate.ack_text(effects, {"ticket": 7, "run_id": "notify-reply"}), "Received. Ticket #7 moved to ready.")
+        self.assertEqual(gate.ack_text(effects, {"ticket": 7, "run_id": "https://air/run/9"}),
+                         "Received. Ticket #7 moved to ready. Run: https://air/run/9")
+
     def check(self, **change):
         event = gate.from_trigger(self.raw(**change))
         with patch.object(gate.config_mod, "resolve", return_value=Path("/nonexistent")):
@@ -194,7 +200,7 @@ class ReplyTest(unittest.TestCase):
 
     def apply(self, outcome="ready", reason=None, **change):
         event = gate.from_trigger(self.raw(**change))
-        payload = {"ticket": 7, "event": event["id"], "reply_event": event["reply_event"], "run_id": "run-1"}
+        payload = {"ticket": 7, "event": event["id"], "reply_event": event["reply_event"], "run_id": "https://air/run/1"}
         if reason:
             payload["reason"] = reason
         return gate.apply("notify-reply", outcome, payload, self.tr, self.graph)
@@ -234,11 +240,11 @@ class ReplyTest(unittest.TestCase):
         ((rcpt, raw),) = self.smtp.mails
         mail = message_from_bytes(raw)
         self.assertEqual((rcpt, mail["In-Reply-To"]), (["ann@example.com"], self.REF))
-        self.assertIn("moved to ready. Run: run-1", mail.get_payload())
+        self.assertIn("moved to ready. Run: https://air/run/1", mail.get_payload())
 
     def test_ack_gives_the_skip_reason(self):
         self.apply("skipped", reason="the person asks for nothing")
-        self.assertIn("No change: the person asks for nothing. Run: run-1", message_from_bytes(self.smtp.mails[0][1]).get_payload())
+        self.assertIn("No change: the person asks for nothing. Run: https://air/run/1", message_from_bytes(self.smtp.mails[0][1]).get_payload())
 
     def test_marker_in_a_user_comment_is_not_trusted(self):
         forged = {"author": "eve", "author_is_bot": False, "at": None,

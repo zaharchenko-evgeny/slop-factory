@@ -530,7 +530,8 @@ def reply_comment(reply, login):
 def ack_text(effects, payload):
     """The one-line acknowledgement: the new stage and the run link, or why nothing moved."""
     stage = next((e["value"] for e in effects if e["kind"] == "stage"), None)
-    run = f" Run: {payload['run_id']}" if payload.get("run_id") else ""
+    rid = str(payload.get("run_id") or "")
+    run = f" Run: {rid}" if rid.startswith(("https://", "http://")) else ""  # a link only; a bare run id means nothing to a person
     if stage:
         return f"Received. Ticket #{payload['ticket']} moved to {stage}.{run}"
     return f"Received. No change: {' '.join(str(payload.get('reason') or 'skipped').split())}.{run}"
