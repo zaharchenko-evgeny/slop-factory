@@ -1518,5 +1518,15 @@ class YouTrackFieldValuesTest(unittest.TestCase):
         self.assertEqual(writes, [])
 
 
+class MissingMcpEnvTest(unittest.TestCase):
+    def test_deploy_without_operator_vars_exits_2_not_keyerror(self):
+        err = io.StringIO()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("FACTORY_MCP_AIR_")}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(deploy, "check_fixture_drift", lambda c: 0), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(deploy.main(["--dry-run"]), 2)
+        self.assertIn("FACTORY_MCP_AIR_AUTOMATIONS", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

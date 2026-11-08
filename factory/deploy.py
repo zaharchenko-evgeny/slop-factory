@@ -1164,7 +1164,11 @@ def main(argv: list[str]) -> int:
         config = config_mod.load()
         if check_fixture_drift(config):
             return 1
-        servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
+        names = ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")
+        if not all(os.environ.get(v) for v in names):
+            print("set FACTORY_MCP_AIR_AUTOMATIONS and FACTORY_MCP_AIR_CLOUD (operator only)", file=sys.stderr)
+            return 2
+        servers = [Mcp(os.environ[v]) for v in names]
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
             run = github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config),

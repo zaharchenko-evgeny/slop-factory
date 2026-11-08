@@ -444,6 +444,15 @@ class CrashReportTest(unittest.TestCase):
             cli.report_crash("begin", RuntimeError("x"), run=run)
             self.assertEqual(calls, [])
 
+    def test_crash_report_names_command_not_team_dir(self):
+        from unittest import mock
+        calls = []
+        with mock.patch.object(cli, "report_crash", lambda c, e: calls.append(c)), \
+                mock.patch.object(cli, "_main", side_effect=RuntimeError("x")):
+            with self.assertRaises(RuntimeError):
+                cli.main(["--team", "/home/workspace/factory-team", "deploy", "--dry-run"])
+        self.assertEqual(calls, ["deploy"])
+
 
 class EndFailureTest(unittest.TestCase):
     """#997: a failed `factory end` leaves one comment on the ticket that reconcile reads."""
