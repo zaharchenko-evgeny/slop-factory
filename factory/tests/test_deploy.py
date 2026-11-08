@@ -758,6 +758,25 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual({t["source"] for t in a["fix"]["triggers"]}, {"github"})
         self.assertEqual(deploy.trigger("youtrack.fieldChanged State=In Progress", None)["filters"], {"State": "In Progress"})
 
+    def test_youtrack_stage_tag_is_per_repository_and_only_that_node_listens(self):
+        """#896: with `tracker.repository_field`, `implement api` listens to `factory:ready-api`, `implement web` to `-web`."""
+        def edit(conf):
+            tag_store(conf)
+            conf["tracker"]["repository_field"] = "Repository"
+            conf["states"]["ready"]["store"] = {"tag": "factory:ready"}
+            conf["repositories"] = [{**conf["repositories"][0], "name": "api"},
+                                    {**conf["repositories"][0], "name": "web", "role": "project"}]
+
+        def edit_nodes(compiled):
+            compiled["nodes"]["implement-medium"]["triggers"] = ["youtrack.tagAdded factory:ready"]
+        plan = youtrack_plan(edit, edit_nodes)
+        listens = {a["name"]: [t["filters"] for t in a["triggers"]] for a in plan["automations"]
+                   if any(t.get("filters", {}).get("tagAdded", "").startswith("factory:ready") for t in a["triggers"])}
+        self.assertEqual(listens, {"[Slop factory] implement-medium api": [{"tagAdded": "factory:ready-api"}],
+                                   "[Slop factory] implement-medium web": [{"tagAdded": "factory:ready-web"}]})
+        self.assertTrue({"factory:ready-api", "factory:ready-web"} <= set(plan["tags"]))
+        self.assertNotIn("factory:ready", plan["tags"])
+
     def test_hand_added_connector_is_a_removal(self):
         planned = {"name": "[F] a", "mcpConnectors": []}
         plan = {"prefix": "[F] ", "environments": [], "automations": [planned]}
@@ -1551,6 +1570,16 @@ class YouTrackFieldValuesTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("field 'State' does not exist", err)
         self.assertEqual(writes, [])
+
+
+class MissingMcpEnvTest(unittest.TestCase):
+    def test_deploy_without_operator_vars_exits_2_not_keyerror(self):
+        err = io.StringIO()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("FACTORY_MCP_AIR_")}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(deploy, "check_fixture_drift", lambda c: 0), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(deploy.main(["--dry-run"]), 2)
+        self.assertIn("FACTORY_MCP_AIR_AUTOMATIONS", err.getvalue())
 
 
 if __name__ == "__main__":
