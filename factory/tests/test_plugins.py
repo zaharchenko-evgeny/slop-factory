@@ -126,7 +126,7 @@ class OwnershipTest(FakePlugins):
 class RegistryTest(FakePlugins):
     def test_comments_on_and_off(self):
         on, off = plugins.registry({"plugins": ["comments"]}), plugins.registry({})
-        self.assertEqual(on.effect_kinds(), {"route", "reply", "skip"})
+        self.assertEqual(on.effect_kinds(), {"route", "reply", "skip", "wake"})
         self.assertEqual(set(on.guards()), {"mention"})
         self.assertEqual((on.triggers(), on.outcomes()), ({"mention"}, {"ask"}))
         self.assertEqual(on.effect("comment", "mention"), "factory_plugins.comments.mentions:reply_target")

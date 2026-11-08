@@ -743,8 +743,9 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual([n for n in by_name if n.startswith("[Slop factory] intake")], ["[Slop factory] intake"])
 
     def test_mentionable_agents_get_a_reply_node(self):
-        """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node and
-        the mention router; the others do not. With it off (ADR-0025) none deploy. The fixture has it on (#1083)."""
+        """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node;
+        the others do not, and no mention router deploys (#893). With it off (ADR-0025) none deploy. The fixture has
+        it on (#1083)."""
         def comments_on(f):
             f["plugins"] = ["comments"]
 
@@ -755,8 +756,8 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual({a["spec"]["node"] for a in plan["automations"]},
                          {a["spec"]["node"] for a in definition_plan()["automations"]})
         nodes_ = {a["spec"]["node"] for a in plan["automations"]}
-        self.assertTrue({"mentions", "reply-dev", "reply-reviewer"} <= nodes_)
-        self.assertFalse({"reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
+        self.assertTrue({"reply-dev", "reply-reviewer"} <= nodes_)
+        self.assertFalse({"mentions", "reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
         self.assertIn("factory:comment", plan["labels"])
 
         def none_mentionable(f):
@@ -766,7 +767,7 @@ class ProjectPlanTest(unittest.TestCase):
         for edit in (none_mentionable, comments_off):
             plan = definition_plan(edit_factory=edit)
             nodes_ = {a["spec"]["node"] for a in plan["automations"]}
-            self.assertFalse({n for n in nodes_ if n == "mentions" or n.startswith("reply-")})
+            self.assertFalse({n for n in nodes_ if n.startswith("reply-")})
         self.assertIn("factory:comment", plan["labels"])  # kept while off: a wake workflow installed earlier still adds it
 
     def test_mcp_connectors_come_from_node_then_agent_then_role(self):
