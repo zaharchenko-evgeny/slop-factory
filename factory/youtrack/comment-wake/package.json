@@ -1,0 +1,9 @@
+{
+  "name": "comment-wake",
+  "title": "Factory comment wake",
+  "version": "1.0.0",
+  "description": "Adds the factory:comment tag when a non-factory comment is added.",
+  "youtrack": {
+    "type": "workflow"
+  }
+}

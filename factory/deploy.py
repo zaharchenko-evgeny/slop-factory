@@ -1084,7 +1084,16 @@ def extra_variables(plan: dict, envs: list[dict]) -> list[str]:
             for k in have.get(e["name"], {}) if k not in (e.get("variables") or {})]
 
 
-def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None, yt_run=None) -> int:
+def youtrack_workflow_command(plan: dict) -> list[str] | None:
+    tracker = plan.get("tag_tracker") or {}
+    if tracker.get("adapter") != "youtrack":
+        return None
+    return ["npx", "--yes", "@jetbrains/youtrack-scripting", "upload", "factory/youtrack/comment-wake",
+            "--host", tracker["url"]]
+
+
+def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None, yt_run=None,
+           workflow_run=subprocess.run) -> int:
     """Write only to Air and to repository labels (through `run`, a `gh` runner): deploy never creates, edits or closes a tracker ticket."""
     # The automations' repositories too: an environment moved off a repository is found there, then replaced.
     repo_urls = list(dict.fromkeys([e["repository"] for e in plan["environments"]] +
@@ -1104,6 +1113,10 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print(line)
     for line in extra_variables(plan, state[1]):
         print(line)
+    workflow_command = youtrack_workflow_command(plan)
+    if workflow_command:
+        token_env = (plan.get("tag_tracker") or {}).get("token_env", "YOUTRACK_TOKEN")
+        print("step YouTrack workflow upload: " + shlex.join(workflow_command) + f" --token ${token_env}")
     label_changes = reconcile_labels(plan, run)
     tag_changes = reconcile_tags(plan, yt_run)
     try:
@@ -1152,6 +1165,20 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
             print(f"refused: would remove {name} value {value} in YouTrack", file=sys.stderr)
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
+    if workflow_command:
+        token_env = (plan.get("tag_tracker") or {}).get("token_env", "YOUTRACK_TOKEN")
+        token = os.environ.get(token_env)
+        if not token:
+            print(f"error: set {token_env} to upload the YouTrack workflow", file=sys.stderr)
+            return 1
+        try:
+            workflow_run([*workflow_command, "--token", token], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"error: YouTrack workflow upload failed with exit code {e.returncode}", file=sys.stderr)
+            return 1
+        except OSError as e:
+            print(f"error: YouTrack workflow upload failed: {e}", file=sys.stderr)
+            return 1
     for _, repo, label, _ in removals:
         label_tracker(repo, run).delete_label(label, plan["owned_label_prefixes"])
         print(f"removed label {label} in {repo}")

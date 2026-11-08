@@ -146,6 +146,14 @@ roles:
   reference), `mcp-mixed-entry` (`connector` with `command`/`url`) and `bad-mcp-entry`.
 - The prompt's "Your MCP servers" section lists both kinds by key.
 
+## YouTrack workflow
+
+For a YouTrack tracker, `factory deploy --dry-run` lists the comment-wake workflow upload. Apply uses the
+[@jetbrains/youtrack-scripting](https://www.npmjs.com/package/@jetbrains/youtrack-scripting) upload command with
+`npx --yes`, `factory/youtrack/comment-wake`, `--host <tracker url>` and `--token $<token_env>`.
+Set the named token as an environment variable before apply. Attach the uploaded workflow to the project once in
+YouTrack under Project settings → Workflows.
+
 ## Local target (ADR-0017)
 
 The same nodes run on a laptop with no Air account. `targets.local` in `factory.project.yaml` takes
