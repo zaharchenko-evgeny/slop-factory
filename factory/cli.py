@@ -198,7 +198,8 @@ def handoff_of(a):
         if items:
             data[key] = data.get(key, []) + items
     data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate),
-                                   ("reply", a.reply), ("to", a.to), ("text", a.text), ("problem", a.problem),
+                                   ("reply", a.reply), ("to", a.to), ("text", a.text), ("message", a.message),
+                                   ("problem", a.problem),
                                    ("recommended", a.recommended)) if v is not None and v != ""})
     for key, items in (("links", [dict(zip(("title", "url"), parted(t, " | ", "--link 'TITLE | URL'"))) for t in a.link]),
                        ("options", a.option)):
@@ -223,7 +224,7 @@ def end_parser():
     p = argparse.ArgumentParser(prog="factory end", allow_abbrev=False)
     p.add_argument("outcome")
     for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "reply", "addressed", "disputed-focuses", "notes",
-                "note-for", "note-hint", "note-repro", "to", "text", "problem"):
+                "note-for", "note-hint", "note-repro", "to", "text", "message", "problem"):
         p.add_argument(f"--{opt}")
     p.add_argument("--recommended", type=int)
     p.add_argument("--failing-check")
@@ -253,21 +254,34 @@ def end(argv, team=None):
     handoff.parent.mkdir(parents=True, exist_ok=True)
     handoff.write_text(json.dumps(data))
     config.set_team(state["team"])
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
+    err, out = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
         try:
             code = run_gate(state["engine"], ["apply", "--node", state["node"], "--event", state["event"], "--handoff",
                                               str(handoff), *gate_args(state)], state["team"], stderr=True)
         except Exception as e:  # the in-process gate (no main worktree) raises instead of exiting
             print(f"{type(e).__name__}: {e}", file=sys.stderr)
             code = 1
+    sys.stdout.write(out.getvalue())
     sys.stderr.write(err.getvalue())
-    if code not in (0, 10):
-        report_end_failure(state, a.outcome, err.getvalue())
+    if code not in (0, 10):  # the gate prints its refusal as JSON on stdout (#1035)
+        report_end_failure(state, a.outcome, "\n".join(x for x in (err.getvalue().strip(), gate_error(out.getvalue())) if x))
     return code
 
 
 END_FAILED = "[factory] end failed:"
+
+
+def gate_error(stdout):
+    """The `error`, `reason` or `why` of the gate's last JSON line, else ''."""
+    for line in reversed(stdout.strip().splitlines()):
+        try:
+            doc = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(doc, dict):
+            return next((str(doc[k]) for k in ("error", "reason", "why") if doc.get(k)), "")
+    return ""
 
 
 def report_end_failure(state, outcome, error, run=subprocess.run):
