@@ -3,6 +3,7 @@
 name: Slop factory
 engine: "git+https://github.com/zaharchenko-evgeny/slop-factory@main"   # what the Air startup script installs
 owner: zaharchenko-evgeny   # the GitHub login the notify node tells
+plugins: [comments]         # ADR-0026: mentions, asks and the comment node
 tracker:
   adapter: github-issues
   repository: zaharchenko-evgeny/slop-factory
