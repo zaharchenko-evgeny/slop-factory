@@ -143,13 +143,15 @@ def flow_triggers(node: dict) -> str:
 
 
 def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: str | None = None,
-            repo: str | None = None) -> dict:
+            repo: str | None = None, repo_tags: tuple = ()) -> dict:
     """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations)."""
     event, _, arg = str(text).partition(" ")
     arg = arg.replace("<tier>", tier or "")
     arg = arg.replace("<focus>", focus or "")
     if event.startswith("youtrack."):  # the filter value is case-sensitive: pass it through unchanged
         name, _, value = arg.partition("=")
+        if repo and arg in repo_tags:  # a per-repository stage tag: only this repository's node listens to it
+            arg = f"{arg}-{repo}"
         filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
         return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
     if event == "workflow_run":  # ADR-0021 `ci: failed`: Air fires only on a failed run (AIRA-725)
@@ -438,6 +440,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     bot = config["targets"]["air"]["bot_login"]
     prefix = f"[{project_name(config)}] "
     automations = []
+    repo_tags = tuple(youtrack_tracker.repo_stage_tags(config))
     used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
     unscoped = set()  # environments some automation shares across the project
     scoped = []  # (env, repository name, node) of the per-repository or per-node automations
@@ -470,7 +473,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     trig.append({"triggerType": "WEBHOOK"})
                 elif str(t) != "manual":
                     trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus,
-                                        scope["name"] if scope else None))
+                                        scope["name"] if scope else None, repo_tags))
             automation_repository = repository(team if focus == "knowledge" else scope or repos.get(envs_def[env]["repository"]) or primary)
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
@@ -658,10 +661,12 @@ def youtrack_tags(nodes: dict, config: dict) -> list[str]:
         return []
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
-    out = set()
+    repo_tags, out = youtrack_tracker.repo_stage_tags(config), set()
     for x in [*(config.get("states") or {}).values(), *(config.get("commands") or {}).values()]:
         tag = x["store"].get("tag")
-        if isinstance(tag, str):
+        if tag in repo_tags:  # one tag per repository
+            out |= {f"{tag}-{r['name']}" for r in config["repositories"]}
+        elif isinstance(tag, str):
             out |= {tag.replace("<tier>", t) for t in tiers} if "<tier>" in tag else \
                 {tag.replace("<focus>", f) for f in focuses} if "<focus>" in tag else {tag}
     return sorted(out)

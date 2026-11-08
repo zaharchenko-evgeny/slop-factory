@@ -199,6 +199,70 @@ class StoreTest(unittest.TestCase):
                                                               "value": {"name": "factory:ready"}}]})])
 
 
+class RepositoryTagsTest(unittest.TestCase):
+    """#896: the stages that wake a per-repository node are tags `<tag>-<repo>`, the repository is a ticket field."""
+
+    def store(self, repo="api", **kw):
+        issue = copy.deepcopy(ISSUE)
+        issue["tags"] = []
+        issue["customFields"] = [{"name": "Repository", "value": {"name": repo}}] if repo else []
+        fake = FakeYouTrack(issue, tags=("factory:ready", "factory:ready-api", "factory:ready-web"))
+        return fake, yt.YouTrackTicketStore(fake, repository_field="Repository", repo_stages=["factory:ready"],
+                                            repositories=["api", "web"], **kw)
+
+    def test_set_stage_writes_the_repository_tag_and_reads_it_back_as_the_stage(self):
+        fake, store = self.store()
+        self.assertTrue(store.set_stage("LME-1701", "factory:ready", []))
+        self.assertEqual([t["name"] for t in fake.issue["tags"]], ["factory:ready-api"])
+        self.assertEqual(store.issue("LME-1701")["attrs"], ["factory:ready"])
+        self.assertFalse(store.set_stage("LME-1701", "factory:ready", ["factory:ready"]))
+
+    def test_a_later_stage_removes_the_repository_tag(self):
+        fake, store = self.store()
+        store.set_stage("LME-1701", "factory:ready", [])
+        fake.tags["factory:in-dev"] = "id:factory:in-dev"
+        self.assertTrue(store.set_stage("LME-1701", "factory:in-dev", ["factory:ready"]))
+        self.assertEqual([t["name"] for t in fake.issue["tags"]], ["factory:in-dev"])
+
+    def test_a_ticket_without_the_field_or_with_an_unknown_value_is_blocked_by_name(self):
+        for repo, want in ((None, "is empty"), ("other", "holds 'other'")):
+            fake, store = self.store(repo)
+            self.assertRegex(store.repository("LME-1701")[1], f"'Repository' {want}")
+            with self.assertRaisesRegex(yt.MissingRepository, "'Repository'"):
+                store.set_stage("LME-1701", "factory:ready", [])
+            self.assertEqual(fake.issue["tags"], [])
+
+    def test_tickets_by_stage_queries_every_repository_tag(self):
+        fake, store = self.store()
+        store.tickets_by_stage(["factory:ready"], open_only=True)
+        self.assertEqual(unquote(parse_qs(urlsplit(fake.calls[-1][1]).query)["query"][0]),
+                         "(tag: {factory:ready-api} or tag: {factory:ready-web}) and #Unresolved")
+
+    def test_create_children_sets_the_repository_field_and_links_by_after(self):
+        fake, store = self.store()
+        ids, cmds = iter(["T-2", "T-3"]), []
+        store._create = lambda title, body, tags=(), repo=None: (cmds.append(("create", title, repo)), next(ids))[1]
+        store._command = lambda n, q: cmds.append((n, q))
+        store.open_blockers_all = lambda n: []
+        store.set_stage = lambda *a: True
+        store.create_children("T-1", [{"title": "w", "repo": "web", "after": ["api"]}, {"title": "a", "repo": "api"}],
+                              "factory:ready")
+        self.assertEqual(cmds, [("create", "a", "api"), ("T-2", "subtask of T-1"), ("T-1", "depends on T-2"),
+                                ("create", "w", "web"), ("T-3", "subtask of T-1"), ("T-3", "depends on T-2"),
+                                ("T-1", "depends on T-3")])
+
+    def test_create_children_links_by_one_based_position_in_after(self):
+        fake, store = self.store()
+        ids, cmds = iter(["T-2", "T-3"]), []
+        store._create = lambda title, body, tags=(), repo=None: (cmds.append(("create", title, repo)), next(ids))[1]
+        store._command = lambda n, q: cmds.append((n, q))
+        store.open_blockers_all = lambda n: []
+        store.set_stage = lambda *a: True
+        store.create_children("T-1", [{"title": "a", "repo": "api"}, {"title": "w", "repo": "web", "after": [1]}],
+                              "factory:ready")
+        self.assertIn(("T-3", "depends on T-2"), cmds)
+
+
 class TagInventoryTest(unittest.TestCase):
     def test_lists_creates_and_deletes_factory_tags_but_preserves_others(self):
         calls = []

@@ -12,6 +12,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 import github_graphql
+from gate_port import child_links, child_order
 
 ISSUE_FIELDS = ("idReadable,summary,description,resolved,updated,reporter(login),tags(id,name),"
                 "customFields(name,value(name,login)),links(direction,linkType(name),issues(idReadable,resolved,tags(name)))")
@@ -29,6 +30,23 @@ class MissingTag(RuntimeError):
 
 class MissingField(RuntimeError):
     """The custom field does not exist in the project: an administrator creates fields, deploy never does."""
+
+
+class MissingRepository(RuntimeError):
+    """The ticket has no repository field value, or one that is not a repository of the definition."""
+
+
+REPO_STAGES = ("ready", "changes-requested")  # the stages that wake a PER_REPO node
+
+
+def repo_stage_tags(config):
+    """The stage tags that carry a repository suffix (`<tag>-<repo>`): those of `REPO_STAGES` in a YouTrack definition
+    with `tracker.repository_field`; none otherwise."""
+    tracker = config.get("tracker") or {}
+    if tracker.get("adapter") != "youtrack" or not tracker.get("repository_field"):
+        return []
+    tags = [((config.get("states") or {}).get(s) or {}).get("store", {}).get("tag") for s in REPO_STAGES]
+    return [t for t in tags if isinstance(t, str)]
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -59,17 +77,22 @@ def iso(ms):
 class YouTrackTicketStore:
     """`state_field` names the single-value custom field of a `field` stage store (`{name: State}`); without it
     stages are tags. `done_state` is the State a closed ticket gets; `bots` the logins that count as agents;
-    `writers` the logins that may answer a question the factory asked."""
+    `writers` the logins that may answer a question the factory asked. With `repository_field`, the stage tags in
+    `repo_stages` are stored as `<tag>-<repo>` (the repository is the field's value, one of `repositories`) and read
+    back as `<tag>`."""
 
-    def __init__(self, run, state_field=None, done_state="Done", project=None, bots=(), writers=(), assignee_field="Assignee"):
+    def __init__(self, run, state_field=None, done_state="Done", project=None, bots=(), writers=(), assignee_field="Assignee",
+                 repository_field=None, repo_stages=(), repositories=()):
         self.run, self.state_field, self.done_state, self.project = run, state_field, done_state, project
         self.bots, self.writers, self.assignee_field = set(bots), set(writers), assignee_field
+        self.repository_field, self.repo_stages, self.repositories = repository_field, tuple(repo_stages), tuple(repositories)
 
     @classmethod
     def from_config(cls, tracker, run=None, **kw):
         """From the descriptor's `tracker`: `url`, `token_env` (default YOUTRACK_TOKEN), `done_state`, `project`."""
         run = run or urllib_runner(tracker["url"], os.environ[tracker.get("token_env", "YOUTRACK_TOKEN")])
-        return cls(run, done_state=tracker.get("done_state", "Done"), project=tracker.get("project"), **kw)
+        return cls(run, done_state=tracker.get("done_state", "Done"), project=tracker.get("project"),
+                   repository_field=tracker.get("repository_field"), **kw)
 
     # --- reads
     def _issue(self, n):
@@ -80,8 +103,21 @@ class YouTrackTicketStore:
         value = next((f.get("value") for f in raw.get("customFields") or [] if f.get("name") == name), None)
         return [value] if isinstance(value, dict) else value or []
 
+    def _repo(self, raw):
+        """The repository value of an issue; None without a `repository_field` or a value."""
+        return next((v.get("name") for v in self._field(raw, self.repository_field)), None) if self.repository_field else None
+
+    def repository(self, n):
+        """(repository, reason) of ticket `n`: the reason names the field when it is empty or holds an unknown value."""
+        repo = self._repo(self._issue(n))
+        if repo and (not self.repositories or repo in self.repositories):
+            return repo, None
+        return None, (f"field {self.repository_field!r} is empty: set it to one of {', '.join(self.repositories)}" if not repo else
+                      f"field {self.repository_field!r} holds {repo!r}, not one of {', '.join(self.repositories)}")
+
     def _attrs(self, raw):
-        attrs = [t["name"] for t in raw.get("tags") or []]
+        repo = self._repo(raw)
+        attrs = [next((s for s in self.repo_stages if t["name"] == f"{s}-{repo}"), t["name"]) for t in raw.get("tags") or []]
         return attrs + [v["name"] for v in self._field(raw, self.state_field)] if self.state_field else attrs
 
     def issue(self, n):
@@ -135,6 +171,7 @@ class YouTrackTicketStore:
         last `github_graphql.CLOSED_HOURS`."""
         if not attrs:
             return []
+        attrs = [x for a in attrs for x in ([f"{a}-{r}" for r in self.repositories] if a in self.repo_stages else [a])]
         query = " or ".join(f"tag: {{{a}}}" for a in attrs)
         if not open_only:
             query = f"({query}) and (#Unresolved or resolved date: {{minus {github_graphql.CLOSED_HOURS}h}} .. Now)"
@@ -244,6 +281,12 @@ class YouTrackTicketStore:
         """Stage `stage` replaces the stage attrs `have`: tags, or the one value of the state field."""
         if self.state_field:
             return self.set_field(n, self.state_field, stage)
+        if self.repo_stages:
+            repo, reason = self.repository(n)
+            if reason and stage in self.repo_stages:
+                raise MissingRepository(reason)
+            tag = lambda x: f"{x}-{repo}" if repo and x in self.repo_stages else x
+            return self.edit_attrs(n, [tag(stage)], [tag(x) for x in have if tag(x) != tag(stage)])
         return self.edit_attrs(n, [stage], [x for x in have if x != stage])
 
     def assign(self, n, people):
@@ -259,33 +302,42 @@ class YouTrackTicketStore:
     def _command(self, n, query):
         self.run("POST", f"/api/issues/{n}/execute", {"query": query})
 
-    def _create(self, title, body, tags=()):
+    def _create(self, title, body, tags=(), repo=None):
         issue = self.run("POST", "/api/issues?fields=idReadable", {
             "summary": title, "description": body, **({"project": {"shortName": self.project}} if self.project else {})})
         self.edit_attrs(issue["idReadable"], tags)
+        if repo:
+            self.set_field(issue["idReadable"], self.repository_field, repo)
         return issue["idReadable"]
 
     def create_children(self, n, children, ready):
         """Per child: reuse the subtask of that title, then add each link that is missing (a retry converges). The
-        child is chained behind the previous one and blocks the parent; `ready` is set last, once the links exist."""
+        child depends on the children of the repositories it is `after` (`gate_port.child_links`) and blocks the
+        parent; its repository field is its `repo`; `ready` is set last, once the links exist."""
         subs = {c["summary"]: c["idReadable"] for c in self.run(
             "GET", f"/api/issues?query={urllib.parse.quote(f'subtask of: {n}')}&fields=idReadable,summary&{TOP}")}
-        blockers, wrote, prev = set(self.open_blockers_all(n)), False, None
-        for c in children:
+        blockers, wrote, made, links = set(self.open_blockers_all(n)), False, {}, child_links(children)
+        for k in child_order(links):
+            c = children[k]
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
+            repo = c.get("repo") if self.repository_field else None
             child = subs.get(c["title"])
             if child is None:
-                child = self._create(c["title"], f"{c.get('body', '')}\n\n{CHILD_MARK.format(n=n)}")
+                child = self._create(c["title"], f"{c.get('body', '')}\n\n{CHILD_MARK.format(n=n)}", **({"repo": repo} if repo else {}))
                 self._command(child, f"subtask of {n}")
                 wrote = True
-            if prev and prev not in self.open_blockers_all(child):
-                self._command(child, f"depends on {prev}")
-                wrote = True
+            elif repo:
+                wrote = self.set_field(child, self.repository_field, repo) or wrote
+            made[k] = child
+            have = self.open_blockers_all(child)
+            for j in links[k]:
+                if j in made and made[j] not in have:
+                    self._command(child, f"depends on {made[j]}")
+                    wrote = True
             if child not in blockers:
                 self._command(n, f"depends on {child}")
                 wrote = True
             wrote = self.set_stage(child, ready, []) or wrote
-            prev = child
         return wrote
 
     def open_blockers_all(self, n):
