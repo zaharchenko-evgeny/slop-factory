@@ -8,6 +8,7 @@ import contextlib
 import io
 import argparse
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -112,6 +113,22 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual([(n, o) for n, o, _ in reports], [("implement", "done")])
         self.assertIn("HTTP 403", reports[0][2])
+
+    def test_a_gate_refusal_on_stdout_is_quoted_in_the_report(self):
+        tracker = self.tracker()
+        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        reports = []
+
+        def refusing_gate(engine, argv, team=None, stderr=False):
+            print(json.dumps({"error": "payload: missing field `message`"}))
+            return 2
+        with mock.patch.object(cli, "run_gate", refusing_gate), \
+                mock.patch.object(cli, "report_end_failure", lambda state, outcome, err: reports.append(err)):
+            code, out = self.run_cli("end", "done")
+        self.assertEqual(code, 2)
+        self.assertEqual(reports, ["payload: missing field `message`"])
+        self.assertIn("missing field", out)  # the agent still sees the gate's output (#1035)
 
     def test_end_env_broken_records_check_and_parks_ticket(self):
         tracker = self.tracker()
@@ -443,6 +460,56 @@ class CrashReportTest(unittest.TestCase):
             calls, run = self.gh([])
             cli.report_crash("begin", RuntimeError("x"), run=run)
             self.assertEqual(calls, [])
+
+    def test_crash_report_names_command_not_team_dir(self):
+        from unittest import mock
+        calls = []
+        with mock.patch.object(cli, "report_crash", lambda c, e: calls.append(c)), \
+                mock.patch.object(cli, "_main", side_effect=RuntimeError("x")):
+            with self.assertRaises(RuntimeError):
+                cli.main(["--team", "/home/workspace/factory-team", "deploy", "--dry-run"])
+        self.assertEqual(calls, ["deploy"])
+
+
+class EndFieldsTest(unittest.TestCase):
+    """#1035: every handoff field an effect reads can be written by a `factory end` option (or the gate derives it)."""
+    FILES = ("factory/tests/fixtures/slop/workflow.yaml", "skills/factory-setup/template/workflow.yaml")
+    READS = ("comment", "create-issues", "set-field", "route", "reply", "park-behind-main-red")
+
+    def effect_fields(self, doc):
+        found = set()
+        def walk(x):
+            if isinstance(x, dict):
+                for e in x.get("effects") or [] if isinstance(x.get("effects"), list) else []:
+                    if isinstance(e, dict):
+                        found.update(v for k, v in e.items() if k in self.READS and isinstance(v, str))
+                        found.update(re.findall(r"<([^>]+)>", " ".join(str(e.get(k, "")) for k in ("label", "unlabel"))))
+                for v in x.values():
+                    walk(v)
+            elif isinstance(x, list):
+                for v in x:
+                    walk(v)
+        walk(doc)
+        return found
+
+    def test_end_writes_every_effect_field(self):
+        import yaml
+        import gate
+        root = Path(__file__).resolve().parents[2]
+        args = ["x", "--size-estimate", "1"]
+        for action in cli.end_parser()._actions:
+            opt = next((o for o in action.option_strings if o.startswith("--")), None)
+            if opt and isinstance(action, argparse._StoreAction) and action.dest not in ("findings", "slices", "checks", "addressed", "notes"):
+                args += [opt, "1" if action.type is int else "x"]
+        handoff = cli.handoff_of(cli.end_parser().parse_args(args))
+        written = set(handoff) | set(gate.intake_fields(handoff))
+        for name in self.FILES:
+            with self.subTest(name):
+                missing = self.effect_fields(yaml.safe_load((root / name).read_text())) - written
+                self.assertEqual(missing, set(), f"no `factory end` option writes {sorted(missing)}")
+
+    def test_end_notified_message(self):
+        self.assertEqual(cli.handoff_of(cli.end_parser().parse_args(["notified", "--message", "@o hi"]))["message"], "@o hi")
 
 
 class EndFailureTest(unittest.TestCase):
