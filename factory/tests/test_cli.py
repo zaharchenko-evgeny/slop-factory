@@ -202,6 +202,45 @@ class BeginEndTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reason"):
             self.handoff("done", "--not-run", "e2e")
 
+    def test_blocking_finding_unseen_part(self):
+        data = self.handoff("changes", "--blocking", "B2 src/x.py:10 crashes | case: x('') raises | unseen: new branch")
+        self.assertEqual(data["findings"][0]["case"], "x('') raises")
+        self.assertEqual(data["findings"][0]["unseen"], "new branch")
+
+    def test_end_field_option_sets_any_key(self):
+        data = self.handoff("notified", "--field", "assignee=octo", "--field", "size-estimate=40")
+        self.assertEqual((data["assignee"], data["size_estimate"]), ("octo", "40"))
+        with self.assertRaisesRegex(ValueError, "KEY=VALUE"):
+            self.handoff("notified", "--field", "novalue")
+
+    def test_every_effect_field_has_an_end_option(self):
+        """Every payload field an effect in a shipped workflow reads has its own named `factory end` option (#1048):
+        a required field without one fails the agent's run (notify's `message` and `assignee`)."""
+        import yaml
+        fields = set()
+        for wf in (ROOT / "factory/tests/fixtures/slop/workflow.yaml", ROOT / "factory/tests/fixtures/v2/workflow.yaml",
+                   ROOT / "skills/factory-setup/template/workflow.yaml"):
+            for node in (yaml.safe_load(wf.read_text()).get("nodes") or {}).values():
+                for out in (node.get("outcomes") or {}).values():
+                    for e in (out or {}).get("effects") or []:
+                        if not isinstance(e, dict):
+                            continue
+                        kind, arg = next(iter(e.items()))
+                        if kind in ("comment", "create-issues", "route", "reply", "park-behind-main-red", "set-field") \
+                                and isinstance(arg, str):
+                            fields.add(arg)
+                        elif kind == "assign" and isinstance(arg, dict):
+                            fields.add(arg["field"])
+                        elif kind in ("label", "unlabel"):
+                            fields |= set(re.findall(r"<([^>]+)>", str(arg)))
+        fields -= {"risk", "tier", "focus",  # set by the gate, not the agent
+                   "questions", "children"}  # derived by the gate from `--reason` and `--slice` (gate.intake payload)
+        self.assertTrue(fields)
+        for f in sorted(fields):
+            with self.subTest(field=f):
+                data = self.handoff("x", f"--{f.replace('_', '-')}", "v")
+                self.assertEqual(data.get(f), "v")
+
     def test_end_plain_text_findings(self):
         data = self.handoff("changes", "--blocking", "B1 src/x.py:10 the empty input crashes | case: x.run('') raises",
                             "--minor", "M1 src/y.py:3 name is vague")

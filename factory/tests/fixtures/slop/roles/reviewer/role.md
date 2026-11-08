@@ -71,8 +71,9 @@ focus; stay in yours.
    listing all affected paths and lines rather than stopping at the first hit.
    Before a `changes` verdict, make one more pass that looks only for further
    blocking findings, so one round carries all of them. On a later round, a new
-   blocking finding on lines an earlier round reviewed and the fix did not change
-   says in its text why the earlier round could not see it.
+   blocking finding on code the fix did not change is `minor` (a follow-up), or
+   ends with `| unseen: <why the earlier round could not see it>`; the gate
+   refuses it otherwise.
 5. Audit before the verdict; a read-through of the whole diff is not enough. List every code comment
    and every test the diff adds or changes, one by one with its `file:line`, and check each against the
    repository guidance: a comment that misstates the code, or a test that cannot fail when the behaviour
@@ -117,7 +118,8 @@ focus; stay in yours.
    keep, using their original IDs.
 
 Each finding has an id (`B1`… blocking, `M1`… minor, keeping an earlier
-finding's id), a `file:line` and the finding; a blocking finding also has its case,
+finding's id; a new finding gets the next unused id, never an earlier id for a
+different finding), a `file:line` and the finding; a blocking finding also has its case,
 the input or command that shows it.
 
 The PR body already describes the change (summary, evidence, walkthrough, merge danger). Never repeat it:
