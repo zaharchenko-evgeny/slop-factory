@@ -3,7 +3,8 @@
 It validates the definition, installs the skills of every role that runs in the environment (the engine's own
 skills too) under `~/.agents/skills/`, checking each sourced skill against its sha256, then runs the
 environment's `setup` script and each role's `roles/<role>/setup.sh`. It then writes `.mcp.json` in the checkout
-with the custom MCP servers of the node in `FACTORY_NODE`; without it, no file.
+with the custom MCP servers of the node in `FACTORY_NODE`; without it, no file. The checkout's repository is the
+automation's main one: scripts get it as `FACTORY_NODE_REPO` (ADR-0024).
 """
 import hashlib
 import json
@@ -66,9 +67,10 @@ def write_mcp_json(defn, checkout, node=None):
     return sorted(servers)
 
 
-def install(defn, environment, home, fetcher=fetch, run=subprocess.run, checkout=None, node=None):
+def install(defn, environment, home, fetcher=fetch, run=subprocess.run, checkout=None, node=None, node_repo=None):
     """Install the environment's skills and run its setup scripts; returns the lines it printed. Raises SystemExit
-    with the reasons when the definition is invalid or a skill's sha256 differs."""
+    with the reasons when the definition is invalid or a skill's sha256 differs. `node_repo` (the repository of the
+    automation copy, ADR-0024) is exported to the setup scripts as `FACTORY_NODE_REPO`."""
     errs = definition.errors(defn)
     if environment not in (defn["factory"].get("environments") or {}):
         errs.append(f"unknown-environment: {environment}")
@@ -99,7 +101,8 @@ def install(defn, environment, home, fetcher=fetch, run=subprocess.run, checkout
     scripts = ([root / env["setup"]] if env.get("setup") else []) + \
               [root / "roles" / r / "setup.sh" for r in roles if (root / "roles" / r / "setup.sh").is_file()]
     for script in scripts:
-        run(["bash", str(script)], check=True, cwd=root)
+        extra = {"env": {**os.environ, "FACTORY_NODE_REPO": node_repo}} if node_repo else {}
+        run(["bash", str(script)], check=True, cwd=root, **extra)
         lines.append(f"ran {script.relative_to(root)}")
     if node is not None and node not in (defn["workflow"].get("nodes") or {}):
         raise SystemExit(f"factory setup: unknown node {node}")
@@ -107,6 +110,12 @@ def install(defn, environment, home, fetcher=fetch, run=subprocess.run, checkout
     if written:
         lines.append(f".mcp.json: {', '.join(written)}")
     return lines
+
+
+def checkout_repo(checkout):
+    """`owner/repo` of the checkout's `origin`: the main repository of the automation copy; None without one."""
+    url = subprocess.run(["git", "-C", str(checkout), "remote", "get-url", "origin"], capture_output=True, text=True)
+    return definition.full_name(url.stdout.strip()) if url.returncode == 0 and url.stdout.strip() else None
 
 
 def _copy(src, dst):
@@ -123,6 +132,7 @@ def main(argv):
     if not definition.present(config.team_root()):
         print("factory setup: the team root has no factory.yaml and workflow.yaml (ADR-0021)")
         return 2
-    for line in install(definition.load(config.team_root()), argv[1], Path.home(), node=os.environ.get("FACTORY_NODE")):
+    for line in install(definition.load(config.team_root()), argv[1], Path.home(), node=os.environ.get("FACTORY_NODE"),
+                       node_repo=checkout_repo(Path.cwd())):
         print(line)
     return 0

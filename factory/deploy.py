@@ -378,7 +378,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
                     "foreground, and wait until it exits. Copy only that one number. It applies "
                     "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
                     "Report its JSON output." + INSTALLED_FACTORY)
-        text = definition.render(defn, name).strip()
+        text = definition.render(defn, name, (main_repository or {}).get("fullName")).strip()
         skills = definition.skill_lines(defn, role)
         servers = [f"{k} (Air connector {e['connector']})" if "connector" in e else f"{k} (custom, from .mcp.json)"
                    for k, e in definition.mcp(defn, name).items()]
@@ -428,6 +428,26 @@ PER_REPO = definition.PER_REPO
 WRITE_TOKEN_SECRET = github_tracker.WRITE_TOKEN  # `write_mode: token`: the project-repository write token, by name only
 
 
+def node_copies(defn: dict, name: str, n: dict, config: dict) -> list[dict]:
+    """ADR-0024: the automation copies of a node whose environment has no `main`: one per listened repository for an
+    event node, else one in its written repository (or the tracker). A copy has its `repo`, name `suffix`, the
+    `additional` checkouts and the `output`: the node's own where it writes the repository, else `read-only`."""
+    listens, writes = definition.node_listens(defn, name), definition.node_writes(defn, name)
+    env = definition._parts(defn, name)[3]
+    by_name = {definition.full_name(r["url"]): r for r in config["repositories"]}
+
+    def repo_of(full: str) -> dict:
+        return by_name.get(full) or {"name": full.split("/")[-1], "url": f"https://github.com/{full}", "default_branch": "main"}
+    targets = listens or (writes[:1] or definition.tracker_repositories(defn)[:1])
+    copies = []
+    for full in targets:
+        others = [definition.full_name(r["repo"]) for r in env.get("repositories") or [] if definition.full_name(r["repo"]) != full]
+        copies.append({"repo": repo_of(full), "suffix": f" {full.split('/')[-1]}" if len(listens) > 1 else "",
+                       "additional": [{"repository": repository(repo_of(o)), "branch": repo_of(o)["default_branch"]} for o in others],
+                       "output": n.get("output", "read-only") if full in writes else "read-only"})
+    return copies
+
+
 def plan_air(nodes: dict, config: dict) -> dict:
     air, roles, agents = config["targets"]["air"]["models"], config["roles"], agents_of(nodes, config)
     for aid in sorted({a["id"] for a in agents.values() if a.get("effort")}):
@@ -458,8 +478,9 @@ def plan_air(nodes: dict, config: dict) -> dict:
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
         scopes = code_scopes if per_repo and definition.per_repo_node(name) else [None]
-        for scope, (aname, tier_arg, tier, focus) in [(sc, v) for sc in scopes
-                                                      for v in variants(name, n, roles, agents.get(name))]:
+        own = node_copies(defn, name, n, config) if defn and definition.mainless(defn, name) else [None]
+        for scope, copy_, (aname, tier_arg, tier, focus) in [(sc, c, v) for sc in scopes for c in own
+                                                             for v in variants(name, n, roles, agents.get(name))]:
             env = next((e for r, e in code_envs.items() if scope and definition.full_name(r) == definition.full_name(scope["url"])),
                        n["env"])  # a definition: the environment where the scope repository is `main`
             agent, _, model = air[tier].partition("/")
@@ -475,7 +496,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 elif str(t) != "manual":
                     trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus,
                                         scope["name"] if scope else None, repo_tags))
-            automation_repository = repository(team if focus == "knowledge" else scope or repos.get(envs_def[env]["repository"]) or primary)
+            automation_repository = repository(team if focus == "knowledge" else scope or (copy_ or {}).get("repo")
+                                               or repos.get(envs_def[env]["repository"]) or primary)
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
             scope_name = scope["name"] if scope else None
@@ -488,9 +510,9 @@ def plan_air(nodes: dict, config: dict) -> dict:
             else:
                 unscoped.add(env)
             automation = {
-                "name": f"{prefix}{aname}" + (f" {scope_name}" if scope_name else ""),
+                "name": f"{prefix}{aname}" + (f" {scope_name}" if scope_name else "") + (copy_ or {}).get("suffix", ""),
                 "triggers": trig,
-                "triggerVcs": [{"outputBehaviour": n.get("output", "read-only")} for _ in trig],
+                "triggerVcs": [{"outputBehaviour": (copy_ or n).get("output", "read-only")} for _ in trig],
                 "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
@@ -499,7 +521,10 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "prompt": script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else agent_prompt(
                     name, n, config, aname, focus, automation_repository, tier_arg or tier),
             }
-            if automation_repository["fullName"] != repository(team)["fullName"]:
+            if copy_:
+                if copy_["additional"]:
+                    automation["additionalRepositories"] = copy_["additional"]
+            elif automation_repository["fullName"] != repository(team)["fullName"]:
                 automation["additionalRepositories"] = additional_repositories(automation_repository, team, config)
             else:
                 projects = other_projects(automation_repository, team, config)

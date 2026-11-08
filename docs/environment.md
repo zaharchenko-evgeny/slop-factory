@@ -6,6 +6,7 @@ One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails whe
 |---|---|---|---|
 | `FACTORY_ENV` | Air deploy: the only variable of a planned environment (`factory deploy` owns an environment's whole variable set) | `factory/doctor.py`, `factory/deploy.py` (written to the plan) | required in an Air run (`read`, `write` or `ops`) |
 | `FACTORY_NODE` | Air deploy: only in the environment of a node with custom MCP servers | `factory/team_setup.py` | optional; the node whose custom MCP servers `factory setup` writes to `.mcp.json`; unset: no file |
+| `FACTORY_NODE_REPO` | `factory setup` (from the checkout's `origin`: the main repository of the automation copy, ADR-0024) | setup scripts (`environments/*/setup.sh`, `roles/*/setup.sh`) | optional; unset without an `origin` |
 | `FACTORY_TEAM` | the startup wrapper of `factory` (internal) | `factory/config.py`, `factory/cli.py`, `factory/local.py`, `engine/template-v1/roles/` | optional; defaults to the `factory-team` directory in the home directory when it exists, else the working directory |
 | `FACTORY_ENGINE_DIR` | tests and development | `engine/template-v1/.air/cloud/startup.sh` | optional; an engine checkout whose `factory-step` skill the startup script installs; defaults to the `factory-main` directory in the home directory |
 | `FACTORY_ENGINE` | tests and development | `factory/config.py` | optional; defaults to this checkout |

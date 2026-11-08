@@ -154,6 +154,12 @@ def tracker_repositories(defn):
     return [full_name(r) for r in listed if isinstance(r, str)] if isinstance(listed, list) else []
 
 
+def mainless(defn, name):
+    """True when the environment of node `name` lists repositories and none is `main` (ADR-0024)."""
+    repos = _parts(defn, name)[3].get("repositories") or []
+    return bool(repos) and not any(r.get("main") for r in repos)
+
+
 def _has_event_trigger(node):
     return any(isinstance(t, dict) and not {"schedule", "webhook"} & t.keys() for t in node.get("triggers") or [])
 
@@ -314,11 +320,12 @@ def _jinja(defn):
                               keep_trailing_newline=True)
 
 
-def render(defn, name):
+def render(defn, name, repo=None):
     """The role body of node `name`, rendered with its merged settings; a node's own instructions come from its
-    settings (`mode`, `focus`), never from a prompt of its own. Raises on an undefined name."""
+    settings (`mode`, `focus`), never from a prompt of its own. `node.repo` is the repository of the automation
+    copy (ADR-0024), `""` outside a deployed copy. Raises on an undefined name."""
     node, agent, role, env = _parts(defn, name)
-    ctx = {"settings": settings(defn, name), "node": {**node, "name": name},
+    ctx = {"settings": settings(defn, name), "node": {**node, "name": name, "repo": repo or ""},
            "agent": {**agent, "name": node.get("agent")}, "role": role, "environment": env,
            "factory": {k: v for k, v in defn["factory"].items() if k != "environments"}}
     j = _jinja(defn)

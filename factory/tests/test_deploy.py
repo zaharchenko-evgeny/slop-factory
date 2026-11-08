@@ -1323,6 +1323,89 @@ def fake_labels(by_repo):
     return run
 
 
+class MainlessEnvironmentPlanTest(unittest.TestCase):
+    """ADR-0024 (#979): an environment with no `main` plans one automation per listened repository."""
+
+    @classmethod
+    def setUpClass(cls):
+        def edit_factory(f):
+            f["tracker"] = {"adapter": "github-issues", "repositories": ["o/api", "o/web"]}
+            f["environments"]["engine"]["repositories"] = [{"repo": "o/api"}, {"repo": "o/web"}, {"repo": "o/team"}]
+            f["environments"]["knowledge"]["repositories"] = [{"repo": "o/team"}]
+
+        def edit_workflow(w):
+            for name, n in w["nodes"].items():
+                if name.startswith("implement-") or name in ("fix", "update"):
+                    n["writes"] = ["o/api", "o/web"]
+            w["nodes"]["intake"]["listens"] = "tracker"
+            w["nodes"]["retro"]["writes"] = ["o/team"]
+        cls.plan = definition_plan(edit_factory, edit_workflow, source="fixtures/v2")
+        cls.automations = cls.plan["automations"]
+
+    def copies(self, node):
+        return [a for a in self.automations if a["spec"]["node"] == node]
+
+    def test_event_node_gets_one_copy_per_listened_repository(self):
+        copies = self.copies("implement-medium")
+        self.assertEqual(sorted(a["name"] for a in copies),
+                         ["[Slop factory] implement-medium api", "[Slop factory] implement-medium web"])
+        self.assertEqual(sorted(a["repository"]["fullName"] for a in copies), ["o/api", "o/web"])
+        for a in copies:
+            self.assertEqual(a["triggers"], [{"triggerType": "EVENT", "source": "github", "eventType": "issues.labeled",
+                                              "filters": {"label": "factory:implement-medium"}}])
+            self.assertEqual([v["outputBehaviour"] for v in a["triggerVcs"]], ["create-pr"])
+            others = {"o/api", "o/web", "o/team"} - {a["repository"]["fullName"]}
+            self.assertEqual({x["repository"]["fullName"] for x in a["additionalRepositories"]}, others)
+        self.assertEqual({a["environmentConfigId"] for a in copies}, {"[Slop factory] engine"})
+
+    def test_read_only_copy_has_read_only_output(self):
+        copies = self.copies("review-low")
+        self.assertEqual(sorted(a["repository"]["fullName"] for a in copies), ["o/api", "o/web"])
+        for a in copies:
+            self.assertEqual([v["outputBehaviour"] for v in a["triggerVcs"]], ["read-only"])
+
+    def test_tracker_node_is_one_automation_on_the_tracker(self):
+        (a,) = self.copies("intake")
+        self.assertEqual(a["name"], "[Slop factory] intake")
+        self.assertEqual(a["repository"]["fullName"], "o/api")
+
+    def test_scheduled_writer_runs_in_its_written_repository(self):
+        (a,) = self.copies("retro")
+        self.assertEqual(a["name"], "[Slop factory] retro")
+        self.assertEqual(a["repository"]["fullName"], "o/team")
+        self.assertEqual([v["outputBehaviour"] for v in a["triggerVcs"]], ["push-to-new-branch"])
+
+    def test_one_air_environment_per_definition_environment(self):
+        names = [e["name"] for e in self.plan["environments"]]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertFalse([n for n in names if n.endswith((" api", " web"))], names)
+
+    def test_node_repo_is_the_copys_repository_in_the_prompt(self):
+        def edit_factory(f):
+            f["tracker"] = {"adapter": "github-issues", "repositories": ["o/api", "o/web"]}
+            f["environments"]["engine"]["repositories"] = [{"repo": "o/api"}, {"repo": "o/web"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(HERE / "fixtures/v2", tmp, dirs_exist_ok=True)
+            body = Path(tmp) / "roles/developer/role.md"
+            body.write_text(body.read_text() + "\nCopy repository: {{ node.repo }}\n")
+            for name, edit in ((definition.FACTORY, edit_factory), (definition.WORKFLOW, None)):
+                if edit:
+                    data = yaml.safe_load((Path(tmp) / name).read_text())
+                    edit(data)
+                    (Path(tmp) / name).write_text(yaml.safe_dump(data, sort_keys=False))
+            before = cfg.team_root()
+            cfg.set_team(tmp)
+            try:
+                plan = deploy.plan_air(nodes.load(), cfg.load())
+            finally:
+                cfg.set_team(before)
+        prompts = {a["repository"]["fullName"]: a["prompt"] for a in plan["automations"]
+                   if a["spec"]["node"] == "implement-medium"}
+        self.assertEqual(set(prompts), {"o/api", "o/web"})
+        for repo, prompt in prompts.items():
+            self.assertIn(f"Copy repository: {repo}", prompt)
+
+
 class LabelsTest(unittest.TestCase):
     PLAN = {"labels": ["complexity:medium", "factory:ready", "risk:low"], "label_repositories": ["o/tracker", "o/code"],
             "owned_label_prefixes": ["complexity:", "factory:", "risk:"], "label_specs": {
