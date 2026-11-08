@@ -530,6 +530,12 @@ class EndFailureTest(unittest.TestCase):
         self.assertTrue(body.startswith("[factory] end failed: node=review-low head=abc123def456 outcome=approve-low"))
         self.assertIn("HTTP 403", body)
 
+    def test_a_memory_tracker_run_posts_nothing(self):
+        calls = []
+        cli.report_end_failure({"ticket": 7, "node": "implement", "tracker": ["--tracker", "tickets.json"]}, "done", "boom",
+                               run=lambda args, **kw: calls.append(args))
+        self.assertEqual(calls, [])
+
     def test_no_ticket_no_comment(self):
         calls = []
         cli.report_end_failure({"node": "reconcile"}, "reconciled", "boom", run=lambda args, **kw: calls.append(args))
