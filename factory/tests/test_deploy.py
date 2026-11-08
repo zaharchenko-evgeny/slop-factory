@@ -5,6 +5,7 @@
 # ///
 """Tests for factory/deploy.py. Run: uv run factory/tests/test_deploy.py
 Regenerate the fixture: UPDATE_FIXTURE=1 uv run factory/tests/test_deploy.py"""
+import base64
 import contextlib
 import copy
 import io
@@ -525,12 +526,46 @@ class ApplyTest(unittest.TestCase):
               mock.patch.object(deploy, "diff", side_effect=[changed, []]),
               mock.patch.object(deploy, "apply_diff") as apply,
               mock.patch.object(deploy, "write_files", return_value=0),
+              mock.patch.object(deploy, "sync_comment_wake_files", return_value=0),
               mock.patch("github_tracker.GitHubTracker.from_config") as issues,
               mock.patch("gate_github.GitHubGateTracker.from_config") as gate_issues):
             self.assertEqual(deploy.main(["--apply"]), 0)
         apply.assert_called_once()
         issues.assert_not_called()
         gate_issues.assert_not_called()
+
+
+class CommentWakeDeployTest(unittest.TestCase):
+    def test_apply_installs_files_once_in_every_configured_github_repository(self):
+        files = {}
+        writes = []
+
+        def gh(args):
+            endpoint = next((x for x in args if x.startswith("repos/") and "/contents/" in x), None)
+            if not endpoint:
+                raise AssertionError(args)
+            if "-X" not in args:
+                if endpoint not in files:
+                    raise RuntimeError("HTTP 404: Not Found")
+                return json.dumps({"sha": "sha", "content": base64.b64encode(files[endpoint].encode()).decode()})
+            content = next(x.split("=", 1)[1] for x in args if x.startswith("content="))
+            files[endpoint] = base64.b64decode(content).decode()
+            writes.append(endpoint)
+            return "{}"
+
+        settings = {"repositories": [
+            {"name": "main", "url": "https://github.com/o/main", "role": "primary"},
+            {"name": "app", "url": "https://github.com/o/app", "role": "project"},
+        ]}
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(deploy.sync_comment_wake_files(settings, gh, True), 0)
+            self.assertEqual(deploy.sync_comment_wake_files(settings, gh, True), 0)
+        self.assertEqual(len(writes), 4)
+        self.assertEqual(set(files), {
+            f"repos/o/{repo}/contents/{path}"
+            for repo in ("main", "app") for path in deploy.COMMENT_WAKE_FILES
+        })
 
 
 class BackendTest(unittest.TestCase):
@@ -722,6 +757,25 @@ class ProjectPlanTest(unittest.TestCase):
                        "filters": {"tagAdded": "factory:implement-medium"}}, a["implement-medium"]["triggers"])
         self.assertEqual({t["source"] for t in a["fix"]["triggers"]}, {"github"})
         self.assertEqual(deploy.trigger("youtrack.fieldChanged State=In Progress", None)["filters"], {"State": "In Progress"})
+
+    def test_youtrack_stage_tag_is_per_repository_and_only_that_node_listens(self):
+        """#896: with `tracker.repository_field`, `implement api` listens to `factory:ready-api`, `implement web` to `-web`."""
+        def edit(conf):
+            tag_store(conf)
+            conf["tracker"]["repository_field"] = "Repository"
+            conf["states"]["ready"]["store"] = {"tag": "factory:ready"}
+            conf["repositories"] = [{**conf["repositories"][0], "name": "api"},
+                                    {**conf["repositories"][0], "name": "web", "role": "project"}]
+
+        def edit_nodes(compiled):
+            compiled["nodes"]["implement-medium"]["triggers"] = ["youtrack.tagAdded factory:ready"]
+        plan = youtrack_plan(edit, edit_nodes)
+        listens = {a["name"]: [t["filters"] for t in a["triggers"]] for a in plan["automations"]
+                   if any(t.get("filters", {}).get("tagAdded", "").startswith("factory:ready") for t in a["triggers"])}
+        self.assertEqual(listens, {"[Slop factory] implement-medium api": [{"tagAdded": "factory:ready-api"}],
+                                   "[Slop factory] implement-medium web": [{"tagAdded": "factory:ready-web"}]})
+        self.assertTrue({"factory:ready-api", "factory:ready-web"} <= set(plan["tags"]))
+        self.assertNotIn("factory:ready", plan["tags"])
 
     def test_hand_added_connector_is_a_removal(self):
         planned = {"name": "[F] a", "mcpConnectors": []}
@@ -987,6 +1041,14 @@ class PlanTest(unittest.TestCase):
         self.assertNotIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] read"])
         self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
 
+    def test_issues_token_is_deployed_to_every_environment_and_adds_no_write_token(self):
+        plan = self.three_repositories(issues_token_env="FACTORY_ISSUES_TOKEN")
+        envs = {e["name"]: e["secrets"] for e in plan["environments"]}
+        self.assertIn("FACTORY_ISSUES_TOKEN", envs["[Slop factory] read"])
+        for name, secrets in envs.items():
+            self.assertIn("FACTORY_ISSUES_TOKEN", secrets, name)
+            self.assertNotIn("FACTORY_WRITE_TOKEN", secrets, name)
+
     def test_token_write_mode_prompts_push_extra_project_repositories(self):
         token = self.three_repositories(write_mode="token", team_repository="https://github.com/o/team")
         per_repo = self.three_repositories(write_mode="per-repo", team_repository="https://github.com/o/team")
@@ -1209,6 +1271,9 @@ class DefinitionPlanTest(unittest.TestCase):
         plan = self.plan
         self.assertTrue({"factory:ci-green", "factory:ci-red"} <= set(plan["labels"]))  # deploy never removes them
 
+    def test_comment_label_is_kept(self):
+        self.assertIn("factory:comment", self.plan["labels"])  # scripts/comment-wake-label.sh adds it
+
     def test_a_pr_woken_node_begins_with_its_pr(self):
         def arg(name):
             p = self.by[f"[Slop factory] {name}"]["prompt"]
@@ -1236,7 +1301,7 @@ class DefinitionPlanTest(unittest.TestCase):
                          "https://github.com/zaharchenko-evgeny/slop-eval-factory")
         for label in ("factory:implement-small", "factory:review-high", "factory:knowledge-review", "factory:done",
                       "factory:automerge", "risk:low", "complexity:large",
-                      "factory:lesson"):
+                      "factory:lesson", "factory:comment"):
             self.assertIn(label, self.plan["labels"])
         for label in ("factory:reply-dev", "factory:reply-reviewer", "factory:needs-human"):  # generated reply and needs-human labels
             self.assertIn(label, self.plan["labels"])
@@ -1505,6 +1570,16 @@ class YouTrackFieldValuesTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("field 'State' does not exist", err)
         self.assertEqual(writes, [])
+
+
+class MissingMcpEnvTest(unittest.TestCase):
+    def test_deploy_without_operator_vars_exits_2_not_keyerror(self):
+        err = io.StringIO()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("FACTORY_MCP_AIR_")}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(deploy, "check_fixture_drift", lambda c: 0), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(deploy.main(["--dry-run"]), 2)
+        self.assertIn("FACTORY_MCP_AIR_AUTOMATIONS", err.getvalue())
 
 
 if __name__ == "__main__":

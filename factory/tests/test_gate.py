@@ -27,6 +27,7 @@ cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"
 import deploy  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
+import definition  # noqa: E402
 from gate_port import MemoryTracker, TagTracker  # noqa: E402
 
 CONFIG = cfg.load()
@@ -44,6 +45,17 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
+    def test_slop_ci_red_routes_to_fix_and_pending_ci_blocks_review(self):
+        graph = definition.nodes(definition.load(ROOT / "factory/tests/fixtures/slop"))
+
+        red = MemoryTracker({"7": {"stage": "in-review", "ci": "red"}})
+        status, outcome = gate.decide("ci-red", "7", red, graph, dry_run=True)
+        self.assertEqual((status, outcome["outcome"]), (gate.GO, "fix"))
+
+        pending = MemoryTracker({"7": {"stage": "in-review", "ci": "pending", "attrs": ["risk:high"]}})
+        status, _ = gate.check("review-high", {"id": "e1", "ticket": "7"}, pending, graph, CONFIG)
+        self.assertEqual(status, gate.NO_GO)
+
     def test_partial_outcome_failure_reports_effects_that_landed(self):
         graph = {"nodes": {"review": {"when": {}, "outcomes": {"changes": {"effects": [
             {"review": "request-changes-at-head"}, {"unlabel": "factory:review-x", "on": "pr"}]}}}}}
@@ -1996,6 +2008,52 @@ class CiSyncTest(unittest.TestCase):
         results, failed = gate.ci_sync(host, ["o/missing", "o/app"], dry_run=True)
         self.assertTrue(failed)
         self.assertEqual((results[0]["repo"], results[1]["added"], host.edits), ("o/missing", [self.GREEN], []))
+
+
+class StatusTests(unittest.TestCase):
+    def review(self, body, head="a", verdict="changes", rnd=1, focus="behaviour"):
+        return {"agent": True, "verdict": verdict, "commit_id": head, "focus": focus, "round": rnd, "body": body}
+
+    def test_open_lists_b1_and_drops_it_once_a_later_review_resolves_it(self):
+        first = self.review("[factory] x\n\n**B1** a.py:3 — crashes on empty input\nmore\n\n<!-- m -->")
+        facts = {"reviews": [first], "stage": "changes-requested", "pr": 9, "head": "a", "ci": "green", "fix_rounds": 1, "fix_cap": 3}
+        st = gate.status(facts)
+        self.assertEqual(st["reviews"]["behaviour"]["open"], [{"id": "B1", "text": "a.py:3 — crashes on empty input"}])
+        self.assertEqual((st["stage"], st["pr"], st["fix_rounds"], st["fix_cap"]), ("changes-requested", 9, 1, 3))
+        kept = gate.status({**facts, "reviews": [first, self.review("B1 is not resolved yet.", "b", rnd=2)]})
+        self.assertEqual([f["id"] for f in kept["reviews"]["behaviour"]["open"]], ["B1"])
+        later = self.review("[factory] B1 is resolved.", "b", verdict="approve", rnd=2)
+        st = gate.status({**facts, "reviews": [first, later]})
+        self.assertEqual(st["reviews"]["behaviour"], {"round": 2, "verdict": "approve", "head": "b", "open": []})
+
+    def test_status_is_short_and_names_failing_ci(self):
+        body = "\n".join(f"**B{i}** f.py:{i} — " + "x" * 400 for i in range(1, 9))
+        st = gate.status({"reviews": [self.review(body)], "ci": "red", "ci_failure": {"job": "lint", "step": "ruff", "log": "l"}})
+        self.assertEqual(st["ci"], {"state": "red", "failing": ["lint"]})
+        self.assertLess(len(json.dumps(st)), 2000)
+
+    def test_status_stays_under_the_limit_with_many_open_findings(self):
+        body = "\n".join(f"**B{i}** f.py:{i} — issue" for i in range(1, 101))
+        st = gate.status({"reviews": [self.review(body)]})
+        review = st["reviews"]["behaviour"]
+        self.assertLess(len(json.dumps(st)), 2000)
+        self.assertEqual(len(review["open"]) + review["omitted"], 100)
+
+    def test_begin_of_a_fix_run_includes_status(self):
+        tracker = MemoryTracker({7: {"stage": "changes-requested", "head": "abc", "pr": 9, "pr_state": "open", "ci": "green",
+                                     "round_complete": True, "fix_rounds": 0, "fix_cap": 3,
+                                     "reviews": [self.review("**B1** a.py:1 — bad", "abc")]}})
+        payload = {"eventType": "pull_request.labeled", "data": {"action": "labeled", "number": 9}}
+        path = Path(tempfile.mkdtemp()) / "e.json"
+        path.write_text(json.dumps(payload))
+        host = type("Host", (), {"ticket_for_pr": lambda self, number: 7})()
+        out = StringIO()
+        with patch.object(gate.GitHubCodeHost, "from_config", return_value=host), \
+                patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), redirect_stdout(out):
+            gate.main(["check", "--node", "fix", "--event", str(path)])
+        st = json.loads(out.getvalue())["status"]
+        self.assertEqual(st["reviews"]["behaviour"]["open"][0]["id"], "B1")
+        self.assertEqual(st["stage"], "changes-requested")
 
 
 class DefinitionDeliveryTest(unittest.TestCase):

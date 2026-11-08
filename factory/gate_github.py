@@ -24,7 +24,7 @@ import github_graphql
 from gate_port import PR_DEFAULTS, DescriptorPort, child_attrs, child_links, child_order, combine_prs, fix_round_count, ticket_from_ref, ticket_repositories
 from github_tracker import CountedRun, ProjectWriteRun, gh, project_repositories, random_color
 import vocab
-from youtrack_tracker import YouTrackTicketStore
+from youtrack_tracker import MissingRepository, YouTrackTicketStore, repo_stage_tags
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
 NOTE_FIELDS, NOTE_FOR, NOTE_MAX = ("for", "files", "repro", "hint", "context"), ("fixer", "reviewer", "developer", "any"), 2000
@@ -130,7 +130,7 @@ class GitHubCodeHost:
     def from_config(cls, path=None, run=gh):
         c = yaml.safe_load(Path(path).read_text()) if path else config.load()
         return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"],
-                   ProjectWriteRun(run, project_repositories(c)))
+                   ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env")))
 
     def ticket_for_pr(self, number, repository=None):
         """Resolve a PR number to its ticket from the live head ref, else the live title; `repository` (owner/repo)
@@ -442,10 +442,11 @@ class GitHubGateTracker(DescriptorPort):
                 raise ValueError("descriptor: code_host.repository is required with tracker.adapter youtrack")
             field = next((s["store"]["field"]["name"] for s in (c.get("states") or {}).values()
                           if isinstance((s.get("store") or {}).get("field"), dict)), None)
-            tickets = YouTrackTicketStore.from_config(t, state_field=field, bots=t.get("bot_logins") or ())
+            tickets = YouTrackTicketStore.from_config(t, state_field=field, bots=t.get("bot_logins") or (),
+                                                      repo_stages=repo_stage_tags(c), repositories=list(repository_names(c) or []))
             repo = code_repo
         return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"],
-                   ProjectWriteRun(run, project_repositories(c)),
+                   ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env")),
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
                    (c.get("ci") or {}).get("workflows") or ["quality-gates"],
                    (c.get("code_host") or {}).get("repository"),
@@ -946,7 +947,11 @@ class GitHubGateTracker(DescriptorPort):
             if value == "done" and self.tickets.issue(n)["state"] == "open":
                 self.tickets.close(n)  # before the label: a retry still finds the ticket
                 closed = True
-            return (have != [want] and self.tickets.set_stage(n, want, have)) or closed
+            try:
+                return (have != [want] and self.tickets.set_stage(n, want, have)) or closed
+            except MissingRepository as e:  # no repository to wake: say so and wait for a person
+                self.tickets.comment(n, f"[factory] Blocked: {e}")
+                return self.tickets.set_stage(n, self.stages["blocked"], have) or True
         if kind in ("label", "unlabel"):
             on, target = e.get("on") or "issue", n
             if on == "pr":

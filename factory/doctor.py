@@ -12,6 +12,7 @@ Needs `FACTORY_ENV` (read, write, ops) for the tool check. Also one `env:<NAME>`
 environment declares: `ok` when set and non-empty, `missing` otherwise. In the environments that write to the
 `role: project` repositories, one `write:label:<owner/repo>` probe per such repository.
 """
+import base64
 import json
 import os
 import re
@@ -119,6 +120,10 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
         results.append({"probe": "setup", "result": "denied", "detail": str(e)[:200]})
     finally:
         results += cleanup(repo, made, run)
+    try:
+        results += comment_wake_probes(config.load(), run)
+    except Exception as e:
+        results.append({"probe": "project-files", "result": "denied", "detail": str(e)[:200]})
     tools, skills = env_needs(env, nodes)
     for t in tools:
         results.append({"probe": f"tool:{t}", "result": "ok" if which(t) else "missing", "detail": env})
@@ -133,17 +138,23 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
 
 
 def project_write_probes(settings, env, run, environ=os.environ):
-    """In an environment that writes with the project token (github_tracker.token_env), one `write:label:<owner/repo>` probe per `role: project` repository: create
-    a probe label, then delete it, with $FACTORY_WRITE_TOKEN when it is set (github_tracker.ProjectWriteRun). In
-    `write_mode: token` a missing token is a `fail`, and nothing is written."""
-    if not github_tracker.token_env(env, settings):
-        return []
+    """In an environment that writes with a project token (github_tracker.token_env, or `issues_token_env` in a multi-repository team), one `write:label:<owner/repo>` probe per `role: project` repository: create
+    a probe label, then delete it, with the issues token (`issues_token_env`) or $FACTORY_WRITE_TOKEN when it is set
+    (github_tracker.ProjectWriteRun). With `issues_token_env` or `write_mode: token`, a missing token is a `fail` that
+    names the secret, and nothing is written."""
     repos = github_tracker.project_repositories(settings)
-    run = github_tracker.ProjectWriteRun(run, repos, environ)
+    issues = settings.get("issues_token_env")
+    # deploy adds the issues token to every environment of a multi-repository team (deploy.py), declared or not
+    if not (github_tracker.token_env(env, settings) or (issues and len(settings.get("repositories") or []) > 1)):
+        return []
+    run = github_tracker.ProjectWriteRun(run, repos, environ, issues)
     results = []
     for repo in repos:
         name = f"write:label:{repo}"
-        if settings.get("write_mode") == "token" and not environ.get(github_tracker.WRITE_TOKEN):
+        if issues and not environ.get(issues) and not environ.get(github_tracker.WRITE_TOKEN):
+            results.append({"probe": name, "result": "fail", "detail": f"{issues} is not set (issues_token_env)"})
+            continue
+        if not issues and settings.get("write_mode") == "token" and not environ.get(github_tracker.WRITE_TOKEN):
             results.append({"probe": name, "result": "fail", "detail": f"{github_tracker.WRITE_TOKEN} is not set (write_mode: token)"})
             continue
         label = f"factory-doctor-probe-{uuid.uuid4().hex[:12]}"
@@ -153,6 +164,24 @@ def project_write_probes(settings, env, run, environ=os.environ):
                 run(["label", "delete", label, "-R", repo, "--yes"])
             except Exception as e:
                 results.append({"probe": "cleanup", "result": "denied", "detail": f"label delete {repo}: {e}"[:200]})
+    return results
+
+
+def comment_wake_probes(settings, run):
+    """Check that each GitHub project repository has the current comment wake workflow and script."""
+    import deploy
+    expected = {path: (deploy.ROOT / path).read_text() for path in deploy.COMMENT_WAKE_FILES}
+    results = []
+    repos = ["/".join(r["url"].rstrip("/").split("/")[-2:]) for r in settings.get("repositories", [])
+             if r.get("role") in ("primary", "project") and "github.com" in r.get("url", "")]
+    for repo in repos:
+        for path, text in expected.items():
+            name = f"project-file:{repo}/{path}"
+            def check(repo=repo, path=path, text=text):
+                data = json.loads(run(["api", f"repos/{repo}/contents/{path}"]))
+                if base64.b64decode(data.get("content", "")).decode() != text:
+                    raise RuntimeError("file content differs from factory source")
+            probe(results, name, check)
     return results
 
 

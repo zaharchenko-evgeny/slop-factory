@@ -4,6 +4,7 @@
 # dependencies = ["pyyaml>=6"]
 # ///
 """Unit tests for factory/doctor.py with a stubbed gh. Run: uv run --quiet factory/tests/test_doctor.py"""
+import base64
 import contextlib
 import io
 import json
@@ -58,6 +59,10 @@ class FakeGh:
             return "log line"
         if args[0] == "api" and args[-1].endswith("/commits/main"):
             return json.dumps({"sha": "b" * 40, "parents": [{"sha": "a" * 40}]})
+        if args[0] == "api" and "contents/" in args[-1]:
+            path = args[-1].split("contents/", 1)[1]
+            content = (ROOT / path).read_text()
+            return json.dumps({"content": base64.b64encode(content.encode()).decode()})
         if args[0] == "api" and "/issues/" in args[-1] and not args[-1].endswith("timeline"):
             return json.dumps({"id": 999})
         return ""
@@ -112,6 +117,19 @@ class ProjectWriteProbeTest(unittest.TestCase):
         self.assertEqual([c[:2] + c[3:5] for c in gh.calls], [["label", "create", "-R", "o/app"], ["label", "delete", "-R", "o/app"]])
         self.assertEqual(gh.calls[0][2], gh.calls[1][2])
         self.assertEqual(gh.tokens, ["pat", "pat"])
+
+    def test_issues_token_probe_uses_the_issues_token_and_names_a_missing_secret(self):
+        settings = {**self.SETTINGS, "write_mode": "per-repo", "issues_token_env": "FACTORY_ISSUES_TOKEN",
+                    "environments": {"read": {"secrets": []}}}  # deploy adds the issues token itself
+        gh = FakeGh()
+        got = doctor.project_write_probes(settings, "read", gh, {"FACTORY_ISSUES_TOKEN": "iss"})
+        self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])
+        self.assertEqual(gh.tokens, ["iss", "iss"])
+        gh = FakeGh()
+        got = doctor.project_write_probes(settings, "read", gh, {})
+        self.assertEqual(got, [{"probe": "write:label:o/app", "result": "fail",
+                                "detail": "FACTORY_ISSUES_TOKEN is not set (issues_token_env)"}])
+        self.assertEqual(gh.calls, [])
 
     def test_an_environment_that_declares_the_token_is_probed_whatever_its_name(self):
         settings = {**self.SETTINGS, "environments": {"engine": {"secrets": ["FACTORY_WRITE_TOKEN"]}, "team": {"secrets": []}}}
