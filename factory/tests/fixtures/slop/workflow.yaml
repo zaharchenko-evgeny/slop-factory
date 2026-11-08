@@ -237,7 +237,6 @@ nodes:
   # --- Notifications --------------------------------------------------------------------------
   notify:                         # a state that needs the owner: the agent writes one message, or skips
     agent: notify
-    environment: team
     triggers: [{ stage: blocked }, { stage: needs-answers }]
     output: read-only
     outcomes:
@@ -246,7 +245,6 @@ nodes:
 
   notify-pr:                      # a PR that waits for the owner: the message goes on the PR
     agent: notify
-    environment: team
     triggers: [{ label: "factory:needs-human" }]
     output: read-only
     outcomes:

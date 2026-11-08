@@ -56,6 +56,49 @@ class GateTest(unittest.TestCase):
         status, _ = gate.check("review-high", {"id": "e1", "ticket": "7"}, pending, graph, CONFIG)
         self.assertEqual(status, gate.NO_GO)
 
+    def test_partial_outcome_failure_reports_effects_that_landed(self):
+        graph = {"nodes": {"review": {"when": {}, "outcomes": {"changes": {"effects": [
+            {"review": "request-changes-at-head"}, {"unlabel": "factory:review-x", "on": "pr"}]}}}}}
+
+        class FailsAfterReview(MemoryTracker):
+            def apply(self, effect):
+                if effect["kind"] == "unlabel":
+                    raise RuntimeError("unlabel failed")
+                if effect["kind"] == "comment":
+                    self.report = effect
+                return super().apply(effect)
+
+        tr = FailsAfterReview({"7": {"stage": "in-review", "head": "abc"}})
+        with self.assertRaisesRegex(RuntimeError, "unlabel failed"):
+            gate.apply("review", "changes", {"ticket": "7", "focus": "x", "round": 1,
+                                                "run_id": "run-1"}, tr, graph)
+        comments = [json.loads(v) for kind, v in tr.tickets["7"]["log"] if kind == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("review", comments[0])
+        self.assertEqual((tr.report["on"], tr.report["run_id"]), ("pr", "run-1"))
+
+    def test_sweep_plan_replays_stale_review_marker_instead_of_refiring(self):
+        facts = {"stage": "in-review", "head": "abc", "pr_labels": ["factory:review-x"],
+                 "reviews": [{"agent": True, "focus": "x", "verdict": "changes", "commit_id": "abc", "round": 2}]}
+        self.assertEqual(gate.sweep_plan(facts),
+                         ("review", "changes", {"focus": "x", "round": 2, "review_replay": True}))
+
+    def test_definition_replay_uses_review_node_and_marker_outcome(self):
+        node = {"triggers": [{"label": "factory:review-high"}], "outcomes": {
+            "approve-low": {"effects": [{"review": "approve-at-head"}]},
+            "approve-risky": {"effects": [{"review": "approve-at-head"}]},
+            "changes": {"effects": [{"review": "request-changes-at-head"}]}}}
+        graph = {"nodes": {"review-high": node}}
+        review = {"agent": True, "focus": "review-high", "verdict": "approve", "commit_id": "abc", "round": 1}
+        facts = {"stage": "in-review", "head": "abc", "pr_labels": ["factory:review-high"], "reviews": [review]}
+        with patch("gate.definition_team", return_value=True):
+            self.assertIsNone(gate.stale_review_plan(facts, graph))  # two approvals: an unnamed one is not guessed
+            facts["reviews"] = [{**review, "outcome": "approve-risky"}]
+            self.assertEqual(gate.stale_review_plan(facts, graph)[:2], ("review-high", "approve-risky"))
+            facts["reviews"] = [{**review, "verdict": "changes"}]
+            self.assertEqual(gate.stale_review_plan(facts, graph)[:2], ("review-high", "changes"))
+            self.assertIsNone(gate.stale_review_plan({**facts, "pr_labels": []}, graph))
+
     def test_assignment_effect_resolves_owner_and_preserves_logins(self):
         self.assertEqual(gate.resolve({"assign": "owner", "on": "pr"}, {}, "7"),
                          {"kind": "assign", "ticket": "7", "value": cfg.owner(CONFIG), "on": "pr"})

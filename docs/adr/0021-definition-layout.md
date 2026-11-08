@@ -44,7 +44,7 @@ Decision:
    effects' own checks (a merge needs an approved head with green CI). A step
    with no judgement runs a cheap agent with `run: decide`: `factory decide`
    applies the node's first outcome whose guards hold. Several triggers are OR.
-5. **An environment** lists its repositories; exactly one is `main` (branches,
+5. *Superseded in part by ADR-0024.* **An environment** lists its repositories; exactly one is `main` (branches,
    PRs and the node's output apply there). A writable repository that is not
    `main` needs `token_env`, declared in `env`. An optional `setup` script
    installs the environment's tools.

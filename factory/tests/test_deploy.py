@@ -867,9 +867,14 @@ class PlanTest(unittest.TestCase):
         automations = {a["name"]: a for a in plan["automations"]}
         for name in ("doctor", "doctor-write", "doctor-ops"):
             prompt = automations[f"[Slop factory] {name}"]["prompt"]
-            self.assertIn("Run the installed `factory doctor` command exactly once", prompt)
-            self.assertIn("in the foreground with no arguments", prompt)
-            self.assertIn("Do not use `uv run`, `--help` or add arguments", prompt)
+            if name == "doctor-ops":
+                self.assertIn("Run the installed `factory doctor --engine` command exactly once", prompt)
+                self.assertIn("in the foreground with only the `--engine` argument", prompt)
+                self.assertIn("Do not use `uv run`, `--help` or add other arguments", prompt)
+            else:
+                self.assertIn("Run the installed `factory doctor` command exactly once", prompt)
+                self.assertIn("in the foreground with no arguments", prompt)
+                self.assertIn("Do not use `uv run`, `--help` or add arguments", prompt)
             self.assertIn("every JSON probe line", prompt)
             self.assertIn("exit code", prompt)
             self.assertIn("temporary probe issue", prompt)
@@ -981,6 +986,14 @@ class PlanTest(unittest.TestCase):
         self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] ops"])  # reconcile's CI label sync
         self.assertNotIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] read"])
         self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
+
+    def test_issues_token_is_deployed_to_every_environment_and_adds_no_write_token(self):
+        plan = self.three_repositories(issues_token_env="FACTORY_ISSUES_TOKEN")
+        envs = {e["name"]: e["secrets"] for e in plan["environments"]}
+        self.assertIn("FACTORY_ISSUES_TOKEN", envs["[Slop factory] read"])
+        for name, secrets in envs.items():
+            self.assertIn("FACTORY_ISSUES_TOKEN", secrets, name)
+            self.assertNotIn("FACTORY_WRITE_TOKEN", secrets, name)
 
     def test_token_write_mode_prompts_push_extra_project_repositories(self):
         token = self.three_repositories(write_mode="token", team_repository="https://github.com/o/team")
@@ -1203,6 +1216,9 @@ class DefinitionPlanTest(unittest.TestCase):
     def test_ci_result_labels_are_kept(self):
         plan = self.plan
         self.assertTrue({"factory:ci-green", "factory:ci-red"} <= set(plan["labels"]))  # deploy never removes them
+
+    def test_comment_label_is_kept(self):
+        self.assertIn("factory:comment", self.plan["labels"])  # scripts/comment-wake-label.sh adds it
 
     def test_a_pr_woken_node_begins_with_its_pr(self):
         def arg(name):

@@ -65,8 +65,67 @@ class FactsTest(unittest.TestCase):
         self.assertEqual([(x["kind"], x.get("label")) for x in f["operator_interventions"]],
                          [("label", "factory:approved"), ("label", "factory:needs-human"), ("review", None), ("comment", None)])
         self.assertEqual(f["reviews"]["behaviour"],
-                         {"approve": 0, "changes": 2, "blocking": 1, "changes_without_finding": 1})
+                         {"reviews": 2, "approve": 0, "changes": 2, "blocking": 1, "changes_without_finding": 1,
+                          "confirmed": 0, "withdrawn": 0, "escaped": 0})
         self.assertEqual(f["stops"], [{"stage": "factory:blocked", "at": "T2", "reason": "[factory] stuck"}])
+
+
+def review(focus, verdict, head, findings=0):
+    body = f"<!-- factory:review focus={focus} round=1 verdict={verdict} -->\n" + "".join(f"**B{i}** a:1 — x\n" for i in range(findings))
+    return {"user": BOT, "body": body, "commit_id": head}
+
+
+class ReviewScoringTest(unittest.TestCase):
+    def facts(self, reviews, **kw):
+        return retro.ticket_facts(7, [], [], reviews, [], {BOT["login"]}, pr_number=9, **kw)["reviews"]
+
+    def test_confirmed_when_a_new_head_follows(self):
+        got = self.facts([review("behaviour", "changes", "a", 2), review("behaviour", "approve", "b")])
+        self.assertEqual((got["behaviour"]["confirmed"], got["behaviour"]["withdrawn"]), (2, 0))
+
+    def test_withdrawn_when_next_review_approves_the_same_head(self):
+        got = self.facts([review("behaviour", "changes", "a", 3), review("behaviour", "approve", "a")])
+        self.assertEqual((got["behaviour"]["confirmed"], got["behaviour"]["withdrawn"]), (0, 3))
+
+    def test_escaped_counts_later_bug_tickets_of_approved_merged_pr(self):
+        later = [{"number": 20, "body": "PR #9 broke the retro\nother", "labels": []},
+                 {"number": 21, "body": "see https://github.com/o/r/issues/7", "labels": ["bug"]},
+                 {"number": 22, "body": "#7 is related", "labels": []},
+                 {"number": 23, "body": "#8 broke it", "labels": []}]
+        reviews = [review("behaviour", "approve", "a"), review("tests", "changes", "a", 1)]
+        got = self.facts(reviews, merged=True, later=later)
+        self.assertEqual((got["behaviour"]["escaped"], got["tests"]["escaped"]), (2, 0))
+        self.assertEqual(self.facts(reviews, later=later)["behaviour"]["escaped"], 0)  # not merged
+
+    def test_facts_output_has_per_focus_totals(self):
+        one = {"reviews": {"behaviour": {"reviews": 2, "confirmed": 1}}}
+        two = {"reviews": {"behaviour": {"reviews": 1, "confirmed": 0}, "tests": {"reviews": 1, "confirmed": 1}}}
+        self.assertEqual(retro.review_totals([one, two]),
+                         {"behaviour": {"reviews": 3, "confirmed": 1}, "tests": {"reviews": 1, "confirmed": 1}})
+
+
+class FactsOutputTest(unittest.TestCase):
+    def test_facts_returns_tickets_and_totals(self):
+        class Tracker:
+            stages, bot, trusted = {"done": "factory:done"}, "b", ()
+
+            def _list(self, path):
+                if path.startswith("issues?state=all&labels"):
+                    return [{"number": 7, "body": ""}]
+                if path.startswith("issues?state=all&since"):
+                    return []
+                if path == "issues/7/events":
+                    return [label("done", "2026-11-02T00:00:00Z")]
+                if path == "pulls/9/reviews":
+                    return [review("behaviour", "approve", "a")]
+                return []
+
+            def _pr(self, n):
+                return {"number": 9, "merged": True}
+
+        got = retro.facts(Tracker(), "2026-11-01T00:00:00Z")
+        self.assertEqual(got["reviews"]["behaviour"]["approve"], 1)
+        self.assertEqual([t["ticket"] for t in got["tickets"]], [7])
 
 
 class InboxTest(unittest.TestCase):
