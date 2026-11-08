@@ -124,7 +124,7 @@ def comment_wake_probes(settings, run):
     """Check that each GitHub project repository has the current wake files `wake.wake_rules` installs (the comment
     wake workflow and script while the comments plugin is on)."""
     paths = wake.wake_rules(plugins.selected(settings))["install"]
-    expected = {path: (wake.ROOT / path).read_text() for path in paths}
+    expected = {path: wake.wake_file_text(path) for path in paths}
     results = []
     repos = ["/".join(r["url"].rstrip("/").split("/")[-2:]) for r in settings.get("repositories", [])
              if r.get("role") in ("primary", "project") and "github.com" in r.get("url", "")]

@@ -1,0 +1,36 @@
+name: comment-wake-label
+
+on:
+  # The job checks commenter access and never runs PR code.
+  # jactionlint ignore=dangerous-triggers
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  group: comment-wake-label-${{ github.event.comment.id }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    # Factory asks come from the Air app, whose comments are CONTRIBUTOR.
+    if: >-
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      || github.event.comment.user.type == 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: bash scripts/comment-wake-label.sh

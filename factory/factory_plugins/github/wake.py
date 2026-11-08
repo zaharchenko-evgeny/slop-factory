@@ -8,8 +8,13 @@ from pathlib import Path
 
 import plugins
 
-ROOT = Path(__file__).resolve().parents[3]
+WAKE_FILES = Path(__file__).resolve().parent / "wake_files"  # package data: copies of the repository files, so the wheel has them
 COMMENT_WAKE_FILES = (".github/workflows/comment-wake-label.yml", "scripts/comment-wake-label.sh")
+
+
+def wake_file_text(path: str) -> str:
+    """The text of the comment wake file installed at `path` in a project repository."""
+    return (WAKE_FILES / Path(path).name).read_text()
 
 
 def wake_rules(features) -> dict:
@@ -24,7 +29,7 @@ def sync_wake_files(config: dict, run, apply: bool) -> int:
     removes where an earlier deploy installed them."""
     import deploy
     rules = wake_rules(plugins.selected(config))
-    files = {path: (ROOT / path).read_text() for path in dict.fromkeys(rules["install"])}
+    files = {path: wake_file_text(path) for path in dict.fromkeys(rules["install"])}
     for repo in [r for r in config.get("repositories", []) if "github.com" in r["url"]]:
         name = deploy.repository(repo)["fullName"]
         for path in [*files, *rules["remove"]]:

@@ -12,10 +12,12 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 import urllib.parse
+import zipfile
 from unittest import mock
 from pathlib import Path
 
@@ -606,6 +608,27 @@ class CommentWakeDeployTest(unittest.TestCase):
                          {"install": list(github_wake.COMMENT_WAKE_FILES), "remove": []})
         self.assertEqual(github_wake.wake_rules(["github"]),
                          {"install": [], "remove": list(github_wake.COMMENT_WAKE_FILES)})
+
+
+class WakeFilesPackagedTest(unittest.TestCase):
+    ROOT = Path(__file__).resolve().parents[2]
+
+    def test_packaged_copies_match_the_repository_files(self):
+        """The wheel ships copies of the comment wake files; they must equal the files this repository runs."""
+        for path in github_wake.COMMENT_WAKE_FILES:
+            self.assertEqual(github_wake.wake_file_text(path), (self.ROOT / path).read_text(), path)
+
+    def test_wheel_contains_the_wake_files(self):
+        """The installed engine reads the wake files from its package data, not from the source tree."""
+        if not (self.ROOT / "pyproject.toml").exists():
+            self.skipTest("not a source checkout")
+        with tempfile.TemporaryDirectory() as out:
+            subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-deps", "--no-build-isolation", "-q", "-w", out,
+                            str(self.ROOT)], check=True, capture_output=True)
+            with zipfile.ZipFile(next(Path(out).glob("*.whl"))) as wheel:
+                names = set(wheel.namelist())
+        for path in github_wake.COMMENT_WAKE_FILES:
+            self.assertIn(f"factory_plugins/github/wake_files/{Path(path).name}", names)
 
 
 class BackendTest(unittest.TestCase):
