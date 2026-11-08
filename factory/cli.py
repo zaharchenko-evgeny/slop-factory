@@ -394,7 +394,7 @@ def main(argv=None):
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
-        rest = [a for a in args if not a.startswith("--team")]
+        rest = pop_team(args)[1]
         report_crash(rest[0] if rest else "", e)
         raise
 
