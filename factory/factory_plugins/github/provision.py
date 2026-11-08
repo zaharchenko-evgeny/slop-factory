@@ -1,0 +1,53 @@
+"""What `factory deploy` sets up on GitHub (ADR-0026 `provision`): the repository labels of the tracker schema, the
+write-token secret of `write_mode: token`, and the `gh` runner that writes project repositories with it."""
+from factory_plugins.github import tracker as github_tracker
+
+
+def label_tracker(repo: str, run=None):
+    return github_tracker.GitHubTracker(repo, {}, run=run or github_tracker.gh)
+
+
+def reconcile(schema, run=None) -> list[tuple]:
+    """(action, repository, label, changed fields) per required label to create or update, and per factory-owned
+    label no longer required to remove, in each repository of `schema.repositories` independently."""
+    out, owned, random_colors = [], tuple(schema.owned_prefixes), {}
+    for repo in schema.repositories:
+        have = label_tracker(repo, run).list_labels()
+        for name in schema.labels:
+            spec = schema.specs.get(name, {})
+            if name not in have:
+                want = {"color": spec.get("color") or random_colors.setdefault(name, github_tracker.random_color()),
+                        "description": spec.get("description", "")}
+                out.append(("create", repo, name, want))
+            elif changed := [k for k in ("color", "description") if k in spec and have[name][k] != spec[k]]:
+                want = {"color": have[name]["color"], "description": have[name]["description"], **spec}
+                out.append(("update", repo, name, want, changed))
+        out += [("remove", repo, name, None) for name in sorted(have) if name.startswith(owned) and name not in schema.labels]
+    return out
+
+
+def provision(schema, changes, apply, run=None) -> list[str]:
+    """Write `changes` (from `reconcile`): `apply="write"` creates and updates labels, `apply="remove"` deletes the
+    factory-owned ones no longer required. Returns the lines to print."""
+    lines = []
+    for action, repo, label, want, *_ in changes:
+        if apply == "write" and action in ("create", "update"):
+            getattr(label_tracker(repo, run), f"{action}_label")(label, want["color"], want["description"])
+            lines.append(f"{action}d label {label} in {repo}")
+        elif apply == "remove" and action == "remove":
+            label_tracker(repo, run).delete_label(label, list(schema.owned_prefixes))
+            lines.append(f"removed label {label} in {repo}")
+    return lines
+
+
+def secrets(env: str, config: dict) -> list[str]:
+    """Hook `deploy.secrets`: WRITE_TOKEN in an environment that writes project repositories with it, under
+    `write_mode: token` and several repositories."""
+    token = config.get("write_mode") == "token" and len(config["repositories"]) > 1
+    return [github_tracker.WRITE_TOKEN] if token and github_tracker.token_env(env, config) else []
+
+
+def write_run(config: dict):
+    """The `gh` runner deploy writes with: project repositories get the issues or write token."""
+    return github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config),
+                                          issues_token_env=config.get("issues_token_env"))

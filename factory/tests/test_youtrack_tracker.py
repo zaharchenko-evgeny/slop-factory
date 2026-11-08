@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Tests for factory/youtrack_tracker.py with a stubbed runner. Run: uv run factory/tests/test_youtrack_tracker.py"""
+"""Tests for factory/factory_plugins/youtrack/store.py with a stubbed runner. Run: uv run factory/tests/test_youtrack_tracker.py"""
 import copy
 import json
 import sys
@@ -16,7 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
 import test_gate_github as contract  # noqa: E402
-import youtrack_tracker as yt  # noqa: E402
+from factory_plugins.youtrack import store as yt  # noqa: E402
 
 FIXTURES = HERE / "fixtures/youtrack"
 ISSUE = json.loads((FIXTURES / "issue.json").read_text())
@@ -197,6 +197,48 @@ class StoreTest(unittest.TestCase):
         writes = [(m, b) for m, p, b in fake.calls if m == "POST"]
         self.assertEqual(writes, [("POST", {"customFields": [{"name": "State", "$type": "StateIssueCustomField",
                                                               "value": {"name": "factory:ready"}}]})])
+
+
+class TrackerFromConfigTest(unittest.TestCase):
+    """#1069: the youtrack plugin's tracker is the vcs's gate tracker over the YouTrack store, built from a tracker
+    config block."""
+
+    def descriptor(self, **tracker):
+        import shutil
+        import tempfile
+        import yaml
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        desc = {**contract.CONFIG, "code_host": {"repository": "o/code"},
+                "tracker": {**contract.CONFIG["tracker"], "adapter": "youtrack", "url": "https://yt.example",
+                            "project": "LME", **tracker}}
+        path = Path(d, "factory.descriptor.yaml")
+        path.write_text(yaml.safe_dump(desc))
+        return path, desc
+
+    def test_tickets_in_youtrack_and_pull_requests_on_the_code_host(self):
+        from factory_plugins.youtrack.gate import YouTrackTracker
+        path, _ = self.descriptor(bot_logins=["factory[bot]"])
+        t = YouTrackTracker.from_config(path, run=lambda *a, **k: "", yt_run=FakeYouTrack())
+        self.assertIsInstance(t, contract.GitHubGateTracker)
+        self.assertIsInstance(t.tickets, yt.YouTrackTicketStore)
+        self.assertEqual((t.repo, t.pr_repo, t.tickets.project, t.tickets.bots), ("o/code", "o/code", "LME", {"factory[bot]"}))
+        self.assertEqual((t.state_kinds, t.command_kinds), (("field", "tag"), ("tag", "pr_label")))
+
+    def test_a_tracker_block_names_the_youtrack_project(self):
+        from factory_plugins.youtrack.gate import YouTrackTracker
+        path, desc = self.descriptor()
+        block = {**desc["tracker"], "project": "OPS", "done_state": "Closed"}
+        t = YouTrackTracker.from_config(path, run=lambda *a, **k: "", tracker=block, yt_run=FakeYouTrack())
+        self.assertEqual((t.tickets.project, t.tickets.done_state), ("OPS", "Closed"))
+
+    def test_a_code_host_repository_is_required(self):
+        import yaml
+        from factory_plugins.youtrack.gate import YouTrackTracker
+        path, desc = self.descriptor()
+        path.write_text(yaml.safe_dump({k: v for k, v in desc.items() if k != "code_host"}))
+        with self.assertRaisesRegex(ValueError, "code_host.repository is required with tracker.adapter youtrack"):
+            YouTrackTracker.from_config(path, run=lambda *a, **k: "", yt_run=FakeYouTrack())
 
 
 class RepositoryTagsTest(unittest.TestCase):

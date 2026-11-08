@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Validate engine/nodes.yaml (ADR-0014) and print its stage chart.
+"""Validate engine/nodes.yaml (ADR-0014); `chart` prints its stage chart through the chart plugin (ADR-0026).
 
 Usage: nodes.py validate [nodes.yaml] | nodes.py chart [nodes.yaml]
 Each error line starts with a name: no-trigger, bad-condition, unknown-effect, unknown-role,
@@ -17,13 +17,13 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 import config as config_mod  # noqa: E402  (`validate` takes a `config` dict)
-import vocab  # noqa: E402
+import plugins  # noqa: E402  (ADR-0026)
 
 ROOT = Path(__file__).resolve().parents[1]
-EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red", "assign", "unassign", "route", "reply", "skip"}
+EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red", "assign", "unassign"}  # and the plugins' effects
 OUTPUTS = {"read-only", "create-pr", "push-to-source", "push-to-new-branch", "as-instructed"}
 WHEN_KEYS = {"stage", "blockers", "focus", "round", "fix-rounds", "ci", "actor", "always", "due", "pr-state",
-             "label", "pr", "review", "children", "ticket", "mention"}  # the last six: ADR-0021 facts
+             "label", "pr", "review", "children", "ticket"}  # the last five: ADR-0021 facts; and the plugins' guards
 NO_ROLE = {"script", "human"}
 
 
@@ -66,6 +66,15 @@ def validate(nodes, config):
     roles = config["roles"]
     errs += config_mod.mcp_errors(roles, ((config.get("targets") or {}).get("air") or {}).get("mcp_connectors"), nodes)
     envs, scheds = nodes.get("environments") or {}, nodes.get("schedules") or {}
+    registry = plugins.registry(config)  # ADR-0026: the keys of the plugins the team turns on
+    effects, when_keys = EFFECTS | registry.effect_kinds(), WHEN_KEYS | set(registry.guards())
+
+    def off(where, key, of):
+        """The module-off error when `key` belongs to a plugin that is off, else None."""
+        owner = plugins.owner(key, of) if isinstance(key, str) else None
+        if owner is None or registry.is_on(owner):
+            return None
+        return plugins.refusal(where, f"`on: {key}`" if of == "trigger" else key, owner)
 
     def stage(where, s):
         if s != "none" and s not in stages:
@@ -84,8 +93,8 @@ def validate(nodes, config):
             errs.append(f"bad-condition: {name}: `when` must be one non-empty mapping")
         else:
             for k in n["when"]:
-                if k not in WHEN_KEYS:
-                    errs.append(f"bad-condition: {name}: unknown `when` key {k}")
+                if k not in when_keys:
+                    errs.append(off(f"{name}.when", k, "guard") or f"bad-condition: {name}: unknown `when` key {k}")
             if "stage" in n["when"]:
                 for st in n["when"]["stage"] if isinstance(n["when"]["stage"], list) else [n["when"]["stage"]]:
                     stage(f"{name}.when", st)
@@ -110,11 +119,20 @@ def validate(nodes, config):
         for oname, o in n["outcomes"].items():
             for e in (o or {}).get("effects") or []:
                 keys = [k for k in e if k != "on"] if isinstance(e, dict) else []
-                if len(keys) != 1 or keys[0] not in EFFECTS:
-                    errs.append(f"unknown-effect: {name}.{oname}: {e}")
-                elif "on" in e and (e["on"] not in ("issue", "pr", "mention") or keys[0] not in ("label", "unlabel", "comment")
-                                   or (e["on"] == "mention" and keys[0] != "comment")):  # #590: where the question was
-                    errs.append(f"unknown-effect: {name}.{oname}: bad `on` in {e}")
+                if len(keys) != 1 or keys[0] not in effects:
+                    errs.append(len(keys) == 1 and off(f"{name}.{oname}", keys[0], "effect")
+                                or f"unknown-effect: {name}.{oname}: {e}")
+                elif "on" in e:
+                    target = e["on"]
+                    if target in ("issue", "pr"):
+                        ok = keys[0] in ("label", "unlabel", "comment") \
+                            or registry.effect(keys[0], {"issue": "ticket"}.get(target, target)) is not None  # notify
+                    else:  # a plugin's target: only an effect it declares there (#590: `comment` `on: mention`)
+                        ok = isinstance(target, str) and target in registry.triggers() \
+                            and registry.effect(keys[0], target) is not None
+                    if not ok:
+                        errs.append(off(f"{name}.{oname}", target, "trigger")
+                                    or f"unknown-effect: {name}.{oname}: bad `on` in {e}")
             if (o or {}).get("else") and o["else"] not in n["outcomes"]:
                 errs.append(f"unknown-outcome: {name}.{oname}: else {o['else']}")
             for s in (o or {}).get("from") or []:
@@ -139,124 +157,14 @@ def validate(nodes, config):
     return errs
 
 
-def planned(x):
-    return isinstance(x, dict) and x.get("enabled") is False
-
-
-def trigger_text(t, n, schedules):
-    """A trigger in a reader's words: `issue +factory:ready`, `PR +factory:fix-{cheap|mid}`, `PR merged`."""
-    tiers = "|".join(n.get("tiers") or ["tier"])
-    t = t.replace("<tier>", "{" + tiers + "}")
-    event, _, label = t.partition(" ")
-    names = {"issues.labeled": "issue +", "pull_request.labeled": "PR +", "pull_request.merged": "PR merged", "issues.closed": "issue closed", "issues.unlabeled": "issue label removed",
-             "pull_request.synchronize": "PR push", "pull_request.opened": "PR opened",
-             "issue_comment.created": "comment on a PR",
-             "pull_request_review.submitted": "PR review submitted", "workflow_run": "run of ", "manual": "a person"}
-    if event == "webhook":
-        return f"webhook {label}"
-    if event == "schedule":
-        return f"cron {schedules.get(label, {}).get('cron', label)}"
-    return names.get(event, event) + label
-
-
-def writes(outcome, n):
-    """Labels an outcome adds (they start other nodes), in the chart's words."""
-    tiers = "|".join(n.get("tiers") or ["tier"])
-    out = []
-    for e in outcome.get("effects") or []:
-        if "label" in e:
-            out.append("+" + e["label"].replace("<next tier>", "{next}").replace("<tier>", "{" + tiers + "}"))
-        if "join" in e:
-            out.append("join")
-    return out
-
-
-def _id(x):
-    return "".join(c if c.isalnum() else "_" for c in x)
-
-
-def chart(nodes):
-    """Mermaid flowchart of the whole factory: stages (rounded), automation nodes (boxes with what starts
-    them), planned nodes and edges dashed. Derived from nodes.yaml, so it cannot drift from the factory."""
-    scheds, lines = nodes.get("schedules") or {}, ["flowchart LR"]
-    lines += ["    classDef stage fill:#eef,stroke:#669", "    classDef node fill:#fff,stroke:#333",
-              "    classDef planned fill:#fafafa,stroke:#999,stroke-dasharray:5 5,color:#666",
-              "    classDef ext fill:#efe,stroke:#393"]
-    stages, edges_out = set(), []
-    for name, n in nodes["nodes"].items():
-        plan = planned(n)
-        trig = "<br/>".join("on: " + trigger_text(t, n, scheds) for t in n.get("triggers") or [])
-        who = n["role"] if n["role"] in ("script", "human") else f"{n['role']} · {n.get('tier') or '|'.join(n.get('tiers') or []) or 'review tiers'}"
-        tag = f" (#{n['ticket']})" if plan and n.get("ticket") else ""
-        lines.append(f'    N_{_id(name)}["<b>{name}</b>{tag}<br/>{trig}<br/>{who}"]:::{"planned" if plan else "node"}')
-        src = (n.get("when") or {}).get("stage")
-        srcs = src if isinstance(src, list) else [src] if src else []
-        for oname, o in (n.get("outcomes") or {}).items():
-            oplan = plan or planned(o)
-            target = effect_stage(o)
-            froms = o.get("from") or srcs
-            for f in froms:
-                stages.add(f)
-                edges_out.append((f"S_{_id(f)}", f"N_{_id(name)}", None, oplan))
-            label = " ".join([oname] + writes(o, n)) + (f" (#{o['ticket']})" if planned(o) and o.get("ticket") else "")
-            if target:
-                stages.add(target)
-                edges_out.append((f"N_{_id(name)}", f"S_{_id(target)}", label, oplan))
-            elif any("join" in e for e in o.get("effects") or []) and name != "join":
-                edges_out.append((f"N_{_id(name)}", "N_join", label, oplan))
-    if any(vocab.ci("ci-green") in t for n in nodes["nodes"].values() for t in n.get("triggers") or []):
-        green, red = vocab.ci("ci-green"), vocab.ci("ci-red")
-        lines.append(f'    CI["<b>CI</b> quality-gates (labels CI result)<br/>on: PR push<br/>writes +{green} or +{red}"]:::ext')
-        edges_out += [("S_in_review", "CI", "push", False), ("CI", "N_review", f"+{green}", False),
-                      ("CI", "N_join", f"+{red}", False)]
-    for st in sorted(stages - {"none"}):
-        lines.append(f'    S_{_id(st)}(["{st}"]):::stage')
-    if "none" in stages:
-        lines.append('    S_none(["PR with no stage"]):::stage')
-    seen = set()
-    for a, b, label, plan in edges_out:
-        arrow = "-.->" if plan else "-->"
-        e = f"    {a} {arrow} {b}" if label is None else f'    {a} {"-." if plan else "--"} "{label}" {arrow} {b}'
-        if e not in seen:
-            seen.add(e)
-            lines.append(e)
-    lines += ["    subgraph Legend", '        L_s(["stage: label factory:‹stage›"]):::stage',
-              '        L_n["<b>built node</b><br/>on: the labels or events that start its automation"]:::node',
-              '        L_p["<b>planned node</b> (#ticket)"]:::planned',
-              '        L_s --> L_n', '        L_n -- "outcome +label it adds" --> L_s', '        L_s -.-> L_p', "    end"]
-    return "\n".join(lines) + "\n"
-
-
-def table(nodes):
-    """Markdown table: each node, what starts it, what it writes, and whether it is built."""
-    scheds = nodes.get("schedules") or {}
-    rows = ["| Node | Starts on | Writes (labels it adds, stage it sets) | Role · tier | Status |", "|---|---|---|---|---|"]
-    for name, n in nodes["nodes"].items():
-        trig = "<br>".join(f"`{trigger_text(t, n, scheds)}`" for t in n.get("triggers") or [])
-        outs = []
-        for oname, o in (n.get("outcomes") or {}).items():
-            w = writes(o, n) + ([f"→ {effect_stage(o)}"] if effect_stage(o) else [])
-            outs.append(f"{oname}: {' '.join(w) or '—'}" + (f" (planned #{o.get('ticket')})" if planned(o) else ""))
-        who = n["role"] if n["role"] in ("script", "human") else f"{n['role']} · {n.get('tier') or '/'.join(n.get('tiers') or []) or 'per focus'}"
-        status = f"planned #{n.get('ticket')}" if planned(n) else "built"
-        rows.append(f"| `{name}` | {trig} | {'<br>'.join(outs)} | {who} | {status} |")
-    return "\n".join(rows) + "\n"
-
-
-def block(nodes):
-    """The generated docs block: the chart and the table."""
-    return "```mermaid\n" + chart(nodes) + "```\n\n" + table(nodes)
-
-
 def main(argv):
     argv = config.pop_team(argv)
     if not argv or argv[0] not in ("validate", "chart"):
         print(__doc__)
         return 2
+    if argv[0] == "chart":  # the chart plugin (ADR-0026): development tooling, on whenever its command is used
+        return plugins.registry({}, use=(("tool", "chart"),)).command("chart")(argv[1:])
     nodes = load(argv[1] if len(argv) > 1 else None)
-    if argv[0] == "chart":
-        print(block(nodes), end="")
-        return 0
     errs = validate(nodes, config.load())
     print("\n".join(errs) or "nodes.yaml: ok")
     return 1 if errs else 0

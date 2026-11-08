@@ -16,7 +16,8 @@ Decision:
 - A harness is a local-target setting: `roles.<role>.modes.<focus>.harness`,
   else `roles.<role>.harness`, else `targets.local.harness`, else
   `claude-code`. Supported: `claude-code`, `codex`, `junie`, `pi`. The local
-  adapter (`factory/local.py`) builds each one's headless command.
+  adapter (an agent runner plugin, `factory/factory_plugins/<plugin>/runner.py`
+  since #1071) builds each one's headless command.
 - The local model map is `targets.local.models`; the top-level `models` map is
   still read by the local target when `targets.local.models` is absent. Node
   validation checks tiers against `targets.air.models`.

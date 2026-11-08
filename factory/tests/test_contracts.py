@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Tests for factory/contracts.py on the recordings in factory/tests/contracts/. Run: uv run --quiet factory/tests/test_contracts.py"""
+"""Tests for factory/factory_plugins/air/contracts.py on the recordings in factory/tests/contracts/. Run: uv run --quiet factory/tests/test_contracts.py"""
 import json
 import re
 import subprocess
@@ -16,7 +16,7 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(HERE / "fixtures/team")
-import contracts  # noqa: E402
+from factory_plugins.air import contracts  # noqa: E402
 import gate  # noqa: E402
 
 REC = HERE / "contracts/air-mcp.json"
@@ -28,7 +28,7 @@ def ask(server, *calls):
     msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}]
     msgs += [{"jsonrpc": "2.0", "id": i + 2, "method": "tools/call", "params": {"name": t, "arguments": a}}
              for i, (t, a) in enumerate(calls)]
-    out = subprocess.run([sys.executable, str(ROOT / "factory/contracts.py"), "serve", str(REC), server], check=True,
+    out = subprocess.run([sys.executable, str(ROOT / "factory/factory_plugins/air/contracts.py"), "serve", str(REC), server], check=True,
                          input="".join(json.dumps(m) + "\n" for m in msgs), capture_output=True, text=True).stdout
     return [json.loads(line) for line in out.splitlines()][1:]
 
