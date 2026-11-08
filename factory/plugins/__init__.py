@@ -126,6 +126,8 @@ def implied(config):
     envs = config.get("environments")
     names += [("vcs", _named(e.get("vcs"))) for e in (envs.values() if isinstance(envs, dict) else [])
               if isinstance(e, dict) and e.get("vcs")]
+    names += [("tracker", _named(e.get("tracker")) or "github-issues") for e in (envs.values() if isinstance(envs, dict) else [])
+              if isinstance(e, dict) and isinstance(e.get("tracker"), dict)]  # an environment's own tracker (#1069)
     models = config.get("models")
     names += [("agent", m.get("harness")) for m in (models.values() if isinstance(models, dict) else [])
               if isinstance(m, dict)]

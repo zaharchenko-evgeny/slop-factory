@@ -37,11 +37,12 @@ class YouTrackTracker:
     """The `youtrack` tracker the registry provides: only `from_config`, which returns the gate tracker."""
 
     @classmethod
-    def from_config(cls, path=None, run=None, tracker=None, yt_run=None):
-        """The gate tracker of the descriptor at `path` (else the team's): its tickets in YouTrack, from the tracker
-        config block `tracker` (default the descriptor's `tracker`), its pull requests on the vcs the descriptor
-        selects. `run` is the vcs's runner, `yt_run` YouTrack's (tests stub both)."""
-        c = yaml.safe_load(Path(path).read_text()) if path else config.load()
+    def from_config(cls, path=None, run=None, tracker=None, yt_run=None, descriptor=None):
+        """The gate tracker of the descriptor at `path` (else `descriptor`, else the team's): its tickets in YouTrack,
+        from the tracker config block `tracker` (default the descriptor's `tracker`; an environment's merged block
+        carries its `scope`), its pull requests on the vcs the descriptor selects. `run` is the vcs's runner, `yt_run`
+        YouTrack's (tests stub both)."""
+        c = yaml.safe_load(Path(path).read_text()) if path else descriptor if descriptor is not None else config.load()
         vcs = config.vcs(c)
         if not (c.get("code_host") or {}).get("repository"):  # the gate tracker's pull requests (GitHubGateTracker)
             raise ValueError("descriptor: code_host.repository is required with tracker.adapter youtrack")

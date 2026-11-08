@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from gate_port import CLOSED_HOURS, child_links, child_order
 from ports.system import Effect
+from scopes import matches
 
 ISSUE_FIELDS = ("idReadable,summary,description,resolved,updated,reporter(login),tags(id,name),"
                 "customFields(name,value(name,login)),links(direction,linkType(name),issues(idReadable,resolved,tags(name)))")
@@ -81,7 +82,8 @@ class YouTrackTicketStore:
     stages are tags. `done_state` is the State a closed ticket gets; `bots` the logins that count as agents;
     `writers` the logins that may answer a question the factory asked. With `repository_field`, the stage tags in
     `repo_stages` are stored as `<tag>-<repo>` (the repository is the field's value, one of `repositories`) and read
-    back as `<tag>`."""
+    back as `<tag>`. `scope` (`{field, value[, type]}`, #1069) is the environment's share of the project: its ticket
+    queries hold only the tickets whose field holds the value, and a ticket it creates gets the value."""
 
     state_kinds, command_kinds = ("field", "tag"), ("tag",)  # a state is a field value or a tag, a command a tag
     # (system, effect, ctx) -> wrote, on the gate tracker that holds this store as its `tickets`: a stage is a tag (per
@@ -94,8 +96,9 @@ class YouTrackTicketStore:
     )
 
     def __init__(self, run, state_field=None, done_state="Done", project=None, bots=(), writers=(), assignee_field="Assignee",
-                 repository_field=None, repo_stages=(), repositories=()):
+                 repository_field=None, repo_stages=(), repositories=(), scope=None):
         self.run, self.state_field, self.done_state, self.project = run, state_field, done_state, project
+        self.scope = scope
         self.bots, self.writers, self.assignee_field = set(bots), set(writers), assignee_field
         self.repository_field, self.repo_stages, self.repositories = repository_field, tuple(repo_stages), tuple(repositories)
 
@@ -104,7 +107,7 @@ class YouTrackTicketStore:
         """From the descriptor's `tracker`: `url`, `token_env` (default YOUTRACK_TOKEN), `done_state`, `project`."""
         run = run or urllib_runner(tracker["url"], os.environ[tracker.get("token_env", "YOUTRACK_TOKEN")])
         return cls(run, done_state=tracker.get("done_state", "Done"), project=tracker.get("project"),
-                   repository_field=tracker.get("repository_field"), **kw)
+                   repository_field=tracker.get("repository_field"), scope=tracker.get("scope"), **kw)
 
     # --- reads
     def _issue(self, n):
@@ -126,6 +129,17 @@ class YouTrackTicketStore:
             return repo, None
         return None, (f"field {self.repository_field!r} is empty: set it to one of {', '.join(self.repositories)}" if not repo else
                       f"field {self.repository_field!r} holds {repo!r}, not one of {', '.join(self.repositories)}")
+
+    def in_scope(self, n):
+        """Whether ticket `n`'s scope field holds the scope's value (every ticket without a scope)."""
+        if not self.scope:
+            return True
+        field = self.scope["field"]
+        return matches(self.scope, fields={field: [v.get("name") for v in self._field(self._issue(n), field)]})
+
+    def _scoped(self, query):
+        """`query` narrowed to the scope: `(<query>) and <field>: {<value>}`."""
+        return f"({query}) and {self.scope['field']}: {{{self.scope['value']}}}" if self.scope else query
 
     def _attrs(self, raw):
         repo = self._repo(raw)
@@ -190,7 +204,7 @@ class YouTrackTicketStore:
             query = f"({query}) and (#Unresolved or resolved date: {{minus {CLOSED_HOURS}h}} .. Now)"
         else:
             query = f"({query}) and #Unresolved"
-        found = self.run("GET", f"/api/issues?query={urllib.parse.quote(query)}&fields=idReadable&{TOP}")
+        found = self.run("GET", f"/api/issues?query={urllib.parse.quote(self._scoped(query))}&fields=idReadable&{TOP}")
         return sorted(i["idReadable"] for i in found)
 
     def can_answer(self, login):
@@ -319,6 +333,9 @@ class YouTrackTicketStore:
         issue = self.run("POST", "/api/issues?fields=idReadable", {
             "summary": title, "description": body, **({"project": {"shortName": self.project}} if self.project else {})})
         self.edit_attrs(issue["idReadable"], tags)
+        if self.scope:  # a ticket the factory creates stays in its environment
+            self.set_field(issue["idReadable"], self.scope["field"], self.scope["value"],
+                           self.scope.get("type", "SingleEnumIssueCustomField"))
         if repo:
             self.set_field(issue["idReadable"], self.repository_field, repo)
         return issue["idReadable"]
@@ -360,7 +377,7 @@ class YouTrackTicketStore:
     def park(self, n, check, triage):
         """Open or reuse the one `Main is red in Air: <check>` ticket, then block ticket `n` by it."""
         title = f"Main is red in Air: {check}"
-        found = self.run("GET", f"/api/issues?query={urllib.parse.quote(f'#Unresolved summary: {{{title}}}')}"
+        found = self.run("GET", f"/api/issues?query={urllib.parse.quote(self._scoped(f'#Unresolved summary: {{{title}}}'))}"
                                 f"&fields=idReadable,summary&{TOP}")
         red = next((i["idReadable"] for i in found if i["summary"] == title), None)
         if red is None:

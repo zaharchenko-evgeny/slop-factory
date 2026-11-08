@@ -64,6 +64,32 @@ label or a merge. In `write` and `ops`, `factory doctor` runs one
 `write:label:<owner/repo>` probe per project repository and reports `fail`
 when the token is missing in `token` mode.
 
+### Per-environment trackers
+
+One factory can serve several projects, each with its own tracker (#1069,
+ADR-0026 "Per-environment trackers"). A project is an environment with a
+`tracker` block. Unset keys come from the top-level `tracker` when the
+adapters match. `scope` names the project's share of that tracker: `label` on
+`github-issues`, `field` and `value` on `youtrack`.
+
+```yaml
+tracker: {adapter: youtrack, url: https://yt.example, project: PRJ}
+environments:
+  backend:  {repositories: [...], tracker: {adapter: youtrack, scope: {field: Subsystem, value: Backend}}}
+  frontend: {repositories: [...], tracker: {adapter: youtrack, scope: {field: Subsystem, value: Frontend}}}
+  web:      {repositories: [...], tracker: {adapter: github-issues, repository: owner/web, scope: {label: "area:web"}}}
+```
+
+Each node of the default environment is deployed once per project, in that
+project's Air environment. The gate reads and writes each ticket through its
+project's tracker. A ticket inside no project's scope is left alone: the
+step prints `skip: <ticket> outside every environment scope` and writes
+nothing. Sweeps query each project with its scope, and tickets the factory
+creates get the project's label or field value. `factory validate` rejects an
+adapter that no plugin provides, scope keys of another adapter, and projects
+that share one tracker with the same scope or with no scope. Without any
+environment `tracker`, nothing changes.
+
 ### Team-owned runtime files
 
 Runtime `roles/`, `skills/`, workflows, policies, and judgments come only from

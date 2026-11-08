@@ -11,6 +11,7 @@ from pathlib import Path
 import yaml
 
 import plugins  # ADR-0026: a plugin's code is imported when the core calls it
+import scopes
 
 FACTORY = "factory.yaml"
 WORKFLOW = "workflow.yaml"
@@ -410,6 +411,7 @@ def errors(defn):
                 errs.append(f"write-token: environments.{e}: {r.get('repo')} is writable without `token_env`")
             if r.get("token_env") and r["token_env"] not in declared:
                 errs.append(f"undeclared-env: environments.{e}: {r['token_env']}")
+    errs += scopes.errors(f)  # environments with their own trackers (#1069)
     listed = (f.get("tracker") or {}).get("repositories")
     if listed is not None and (not isinstance(listed, list) or not all(isinstance(r, str) for r in listed)):
         errs.append("bad-tracker-repositories: factory.yaml: `tracker.repositories` is a list of repositories")
@@ -422,6 +424,18 @@ def errors(defn):
     code = code_repos(defn)
     tracker_repo = full_name((f.get("tracker") or {}).get("repository") or "")
     tracker_name = (f.get("tracker") or {}).get("repository")
+    project_envs = scopes.project_envs(f)
+
+    def deaf_tracker(env, main_name):
+        """A ticket trigger hears nothing when the environment's main repository is not its tracker's. #1069: a node
+        of the default environment runs once per project environment (each checked by `scopes.errors`); a project
+        environment's own tracker is its tracker; a YouTrack tracker wakes nodes in any repository."""
+        if project_envs and env == default_env:
+            return False
+        block = project_envs.get(env)
+        if block is None:
+            return main_name != tracker_repo
+        return scopes.adapter(block) == "github-issues" and main_name != full_name(block.get("repository") or "")
     pr_labels = {}
     for source in nodes.values():
         source_env = envs.get(source.get("environment") or default_env) or {}
@@ -459,7 +473,7 @@ def errors(defn):
                 code_event = isinstance(trigger, dict) and next(iter(trigger), None) in ("pr", "ci")
                 pr_event = code_event or isinstance(trigger, dict) and pr_label in pr_labels
                 source_repos = pr_labels.get(pr_label)
-                if (source_repos and main_name not in source_repos) or (not pr_event and main_name != tracker_repo) \
+                if (source_repos and main_name not in source_repos) or (not pr_event and deaf_tracker(env, main_name)) \
                         or (code_event and main_name not in {full_name(r) for r in code}):
                     errs.append(f"deaf-trigger: {where}: environment {env} main repository {main_repo} "
                                 f"does not match tracker {tracker_name}")
@@ -665,7 +679,8 @@ def to_project(defn):
                             # where the gate may write in this environment: the main repository, or `write: true` (#994)
                             "writable": [names[r["repo"]] for r in repos if r.get("main") or r.get("write")],
                             "secret_help": help_,
-                            "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP}
+                            "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP,
+                            **({"tracker": dict(e["tracker"])} if isinstance(e.get("tracker"), dict) else {})}
 
     # Stages: every name the nodes use, plus the engine's PR facts.
     used = _used_stages(w)
