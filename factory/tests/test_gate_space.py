@@ -3,15 +3,17 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Tests for factory/gate_space.py with a fake Space API. Run: uv run factory/tests/test_gate_space.py"""
+"""Tests for factory/factory_plugins/space/gate.py with a fake Space API. Run: uv run factory/tests/test_gate_space.py"""
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gate_port import PR_DEFAULTS  # noqa: E402
-from gate_space import SpaceCodeHost, space_event  # noqa: E402
+from factory_plugins.space.gate import SpaceCodeHost, space_event  # noqa: E402
 import gate  # noqa: E402
+import plugins  # noqa: E402
 
 
 def mr(number, branch, **kw):
@@ -75,6 +77,11 @@ class SpaceFacts(unittest.TestCase):
 
 
 class SpaceEvents(unittest.TestCase):
+    def setUp(self):  # a team whose vcs is space: its plugin reads the payload (the `gate.trigger` hook)
+        p = mock.patch.object(gate, "plugin_registry", lambda: plugins.registry({"vcs": "space"}))
+        p.start()
+        self.addCleanup(p.stop)
+
     def payload(self, **mr):
         return {"eventType": "space.merge_request.opened", "data": {"action": "opened", "project": {"key": "IJ"},
                 "merge_request": {"number": 7, "title": "t", "branch": "ez/5-thing", **mr}}}
@@ -192,6 +199,101 @@ class SpaceWrites(unittest.TestCase):
     def test_unknown_effect(self):
         with self.assertRaises(ValueError):
             self.apply("explode")
+
+
+ENVS = {"vcs": {"adapter": "github", "repository": "o/app"},
+        "environments": {"ij": {"vcs": {"adapter": "space", "url": "https://space.example", "project": "IJ"}},
+                         "web": {"vcs": {"repository": "o/web"}}, "named": {"vcs": "space"}, "plain": {}}}
+
+
+class EnvironmentVcs(unittest.TestCase):
+    """#1070: `environments.<env>.vcs` picks an environment's vcs over the top-level `vcs` (alias `code_host`)."""
+
+    def test_an_environment_vcs_overrides_the_top_level_one(self):
+        vcs = gate.config_mod.vcs
+        self.assertEqual(vcs(ENVS), {"adapter": "github", "repository": "o/app"})
+        self.assertEqual(vcs(ENVS, "ij"), {"adapter": "space", "url": "https://space.example", "project": "IJ"})
+        self.assertEqual(vcs(ENVS, "web"), {"adapter": "github", "repository": "o/web"})  # same adapter: merged
+        self.assertEqual(vcs(ENVS, "named"), {"adapter": "space"})
+        self.assertEqual((vcs(ENVS, "plain"), vcs(ENVS, "absent")), (vcs(ENVS), vcs(ENVS)))
+        self.assertEqual(vcs({"code_host": "space"}), {"adapter": "space"})
+        self.assertIn("space", plugins.selected(ENVS))
+
+    def test_the_run_environment_vcs_is_built_beside_the_tracker(self):
+        from gate_port import MemorySystem
+        from gate_tracker import OnVcs
+        tickets = MemorySystem({5: {"stage": "in-review"}})
+        with mock.patch.dict(gate.os.environ, {"FACTORY_ENV": "ij", "SPACE_TOKEN": "t"}), \
+                mock.patch.object(gate, "tracker_of", return_value=tickets):
+            tracker, vcs = gate.systems(ENVS)
+        self.assertIsInstance(vcs, SpaceCodeHost)
+        self.assertEqual(vcs.project, "IJ")
+        self.assertIsInstance(tracker, OnVcs)
+        self.assertIs(tracker.tracker, tickets)
+        self.assertIs(tracker.vcs, vcs)
+
+    def test_an_unknown_vcs_names_the_registry(self):
+        config = {"environments": {"x": {"vcs": "gitlab"}}}
+        with mock.patch.dict(gate.os.environ, {"FACTORY_ENV": "x"}), mock.patch.object(gate, "tracker_of"):
+            with self.assertRaisesRegex(ValueError, "unknown-vcs: environments.x.vcs: gitlab: no selected plugin"):
+                gate.systems(config)
+        self.assertEqual(plugins.impl_error({}, "vcs", "space", "vcs"), "module-off: vcs: space needs plugins: [space]")
+
+
+class VcsValidation(unittest.TestCase):
+    def test_an_unknown_vcs(self):
+        self.assertEqual(scopes_errors({"environments": {"x": {"vcs": "gitlab"}}}),
+                         ["unknown-vcs: factory.yaml: environments.x.vcs: gitlab: no selected plugin provides this vcs "
+                          "(known: github, space)"])
+        self.assertEqual(scopes_errors(ENVS), [])
+
+    def test_a_pr_effect_the_environment_vcs_does_not_apply(self):
+        nodes = {"review": ("ij", [{"review": "approve-at-head"}, {"label": "a", "on": "pr"}, {"comment": "x", "on": "pr"},
+                                   {"request-reviewers": None}, {"stage": "approved"}, {"comment": "on the ticket"}]),
+                 "web": ("web", [{"comment": "x", "on": "pr"}]), "plain": ("plain", [{"pr-notes": "n"}])}
+        self.assertEqual(scopes_errors(ENVS, nodes), [
+            "vcs-effect: factory.yaml: nodes.review: environment ij vcs space does not support effect `comment` on: pr",
+            "vcs-effect: factory.yaml: nodes.review: environment ij vcs space does not support effect "
+            "`request-reviewers` on: pr"])  # github (web, plain) leaves its PRs to the tracker, which applies them all
+
+    def test_definition_validation_names_the_environment_vcs(self):
+        import tempfile
+        import shutil
+        import yaml
+        import config
+        import definition
+        fixtures = Path(__file__).resolve().parent / "fixtures"
+        with tempfile.TemporaryDirectory() as d:
+            team = Path(d) / "team"
+            shutil.copytree(fixtures / "v2", team)
+            f = yaml.safe_load((team / "factory.yaml").read_text())
+            env = next(iter(f["environments"]))
+            f["environments"][env]["vcs"] = "gitlab"
+            (team / "factory.yaml").write_text(yaml.safe_dump(f))
+            old = config.team_root()
+            config.set_team(str(team))
+            try:
+                errs = definition.errors(definition.load(team))
+            finally:
+                config.set_team(str(old))
+        self.assertIn(f"unknown-vcs: factory.yaml: environments.{env}.vcs: gitlab: no selected plugin provides this vcs "
+                      "(known: github, space)", errs)
+
+    def test_the_project_schema_takes_an_environment_vcs(self):
+        import json
+        import config
+        schema = json.loads((Path(__file__).resolve().parents[2] / "engine/project.schema.json").read_text())
+        env = schema["properties"]["environments"]["additionalProperties"]
+        for value, want in (("space", []), ({"adapter": "space", "url": "u", "project": "IJ"}, []),
+                            ({"token": "x"}, ["unknown-key: e.vcs.token"]), (3, ["e.vcs: must be string or object"])):
+            errs = []
+            config._check(env, {"vcs": value}, "e", errs, schema)
+            self.assertEqual(errs, want)
+
+
+def scopes_errors(config, nodes=None):
+    import scopes
+    return scopes.vcs_errors(config, nodes=nodes)
 
 
 if __name__ == "__main__":

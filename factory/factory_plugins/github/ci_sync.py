@@ -6,6 +6,7 @@ import json
 import sys
 
 import config as config_mod
+import plugins
 import vocab
 from factory_plugins.github.gate import BAD_CI, GOOD_CI, GitHubCodeHost
 from factory_plugins.github.tracker import project_repositories
@@ -69,9 +70,10 @@ def ci_sync(code_host, repositories, dry_run=False, progress=None):
 
 def run_ci_sync(dry_run=False, progress=None):
     """`ci-sync` (manual) and each `factory reconcile` pass (scheduled): the descriptor's project repositories on
-    GitHub. Another vcs has no sync yet: nothing is read (Space, until its plugin, #1070)."""
+    GitHub. It is GitHub's alone: a team whose vcs is another plugin's (space, #1070) has no ci-sync, and nothing is
+    read."""
     config = config_mod.load()
-    if config_mod.vcs(config).get("adapter") == "space":
+    if plugins.registry(config).impl("vcs", config_mod.vcs(config).get("adapter") or "github") is not GitHubCodeHost:
         return [], False
     return ci_sync(GitHubCodeHost.from_config(), project_repositories(config), dry_run, progress)
 

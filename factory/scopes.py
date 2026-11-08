@@ -12,6 +12,8 @@ has none of this: its one top-level tracker, as before.
 - `identity(block)`: the system a block names; environments on one identity split it by scope.
 - `matches(scope, attrs, fields)`: whether a ticket with these labels and field values is in `scope`.
 - `errors(config)`: the `factory validate` checks.
+- `vcs_errors(config, where, nodes)`: the vcs checks (#1070): every vcs named is provided, and each node's PR
+  effects are ones its environment's vcs applies.
 - `ScopedTracker`: the gate's tracker over the project environments: each ticket goes to its environment's tracker.
 """
 import plugins
@@ -105,6 +107,40 @@ def errors(config, where="factory.yaml"):
                 out.append(f"overlapping-scope: {where}: environments.{n}.tracker and environments.{seen[key]}.tracker "
                            f"have the same scope on one tracker")
             seen.setdefault(key, n)
+    return out
+
+
+def vcs_errors(config, where="factory.yaml", nodes=None):
+    """The checks of the vcs (#1070): a selected plugin provides every vcs the config names (`vcs:`, alias
+    `code_host:`, and each `environments.<env>.vcs`), and every PR effect a node uses is one its environment's vcs
+    declares. `nodes` is {node: (environment, [effect])}, each effect a workflow mapping (`{label: x, on: pr}`). A
+    vcs that declares no effects (github) leaves its pull requests to the tracker, which applies them all; so does a
+    team that names no vcs."""
+    import config as config_mod
+    import effects
+    config = config or {}
+    envs = config.get("environments") if isinstance(config.get("environments"), dict) else {}
+    named = lambda env: bool(config.get("vcs") or config.get("code_host")  # noqa: E731
+                             or (env in envs and isinstance(envs[env], dict) and envs[env].get("vcs")))
+    out, bad = [], set()
+    for env, w in [(None, "vcs")] + [(e, f"environments.{e}.vcs") for e in envs]:
+        if not named(env) or (env is not None and not (isinstance(envs[env], dict) and envs[env].get("vcs"))):
+            continue
+        name = config_mod.vcs(config, env).get("adapter") or "github"
+        why = plugins.impl_error(config, "vcs", name, f"{where}: {w}")
+        if why:
+            out.append(why)
+            bad.add(name)
+    registry = plugins.registry(config)
+    for node, (env, used) in (nodes or {}).items():
+        name = config_mod.vcs(config, env).get("adapter") or "github"
+        pr = [k for e in used or [] if isinstance(e, dict)
+              for k in [next((k for k in e if k != "on"), None)] if k and effects.target({"kind": k, "on": e.get("on")}) == "pr"]
+        if not pr or not named(env) or name in bad:
+            continue
+        declared = {(x.kind, x.target) for x in getattr(registry.impl("vcs", name), "effects", ()) or ()}
+        out += [f"vcs-effect: {where}: nodes.{node}: environment {env} vcs {name} does not support effect `{k}` on: pr"
+                for k in dict.fromkeys(pr) if declared and (k, "pr") not in declared]
     return out
 
 

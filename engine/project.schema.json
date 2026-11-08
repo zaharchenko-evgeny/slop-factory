@@ -94,6 +94,17 @@
           "variables": {"type": "object", "additionalProperties": {"type": "string"}},
           "vm": {"type": "string"},
           "startup": {"type": "string"},
+          "vcs": {
+            "type": ["string", "object"],
+            "description": "This environment's own vcs (#1070), a name or a block: it overrides the top-level `vcs` (alias `code_host`); unset keys come from it when the adapters match. A selected plugin must provide it.",
+            "additionalProperties": false,
+            "properties": {
+              "adapter": {"type": "string"},
+              "repository": {"type": "string"},
+              "project": {"type": "string"},
+              "url": {"type": "string"}
+            }
+          },
           "tracker": {
             "type": "object",
             "description": "This environment's own tracker (#1069): unset keys come from the top-level `tracker` when the adapters match; `scope` names its share of that tracker (`label` on github-issues, `field` and `value` on youtrack).",

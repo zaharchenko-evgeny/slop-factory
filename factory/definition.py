@@ -418,6 +418,10 @@ def errors(defn):
     if w.get("blockers", "start") not in ("start", "merge"):
         errs.append(f"bad-blockers: workflow.yaml: `blockers` is `start` or `merge`, not {w['blockers']!r}")
     default_env = (w.get("settings") or {}).get("environment")
+    errs += scopes.vcs_errors(f, nodes={  # each node's PR effects on its environment's vcs (#1070)
+        name: (n.get("environment") or default_env,
+               [e for o in (n.get("outcomes") or {}).values() for e in (o or {}).get("effects") or []])
+        for name, n in nodes.items() if isinstance(n, dict)})
     in_envs = {full_name(r["repo"]) for spec in envs.values() for r in (spec or {}).get("repositories") or []}
     errs += [f"tracker-repository: factory.yaml: tracker repository {r} is in no environment"
              for r in tracker_repositories(defn) if r not in in_envs]
@@ -680,7 +684,8 @@ def to_project(defn):
                             "writable": [names[r["repo"]] for r in repos if r.get("main") or r.get("write")],
                             "secret_help": help_,
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP,
-                            **({"tracker": dict(e["tracker"])} if isinstance(e.get("tracker"), dict) else {})}
+                            **({"tracker": dict(e["tracker"])} if isinstance(e.get("tracker"), dict) else {}),
+                            **({"vcs": e["vcs"]} if e.get("vcs") else {})}  # its own vcs (#1070)
 
     # Stages: every name the nodes use, plus the engine's PR facts.
     used = _used_stages(w)
@@ -730,6 +735,7 @@ def to_project(defn):
                     **({"lesson_label": (dset.get("knowledge") or {})["lesson_label"]}
                        if (dset.get("knowledge") or {}).get("lesson_label") else {})},
         "repositories": repositories,
+        **{k: f[k] for k in ("vcs", "code_host") if f.get(k)},  # the vcs of the pull requests (#1070)
         "environments": environments,
         "workflow": WORKFLOW,
         "states": states,

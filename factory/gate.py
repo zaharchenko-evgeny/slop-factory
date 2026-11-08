@@ -38,7 +38,7 @@ import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 from derive import clean_notes, review_at_head  # noqa: E402
 import effects as effects_mod  # noqa: E402
-from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
+from gate_tracker import OnVcs, hosts_prs, overlay  # noqa: E402
 from gate_port import MemorySystem, ticket_from_ref  # noqa: E402
 import vocab  # noqa: E402
 import definition  # noqa: E402
@@ -145,16 +145,28 @@ def pr_ticket(code_host, number, repository=None):
     return code_host.ticket_for_pr(number, name) if name else code_host.ticket_for_pr(number)
 
 
+def vcs_trigger(d, code_host=None):
+    """`{kind, number, action, repository, ticket}` of a payload a vcs plugin reads itself (the code host's own
+    `trigger`, then the `gate.trigger` hook of the selected plugins: space's merge requests), else None."""
+    own = getattr(code_host, "trigger", None) if code_host is not None else None
+    for parse in [*([own] if callable(own) else []), *plugin_registry().hook("gate.trigger")]:
+        ev = parse(d)
+        if ev is not None:
+            return ev
+    return None
+
+
 def from_trigger(d, code_host=None):
     """Extract the event kind and ticket number; tracker facts supply mutable metadata."""
     event_name = d.get("eventType") or d.get("event_name")
-    if str(event_name or "").startswith("space.") or isinstance(d.get("merge_request"), dict) \
-            or isinstance((d.get("data") or {}).get("merge_request"), dict):
-        ev = space_event(d)
-        ticket = ev["ticket"] or (code_host.ticket_for_pr(ev["number"], ev["project"]) if code_host and ev["project"] else None)
+    ev = vcs_trigger(d, code_host)
+    if ev is not None:
+        ticket = ev["ticket"] or (code_host.ticket_for_pr(ev["number"], ev["repository"])
+                                  if code_host and ev["repository"] else None)
         if ticket is None:
-            raise NoTicket(f"merge request {ev['number']} is not on an ez/<n>- branch")
-        return {"id": f"merge_request:{ticket}:{ev['action']}", "ticket": ticket, "event_name": "pull_request", "action": ev["action"]}
+            raise NoTicket(f"{ev['kind'].replace('_', ' ')} {ev['number']} is not on an ez/<n>- branch")
+        return {"id": f"{ev['kind']}:{ticket}:{ev['action']}", "ticket": ticket, "event_name": "pull_request",
+                "action": ev["action"]}
     if not any(isinstance(d.get(key), dict) for key in ("pull_request", "issue", "review")):
         if isinstance(d.get("data"), dict):
             wrapper = d
@@ -209,10 +221,24 @@ def env_descriptor(config, env):
         or config.get("repositories") or []
     main = next((r["url"] for r in repos if r.get("role") == "primary"), None)
     out = {**{k: v for k, v in config.items() if k != "vcs"}, "tracker": scopes.project_envs(config)[env],
-           "repositories": repos}
+           "repositories": repos, "code_host": config_mod.vcs(config, env)}  # the environment's vcs (#1070)
     if main:
-        out["code_host"] = {**config_mod.vcs(config), "repository": "/".join(main.rstrip("/").split("/")[-2:])}
+        out["code_host"] = {**out["code_host"], "repository": "/".join(main.rstrip("/").split("/")[-2:])}
     return out
+
+
+def vcs_class(config, block, where="vcs"):
+    """The class the selected plugin provides for vcs block `block` (github when it names none)."""
+    name = block.get("adapter") or "github"
+    why = plugins.impl_error(config, "vcs", name, where)
+    if why:
+        raise ValueError(why)
+    return plugins.registry(config).impl("vcs", name)
+
+
+def beside(tracker, vcs):
+    """(tracker, vcs), the tracker an `OnVcs` when the vcs applies its own PR effects (gate_tracker.py)."""
+    return (OnVcs.of(tracker, vcs) if hosts_prs(vcs) else tracker), vcs
 
 
 def env_systems(config, env, **runners):
@@ -224,22 +250,26 @@ def env_systems(config, env, **runners):
     if tracker_cls is None:
         raise ValueError(f"environments.{env}.tracker.adapter {scopes.adapter(block)}: no selected plugin provides this tracker")
     tracker = tracker_cls.from_config(descriptor=c, **runners)
-    vcs_cls = plugins.registry(config).impl("vcs", config_mod.vcs(c).get("adapter") or "github")
-    return tracker, vcs_cls.from_config(descriptor=c, **({"run": tracker.run} if hasattr(tracker, "run") else {}))
+    vcs_cls = vcs_class(config, config_mod.vcs(c), f"environments.{env}.vcs")
+    return beside(tracker, vcs_cls.from_config(descriptor=c, **({"run": tracker.run} if hasattr(tracker, "run") else {})))
 
 
 def systems(config):
-    """The (tracker, vcs) of `config`, from the plugins that provide them; Space comes from gate_space until #1070.
-    With environments that have their own trackers (#1069), both are one `scopes.ScopedTracker`: each ticket goes to
-    its environment's tracker, the run's environment (FACTORY_ENV) first."""
+    """The (tracker, vcs) of `config`, from the plugins that provide them; the vcs is the run's environment's
+    (FACTORY_ENV: its own `vcs:` over the top-level one, #1070). With environments that have their own trackers
+    (#1069), both are one `scopes.ScopedTracker`: each ticket goes to its environment's tracker, the run's environment
+    first."""
+    env = os.environ.get("FACTORY_ENV")
     if scopes.project_envs(config):
-        scoped = scopes.ScopedTracker(config, env_systems, os.environ.get("FACTORY_ENV"))
+        scoped = scopes.ScopedTracker(config, env_systems, env)
         return scoped, scoped
     tracker = tracker_of(config)
-    if config_mod.vcs(config).get("adapter") == "space":
-        return tracker, space_from_config(config)
-    vcs_cls = plugins.registry(config).impl("vcs", config_mod.vcs(config).get("adapter") or "github")
-    return tracker, vcs_cls.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {}))  # one runner, so github_calls counts both
+    block = config_mod.vcs(config, env)
+    vcs_cls = vcs_class(config, block, f"environments.{env}.vcs" if block != config_mod.vcs(config) else "vcs")
+    own = {} if block == config_mod.vcs(config) else \
+        {"descriptor": {**{k: v for k, v in config.items() if k != "vcs"}, "code_host": block}}
+    run = {"run": tracker.run} if hasattr(tracker, "run") else {}  # one runner, so github_calls counts both
+    return beside(tracker, vcs_cls.from_config(**own, **run))
 
 
 def read(path, what, raw=False, code_host=None):
@@ -604,10 +634,10 @@ def check(name, event, tracker, nodes, config, code_host=None):
     if "id" not in event:
         raise Bad("malformed event: needs `id`")
     facts = tracker.facts(event["ticket"])
-    if isinstance(code_host, SpaceCodeHost):  # Space owns the merge request: its CI and review facts replace the tracker's
-        space = code_host.facts(event["ticket"])
-        if space["pr"] is not None:
-            facts = {**facts, **{k: space[k] for k in ("pr", "head", "branch", "pr_state", "ci", "dry_run", "pr_labels", "reviews", "round_complete", "round_verdict", "round_head")}}
+    if isinstance(code_host, scopes.ScopedTracker):  # the vcs of the ticket's environment
+        code_host = code_host.vcs_for()[1]
+    if code_host is not tracker and getattr(tracker, "vcs", None) is not code_host:
+        facts = overlay(facts, code_host, event["ticket"])  # a vcs that owns its merge requests (space): its facts win
     if "event_name" in event:
         event["id"] = f"{event['event_name']}:{event['ticket']}:{event['action']}:{facts.get('updated_at', '')}"
         event["head"] = facts.get("head")
