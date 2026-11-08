@@ -64,6 +64,7 @@ gates:
 ci: { workflows: [quality-gates] }
 limits:
   remind_after_hours: 24
+  stuck_minutes: 120   # reconcile: a PR-stage ticket with no open PR waits this long before it is blocked
   comment_runs_per_day: 50   # runs of the `comment` node per day; they do not count against `runs_per_day`
   mention_hops: 3   # asks (`factory end ask`) per ticket; a reply cannot ask
   generated_paths:

@@ -231,6 +231,9 @@
         "remind_after_hours": {
           "type": "integer"
         },
+        "stuck_minutes": {
+          "type": "integer"
+        },
         "resume_cap": {
           "type": "integer"
         },
