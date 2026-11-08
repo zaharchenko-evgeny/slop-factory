@@ -80,6 +80,11 @@
         "project": {
           "type": "string"
         },
+        "projects": {
+          "type": "object",
+          "propertyNames": {"minLength": 1},
+          "additionalProperties": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"}
+        },
         "token_env": {
           "type": "string"
         },

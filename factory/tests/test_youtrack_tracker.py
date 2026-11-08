@@ -241,6 +241,62 @@ class TrackerFromConfigTest(unittest.TestCase):
             YouTrackTracker.from_config(path, run=lambda *a, **k: "", yt_run=FakeYouTrack())
 
 
+class LinkedProjectTest(unittest.TestCase):
+    """#981: with `tracker.projects`, a ticket's repository comes from its YouTrack project."""
+
+    def store(self, project, **kw):
+        issue = copy.deepcopy(ISSUE)
+        issue["project"] = {"shortName": project} if project else None
+        fake = FakeYouTrack(issue, tags=("factory:ready", "factory:ready-api", "factory:ready-web"))
+        return fake, yt.YouTrackTicketStore(fake, projects={"API": "o/api", "WEB": "O/Web"}, repositories=["api", "web"],
+                                            full_names={"o/api": "api", "o/web": "web"}, **kw)
+
+    def test_ticket_repository_from_linked_project(self):
+        for project, want in (("API", "api"), ("WEB", "web"), ("api", None), ("OPS", None), (None, None)):
+            repo, reason = self.store(project)[1].repository("T-1")
+            if want:
+                self.assertEqual((repo, reason), (want, None))
+                self.assertEqual(self.store(project)[1].ticket_repositories("T-1"), [want])
+            else:  # the short name is case-sensitive; an unlinked or missing project names itself
+                self.assertIsNone(repo)
+                self.assertIn(f"project {project!r} is not linked", reason)
+                with self.assertRaisesRegex(ValueError, f"project {project!r} is not linked"):
+                    self.store(project)[1].ticket_repositories("T-1")
+        self.assertIsNone(yt.YouTrackTicketStore(FakeYouTrack()).ticket_repositories("T-1"))  # no links: the body decides
+
+    def test_a_project_linked_to_another_repository_is_named(self):
+        fake = FakeYouTrack({**copy.deepcopy(ISSUE), "project": {"shortName": "OPS"}})
+        store = yt.YouTrackTicketStore(fake, projects={"OPS": "o/ops"}, repositories=["api", "web"])
+        self.assertEqual(store.repository("T-1"), (None, "project 'OPS' links o/ops, not one of api, web"))
+
+    def test_linked_project_names_the_repository_tag_over_the_repository_field(self):
+        """The project's repository name (`api`), not `owner/repo` nor the field, names the stage tag `factory:ready-api`."""
+        fake, store = self.store("API", repository_field="Repository", repo_stages=["factory:ready"])
+        fake.issue["tags"], fake.issue["customFields"] = [], [{"name": "Repository", "value": {"name": "web"}}]
+        self.assertTrue(store.set_stage("LME-1701", "factory:ready", []))
+        self.assertEqual([t["name"] for t in fake.issue["tags"]], ["factory:ready-api"])
+        self.assertEqual(store.issue("LME-1701")["attrs"], ["factory:ready"])
+
+    def test_gate_reads_the_ticket_repositories_from_the_linked_project(self):
+        import yaml
+        from factory_plugins.youtrack.gate import YouTrackTracker
+        path, desc = TrackerFromConfigTest.descriptor(self, projects={"API": "o/api"})
+        desc["repositories"] = [{"name": "code", "url": "https://github.com/o/code", "role": "primary"},
+                                {"name": "api", "url": "https://github.com/o/api", "role": "project"}]
+        path.write_text(yaml.safe_dump(desc))
+        for project, body, want in (("API", "", ["api"]), ("API", "repositories: code", ["api"])):
+            fake = FakeYouTrack({**copy.deepcopy(ISSUE), "project": {"shortName": project}})
+            t = YouTrackTracker.from_config(path, run=lambda *a, **k: "", yt_run=fake)
+            self.assertEqual(t.ticket_repositories("T-1", body), want)
+        fake = FakeYouTrack({**copy.deepcopy(ISSUE), "project": {"shortName": "OPS"}})
+        with self.assertRaisesRegex(ValueError, "project 'OPS' is not linked"):
+            YouTrackTracker.from_config(path, run=lambda *a, **k: "", yt_run=fake).ticket_repositories("T-1", "")
+        desc["tracker"].pop("projects")
+        path.write_text(yaml.safe_dump(desc))
+        t = YouTrackTracker.from_config(path, run=lambda *a, **k: "", yt_run=FakeYouTrack())
+        self.assertEqual(t.ticket_repositories("T-1", "repositories: code, api"), ["code", "api"])  # the body line
+
+
 class RepositoryTagsTest(unittest.TestCase):
     """#896: the stages that wake a per-repository node are tags `<tag>-<repo>`, the repository is a ticket field."""
 

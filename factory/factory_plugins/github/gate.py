@@ -1136,11 +1136,18 @@ class GitHubGateTracker(DescriptorPort):
     def _may_write(self, name):
         return self.writable is None or name in self.writable
 
+    def ticket_repositories(self, n, body):
+        """The repository names ticket `n` changes (ADR-0017): the ticket store's answer when it links tickets to
+        repositories (YouTrack `tracker.projects`, #981), else the ticket's `repositories:` line in `body`."""
+        own = getattr(self.tickets, "ticket_repositories", None)
+        linked = own(n) if own else None
+        return linked if linked is not None else ticket_repositories(body, list(self.repositories), next(iter(self.repositories)))
+
     def _views(self, n):
         """(repository name, view, PR or None) per repository of ticket `n`, in the ticket's order (ADR-0017)."""
         body = self.tickets.issue(n)["body"]
         out = []
-        for name in ticket_repositories(body, list(self.repositories), next(iter(self.repositories))):
+        for name in self.ticket_repositories(n, body):
             view = self if self.repositories[name] == self.pr_repo else self._on(self.repositories[name])
             out.append((name, view, view._pr(n)))
         return out
