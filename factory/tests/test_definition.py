@@ -81,6 +81,18 @@ class DefinitionTest(unittest.TestCase):
         _, workflow = definition.to_project(definition.load(self.root))
         self.assertEqual(workflow["nodes"]["intake"]["outcomes"]["ready"]["effects"], effects)
 
+    def test_assignment_field_form_validates(self):
+        effects = [{"assign": {"field": "assignee"}, "on": "pr"}]
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(effects=effects))
+        self.assertEqual(self.errors(), [])
+
+    def test_assignment_effect_rejects_other_dicts(self):
+        for value in ({"fieldd": "x"}, {"field": "x", "extra": 1}, {"field": 3}):
+            with self.subTest(value=value):
+                self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(
+                    effects=[{"assign": value}]))
+                self.assertError("bad-effect: nodes.intake.ready: assign")
+
     def test_assignment_effect_rejects_non_string_values(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(
             effects=[{"assign": 3}]))
