@@ -12,9 +12,6 @@ Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py sweep [--tracker github] [--dry-run] [--stale] [--event FILE | --issue N] (no agent: lists the tickets itself,
                                                                  one stage per ticket;
                                                                  --stale also re-fires nodes whose run died silently)
-       gate.py ci-sync [--dry-run]   (factory:ci-green / factory:ci-red on the open factory PRs of every `role: project`
-                                      repository, from their head check runs and commit statuses; `factory reconcile`
-                                      runs it on its schedule)
 Exit 0 go / done, 10 no go (stale, duplicate or the node no longer matches), 2 bad event, payload, node
 or outcome, 1 a failing effect (the stage is untouched: it is the last effect).
 An event is JSON {id, ticket, head?, actor?}. A payload is JSON {ticket, event?, head?, actor?, ...}
@@ -22,7 +19,7 @@ plus one field per outcome effect that needs data (the error names the field).
 `check --event` also takes the raw trigger payload (an `issues`, `pull_request` or `pull_request_review`
 event): the ticket is the issue number or the `<n>` of the PR branch `ez/<n>-*` (none: exit 10).
 `--tracker memory:FILE` runs on a JSON file {ticket: record} with the in-memory fake; `--tracker github`
-uses factory/gate_github.py (bot login from `targets.air.bot_login`).
+uses factory/factory_plugins/github/gate.py (bot login from `targets.air.bot_login`).
 """
 import argparse
 import json
@@ -40,10 +37,8 @@ import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 from derive import clean_notes, review_at_head  # noqa: E402
 import effects as effects_mod  # noqa: E402
-from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker  # noqa: E402
 from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
 from gate_port import MemorySystem, ticket_from_ref  # noqa: E402
-from github_tracker import project_repositories  # noqa: E402
 import vocab  # noqa: E402
 import definition  # noqa: E402
 import plugins  # noqa: E402  (ADR-0026: a plugin's code is imported when the core calls it)
@@ -173,7 +168,7 @@ def from_trigger(d, code_host=None):
         else "pull_request" if is_pr else "issues"  # a comment on a PR arrives as an issue event of its number
     if is_pr:
         ticket = pr_ticket(code_host, number, d.get("repository")) if code_host else None
-        if ticket is None and not isinstance(code_host, GitHubCodeHost):  # a live lookup is the only source for GitHub
+        if ticket is None and not is_github(code_host):  # a live lookup is the only source for GitHub
             ticket = ticket_from_ref(((pr or {}).get("head") or {}).get("ref")) or ticket_from_ref((pr or {}).get("title"))
         if ticket is None:
             raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
@@ -181,6 +176,32 @@ def from_trigger(d, code_host=None):
         ticket = number
     action = d.get("action") or "event"
     return {"id": f"{name}:{ticket}:{action}", "ticket": ticket, "event_name": name, "action": action}
+
+
+def is_github(code_host):
+    """Whether `code_host` is the github plugin's vcs; a plugin module never imported built none."""
+    module = sys.modules.get("factory_plugins.github.gate")
+    return module is not None and isinstance(code_host, module.GitHubCodeHost)
+
+
+def tracker_of(config):
+    """The gate tracker of `config`, from the plugin that provides `tracker.adapter` (ADR-0026). The github plugin's
+    tracker also builds the YouTrack store until the youtrack plugin (#1069)."""
+    t = config.get("tracker")
+    tracker_cls = plugins.registry(config).impl("tracker", (t.get("adapter") if isinstance(t, dict) else None)
+                                                or "github-issues")
+    if tracker_cls is None:
+        from factory_plugins.github.gate import GitHubGateTracker as tracker_cls
+    return tracker_cls.from_config()
+
+
+def systems(config):
+    """The (tracker, vcs) of `config`, from the plugins that provide them; Space comes from gate_space until #1070."""
+    tracker = tracker_of(config)
+    if config_mod.vcs(config).get("adapter") == "space":
+        return tracker, space_from_config(config)
+    vcs_cls = plugins.registry(config).impl("vcs", config_mod.vcs(config).get("adapter") or "github")
+    return tracker, vcs_cls.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {}))  # one runner, so github_calls counts both
 
 
 def read(path, what, raw=False, code_host=None):
@@ -1238,72 +1259,9 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
     return results, failed
 
 
-def head_ci(checks):
-    """(green|red|pending|none, latest result time) of a head's check runs and commit statuses, each
-    {conclusion, at} with conclusion None while it runs. One failure is red, as the gate's `ci` fact reads it."""
-    done = [c["conclusion"] for c in checks]
-    at = max((c["at"] for c in checks if c.get("at")), default=None)
-    if not done:
-        return "none", at
-    if any(c in BAD_CI for c in done):
-        return "red", at
-    return ("green" if all(c in GOOD_CI for c in done) else "pending"), at
-
-
-def ci_sync_pr(code_host, repository, pr, dry_run=False):
-    """Set `factory:ci-green` or `factory:ci-red` on one factory PR {number, head, labels} from its head checks; a
-    head with no result yet (pending, or no checks) keeps its labels. A label added before the head's latest result
-    belongs to an earlier head: it is removed and added again, because re-adding a present label fires no event.
-    The scheduled `ci_sync` calls this per PR; the event path (a finished check, after the #365 probe) calls it for one PR."""
-    ci, at = head_ci(code_host.head_checks(repository, pr["head"]))
-    r = {"repo": repository, "pr": pr["number"], "head": pr["head"], "ci": ci, "added": [], "removed": []}
-    if ci not in ("green", "red"):
-        return r
-    want, other = vocab.ci(f"ci-{ci}"), vocab.ci("ci-red" if ci == "green" else "ci-green")
-    stale = want in pr["labels"] and bool(at) and (code_host.label_added_at(repository, pr["number"], want) or "") < at
-    if want in pr["labels"] and not stale:
-        r["removed"] = [other] if other in pr["labels"] else []
-    else:
-        r["removed"], r["added"] = [x for x in (other, want) if x in pr["labels"]], [want]
-    if not dry_run and (r["added"] or r["removed"]):
-        code_host.edit_pr_labels(repository, pr["number"], add=r["added"], remove=r["removed"])
-    return r
-
-
-def ci_sync(code_host, repositories, dry_run=False, progress=None):
-    """The CI label of every open factory PR in `repositories` (the `role: project` ones: the factory repository
-    labels its own PRs from quality-gates). Returns (results, failed); one PR failing does not stop the others."""
-    results, failed = [], False
-    for repository in repositories:
-        try:
-            prs = code_host.factory_prs(repository)
-        except Exception as e:
-            failed = True
-            results.append({"repo": repository, "error": f"{type(e).__name__}: {e}"})
-            continue
-        for pr in prs:
-            try:
-                r = ci_sync_pr(code_host, repository, pr, dry_run)
-            except Exception as e:
-                failed, r = True, {"repo": repository, "pr": pr["number"], "error": f"{type(e).__name__}: {e}"}
-            results.append(r)
-            if progress:
-                progress(r)
-    return results, failed
-
-
-def run_ci_sync(dry_run=False, progress=None):
-    """`ci-sync` (manual) and each `factory reconcile` pass (scheduled): the descriptor's project repositories on
-    GitHub. Another code host has no sync yet: nothing is read."""
-    config = config_mod.load()
-    if (config.get("code_host") or {}).get("adapter") == "space":
-        return [], False
-    return ci_sync(GitHubCodeHost.from_config(), project_repositories(config), dry_run, progress)
-
-
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "ci-sync", "decide", "ci"])
+    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "decide", "ci"])
     p.add_argument("--wait", action="store_true")
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
@@ -1325,19 +1283,11 @@ def main(argv):
     except SystemExit:
         return BAD
     path = ""
-    if a.cmd == "ci-sync":
-        results, failed = run_ci_sync(a.dry_run, lambda r: print(json.dumps(r), file=sys.stderr, flush=True))
-        print(json.dumps({"dry_run": a.dry_run, "ci_sync": results}))
-        return FAILED if failed else GO
     code_host = None
     try:
         kind, _, path = (a.tracker or "github").partition(":")
         if kind == "github" and not path:
-            tracker = GitHubGateTracker.from_config()
-            if (config_mod.load().get("code_host") or {}).get("adapter") == "space":
-                code_host = space_from_config(config_mod.load())
-            else:
-                code_host = GitHubCodeHost.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {}))  # one runner, so github_calls counts both
+            tracker, code_host = systems(config_mod.load())
         elif kind == "memory" and path:
             try:
                 tracker = MemorySystem(dict(json.loads(Path(path).read_text())))

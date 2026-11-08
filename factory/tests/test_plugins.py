@@ -155,7 +155,7 @@ class RegistryTest(FakePlugins):
         self.assertEqual(registry.impl("notifier", "pigeon").__name__, "Pigeon")
         self.assertIn("fakeplug.aa.impl", sys.modules)
         self.assertEqual(registry.command("coo")(["x"]), 1)
-        self.assertEqual([f({}) for f in registry.hook("deploy.files")], [("a",)])
+        self.assertEqual([f({}) for f in registry.hook("deploy.files", "aa")], [("a",)])
         self.assertIsNone(registry.command("bark"))
         self.assertIsNone(plugins.registry({}).command("coo"))
 
@@ -188,7 +188,7 @@ class LazinessTest(unittest.TestCase):
 
     def imported(self, team, script):
         code = "\n".join([
-            "import json, sys", f"sys.path.insert(0, {str(ROOT)!r})", "import config, definition, gate, nodes, deploy",
+            "import json, sys", f"sys.path.insert(0, {str(ROOT)!r})", "import config, definition, gate, nodes, deploy, doctor",
             f"config.set_team({str(team)!r})", textwrap.dedent(script),
             'print(json.dumps(sorted(m for m in sys.modules if m.startswith("factory_plugins"))))'])
         done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
@@ -211,7 +211,8 @@ class LazinessTest(unittest.TestCase):
                 except gate.Bad:
                     pass
                 """)
-        self.assertEqual(mods, ["factory_plugins", *(f"factory_plugins.{p}" for p in ("comments", "notify", "notify_email"))])
+        self.assertEqual(mods, ["factory_plugins",
+                                *(f"factory_plugins.{p}" for p in ("comments", "github", "notify", "notify_email"))])
 
     def test_notify_on_imports_its_code_only_when_called(self):
         with tempfile.TemporaryDirectory() as d:
@@ -227,7 +228,21 @@ class LazinessTest(unittest.TestCase):
 
     def test_on_imports_what_the_core_calls(self):
         mods = self.imported(FIXTURES / "v2", "defn = definition.load(config.team_root())")
-        self.assertEqual(mods, ["factory_plugins", "factory_plugins.comments", "factory_plugins.comments.mentions"])
+        self.assertEqual(mods, ["factory_plugins", "factory_plugins.comments", "factory_plugins.comments.mentions",
+                                "factory_plugins.github"])
+
+    def test_github_declaration_only_until_a_system_is_used(self):
+        """#1068: the github plugin is on by default, yet the registry, `gate.plugin_registry()` and importing the
+        core modules load its declaration only."""
+        mods = self.imported(FIXTURES / "v2", """
+            import plugins
+            registry = plugins.registry(config.load())
+            assert registry.is_on("github"), registry.names
+            gate.plugin_registry()
+            registry.impls("tracker"); registry.impls("vcs")
+            """)
+        self.assertIn("factory_plugins.github", mods)
+        self.assertEqual([m for m in mods if m.startswith("factory_plugins.github.")], [])
 
 
 if __name__ == "__main__":

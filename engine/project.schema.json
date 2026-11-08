@@ -26,6 +26,16 @@
         "url": {"type": "string"}
       }
     },
+    "vcs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {"enum": ["github", "space"]},
+        "repository": {"type": "string"},
+        "project": {"type": "string"},
+        "url": {"type": "string"}
+      }
+    },
     "tracker": {
       "type": "object",
       "additionalProperties": false,

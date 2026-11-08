@@ -1,7 +1,7 @@
 """Batched GitHub GraphQL reads for the gate, returned in the REST shapes the gate already reads.
 
 `search_query` lists the factory's tickets in one paged search: open tickets with a stage label, plus tickets closed in
-the last `CLOSED_HOURS`. `batch_query` reads, for up to `BATCH` tickets at once, each ticket's issue, events, comments
+the last `gate_port.CLOSED_HOURS`. `batch_query` reads, for up to `BATCH` tickets at once, each ticket's issue, events, comments
 and native blockers; `to_rest` turns one ticket of its answer into the bodies of `issues/{n}`, `issues/{n}/events`,
 `issues/{n}/comments` and `issues/{n}/dependencies/blocked_by`, or leaves out a part GraphQL did not return in full.
 """
@@ -9,8 +9,9 @@ import base64
 import re
 from datetime import datetime, timedelta, timezone
 
+from gate_port import CLOSED_HOURS
+
 BATCH = 10  # 5 Nov: a 38-ticket query answered every timeline with totalCount 0 and no error; 10 matched REST
-CLOSED_HOURS = 48  # a ticket closed on merge while its finish run was lost (#567) is found for this long
 # The timeline item types REST /issues/{n}/events also returns: comments and cross-references are not events there.
 # Project events are left out: reading them needs the read:project scope, and the factory uses no GitHub project.
 EVENT_TYPES = ("ASSIGNED_EVENT CLOSED_EVENT COMMENT_DELETED_EVENT "

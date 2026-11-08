@@ -29,6 +29,8 @@ import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 import deploy
 import nodes
+from factory_plugins.github import tracker as github_tracker  # noqa: E402
+from factory_plugins.github import wake as github_wake  # noqa: E402
 import definition  # noqa: E402
 import workflow  # noqa: E402
 
@@ -526,9 +528,9 @@ class ApplyTest(unittest.TestCase):
               mock.patch.object(deploy, "diff", side_effect=[changed, []]),
               mock.patch.object(deploy, "apply_diff") as apply,
               mock.patch.object(deploy, "write_files", return_value=0),
-              mock.patch.object(deploy, "sync_comment_wake_files", return_value=0),
-              mock.patch("github_tracker.GitHubTracker.from_config") as issues,
-              mock.patch("gate_github.GitHubGateTracker.from_config") as gate_issues):
+              mock.patch.object(deploy, "sync_wake_files", return_value=0),
+              mock.patch("factory_plugins.github.tracker.GitHubTracker.from_config") as issues,
+              mock.patch("factory_plugins.github.gate.GitHubGateTracker.from_config") as gate_issues):
             self.assertEqual(deploy.main(["--apply"]), 0)
         apply.assert_called_once()
         issues.assert_not_called()
@@ -537,6 +539,10 @@ class ApplyTest(unittest.TestCase):
 
 class CommentWakeDeployTest(unittest.TestCase):
     def test_apply_installs_files_once_in_every_configured_github_repository(self):
+        self.install()
+
+    def install(self):
+        """Deploy with comments off (writes nothing), then twice with comments on (writes each file once)."""
         files = {}
         writes = []
 
@@ -559,15 +565,46 @@ class CommentWakeDeployTest(unittest.TestCase):
         ]}
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            self.assertEqual(deploy.sync_comment_wake_files({**settings, "plugins": []}, gh, True), 0)
+            self.assertEqual(deploy.sync_wake_files({**settings, "plugins": []}, gh, True), 0)
             self.assertEqual(writes, [])  # ADR-0025: the module is off
-            self.assertEqual(deploy.sync_comment_wake_files(settings, gh, True), 0)
-            self.assertEqual(deploy.sync_comment_wake_files(settings, gh, True), 0)
+            self.assertEqual(deploy.sync_wake_files(settings, gh, True), 0)
+            self.assertEqual(deploy.sync_wake_files(settings, gh, True), 0)
         self.assertEqual(len(writes), 4)
         self.assertEqual(set(files), {
             f"repos/o/{repo}/contents/{path}"
-            for repo in ("main", "app") for path in deploy.COMMENT_WAKE_FILES
+            for repo in ("main", "app") for path in github_wake.COMMENT_WAKE_FILES
         })
+        return settings, gh, files, writes
+
+    def test_turning_comments_off_removes_the_installed_files(self):
+        """#1057: a deploy with the comments plugin off deletes the comment wake files an earlier deploy installed."""
+        settings, gh, files, writes = self.install()
+        deletes = []
+
+        def gh_with_delete(args):
+            if "DELETE" in args:
+                endpoint = next(x for x in args if x.startswith("repos/"))
+                self.assertIn("sha=sha", args)
+                deletes.append(endpoint)
+                files.pop(endpoint)
+                return "{}"
+            return gh(args)
+        off = {**settings, "plugins": []}
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(deploy.sync_wake_files(off, gh_with_delete, False), 0)  # dry run: reports only
+            self.assertEqual(deletes, [])
+            self.assertEqual(deploy.sync_wake_files(off, gh_with_delete, True), 0)
+            self.assertEqual(deploy.sync_wake_files(off, gh_with_delete, True), 0)  # nothing left to remove
+        self.assertEqual(len(deletes), 4)
+        self.assertEqual(files, {})
+        self.assertIn("remove project file o/app/scripts/comment-wake-label.sh", output.getvalue())
+
+    def test_wake_rules_follow_the_comments_plugin(self):
+        self.assertEqual(github_wake.wake_rules(["comments", "github"]),
+                         {"install": list(github_wake.COMMENT_WAKE_FILES), "remove": []})
+        self.assertEqual(github_wake.wake_rules(["github"]),
+                         {"install": [], "remove": list(github_wake.COMMENT_WAKE_FILES)})
 
 
 class BackendTest(unittest.TestCase):
@@ -1046,10 +1083,10 @@ class PlanTest(unittest.TestCase):
         self.assertIn("[Slop factory] implement-mid", names)
         self.assertFalse([n for n in names if n.endswith((" api", " client"))])
         envs = {e["name"]: e["secrets"] for e in plan["environments"]}
-        self.assertEqual(deploy.WRITE_TOKEN_SECRET, "FACTORY_WRITE_TOKEN")
-        self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] write"])
-        self.assertIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] ops"])  # reconcile's CI label sync
-        self.assertNotIn(deploy.WRITE_TOKEN_SECRET, envs["[Slop factory] read"])
+        self.assertEqual(github_tracker.WRITE_TOKEN, "FACTORY_WRITE_TOKEN")
+        self.assertIn(github_tracker.WRITE_TOKEN, envs["[Slop factory] write"])
+        self.assertIn(github_tracker.WRITE_TOKEN, envs["[Slop factory] ops"])  # reconcile's CI label sync
+        self.assertNotIn(github_tracker.WRITE_TOKEN, envs["[Slop factory] read"])
         self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
 
     def test_issues_token_is_deployed_to_every_environment_and_adds_no_write_token(self):
@@ -1365,7 +1402,7 @@ class LabelsTest(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                 mock.patch.object(deploy, "read_state", return_value=([], [])), \
-                mock.patch.object(deploy.github_tracker, "gh", run):
+                mock.patch("factory_plugins.github.tracker.gh", run):
             code = deploy.deploy(mode, allow_delete, plan, None, None)
         return code, out.getvalue(), err.getvalue(), run.writes
 
@@ -1394,7 +1431,7 @@ class LabelsTest(unittest.TestCase):
         def run(args, **kw):
             tokens.append((args[1], args[args.index("-R") + 1], kw.get("token")))
             return "[]" if args[:2] == ["label", "list"] else ""
-        wrapped = deploy.github_tracker.ProjectWriteRun(run, ["o/code"], {"FACTORY_WRITE_TOKEN": "t"})
+        wrapped = github_tracker.ProjectWriteRun(run, ["o/code"], {"FACTORY_WRITE_TOKEN": "t"})
         plan = {**self.PLAN, "label_repositories": ["o/tracker", "o/code"], "prefix": "p", "environments": [], "automations": []}
         with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(deploy, "read_state", return_value=([], [])):
             deploy.deploy("--apply", False, plan, None, None, run=wrapped)

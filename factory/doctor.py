@@ -12,7 +12,6 @@ Needs `FACTORY_ENV` (read, write, ops) for the tool check. Also one `env:<NAME>`
 environment declares: `ok` when set and non-empty, `missing` otherwise. In the environments that write to the
 `role: project` repositories, one `write:label:<owner/repo>` probe per such repository.
 """
-import base64
 import json
 import os
 import re
@@ -20,14 +19,13 @@ import shutil
 import subprocess
 import sys
 import urllib.parse
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
-import github_tracker  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
+import plugins  # noqa: E402
 import youtrack_tracker  # noqa: E402
 
 BASE_TOOLS = ("gh", "uv")
@@ -68,14 +66,6 @@ def env_needs_tiers(nodes):
     return sorted({t for n in nodes["nodes"].values() for t in n.get("tiers") or []})
 
 
-def run_log(api, run, repo):
-    """Fetch the log of the latest successful workflow run (a run list alone does not need the logs permission)."""
-    runs = json.loads(api(f"repos/{repo}/actions/runs?per_page=1&status=success"))["workflow_runs"]
-    if not runs:
-        raise RuntimeError("no finished workflow run to read a log from")
-    return run(["run", "view", str(runs[0]["id"]), "-R", repo, "--log"])[:50]
-
-
 def probe(results, name, fn):
     try:
         detail = fn()
@@ -85,45 +75,15 @@ def probe(results, name, fn):
 
 
 def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=None, run_id="doctor", environ=os.environ):
-    """Every probe's result. Probe objects are removed at the end, also when a probe fails."""
-    api = lambda *a: run(["api", *a])  # noqa: E731
-    note = lambda text: f"[factory] {text}\n\nFactory-Run: {run_id}"  # noqa: E731
-    results, made = [], {"issues": [], "pr": None, "branch": None}
-    issue = child = None
+    """Every probe's result: the selected systems' `doctor.probes` hooks (github: every write the gate makes and every
+    read it needs, the wake files and the project write token), then the tools, skills and declared variables."""
     try:
-        def create_issue(title):
-            n = int(run(["issue", "create", "-R", repo, "--title", title, "--body", note("doctor probe, deleted at once.")]).strip().rsplit("/", 1)[-1])
-            made["issues"].append(n)
-            return n
-        head = json.loads(api(f"repos/{repo}/commits/main"))
-        old = head["parents"][0]["sha"] if head.get("parents") else head["sha"]  # a branch behind main: update-branch has work
-        branch = f"factory/doctor-probe-{uuid.uuid4().hex[:12]}"
-        api("-X", "POST", f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{branch}", "-f", f"sha={old}")
-        made["branch"] = branch
-        issue, child = create_issue("Doctor probe"), create_issue("Doctor probe child")
-        child_id = json.loads(api(f"repos/{repo}/issues/{child}"))["id"]
-        api("-X", "PUT", f"repos/{repo}/contents/.factory-doctor-{issue}", "-f", "message=doctor probe", "-f", "content=eA==", "-f", f"branch={branch}")
-        made["pr"] = int(run(["pr", "create", "-R", repo, "--head", branch, "--base", "main", "--title", "Doctor probe", "--body", note("doctor probe, closed at once.")]).strip().rsplit("/", 1)[-1])
-        pr = made["pr"]
-        sha = head["sha"]
-        probe(results, "write:label", lambda: run(["issue", "edit", str(issue), "-R", repo, "--add-label", risk_label]))
-        probe(results, "write:comment", lambda: run(["issue", "comment", str(issue), "-R", repo, "--body", note("doctor probe")]))
-        probe(results, "write:pr-review", lambda: run(["pr", "review", str(pr), "-R", repo, "--comment", "--body", note("doctor probe")]))
-        probe(results, "write:sub-issue", lambda: api("-X", "POST", f"repos/{repo}/issues/{issue}/sub_issues", "-F", f"sub_issue_id={child_id}"))
-        probe(results, "write:blocked-by", lambda: api("-X", "POST", f"repos/{repo}/issues/{issue}/dependencies/blocked_by", "-F", f"issue_id={child_id}"))
-        probe(results, "write:update-branch", lambda: api("-X", "PUT", f"repos/{repo}/pulls/{pr}/update-branch"))
-        probe(results, "read:actions-run-logs", lambda: run_log(api, run, repo))
-        probe(results, "read:check-runs", lambda: api(f"repos/{repo}/commits/{sha}/check-runs"))
-        probe(results, "read:commit-statuses", lambda: api(f"repos/{repo}/commits/{sha}/status"))
-        probe(results, "read:timeline", lambda: api(f"repos/{repo}/issues/{issue}/timeline"))
-    except Exception as e:
-        results.append({"probe": "setup", "result": "denied", "detail": str(e)[:200]})
-    finally:
-        results += cleanup(repo, made, run)
-    try:
-        results += comment_wake_probes(config.load(), run)
-    except Exception as e:
-        results.append({"probe": "project-files", "result": "denied", "detail": str(e)[:200]})
+        settings, unread = config.load(), []
+    except Exception as e:  # the repository probes still run; the project files cannot be checked
+        settings, unread = {}, [{"probe": "project-files", "result": "denied", "detail": str(e)[:200]}]
+    results = [r for hook in plugins.registry(settings).hook("doctor.probes")
+               for r in hook(settings, env, run, repo=repo, risk_label=risk_label, run_id=run_id, environ=environ)]
+    results += unread
     tools, skills = env_needs(env, nodes)
     for t in tools:
         results.append({"probe": f"tool:{t}", "result": "ok" if which(t) else "missing", "detail": env})
@@ -134,54 +94,6 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
     for name in [*(declared.get("variables") or {}), *(declared.get("secrets") or [])]:
         results.append({"probe": f"env:{name}", "result": "ok" if environ.get(name) else "missing", "detail": env,
                         "help": (declared.get("secret_help") or {}).get(name, "")})
-    return results
-
-
-def project_write_probes(settings, env, run, environ=os.environ):
-    """In an environment that writes with a project token (github_tracker.token_env, or `issues_token_env` in a multi-repository team), one `write:label:<owner/repo>` probe per `role: project` repository: create
-    a probe label, then delete it, with the issues token (`issues_token_env`) or $FACTORY_WRITE_TOKEN when it is set
-    (github_tracker.ProjectWriteRun). With `issues_token_env` or `write_mode: token`, a missing token is a `fail` that
-    names the secret, and nothing is written."""
-    repos = github_tracker.project_repositories(settings)
-    issues = settings.get("issues_token_env")
-    # deploy adds the issues token to every environment of a multi-repository team (deploy.py), declared or not
-    if not (github_tracker.token_env(env, settings) or (issues and len(settings.get("repositories") or []) > 1)):
-        return []
-    run = github_tracker.ProjectWriteRun(run, repos, environ, issues)
-    results = []
-    for repo in repos:
-        name = f"write:label:{repo}"
-        if issues and not environ.get(issues) and not environ.get(github_tracker.WRITE_TOKEN):
-            results.append({"probe": name, "result": "fail", "detail": f"{issues} is not set (issues_token_env)"})
-            continue
-        if not issues and settings.get("write_mode") == "token" and not environ.get(github_tracker.WRITE_TOKEN):
-            results.append({"probe": name, "result": "fail", "detail": f"{github_tracker.WRITE_TOKEN} is not set (write_mode: token)"})
-            continue
-        label = f"factory-doctor-probe-{uuid.uuid4().hex[:12]}"
-        probe(results, name, lambda: run(["label", "create", label, "-R", repo, "--description", "doctor probe, deleted at once"]))
-        if results[-1]["result"] == "ok":
-            try:
-                run(["label", "delete", label, "-R", repo, "--yes"])
-            except Exception as e:
-                results.append({"probe": "cleanup", "result": "denied", "detail": f"label delete {repo}: {e}"[:200]})
-    return results
-
-
-def comment_wake_probes(settings, run):
-    """Check that each GitHub project repository has the current comment wake workflow and script."""
-    import deploy
-    expected = {path: (deploy.ROOT / path).read_text() for path in deploy.COMMENT_WAKE_FILES}
-    results = []
-    repos = ["/".join(r["url"].rstrip("/").split("/")[-2:]) for r in settings.get("repositories", [])
-             if r.get("role") in ("primary", "project") and "github.com" in r.get("url", "")]
-    for repo in repos:
-        for path, text in expected.items():
-            name = f"project-file:{repo}/{path}"
-            def check(repo=repo, path=path, text=text):
-                data = json.loads(run(["api", f"repos/{repo}/contents/{path}"]))
-                if base64.b64decode(data.get("content", "")).decode() != text:
-                    raise RuntimeError("file content differs from factory source")
-            probe(results, name, check)
     return results
 
 
@@ -225,27 +137,6 @@ def youtrack_probes(settings, tiers, environ=os.environ, yt_run=None):
     except Exception as e:  # an unreadable YouTrack is a denied probe
         results.append({"probe": "youtrack:read", "result": "denied", "detail": str(e)[:200]})
     return results
-
-
-def cleanup(repo, made, run):
-    """Delete the probe objects (an issue the token cannot delete is closed); report a `cleanup` failure."""
-    out = []
-    steps = ([["pr", "close", str(made["pr"]), "-R", repo, "--delete-branch"]] if made["pr"] else
-             [["api", "-X", "DELETE", f"repos/{repo}/git/refs/heads/{made['branch']}"]] if made["branch"] else [])
-    for n in made["issues"]:
-        steps.append(["issue", "delete", str(n), "-R", repo, "--yes"])
-    for args in steps:
-        try:
-            run(args)
-        except Exception as e:
-            fallback = ["issue", "close", args[2], "-R", repo] if args[:2] == ["issue", "delete"] else None
-            try:
-                if not fallback:
-                    raise e
-                run(fallback)
-            except Exception:
-                out.append({"probe": "cleanup", "result": "denied", "detail": f"{' '.join(args[:3])}: {e}"[:200]})
-    return out
 
 
 def env_ticket_body(r, run_id):
@@ -400,26 +291,29 @@ def engine_probes(settings, tracker=None, dry_run=deploy_run, now=None):
         except Exception as e:
             out.append({"probe": name, "result": "fail", "detail": f"{type(e).__name__}: {e}"[:300]})
     if tracker is None:
-        import gate_github
+        from factory_plugins.github import gate as gate_github
         tracker = gate_github.GitHubGateTracker.from_config()
     if definition.present(config.team_root()):
         attempt(STUCK, lambda: stuck_probe(tracker, definition.load(config.team_root()), settings, now))
+    from factory_plugins.github import tracker as github_tracker
     attempt(FACTS, lambda: facts_probe(tracker, settings["tracker"]["stages"],
                                                  github_tracker.GitHubTracker.from_config()._frontier))
     attempt("deploy:drift", lambda: drift_probe(dry_run))
     return out
 
 
-def main(argv=None, run=github_tracker.gh):
+def main(argv=None, run=None):
+    if run is None:  # the doctor files its tickets on GitHub
+        from factory_plugins.github import tracker as github_tracker
+        run = github_tracker.gh
     env = os.environ.get("FACTORY_ENV")
     if env not in (nodes_mod.load().get("environments") or {}):
         print(json.dumps({"error": "FACTORY_ENV must name an environment of nodes.yaml"}))
         return 2
     settings = config.load()
-    repo = settings["tracker"].get("repository") or settings["code_host"]["repository"]
+    repo = settings["tracker"].get("repository") or config.vcs(settings)["repository"]
     run_id = f"doctor:{env}"
     results = run_probes(repo, env, nodes_mod.load(), run, (settings["tracker"].get("risk_labels") or {"low": "risk:low"})["low"], run_id=run_id)
-    results += project_write_probes(settings, env, run)
     if settings["tracker"].get("adapter") == "youtrack":
         results += youtrack_probes(settings, env_needs_tiers(nodes_mod.load()))
     engine = engine_probes(settings) if "--engine" in (argv or []) else []

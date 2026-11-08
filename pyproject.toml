@@ -13,6 +13,6 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["plugins", "ports", "factory_plugins", "factory_plugins.comments", "factory_plugins.notify", "factory_plugins.notify_email"]
+packages = ["plugins", "ports", "factory_plugins", "factory_plugins.comments", "factory_plugins.notify", "factory_plugins.notify_email", "factory_plugins.github"]
 package-dir = { "" = "factory" }
-py-modules = ["cli", "config", "contracts", "definition", "deploy", "derive", "doctor", "effects", "gate", "gate_github", "gate_port", "gate_space", "gate_tracker", "github_graphql", "github_tracker", "local", "nodes", "project", "reconcile", "retro", "team_setup", "upgrade", "vocab", "workflow", "youtrack_tracker"]
+py-modules = ["cli", "config", "contracts", "definition", "deploy", "derive", "doctor", "effects", "gate", "gate_port", "gate_space", "gate_tracker", "local", "nodes", "project", "reconcile", "retro", "team_setup", "upgrade", "vocab", "workflow", "youtrack_tracker"]

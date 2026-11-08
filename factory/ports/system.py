@@ -63,6 +63,22 @@ class Query:
     scope: dict | None = field(default=None, hash=False)
 
 
+@dataclass(frozen=True)
+class TrackerSchema:
+    """What a tracker must carry before the gate writes to it, as `factory deploy` plans it: the `labels` (or tags),
+    the `repositories` that hold them, their `specs` ({label: {color[, description]}}) and the `owned_prefixes` the
+    deploy may remove from. Plugins add labels through the `deploy.schema` hook."""
+    labels: tuple = ()
+    repositories: tuple = ()
+    specs: dict = field(default_factory=dict, hash=False)
+    owned_prefixes: tuple = ()
+
+    @classmethod
+    def from_plan(cls, plan: dict):
+        return cls(tuple(plan.get("labels") or ()), tuple(plan.get("label_repositories") or ()),
+                   dict(plan.get("label_specs") or {}), tuple(plan.get("owned_label_prefixes") or ()))
+
+
 class System(Protocol):
     name: str
     effects: tuple[Effect, ...]
@@ -77,6 +93,6 @@ class System(Protocol):
     def find(self, query: Query) -> list:
         """The ids or child records `query` names."""
 
-    # Setup hooks, optional until the slices that use them (#1068): `provision(config) -> list[str]` creates the
-    # labels or fields, `wake_rules(plan) -> list` the triggers that wake a node, `probes(config) -> list` the
-    # checks `factory doctor` runs.
+    # Setup hooks (#1068), declared by the system's plugin: `provision(schema, changes, apply)` writes the labels or
+    # fields of a TrackerSchema, `wake_rules(features)` names the files that wake a node, and the `doctor.probes`
+    # hook the checks `factory doctor` runs. The GitHub ones are in factory_plugins/github.

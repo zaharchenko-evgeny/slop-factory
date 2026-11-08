@@ -18,7 +18,7 @@ import test_gate_github as G  # noqa: E402  (sets the team the GitHub tracker re
 from test_gate_github import BOT, M, REPO, STAGES, FakeGh, GitHubGateTracker, review  # noqa: E402
 from system_contract import SystemContract  # noqa: E402
 import derive  # noqa: E402
-import gate_github  # noqa: E402
+from factory_plugins.github import gate as gate_github  # noqa: E402
 from gate_port import MemorySystem, TagTracker  # noqa: E402
 
 LABELS = ["factory:in-review", "risk:low", "factory:fix-mid"]

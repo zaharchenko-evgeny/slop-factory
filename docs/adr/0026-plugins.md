@@ -1,6 +1,6 @@
 # ADR-0026: Engine plugins: events in, records out, effects
 
-Status: accepted, requested by #1064 (slices: #1065, #1066, #1067). Amends
+Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068). Amends
 ADR-0025 and ADR-0004.
 
 ## Context
@@ -94,20 +94,24 @@ every adapter: the stage policy, the merge gates, idempotency and the
    `definition.load`, `definition.errors`, `definition.warnings`,
    `gate.step_context`, the `guards` of `gate.guard_holds`, `gate.outcome`,
    `gate.send`, the effect registry, `deploy.schema`, `deploy.files`,
-   `doctor.probes` and `reconcile.passes`.
+   `doctor.probes` and `reconcile.passes`, plus the system setup hooks of
+   #1068 (`deploy.labels`, `deploy.provision`, `deploy.secrets`, `deploy.run`,
+   `deploy.plan_files`).
 9. **Core commands** stay in `cli.py`: `begin`, `end`, `check`, `apply`,
-   `sweep`, `ci-sync`, `decide`, `ci`, `deploy`, `run`, `contracts`,
+   `sweep`, `decide`, `ci`, `deploy`, `run`, `contracts`,
    `chart`, `migrate`, `upgrade`, `check-workflow`, `validate`, `retro`,
-   `setup`, `env`, `doctor` and `reconcile`. Later slices move `ci-sync`,
-   `run` and `deploy --target local` into their plugins. `cli` asks the
-   registry for a word it does not know before it prints help.
+   `setup`, `env`, `doctor` and `reconcile`. `ci-sync` is the github
+   plugin's command (#1068); later slices move `run` and
+   `deploy --target local` into their plugins. `cli` asks the registry for a
+   word it does not know before it prints help.
 
 ## Consequences
 
 `comments` is the first plugin. Its declaration names the `route`, `reply`
 and `skip` effects on `ticket`, the `comment` effect `on: mention`, the
 `mention` guard and trigger, the `ask` outcome, the `mentionable` agent
-setting, and five hooks. The core no longer imports it, and
+setting, and four hooks (#1068 moved its `deploy.files` to github). The core
+no longer imports it, and
 `gate.comments_on`, `gate.module_off`, `deploy.comments_on` and
 `definition.module_on` are gone.
 
@@ -148,8 +152,32 @@ Remaining gaps:
   relies on GitHub refusing the second PUT.
 - A system without `effects` keeps the old remote kinds (`effects.REMOTE`).
 
-Later slices move GitHub (#1068), YouTrack (#1069), Space (#1070), the local
-surface and agent runners (#1071) and Air (#1072) into plugins.
+Later slices move YouTrack (#1069), Space (#1070), the local surface and
+agent runners (#1071) and Air (#1072) into plugins.
+
+`github` (#1068) is the first system plugin. `factory_plugins/github/` holds
+`gate.py`, `tracker.py` and `graphql.py` (formerly `factory/gate_github.py`,
+`github_tracker.py` and `github_graphql.py`) and provides tracker
+`github-issues` and vcs `github`. It is on by default: a config that names no
+tracker or no vcs selects it. `vcs:` is the name of `code_host:`, which stays
+as an alias. The core imports only its declaration; `gate.tracker_of(config)`
+loads the implementation the registry names. Its hooks:
+- `deploy.labels` and `deploy.provision` reconcile and write the repository
+  labels of a `ports.system.TrackerSchema`. The core still computes the
+  labels, so the plan keys stay unchanged; a plugin adds labels with
+  `deploy.schema`. `factory:comment` stays a core label (ADR-0025).
+- `deploy.secrets` adds `FACTORY_WRITE_TOKEN` under `write_mode: token`, and
+  `deploy.run` gives the deploy its project-write `gh` runner.
+- `deploy.plan_files` renders the Actions workflows of `runner: actions`
+  nodes. `deploy.files` syncs the wake files of `wake_rules(features)`: the
+  comment wake workflow and script are installed while `comments` is on and
+  deleted from the project repositories once it is off. The comments
+  plugin's own `deploy.files` hook is gone.
+- `doctor.probes` runs the repository, wake-file and project-write probes.
+- `reconcile.passes` runs the CI label sync, and `ci-sync` is its command.
+
+The doctor's ticket filing and engine probes still call `gh` directly, and a
+`youtrack` team still reads PRs through `GitHubGateTracker` until #1069.
 
 `notify` (#1066) is the second feature plugin. Its declaration names the
 `notify` effect on `ticket` and `pr`, the `notify` CLI word

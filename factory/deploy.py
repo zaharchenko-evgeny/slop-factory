@@ -14,7 +14,6 @@ place (same id) to NEW instead of creating NEW and deleting OLD.
 air: {"automations": [...], "environments": [...]}: one automation per enabled node (per tier or focus
      where the node has them) and one environment per environment in use, for the factory-deploy skill.
 """
-import base64
 import fnmatch
 import json
 import time
@@ -32,12 +31,12 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
 import definition
-import github_tracker
 import nodes as nodes_mod
 import plugins
 import project as project_mod
 import vocab
 import youtrack_tracker
+from ports.system import TrackerSchema
 
 ROOT = Path(__file__).resolve().parents[1]
 SLOP_FIXTURE = ROOT / "factory/tests/fixtures/slop"
@@ -426,7 +425,6 @@ def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
 # Nodes planned once per project repository when `write_mode` is `per-repo` (default) and the project has several
 # repositories: Air pushes only to an automation's primary repository. Only triage sees every repository.
 PER_REPO = definition.PER_REPO
-WRITE_TOKEN_SECRET = github_tracker.WRITE_TOKEN  # `write_mode: token`: the project-repository write token, by name only
 
 
 def plan_air(nodes: dict, config: dict) -> dict:
@@ -509,7 +507,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                         {"repository": repository(r), "branch": r["default_branch"]} for r in projects]
             automations.append(automation)
     envs = []
-    token = config.get("write_mode") == "token" and len(config["repositories"]) > 1
+    registry = plugins.registry(config)
     issues_token = config.get("issues_token_env")  # the gate's issue, label and comment writes to project repositories
     for env, scope_name, node_name in [(e, None, None) for e in used if e in unscoped] + scoped:
         d = envs_def[env]
@@ -520,7 +518,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env, **({"FACTORY_NODE": node_name} if node_name else {})},
             "secrets": list(dict.fromkeys([*d.get("secrets", []),
-                                           *([WRITE_TOKEN_SECRET] if token and github_tracker.token_env(env, config) else []),
+                                           *(s for hook in registry.hook("deploy.secrets") for s in hook(env, config)),
                                            *([issues_token] if issues_token and len(config["repositories"]) > 1 else [])])),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
@@ -534,103 +532,37 @@ def plan_air(nodes: dict, config: dict) -> dict:
         {v.partition(":")[0] + ":" for f in fields.values() for v in f if ":" in v})} if fields else {}
     if tags or fields:  # keeps a GitHub plan (and its fixture) unchanged
         tag_plan = {**tag_plan, **field_plan, "tag_tracker": config["tracker"]}
-    return {"prefix": prefix, "automations": automations, "environments": envs, "labels": labels(nodes, config),
-            "label_repositories": label_repos, "label_specs": label_specs(nodes, config),
-            "owned_label_prefixes": owned_label_prefixes(config),
+    schema = tracker_schema(nodes, config, label_repos)
+    return {"prefix": prefix, "automations": automations, "environments": envs, "labels": list(schema.labels),
+            "label_repositories": list(schema.repositories), "label_specs": schema.specs,
+            "owned_label_prefixes": list(schema.owned_prefixes),
             **tag_plan, "files": actions_files(nodes, config)}
 
 
+def tracker_schema(nodes: dict, config: dict, repositories=()) -> TrackerSchema:
+    """The labels the trackers and code hosts must carry: the core's `labels()` and `label_specs()`, plus what the
+    selected plugins' `deploy.schema` hooks add ({label: spec})."""
+    names, specs = labels(nodes, config), label_specs(nodes, config)
+    extra = {k: v for hook in plugins.registry(config).hook("deploy.schema") for k, v in hook(nodes, config).items()}
+    if extra:
+        names = sorted({*names, *extra})
+        specs = {**{k: v for k, v in extra.items() if v}, **specs}
+    return TrackerSchema(tuple(names), tuple(repositories), specs, tuple(owned_label_prefixes(config)))
+
+
 def actions_files(nodes: dict, config: dict) -> dict:
-    """{path: text} of the GitHub Actions workflows the graph's `runner: actions` nodes render, in the factory repository only."""
-    scheds, files = nodes.get("schedules") or {}, {}
-    for name, n in nodes["nodes"].items():
-        if n.get("runner") == "actions" and n.get("enabled") is not False:
-            cron = next(scheds[str(t)[9:]]["cron"] for t in n["triggers"] if str(t).startswith("schedule "))
-            wake = "".join(f"  # jactionlint ignore=dangerous-triggers\n  workflow_run:\n    workflows: [{str(t)[13:]}]\n    types: [completed]\n"
-                           for t in n["triggers"] if str(t).startswith("workflow_run "))
-            events = {}
-            for t in n["triggers"]:
-                if str(t).startswith(("issues.", "pull_request_review.")):
-                    event, _, kind = str(t).partition(".")
-                    events.setdefault(event, []).append(kind)
-            wake = "".join(f"  {e}:\n    types: [{', '.join(k)}]\n" for e, k in events.items()) + wake
-            files[f".github/workflows/factory-{name}.yml"] = ACTIONS_WORKFLOW.format(
-                name=name, project=project_name(config), cron=cron, wake=wake, run=n["run"].replace("uv run factory/cli.py", "uv run --quiet factory/cli.py"))
-    return files
+    """{path: text} of the workflows the graph's `runner: actions` nodes render in the factory repository (hook
+    `deploy.plan_files`: the github plugin renders GitHub Actions workflows)."""
+    return {k: v for hook in plugins.registry(config).hook("deploy.plan_files") for k, v in hook(nodes, config).items()}
 
 
-COMMENT_WAKE_FILES = (".github/workflows/comment-wake-label.yml", "scripts/comment-wake-label.sh")
-
-
-def sync_comment_wake_files(config: dict, run, apply: bool) -> int:
-    """Install the files the plugins' `deploy.files` hooks name (the comments plugin: the comment wake workflow and its
-    script, ADR-0025) in every configured GitHub project repository."""
-    paths = [p for hook in plugins.registry(config).hook("deploy.files") for p in hook(config)]
-    if not paths:
-        return 0
-    files = {path: (ROOT / path).read_text() for path in dict.fromkeys(paths)}
-    repositories = [r for r in config.get("repositories", []) if "github.com" in r["url"]]
-    for repo in repositories:
-        name = repository(repo)["fullName"]
-        for path, text in files.items():
-            endpoint = f"repos/{name}/contents/{path}"
-            try:
-                current = json.loads(run(["api", endpoint]))
-                old = base64.b64decode(current.get("content", "")).decode()
-                if old == text:
-                    continue
-                action = "update"
-            except Exception as error:
-                if "HTTP 404" not in str(error):
-                    print(f"error: cannot read {name}/{path}: {error}", file=sys.stderr)
-                    return 1
-                current, action = {}, "create"
-            print(f"{action} project file {name}/{path}")
-            if apply:
-                args = ["api", "-X", "PUT", endpoint, "-f", "message=Install factory comment wake workflow",
-                        "-f", f"content={base64.b64encode(text.encode()).decode()}"]
-                if current.get("sha"):
-                    args += ["-f", f"sha={current['sha']}"]
-                try:
-                    run(args)
-                except Exception as error:
-                    print(f"error: cannot write {name}/{path}: {error}", file=sys.stderr)
-                    return 1
+def sync_wake_files(config: dict, run, apply: bool) -> int:
+    """Hook `deploy.files`: each selected code host installs (or removes) the files that wake a node in its project
+    repositories (github: the comment wake workflow and its script while the comments plugin is on, ADR-0025)."""
+    for hook in plugins.registry(config).hook("deploy.files"):
+        if code := hook(config, run, apply):
+            return code
     return 0
-
-
-# The token is the built-in github.token while the factory repository is also the target (#339); labels it sets wake Air.
-ACTIONS_WORKFLOW = """# Generated by `factory deploy` from engine/nodes.yaml (node `{name}`). Do not edit.
-name: factory-{name}
-
-on:
-  schedule:
-    - cron: "{cron}"
-{wake}  workflow_dispatch:
-
-permissions: {{}}
-
-concurrency:
-  group: factory-{name}
-  cancel-in-progress: false
-
-jobs:
-  {name}:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-    env:
-      GH_TOKEN: ${{{{ github.token }}}}
-      GH_REPO: ${{{{ github.repository }}}}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with: {{ persist-credentials: false }}
-      - run: pipx install uv
-      - run: {run}
-"""
 
 
 COMPLEXITY_DESCRIPTION = "Size grade set by intake; chooses the developer tier"
@@ -674,27 +606,20 @@ def label_specs(nodes: dict, config: dict) -> dict:
     return out
 
 
-def label_tracker(repo: str, run=None):
-    return github_tracker.GitHubTracker(repo, {}, run=run or github_tracker.gh)
-
-
-def reconcile_labels(plan: dict, run=None) -> list[tuple]:
+def reconcile_labels(plan: dict, run=None, config=None) -> list[tuple]:
     """(action, repository, label, changed fields) per required label to create or update, and per factory-owned
-    label no longer required to remove, in each repository of `plan["label_repositories"]` independently."""
-    out, owned, random_colors = [], tuple(plan.get("owned_label_prefixes") or []), {}
-    for repo in plan.get("label_repositories") or []:
-        have = label_tracker(repo, run).list_labels()
-        for name in plan["labels"]:
-            spec = (plan.get("label_specs") or {}).get(name, {})
-            if name not in have:
-                want = {"color": spec.get("color") or random_colors.setdefault(name, github_tracker.random_color()),
-                        "description": spec.get("description", "")}
-                out.append(("create", repo, name, want))
-            elif changed := [k for k in ("color", "description") if k in spec and have[name][k] != spec[k]]:
-                want = {"color": have[name]["color"], "description": have[name]["description"], **spec}
-                out.append(("update", repo, name, want, changed))
-        out += [("remove", repo, name, None) for name in sorted(have) if name.startswith(owned) and name not in plan["labels"]]
-    return out
+    label no longer required to remove, from the selected plugins' `deploy.labels` hooks (github: each repository of
+    `plan["label_repositories"]` independently)."""
+    schema = TrackerSchema.from_plan(plan)
+    return [c for hook in plugins.registry(config).hook("deploy.labels") for c in hook(schema, run)]
+
+
+def provision_labels(plan: dict, changes: list, apply: str, run=None, config=None) -> None:
+    """Write label `changes` through the `deploy.provision` hooks: `apply` is `write` (create, update) or `remove`."""
+    schema = TrackerSchema.from_plan(plan)
+    for hook in plugins.registry(config).hook("deploy.provision"):
+        for line in hook(schema, changes, apply, run):
+            print(line)
 
 
 def youtrack_tags(nodes: dict, config: dict) -> list[str]:
@@ -1091,8 +1016,10 @@ def extra_variables(plan: dict, envs: list[dict]) -> list[str]:
             for k in have.get(e["name"], {}) if k not in (e.get("variables") or {})]
 
 
-def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None, yt_run=None) -> int:
-    """Write only to Air and to repository labels (through `run`, a `gh` runner): deploy never creates, edits or closes a tracker ticket."""
+def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None, yt_run=None,
+           config=None) -> int:
+    """Write only to Air and to repository labels (through `run`, a `gh` runner): deploy never creates, edits or closes a
+    tracker ticket. `config` selects the plugins that provision the labels (github when None)."""
     # The automations' repositories too: an environment moved off a repository is found there, then replaced.
     repo_urls = list(dict.fromkeys([e["repository"] for e in plan["environments"]] +
                                    [a["repository"]["browseUrl"] for a in plan["automations"]
@@ -1111,7 +1038,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print(line)
     for line in extra_variables(plan, state[1]):
         print(line)
-    label_changes = reconcile_labels(plan, run)
+    label_changes = reconcile_labels(plan, run, config)
     tag_changes = reconcile_tags(plan, yt_run)
     try:
         field_changes = reconcile_fields(plan, yt_run)
@@ -1138,15 +1065,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         else:
             continue
         print(f"{action}d {name} value {value} in YouTrack")
-    for action, repo, label, want, *_ in label_changes:  # a missing label fails every handoff that adds it
-        tracker = label_tracker(repo, run)
-        if action == "create":
-            tracker.create_label(label, want["color"], want["description"])
-        elif action == "update":
-            tracker.update_label(label, want["color"], want["description"])
-        else:
-            continue
-        print(f"{action}d label {label} in {repo}")
+    provision_labels(plan, label_changes, "write", run, config)  # a missing label fails every handoff that adds it
     removals = [c for c in label_changes if c[0] == "remove"]
     tag_removals = [t for a, t in tag_changes if a == "remove"]
     value_removals = [c for c in field_changes if c[0] == "remove"]
@@ -1159,9 +1078,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
             print(f"refused: would remove {name} value {value} in YouTrack", file=sys.stderr)
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
-    for _, repo, label, _ in removals:
-        label_tracker(repo, run).delete_label(label, plan["owned_label_prefixes"])
-        print(f"removed label {label} in {repo}")
+    provision_labels(plan, removals, "remove", run, config)
     for tag in tag_removals:
         tag_store(plan, yt_run).delete_tag(tag, plan["owned_tag_prefixes"])
         print(f"removed tag {tag} in YouTrack")
@@ -1220,13 +1137,12 @@ def main(argv: list[str]) -> int:
         servers = [Mcp(os.environ[v]) for v in names]
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
-            run = github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config),
-                                                    issues_token_env=config.get("issues_token_env"))
-            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run)
+            run = next((hook(config) for hook in plugins.registry(config).hook("deploy.run")), None)
+            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run, config=config)
             if code:
                 return code
             code = write_files(plan["files"], argv[0] == "--apply")
-            return code or sync_comment_wake_files(config, run, argv[0] == "--apply")
+            return code or sync_wake_files(config, run, argv[0] == "--apply")
         finally:
             for server in servers:
                 server.close()

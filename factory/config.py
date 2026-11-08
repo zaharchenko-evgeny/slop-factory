@@ -122,6 +122,11 @@ def owner(cfg=None):
     return cfg.get("owner") or (cfg.get("notify") or {}).get("github_user")
 
 
+def vcs(cfg):
+    """The `vcs:` block that hosts the pull requests (`code_host:` is its old name); {} when neither is set."""
+    return (cfg or {}).get("vcs") or (cfg or {}).get("code_host") or {}
+
+
 def _check(schema, value, where, errs, root_schema=None):
     root_schema = schema if root_schema is None else root_schema
     if "$ref" in schema:
@@ -170,13 +175,13 @@ def _check(schema, value, where, errs, root_schema=None):
 
 def tracker_errors(descriptor, where):
     """Cross-field errors of `tracker` the schema cannot say: a youtrack tracker names its url and project and needs
-    `code_host.repository` for the pull requests; a github-issues tracker needs `repository`."""
+    `vcs.repository` (alias `code_host.repository`) for the pull requests; a github-issues tracker needs `repository`."""
     t = descriptor.get("tracker") if isinstance(descriptor, dict) else None
     if not isinstance(t, dict):
         return []
     if t.get("adapter") == "youtrack":
         need = [f"{where}.tracker.{k}: required with adapter youtrack" for k in ("url", "project") if k not in t]
-        if not ((descriptor.get("code_host") or {}).get("repository")):
+        if not vcs(descriptor).get("repository"):
             need.append(f"{where}.code_host.repository: required with tracker.adapter youtrack")
         return need
     if t.get("adapter") == "github-issues" and "repository" not in t:

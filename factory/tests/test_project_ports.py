@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 import project  # noqa: E402
-from gate_github import GitHubGateTracker  # noqa: E402
+from factory_plugins.github.gate import GitHubGateTracker  # noqa: E402
 from gate_port import MemorySystem, UnsupportedStore  # noqa: E402
 from test_youtrack_tracker import FakeYouTrack  # noqa: E402
 from youtrack_tracker import YouTrackTicketStore  # noqa: E402

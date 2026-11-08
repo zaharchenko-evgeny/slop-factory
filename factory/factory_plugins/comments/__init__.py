@@ -6,7 +6,6 @@ team's factory.yaml lists `plugins: [comments]`; while it is off the core import
 - `asks`: an agent asks another agent in the thread, with a hop budget (#591): the `ask` outcome.
 - `node`: one comment node routes person comments and agent asks (ADR-0023): the cursor, the step input and the
   `route`, `reply` and `skip` effects.
-- `wake`: the files deploy installs so a comment wakes the comment node.
 """
 from plugins import Plugin
 
@@ -24,6 +23,5 @@ PLUGIN = Plugin(
     hooks={"definition.load": "factory_plugins.comments.mentions:add_nodes",
            "definition.errors": "factory_plugins.comments.mentions:errors",
            "gate.step_context": "factory_plugins.comments.node:step_context",
-           "gate.outcome": "factory_plugins.comments.asks:outcome",
-           "deploy.files": "factory_plugins.comments.wake:files"},
+           "gate.outcome": "factory_plugins.comments.asks:outcome"},
 )
