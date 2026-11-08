@@ -173,14 +173,17 @@ def plan_air(nodes: dict, config: dict) -> dict:
         })
     label_repos = list(dict.fromkeys(x for x in ((config.get("tracker") or {}).get("repository"),
                                                  core.repository(primary)["fullName"]) if x))
-    label_repos += [r for r in dict.fromkeys(b.get("repository") for b in trackers.values()  # a project's GitHub issues
-                                             if scopes_mod.adapter(b) == "github-issues") if r and r not in label_repos]
+    project_repos = [r for r in dict.fromkeys(b.get("repository") for b in trackers.values()  # a project's GitHub issues
+                                              if scopes_mod.adapter(b) == "github-issues") if r]
+    label_repos += [r for r in project_repos if r not in label_repos]
     # the tracker's own setup (youtrack: tags and field values); none keeps a GitHub plan (and its fixture) unchanged
     tag_plan = {k: v for hook in registry.hook("deploy.plan") for k, v in hook(nodes, config).items()}
     schema = core.tracker_schema(nodes, config, label_repos)
-    return {"prefix": prefix, "automations": automations, "environments": envs, "labels": list(schema.labels),
-            "label_repositories": list(schema.repositories), "label_specs": schema.specs,
-            "owned_label_prefixes": list(schema.owned_prefixes),
+    label_keys = ({"label_plan": core.label_plan(nodes, config, project_repos)}  # ADR-0024: labels per repository
+                  if (config.get("tracker") or {}).get("repositories")
+                  else {"labels": list(schema.labels), "label_repositories": list(schema.repositories)})
+    return {"prefix": prefix, "automations": automations, "environments": envs, **label_keys,
+            "label_specs": schema.specs, "owned_label_prefixes": list(schema.owned_prefixes),
             **tag_plan, "files": core.actions_files(nodes, config)}
 
 
