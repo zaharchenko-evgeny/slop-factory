@@ -396,6 +396,56 @@ def _resolved_ids(body):
     return ids
 
 
+def _open_blocking(reviews, focus):
+    """Blocking finding ids still open in the agent reviews of `focus`: a `B<n>` stays open until a later review of
+    the focus says it is resolved or approves."""
+    open_ids = set()
+    for r in reviews:
+        if not r.get("agent") or (r.get("focus") or "review") != (focus or "review"):
+            continue
+        open_ids -= _resolved_ids(r.get("body") or "")
+        if r.get("verdict") == "approve":
+            open_ids.clear()
+        open_ids |= {str(i) for i in r.get("findings") or [] if str(i).startswith("B")}
+    return open_ids
+
+
+def rereview_scope(effects, payload, facts, focus, tracker, ticket):
+    """Why a re-review's change request is refused, or None (#1048). On a re-review (the focus has an agent review at
+    an earlier head), each blocking finding must continue an open earlier finding (its id), sit on a file whose PR
+    patch changed since the last reviewed head (within the fix's hunks when the line is known), or say why the earlier round could not see it (`unseen`). Anything
+    else belonged in the earlier round: report it as minor. Skipped when the patches cannot be compared."""
+    if not any(e["kind"] == "review" and str(e["value"]).startswith("request-changes") for e in effects):
+        return None
+    focus = focus or payload.get("focus")
+    head = facts.get("head")
+    blocking = [f for f in payload.get("findings") or [] if isinstance(f, dict) and f.get("severity") == "blocking"]
+    earlier = [r for r in facts.get("reviews") or [] if r.get("agent") and (r.get("focus") or "review") == (focus or "review")
+               and r.get("commit_id") and r.get("commit_id") != head]
+    if not blocking or not earlier or not head or not hasattr(tracker, "changed_since"):
+        return None
+    changed = tracker.changed_since(ticket, earlier[-1]["commit_id"])
+    if changed is None:
+        return None
+    open_ids = _open_blocking(facts.get("reviews") or [], focus)
+    def touched(location):  # `path[:line]` within a changed hunk (3 lines of margin), or anywhere in a changed file
+        path, _, line = str(location or "").partition(":")
+        if path not in changed:
+            return False
+        hunks, line = changed[path] if isinstance(changed, dict) else None, line.split("-")[0].split(":")[0]
+        if hunks is None or not line.isdigit():
+            return True
+        return any(a - 3 <= int(line) <= b + 3 for a, b in hunks)
+    out = [f for f in blocking if str(f.get("id")) not in open_ids and not f.get("unseen") and not touched(f.get("file"))]
+    if not out:
+        return None
+    named = ", ".join(f"{f.get('id')} ({str(f.get('file') or '').split(':')[0]})" for f in out)
+    return (f"re-review scope: {named}: new blocking findings on code the fix did not change since "
+            f"{earlier[-1]['commit_id'][:12]}. The earlier round should have raised them. Report each as `--minor` "
+            f"(a follow-up), keep the id of the open earlier finding it continues, or append "
+            f"`| unseen: <why the earlier round could not see it>`.")
+
+
 def status(facts, limit=2000, cut=160):
     """The short computed `status` of `factory begin`: stage, PR, CI, fix rounds and, per review focus, the latest
     review with its open blocking findings (a `B<n>` finding stays open until a later review of the focus says it is resolved)."""
@@ -617,7 +667,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
     if comment_node(node):  # ADR-0023: what the comment node reads, after the cursor
         listed = new_comments(facts, tracker, event["ticket"])
         save_comment_input(event["ticket"], listed)
-        facts["new_comments"] = [{k: c.get(k) for k in ("id", "on", "author", "author_is_bot", "at", "body")}
+        facts["new_comments"] = [{k: c.get(k) for k in ("id", "on", "author", "author_is_bot", "author_is_factory", "at", "body")}
                                  for c in listed]
     facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
     role, roles = node["role"], config["roles"]
@@ -767,7 +817,7 @@ def ask_effects(name, node, out, payload, tracker, ticket, effects):
     if pr is None and hasattr(tracker, "pr_comments"):
         pr = tracker.pr_comments(ticket)
     asked = sum(1 for c in [*(facts.get("comments") or []), *(pr or [])]  # only the factory's own asks count
-                if c.get("author_is_bot") and (c.get("body") or "").startswith("[factory]") and ASK.search(c["body"]))
+                if c.get("author_is_factory") and (c.get("body") or "").startswith("[factory]") and ASK.search(c["body"]))
     limit = config_mod.load().get("limits", {}).get("mention_hops", 3)
     if asked >= limit:
         return [{"kind": "comment", "ticket": ticket, "value": f"[factory] Ask refused: this ticket reached its limit of "
@@ -782,10 +832,10 @@ COMMENT_EFFECTS = ("route", "reply", "skip")  # the effects of the comment node'
 SEEN = re.compile(r"<!-- factory:comment-seen (\d+) -->")
 
 
-def comment_cursor(comments, bot=None):
-    """The highest id in a `factory:comment-seen` marker of the factory's own comments (0: none). With the tracker's
-    `bot` login known, only that author counts; another integration cannot move the cursor."""
-    return max((int(m[1]) for c in comments if (c.get("author") == bot if bot else c.get("author_is_bot"))
+def comment_cursor(comments):
+    """The highest id in a `factory:comment-seen` marker of the factory's own comments (0: none). Only
+    `author_is_factory` counts; another integration cannot move the cursor."""
+    return max((int(m[1]) for c in comments if c.get("author_is_factory")
                 and (c.get("body") or "").startswith("[factory]") and (m := SEEN.search(c["body"]))), default=0)
 
 
@@ -796,7 +846,7 @@ def new_comments(facts, tracker=None, ticket=None):
     if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
         pr = tracker.pr_comments(ticket)
     found = [dict(c, on="ticket") for c in facts.get("comments") or []] + [dict(c, on="pr") for c in pr or []]
-    cursor = comment_cursor(found, getattr(tracker, "bot", None))
+    cursor = comment_cursor(found)
     own = lambda c: FROM.search(c.get("body") or "") and not ASK.search(c.get("body") or "")
     return sorted((c for c in found if int(c.get("id") or 0) > cursor and not own(c)), key=lambda c: int(c["id"]))
 
@@ -937,6 +987,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             if e["kind"] in ("review", "comment"):
                 e["notes"] = notes
     facts = tracker.facts(ticket)
+    if scope := rereview_scope(effects, payload, facts, focus, tracker, ticket):
+        raise Bad(scope)
     comment_after = []
     if any(e["kind"] in COMMENT_EFFECTS for e in effects):
         moved, comment_after = comment_moves([e for e in effects if e["kind"] in COMMENT_EFFECTS], name, payload, facts,
