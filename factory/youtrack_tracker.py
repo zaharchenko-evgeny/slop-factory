@@ -144,7 +144,8 @@ class YouTrackTicketStore:
 
     def comments(self, n):
         return [{"author": (login := (c.get("author") or {}).get("login", "")),
-                 "author_is_bot": login in self.bots or login.endswith("[bot]"), "body": c.get("text") or "",
+                 "author_is_bot": login in self.bots or login.endswith("[bot]"),
+                 "author_is_factory": login in self.bots, "body": c.get("text") or "",
                  "at": iso(c.get("created")) or ""}
                 for c in self.run("GET", f"/api/issues/{n}/comments?fields={COMMENT_FIELDS}&{TOP}")]
 
