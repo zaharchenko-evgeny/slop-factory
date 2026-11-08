@@ -176,14 +176,16 @@ per repository.
 
 ## 9. Repositories and branches
 
-- A ticket names every affected repository. The developer runs in a
-  multi-repo environment and opens one PR per repository, each linked to the
-  ticket. The ticket reaches `done` when all its PRs are merged.
+- A ticket names every affected repository. A node declares the repositories
+  it writes (`writes`, ADR-0024). The developer runs once per written
+  repository and opens that repository's PR, linked to the ticket. The ticket
+  reaches `done` when all its PRs are merged. (Superseded in part by ADR-0024:
+  the multi-repo environment with one `main`.)
 - Repository roles (ADR-0017): `factory.project.yaml` marks exactly one
   repository `role: primary`; the others are `role: project`. An Air project
-  automation runs in the primary repository and checks out the other project
-  repositories and the factory repository (read-only) as additional
-  repositories. Retro, distill, the knowledge review and the ops nodes run in
+  automation checks out the project repositories and the factory repository
+  (read-only); the repository it writes is its main (ADR-0024, which
+  supersedes in part ADR-0017). Retro, distill, the knowledge review and the ops nodes run in
   the factory repository.
 - The team repository may also be listed as a `role: project` repository, so
   the factory delivers tickets that change it (ADR-0019,
@@ -357,7 +359,7 @@ See the [auto-approve and auto-merge recipe](recipes/auto-approve.md) for how to
 | Topic | What to verify |
 | --- | --- |
 | Workflows in projects | Whether an Air workflow can run in the project, or only in the personal workspace |
-| Multi-repo automations | Whether automations push to additional repositories (#459 probes it); fallback is the developer pushing extra branches itself, or one repository per ticket |
+| Multi-repo automations | Whether automations push to additional repositories (#459 probes it); ADR-0024 replaces the fallback with one automation per written repository |
 | Branch protection | Whether a bot approval can satisfy each repository's rules; own-PR approval is not allowed by GitHub |
 | Air Mate | Starting runs from Slack depends on AREX-148; until then the router creates a ticket |
 | Air GitHub app | Access to the personal factory repository |

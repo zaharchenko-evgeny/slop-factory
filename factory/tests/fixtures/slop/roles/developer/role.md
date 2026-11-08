@@ -39,9 +39,19 @@ nothing: this run has no branch. Use the `diagnosing-bugs` skill.
    test or self-check for non-trivial logic.
    The size estimate is not a limit: finish the ticket even when the branch grows past it, and give the
    real size in the PR body.
+   For code that parses, matches or filters input (Markdown, comments, markers, config), test the
+   class of inputs in one table-driven test, not one example: every variant of the syntax, empty and
+   missing values, and every comment author and kind the code can see.
+   Code that acts on a comment, marker or label checks that the configured factory identity wrote it;
+   any bot or a `[factory]` prefix is not proof.
+   When the change touches packaging, deploy, scripts or prompts, check the delivered form: run the
+   affected tests from the built wheel, read the `factory deploy plan` diff, regenerate fixtures, and
+   keep scripts executable.
 3. Before the handoff, run every acceptance check that can run locally. List
    every check in `checks` with its text and result (`pass`, `fail`, or
-   `not-run`); give `not-run` checks a reason. A failed check cannot be handed
+   `not-run`); give `not-run` checks a reason. Quote each acceptance check and
+   each scope requirement of the ticket word for word, one entry each, with the
+   test or command that proves it; a requirement without one is `not-run`. A failed check cannot be handed
    off as `done`.
 4. Run the checks the project documents (its `AGENTS.md` and CI commands) and fix failures.
 5. Review your own diff against the base branch as a reviewer would, with `ponytail-review`, and fix
@@ -77,6 +87,10 @@ repos/<repo>/pulls/<n>/reviews`; each body holds the summary and one `**B1**
 path:line — text` line per finding, blocking first). Address each finding in
 your handoff as fixed (include the commit) or disputed (give a reason). Commit
 fixes separately as needed. Ignore nits.
+
+Fix the class, not the case: turn each finding's `case` into a table-driven test
+with its neighbouring cases (the other syntax variants, authors, empty or missing
+values), make every row pass, and search the diff for the same pattern elsewhere.
 
 When `ci_failure` is present and there are no review findings, fix the failed
 CI step using its job, step and log tail. A red CI fix round without review
