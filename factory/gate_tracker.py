@@ -51,7 +51,10 @@ class GateTracker:
         children = tracker.find(Query("children", of=n, scope=scope)) if stage == "split" else None
         names = list(getattr(tracker, "repositories", None) or {"primary": None})
         want = derive.pr_want(stage)  # a costly PR read only on the path that needs it
-        prs = [(name, vcs.read(Subject("pr", n, name), want)) for name in ticket_repositories(ticket.body, names, names[0])]
+        # a tracker that links tickets to repositories answers itself (YouTrack `tracker.projects`, #981)
+        repos = tracker.ticket_repositories(n, ticket.body) if hasattr(tracker, "ticket_repositories") else \
+            ticket_repositories(ticket.body, names, names[0])
+        prs = [(name, vcs.read(Subject("pr", n, name), want)) for name in repos]
         f, self.since = derive.facts(ticket, prs, rules, children)
         return f
 

@@ -24,6 +24,7 @@ import config as config_mod
 import definition
 import plugins
 import project as project_mod
+import scopes as scopes_mod
 import vocab
 from ports.system import TrackerSchema
 
@@ -417,6 +418,32 @@ def scope_filter(trig: dict, block: dict) -> dict:
     return trig
 
 
+def team_definition() -> dict | None:
+    """The team's definition (ADR-0021), else None (a descriptor team)."""
+    return definition.load(config_mod.team_root()) if definition.present(config_mod.team_root()) else None
+
+
+def code_scopes(config: dict, defn: dict | None) -> list[dict]:
+    """The repositories a per-repository node may get a copy for: a definition's code repositories (`main` in an
+    environment), else every repository."""
+    if not defn:
+        return config["repositories"]
+    code = {definition.full_name(c) for c in definition.per_repo_envs(defn)}
+    return [r for r in config["repositories"] if definition.full_name(r["url"]) in code]
+
+
+def node_scopes(nodes: dict, config: dict, defn: dict | None) -> dict:
+    """{node: its copies' repositories, [None] for one automation} of every node deploy plans (#895): with
+    `write_mode: per-repo` and more than one code repository a per-repository node gets one copy per code repository,
+    except in the default environment when environments have their own trackers (#1069: it runs once per project)."""
+    scopes = code_scopes(config, defn)
+    per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(scopes) > 1
+    trackers = scopes_mod.project_envs(config)
+    default_env = default_environment(nodes, defn) if trackers else None
+    return {name: scopes if per_repo and definition.per_repo_node(name) and not (trackers and n["env"] == default_env) else [None]
+            for name, n in nodes["nodes"].items() if n.get("enabled") is not False and n["role"] != "human" and not n.get("runner")}
+
+
 def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
     """The node, gate options and spec of one automation (`review-behaviour`, `fix-mid`) from the node graph."""
     roles, agents = config["roles"], agents_of(nodes, config)
@@ -589,11 +616,15 @@ def surface_name(config: dict) -> str | None:
 
 
 def output_errors(nodes: dict, config: dict) -> list[str]:
-    """`unsupported-output` per deployed node whose `output:` its surface cannot serve: the configured `surface:`, else
-    every surface the selection provides once `targets.air` turns on `air`. No surface: nothing is checked."""
+    """The `deploy.errors` of the selected plugins (youtrack: `tracker.projects`), then `unsupported-output` per deployed
+    node whose `output:` its surface cannot serve: the configured `surface:`, else every surface the selection provides
+    once `targets.air` turns on `air`. No surface: no output is checked."""
+    errs = [e for hook in plugins.registry(config).hook("deploy.errors") for e in hook(nodes, config)]
     name = surface_name(config)
-    if not name:
-        return []
+    return errs + (_output_errors(nodes, config, name) if name else [])
+
+
+def _output_errors(nodes: dict, config: dict, name: str) -> list[str]:
     registry = plugins.registry(config, use=(("surface", name),))
     names = [name] if config.get("surface") else registry.impls("surface")
     if not (classes := [cls for n in names if (cls := registry.impl("surface", n))]):
