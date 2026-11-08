@@ -25,6 +25,7 @@ defaults:
     branch_pattern: "ez/{ticket}-{slug}"
     commit_prefix: "#{ticket} "
     bot_login: "jetbrains-air[bot]"
+    issues_token_env: FACTORY_ISSUES_TOKEN   # the gate's issue, label and comment writes to slop-eval-factory (slop-factory#652)
     confirm_external_writes: true
     confirm_external_writes_scope: []
     knowledge:                    # the knowledge base: an additional repository of the environments that read it
