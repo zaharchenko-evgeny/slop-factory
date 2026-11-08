@@ -18,6 +18,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -45,11 +47,23 @@ def tlc_jar():
     jar = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "factory" / f"tla2tools-{TLC_SHA[:12]}.jar"
     if not jar.is_file():
         jar.parent.mkdir(parents=True, exist_ok=True)
-        data = urllib.request.urlopen(TLC_URL, timeout=120).read()
+        data = _download(TLC_URL)
         if hashlib.sha256(data).hexdigest() != TLC_SHA:
             raise RuntimeError(f"{TLC_URL}: sha256 differs from the pin")
         jar.write_bytes(data)
     return str(jar)
+
+
+def _download(url, tries=4, sleep=time.sleep):
+    """The bytes at `url`; a 5xx answer or a network error is retried with backoff (GitHub release downloads
+    answer 504 at times)."""
+    for attempt in range(tries):
+        try:
+            return urllib.request.urlopen(url, timeout=120).read()
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt == tries - 1 or (isinstance(e, urllib.error.HTTPError) and e.code < 500):
+                raise
+            sleep(5 * 2 ** attempt)
 
 
 def _names(value):
