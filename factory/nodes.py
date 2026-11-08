@@ -18,12 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 import config as config_mod  # noqa: E402  (`validate` takes a `config` dict)
 import vocab  # noqa: E402
+import comments  # noqa: E402  (its names only, ADR-0025)
 
 ROOT = Path(__file__).resolve().parents[1]
-EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red", "assign", "unassign", "route", "reply", "skip"}
+EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red", "assign", "unassign"}  # and comments.EFFECTS
 OUTPUTS = {"read-only", "create-pr", "push-to-source", "push-to-new-branch", "as-instructed"}
 WHEN_KEYS = {"stage", "blockers", "focus", "round", "fix-rounds", "ci", "actor", "always", "due", "pr-state",
-             "label", "pr", "review", "children", "ticket", "mention"}  # the last six: ADR-0021 facts
+             "label", "pr", "review", "children", "ticket"}  # the last five: ADR-0021 facts; comments.GUARDS: the module's
 NO_ROLE = {"script", "human"}
 
 
@@ -66,6 +67,9 @@ def validate(nodes, config):
     roles = config["roles"]
     errs += config_mod.mcp_errors(roles, ((config.get("targets") or {}).get("air") or {}).get("mcp_connectors"), nodes)
     envs, scheds = nodes.get("environments") or {}, nodes.get("schedules") or {}
+    on = comments.NAME in (config.get("modules") or [])  # ADR-0025: the comments module's keys
+    effects, when_keys = EFFECTS | (set(comments.EFFECTS) if on else set()), WHEN_KEYS | (set(comments.GUARDS) if on else set())
+    off = lambda k: f" (needs modules: [{comments.NAME}])" if not on and k in (*comments.EFFECTS, *comments.GUARDS) else ""
 
     def stage(where, s):
         if s != "none" and s not in stages:
@@ -84,8 +88,8 @@ def validate(nodes, config):
             errs.append(f"bad-condition: {name}: `when` must be one non-empty mapping")
         else:
             for k in n["when"]:
-                if k not in WHEN_KEYS:
-                    errs.append(f"bad-condition: {name}: unknown `when` key {k}")
+                if k not in when_keys:
+                    errs.append(f"bad-condition: {name}: unknown `when` key {k}{off(k)}")
             if "stage" in n["when"]:
                 for st in n["when"]["stage"] if isinstance(n["when"]["stage"], list) else [n["when"]["stage"]]:
                     stage(f"{name}.when", st)
@@ -110,11 +114,11 @@ def validate(nodes, config):
         for oname, o in n["outcomes"].items():
             for e in (o or {}).get("effects") or []:
                 keys = [k for k in e if k != "on"] if isinstance(e, dict) else []
-                if len(keys) != 1 or keys[0] not in EFFECTS:
-                    errs.append(f"unknown-effect: {name}.{oname}: {e}")
-                elif "on" in e and (e["on"] not in ("issue", "pr", "mention") or keys[0] not in ("label", "unlabel", "comment")
+                if len(keys) != 1 or keys[0] not in effects:
+                    errs.append(f"unknown-effect: {name}.{oname}: {e}{off(keys[0] if len(keys) == 1 else None)}")
+                elif "on" in e and (e["on"] not in ("issue", "pr", *(("mention",) if on else ())) or keys[0] not in ("label", "unlabel", "comment")
                                    or (e["on"] == "mention" and keys[0] != "comment")):  # #590: where the question was
-                    errs.append(f"unknown-effect: {name}.{oname}: bad `on` in {e}")
+                    errs.append(f"unknown-effect: {name}.{oname}: bad `on` in {e}{off(e['on'])}")
             if (o or {}).get("else") and o["else"] not in n["outcomes"]:
                 errs.append(f"unknown-outcome: {name}.{oname}: else {o['else']}")
             for s in (o or {}).get("from") or []:

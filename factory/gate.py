@@ -34,6 +34,8 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+if __name__ == "__main__":  # run as a script: `import gate` (the comments module) must get this module, and its `Bad`
+    sys.modules.setdefault("gate", sys.modules[__name__])
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 import notify as notifiers  # noqa: E402
@@ -43,6 +45,7 @@ from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
 from github_tracker import project_repositories  # noqa: E402
 import vocab  # noqa: E402
 import definition  # noqa: E402
+import comments  # noqa: E402  (its names only; the feature code is imported when the module is on, ADR-0025)
 
 ROOT = nodes_mod.ROOT
 GO, NO_GO, BAD, FAILED = 0, 10, 2, 1
@@ -485,64 +488,30 @@ def guard_holds(guard, facts, tracker=None, ticket=None):
         kids = tracker.children(ticket) or []
         facts = {**facts, "children_open": sum(1 for c in kids if c.get("state") == "open")}
     unknown = set(guard) - GUARD_KEYS
+    if unknown & set(comments.GUARDS) and comments_on():  # read the config only for a guard of the module
+        unknown -= set(comments.GUARDS)
     if unknown:
-        raise Bad(f"unknown guard: {', '.join(sorted(unknown))}")
+        raise Bad(f"unknown guard: {', '.join(sorted(unknown))}" + module_off(unknown & set(comments.GUARDS)))
     if "mention" in guard:
-        if not mention_holds(guard["mention"], facts, tracker, ticket):
+        from comments import mentions
+        if not mentions.holds(guard["mention"], facts, tracker, ticket):
             return False
         guard = {k: v for k, v in guard.items() if k != "mention"}
     return holds(guard, facts, {})
 
 
-def latest_mention(facts, tracker=None, ticket=None):
-    """{by, body, at, on, url} of the latest comment or review on the ticket or its PR that names @factory:, else None."""
-    found = [dict(c, on="ticket") for c in facts.get("comments") or []]
-    pr = facts.get("pr_comments")
-    if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
-        pr = tracker.pr_comments(ticket)
-    found += [dict(c, on="pr") for c in pr or []]
-    found += [{"author": r.get("author"), "body": r.get("body"), "at": r.get("submitted_at"), "on": "pr"}
-              for r in facts.get("reviews") or [] if r.get("body")]
-    found = [c for c in found if "@factory:" in (c.get("body") or "")]
-    if not found:
-        return None
-    c = max(enumerate(found), key=lambda ic: (ic[1].get("at") or "", ic[0]))[1]
-    return {"by": c.get("author"), "body": c.get("body"), "at": c.get("at"), "on": c["on"], "url": c.get("url")}
+def comments_on():
+    """True when the team turns on the comments module (`modules: [comments]`, ADR-0025)."""
+    return comments.NAME in (config_mod.load().get("modules") or [])
 
 
-def mention_holds(agent, facts, tracker=None, ticket=None):
-    """ADR-0021 #590: the latest comment on the ticket or its PR names `@factory:<agent>`, and may ask it. A person
-    may ask any agent; an agent (its comment's `factory:from` marker) only a neighbour in workflow.yaml; a reply
-    never asks anyone, so two agents cannot answer each other forever."""
-    comments = list(facts.get("comments") or [])
-    pr_comments = facts.get("pr_comments")
-    if pr_comments is None and tracker is not None and hasattr(tracker, "pr_comments"):
-        pr_comments = tracker.pr_comments(ticket)
-    comments += pr_comments or []
-    comments += [{"body": r.get("body") or "", "at": r.get("submitted_at") or r.get("at")}
-                 for r in facts.get("reviews") or [] if r.get("body")]  # a reviewer asks in its review
-    if not comments:
-        return False
-    latest = max(enumerate(comments), key=lambda ic: (ic[1].get("at") or "", ic[0]))[1]
-    body = latest.get("body") or ""
-    if not re.search(rf"@factory:{re.escape(agent)}(?![\w-])", body):
-        return False
-    marker = FROM.search(body)
-    if not marker:
-        return True  # a person
-    if marker[2]:  # a reply asks no one, except an answer to an ask, which goes back to the asker (#591)
-        answer = ANSWER.search(body)
-        ask = next((c for c in comments if answer and (m := ASK.search(c.get("body") or "")) and m[1] == answer[1]), None)
-        asker = FROM.search(ask["body"]) if ask else None
-        return bool(asker and asker[1] == agent)
-    if marker[1] == agent:
-        return False
-    import definition
-    return frozenset((marker[1], agent)) in definition.neighbours(definition.load(config_mod.team_root()))
+def module_off(used):
+    """The note a refusal adds when `used` (guards, effects, outcomes) needs the comments module, which is off."""
+    return f" ({', '.join(sorted(used))} needs `modules: [{comments.NAME}]`)" if used else ""
 
 
 REMOTE_FIRST = ("review", "merge", "update-branch")  # effects that write to a code host and can fail there
-GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention"}
+GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket"}  # comments.GUARDS: the module's
 FROM = re.compile(r"<!-- factory:from (\S+?)( reply)? -->")
 
 
@@ -610,11 +579,12 @@ def check(name, event, tracker, nodes, config, code_host=None):
     why = matches(node, facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     notes = facts.get("agent_notes", [])
-    if comment_node(node):  # ADR-0023: what the comment node reads, after the cursor
-        listed = new_comments(facts, tracker, event["ticket"])
-        save_comment_input(event["ticket"], listed)
-        facts["new_comments"] = [{k: c.get(k) for k in ("id", "on", "author", "author_is_bot", "author_is_factory", "at", "body")}
-                                 for c in listed]
+    mention = {}
+    if comments_on():
+        from comments import mentions, node as comment_node
+        comment_node.step_input(node, facts, tracker, event["ticket"])  # ADR-0023: the comments after the cursor
+        if name.startswith("reply-") and definition_team():
+            mention = {"mention": mentions.latest(facts, tracker, event["ticket"])}
     facts = {k: v for k, v in facts.items() if k not in ("body", "agent_notes")}
     role, roles = node["role"], config["roles"]
     tiers = node.get("tiers") or [node.get("tier") or roles.get(role, {}).get("tier")]
@@ -630,7 +600,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
         "skills": skills.read_text().split() if skills.exists() else [],
         "context": facts, "status": status(facts), "outcomes": list(node["outcomes"]),
         "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if fixing else ()))],
-        **({"mention": latest_mention(facts, tracker, event["ticket"])} if name.startswith("reply-") and definition_team() else {}),
+        **mention,
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and fixing),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
         # one entry per repository of a ticket that changes several (ADR-0017), all on the ticket's one branch
@@ -706,9 +676,6 @@ def resolve(effect, payload, ticket):
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
 
 
-ASK = re.compile(r"<!-- factory:ask id=(\S+) from=(\S+) to=(\S+) hop=(\d+) -->")
-ANSWER = re.compile(r"<!-- factory:answer id=(\S+) -->")
-
 
 def notify_config():
     """`notify` of the team's factory.yaml; Bad when the team has none."""
@@ -747,139 +714,6 @@ def notify_effects(effects, tracker, ticket, name):
     return out, failures, posted
 
 
-def ask_effects(name, node, out, payload, tracker, ticket, effects):
-    """#591: the comment an `ask` outcome posts. `@factory:<to>` wakes the target through the mention router, so it
-    runs in reply mode. Refused for a pair outside the outcome's `to` allowlist; over `limits.mention_hops` asks on
-    the ticket it posts one comment naming the limit and wakes nothing."""
-    to = str(payload.get("to") or "")
-    allowed = out.get("to") or []
-    if to not in allowed:
-        raise Bad(f"ask: `{to}` is not an agent this node may ask; allowed: {', '.join(allowed) or 'none'}")
-    facts = tracker.facts(ticket)
-    pr = facts.get("pr_comments")
-    if pr is None and hasattr(tracker, "pr_comments"):
-        pr = tracker.pr_comments(ticket)
-    asked = sum(1 for c in [*(facts.get("comments") or []), *(pr or [])]  # only the factory's own asks count
-                if c.get("author_is_factory") and (c.get("body") or "").startswith("[factory]") and ASK.search(c["body"]))
-    limit = config_mod.load().get("limits", {}).get("mention_hops", 3)
-    if asked >= limit:
-        return [{"kind": "comment", "ticket": ticket, "value": f"[factory] Ask refused: this ticket reached its limit of "
-                 f"{limit} asks (`limits.mention_hops`). Go on without asking."}]
-    who = f"{agent_of(name) if definition_team() else node.get('agent', name)} ({node.get('role')})"
-    marker = f"<!-- factory:ask id={ticket}-{asked + 1} from={name} to=reply-{to} hop={asked + 1} -->"
-    text = " ".join(str(payload["text"]).split())
-    return [{**effects[0], "value": f"[factory] **{who}:** @factory:{to} {text}\n{marker}"}]
-
-
-COMMENT_EFFECTS = ("route", "reply", "skip")  # the effects of the comment node's outcomes (ADR-0023)
-SEEN = re.compile(r"<!-- factory:comment-seen (\d+) -->")
-
-
-def comment_cursor(comments):
-    """The highest id in a `factory:comment-seen` marker of the factory's own comments (0: none). Only
-    `author_is_factory` counts; another integration cannot move the cursor."""
-    return max((int(m[1]) for c in comments if c.get("author_is_factory")
-                and (c.get("body") or "").startswith("[factory]") and (m := SEEN.search(c["body"]))), default=0)
-
-
-def new_comments(facts, tracker=None, ticket=None):
-    """The comments on the ticket and its PR after the cursor, oldest first, `on` saying where each is. The factory's
-    own comments (a `factory:from` marker without an ask marker) are not input."""
-    pr = facts.get("pr_comments")
-    if pr is None and tracker is not None and hasattr(tracker, "pr_comments"):
-        pr = tracker.pr_comments(ticket)
-    found = [dict(c, on="ticket") for c in facts.get("comments") or []] + [dict(c, on="pr") for c in pr or []]
-    cursor = comment_cursor(found)
-    own = lambda c: FROM.search(c.get("body") or "") and not ASK.search(c.get("body") or "")
-    return sorted((c for c in found if int(c.get("id") or 0) > cursor and not own(c)), key=lambda c: int(c["id"]))
-
-
-def comment_input_path(ticket):
-    return Path(".factory") / "check" / f"{ticket}-comments.json"
-
-
-def save_comment_input(ticket, comments):
-    """The newest comment id the step's context lists: `apply` acknowledges nothing after it."""
-    path = comment_input_path(ticket)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"ticket": ticket, "last": max((int(c["id"]) for c in comments), default=0)}))
-
-
-def comment_input_last(ticket):
-    """The saved id, or None when no `check` ran (every comment is then input)."""
-    try:
-        state = json.loads(comment_input_path(ticket).read_text())
-        return int(state["last"]) if str(state.get("ticket")) == str(ticket) else None
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-
-
-def comment_node(node):
-    return any(next((k for k in e if k != "on"), None) in COMMENT_EFFECTS
-               for o in node["outcomes"].values() for e in (o or {}).get("effects") or [])
-
-
-def route_effects(to, facts, ticket, nodes, tier, clean):
-    """The effects that move the item to node `to`: its trigger label and the stage its `when` needs, both from
-    workflow.yaml. `clean` also drops the person's wait and the stale command labels. Refuses (Bad, nothing
-    written) an unknown node, one without a label trigger, or one whose `when` fails with the new stage and label."""
-    node = (nodes.get("nodes") or {}).get(to)
-    if node is None or node.get("enabled") is False:
-        raise Bad(f"route: unknown node `{to}`")
-    trigger = next((m for t in node.get("triggers") or [] if isinstance(t, str)
-                    and (m := re.fullmatch(r"(issues|pull_request)\.labeled (\S+)", t))), None)
-    if not trigger:
-        raise Bad(f"route: node `{to}` has no label trigger")
-    label, on = trigger[2].replace("<tier>", tier), "pr" if trigger[1] == "pull_request" else None
-    if "<" in label:
-        raise Bad(f"route: the trigger label of `{to}` needs a value: {label}")
-    when = node.get("when") or {}
-    stages = [when["stage"]] if isinstance(when.get("stage"), str) else list(when.get("stage") or [])
-    stage = facts["stage"] if facts["stage"] in stages or not stages else stages[0]
-    held = {**facts, "stage": stage, **{"pr_labels" if on else "attrs": [*facts.get("pr_labels" if on else "attrs", []), label]}}
-    if not holds({k: v for k, v in when.items() if k != "stage"}, held, {}):
-        raise Bad(f"route: node `{to}` does not match this item now (its `when` fails)")
-    out = clear_commands(ticket) + [{"kind": "unlabel", "ticket": ticket, "value": vocab.needs_human(), **extra}
-                                    for extra in ({}, {"on": "pr"})] if clean else []
-    out.append({"kind": "label", "ticket": ticket, "value": label, **({"on": on} if on else {})})
-    if stage != facts["stage"]:
-        out.append({"kind": "stage", "ticket": ticket, "value": stage})
-    return out, stage
-
-
-def comment_moves(moves, name, payload, facts, tracker, nodes, ticket):
-    """(effects, after) for the comment node's route, reply and skip effects (ADR-0023). `effects` move the item;
-    `after` always runs: remove the wake label, react on a skipped comment, post a short reply with the cursor."""
-    found = new_comments(facts, tracker, ticket)
-    last = comment_input_last(ticket)
-    fresh = [c for c in found if last is None or int(c["id"]) <= last]  # what the step read
-    later = {c["on"] for c in found if c not in fresh}  # arrived during the run: still pending
-    tier = payload.get("tier") or fix_tier(facts)
-    effects, summary = [], "Nothing to do."
-    for e in moves:
-        if e["kind"] == "skip":
-            if fresh:
-                effects.append({"kind": "react", "ticket": ticket, "value": "eyes", "comment": fresh[-1]["id"],
-                                **({"on": "pr"} if fresh[-1]["on"] == "pr" else {})})
-            continue
-        route = e["kind"] == "route"
-        to = e["value"] if route else f"reply-{e['value']}"
-        more, stage = route_effects(to, facts, ticket, nodes, tier, clean=route)
-        effects += more
-        summary = f"Moved to `{to}`, stage `{stage}`." if route else f"Asked `{e['value']}` to answer."
-    text = " ".join(str(payload.get("reply") or summary).split())
-    if fresh:
-        text += f"\n<!-- factory:comment-seen {fresh[-1]['id']} -->"
-    if definition_team():
-        text += f"\n\n{comment_marker(name)}"
-    after = [{"kind": "unlabel", "ticket": ticket, "value": vocab.comment(), **extra} for extra in ({}, {"on": "pr"})]
-    after += [{"kind": "label", "ticket": ticket, "value": vocab.comment(), **({"on": "pr"} if on == "pr" else {})}
-              for on in sorted(later)]  # the label added again wakes the node for the later comments
-    after.append({"kind": "comment", "ticket": ticket, "value": text, **({"on": "pr"} if fresh and fresh[-1]["on"] == "pr" else {}),
-                  **({"run_id": payload["run_id"]} if payload.get("run_id") else {})})
-    return effects, after
-
-
 def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     node = load_node(name, nodes)
     if outcome not in node["outcomes"]:
@@ -911,8 +745,13 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
         payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
+    used = {e["kind"] for e in effects if e["kind"] in comments.EFFECTS} | ({"ask"} if outcome == "ask" else set()) \
+        | {"on: mention" for e in effects if e.get("on") == "mention"}
+    if used and not comments_on():
+        raise Bad(f"outcome {outcome}: the comments module is off" + module_off(used))
     if outcome == "ask":
-        effects = ask_effects(name, node, out, payload, tracker, ticket, effects)
+        from comments import asks
+        effects = asks.effects(name, node, out, payload, tracker, ticket, effects)
     if payload.get("agent_notes"):  # hidden notes for later agents ride on the review, the comments or the PR text
         try:
             notes = clean_notes(payload["agent_notes"])
@@ -925,10 +764,11 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if scope := rereview_scope(effects, payload, facts, focus, tracker, ticket):
         raise Bad(scope)
     comment_after = []
-    if any(e["kind"] in COMMENT_EFFECTS for e in effects):
-        moved, comment_after = comment_moves([e for e in effects if e["kind"] in COMMENT_EFFECTS], name, payload, facts,
-                                             tracker, nodes, ticket)
-        effects = [e for e in effects if e["kind"] not in COMMENT_EFFECTS] + moved
+    if any(e["kind"] in comments.EFFECTS for e in effects):
+        from comments import node as comment_node
+        moved, comment_after = comment_node.moves([e for e in effects if e["kind"] in comments.EFFECTS], name, payload,
+                                                  facts, tracker, nodes, ticket)
+        effects = [e for e in effects if e["kind"] not in comments.EFFECTS] + moved
     after = []  # effects that must follow the stage change
     starts = [e for e in effects if e["kind"] == "label" and str(e["value"]).startswith(commands())]
     stop = starts and stop_reason(facts, fix=any(str(e["value"]).startswith(vocab.prefix("fix-<tier>")) for e in starts))
@@ -982,14 +822,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         if e["kind"] == "comment" and payload.get("run_id"):
             e["run_id"] = payload["run_id"]
         if e["kind"] == "comment" and e.get("on") == "mention":  # #590: answer where, and whom, the question came from
-            asked = latest_mention(facts, tracker, ticket)
-            e["on"] = "pr" if asked and asked["on"] == "pr" else None
-            if not e["on"]:
-                del e["on"]
-            if (ask := ASK.search((asked or {}).get("body") or "")) and (asker := FROM.search(asked["body"])):
-                e["value"] = f"@factory:{asker[1]} {e['value']}\n<!-- factory:answer id={ask[1]} -->"  # #591: back to the asker
-            elif asked and asked.get("by"):
-                e["value"] = f"@{asked['by']} {e['value']}"
+            from comments import mentions
+            mentions.reply_target(e, facts, tracker, ticket)
         if e["kind"] == "comment" and definition_team():
             e["value"] = f"{e['value']}\n\n{comment_marker(name)}"
         if e["kind"] == "review" and definition_team():

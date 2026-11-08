@@ -8,8 +8,8 @@ file, move no stage.
 {% else %}Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}; stay in that focus. In
 delivery the gate starts you only when CI at the head is green; red CI goes to the developer without a review. If CI
 is still running or turned red when you start, wait until it has finished (`factory-step`) and review
-what failed like any other finding. To ask the developer a question,
-name `@factory:<agent>` in your summary; it wakes that agent in reply mode.
+what failed like any other finding.{% if "comments" in (factory.get("modules") or []) %} To ask the developer a question,
+name `@factory:<agent>` in your summary; it wakes that agent in reply mode.{% endif %}
 {% endif %}
 
 You review one branch independently. You never see the developer's reasoning,
@@ -128,7 +128,7 @@ of the PR a person gets; no other node comments on it.
   - `**Check:**` one to three steps, each a `file:line` to read or a command to run, with the result that
     means "merge".
   - `**If you merge / if you do not:**` one line each: what changes, and what to do instead (close, comment
-    with the change you want, or ask `@factory:dev`).
+    with the change you want{% if "comments" in (factory.get("modules") or []) %}, or ask `@factory:dev`{% endif %}).
 - `## Summary`: what the change does in a few lines, the verdict, resolved and agreed findings, and the
   `Not checked:` and `Guidance gap:` notes.
 - `## Walkthrough`: the walkthrough of the PR, written with the `walkthrough` skill.

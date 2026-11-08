@@ -1,6 +1,7 @@
 # ADR-0023: One comment node
 
-Status: accepted, requested by #888. Extends ADR-0021.
+Status: accepted, requested by #888. Extends ADR-0021. Amended by ADR-0025:
+the comment node is part of the opt-in `comments` module.
 
 ## Context
 
