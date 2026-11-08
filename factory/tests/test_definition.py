@@ -81,6 +81,18 @@ class DefinitionTest(unittest.TestCase):
         _, workflow = definition.to_project(definition.load(self.root))
         self.assertEqual(workflow["nodes"]["intake"]["outcomes"]["ready"]["effects"], effects)
 
+    def test_assignment_field_form_validates(self):
+        effects = [{"assign": {"field": "assignee"}, "on": "pr"}]
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(effects=effects))
+        self.assertEqual(self.errors(), [])
+
+    def test_assignment_effect_rejects_other_dicts(self):
+        for value in ({"fieldd": "x"}, {"field": "x", "extra": 1}, {"field": 3}):
+            with self.subTest(value=value):
+                self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(
+                    effects=[{"assign": value}]))
+                self.assertError("bad-effect: nodes.intake.ready: assign")
+
     def test_assignment_effect_rejects_non_string_values(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(
             effects=[{"assign": 3}]))
@@ -136,6 +148,39 @@ class DefinitionTest(unittest.TestCase):
     def test_unknown_webhook(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["notify"]["triggers"].append({"webhook": "nope"}))
         self.assertError("unknown-webhook: nodes.notify: nope")
+
+    def test_event_node_in_non_tracker_environment_is_deaf_trigger(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team"))
+        self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
+
+    def test_pr_label_node_outside_pr_repository_is_deaf_trigger(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["automerge"]["outcomes"]["needs-human"]["effects"][-1].update(on="pr"))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(
+            environment="team", triggers=[{"label": "factory:needs-human"}]))
+        self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
+
+    def test_pr_and_ci_triggers_outside_code_repositories_are_deaf_triggers(self):
+        for trigger in ({"pr": "merged"}, {"ci": "failed"}):
+            self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team", triggers=[trigger]))
+            self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
+
+    def test_scheduled_node_in_any_environment_is_fine(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(environment="team"))
+        self.assertEqual(self.errors(), [])
+
+    def test_pr_label_node_in_pr_repository_environment_is_fine(self):
+        def add_pr_repository(factory):
+            factory["environments"]["engine"]["repositories"].append({"repo": "owner/web"})
+            factory["environments"]["web"] = {"repositories": [{"repo": "owner/web", "main": True}]}
+        self.edit("factory.yaml", add_pr_repository)
+        self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(
+            environment="web", outcomes={**w["nodes"]["retro"]["outcomes"],
+                                         "proposed": {"effects": [{"label": "factory:knowledge-review", "on": "pr"},
+                                                                      {"label": "factory:review-low", "on": "pr"}]}}))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["review-low"].update(
+            environment="web", triggers=[{"label": "factory:review-low"}]))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["knowledge-review"].update(environment="web"))
+        self.assertEqual(self.errors(), [])
 
     def test_one_main_repository(self):
         self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(main=True))
@@ -237,6 +282,20 @@ class DefinitionTest(unittest.TestCase):
     def test_nodes_have_no_prompt(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(prompt="Scope it."))
         self.assertError("node-prompt: nodes.intake")
+
+    def test_compile_lists_the_writable_repositories_of_each_environment(self):
+        import definition
+        envs = definition.to_project(definition.load(self.root))[0]["environments"]
+        for name, env in envs.items():
+            with self.subTest(env=name):
+                self.assertTrue(set(env["writable"]) <= set(env["repositories"]))
+                self.assertIn(env["repositories"][0], env["writable"])  # the main repository is always writable
+
+    def test_issues_token_env_setting_passes_validation(self):
+        self.edit("factory.yaml", lambda f: f["defaults"].setdefault("settings", {}).update(issues_token_env="FACTORY_ISSUES_TOKEN"))
+        run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
+                             text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
+        self.assertEqual((run.returncode, run.stdout.strip()), (0, "factory: ok"), run.stdout + run.stderr)
 
     def test_settings_merge_order(self):
         defn = definition.load(self.root)
@@ -431,6 +490,31 @@ class DefinitionTest(unittest.TestCase):
         finally:
             config.set_team(before)
 
+    def test_a_failed_review_write_leaves_labels_and_stage_as_they_were(self):
+        import config
+        import gate
+        import nodes as nodes_mod
+        from gate_port import MemoryTracker
+        before = config._team
+        config.set_team(ROOT / "tests/fixtures/slop")  # its review outcomes replace the risk label (#998)
+        try:
+            n = nodes_mod.load()
+            t = MemoryTracker({"7": {"stage": "in-review", "pr": 5, "head": "h1", "ci": "green", "attrs": ["risk:low"],
+                                     "pr_labels": ["factory:review-low"]}})
+            apply = t.apply
+
+            def failing(e):
+                if e["kind"] == "review":
+                    raise RuntimeError("HTTP 403: Resource not accessible by integration")
+                return apply(e)
+            t.apply = failing
+            with self.assertRaises(RuntimeError):
+                gate.apply("review-low", "approve-risky", {"ticket": "7", "summary": "ok"}, t, n)
+            f = t.facts("7")
+            self.assertEqual((f["stage"], "risk:low" in f["attrs"]), ("in-review", True))
+        finally:
+            config.set_team(before)
+
     def test_a_person_asks_dev_on_the_pr_and_dev_answers_there(self):
         import config
         import gate
@@ -573,6 +657,61 @@ class SlopBugPathTest(unittest.TestCase):
     def test_cannot_reproduce_asks_the_reporter(self):
         t = self.run_flow("cannot-reproduce", "[factory] Not reproduced. 1. Which version?")
         self.assertEqual(t.facts("7")["stage"], "needs-answers")
+
+
+class PlanTest(unittest.TestCase):
+    """`definition.plan`: the sweep's start, merge, finish, reopen and join decisions from the node graph."""
+    ON = {"enabled": True, "max_risk": "high"}
+
+    def setUp(self):
+        import nodes as nodes_mod
+        self.graph = nodes_mod.load(ROOT.parent / "engine/nodes.yaml")
+        self.base = {"ticket": 1, "pr": 5, "pr_state": "open", "head": "h1", "ci": "green", "round_complete": True,
+                     "round_verdict": "approve", "round_head": "h1", "risk": "low", "blockers_open": 0,
+                     "attrs": ["complexity:medium"], "pr_labels": [], "reviews": []}
+
+    def plan(self, **facts):
+        return definition.plan(self.graph, {**self.base, **facts}, self.ON, "mid")
+
+    def test_start_a_ready_ticket_with_its_complexity_tier(self):
+        self.assertEqual(self.plan(stage="ready", pr_state="none"), ("start", "started", {"tier": "mid"}))
+        self.assertIsNone(self.plan(stage="ready", pr_state="none", blockers_open=1))
+        self.assertIsNone(self.plan(stage="ready", pr_state="none", issue_state="closed"))
+
+    def test_merge_an_approved_green_head_and_update_a_behind_one(self):
+        self.assertEqual(self.plan(stage="approved"), ("merge", "merged", {}))
+        self.assertEqual(self.plan(stage="approved", behind=True), ("merge", "updated", {}))
+        self.assertIsNone(self.plan(stage="approved", ci="pending"))
+
+    def test_finish_a_merged_pr_a_conflict_an_answer_and_done_children(self):
+        self.assertEqual(self.plan(stage="approved", pr_state="merged"), ("finish", "merged", {}))
+        self.assertIsNone(self.plan(stage="done", pr_state="merged"))  # a final stage has nothing to finish
+        self.assertEqual(self.plan(stage="approved", conflict=True), ("finish", "conflict", {}))
+        self.assertEqual(self.plan(stage="needs-answers", pr_state="none", answered=True), ("finish", "answered", {}))
+        kids = [{"number": 2, "state": "closed", "blocked": False, "not_planned": False}]
+        self.assertEqual(self.plan(stage="split", pr_state="none", children=kids), ("finish", "children-done", {}))
+        kids.append({"number": 3, "state": "open", "blocked": True, "not_planned": False})
+        self.assertEqual(self.plan(stage="split", pr_state="none", children=kids)[:2], ("finish", "child-blocked"))
+
+    def test_reopen_an_approved_ticket_with_a_new_head_or_red_ci(self):
+        self.assertEqual(self.plan(stage="approved", head="h2"), ("reopen", "reopened", {}))
+        self.assertEqual(self.plan(stage="approved", ci="red"), ("reopen", "reopened", {}))
+
+    def test_join_a_complete_round_and_ask_waiting_reviewers_again(self):
+        self.assertEqual(self.plan(stage="in-review")[:2], ("join", "approved"))
+        self.assertEqual(self.plan(stage="in-review", round_verdict="changes")[:2], ("join", "changes"))
+        self.assertEqual(self.plan(stage="in-review", waiting_reviewers=["behaviour"], round_complete=False),
+                         ("join", "waiting", {}))
+        self.assertIsNone(self.plan(stage="in-review", round_complete=False))
+
+    def test_a_decision_needs_its_outcome_in_the_graph(self):
+        del self.graph["nodes"]["merge"]["outcomes"]["merged"]
+        self.assertIsNone(self.plan(stage="approved"))
+
+    def test_decisions_do_not_read_ci_labels(self):
+        labels = ["factory:ci-red", "factory:ci-green"]
+        self.assertEqual(self.plan(stage="approved", pr_labels=labels), ("merge", "merged", {}))
+        self.assertEqual(self.plan(stage="approved", ci="pending", pr_labels=labels, ci_label="green"), None)
 
 
 if __name__ == "__main__":
