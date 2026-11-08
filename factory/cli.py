@@ -15,6 +15,7 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
                    [--note-for ROLE] [--note-hint TEXT] [--note-repro CMD] [--note-file PATH]
                    (the outcome and the data its effects use; repeat a list option once per item;
                     skills/factory-step/SKILL.md describes them per role)
+       factory check-workflow [TEAM]               (check the team's workflow.yaml with the statechart rules; exit 1 lists the broken rules)
        factory migrate project TEAM [--out DIR]    (copy a v2 team checkout's descriptor and workflow, with its commit in SOURCE)
        factory env roles ENV                       (the roles of the enabled agent nodes that run in ENV, one per line)
        factory sweep --main ...                    (the gate's sweep from main's graph)
@@ -29,6 +30,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from importlib import metadata
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -60,13 +62,16 @@ def from_main():
     return root
 
 
-def run_gate(engine, argv, team=None):
-    """The gate, as main's own executable when `engine` is a main worktree, so a pull request cannot replace it."""
+def run_gate(engine, argv, team=None, stderr=False):
+    """The gate, as main's own executable when `engine` is a main worktree, so a pull request cannot replace it.
+    `stderr`: pass its error output through sys.stderr too, so `end` can quote it."""
     if not engine:
         return gate.main(argv)
     done = subprocess.run([sys.executable, str(Path(engine) / "factory/gate.py"), "--team", team or engine, *argv],
-                          stdout=subprocess.PIPE, text=True)
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE if stderr else None, text=True)
     print(done.stdout, end="")  # through sys.stdout, so callers can capture it
+    if stderr:
+        print(done.stderr, end="", file=sys.stderr)
     return done.returncode
 
 
@@ -119,7 +124,10 @@ def begin(argv, team=None):
                         str(config.team_root()))
     print(out.getvalue(), end="")
     if code == 0:
-        state["handoff_path"] = json.loads(out.getvalue())["handoff_path"]
+        checked = json.loads(out.getvalue())
+        state["handoff_path"] = checked["handoff_path"]
+        state["ticket"] = checked.get("ticket")  # for the `end failed` comment (#997)
+        state["head"] = ((checked.get("context") or {}).get("head") or "")[:12]
         STATE.write_text(json.dumps(state))
     return code
 
@@ -190,7 +198,8 @@ def handoff_of(a):
         if items:
             data[key] = data.get(key, []) + items
     data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate),
-                                   ("reply", a.reply), ("to", a.to), ("text", a.text), ("problem", a.problem),
+                                   ("reply", a.reply), ("to", a.to), ("text", a.text), ("message", a.message), ("assignee", a.assignee),
+                                   ("problem", a.problem),
                                    ("recommended", a.recommended)) if v is not None and v != ""})
     for key, items in (("links", [dict(zip(("title", "url"), parted(t, " | ", "--link 'TITLE | URL'"))) for t in a.link]),
                        ("options", a.option)):
@@ -215,7 +224,7 @@ def end_parser():
     p = argparse.ArgumentParser(prog="factory end", allow_abbrev=False)
     p.add_argument("outcome")
     for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "reply", "addressed", "disputed-focuses", "notes",
-                "note-for", "note-hint", "note-repro", "to", "text", "problem"):
+                "note-for", "note-hint", "note-repro", "to", "text", "message", "assignee", "problem"):
         p.add_argument(f"--{opt}")
     p.add_argument("--recommended", type=int)
     p.add_argument("--failing-check")
@@ -245,8 +254,51 @@ def end(argv, team=None):
     handoff.parent.mkdir(parents=True, exist_ok=True)
     handoff.write_text(json.dumps(data))
     config.set_team(state["team"])
-    return run_gate(state["engine"], ["apply", "--node", state["node"], "--event", state["event"], "--handoff",
-                                      str(handoff), *gate_args(state)], state["team"])
+    err, out = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+        try:
+            code = run_gate(state["engine"], ["apply", "--node", state["node"], "--event", state["event"], "--handoff",
+                                              str(handoff), *gate_args(state)], state["team"], stderr=True)
+        except Exception as e:  # the in-process gate (no main worktree) raises instead of exiting
+            print(f"{type(e).__name__}: {e}", file=sys.stderr)
+            code = 1
+    sys.stdout.write(out.getvalue())
+    sys.stderr.write(err.getvalue())
+    if code not in (0, 10):  # the gate prints its refusal as JSON on stdout (#1035)
+        report_end_failure(state, a.outcome, "\n".join(x for x in (err.getvalue().strip(), gate_error(out.getvalue())) if x))
+    return code
+
+
+END_FAILED = "[factory] end failed:"
+
+
+def gate_error(stdout):
+    """The `error`, `reason` or `why` of the gate's last JSON line, else ''."""
+    for line in reversed(stdout.strip().splitlines()):
+        try:
+            doc = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(doc, dict):
+            return next((str(doc[k]) for k in ("error", "reason", "why") if doc.get(k)), "")
+    return ""
+
+
+def report_end_failure(state, outcome, error, run=subprocess.run):
+    """One ticket comment naming the node, head, outcome and the error's last lines, so reconcile and a person see
+    why the outcome did not land, and that a retry on this head fails the same way (#997)."""
+    if not state.get("ticket"):
+        return
+    tail = "\n".join(line for line in error.strip().splitlines()[-5:])[:1500] or "no error output"
+    body = (f"{END_FAILED} node={state['node']} head={state.get('head') or 'none'} outcome={outcome}\n\n```\n{tail}\n```\n\n"
+            f"The outcome did not land; a retry on this head fails the same way until the cause is fixed.\n\n"
+            f"Factory-Run: {os.environ.get('FACTORY_NODE') or state['node']}")
+    try:
+        repo = config.load()["tracker"].get("repository")
+        run(["gh", "issue", "comment", str(state["ticket"]), *(["-R", repo] if repo else []), "--body", body],
+            capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        print(f"factory: could not report the failed end: {e}", file=sys.stderr)
 
 
 def validate():
@@ -266,6 +318,35 @@ def validate():
         errs = nodes.validate(nodes.load(), config.load())
     print("\n".join(errs) or "factory: ok")
     return 1 if errs else 0
+
+
+def check_workflow(argv):
+    """Run the statechart rules (skills/factory-setup/statechart.py, TLC at its pin) on TEAM's workflow.yaml.
+    Exit 0: no rule broken; 1: broken rules listed; 2: no workflow.yaml, no statechart skill, or the check could not run."""
+    import yaml
+    path = Path(argv[0] if argv else config.team_root()) / "workflow.yaml"
+    skill = HERE.parent / "skills/factory-setup"
+    if not skill.is_dir():  # installed: the wheel records statechart.py and its pin files under share/factory
+        try:
+            skill = next(d for d in (f.locate().resolve().parent for f in metadata.files("slop-factory") or []
+                                     if f.name == "statechart.py") if (d / "vendor-skills.py").is_file())
+        except (metadata.PackageNotFoundError, StopIteration):
+            pass
+    if not path.is_file():
+        print(f"check-workflow: {path} not found", file=sys.stderr)
+        return 2
+    if not (skill / "statechart.py").is_file():
+        print("check-workflow: statechart.py is not in this install", file=sys.stderr)
+        return 2
+    sys.path.insert(0, str(skill))
+    import statechart
+    try:
+        broken, _ = statechart.check(yaml.safe_load(path.read_text()))
+    except (RuntimeError, OSError) as e:
+        print(f"check-workflow: {e}", file=sys.stderr)
+        return 2
+    print("broken rules: " + (", ".join(broken) or "none"))
+    return 1 if broken else 0
 
 
 def env_roles(env):
@@ -294,8 +375,46 @@ def pop_team(argv):
     return team, argv
 
 
+def report_crash(cmd, error, run=subprocess.run):
+    """In an Air run (FACTORY_ENV set), open `Doctor: factory <cmd> crashes` unless one is open (#984). Only `gh` and
+    the checkout's remote: it must work when the engine files themselves are missing."""
+    if not os.environ.get("FACTORY_ENV"):
+        return
+    gh = lambda *a: run(["gh", *a], capture_output=True, text=True, timeout=60)  # noqa: E731
+    try:
+        repo = os.environ.get("GITHUB_REPOSITORY") or gh("repo", "view", "--json", "nameWithOwner", "-q",
+                                                         ".nameWithOwner").stdout.strip()
+        title = f"Doctor: factory {cmd or 'help'} crashes"
+        found = gh("issue", "list", "-R", repo, "--state", "open", "--search", f'"{title}" in:title',
+                   "--json", "title", "-q", ".[].title").stdout.splitlines()
+        if title not in found:
+            try:  # the triage label comes from the vocabulary, which needs the engine files: none when they are missing
+                import doctor
+                label = doctor.triage_label()
+            except Exception:
+                label = None
+            gh("issue", "create", "-R", repo, "--title", title, *(["--label", label] if label else []), "--body",
+               f"[factory] `factory {cmd}` crashed in Air environment `{os.environ['FACTORY_ENV']}`: "
+               f"`{type(error).__name__}: {str(error)[:500]}`. Every node that runs this command fails until it is "
+               f"fixed.\n\nFactory-Run: {os.environ.get('FACTORY_NODE') or 'factory'}")
+    except Exception as e:  # the crash itself is what matters; never hide it behind a reporting error
+        print(f"factory: could not report the crash: {e}", file=sys.stderr)
+
+
 def main(argv=None):
-    team, argv = pop_team(sys.argv[1:] if argv is None else argv)
+    args = sys.argv[1:] if argv is None else argv
+    try:
+        return _main(args)
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        rest = pop_team(args)[1]
+        report_crash(rest[0] if rest else "", e)
+        raise
+
+
+def _main(argv):
+    team, argv = pop_team(argv)
     cmd, rest = (argv[0], argv[1:]) if argv else ("", [])
     if cmd == "sweep" and "--main" in rest:
         engine = from_main()
@@ -334,6 +453,8 @@ def main(argv=None):
     if cmd == "upgrade":
         from upgrade import main as upgrade_main
         return upgrade_main(rest)
+    if cmd == "check-workflow" and len(rest) <= 1:
+        return check_workflow(rest)
     if cmd == "validate" and not rest:
         return validate()
     if cmd == "retro":

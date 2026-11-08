@@ -14,6 +14,7 @@ place (same id) to NEW instead of creating NEW and deleting OLD.
 air: {"automations": [...], "environments": [...]}: one automation per enabled node (per tier or focus
      where the node has them) and one environment per environment in use, for the factory-deploy skill.
 """
+import base64
 import fnmatch
 import json
 import time
@@ -143,13 +144,15 @@ def flow_triggers(node: dict) -> str:
 
 
 def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: str | None = None,
-            repo: str | None = None) -> dict:
+            repo: str | None = None, repo_tags: tuple = ()) -> dict:
     """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations)."""
     event, _, arg = str(text).partition(" ")
     arg = arg.replace("<tier>", tier or "")
     arg = arg.replace("<focus>", focus or "")
     if event.startswith("youtrack."):  # the filter value is case-sensitive: pass it through unchanged
         name, _, value = arg.partition("=")
+        if repo and arg in repo_tags:  # a per-repository stage tag: only this repository's node listens to it
+            arg = f"{arg}-{repo}"
         filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
         return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
     if event == "workflow_run":  # ADR-0021 `ci: failed`: Air fires only on a failed run (AIRA-725)
@@ -291,8 +294,11 @@ def script_prompt(name: str, main_repository: dict | None = None, config: dict |
                   webhook: bool = False) -> str:
     checkout = checkout_instructions(main_repository, config) if config else ""
     if name.startswith("doctor"):
-        prompt = ("Run the installed `factory doctor` command exactly once in the foreground with no arguments. "
-                  "Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. "
+        engine = name == "doctor-ops"
+        command = "`factory doctor --engine`" if engine else "`factory doctor`"
+        prompt = (f"Run the installed {command} command exactly once in the foreground with "
+                  + ("only the `--engine` argument. " if engine else "no arguments. ")
+                  + f"Do not use `uv run`, `--help` or add {'other ' if engine else ''}arguments. Report every JSON probe line and the command's exit code. "
                   "It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. "
                   "A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a "
                   "`report` probe line. You must not create, edit or close tickets yourself.")
@@ -435,6 +441,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     bot = config["targets"]["air"]["bot_login"]
     prefix = f"[{project_name(config)}] "
     automations = []
+    repo_tags = tuple(youtrack_tracker.repo_stage_tags(config))
     used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
     unscoped = set()  # environments some automation shares across the project
     scoped = []  # (env, repository name, node) of the per-repository or per-node automations
@@ -467,7 +474,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     trig.append({"triggerType": "WEBHOOK"})
                 elif str(t) != "manual":
                     trig.append(trigger(t, tier_arg, bot if aname.startswith(BOT_FILTERED) else None, focus,
-                                        scope["name"] if scope else None))
+                                        scope["name"] if scope else None, repo_tags))
             automation_repository = repository(team if focus == "knowledge" else scope or repos.get(envs_def[env]["repository"]) or primary)
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
@@ -502,6 +509,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             automations.append(automation)
     envs = []
     token = config.get("write_mode") == "token" and len(config["repositories"]) > 1
+    issues_token = config.get("issues_token_env")  # the gate's issue, label and comment writes to project repositories
     for env, scope_name, node_name in [(e, None, None) for e in used if e in unscoped] + scoped:
         d = envs_def[env]
         repo = repos[scope_name] if scope_name else repos.get(d["repository"]) or primary
@@ -511,7 +519,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env, **({"FACTORY_NODE": node_name} if node_name else {})},
             "secrets": list(dict.fromkeys([*d.get("secrets", []),
-                                           *([WRITE_TOKEN_SECRET] if token and github_tracker.token_env(env, config) else [])])),
+                                           *([WRITE_TOKEN_SECRET] if token and github_tracker.token_env(env, config) else []),
+                                           *([issues_token] if issues_token and len(config["repositories"]) > 1 else [])])),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
@@ -547,6 +556,42 @@ def actions_files(nodes: dict, config: dict) -> dict:
             files[f".github/workflows/factory-{name}.yml"] = ACTIONS_WORKFLOW.format(
                 name=name, project=project_name(config), cron=cron, wake=wake, run=n["run"].replace("uv run factory/cli.py", "uv run --quiet factory/cli.py"))
     return files
+
+
+COMMENT_WAKE_FILES = (".github/workflows/comment-wake-label.yml", "scripts/comment-wake-label.sh")
+
+
+def sync_comment_wake_files(config: dict, run, apply: bool) -> int:
+    """Install the comment wake workflow and its script in every configured GitHub project repository."""
+    files = {path: (ROOT / path).read_text() for path in COMMENT_WAKE_FILES}
+    repositories = [r for r in config.get("repositories", []) if "github.com" in r["url"]]
+    for repo in repositories:
+        name = repository(repo)["fullName"]
+        for path, text in files.items():
+            endpoint = f"repos/{name}/contents/{path}"
+            try:
+                current = json.loads(run(["api", endpoint]))
+                old = base64.b64decode(current.get("content", "")).decode()
+                if old == text:
+                    continue
+                action = "update"
+            except Exception as error:
+                if "HTTP 404" not in str(error):
+                    print(f"error: cannot read {name}/{path}: {error}", file=sys.stderr)
+                    return 1
+                current, action = {}, "create"
+            print(f"{action} project file {name}/{path}")
+            if apply:
+                args = ["api", "-X", "PUT", endpoint, "-f", "message=Install factory comment wake workflow",
+                        "-f", f"content={base64.b64encode(text.encode()).decode()}"]
+                if current.get("sha"):
+                    args += ["-f", f"sha={current['sha']}"]
+                try:
+                    run(args)
+                except Exception as error:
+                    print(f"error: cannot write {name}/{path}: {error}", file=sys.stderr)
+                    return 1
+    return 0
 
 
 # The token is the built-in github.token while the factory repository is also the target (#339); labels it sets wake Air.
@@ -635,10 +680,10 @@ def reconcile_labels(plan: dict, run=None) -> list[tuple]:
     for repo in plan.get("label_repositories") or []:
         have = label_tracker(repo, run).list_labels()
         for name in plan["labels"]:
-            spec = {"description": "", **(plan.get("label_specs") or {}).get(name, {})}
+            spec = (plan.get("label_specs") or {}).get(name, {})
             if name not in have:
                 want = {"color": spec.get("color") or random_colors.setdefault(name, github_tracker.random_color()),
-                        "description": spec["description"]}
+                        "description": spec.get("description", "")}
                 out.append(("create", repo, name, want))
             elif changed := [k for k in ("color", "description") if k in spec and have[name][k] != spec[k]]:
                 want = {"color": have[name]["color"], "description": have[name]["description"], **spec}
@@ -653,10 +698,12 @@ def youtrack_tags(nodes: dict, config: dict) -> list[str]:
         return []
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
-    out = set()
+    repo_tags, out = youtrack_tracker.repo_stage_tags(config), set()
     for x in [*(config.get("states") or {}).values(), *(config.get("commands") or {}).values()]:
         tag = x["store"].get("tag")
-        if isinstance(tag, str):
+        if tag in repo_tags:  # one tag per repository
+            out |= {f"{tag}-{r['name']}" for r in config["repositories"]}
+        elif isinstance(tag, str):
             out |= {tag.replace("<tier>", t) for t in tiers} if "<tier>" in tag else \
                 {tag.replace("<focus>", f) for f in focuses} if "<focus>" in tag else {tag}
     return sorted(out)
@@ -716,6 +763,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
     out.add(vocab.needs_human())
     out.add(vocab.lesson())  # ADR-0021: a ticket with uncollected lessons
+    out.add(vocab.comment())  # ADR-0023: scripts/comment-wake-label.sh adds it; the comment node removes it
     out |= {vocab.ci("ci-green"), vocab.ci("ci-red")}  # CI writes them (scripts/ci-state-label.sh); reconcile reads
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
@@ -1158,12 +1206,20 @@ def main(argv: list[str]) -> int:
         config = config_mod.load()
         if check_fixture_drift(config):
             return 1
-        servers = [Mcp(os.environ[v]) for v in ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")]
+        names = ("FACTORY_MCP_AIR_AUTOMATIONS", "FACTORY_MCP_AIR_CLOUD")
+        if not all(os.environ.get(v) for v in names):
+            print("set FACTORY_MCP_AIR_AUTOMATIONS and FACTORY_MCP_AIR_CLOUD (operator only)", file=sys.stderr)
+            return 2
+        servers = [Mcp(os.environ[v]) for v in names]
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
-            run = github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config))
+            run = github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config),
+                                                    issues_token_env=config.get("issues_token_env"))
             code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run)
-            return code or write_files(plan["files"], argv[0] == "--apply")
+            if code:
+                return code
+            code = write_files(plan["files"], argv[0] == "--apply")
+            return code or sync_comment_wake_files(config, run, argv[0] == "--apply")
         finally:
             for server in servers:
                 server.close()

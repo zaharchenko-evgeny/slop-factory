@@ -1054,7 +1054,7 @@
       "environmentConfigId": "[Slop factory] ops",
       "mcpConnectors": [],
       "name": "[Slop factory] doctor-ops",
-      "prompt": "Run the installed `factory doctor` command exactly once in the foreground with no arguments. Do not use `uv run`, `--help` or add arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
+      "prompt": "Run the installed `factory doctor --engine` command exactly once in the foreground with only the `--engine` argument. Do not use `uv run`, `--help` or add other arguments. Report every JSON probe line and the command's exit code. It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a `report` probe line. You must not create, edit or close tickets yourself. Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path into the engine checkout.",
       "repository": {
         "browseUrl": "https://example.com/o/main",
         "cloneUrl": "https://example.com/o/main.git",
@@ -1227,6 +1227,7 @@
     "factory:approved",
     "factory:ci-green",
     "factory:ci-red",
+    "factory:comment",
     "factory:implement-cheap",
     "factory:implement-mid",
     "factory:implement-strong",

@@ -1,0 +1,5 @@
+# Breaks OneStageLabel: `intake` sets the stage `reveiw`, which no node declares.
+stages: { final: [done], waiting: [blocked] }
+nodes:
+  intake: { agent: router, triggers: [{ stage: triage }], when: { stage: triage },
+            outcomes: { ready: { effects: [{ stage: reveiw }] }, finish: { effects: [{ stage: done }] } } }
