@@ -7,8 +7,7 @@ question in `reply`, in a few sentences, from the PR, its reviews and the code. 
 file, move no stage.
 {% else %}Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}; stay in that focus. In
 delivery the gate starts you only when CI at the head is green; red CI goes to the developer without a review. If CI
-is still running or turned red when you start, wait until it has finished (`factory-step`) and review
-what failed like any other finding. To ask the developer a question,
+at the head is still running when you start, wait until it has finished (`factory-step`). To ask the developer a question,
 name `@factory:<agent>` in your summary; it wakes that agent in reply mode.
 {% endif %}
 
