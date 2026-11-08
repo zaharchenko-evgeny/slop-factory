@@ -225,7 +225,8 @@ class FakeGh:
         if a.endswith("issues/7/sub_issues"):
             reasons, labels = getattr(self, "sub_reason", ["completed"] * 9), getattr(self, "sub_labels", [[]] * 9)
             return recorded(a, [{"number": i + 1, "title": t, "state": st, "state_reason": r if st == "closed" else None,
-                                 "labels": [{"name": x} for x in ls]}
+                                 "labels": [{"name": x} for x in ls],
+                                 "repository_url": getattr(self, "sub_repos", {}).get(t, f"https://api.github.com/repos/{REPO}")}
                                 for i, (t, st, r, ls) in enumerate(zip(self.sub, self.sub_state, reasons, labels))])
         self.writes.append(args)
         if self.fail_blocked_by and "/dependencies/blocked_by" in a:
@@ -886,11 +887,30 @@ class EffectsTest(unittest.TestCase):
         child = {"id": 555, "number": 41, "title": "Web", "body": "w\n\n<!-- factory:child of=7 -->",
                  "labels": [{"name": "risk:low"}, {"name": "repo:web"}, {"name": "factory:ready"}]}
         t, gh, web = self.split_across_repositories([child], sub=["Api", "Web"])
+        gh.sub_repos = {"Web": "https://api.github.com/repos/o/web"}
         api_id = json.loads(gh("api --paginate repos/o/r/issues/7/sub_issues".split()).splitlines()[0])["id"]
         t, gh, web = self.split_across_repositories([child], sub=["Api", "Web"], blocked=[{"id": api_id, "state": "open"}])
+        gh.sub_repos = {"Web": "https://api.github.com/repos/o/web"}
         gh.blocked = [{"state": "open", "id": 555}]
         self.assertFalse(t.apply(eff("create-issues", kids)))
         self.assertEqual((gh.writes, [w for w in web if {"POST", "PATCH", "DELETE"} & set(w)]), ([], []))
+
+    def test_create_children_ignores_a_same_titled_child_linked_from_another_repository(self):
+        kids = [{"title": "Web", "body": "w", "repo": "web"}]
+        for url, creates in [("https://api.github.com/repos/o/r", True), ("https://api.github.com/repos/o/web", False)]:
+            with self.subTest(repository_url=url):
+                t, gh, web = self.split_across_repositories(sub=["Web"])
+                gh.sub_repos = {"Web": url}
+                t.apply(eff("create-issues", kids))
+                self.assertEqual(any("repos/o/web/issues" in w and "POST" in w and any(x.startswith("title=Web") for x in w) for w in web), creates)
+
+    def test_blocking_matches_the_body_line_of_a_child_in_another_repository(self):
+        for line, repo, want in [("Blocked by: o/web#41", "o/web", [12]), ("Blocked by: #41", "o/web", []),
+                                 ("Blocked by: o/web#41", None, []), ("Blocked by: #41", None, [12]), ("Blocked by: o/web#41", "o/other", [])]:
+            with self.subTest(line=line, repo=repo):
+                t, gh, _ = self.split_across_repositories()
+                gh.open_issues = [{"number": 12, "state": "open", "body": f"{line}\n\nParent"}]
+                self.assertEqual([i["number"] for i in t.tickets.blocking(41, repo)], want)
 
     def test_blocked_by_line_of_another_repository_is_read_from_that_repository(self):
         t, gh, _ = self.split_across_repositories()

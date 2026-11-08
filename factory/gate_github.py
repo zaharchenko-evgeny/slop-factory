@@ -251,13 +251,15 @@ class GitHubTicketStore:
         """Every native blocker of `n`, open or closed (`[{number, state}]`)."""
         return [{"number": b["number"], "state": b["state"]} for b in self.read_list(f"issues/{n}/dependencies/blocked_by")]
 
-    def blocking(self, n):
-        """Issues whose native or body fallback dependency list names `n` as a blocker."""
-        dependents = self.read_list(f"issues/{n}/dependencies/blocking")
+    def blocking(self, n, repo=None):
+        """Issues whose native or body fallback dependency list names `n` (of `repo`, else this repository) as a blocker."""
+        other = repo if repo and repo != self.repo else None
+        dependents = self.read_list(f"issues/{n}/dependencies/blocking", repo=other)
         known = {i["number"] for i in dependents}
+        line = rf"{re.escape(other)}#{n}" if other else f"#{n}"
         for issue in self.read_list("issues?state=open&per_page=100"):
             if issue["number"] != n and issue["number"] not in known and re.search(
-                    rf"(?im)^Blocked by: #{n}\s*$", issue.get("body") or ""):
+                    rf"(?im)^Blocked by: {line}\s*$", issue.get("body") or ""):
                 dependents.append(issue)
                 known.add(issue["number"])
         return dependents
@@ -341,8 +343,11 @@ class GitHubTicketStore:
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
             repo = self.repo_of(c)
             new = open_issues(repo).get(c["title"])
-            if c["title"] in subs and new is None:  # not created by this ticket: leave it alone
-                made[k] = (subs[c["title"]].get("id"), subs[c["title"]].get("number"), repo)
+            linked = subs.get(c["title"])
+            if linked and not str(linked.get("repository_url") or f"/{repo}").endswith(f"/{repo}"):
+                linked = None  # a same-titled child of another repository is not this one
+            if linked and new is None:  # not created by this ticket: leave it alone
+                made[k] = (linked.get("id"), linked.get("number"), repo)
                 continue
             prereqs = [made[j] for j in after if j in made]
             want = f"{c.get('body', '')}\n\n{mark}"
@@ -376,7 +381,7 @@ class GitHubTicketStore:
                     want = self._blocked_body(want, prev_number, prev_repo, repo) if prev_number else want
                     self.run(["api", "-X", "PATCH", f"repos/{repo}/issues/{new['number']}", "-f", f"body={want}"])
                 wrote = True
-            if c["title"] not in subs:
+            if not linked:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
             if new["id"] not in blockers:
                 try:
@@ -394,7 +399,7 @@ class GitHubTicketStore:
                         self.run(["api", "-X", "DELETE", f"repos/{repo}/issues/{new['number']}/labels/{x}"])
                 self.run(["api", "-X", "POST", f"repos/{repo}/issues/{new['number']}/labels", "-f", f"labels[]={ready}"])
                 wrote = True
-            wrote = wrote or c["title"] not in subs or new["id"] not in blockers
+            wrote = wrote or not linked or new["id"] not in blockers
             made[k] = (new["id"], new["number"], repo)
         return wrote
 
@@ -775,9 +780,9 @@ class GitHubGateTracker(DescriptorPort):
         """The sub-issues of `n` (the `children` guard, ADR-0021)."""
         return self.tickets.children(n)
 
-    def blocking(self, n):
+    def blocking(self, n, repo=None):
         """Issues whose native or body fallback dependency list names `n` as a blocker."""
-        return self.tickets.blocking(n)
+        return self.tickets.blocking(n, repo) if repo else self.tickets.blocking(n)
 
     def blocked_by(self, n):
         return self.tickets.blocked_by(n) if hasattr(self.tickets, "blocked_by") else []
