@@ -174,5 +174,40 @@ class Templates(unittest.TestCase):
             self.assertEqual(run.stdout.strip(), "factory: ok", run.stderr)
 
 
+
+class Download(unittest.TestCase):
+    def fake(self, answers):
+        calls = []
+
+        class Body:
+            def read(self):
+                return b"jar"
+
+        def urlopen(url, timeout):
+            calls.append(url)
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return Body()
+        return calls, urlopen
+
+    def http(self, code):
+        import urllib.error
+        return urllib.error.HTTPError("u", code, "x", {}, None)
+
+    def test_a_5xx_answer_is_retried(self):
+        from unittest.mock import patch
+        calls, urlopen = self.fake([self.http(504), self.http(502), "ok"])
+        with patch.object(statechart.urllib.request, "urlopen", urlopen):
+            self.assertEqual(statechart._download("u", sleep=lambda s: None), b"jar")
+        self.assertEqual(len(calls), 3)
+
+    def test_a_4xx_answer_is_not_retried(self):
+        from unittest.mock import patch
+        calls, urlopen = self.fake([self.http(404)])
+        with patch.object(statechart.urllib.request, "urlopen", urlopen), self.assertRaises(Exception):
+            statechart._download("u", sleep=lambda s: None)
+        self.assertEqual(len(calls), 1)
+
 if __name__ == "__main__":
     unittest.main()
