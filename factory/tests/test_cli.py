@@ -483,6 +483,8 @@ class EndFieldsTest(unittest.TestCase):
                 for e in x.get("effects") or [] if isinstance(x.get("effects"), list) else []:
                     if isinstance(e, dict):
                         found.update(v for k, v in e.items() if k in self.READS and isinstance(v, str))
+                        found.update(v["field"] for k, v in e.items()
+                                     if k in ("assign", "unassign") and isinstance(v, dict) and "field" in v)
                         found.update(re.findall(r"<([^>]+)>", " ".join(str(e.get(k, "")) for k in ("label", "unlabel"))))
                 for v in x.values():
                     walk(v)
@@ -510,6 +512,7 @@ class EndFieldsTest(unittest.TestCase):
 
     def test_end_notified_message(self):
         self.assertEqual(cli.handoff_of(cli.end_parser().parse_args(["notified", "--message", "@o hi"]))["message"], "@o hi")
+        self.assertEqual(cli.handoff_of(cli.end_parser().parse_args(["notified", "--assignee", "o"]))["assignee"], "o")
 
 
 class EndFailureTest(unittest.TestCase):
