@@ -1209,6 +1209,9 @@ class DefinitionPlanTest(unittest.TestCase):
         plan = self.plan
         self.assertTrue({"factory:ci-green", "factory:ci-red"} <= set(plan["labels"]))  # deploy never removes them
 
+    def test_comment_label_is_kept(self):
+        self.assertIn("factory:comment", self.plan["labels"])  # scripts/comment-wake-label.sh adds it
+
     def test_a_pr_woken_node_begins_with_its_pr(self):
         def arg(name):
             p = self.by[f"[Slop factory] {name}"]["prompt"]
