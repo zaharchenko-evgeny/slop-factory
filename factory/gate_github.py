@@ -1225,4 +1225,15 @@ class GitHubGateTracker(DescriptorPort):
             body += f"\n\nFactory-Run: {e['run_id']}"
         self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/pulls/{pr['number']}/reviews", "-f", f"commit_id={head}",
                   "-f", "event=COMMENT", "-f", f"body={body}{self._block(e)}"])
+        if e.get("report"):
+            self._put_report(pr, focus, defang(e["report"]))
         return True
+
+    def _put_report(self, pr, focus, report):
+        """The full reviewer report in the PR body, in this focus's marked block: replaced when present, else appended."""
+        block = f"<!-- factory:report focus={focus} -->\n{report.strip()}\n<!-- /factory:report -->"
+        old = pr.get("body") or ""
+        found = re.compile(rf"<!-- factory:report focus={re.escape(focus)} -->.*?<!-- /factory:report -->", re.S)
+        body = found.sub(lambda _: block, old, count=1) if found.search(old) else f"{old}\n\n{block}".lstrip("\n")
+        if body != old:
+            self.run(["pr", "edit", str(pr["number"]), "-R", self.pr_repo, "--body", body])

@@ -178,6 +178,11 @@ class BeginEndTest(unittest.TestCase):
     def handoff(self, *argv):
         return cli.handoff_of(cli.end_parser().parse_args(list(argv)))
 
+    def test_end_carries_the_review_report(self):
+        data = self.handoff("approve", "--summary", "ok", "--report", "## Full")
+        self.assertEqual((data["summary"], data["report"]), ("ok", "## Full"))
+        self.assertNotIn("report", self.handoff("approve", "--summary", "ok"))
+
     def test_end_plain_text_checks(self):
         data = self.handoff("done", "--pass", "tests pass", "--fail", "lint", "--not-run", "e2e | no browser")
         self.assertEqual(data["checks"], [{"text": "tests pass", "result": "pass"}, {"text": "lint", "result": "fail"},

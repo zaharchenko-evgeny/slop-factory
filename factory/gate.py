@@ -918,6 +918,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             e["focus"] = payload.get("focus") or name
             e["round"] = payload.get("round")
             e["findings"], e["summary"], e["run_id"] = payload.get("findings"), payload.get("summary"), payload.get("run_id")
+            e["report"] = payload.get("report")
             e["outcome"] = outcome  # the marker keeps it: a replay of a split approval needs the one that was reported
         if e["kind"] == "join":
             e["tier"] = payload.get("tier")

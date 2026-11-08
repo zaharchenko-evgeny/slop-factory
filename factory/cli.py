@@ -7,7 +7,7 @@
 
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> --issue N | --pr N | [payload file]   (payload on stdin by default; exit 10: the node must not act)
-       factory end <outcome> [--reason TEXT] [--summary TEXT] [--reply TEXT] [--size-estimate N] [--disputed-focuses a,b]
+       factory end <outcome> [--reason TEXT] [--summary TEXT] [--report TEXT] [--reply TEXT] [--size-estimate N] [--disputed-focuses a,b]
                    [--pass CHECK] [--fail CHECK] [--not-run 'CHECK | REASON'] [--propose-check CHECK]
                    [--blocking 'ID FILE FINDING | case: REPRO'] [--minor 'ID FILE FINDING']
                    [--fixed 'ID SHA'] [--disputed 'ID REASON'] [--slice FILE.md]
@@ -197,7 +197,7 @@ def handoff_of(a):
                        ("proposed_checks", a.propose_check), ("lessons", [lesson(t) for t in a.lesson])):
         if items:
             data[key] = data.get(key, []) + items
-    data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate),
+    data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("report", a.report), ("size_estimate", a.size_estimate),
                                    ("reply", a.reply), ("to", a.to), ("text", a.text), ("problem", a.problem),
                                    ("recommended", a.recommended)) if v is not None and v != ""})
     for key, items in (("links", [dict(zip(("title", "url"), parted(t, " | ", "--link 'TITLE | URL'"))) for t in a.link]),
@@ -222,7 +222,7 @@ def handoff_of(a):
 def end_parser():
     p = argparse.ArgumentParser(prog="factory end", allow_abbrev=False)
     p.add_argument("outcome")
-    for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "reply", "addressed", "disputed-focuses", "notes",
+    for opt in ("findings", "slices", "checks", "reason", "summary", "report", "size-estimate", "reply", "addressed", "disputed-focuses", "notes",
                 "note-for", "note-hint", "note-repro", "to", "text", "problem"):
         p.add_argument(f"--{opt}")
     p.add_argument("--recommended", type=int)

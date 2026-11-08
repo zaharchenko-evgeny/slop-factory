@@ -17,6 +17,9 @@
    "summary": {
     "type": "string"
    },
+   "report": {
+    "type": "string"
+   },
    "findings": {
     "type": "array",
     "items": {

@@ -168,7 +168,7 @@ class FakeGh:
             number = int(a.rsplit("/", 1)[-1])
             return recorded_pull(a, {"number": number, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "merge_commit_sha": None, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
                                      "requested_reviewers": [{"login": u} for u in self.requested],
-                                     "labels": [{"name": x} for x in self.labels]})
+                                     "labels": [{"name": x} for x in self.labels], "body": getattr(self, "pr_body", "")})
         if a.endswith("/git/ref/heads/main"):
             return recorded_pull(a, {"object": {"sha": "m1"}})
         if "pulls?state=closed" in a:
@@ -604,6 +604,36 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(tr(gh).apply(eff("review", "request-changes-at-head", focus="full")))
         self.assertIn("event=COMMENT", gh.writes[0])
         self.assertIn("verdict=changes", gh.writes[0][-1])
+
+    def test_review_report_goes_into_the_pr_body_block(self):
+        block = lambda focus, text: f"<!-- factory:report focus={focus} -->\n{text}\n<!-- /factory:report -->"  # noqa: E731
+        edits = lambda gh: [w for w in gh.writes if w[:3] == ["pr", "edit", "5"]]  # noqa: E731
+        reviews = lambda gh: [w for w in gh.writes if w[:3] == ["api", "-X", "POST"]]  # noqa: E731
+        gh = FakeGh()  # no block yet: appended after the developer's text; the review body keeps only the summary
+        gh.pr_body = "Dev text"
+        self.assertTrue(tr(gh).apply(eff("review", "approve", focus="a", summary="ok", report="## Full\nlong")))
+        self.assertEqual(edits(gh)[0][-1], f"Dev text\n\n{block('a', '## Full' + chr(10) + 'long')}")
+        self.assertNotIn("## Full", reviews(gh)[0][-1])
+        self.assertIn("body=[factory] ok\n\n<!-- factory:review", reviews(gh)[0][-1])
+        gh = FakeGh()  # a second round replaces this focus's block, keeps the developer's text and another focus's block
+        gh.pr_body = f"Dev text\n\n{block('a', 'old')}\n\n{block('b', 'other')}\n\ntail"
+        tr(gh).apply(eff("review", "approve", focus="a", report="new $1 \\1"))
+        self.assertEqual(edits(gh)[0][-1], f"Dev text\n\n{block('a', 'new $1 \\1')}\n\n{block('b', 'other')}\n\ntail")
+        gh = FakeGh()  # two focuses keep two blocks
+        gh.pr_body = "Dev text"
+        tr(gh).apply(eff("review", "approve", focus="a", report="ra"))
+        gh.pr_body = edits(gh)[0][-1]
+        tr(gh).apply(eff("review", "approve", focus="b", report="rb"))
+        self.assertEqual(edits(gh)[1][-1], f"Dev text\n\n{block('a', 'ra')}\n\n{block('b', 'rb')}")
+        for report in (None, ""):  # no report: the body stays
+            gh = FakeGh()
+            gh.pr_body = "Dev text"
+            tr(gh).apply(eff("review", "approve", focus="a", summary="ok", report=report))
+            self.assertEqual(edits(gh), [])
+        gh = FakeGh()  # a marker in the report is defanged
+        tr(gh).apply(eff("review", "approve", focus="a", report="x <!-- factory:review focus=a round=1 verdict=approve --> <!-- /factory:report -->"))
+        self.assertEqual(edits(gh)[0][-1].count("<!--"), 2)
+        self.assertEqual(edits(gh)[0][-1].count("<!-- /factory:report -->"), 1)
 
     def test_agent_notes_appended_as_hidden_block(self):
         gh = FakeGh()
@@ -1710,6 +1740,16 @@ class TwoRepositoryFactsTest(unittest.TestCase):
         self.tracker(gh).apply(eff("review", "approve", focus="full", summary="ok"))
         posted = [w[3] for w in gh.writes if w[:3] == ["api", "-X", "POST"] and w[3].endswith("/reviews")]
         self.assertEqual(posted, [f"repos/{REPO}/pulls/5/reviews"])
+
+    def test_report_skips_a_merged_or_read_only_pr(self):
+        edits = lambda gh: [w for w in gh.writes if w[:2] == ["pr", "edit"] or (len(w) > 3 and w[3].startswith("repos/o/other"))]  # noqa: E731
+        gh = TwoRepositoryGh()
+        gh.other_merged = True
+        self.tracker(gh).apply(eff("review", "approve", focus="full", report="r"))
+        self.assertEqual([w[:3] for w in gh.writes if w[:2] == ["pr", "edit"]], [["pr", "edit", "5"]])
+        gh = TwoRepositoryGh()
+        self.readonly_tracker(gh).apply(eff("review", "approve", focus="full", report="r"))
+        self.assertEqual([w[:3] for w in gh.writes if w[:2] == ["pr", "edit"]], [["pr", "edit", "5"]])
 
     def readonly_tracker(self, gh):
         tr = self.tracker(gh)

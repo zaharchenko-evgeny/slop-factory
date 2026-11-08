@@ -102,9 +102,9 @@ class ProjectPortsTest(unittest.TestCase):
         self.assertEqual(t.commands(7), [])
 
     def test_no_hardcoded_factory_labels_in_engine(self):
-        """Engine code names labels through factory/vocab.py; only review and note markers (`<!-- factory:...`) and
+        """Engine code names labels through factory/vocab.py; only review, note and report markers (`<!-- factory:...`, `<!-- /factory:...`) and
         docstrings may spell one."""
-        label = re.compile(r"(?<!<!-- )factory:[a-z]")
+        label = re.compile(r"(?<!<!-- )(?<!<!-- /)factory:[a-z]")
         found = []
         for path in sorted(ROOT.glob("*.py")):
             tree = ast.parse(path.read_text())
