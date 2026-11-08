@@ -16,3 +16,6 @@ build-backend = "setuptools.build_meta"
 packages = ["plugins", "ports", "factory_plugins", "factory_plugins.comments", "factory_plugins.notify", "factory_plugins.notify_email", "factory_plugins.github", "factory_plugins.youtrack", "factory_plugins.space", "factory_plugins.air", "factory_plugins.local", "factory_plugins.claude", "factory_plugins.codex", "factory_plugins.junie", "factory_plugins.pi", "factory_plugins.chart"]
 package-dir = { "" = "factory" }
 py-modules = ["cli", "config", "definition", "deploy", "derive", "doctor", "effects", "gate", "gate_port", "gate_tracker", "nodes", "project", "reconcile", "retro", "scopes", "team_setup", "upgrade", "vocab", "workflow"]
+
+[tool.setuptools.package-data]
+"factory_plugins.youtrack" = ["comment-wake/*"]

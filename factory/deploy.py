@@ -367,7 +367,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
                     "foreground, and wait until it exits. Copy only that one number. It applies "
                     "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
                     "Report its JSON output." + INSTALLED_FACTORY)
-        text = definition.render(defn, name).strip()
+        text = definition.render(defn, name, (main_repository or {}).get("fullName")).strip()
         skills = definition.skill_lines(defn, role)
         servers = [f"{k} (Air connector {e['connector']})" if "connector" in e else f"{k} (custom, from .mcp.json)"
                    for k, e in definition.mcp(defn, name).items()]
