@@ -271,6 +271,14 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(prompt="Scope it."))
         self.assertError("node-prompt: nodes.intake")
 
+    def test_compile_lists_the_writable_repositories_of_each_environment(self):
+        import definition
+        envs = definition.to_project(definition.load(self.root))[0]["environments"]
+        for name, env in envs.items():
+            with self.subTest(env=name):
+                self.assertTrue(set(env["writable"]) <= set(env["repositories"]))
+                self.assertIn(env["repositories"][0], env["writable"])  # the main repository is always writable
+
     def test_settings_merge_order(self):
         defn = definition.load(self.root)
         s = definition.settings(defn, "fix")
@@ -461,6 +469,31 @@ class DefinitionTest(unittest.TestCase):
                     with self.subTest(node=node, conflict=conflict):
                         code, out = gate.check(node, {"id": "e1", "ticket": "7"}, t, n, config.load())
                         self.assertEqual((code, out["merge_main"]), (gate.GO, want))
+        finally:
+            config.set_team(before)
+
+    def test_a_failed_review_write_leaves_labels_and_stage_as_they_were(self):
+        import config
+        import gate
+        import nodes as nodes_mod
+        from gate_port import MemoryTracker
+        before = config._team
+        config.set_team(ROOT / "tests/fixtures/slop")  # its review outcomes replace the risk label (#998)
+        try:
+            n = nodes_mod.load()
+            t = MemoryTracker({"7": {"stage": "in-review", "pr": 5, "head": "h1", "ci": "green", "attrs": ["risk:low"],
+                                     "pr_labels": ["factory:review-low"]}})
+            apply = t.apply
+
+            def failing(e):
+                if e["kind"] == "review":
+                    raise RuntimeError("HTTP 403: Resource not accessible by integration")
+                return apply(e)
+            t.apply = failing
+            with self.assertRaises(RuntimeError):
+                gate.apply("review-low", "approve-risky", {"ticket": "7", "summary": "ok"}, t, n)
+            f = t.facts("7")
+            self.assertEqual((f["stage"], "risk:low" in f["attrs"]), ("in-review", True))
         finally:
             config.set_team(before)
 

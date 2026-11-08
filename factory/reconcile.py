@@ -144,6 +144,20 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 if age <= timedelta(minutes=default):
                     continue
             else:
+                replay = gate.stale_review_plan(facts) if stage == "in-review" else None
+                if replay:
+                    node, outcome, payload = replay
+                    if age <= timedelta(minutes=nodes["nodes"][node].get("timeout_minutes", default)):
+                        continue
+                    r = {"ticket": n, "stage": stage, "node": node, "outcome": outcome,
+                         "reconcile": "reapply", "why": "review marker landed at the head; finish its outcome"}
+                    results.append(r)
+                    if not dry_run:
+                        _, out = gate.apply(node, outcome, {"ticket": n, **payload, "run_id": RUN}, tracker, nodes)
+                        r.update(applied=out["applied"], written=out.get("written", []))
+                    if progress:
+                        progress(r)
+                    continue
                 step = next((w for w in wakes(nodes, facts)
                              if age > timedelta(minutes=nodes["nodes"][w[0]].get("timeout_minutes", default))), None)
                 stale_reviews = [label for label, at in facts.get("review_labels", [])
@@ -224,10 +238,25 @@ def stuck_label(wakes, nodes, facts, on_pr, ago):
     return None
 
 
+def last_end_failure(facts, node, head):
+    """The error block of the last `[factory] end failed:` comment for `node` at `head`, else None (#997)."""
+    for c in reversed(facts.get("recover_comments", [])):
+        if c.startswith("[factory] end failed:") and f"node={node} " in c and f"head={head} " in c:
+            body = c.split("\n", 1)[1] if "\n" in c else ""
+            return body.split("The outcome did not land")[0].strip() or "no error output"
+    return None
+
+
 def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="changes-requested"):
     def apply(**e):
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
-    if kind == "stuck":
+    if kind == "end-failed":
+        apply(kind="label", value=vocab.needs_human())
+        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} end failed, not re-fired: {why}\n"
+                                    f"Options: fix the cause (a new head, a token, a setting), then set {vocab.stage('ready')} "
+                                    f"or re-add `{label}`.")
+        apply(kind="stage", value="blocked")
+    elif kind == "stuck":
         apply(kind="label", value=vocab.needs_human())
         apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} stuck: {why}\nOptions: fix the cause and set "
                                     f"{vocab.stage('ready')}, or remove `{label}` and move the ticket by hand.")
@@ -293,6 +322,19 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             ago = lambda at: now - datetime.fromisoformat(at.replace("Z", "+00:00"))  # noqa: E731
             step = None
             on_pr = facts.get("pr_labels") or []
+            replay = gate.stale_review_plan(facts, defn["workflow"]) if stage == "in-review" else None
+            if replay:  # the review landed at this head but its outcome did not finish: apply it, never re-fire the reviewer
+                node, outcome, payload = replay
+                if ago(since) > timedelta(minutes=nodes[node].get("timeout_minutes", default)):
+                    r = {"ticket": n, "stage": stage, "node": node, "outcome": outcome, "reconcile": "reapply",
+                         "why": "review marker landed at the head; finish its outcome"}
+                    results.append(r)
+                    if not dry_run:
+                        _, out = gate.apply(node, outcome, {"ticket": n, **payload, "run_id": RUN}, tracker, defn["workflow"])
+                        r.update(applied=out["applied"], written=out.get("written", []))
+                    if progress:
+                        progress(r)
+                continue
             if (fix and facts.get("conflict") and facts.get("pr") and facts.get("pr_state") in (None, "none", "open")
                     and fix[1] not in on_pr and gate.holds(nodes[fix[0]].get("when") or {}, facts, {})
                     and ago(since) > timedelta(minutes=default)):
@@ -311,6 +353,13 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             kind, node, label, on, why = step
             if kind == "stuck" and any(f"stage={stage} head={head} stuck:" in c for c in facts.get("recover_comments", [])):
                 continue
+            failed = last_end_failure(facts, node, head)
+            if failed and kind == "refire":  # #997: a retry on this head fails the same way; a person fixes the cause
+                if any(f"stage={stage} head={head} end failed" in c for c in facts.get("recover_comments", [])):
+                    continue
+                kind, why = "end-failed", f"`factory end` of {node} failed on this head:\n{failed}"
+            elif failed and kind == "stuck":
+                why = f"{why}\nLast error of {node} on this head:\n{failed}"
             missed = sum(f"stage={stage} head={head} re-fired {label} (" in c for c in facts.get("recover_comments", []))
             kind = "blocked" if kind == "refire" and missed else kind
             r = {"ticket": n, "stage": stage, "node": node, "reconcile": kind, "why": why}

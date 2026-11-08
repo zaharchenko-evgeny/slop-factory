@@ -610,6 +610,8 @@ def to_project(defn):
         repos = sorted(e.get("repositories") or [], key=lambda r: not r.get("main"))
         help_ = environment_secrets(defn, en)
         environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": list(help_),
+                            # where the gate may write in this environment: the main repository, or `write: true` (#994)
+                            "writable": [names[r["repo"]] for r in repos if r.get("main") or r.get("write")],
                             "secret_help": help_,
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP}
 
@@ -666,6 +668,7 @@ def to_project(defn):
         "states": states,
         "commands": commands,
         **({"write_mode": dset["write_mode"]} if dset.get("write_mode") else {}),
+        **({"issues_token_env": dset["issues_token_env"]} if dset.get("issues_token_env") else {}),
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
         "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},
