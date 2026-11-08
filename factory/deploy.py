@@ -533,8 +533,10 @@ def plan_air(nodes: dict, config: dict) -> dict:
         {v.partition(":")[0] + ":" for f in fields.values() for v in f if ":" in v})} if fields else {}
     if tags or fields:  # keeps a GitHub plan (and its fixture) unchanged
         tag_plan = {**tag_plan, **field_plan, "tag_tracker": config["tracker"]}
-    return {"prefix": prefix, "automations": automations, "environments": envs, "labels": labels(nodes, config),
-            "label_repositories": label_repos, "label_specs": label_specs(nodes, config),
+    label_keys = ({"label_plan": label_plan(nodes, config)} if (config.get("tracker") or {}).get("repositories")
+                  else {"labels": labels(nodes, config), "label_repositories": label_repos})  # ADR-0024
+    return {"prefix": prefix, "automations": automations, "environments": envs, **label_keys,
+            "label_specs": label_specs(nodes, config),
             "owned_label_prefixes": owned_label_prefixes(config),
             **tag_plan, "files": actions_files(nodes, config)}
 
@@ -669,17 +671,35 @@ def label_specs(nodes: dict, config: dict) -> dict:
     return out
 
 
+def label_plan(nodes: dict, config: dict) -> dict[str, list[str]]:
+    """{repository: [labels]} for a definition with `tracker.repositories` (ADR-0024). Every ticket repository gets
+    `labels()` and the hold and review-trigger labels; the tracker (the first one) also gets the map label. A project
+    repository that holds no tickets maps to `[]`, so `reconcile_labels` removes the factory-owned labels it still has."""
+    t = config.get("tracker") or {}
+    tickets = list(dict.fromkeys(definition.full_name(r) for r in t.get("repositories") or []))
+    common = sorted({*labels(nodes, config), *(x for x in (t.get("hold_label"), t.get("review_trigger")) if x)})
+    out = {r: [*common, *([t["map_label"]] if i == 0 and t.get("map_label") else [])] for i, r in enumerate(tickets)}
+    for r in config.get("repositories") or []:
+        out.setdefault(repository(r)["fullName"], [])
+    return {r: sorted(set(ls)) for r, ls in out.items()}
+
+
+def plan_labels(plan: dict) -> dict[str, list[str]]:
+    """{repository: [labels]} of a plan: its `label_plan`, or the flat `labels` in each of `label_repositories`."""
+    return plan.get("label_plan") or {r: plan.get("labels") or [] for r in plan.get("label_repositories") or []}
+
+
 def label_tracker(repo: str, run=None):
     return github_tracker.GitHubTracker(repo, {}, run=run or github_tracker.gh)
 
 
 def reconcile_labels(plan: dict, run=None) -> list[tuple]:
     """(action, repository, label, changed fields) per required label to create or update, and per factory-owned
-    label no longer required to remove, in each repository of `plan["label_repositories"]` independently."""
+    label no longer required to remove, in each repository of `plan_labels(plan)` independently."""
     out, owned, random_colors = [], tuple(plan.get("owned_label_prefixes") or []), {}
-    for repo in plan.get("label_repositories") or []:
+    for repo, wanted in plan_labels(plan).items():
         have = label_tracker(repo, run).list_labels()
-        for name in plan["labels"]:
+        for name in wanted:
             spec = (plan.get("label_specs") or {}).get(name, {})
             if name not in have:
                 want = {"color": spec.get("color") or random_colors.setdefault(name, github_tracker.random_color()),
@@ -688,7 +708,7 @@ def reconcile_labels(plan: dict, run=None) -> list[tuple]:
             elif changed := [k for k in ("color", "description") if k in spec and have[name][k] != spec[k]]:
                 want = {"color": have[name]["color"], "description": have[name]["description"], **spec}
                 out.append(("update", repo, name, want, changed))
-        out += [("remove", repo, name, None) for name in sorted(have) if name.startswith(owned) and name not in plan["labels"]]
+        out += [("remove", repo, name, None) for name in sorted(have) if name.startswith(owned) and name not in wanted]
     return out
 
 

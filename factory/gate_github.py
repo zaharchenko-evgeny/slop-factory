@@ -536,7 +536,7 @@ class GitHubGateTracker(DescriptorPort):
         # Ensure labels exist before the new plan can wake CI or an automation.
         known = {x["name"] for x in self._list("labels?per_page=100")}
         specs = after.get("label_specs") or {}
-        for label in after["labels"]:
+        for label in (after["label_plan"].get(self.repo, []) if "label_plan" in after else after["labels"]):
             if label not in known:
                 color = (specs.get(label) or {}).get("color") or random_color()
                 self.run(["api", f"repos/{self.repo}/labels", "-f", f"name={label}", "-f", f"color={color}"])
@@ -547,6 +547,9 @@ class GitHubGateTracker(DescriptorPort):
         for key in ("automations", "environments", "labels", "files"):
             old, new = ((before.get(key) or {}, after.get(key) or {}) if key == "files"
                         else (before.get(key) or [], after.get(key) or []))
+            if key == "labels":  # ADR-0024: a plan with `label_plan` lists `repository label` entries
+                old, new = ([f"{r} {n}" for r, ls in p["label_plan"].items() for n in ls] if "label_plan" in p else v
+                            for p, v in ((before, old), (after, new)))
             if key in ("automations", "environments"):
                 old = {x["name"]: x for x in old}
                 new = {x["name"]: x for x in new}

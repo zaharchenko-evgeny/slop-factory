@@ -1443,6 +1443,56 @@ class LabelColorTest(unittest.TestCase):
             self.assertEqual(deploy.reconcile_labels(plan, run=have), [])
 
 
+class LabelPlanTest(unittest.TestCase):
+    """ADR-0024: labels per repository for a definition with `tracker.repositories`."""
+    TRACKER, WEB, DOCS = "zaharchenko-evgeny/slop-factory", "o/web", "o/docs"
+
+    def plan(self, tickets=None):
+        def edit(f):
+            f["environments"]["engine"]["repositories"] += [{"repo": self.WEB}, {"repo": self.DOCS}]
+            if tickets:
+                f["tracker"]["repositories"] = tickets
+        return definition_plan(edit)
+
+    def test_every_ticket_repository_gets_stage_and_pr_labels(self):
+        plan = self.plan([self.TRACKER, self.WEB])
+        self.assertNotIn("labels", plan)
+        self.assertNotIn("label_repositories", plan)
+        want = {"factory:in-dev", "risk:high", "complexity:medium", "factory:needs-human", "factory:hold",
+                "factory:implement-medium", "factory:ci-green", "factory:ci-red", "factory:review-high", "factory:review"}
+        for repo in (self.TRACKER, self.WEB):
+            self.assertLessEqual(want, set(plan["label_plan"][repo]), repo)
+
+    def test_map_label_only_in_tracker(self):
+        plan = self.plan([self.TRACKER, self.WEB])
+        self.assertIn("factory:map", plan["label_plan"][self.TRACKER])
+        self.assertNotIn("factory:map", plan["label_plan"][self.WEB])
+        swapped = self.plan([self.WEB, self.TRACKER])  # the first ticket repository is the tracker
+        self.assertIn("factory:map", swapped["label_plan"][self.WEB])
+        self.assertNotIn("factory:map", swapped["label_plan"][self.TRACKER])
+
+    def test_repository_without_tickets_gets_no_labels(self):
+        plan = self.plan([self.TRACKER, self.WEB])
+        self.assertEqual(plan["label_plan"][self.DOCS], [])
+        self.assertEqual(plan["label_plan"]["zaharchenko-evgeny/slop-eval-factory"], [])
+
+    def test_plan_without_tracker_repositories_is_unchanged(self):
+        plan = self.plan()
+        self.assertNotIn("label_plan", plan)
+        self.assertEqual(plan["label_repositories"], [self.TRACKER])
+        self.assertNotIn("factory:map", plan["labels"])
+
+    def test_reconcile_removes_labels_from_a_repository_no_longer_holding_tickets(self):
+        plan = self.plan([self.TRACKER])
+        have = {"factory:ready": ("c2e0c6", ""), "factory:hold": ("ededed", ""), "bug": ("ff0000", "")}
+        run = fake_labels({self.TRACKER: {}, self.WEB: have, self.DOCS: {}, "zaharchenko-evgeny/slop-eval-factory": {}})
+        got = deploy.reconcile_labels(plan, run=run)
+        self.assertEqual([(a, n) for a, r, n, *_ in got if r == self.WEB],
+                         [("remove", "factory:hold"), ("remove", "factory:ready")])  # `bug` is not factory-owned
+        self.assertEqual([a for a, r, *_ in got if r == self.TRACKER].count("remove"), 0)
+        self.assertIn(("create", self.TRACKER, "factory:map"), [x[:3] for x in got])
+
+
 class FakeTags:
     """A YouTrack runner over a tag inventory {name: id}; records writes."""
 
