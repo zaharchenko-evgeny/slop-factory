@@ -104,10 +104,10 @@ class SpaceEvents(unittest.TestCase):
 
 class SpaceGateFacts(unittest.TestCase):
     def test_check_reads_space_ci_and_roles_but_keeps_tracker_facts(self):
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         r = {"author": "bob", "verdict": "approve", "commit_id": "sha5", "role": "qa"}
         host = SpaceCodeHost("IJ", FakeSpace(mr(5, "ez/5-a", ci="success", dry_run={"state": "failed"}, reviews=[r])))
-        tracker = MemoryTracker({"5": {"stage": "changes-requested", "head": "gh", "ci": "green", "pr": 9}})
+        tracker = MemorySystem({"5": {"stage": "changes-requested", "head": "gh", "ci": "green", "pr": 9}})
         _, out = gate.check("fix", {"id": "e", "ticket": 5}, tracker, gate.nodes_mod.load(), gate.config_mod.load(), host)
         c = out["context"]
         self.assertEqual((c["ci"], c["dry_run"], c["head"], c["pr"], c["stage"]), ("red", "failed", "sha5", 5, "changes-requested"))
@@ -128,10 +128,10 @@ class SpaceRound(unittest.TestCase):
         self.assertEqual(f["round_verdict"], "changes")
 
     def test_check_uses_space_round(self):
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         r = {"author": "bob", "verdict": "approve", "commit_id": "sha5"}
         host = SpaceCodeHost("IJ", FakeSpace(mr(5, "ez/5-a", reviews=[r])))
-        tracker = MemoryTracker({"5": {"stage": "in-review", "head": "gh", "pr": 9}})
+        tracker = MemorySystem({"5": {"stage": "in-review", "head": "gh", "pr": 9}})
         _, out = gate.check("fix", {"id": "e", "ticket": 5}, tracker, gate.nodes_mod.load(), gate.config_mod.load(), host)
         c = out["context"]
         self.assertEqual((c["round_complete"], c["round_verdict"], c["round_head"]), (True, "approve", "sha5"))

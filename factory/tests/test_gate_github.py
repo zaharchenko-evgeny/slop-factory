@@ -683,7 +683,7 @@ class EffectsTest(unittest.TestCase):
             gate.clean_notes({"for": "any", "context": "x" * 2000})
         with self.assertRaises(ValueError):
             gate.clean_notes({"for": "boss"})
-        tracker = gate.MemoryTracker({"7": {"stage": "in-dev"}})
+        tracker = gate.MemorySystem({"7": {"stage": "in-dev"}})
         with self.assertRaises(gate.Bad):
             gate.apply("implement", "done", {"ticket": 7, "agent_notes": {"for": "any", "hint": "x" * 2000}},
                        tracker, nodes.load())

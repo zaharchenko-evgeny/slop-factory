@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Tests for factory/reconcile.py over MemoryTracker. Run: uv run factory/tests/test_reconcile.py"""
+"""Tests for factory/reconcile.py over MemorySystem. Run: uv run factory/tests/test_reconcile.py"""
 import copy
 import json
 import sys
@@ -19,7 +19,7 @@ cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"
 import nodes as nodes_mod  # noqa: E402
 import reconcile  # noqa: E402
 import gate  # noqa: E402
-from gate_port import MemoryTracker  # noqa: E402
+from gate_port import MemorySystem  # noqa: E402
 
 NODES, CONFIG = nodes_mod.load(), cfg.load()
 STAGES, LIMITS = list(CONFIG["tracker"]["stages"]), CONFIG["limits"]
@@ -28,7 +28,7 @@ OLD, FRESH = "2026-11-03T11:00:00Z", "2026-11-03T11:50:00Z"
 
 
 def run(ticket, nodes=NODES, **kw):
-    tracker = MemoryTracker({1: ticket})
+    tracker = MemorySystem({1: ticket})
     stage_kinds = kw.pop("stage_kinds", CONFIG["tracker"].get("stage_kinds", {}))
     results, failed = reconcile.reconcile(tracker, nodes, STAGES, LIMITS,
                                           stage_kinds=stage_kinds, now=NOW, **kw)
@@ -149,7 +149,7 @@ class ReconcileTest(unittest.TestCase):
     def test_lists_only_open_tickets_in_non_final_stages(self):
         asked = []
 
-        class Counting(MemoryTracker):
+        class Counting(MemorySystem):
             def sweep_tickets(self, stages, open_only=False):
                 asked.append((sorted(stages), open_only))
                 return super().sweep_tickets(stages, open_only)
@@ -183,7 +183,7 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual((results, t.tickets[1]["stage"]), ([], "approved"))
 
     def test_open_main_red_with_green_main_reports_stale_red(self):
-        tracker = MemoryTracker({1: {"stage": "ready", "since": FRESH, "title": "Main is red: agnix"},
+        tracker = MemorySystem({1: {"stage": "ready", "since": FRESH, "title": "Main is red: agnix"},
                                  2: {"stage": "ready", "since": FRESH, "title": "Other ticket"}})
         tracker.green_main = True
         results, _ = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
@@ -214,7 +214,7 @@ class ReconcileTest(unittest.TestCase):
         import json
         from unittest.mock import patch
         out, synced = io.StringIO(), {"repo": "o/app", "pr": 1, "ci": "green"}
-        with patch("gate_github.GitHubGateTracker.from_config", return_value=MemoryTracker({})), \
+        with patch("gate_github.GitHubGateTracker.from_config", return_value=MemorySystem({})), \
                 patch.object(gate, "run_ci_sync", return_value=([synced], False)) as sync, \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(reconcile.main(["--dry-run"]), 0)
@@ -227,7 +227,7 @@ class WakeReadyTest(unittest.TestCase):
     def test_refires_only_unblocked_ready_tickets_that_waited(self):
         from datetime import datetime, timezone
         old, new = "2026-11-06T10:00:00Z", "2026-11-06T11:55:00Z"
-        tr = MemoryTracker({"1": {"stage": "ready", "stage_at": old}, "2": {"stage": "ready", "stage_at": old, "blockers_open": 1},
+        tr = MemorySystem({"1": {"stage": "ready", "stage_at": old}, "2": {"stage": "ready", "stage_at": old, "blockers_open": 1},
                             "3": {"stage": "ready", "stage_at": new}, "4": {"stage": "in-dev", "stage_at": old},
                             "5": {"stage": "ready", "stage_at": old}})
         had = {"1": [{"number": 9, "state": "closed"}], "2": [{"number": 8, "state": "open"}], "3": [{"number": 9, "state": "closed"}]}
@@ -245,7 +245,7 @@ class WakeApprovedTest(unittest.TestCase):
     NOW = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
 
     def wake(self, nodes=None, blockers_open=0):
-        tr = MemoryTracker({1: {"stage": "approved", "blockers_open": blockers_open, "pr": 5, "pr_state": "open",
+        tr = MemorySystem({1: {"stage": "approved", "blockers_open": blockers_open, "pr": 5, "pr_state": "open",
                                 "label_at": {"factory:automerge": "2026-11-06T10:00:00Z"}}})
         tr.blocked_by = lambda n: [{"number": 9, "state": "closed"}]
         return tr, reconcile.wake_approved(tr, nodes or self.NODES, 30, now=self.NOW)
@@ -276,7 +276,7 @@ class RecoverDefinitionTest(unittest.TestCase):
         cfg.set_team(cls.previous)
 
     def recover(self, ticket):
-        tr = MemoryTracker({1: ticket})
+        tr = MemorySystem({1: ticket})
         tracker = self.config["tracker"]
         results = reconcile.recover_definition(tr, self.defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
                                                self.config["limits"], now=NOW)
@@ -313,7 +313,7 @@ class RecoverDefinitionTest(unittest.TestCase):
                 for fx in (oc or {}).get("effects") or []:
                     if fx.get("stage") == "changes-requested":
                         fx["stage"] = "repair"
-        tr = MemoryTracker({1: self.pr(conflict=True)})
+        tr = MemorySystem({1: self.pr(conflict=True)})
         tracker = self.config["tracker"]
         reconcile.recover_definition(tr, defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
                                      self.config["limits"], now=NOW)
@@ -368,7 +368,7 @@ class RecoverDefinitionTest(unittest.TestCase):
         return ticket
 
     def run_many(self, count):
-        tr = MemoryTracker({i: self.missed_twice() for i in range(1, count + 1)})
+        tr = MemorySystem({i: self.missed_twice() for i in range(1, count + 1)})
         tracker = self.config["tracker"]
         results = reconcile.recover_definition(tr, self.defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
                                                self.config["limits"], now=NOW)
@@ -427,7 +427,7 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(logged(t, "label"), [])
 
     def test_bad_ticket_is_reported_once_and_does_not_stop_recovery(self):
-        class BadTicketTracker(MemoryTracker):
+        class BadTicketTracker(MemorySystem):
             def stale_facts(self, ticket):
                 if ticket == 1:
                     raise ValueError("ticket names unknown repositories: fixture")
@@ -451,7 +451,7 @@ class RecoverDefinitionTest(unittest.TestCase):
                              if kind == "comment"), 1)
 
     def test_bad_ticket_dry_run_does_not_post_a_comment(self):
-        class BadTicketTracker(MemoryTracker):
+        class BadTicketTracker(MemorySystem):
             def stale_facts(self, ticket):
                 raise ValueError("ticket names unknown repositories: fixture")
 

@@ -44,20 +44,23 @@ class Event:
 @dataclass(frozen=True)
 class Subject:
     """What a `read` returns a record of: `ticket` (id), `pr` (the PR of ticket `id` in repository `repo`, a
-    descriptor name) or `repo` (`repo`)."""
+    descriptor name) or `repo` (`repo`). `scope` narrows the system to one environment's share of it, in the
+    system's own terms (`{"label": ...}` on GitHub, `{"field": ..., "value": ...}` on YouTrack); None is all of it."""
     kind: str
     id: object = None
     repo: str | None = None
+    scope: dict | None = field(default=None, hash=False)
 
 
 @dataclass(frozen=True)
 class Query:
     """What a `find` lists: `children` (the sub-tickets of `of`), `stage` (ids of tickets holding one of `values`;
-    `open_only`) or `blocking` (the tickets `of` blocks)."""
+    `open_only`) or `blocking` (the tickets `of` blocks). `scope` as on Subject."""
     kind: str
     of: object = None
     values: tuple = ()
     open_only: bool = False
+    scope: dict | None = field(default=None, hash=False)
 
 
 class System(Protocol):

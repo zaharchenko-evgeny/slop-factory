@@ -191,6 +191,14 @@ def pr_facts(pr, required, since, trusted):
             "fix_rounds": fix_round_count(reviews, since)}, got  # same-head dispute rereviews count as a new round
 
 
+def review_at_head(facts):
+    """`approve` when agent reviews at the current head all approve, `changes` when one asks for changes, else `none`."""
+    verdicts = [r.get("verdict") for r in facts.get("reviews") or [] if r.get("agent") and r.get("commit_id") == facts.get("head")]
+    if not verdicts:
+        return "none"
+    return "changes" if any(v != "approve" for v in verdicts) else "approve"
+
+
 def risk(ticket, rules):
     return "low" if rules.risk_labels["low"] in ticket.attrs else "high"
 

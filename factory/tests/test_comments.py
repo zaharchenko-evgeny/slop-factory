@@ -26,7 +26,7 @@ import definition  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
 import plugins  # noqa: E402
-from gate_port import MemoryTracker  # noqa: E402
+from gate_port import MemorySystem  # noqa: E402
 
 FIXTURES = ROOT / "tests/fixtures"
 
@@ -140,7 +140,7 @@ class GateModuleTest(unittest.TestCase):
         self.assertFalse(gate.plugin_registry().is_on("comments"))
 
     def test_off_refuses_comment_effects_and_asks(self):
-        tr = MemoryTracker({"7": {"stage": "triage"}})
+        tr = MemorySystem({"7": {"stage": "triage"}})
         with self.assertRaisesRegex(gate.Bad, r"^module-off: nodes.comment.route: route needs plugins: \[comments\]$"):
             gate.apply("comment", "route", {"ticket": "7", "to": "fix"}, tr, self.graph())
         with self.assertRaisesRegex(gate.Bad, r"^module-off: nodes.comment.ask: ask needs plugins: \[comments\]$"):

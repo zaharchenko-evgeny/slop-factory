@@ -21,12 +21,14 @@ import yaml
 
 import config
 import github_graphql
+from gate_tracker import GateTracker
 from gate_port import DescriptorPort, child_attrs, child_links, child_order, ticket_from_ref, ticket_repositories
 from github_tracker import CountedRun, ProjectWriteRun, gh, project_repositories, random_color
 import derive
+import effects as effects_mod
 from derive import clean_notes, notes_block, parse_notes, redact  # noqa: F401  (the agent notes, ADR-0026)
 from ports.records import Lazy, PrRecord, TicketRecord
-from ports.system import Query, Subject
+from ports.system import Effect, Event, Query, Subject
 import vocab
 from youtrack_tracker import MissingRepository, YouTrackTicketStore, repo_stage_tags
 
@@ -92,6 +94,17 @@ class GitHubCodeHost:
         when the PR is in another of the ticket's repositories."""
         pr = json.loads(self.run(["api", f"repos/{repository or self.repo}/pulls/{number}"]))
         return ticket_from_ref((pr.get("head") or {}).get("ref")) or ticket_from_ref(pr.get("title"))
+
+    def event(self, payload):
+        """The Event of a pull request or PR comment payload, the ticket from the PR's live head ref (the Vcs port);
+        None when it names no PR or the PR is on no factory branch."""
+        pr = payload.get("pull_request") if isinstance(payload.get("pull_request"), dict) else payload.get("issue")
+        number = pr.get("number") if isinstance(pr, dict) else None
+        if not isinstance(number, int) or number < 1:
+            return None
+        repository = (payload.get("repository") or {}).get("full_name") if isinstance(payload.get("repository"), dict) else None
+        ticket = self.ticket_for_pr(number, repository) if repository else self.ticket_for_pr(number)
+        return None if ticket is None else Event(ticket, "pull_request", payload.get("action"), number, repository, payload)
 
     # --- the CI label sync (gate.ci_sync); `repository` is owner/repo
     def _list(self, path):
@@ -765,13 +778,9 @@ class GitHubGateTracker(DescriptorPort):
         return issue["state"] == "closed" and issue["close_reason"] == "not_planned"
 
     def facts(self, n):
-        ticket = self.read(Subject("ticket", n))
-        stage = derive.stage(ticket, self.stages)
-        children = self.find(Query("children", of=n)) if stage == "split" else None
-        want = derive.pr_want(stage)
-        names = ticket_repositories(ticket.body, list(self.repositories), next(iter(self.repositories)))
-        prs = [(name, self.read(Subject("pr", n, name), want)) for name in names]
-        f, self._since = derive.facts(ticket, prs, self.rules(), children)
+        gate = GateTracker.single(self)  # this tracker hosts the PRs too: `read` finds each repository's view
+        f = gate.facts(n)
+        self._since = gate.since  # a person's factory:ready starts fresh (`_review` counts rounds from it)
         return f
 
     def _on(self, repo):
@@ -823,153 +832,192 @@ class GitHubGateTracker(DescriptorPort):
         return True
 
     def apply(self, e):
+        return GateTracker.single(self).apply(e)
+
+    # --- the effect handlers (ADR-0026): (system, effect, ctx) -> wrote, declared in `effects` below
+    def _issue_once(self, n, ctx):
+        """Ticket `n` as read once per `effects.apply`: `stage: done` closes before the stage write reads the attrs."""
+        if "issue" not in ctx:
+            ctx["issue"] = self.tickets.issue(n)
+        return ctx["issue"]
+
+    def _fx_seen(self, e, ctx):
+        return False  # no hidden state: conditions catch a duplicate
+
+    def _fx_join(self, e, ctx):
+        return self._join(e["ticket"], e.get("tier") or "mid")
+
+    def _fx_close(self, e, ctx):
+        n = e["ticket"]
+        if self._issue_once(n, ctx)["state"] != "open":  # read before the close: the stage write reads its attrs
+            return False
+        self.tickets.close(n)
+        return True
+
+    def _fx_stage(self, e, ctx):
+        n, value = e["ticket"], e["value"]
+        want, have = self.stages[value], [x for x in self._issue_once(n, ctx)["attrs"] if x in self.stages.values()]
+        try:
+            return have != [want] and self.tickets.set_stage(n, want, have)
+        except MissingRepository as err:  # no repository to wake: say so and wait for a person
+            self.tickets.comment(n, f"[factory] Blocked: {err}")
+            return self.tickets.set_stage(n, self.stages["blocked"], have) or True
+
+    @staticmethod
+    def _gone(labels, value):
+        """`prefix-*` removes every label with that prefix (a command label of any tier)."""
+        return [x for x in labels if x.startswith(value[:-1])] if value.endswith("*") else [value] if value in labels else []
+
+    def _fx_label(self, e, ctx):
+        n, kind, value, on = e["ticket"], e["kind"], e["value"], e.get("on") or "issue"
+        if on != "issue":
+            raise ValueError(f"{kind}: bad target: {on}")
+        labels = self._labels(n)
+        if kind == "label":
+            return value not in labels and self._edit(n, [value], on=on)
+        gone = self._gone(labels, value)
+        return bool(gone) and self._edit(n, remove=gone, on=on)
+
+    def _fx_pr_label(self, e, ctx):
         n, kind, value = e["ticket"], e["kind"], e["value"]
-        if kind == "seen":
-            return False  # no hidden state: conditions catch a duplicate
-        if kind == "join":
-            return self._join(n, e.get("tier") or "mid")
-        if kind == "stage":
-            want, have = self.stages[value], [x for x in self._labels(n) if x in self.stages.values()]
-            closed = False
-            if value == "done" and self.tickets.issue(n)["state"] == "open":
-                self.tickets.close(n)  # before the label: a retry still finds the ticket
-                closed = True
-            try:
-                return (have != [want] and self.tickets.set_stage(n, want, have)) or closed
-            except MissingRepository as e:  # no repository to wake: say so and wait for a person
-                self.tickets.comment(n, f"[factory] Blocked: {e}")
-                return self.tickets.set_stage(n, self.stages["blocked"], have) or True
-        if kind in ("label", "unlabel"):
-            on, target = e.get("on") or "issue", n
-            if on == "pr":
-                attention = value == vocab.needs_human()
-                if attention:
-                    prs = self._prs(n, open_only=kind == "label")
-                else:
-                    pr = self._pr(n)
-                    prs = [pr] if pr else []
-                if not prs:
-                    return False  # ticket-level waits also apply before a PR exists
-                changed = False
-                for pr in prs:
-                    labels = self._labels(pr["number"], repo=self.pr_repo)
-                    if kind == "label":
-                        if value not in labels:
-                            changed |= self._edit(pr["number"], [value], on=on)
-                    else:
-                        gone = [x for x in labels if x.startswith(value[:-1])] if value.endswith("*") else [value] if value in labels else []
-                        if gone:
-                            changed |= self._edit(pr["number"], remove=gone, on=on)
-                return changed
-            elif on != "issue":
-                raise ValueError(f"{kind}: bad target: {on}")
-            labels = self._labels(target)
-            if kind == "label":
-                return value not in labels and self._edit(target, [value], on=on)
-            # `prefix-*` removes every label with that prefix (a command label of any tier)
-            gone = [x for x in labels if x.startswith(value[:-1])] if value.endswith("*") else [value] if value in labels else []
-            return bool(gone) and self._edit(target, remove=gone, on=on)
-        if kind == "set-field":  # an attribute label `<field>:<value>`; one value per field
-            (k, v), = value.items()
-            have = [x for x in self._labels(n) if x.startswith(f"{k}:")]
-            return have != [f"{k}:{v}"] and self._edit(n, [f"{k}:{v}"] if f"{k}:{v}" not in have else [],
-                                                       [x for x in have if x != f"{k}:{v}"])
-        if kind in ("assign", "unassign"):
-            on, target = e.get("on") or "issue", n
-            if on == "pr":
-                prs = self._prs(n, open_only=kind == "assign")
-                if not prs:
-                    return False
-                changed = False
-                for pr in prs:
-                    current = {a["login"] for a in self._api(f"issues/{pr['number']}", repo=self.pr_repo).get("assignees", [])}
-                    desired = set((value if isinstance(value, list) else [value])) if kind == "assign" else set()
-                    if current != desired:
-                        flags = [x for a in sorted(desired - current) for x in ("--add-assignee", a)]
-                        flags += [x for a in sorted(current - desired) for x in ("--remove-assignee", a)]
-                        self.run(["issue", "edit", str(pr["number"]), "-R", self.pr_repo, *flags])
-                        changed = True
-                return changed
-            elif on != "issue":
-                raise ValueError(f"{kind}: bad target: {on}")
-            return self.tickets.assign(target, (value if isinstance(value, list) else [value]) if kind == "assign" else [])
-        if kind == "comment":
-            body = value if value.startswith("[factory]") else f"[factory] {value}"
-            if e.get("run_id") and "Factory-Run:" not in body:
-                body += f"\n\nFactory-Run: {e['run_id']}"
-            target = e.get("on") or "issue"
-            pr = self._pr(n) if target == "pr" else None
-            if target == "pr" and pr is None:
-                raise RuntimeError(f"comment: no PR for ticket {n}")
-            if pr is None:
-                if any(c["body"] == body for c in self.tickets.comments(n)):
-                    return False
-                self.tickets.comment(n, body + self._block(e))
-                return True
-            if any(c["body"] == body for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
-                return False
-            self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body", body + self._block(e)])
-            return True
-        if kind in ("pr-notes", "pr-notes-sync"):  # a developer's `done` notes for the PR description
+        if value == vocab.needs_human():
+            prs = self._prs(n, open_only=kind == "label")
+        else:
             pr = self._pr(n)
-            if kind == "pr-notes" and pr is None:  # Air opens the PR after the run: park the notes on the ticket
-                body = f"{NOTES_PARKED}\n\n{value}"
-                if e.get("run_id"):
-                    body += f"\n\nFactory-Run: {e['run_id']}"
-                if any(c["body"] == body for c in self.tickets.comments(n)):
-                    return False
-                self.tickets.comment(n, body)
-                return True
-            if pr is None:
+            prs = [pr] if pr else []
+        changed = False  # no PR: ticket-level waits also apply before a PR exists
+        for pr in prs:
+            labels = self._labels(pr["number"], repo=self.pr_repo)
+            if kind == "label":
+                if value not in labels:
+                    changed |= self._edit(pr["number"], [value], on="pr")
+            elif gone := self._gone(labels, value):
+                changed |= self._edit(pr["number"], remove=gone, on="pr")
+        return changed
+
+    def _fx_set_field(self, e, ctx):  # an attribute label `<field>:<value>`; one value per field
+        n, ((k, v),) = e["ticket"], e["value"].items()
+        have = [x for x in self._labels(n) if x.startswith(f"{k}:")]
+        return have != [f"{k}:{v}"] and self._edit(n, [f"{k}:{v}"] if f"{k}:{v}" not in have else [],
+                                                   [x for x in have if x != f"{k}:{v}"])
+
+    def _fx_assign(self, e, ctx):
+        n, kind, value, on = e["ticket"], e["kind"], e["value"], e.get("on") or "issue"
+        if on != "issue":
+            raise ValueError(f"{kind}: bad target: {on}")
+        return self.tickets.assign(n, (value if isinstance(value, list) else [value]) if kind == "assign" else [])
+
+    def _fx_pr_assign(self, e, ctx):
+        n, kind, value = e["ticket"], e["kind"], e["value"]
+        changed = False
+        for pr in self._prs(n, open_only=kind == "assign"):
+            current = {a["login"] for a in self._api(f"issues/{pr['number']}", repo=self.pr_repo).get("assignees", [])}
+            desired = set((value if isinstance(value, list) else [value])) if kind == "assign" else set()
+            if current != desired:
+                flags = [x for a in sorted(desired - current) for x in ("--add-assignee", a)]
+                flags += [x for a in sorted(current - desired) for x in ("--remove-assignee", a)]
+                self.run(["issue", "edit", str(pr["number"]), "-R", self.pr_repo, *flags])
+                changed = True
+        return changed
+
+    def _fx_comment(self, e, ctx):
+        n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
+        if any(c["body"] == body for c in self.tickets.comments(n)):
+            return False
+        self.tickets.comment(n, body + self._block(e))
+        return True
+
+    def _fx_pr_comment(self, e, ctx):
+        n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
+        pr = self._pr(n)
+        if pr is None:
+            raise RuntimeError(f"comment: no PR for ticket {n}")
+        if any(c["body"] == body for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
+            return False
+        self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body", body + self._block(e)])
+        return True
+
+    def _fx_pr_notes(self, e, ctx):  # a developer's `done` notes for the PR description
+        n, kind, value = e["ticket"], e["kind"], e["value"]
+        pr = self._pr(n)
+        if kind == "pr-notes" and pr is None:  # Air opens the PR after the run: park the notes on the ticket
+            body = effects_mod.frame(f"{NOTES_PARKED}\n\n{value}", e.get("run_id"), once=False)
+            if any(c["body"] == body for c in self.tickets.comments(n)):
                 return False
-            if kind == "pr-notes-sync":  # the first gate step that sees the PR copies the parked notes
-                parked = [c for c in self.tickets.comments(n) if c["body"].startswith(NOTES_PARKED)]
-                found = parse_notes(parked[-1]["body"], "",
-                                    "Bot" if parked[-1]["author_is_factory"] else "User") if parked else []
-                if not found:
-                    return False
-                value = notes_block(found[-1])
-            if value in (pr.get("body") or ""):
-                return False
-            self.run(["pr", "edit", str(pr["number"]), "-R", self.pr_repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
+            self.tickets.comment(n, body)
             return True
-        if kind == "react":  # a reaction on one issue comment of the ticket or its PR; the API keeps one per user
-            repo = self.pr_repo if e.get("on") == "pr" else None
-            return bool(self._api(f"issues/comments/{e['comment']}/reactions", "-f", f"content={value}", repo=repo))
-        if kind == "review":
-            return self._review(n, e)
-        if kind == "request-reviewers":
-            return self._rerequest(n)
-        if kind == "create-issues":
-            return self.tickets.create_children(n, value, self.stages["ready"])
-        if kind == "park-behind-main-red":
-            return self.tickets.park(n, value, self.stages["triage"])
-        if kind == "merge":  # the primary last: only its merge event wakes `finish` (Air triggers on its repository)
-            views, wrote = self._views(n), False
-            readonly = [f"{name} #{pr['number']}" for name, _, pr in views if pr and not pr["merged"] and not self._may_write(name)]
-            if readonly:  # refuse before any merge: a half-merged ticket is worse than none
-                raise RuntimeError(f"merge: {', '.join(readonly)} is read-only in this environment; a person merges it")
-            for name, view, pr in views[1:] + views[:1]:
-                if pr is None:
-                    raise RuntimeError(f"merge: no PR for ticket {n} in {name}")
-                if pr["merged"]:
-                    continue
-                if not view._locked_merge(pr, self._judged_head(e, name, views) or pr["head"]["sha"]):
-                    return wrote  # locked, or behind and updated: the next sweep merges the rest
-                wrote = True
-            return wrote
-        if kind == "update-branch":  # a merge commit of the base into the PR branch; refused when the head moved
-            views, wrote = self._views(n), False
-            for name, view, pr in views:
-                if pr is None or pr["merged"] or not self._may_write(name):
-                    continue
-                head = self._judged_head(e, name, views) or pr["head"]["sha"]
-                if len(views) > 1 and view._api(f"compare/{pr['base']['ref']}...{head}", repo=view.pr_repo)["behind_by"] == 0:
-                    continue
-                view._update_branch(pr, head)
-                wrote = True
-            return wrote
-        raise ValueError(f"unknown effect: {kind}")
+        if pr is None:
+            return False
+        if kind == "pr-notes-sync":  # the first gate step that sees the PR copies the parked notes
+            parked = [c for c in self.tickets.comments(n) if c["body"].startswith(NOTES_PARKED)]
+            found = parse_notes(parked[-1]["body"], "", "Bot" if parked[-1]["author_is_factory"] else "User") if parked else []
+            if not found:
+                return False
+            value = notes_block(found[-1])
+        if value in (pr.get("body") or ""):
+            return False
+        self.run(["pr", "edit", str(pr["number"]), "-R", self.pr_repo, "--body", f"{pr.get('body') or ''}\n\n{value}"])
+        return True
+
+    def _fx_react(self, e, ctx):  # a reaction on one issue comment of the ticket or its PR; the API keeps one per user
+        repo = self.pr_repo if e.get("on") == "pr" else None
+        return bool(self._api(f"issues/comments/{e['comment']}/reactions", "-f", f"content={e['value']}", repo=repo))
+
+    def _fx_review(self, e, ctx):
+        return self._review(e["ticket"], e)
+
+    def _fx_request_reviewers(self, e, ctx):
+        return self._rerequest(e["ticket"])
+
+    def _fx_create_issues(self, e, ctx):
+        return self.tickets.create_children(e["ticket"], e["value"], self.stages["ready"])
+
+    def _fx_park(self, e, ctx):
+        return self.tickets.park(e["ticket"], e["value"], self.stages["triage"])
+
+    def _fx_merge(self, e, ctx):  # the primary last: only its merge event wakes `finish` (Air triggers on its repository)
+        n = e["ticket"]
+        views, wrote = self._views(n), False
+        readonly = [f"{name} #{pr['number']}" for name, _, pr in views if pr and not pr["merged"] and not self._may_write(name)]
+        if readonly:  # refuse before any merge: a half-merged ticket is worse than none
+            raise RuntimeError(f"merge: {', '.join(readonly)} is read-only in this environment; a person merges it")
+        for name, view, pr in effects_mod.primary_last(views):
+            if pr is None:
+                raise RuntimeError(f"merge: no PR for ticket {n} in {name}")
+            if pr["merged"]:
+                continue
+            if not view._locked_merge(pr, self._judged_head(e, name, views) or pr["head"]["sha"]):
+                return wrote  # locked, or behind and updated: the next sweep merges the rest
+            wrote = True
+        return wrote
+
+    def _fx_update_branch(self, e, ctx):  # a merge commit of the base into the PR branch; refused when the head moved
+        views, wrote = self._views(e["ticket"]), False
+        for name, view, pr in views:
+            if pr is None or pr["merged"] or not self._may_write(name):
+                continue
+            head = self._judged_head(e, name, views) or pr["head"]["sha"]
+            if len(views) > 1 and view._api(f"compare/{pr['base']['ref']}...{head}", repo=view.pr_repo)["behind_by"] == 0:
+                continue
+            view._update_branch(pr, head)
+            wrote = True
+        return wrote
+
+    effects = (
+        Effect("seen", "ticket", _fx_seen), Effect("join", "ticket", _fx_join),
+        Effect("close", "ticket", _fx_close), Effect("stage", "ticket", _fx_stage),
+        Effect("label", "ticket", _fx_label), Effect("unlabel", "ticket", _fx_label),
+        Effect("label", "pr", _fx_pr_label), Effect("unlabel", "pr", _fx_pr_label),
+        Effect("set-field", "ticket", _fx_set_field),
+        Effect("assign", "ticket", _fx_assign), Effect("unassign", "ticket", _fx_assign),
+        Effect("assign", "pr", _fx_pr_assign), Effect("unassign", "pr", _fx_pr_assign),
+        Effect("comment", "ticket", _fx_comment), Effect("comment", "pr", _fx_pr_comment),
+        Effect("pr-notes", "pr", _fx_pr_notes), Effect("pr-notes-sync", "pr", _fx_pr_notes),
+        Effect("react", "ticket", _fx_react), Effect("react", "pr", _fx_react),
+        Effect("review", "pr", _fx_review, remote=True), Effect("request-reviewers", "pr", _fx_request_reviewers),
+        Effect("create-issues", "ticket", _fx_create_issues), Effect("park-behind-main-red", "ticket", _fx_park),
+        Effect("merge", "pr", _fx_merge, remote=True), Effect("update-branch", "pr", _fx_update_branch, remote=True),
+    )
 
     def _may_write(self, name):
         return self.writable is None or name in self.writable

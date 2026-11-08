@@ -30,7 +30,7 @@ import definition  # noqa: E402
 import gate  # noqa: E402
 import plugins  # noqa: E402
 from factory_plugins.notify_email.smtp import EmailAdapter  # noqa: E402
-from gate_port import MemoryTracker  # noqa: E402
+from gate_port import MemorySystem  # noqa: E402
 
 FIXTURE = ROOT / "tests/fixtures/v2"
 CONFIG = {"adapters": {"email": {"smtp_env": "TEST_NOTIFY_SMTP"}},
@@ -105,7 +105,7 @@ class NotifyTest(unittest.TestCase):
         return [json.loads(v) for k, v in tracker.tickets["7"]["log"] if k == "comment"]
 
     def test_one_send_per_person_and_adapter_and_one_comment_with_markers(self):
-        tr = MemoryTracker({"7": {"stage": "blocked"}})
+        tr = MemorySystem({"7": {"stage": "blocked"}})
         self.assertEqual(self.apply("notified", tr)[0], gate.GO)
         self.assertEqual(sorted(r for r, _ in self.smtp.mails), [["ann@example.com"], ["bob@example.com"]])
         ids = {r[0]: message_from_bytes(raw)["Message-ID"] for r, raw in self.smtp.mails}
@@ -119,26 +119,26 @@ class NotifyTest(unittest.TestCase):
             self.assertIn(f"<!-- factory:notify via=email person={login} ref={ids[who]} -->", comment)
 
     def test_people_limit_and_pr_comment(self):
-        tr = MemoryTracker({"7": {"stage": "blocked", "pr": 9}})
+        tr = MemorySystem({"7": {"stage": "blocked", "pr": 9}})
         self.apply("pr-only", tr)
         self.assertEqual([r for r, _ in self.smtp.mails], [["bob@example.com"]])
         self.assertEqual(self.comments(tr)[0].count("factory:notify"), 1)
 
     def test_empty_people_limit_sends_to_nobody(self):
-        tr = MemoryTracker({"7": {"stage": "blocked"}})
+        tr = MemorySystem({"7": {"stage": "blocked"}})
         self.graph["nodes"]["notify"]["outcomes"]["pr-only"]["effects"][0]["notify"]["people"] = []
         self.apply("pr-only", tr)
         self.assertEqual(self.smtp.mails, [])
 
     def test_unknown_person_in_limit_sends_nothing(self):
-        tr = MemoryTracker({"7": {"stage": "blocked"}})
+        tr = MemorySystem({"7": {"stage": "blocked"}})
         self.graph["nodes"]["notify"]["outcomes"]["pr-only"]["effects"][0]["notify"]["people"] = ["eve"]
         with self.assertRaisesRegex(gate.Bad, "not in notify.people: eve"):
             self.apply("pr-only", tr)
         self.assertEqual(self.smtp.mails, [])
 
     def test_missing_problem_or_bad_recommended_is_refused(self):
-        tr = MemoryTracker({"7": {"stage": "blocked"}})
+        tr = MemorySystem({"7": {"stage": "blocked"}})
         with self.assertRaisesRegex(gate.Bad, "payload: missing field `problem`"):
             gate.apply("notify", "notified", {"ticket": "7"}, tr, self.graph)
         with self.assertRaisesRegex(gate.Bad, "recommended"):
@@ -146,7 +146,7 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual(self.smtp.mails, [])
 
     def test_failed_send_is_reported_and_the_other_send_is_marked(self):
-        tr = MemoryTracker({"7": {"stage": "blocked"}})
+        tr = MemorySystem({"7": {"stage": "blocked"}})
         self.graph["nodes"]["notify"]["outcomes"]["notified"]["effects"].append({"stage": "done"})
         real = EmailAdapter.send
 
@@ -176,7 +176,7 @@ class NotifyTest(unittest.TestCase):
         self.assertIsNone(plugins.registry({"plugins": ["notify"]}).impl("notifier", "email"))
 
     def test_a_notify_effect_is_refused_while_the_plugin_is_off(self):
-        tr = MemoryTracker({"7": {"stage": "blocked"}})
+        tr = MemorySystem({"7": {"stage": "blocked"}})
         with patch("gate.plugin_registry", return_value=plugins.registry({})):
             with self.assertRaisesRegex(gate.Bad, r"module-off: nodes.notify.notified: notify needs plugins: \[notify\]"):
                 self.apply("notified", tr)
@@ -185,7 +185,7 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual((self.smtp.mails, tr.tickets["7"].get("log", [])), ([], []))
 
     def test_a_send_through_a_notifier_that_is_off_fails(self):
-        tr = MemoryTracker({"7": {"stage": "blocked"}})
+        tr = MemorySystem({"7": {"stage": "blocked"}})
         with patch("gate.plugin_registry", return_value=plugins.registry({"plugins": ["notify"]})):
             with self.assertRaisesRegex(RuntimeError, "ann via email: LookupError: no notifier `email` is turned on"):
                 self.apply("notified", tr)

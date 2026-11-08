@@ -38,10 +38,11 @@ if __name__ == "__main__":  # run as a script: `import gate` (a plugin's code) m
     sys.modules.setdefault("gate", sys.modules[__name__])
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
-from derive import clean_notes  # noqa: E402
+from derive import clean_notes, review_at_head  # noqa: E402
+import effects as effects_mod  # noqa: E402
 from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker  # noqa: E402
 from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
-from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
+from gate_port import MemorySystem, ticket_from_ref  # noqa: E402
 from github_tracker import project_repositories  # noqa: E402
 import vocab  # noqa: E402
 import definition  # noqa: E402
@@ -323,19 +324,14 @@ def decide(name, ticket, tracker, nodes, dry_run=False):
     return NO_GO, {"outcome": None, "applied": False, "reason": "no outcome's guards hold"}
 
 
-def merge_refused(effects, facts):
+def merge_refused(effects, facts, tracker=None):
     """ADR-0021: a `merge` effect keeps its own invariants, whatever chose it: the current head is approved by the
-    agent reviews at it, none asks for changes, CI is green there and the branch is not behind. None when it may
-    merge, else the reason. The old layout's merge node checks its gates before it gets here."""
+    agent reviews at it, none asks for changes, CI is green there and the branch is not behind (the merge's `needs`,
+    factory/effects.py). None when it may merge, else the reason. The old layout's merge node checks its gates before
+    it gets here."""
     if not any(e["kind"] == "merge" for e in effects) or not definition_team():
         return None
-    if review_at_head(facts) != "approve":
-        return "merge refused: no approving review at the current head"
-    if facts.get("ci") != "green":
-        return f"merge refused: CI is {facts.get('ci')} at the current head"
-    if facts.get("behind"):
-        return "merge refused: the branch is behind its base (update it first)"
-    return None
+    return effects_mod.refused(effects, facts, tracker)
 
 
 def unblocked(effects, tracker, facts):
@@ -375,14 +371,6 @@ def group_unlabels(effects, facts):
         out += [{"kind": "unlabel", "ticket": e["ticket"], "value": x, **({"on": e["on"]} if e.get("on") else {})}
                 for x in have if x.startswith(f"{group}:") and x != e["value"]]
     return out
-
-
-def review_at_head(facts):
-    """`approve` when agent reviews at the current head all approve, `changes` when one asks for changes, else `none`."""
-    verdicts = [r.get("verdict") for r in facts.get("reviews") or [] if r.get("agent") and r.get("commit_id") == facts.get("head")]
-    if not verdicts:
-        return "none"
-    return "changes" if any(v != "approve" for v in verdicts) else "approve"
 
 
 def _resolved_ids(body):
@@ -507,7 +495,6 @@ def plugin_registry():
     return plugins.registry(config_mod.load())
 
 
-REMOTE_FIRST = ("review", "merge", "update-branch")  # effects that write to a code host and can fail there
 GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket"}  # and the plugins' guards
 FROM = re.compile(r"<!-- factory:from (\S+?)( reply)? -->")
 
@@ -719,12 +706,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if scope := rereview_scope(effects, payload, facts, focus, tracker, ticket):
         raise Bad(scope)
     comment_after = []  # what a plugin's effects must write after the stage change (the comment node's reply)
-    handlers = {}  # a plugin's effects, by handler: it turns them into core effects (comments: route, reply, skip)
-    for e in effects:  # or reads their payload before anything is written (notify on the ticket or its PR)
-        target = e.get("on") or "ticket"
-        if target not in registry.triggers() and (spec := registry.effect(e["kind"], target)):
-            handlers.setdefault(spec, []).append(e)
-    for spec, mine in handlers.items():
+    # A plugin's effects, by handler: it turns them into core effects (comments: route, reply, skip) or reads their
+    # payload before anything is written (notify on the ticket or its PR)
+    for spec, mine in effects_mod.plugin_handlers(registry, effects).items():
         moved, later = plugins.load(spec)(mine, name, payload, facts, tracker, nodes, ticket)
         effects = [e for e in effects if all(e is not m for m in mine)] + moved
         comment_after += later
@@ -760,9 +744,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         effects[:0] = human_effects
     after = [*after, *comment_after, *unblocked(effects, tracker, facts)]
     effects[:0] = group_unlabels(effects, facts)
-    # Remote writes that can fail first, the stage change last: a failed review POST then leaves the labels and the
-    # stage as they were, instead of a ticket with its risk label removed and no node to wake it (#998).
-    effects.sort(key=lambda e: 0 if e["kind"] in REMOTE_FIRST else 2 if e["kind"] == "stage" else 1)
+    effects = effects_mod.order(tracker, effects)  # remote writes first, the stage change last (#998)
     for e in effects:
         if e["kind"] == "stage":
             e["event"] = payload.get("event")
@@ -780,12 +762,10 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
                 e["heads"] = facts["heads"]  # one per repository of a multi-repository ticket
         if e["kind"] == "comment" and payload.get("run_id"):
             e["run_id"] = payload["run_id"]
-        if e.get("on") in registry.triggers() and (spec := registry.effect(e["kind"], e["on"])):  # a plugin's target
+        if spec := effects_mod.plugin_target(registry, e):  # a plugin's target
             plugins.load(spec)(e, facts, tracker, ticket)  # #590 `on: mention`: answer where, and whom, it was asked
-        if e["kind"] == "comment" and definition_team():
-            e["value"] = f"{e['value']}\n\n{comment_marker(name)}"
-        if e["kind"] == "review" and definition_team():
-            e["summary"] = f"{e.get('summary') or ''}\n\n{comment_marker(name)}"
+        if e["kind"] in ("comment", "review") and definition_team():
+            effects_mod.mark(e, comment_marker(name))
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
     replay = (payload.get("review_replay") and facts.get("stage") == "in-review"
@@ -793,7 +773,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
                                                                "round": payload.get("round"),
                                                                "review_replay": True}))
     why = (None if replay else matches(node, facts, {**payload, "id": payload.get("event")}, out)) \
-        or merge_refused(effects, facts)
+        or merge_refused(effects, facts, tracker)
     if why:
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
@@ -1360,7 +1340,7 @@ def main(argv):
                 code_host = GitHubCodeHost.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {}))  # one runner, so github_calls counts both
         elif kind == "memory" and path:
             try:
-                tracker = MemoryTracker(dict(json.loads(Path(path).read_text())))
+                tracker = MemorySystem(dict(json.loads(Path(path).read_text())))
                 code_host = tracker  # the memory tracker also maps a PR number to its ticket
             except (OSError, ValueError, TypeError) as e:
                 raise Bad(f"malformed --tracker file: {e}")

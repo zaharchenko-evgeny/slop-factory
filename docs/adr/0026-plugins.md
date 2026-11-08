@@ -1,7 +1,7 @@
 # ADR-0026: Engine plugins: events in, records out, effects
 
-Status: accepted, requested by #1064 (slice 1: #1065). Amends ADR-0025 and
-ADR-0004.
+Status: accepted, requested by #1064 (slices: #1065, #1066, #1067). Amends
+ADR-0025 and ADR-0004.
 
 ## Context
 
@@ -114,12 +114,42 @@ setting, and five hooks. The core no longer imports it, and
 A team's `modules: [comments]` keeps working. The engine default is
 `plugins: []`.
 
-Until #1067 adds the effect registry with the core policies, the gate calls
-a plugin's effect handler in the shape it had before: the comment node's
-handler turns its effects into core effects, and an `on: mention` handler
-rewrites one effect. Later slices move GitHub (#1068),
-YouTrack (#1069), Space (#1070), the local surface and agent runners
-(#1071) and Air (#1072) onto the registry.
+#1067 makes decisions 6 and 7 real for the gate. `factory/derive.py` derives
+every fact from records (`factory/ports/records.py`). `factory/effects.py`
+is the `(kind, target)` registry with the core policies: `close` before
+`stage: done`, the merge `needs`, `primary_last`, `Effect.remote` in place of
+`gate.REMOTE_FIRST`, `frame` for the `[factory]` prefix and trailer, and `mark`
+for the team's node marker. `factory/gate_tracker.py` holds
+`GateTracker(tracker_for_env, vcs_for_env)`, which reads records and applies
+effects on the system of their target. `GitHubGateTracker` and `MemorySystem`
+declare their handlers in `effects`. `gate_port.CodeHost` is now `Vcs`, with
+`event(payload)`. `factory/tests/system_contract.py` is the contract each
+system passes: records read back, and a second apply of every declared
+`(kind, target)` returns `False`.
+
+The gate is ready for scopes but wires one tracker. `Subject` and `Query`
+carry an optional `scope`, in the system's own terms: `{label: ...}` on
+GitHub, `{field: ..., value: ...}` on YouTrack. Every environment resolves to
+the one top-level tracker (`GateTracker.single`), so no read is scoped yet.
+Per-environment trackers pass a resolver and the ticket's environment.
+
+Remaining gaps:
+- A feature plugin's effects keep their own hook shape. The comments and
+  notify handlers (`effects.plugin_handlers`) rewrite effects before the stop
+  and human-attention rules see them. The `on: mention` handler
+  (`effects.plugin_target`) rewrites one effect after `order`. `gate.send`
+  sends only after the match check. Making them system effects would move
+  them past those points, so they stay hooks.
+- `gate.resolve` drops `on:` for route, reply, park-behind-main-red, stage,
+  review and merge, so those target what their kind names.
+- GitHub's `react` reports a write each time: the API returns the reaction
+  that already exists.
+- A single repository's `update-branch` does not read before it writes; it
+  relies on GitHub refusing the second PUT.
+- A system without `effects` keeps the old remote kinds (`effects.REMOTE`).
+
+Later slices move GitHub (#1068), YouTrack (#1069), Space (#1070), the local
+surface and agent runners (#1071) and Air (#1072) into plugins.
 
 `notify` (#1066) is the second feature plugin. Its declaration names the
 `notify` effect on `ticket` and `pr`, the `notify` CLI word
