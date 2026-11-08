@@ -85,6 +85,11 @@
           "propertyNames": {"minLength": 1},
           "additionalProperties": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"}
         },
+        "repositories": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Repositories that hold tickets (ADR-0024): each names a `repositories[]` entry."
+        },
         "token_env": {
           "type": "string"
         },
