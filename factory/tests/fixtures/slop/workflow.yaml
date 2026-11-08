@@ -241,7 +241,7 @@ nodes:
     triggers: [{ stage: blocked }, { stage: needs-answers }]
     output: read-only
     outcomes:
-      notified: { effects: [{ assign: { field: assignee } }, { comment: message }] }
+      notified: { effects: [{ comment: message }] }
       skipped:  {}
 
   notify-pr:                      # a PR that waits for the owner: the message goes on the PR
@@ -250,7 +250,7 @@ nodes:
     triggers: [{ label: "factory:needs-human" }]
     output: read-only
     outcomes:
-      notified: { effects: [{ assign: { field: assignee }, on: pr }, { comment: message, on: pr }] }
+      notified: { effects: [{ comment: message, on: pr }] }
       skipped:  {}
 
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
