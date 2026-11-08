@@ -28,7 +28,7 @@ import deploy  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
 import definition  # noqa: E402
-from comments import node as comment_node  # noqa: E402
+from factory_plugins.comments import node as comment_node  # noqa: E402
 from gate_port import MemoryTracker, TagTracker  # noqa: E402
 
 CONFIG = cfg.load()
@@ -228,7 +228,7 @@ class GateTest(unittest.TestCase):
         return graph
 
     def ask(self, tracker, to="reviewer", node="intake", hops=3):
-        with patch.object(gate.config_mod, "load", return_value={"limits": {"mention_hops": hops}, "modules": ["comments"]}):
+        with patch.object(gate.config_mod, "load", return_value={"limits": {"mention_hops": hops}, "plugins": ["comments"]}):
             return gate.apply(node, "ask", {"ticket": "7", "to": to, "text": "Is X\nin scope?"}, tracker, self.ask_graph())
 
     def test_ask_posts_one_comment_with_the_marker_and_keeps_the_stage(self):
@@ -283,7 +283,7 @@ class GateTest(unittest.TestCase):
 
     def comment_run(self, tracker, outcome, graph=None, **payload):
         with patch("gate.definition_team", return_value=False), \
-                patch.object(gate.config_mod, "load", return_value={**CONFIG, "modules": ["comments"], "tracker": {**CONFIG["tracker"], "commands": {}}}):
+                patch.object(gate.config_mod, "load", return_value={**CONFIG, "plugins": ["comments"], "tracker": {**CONFIG["tracker"], "commands": {}}}):
             return gate.apply("comment", outcome, {"ticket": "7", **payload}, tracker, graph or self.comment_graph())
 
     def approved_pr(self, **kw):
@@ -403,8 +403,8 @@ class GateTest(unittest.TestCase):
         pairs = {frozenset(("dev", "reviewer"))}
         def holds(body, agent):
             facts = {"comments": [{"body": "older @factory:dev", "at": "1"}, {"body": body, "at": "2"}]}
-            with patch("comments.mentions.neighbours", return_value=pairs), patch("definition.load", return_value={}), \
-                    patch("gate.comments_on", return_value=True):
+            with patch("factory_plugins.comments.mentions.neighbours", return_value=pairs), patch("definition.load", return_value={}), \
+                    patch("gate.plugin_registry", return_value=gate.plugins.registry({"plugins": ["comments"]})):
                 return gate.guard_holds({"mention": agent}, facts)
         self.assertTrue(holds("@factory:dev why X?", "dev"))                                         # a person
         self.assertFalse(holds("@factory:dev-cheap why?", "dev"))                                    # another handle
@@ -414,8 +414,8 @@ class GateTest(unittest.TestCase):
         self.assertFalse(holds("no mention", "dev"))
         review = {"reviews": [{"body": "B1 @factory:dev is this intended? <!-- factory:from reviewer -->",
                                "submitted_at": "3"}], "comments": []}
-        with patch("comments.mentions.neighbours", return_value=pairs), patch("definition.load", return_value={}), \
-                patch("gate.comments_on", return_value=True):
+        with patch("factory_plugins.comments.mentions.neighbours", return_value=pairs), patch("definition.load", return_value={}), \
+                patch("gate.plugin_registry", return_value=gate.plugins.registry({"plugins": ["comments"]})):
             self.assertTrue(gate.guard_holds({"mention": "dev"}, review))                          # asked in a review
 
     def test_label_group_holds_one_value(self):

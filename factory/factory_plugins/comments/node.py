@@ -1,15 +1,16 @@
-"""ADR-0023: one comment node routes person comments and agent asks (ADR-0025 module).
+"""ADR-0023: one comment node routes person comments and agent asks (ADR-0025 plugin).
 
-`step_input` lists, for the step, the comments after the cursor; `moves` turns the node's `route`, `reply` and `skip`
-effects into the writes that move the item, remove the wake label and post the reply with the new cursor.
+`step_context` (hook `gate.step_context`) lists, for the step, the comments after the cursor; `moves` (the handler of
+the `route`, `reply` and `skip` effects) turns them into the writes that move the item, remove the wake label and post
+the reply with the new cursor.
 """
 import json
 import re
 from pathlib import Path
 
 import vocab
-from comments import EFFECTS
-from comments.asks import ASK
+from factory_plugins.comments import EFFECTS
+from factory_plugins.comments.asks import ASK
 
 SEEN = re.compile(r"<!-- factory:comment-seen (\d+) -->")
 
@@ -30,7 +31,7 @@ def new_comments(facts, tracker=None, ticket=None):
     """The comments on the ticket and its PR after the cursor, oldest first, `on` saying where each is. The factory's
     own comments (a `factory:from` marker without an ask marker) are not input."""
     from gate import FROM
-    from comments.mentions import pr_comments
+    from factory_plugins.comments.mentions import pr_comments
     pr = pr_comments(facts, tracker, ticket)
     found = [dict(c, on="ticket") for c in facts.get("comments") or []] + [dict(c, on="pr") for c in pr or []]
     seen = cursor(found)
@@ -66,6 +67,17 @@ def step_input(node, facts, tracker, ticket):
     save_input(ticket, listed)
     facts["new_comments"] = [{k: c.get(k) for k in ("id", "on", "author", "author_is_bot", "author_is_factory", "at", "body")}
                              for c in listed]
+
+
+def step_context(name, node, facts, tracker, ticket):
+    """Hook `gate.step_context`: the comment node's input in `facts`, and for a reply step the `mention` it answers
+    (who asked it, and where)."""
+    import gate
+    step_input(node, facts, tracker, ticket)  # ADR-0023: the comments after the cursor
+    if name.startswith("reply-") and gate.definition_team():
+        from factory_plugins.comments import mentions
+        return {"mention": mentions.latest(facts, tracker, ticket)}
+    return {}
 
 
 def route_effects(to, facts, ticket, nodes, tier, clean):

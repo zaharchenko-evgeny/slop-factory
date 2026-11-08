@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-import comments  # its names only; the feature code is imported when the module is on (ADR-0025)
+import plugins  # ADR-0026: a plugin's code is imported when the core calls it
 
 FACTORY = "factory.yaml"
 WORKFLOW = "workflow.yaml"
@@ -72,16 +72,9 @@ def load(root):
     workflow = _keys(yaml.safe_load((root / WORKFLOW).read_text()) or {})
     bodies = {p.parent.name: p.read_text() for p in sorted((root / ROLES).glob("*/role.md"))}
     defn = {"root": root, "factory": factory, "workflow": workflow, "bodies": bodies}
-    if module_on(defn, comments.NAME):
-        from comments import mentions
-        mentions.add_nodes(defn)  # #590: the generated router and reply nodes of `mentionable` agents
+    for add in plugins.registry(factory).hook("definition.load"):
+        add(defn)  # comments (#590): the generated router and reply nodes of `mentionable` agents
     return defn
-
-
-def module_on(defn, name):
-    """True when the team's factory.yaml turns on engine module `name` (`modules: [comments]`, ADR-0025)."""
-    modules = defn["factory"].get("modules") or []
-    return isinstance(modules, list) and name in modules
 
 
 def merge(base, over):
@@ -406,7 +399,7 @@ def errors(defn):
     envs = f.get("environments") or {}
     hooks = f.get("webhooks") or {}
     nodes = w.get("nodes") or {}
-    on = module_on(defn, comments.NAME)
+    registry = plugins.registry(f)
     if not f.get("owner"):
         errs.append("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)")
     errs += [e for n, s in skills.items() for e in _skill_spec_errors(f"skills.{n}", s)]
@@ -516,14 +509,7 @@ def errors(defn):
                 errs.append(f"unknown-else: {where}.{o}: {oc['else']}")
             guards = [k for k in oc.get("if") or {} if k not in GUARDS]
             kinds = [next((k for k in e if k != "on"), None) for e in oc.get("effects") or []]
-            errs += [f"module-off: {where}.{o}: {k} needs modules: [{comments.NAME}]" for k in [*guards, *kinds]
-                     if k in (*comments.GUARDS, *comments.EFFECTS) and not on]
-            errs += [f"module-off: {where}.{o}: `on: mention` needs modules: [{comments.NAME}]"
-                     for e in oc.get("effects") or [] if e.get("on") == "mention" and not on]
-            if o == "ask" and not on:  # the gate refuses an `ask` outcome while the module is off
-                errs.append(f"module-off: {where}.ask: ask needs modules: [{comments.NAME}]")
-            errs += [f"unknown-guard: {where}.{o}: {k}" for k in guards if k not in comments.GUARDS]
-            errs += [f"unknown-effect: {where}.{o}: {k}" for k in kinds if k not in EFFECTS and k not in comments.EFFECTS]
+            errs += _plugin_key_errors(registry, f"{where}.{o}", o, guards, kinds, oc.get("effects") or [])
             for effect in oc.get("effects") or []:
                 if isinstance(effect, dict) and ("assign" in effect or "unassign" in effect):
                     key = "assign" if "assign" in effect else "unassign"
@@ -560,30 +546,44 @@ def errors(defn):
                 render(defn, name)
             except __import__("jinja2").TemplateError as e:
                 errs.append(f"render: {where}: {e}")
-    if on:
-        from comments import mentions
-        errs += mentions.errors(defn, NO_ROLE)
-    if not isinstance(f.get("modules") or [], list):
-        errs.append(f"bad-modules: factory.yaml: `modules` must be a list, for example [{comments.NAME}]")
-    else:
-        errs += [f"unknown-module: modules: {m}" for m in f.get("modules") or [] if m != comments.NAME]
+    for check in registry.hook("definition.errors"):
+        errs += check(defn)  # comments: a mentionable agent needs a role; `mentions` and `reply-*` are reserved
+    errs += plugins.errors(f)
     return errs + _mcp_errors(defn) + _notify_errors(f.get("notify"))
 
 
+def _plugin_key_errors(registry, where, outcome, guards, kinds, effects):
+    """An outcome's guard facts, effect kinds, `on:` targets and name that a plugin owns while it is off
+    (`module-off`, ADR-0026), and the guards and effects nobody owns."""
+    errs = []
+    for key, of in [*((k, "guard") for k in guards), *((k, "effect") for k in kinds if k not in EFFECTS)]:
+        owner = plugins.owner(key, of)
+        if owner is None:
+            errs.append(f"unknown-{of}: {where}: {key}")
+        elif not registry.is_on(owner):
+            errs.append(plugins.refusal(where, key, owner))
+    errs += [plugins.refusal(where, f"`on: {e['on']}`", owner) for e in effects if isinstance(e, dict)
+             and isinstance(e.get("on"), str) and (owner := plugins.owner(e["on"], "trigger")) and not registry.is_on(owner)]
+    if (owner := plugins.owner(outcome, "outcome")) and not registry.is_on(owner):  # the gate refuses it too
+        errs.append(plugins.refusal(where, outcome, owner))
+    return errs
+
+
 def warnings(defn):
-    """A label an outcome adds that no node triggers on (a person may add it, so it is not an error); a
-    `mentionable` agent while the comments module is off (it is then ignored)."""
+    """A label an outcome adds that no node triggers on (a person may add it, so it is not an error); an agent
+    setting of a plugin that is off (`mentionable` without comments: it is then ignored)."""
     nodes = (defn["workflow"].get("nodes") or {}).values()
     triggered = {t["label"] for n in nodes for t in n.get("triggers") or [] if isinstance(t, dict) and "label" in t}
     added = {e["label"] for n in nodes for oc in (n.get("outcomes") or {}).values()
              for e in (oc or {}).get("effects") or [] if isinstance(e, dict) and "label" in e}
     prefix = (defn["workflow"].get("stages") or {}).get("label_prefix", "factory:")
     # A routing label (the stage prefix) should wake a node; `risk:low` and the like are states, read by guards.
-    off = [] if module_on(defn, comments.NAME) else [
-        f"module-off: agents.{a}: mentionable needs modules: [{comments.NAME}]"
-        for a, spec in (defn["factory"].get("agents") or {}).items() if (spec or {}).get("mentionable")]
+    registry = plugins.registry(defn["factory"])
+    off = [plugins.refusal(f"agents.{a}", k, owner) for a, spec in (defn["factory"].get("agents") or {}).items()
+           for k in spec or {} if (spec or {})[k] and (owner := plugins.owner(k, "agent")) and not registry.is_on(owner)]
+    more = [w for check in registry.hook("definition.warnings") for w in check(defn)]
     return [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
-            if label.startswith(prefix) and label not in triggered] + off
+            if label.startswith(prefix) and label not in triggered] + off + more
 
 
 # --- Compile into the shapes the engine reads (#669, #677) ---------------------------------------
@@ -594,7 +594,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed", ("pr", "commented"): "pr commented",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red", "assign", "unassign", "notify")  # and comments.EFFECTS
+           "request-reviewers", "park-behind-main-red", "assign", "unassign", "notify")  # and the plugins' effects
 
 
 def _name(label, prefix):
@@ -755,7 +755,7 @@ def to_project(defn):
                   "confirm_external_writes_scope": dset.get("confirm_external_writes_scope") or []},
         "reviews": {"trusted_bots": []},
         **({"owner": f["owner"]} if f.get("owner") else {}),
-        **({"modules": list(f["modules"])} if f.get("modules") else {}),
+        **({"plugins": plugins.listed(f)} if plugins.listed(f) else {}),
     }
     return descriptor, {"format": 2, "adapters": {"ticket": (f.get("tracker") or {}).get("adapter", "github-issues"),
                                                   "pr": "github"},

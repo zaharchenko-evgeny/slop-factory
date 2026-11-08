@@ -18,13 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 import config as config_mod  # noqa: E402  (`validate` takes a `config` dict)
 import vocab  # noqa: E402
-import comments  # noqa: E402  (its names only, ADR-0025)
+import plugins  # noqa: E402  (ADR-0026)
 
 ROOT = Path(__file__).resolve().parents[1]
-EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red", "assign", "unassign"}  # and comments.EFFECTS
+EFFECTS = {"stage", "label", "unlabel", "comment", "review", "create-issues", "merge", "update-branch", "set-field", "join", "request-reviewers", "park-behind-main-red", "assign", "unassign"}  # and the plugins' effects
 OUTPUTS = {"read-only", "create-pr", "push-to-source", "push-to-new-branch", "as-instructed"}
 WHEN_KEYS = {"stage", "blockers", "focus", "round", "fix-rounds", "ci", "actor", "always", "due", "pr-state",
-             "label", "pr", "review", "children", "ticket"}  # the last five: ADR-0021 facts; comments.GUARDS: the module's
+             "label", "pr", "review", "children", "ticket"}  # the last five: ADR-0021 facts; and the plugins' guards
 NO_ROLE = {"script", "human"}
 
 
@@ -67,9 +67,15 @@ def validate(nodes, config):
     roles = config["roles"]
     errs += config_mod.mcp_errors(roles, ((config.get("targets") or {}).get("air") or {}).get("mcp_connectors"), nodes)
     envs, scheds = nodes.get("environments") or {}, nodes.get("schedules") or {}
-    on = comments.NAME in (config.get("modules") or [])  # ADR-0025: the comments module's keys
-    effects, when_keys = EFFECTS | (set(comments.EFFECTS) if on else set()), WHEN_KEYS | (set(comments.GUARDS) if on else set())
-    off = lambda k: f" (needs modules: [{comments.NAME}])" if not on and k in (*comments.EFFECTS, *comments.GUARDS) else ""
+    registry = plugins.registry(config)  # ADR-0026: the keys of the plugins the team turns on
+    effects, when_keys = EFFECTS | registry.effect_kinds(), WHEN_KEYS | set(registry.guards())
+
+    def off(where, key, of):
+        """The module-off error when `key` belongs to a plugin that is off, else None."""
+        owner = plugins.owner(key, of) if isinstance(key, str) else None
+        if owner is None or registry.is_on(owner):
+            return None
+        return plugins.refusal(where, f"`on: {key}`" if of == "trigger" else key, owner)
 
     def stage(where, s):
         if s != "none" and s not in stages:
@@ -89,7 +95,7 @@ def validate(nodes, config):
         else:
             for k in n["when"]:
                 if k not in when_keys:
-                    errs.append(f"bad-condition: {name}: unknown `when` key {k}{off(k)}")
+                    errs.append(off(f"{name}.when", k, "guard") or f"bad-condition: {name}: unknown `when` key {k}")
             if "stage" in n["when"]:
                 for st in n["when"]["stage"] if isinstance(n["when"]["stage"], list) else [n["when"]["stage"]]:
                     stage(f"{name}.when", st)
@@ -115,10 +121,18 @@ def validate(nodes, config):
             for e in (o or {}).get("effects") or []:
                 keys = [k for k in e if k != "on"] if isinstance(e, dict) else []
                 if len(keys) != 1 or keys[0] not in effects:
-                    errs.append(f"unknown-effect: {name}.{oname}: {e}{off(keys[0] if len(keys) == 1 else None)}")
-                elif "on" in e and (e["on"] not in ("issue", "pr", *(("mention",) if on else ())) or keys[0] not in ("label", "unlabel", "comment")
-                                   or (e["on"] == "mention" and keys[0] != "comment")):  # #590: where the question was
-                    errs.append(f"unknown-effect: {name}.{oname}: bad `on` in {e}{off(e['on'])}")
+                    errs.append(len(keys) == 1 and off(f"{name}.{oname}", keys[0], "effect")
+                                or f"unknown-effect: {name}.{oname}: {e}")
+                elif "on" in e:
+                    target = e["on"]
+                    if target in ("issue", "pr"):
+                        ok = keys[0] in ("label", "unlabel", "comment")
+                    else:  # a plugin's target: only an effect it declares there (#590: `comment` `on: mention`)
+                        ok = isinstance(target, str) and target in registry.triggers() \
+                            and registry.effect(keys[0], target) is not None
+                    if not ok:
+                        errs.append(off(f"{name}.{oname}", target, "trigger")
+                                    or f"unknown-effect: {name}.{oname}: bad `on` in {e}")
             if (o or {}).get("else") and o["else"] not in n["outcomes"]:
                 errs.append(f"unknown-outcome: {name}.{oname}: else {o['else']}")
             for s in (o or {}).get("from") or []:

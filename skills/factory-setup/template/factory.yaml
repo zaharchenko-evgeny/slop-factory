@@ -122,7 +122,7 @@ roles:
     skills: [to-tickets]
     mcp: {}
 
-# Agents: a role (above; roles/<role>/: role.md, setup.sh) + a model. With `modules: [comments]` (ADR-0025, off
+# Agents: a role (above; roles/<role>/: role.md, setup.sh) + a model. With `plugins: [comments]` (ADR-0026, off
 # by default), `mentionable: true`: @factory:<agent> in a comment or review asks it; deploy adds its reply step (#590).
 # + access + settings. `gate` and `human` have no role.
 agents:

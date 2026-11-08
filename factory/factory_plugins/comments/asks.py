@@ -1,11 +1,16 @@
-"""#591: an agent asks another agent in the thread, with a hop budget (ADR-0025 module)."""
+"""#591: an agent asks another agent in the thread, with a hop budget (ADR-0025 plugin)."""
 import re
 
 ASK = re.compile(r"<!-- factory:ask id=(\S+) from=(\S+) to=(\S+) hop=(\d+) -->")
 ANSWER = re.compile(r"<!-- factory:answer id=(\S+) -->")
 
 
-def effects(name, node, out, payload, tracker, ticket, effects):
+def outcome(name, outcome, node, out, payload, tracker, ticket, effects):
+    """Hook `gate.outcome`: the effects of the plugin's `ask` outcome."""
+    return ask_effects(name, node, out, payload, tracker, ticket, effects) if outcome == "ask" else effects
+
+
+def ask_effects(name, node, out, payload, tracker, ticket, effects):
     """The comment an `ask` outcome posts. `@factory:<to>` wakes the target through the mention router, so it
     runs in reply mode. Refused for a pair outside the outcome's `to` allowlist; over `limits.mention_hops` asks on
     the ticket it posts one comment naming the limit and wakes nothing."""
@@ -14,7 +19,7 @@ def effects(name, node, out, payload, tracker, ticket, effects):
     allowed = out.get("to") or []
     if to not in allowed:
         raise gate.Bad(f"ask: `{to}` is not an agent this node may ask; allowed: {', '.join(allowed) or 'none'}")
-    from comments.mentions import pr_comments
+    from factory_plugins.comments.mentions import pr_comments
     facts = tracker.facts(ticket)
     pr = pr_comments(facts, tracker, ticket)
     asked = sum(1 for c in [*(facts.get("comments") or []), *(pr or [])]  # only the factory's own asks count

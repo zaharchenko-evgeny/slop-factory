@@ -1,8 +1,8 @@
-"""#590: `@factory:<agent>` in a comment or review wakes that agent in reply mode (ADR-0021 layout, ADR-0025 module).
+"""#590: `@factory:<agent>` in a comment or review wakes that agent in reply mode (ADR-0021 layout, ADR-0025 plugin).
 
-`add_nodes(defn)` adds the generated router and reply nodes when `definition.load` reads a team with the module on;
-`errors(defn)` checks what only the module allows; `holds(agent, ...)` is the `mention` guard fact; `latest` and
-`reply_target` tell a reply step who asked it and where.
+`add_nodes(defn)` (hook `definition.load`) adds the generated router and reply nodes when the plugin is on;
+`errors(defn)` (hook `definition.errors`) checks what only the plugin allows; `holds(agent, ...)` is the `mention`
+guard fact; `latest` and `reply_target` (the `comment` effect `on: mention`) tell a reply step who asked it and where.
 """
 import re
 
@@ -57,8 +57,9 @@ def add_nodes(defn):
             "outcomes": {"replied": {"effects": [{"unlabel": f"{prefix}reply-{a}"}, {"comment": "reply", "on": "mention"}]}}})
 
 
-def errors(defn, no_role):
-    """The module's checks of a definition: a mentionable agent needs a role; its node names are reserved."""
+def errors(defn):
+    """The plugin's checks of a definition: a mentionable agent needs a role; its node names are reserved."""
+    from definition import NO_ROLE as no_role
     errs = []
     for a, spec in (defn["factory"].get("agents") or {}).items():
         spec = spec or {}
@@ -98,7 +99,7 @@ def holds(agent, facts, tracker=None, ticket=None):
     import config as config_mod
     import definition
     from gate import FROM
-    from comments.asks import ANSWER, ASK
+    from factory_plugins.comments.asks import ANSWER, ASK
     comments = list(facts.get("comments") or [])
     comments += pr_comments(facts, tracker, ticket) or []
     comments += [{"body": r.get("body") or "", "at": r.get("submitted_at") or r.get("at")}
@@ -125,7 +126,7 @@ def holds(agent, facts, tracker=None, ticket=None):
 def reply_target(e, facts, tracker, ticket):
     """A reply's `comment` effect with `on: mention`: post it where the question was, to whoever asked."""
     from gate import FROM
-    from comments.asks import ASK
+    from factory_plugins.comments.asks import ASK
     asked = latest(facts, tracker, ticket)
     e["on"] = "pr" if asked and asked["on"] == "pr" else None
     if not e["on"]:

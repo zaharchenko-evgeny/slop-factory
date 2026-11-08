@@ -545,7 +545,7 @@ class DefinitionTest(unittest.TestCase):
             config.set_team(before)
 
     def test_neighbours_come_from_the_workflow(self):
-        from comments import mentions
+        from factory_plugins.comments import mentions
         pairs = mentions.neighbours(definition.load(self.root))
         for a, b in [("dev", "reviewer"), ("dev", "reviewer-cheap"), ("reviewer", "approver"), ("dispatcher", "dev"),
                      ("approver", "clerk"), ("dev", "dev-strong")]:
