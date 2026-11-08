@@ -19,3 +19,4 @@ py-modules = ["cli", "config", "definition", "deploy", "derive", "doctor", "effe
 
 [tool.setuptools.package-data]
 "factory_plugins.github" = ["wake_files/*"]
+"factory_plugins.youtrack" = ["comment-wake/*"]
