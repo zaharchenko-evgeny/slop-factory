@@ -33,4 +33,4 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - run: scripts/comment-wake-label.sh
+      - run: bash scripts/comment-wake-label.sh
