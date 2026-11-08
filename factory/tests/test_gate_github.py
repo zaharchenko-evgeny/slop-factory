@@ -845,6 +845,64 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(titles, ["title=Api", "title=Web"])  # prerequisite first
         self.assertEqual(len([w for w in gh.writes if "issues/999/dependencies/blocked_by" in " ".join(w)]), 1)
 
+    def split_across_repositories(self, web_issues=(), sub=(), blocked=None):
+        """A tracker with a `web` repository, and a `gh` whose `o/web` calls answer from `web_issues`; returns both."""
+        web_log = []
+
+        class Gh(FakeGh):
+            def __call__(self, args, timeout=None):
+                path = next((x for x in args if x.startswith("repos/o/web/")), None)
+                if path is None:
+                    return super().__call__(args, timeout)
+                web_log.append(args)
+                if "POST" in args and path.endswith("/issues"):
+                    return json.dumps({"id": 555, "number": 41})
+                if path.endswith("issues?state=open&per_page=100"):
+                    return "\n".join(json.dumps(i) for i in web_issues)
+                if path.endswith("/dependencies/blocked_by") and "POST" not in args:
+                    return "\n".join(json.dumps(i) for i in (blocked or []))
+                return ""
+
+        gh = Gh(labels=("factory:split", "risk:low"), sub=sub)
+        return GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh, repositories={"primary": None, "web": "o/web"}), gh, web_log
+
+    def test_create_children_in_the_repository_the_child_names(self):
+        kids = [{"title": "Api", "body": "a"}, {"title": "Web", "body": "w", "repo": "web", "after": [1]}]
+        t, gh, web = self.split_across_repositories()
+        self.assertTrue(t.apply(eff("create-issues", kids)))
+        post = next(w for w in web if "POST" in w and w[-1] != "labels[]=factory:ready" and any(x.startswith("title=Web") for x in w))
+        self.assertIn("repos/o/web/issues", post)
+        self.assertIn("labels[]=repo:web", post)
+        self.assertFalse([w for w in gh.writes if any(x.startswith("title=Web") for x in w)])  # Api only in the parent's repository
+        self.assertEqual([w for w in gh.writes if any(x.startswith("title=") for x in w)][0][3], "repos/o/r/issues")
+        self.assertEqual([w for w in web if "dependencies/blocked_by" in " ".join(w) and "POST" in w],
+                         [["api", "-X", "POST", "repos/o/web/issues/41/dependencies/blocked_by", "-F", "issue_id=999"]])
+        self.assertIn(["api", "-X", "POST", "repos/o/web/issues/41/labels", "-f", "labels[]=factory:ready"], web)
+        self.assertIn(["api", "-X", "POST", "repos/o/r/issues/7/sub_issues", "-F", "sub_issue_id=555"], gh.writes)
+        self.assertEqual(len([w for w in gh.writes if "issues/7/sub_issues" in " ".join(w)]), 2)  # Api and Web
+
+    def test_create_children_retry_reuses_the_child_of_the_other_repository(self):
+        kids = [{"title": "Api", "body": "a"}, {"title": "Web", "body": "w", "repo": "web", "after": [1]}]
+        child = {"id": 555, "number": 41, "title": "Web", "body": "w\n\n<!-- factory:child of=7 -->",
+                 "labels": [{"name": "risk:low"}, {"name": "repo:web"}, {"name": "factory:ready"}]}
+        t, gh, web = self.split_across_repositories([child], sub=["Api", "Web"])
+        api_id = json.loads(gh("api --paginate repos/o/r/issues/7/sub_issues".split()).splitlines()[0])["id"]
+        t, gh, web = self.split_across_repositories([child], sub=["Api", "Web"], blocked=[{"id": api_id, "state": "open"}])
+        gh.blocked = [{"state": "open", "id": 555}]
+        self.assertFalse(t.apply(eff("create-issues", kids)))
+        self.assertEqual((gh.writes, [w for w in web if {"POST", "PATCH", "DELETE"} & set(w)]), ([], []))
+
+    def test_blocked_by_line_of_another_repository_is_read_from_that_repository(self):
+        t, gh, _ = self.split_across_repositories()
+        gh.blocked, gh.issue_body = [], "Blocked by: o/web#41\n\nChild"
+        seen = []
+        run = gh.__call__
+        t.tickets.run = lambda args, timeout=None: (seen.append(args), json.dumps({"state": "open"}) if "issues/41" in " ".join(args) else run(args, timeout))[1]
+        self.assertEqual(t.tickets.open_blockers(7), [41])
+        self.assertIn(["api", "repos/o/web/issues/41"], seen)
+        self.assertEqual(t.tickets._blocked_body("b", 41, "o/web", "o/r"), "Blocked by: o/web#41\n\nb")
+        self.assertEqual(t.tickets._blocked_body("b", 41, "o/r", "o/r"), "Blocked by: #41\n\nb")
+
     def test_create_children_falls_back_to_blocked_by_line(self):
         gh = FakeGh(labels=("factory:split", "risk:low"))
         gh.blocked, gh.fail_blocked_by = [], True

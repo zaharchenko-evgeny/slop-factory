@@ -182,8 +182,13 @@ class GitHubTicketStore:
     """The ticket side of the GitHub tracker (the TicketStore port, factory/gate_port.py): the issues of `repo`, read
     and written with `gh`. `run` is the tracker's `CountedRun`, whose cache `GitHubGateTracker.prefetch` fills."""
 
-    def __init__(self, repo, run=gh):
+    def __init__(self, repo, run=gh, repositories=None):
         self.repo, self.run = repo, run
+        self.others = dict(repositories or {})  # {name: owner/repo} of the definition's other repositories
+
+    def repo_of(self, child):
+        """The repository a child is created in: the one its `repo` names among the other repositories, else this one."""
+        return self.others.get(child.get("repo")) or self.repo
 
     # --- reads
     def _cached(self, path, repo):
@@ -223,8 +228,8 @@ class GitHubTicketStore:
     def open_blockers(self, n):
         """Numbers of the open issues blocking `n`: native links, then `Blocked by: #<n>` body lines."""
         blockers = [b["number"] for b in self.read_list(f"issues/{n}/dependencies/blocked_by") if b["state"] == "open"]
-        for number in re.findall(r"(?im)^Blocked by: #(\d+)\s*$", self.issue(n)["body"]):
-            if self.api(f"issues/{number}").get("state") == "open":
+        for repo, number in re.findall(r"(?im)^Blocked by: (?:([\w.-]+/[\w.-]+))?#(\d+)\s*$", self.issue(n)["body"]):
+            if self.api(f"issues/{number}", repo=repo or None).get("state") == "open":
                 blockers.append(int(number))
         return blockers
 
@@ -320,27 +325,33 @@ class GitHubTicketStore:
         subs = {c["title"]: c for c in self.read_list(f"issues/{n}/sub_issues")}
         blockers = {b["id"] for b in self.read_list(f"issues/{n}/dependencies/blocked_by")}
         mark = f"<!-- factory:child of={n} -->"  # only an issue this ticket created is reused
-        open_issues = {i["title"]: i for i in reversed(self.read_list("issues?state=open&per_page=100"))
-                       if "pull_request" not in i and mark in (i.get("body") or "")}
+        listed = {}  # repository -> {title: its open child of this ticket}
+
+        def open_issues(repo):
+            if repo not in listed:
+                listed[repo] = {i["title"]: i for i in reversed(self.read_list("issues?state=open&per_page=100", repo=repo))
+                                if "pull_request" not in i and mark in (i.get("body") or "")}
+            return listed[repo]
         risk = [x for x in self.issue(n)["attrs"] if x.startswith("risk:")]  # a slice keeps its parent's risk path
         wrote, made, links = False, {}, child_links(children)  # made: child index -> (id, number); prerequisites go first
         parent_body = self.issue(n)["body"]
         for k in child_order(links):
             c, after = children[k], links[k]
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
-            new = open_issues.get(c["title"])
+            repo = self.repo_of(c)
+            new = open_issues(repo).get(c["title"])
             if c["title"] in subs and new is None:  # not created by this ticket: leave it alone
-                made[k] = (subs[c["title"]].get("id"), subs[c["title"]].get("number"))
+                made[k] = (subs[c["title"]].get("id"), subs[c["title"]].get("number"), repo)
                 continue
             prereqs = [made[j] for j in after if j in made]
             want = f"{c.get('body', '')}\n\n{mark}"
             if new is None:
-                new = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={c['title']}",
+                new = json.loads(self.run(["api", "-X", "POST", f"repos/{repo}/issues", "-f", f"title={c['title']}",
                                            "-f", f"body={want}",
                                            *[x for r in [*risk, *child_attrs(c)] for x in ("-f", f"labels[]={r}")]]))  # no stage yet: not runnable
                 chained, have = set(), set()
             else:  # a reused child converges too: body, risk labels, chain
-                path = f"repos/{self.repo}/issues/{new['number']}"
+                path = f"repos/{repo}/issues/{new['number']}"
                 if (new.get("body") or "") != want:
                     self.run(["api", "-X", "PATCH", path, "-f", f"body={want}"])
                     wrote = True
@@ -352,17 +363,17 @@ class GitHubTicketStore:
                 if missing:
                     self.run(["api", "-X", "POST", f"{path}/labels", *[x for r in [*risk, *child_attrs(c)] for x in ("-f", f"labels[]={r}")]])
                 wrote = wrote or bool(stale or missing)
-                chained = {b["id"] for b in self.read_list(f"issues/{new['number']}/dependencies/blocked_by")} if prereqs else set()
-            for prev, prev_number in prereqs:
+                chained = {b["id"] for b in self.read_list(f"issues/{new['number']}/dependencies/blocked_by", repo=repo)} if prereqs else set()
+            for prev, prev_number, prev_repo in prereqs:
                 if prev in chained:
                     continue
                 try:
-                    self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/dependencies/blocked_by", "-F", f"issue_id={prev}"])
+                    self.run(["api", "-X", "POST", f"repos/{repo}/issues/{new['number']}/dependencies/blocked_by", "-F", f"issue_id={prev}"])
                 except RuntimeError as e:
                     if "403" not in str(e) and "Resource not accessible" not in str(e):
                         raise
-                    want = self._blocked_body(want, prev_number) if prev_number else want
-                    self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{new['number']}", "-f", f"body={want}"])
+                    want = self._blocked_body(want, prev_number, prev_repo, repo) if prev_number else want
+                    self.run(["api", "-X", "PATCH", f"repos/{repo}/issues/{new['number']}", "-f", f"body={want}"])
                 wrote = True
             if c["title"] not in subs:
                 self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
@@ -372,18 +383,18 @@ class GitHubTicketStore:
                 except RuntimeError as e:
                     if "403" not in str(e) and "Resource not accessible" not in str(e):
                         raise
-                    parent_body = self._blocked_body(parent_body, new["number"])
+                    parent_body = self._blocked_body(parent_body, new["number"], repo, self.repo)
                     self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/{n}", "-f",
                               f"body={parent_body}"])
                 wrote = True
             if ready not in have:  # publish `ready` only once the links exist
                 for x in have:  # a reused draft child leaves its old stage
                     if x.startswith("factory:") and x != ready:
-                        self.run(["api", "-X", "DELETE", f"repos/{self.repo}/issues/{new['number']}/labels/{x}"])
-                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{new['number']}/labels", "-f", f"labels[]={ready}"])
+                        self.run(["api", "-X", "DELETE", f"repos/{repo}/issues/{new['number']}/labels/{x}"])
+                self.run(["api", "-X", "POST", f"repos/{repo}/issues/{new['number']}/labels", "-f", f"labels[]={ready}"])
                 wrote = True
             wrote = wrote or c["title"] not in subs or new["id"] not in blockers
-            made[k] = (new["id"], new["number"])
+            made[k] = (new["id"], new["number"], repo)
         return wrote
 
     def park(self, n, check, triage):
@@ -401,8 +412,9 @@ class GitHubTicketStore:
         return True
 
     @staticmethod
-    def _blocked_body(body, number):
-        line = f"Blocked by: #{number}"
+    def _blocked_body(body, number, blocker_repo=None, repo=None):
+        """`body` with a `Blocked by:` line for issue `number`; `owner/repo#n` when it is in another repository."""
+        line = f"Blocked by: {blocker_repo}#{number}" if blocker_repo != repo else f"Blocked by: #{number}"
         return body if re.search(rf"(?m)^{re.escape(line)}$", body) else f"{line}\n\n{body}"
 
 
@@ -423,7 +435,7 @@ class GitHubGateTracker(DescriptorPort):
         self.writable = None  # repository names this environment may write; None: every one (#994)
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, CountedRun(run)
         # the ticket side: every ticket read and write goes through it (GitHub issues unless a store is given)
-        self.tickets = tickets or GitHubTicketStore(repo, self.run)
+        self.tickets = tickets or GitHubTicketStore(repo, self.run, dict(list(self.repositories.items())[1:]))
         self.github = self.tickets if tickets is None else GitHubTicketStore(repo, self.run)  # the code host's REST reads
         if tickets:  # YouTrack: states are a field or tags, commands tags; its `repo` is the code host
             self.state_kinds, self.command_kinds = ("field", "tag"), ("tag", "pr_label")
