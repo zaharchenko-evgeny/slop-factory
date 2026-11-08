@@ -741,10 +741,16 @@ class ProjectPlanTest(unittest.TestCase):
 
     def test_mentionable_agents_get_a_reply_node(self):
         """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node and
-        the mention router; the others do not. With it off (the fixture as it is, ADR-0025) none deploy."""
+        the mention router; the others do not. With it off (ADR-0025) none deploy. The fixture has it on (#1083)."""
         def comments_on(f):
             f["plugins"] = ["comments"]
+
+        def comments_off(f):
+            f.pop("plugins", None)
+            f.pop("modules", None)
         plan = definition_plan(edit_factory=comments_on)
+        self.assertEqual({a["spec"]["node"] for a in plan["automations"]},
+                         {a["spec"]["node"] for a in definition_plan()["automations"]})
         nodes_ = {a["spec"]["node"] for a in plan["automations"]}
         self.assertTrue({"mentions", "reply-dev", "reply-reviewer"} <= nodes_)
         self.assertFalse({"reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
@@ -754,7 +760,7 @@ class ProjectPlanTest(unittest.TestCase):
             comments_on(f)
             for spec in f["agents"].values():
                 spec.pop("mentionable", None)
-        for edit in (none_mentionable, None):
+        for edit in (none_mentionable, comments_off):
             plan = definition_plan(edit_factory=edit)
             nodes_ = {a["spec"]["node"] for a in plan["automations"]}
             self.assertFalse({n for n in nodes_ if n == "mentions" or n.startswith("reply-")})

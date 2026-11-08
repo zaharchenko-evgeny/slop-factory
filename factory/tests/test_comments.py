@@ -49,11 +49,12 @@ class DefinitionModuleTest(unittest.TestCase):
     def off(self):
         self.edit(definition.FACTORY, lambda f: f.pop("plugins"))
 
-    def test_slop_fixture_has_the_module_off(self):
+    def test_slop_fixture_has_the_plugin_on(self):
+        """#1083: the Slop team lists `plugins: [comments]`, so its mentionable agents get reply nodes."""
         defn = definition.load(FIXTURES / "slop")
-        self.assertFalse(plugins.registry(defn["factory"]).is_on("comments"))
-        self.assertFalse({n for n in defn["workflow"]["nodes"] if n == "mentions" or n.startswith("reply-")})
-        self.assertNotIn("mention-router", defn["factory"]["agents"])
+        self.assertTrue(plugins.registry(defn["factory"]).is_on("comments"))
+        self.assertTrue({"mentions", "reply-dev", "reply-reviewer"} <= set(defn["workflow"]["nodes"]))
+        self.assertFalse([w for w in definition.warnings(defn) if w.startswith("module-off")])
 
     def test_off_generates_nothing_and_warns_for_each_mentionable_agent(self):
         on = definition.load(self.root)
