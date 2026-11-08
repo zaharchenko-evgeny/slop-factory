@@ -40,12 +40,14 @@ def rest_event(typename):
     return REST_NAMES.get(typename) or re.sub(r"(?<!^)(?=[A-Z])", "_", typename.removesuffix("Event")).lower()
 
 
-def search_query(repo, labels, now=None, closed_hours=CLOSED_HOURS):
-    """The two search strings (open, recently closed) for issues of `repo` with any of `labels`."""
+def search_query(repo, labels, now=None, closed_hours=CLOSED_HOURS, scope_label=None):
+    """The two search strings (open, recently closed) for issues of `repo` with any of `labels` (and, for an
+    environment's scope, `scope_label` too)."""
     any_label = ",".join(f'"{x}"' for x in labels)
+    scoped = f' label:"{scope_label}"' if scope_label else ""
     since = ((now or datetime.now(timezone.utc)) - timedelta(hours=closed_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return [f"repo:{repo} is:issue is:open label:{any_label}",
-            f"repo:{repo} is:issue is:closed closed:>={since} label:{any_label}"]
+    return [f"repo:{repo} is:issue is:open label:{any_label}{scoped}",
+            f"repo:{repo} is:issue is:closed closed:>={since} label:{any_label}{scoped}"]
 
 
 SEARCH = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){"

@@ -212,7 +212,7 @@ class LazinessTest(unittest.TestCase):
                     pass
                 """)
         self.assertEqual(mods, ["factory_plugins",
-                                *(f"factory_plugins.{p}" for p in ("comments", "github", "notify", "notify_email"))])
+                                *(f"factory_plugins.{p}" for p in ("comments", "github", "notify", "notify_email", "youtrack"))])
 
     def test_notify_on_imports_its_code_only_when_called(self):
         with tempfile.TemporaryDirectory() as d:
@@ -243,6 +243,38 @@ class LazinessTest(unittest.TestCase):
             """)
         self.assertIn("factory_plugins.github", mods)
         self.assertEqual([m for m in mods if m.startswith("factory_plugins.github.")], [])
+
+    def test_youtrack_code_only_when_selected_and_used(self):
+        """#1069: a GitHub team, and the deploy plan, doctor probes and registry of any team, load the youtrack
+        declaration at most; a youtrack team loads its provisioning when the deploy plans, its tracker when the gate
+        builds one."""
+        github = self.imported(FIXTURES / "v2", """
+            import plugins
+            registry = plugins.registry(config.load())
+            assert not registry.is_on("youtrack"), registry.names
+            registry.hook("deploy.plan"); registry.hook("doctor.probes"); registry.impls("tracker")
+            plugins.owners()
+            """)
+        self.assertEqual([m for m in github if m.startswith("factory_plugins.youtrack.")], [])
+        with tempfile.TemporaryDirectory() as d:
+            team = Path(d) / "team"
+            shutil.copytree(FIXTURES / "v2", team)
+            path = team / "factory.yaml"
+            path.write_text(path.read_text().replace("plugins: [comments]", "plugins: [comments, youtrack]"))
+            listed = self.imported(team, """
+                import plugins
+                registry = plugins.registry(config.load())
+                assert registry.is_on("youtrack"), registry.names
+                registry.impls("tracker")
+                """)
+            used = self.imported(team, """
+                import plugins
+                plugins.registry(config.load()).impl("tracker", "youtrack")
+                """)
+        self.assertIn("factory_plugins.youtrack", listed)
+        self.assertEqual([m for m in listed if m.startswith("factory_plugins.youtrack.")], [])
+        self.assertLessEqual({"factory_plugins.youtrack.gate", "factory_plugins.youtrack.store"}, set(used))
+        self.assertNotIn("factory_plugins.youtrack.provision", used)
 
 
 if __name__ == "__main__":

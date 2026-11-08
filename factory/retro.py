@@ -175,14 +175,14 @@ def collect(tracker, label):
 
 
 def main(argv):
-    from factory_plugins.github.gate import GitHubGateTracker
+    import gate
     if argv == ["collect"]:
-        print(json.dumps(collect(GitHubGateTracker.from_config(), vocab.lesson()), indent=2))
+        print(json.dumps(collect(gate.tracker_of(cfg.load()), vocab.lesson()), indent=2))
         return 0
     if len(argv) != 3 or argv[0] != "facts" or argv[1] != "--since":
         print(__doc__)
         return 2
-    print(json.dumps(facts(GitHubGateTracker.from_config(), argv[2]), indent=2))
+    print(json.dumps(facts(gate.tracker_of(cfg.load()), argv[2]), indent=2))
     return 0
 
 

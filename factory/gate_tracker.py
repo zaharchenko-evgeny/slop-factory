@@ -7,9 +7,9 @@ applies an effect on the system of its target under the core policies (factory/e
 The tracker gives `rules()` (derive.Rules) and `repositories` ({name: ...}, the primary first), and may give `scope`
 (ports/system.py Subject.scope), the share of it the environment owns; the gate's reads carry it.
 
-Scope-ready, single-wired: today every environment resolves to the one top-level tracker (`GateTracker.single`), so
-`env` is None and no read is scoped. Per-environment trackers (slice 5 of #1064) pass a resolver and the ticket's
-environment.
+A team with no environment tracker resolves every environment to the one top-level tracker (`GateTracker.single`),
+so `env` is None and no read is scoped. With environment trackers (#1069) each environment's tracker carries its
+`scope` and `scopes.ScopedTracker` sends each ticket to its environment's tracker.
 """
 import derive
 import effects

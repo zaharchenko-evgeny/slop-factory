@@ -1,6 +1,6 @@
 # ADR-0026: Engine plugins: events in, records out, effects
 
-Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068). Amends
+Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068, #1069). Amends
 ADR-0025 and ADR-0004.
 
 ## Context
@@ -51,6 +51,7 @@ every adapter: the stage policy, the merge gates, idempotency and the
    - the system named by `tracker.adapter` (github when unset);
    - every vcs named by `vcs:` (alias `code_host:`) or by
      `environments.<env>.vcs` (github when unset);
+   - every tracker named by `environments.<env>.tracker.adapter`;
    - the `surface:`;
    - the runner of every `models.<alias>.harness`;
    - every `requires`, closed transitively.
@@ -131,11 +132,73 @@ declare their handlers in `effects`. `gate_port.CodeHost` is now `Vcs`, with
 system passes: records read back, and a second apply of every declared
 `(kind, target)` returns `False`.
 
-The gate is ready for scopes but wires one tracker. `Subject` and `Query`
-carry an optional `scope`, in the system's own terms: `{label: ...}` on
-GitHub, `{field: ..., value: ...}` on YouTrack. Every environment resolves to
-the one top-level tracker (`GateTracker.single`), so no read is scoped yet.
-Per-environment trackers pass a resolver and the ticket's environment.
+`Subject` and `Query` carry an optional `scope`, in the system's own terms:
+`{label: ...}` on GitHub, `{field: ..., value: ...}` on YouTrack. A team with
+no environment tracker resolves every environment to the one top-level tracker
+(`GateTracker.single`), so no read is scoped.
+
+### Per-environment trackers
+
+A factory may serve several projects (#1069). Each project is an environment
+with its own tracker, `environments.<env>.tracker`, in the same `factory.yaml`
+and one deploy:
+
+```yaml
+tracker: {adapter: youtrack, url: https://yt.example, project: PRJ}
+environments:
+  backend: {repositories: [...], tracker: {adapter: youtrack, scope: {field: Subsystem, value: Backend}}}
+  web: {repositories: [...], tracker: {adapter: github-issues, repository: o/web, scope: {label: "area:web"}}}
+```
+
+- **Merge.** An environment's block takes every unset key from the top-level
+  `tracker` when the adapters match. With another adapter it takes only the
+  factory's own keys (stages, labels), never the system's (`url`, `project`,
+  `repository`, `token_env`, `done_state`, `repository_field`, `bot_logins`).
+- **Scope.** `{label}` on github-issues: the ticket carries the label.
+  `{field, value[, type]}` on youtrack: the custom field holds the value;
+  `type` is the field's YouTrack type for a created ticket (default
+  `SingleEnumIssueCustomField`).
+- **Resolution** (`factory/scopes.py`, `ScopedTracker`). With environment
+  trackers the gate's tracker and vcs are one `ScopedTracker`. Each ticket
+  goes to its environment's tracker, built from the environment's descriptor
+  (`gate.env_descriptor`): its merged tracker block, its repositories with
+  the main one primary, and that main repository as the code host. A run in a
+  project environment (`FACTORY_ENV`) takes only that environment's tickets.
+  Elsewhere the ticket goes to the first environment whose tracker can hold
+  its id (`PRJ-12` on YouTrack, a number on GitHub) and whose scope holds
+  it. A PR's ticket is looked up on the vcs of the environment that lists the
+  PR's repository, and that environment is tried first.
+- **No environment.** A ticket inside no scope is left alone. `check` exits
+  10 with `{"go": false, "reason": "skip: <ticket> outside every environment
+  scope"}`, because `factory begin` reads exit 0 as go. `apply`, `sweep`,
+  `decide`, `ci` and `wake-reviewers` print
+  `{"skipped": true, "reason": "skip: ..."}` and exit 0. Nothing is written.
+- **Queries.** A scoped GitHub search adds `label:"<label>"`, and a scoped
+  YouTrack query adds `and <field>: {<value>}`. `sweep` and `sweep --stale`
+  list each environment's tickets with its own query.
+- **Created tickets.** Sub-issues and the `Main is red` ticket get the
+  environment's label or field value.
+- **Deploy.** A node of the default environment (`settings.environment`) gets
+  one automation per project environment, named `<node> <env>`. It runs in
+  that environment's Air environment (`FACTORY_ENV=<env>`) on its main
+  repository. A YouTrack event trigger also filters on `<field>: <value>`.
+  GitHub's `label` filter is the label the event adds, so a GitHub trigger
+  has no scope filter and the gate's scope check stops another project's
+  ticket. The knowledge review runs once. A node that names another
+  environment is planned as before, and so is a team with no environment
+  tracker: its plan is byte-identical.
+- **Validation** (`scopes.errors`, from `factory validate` on `factory.yaml`
+  and on the compiled descriptor). A selected plugin must provide the
+  adapter; each environment tracker turns on its plugin. The scope keys must
+  be the adapter's. Environments that share one tracker (adapter and
+  repository, or adapter, url and project) must each have a scope, and no
+  two scopes may be the same.
+
+Limits: two GitHub environments in different repositories can both hold
+number `n`; outside a project run, the first environment that holds it wins.
+The Space vcs, `factory doctor` probes and YouTrack tag provisioning still
+read the top-level tracker. A scope that two labels share cannot be checked
+statically.
 
 Remaining gaps:
 - A feature plugin's effects keep their own hook shape. The comments and
@@ -152,7 +215,7 @@ Remaining gaps:
   relies on GitHub refusing the second PUT.
 - A system without `effects` keeps the old remote kinds (`effects.REMOTE`).
 
-Later slices move YouTrack (#1069), Space (#1070), the local surface and
+Later slices move YouTrack (#1069, below), Space (#1070), the local surface and
 agent runners (#1071) and Air (#1072) into plugins.
 
 `github` (#1068) is the first system plugin. `factory_plugins/github/` holds
@@ -176,8 +239,23 @@ loads the implementation the registry names. Its hooks:
 - `doctor.probes` runs the repository, wake-file and project-write probes.
 - `reconcile.passes` runs the CI label sync, and `ci-sync` is its command.
 
-The doctor's ticket filing and engine probes still call `gh` directly, and a
-`youtrack` team still reads PRs through `GitHubGateTracker` until #1069.
+The doctor's ticket filing and its frontier read still call `gh` directly.
+
+`youtrack` (#1069) is the second system plugin. `factory_plugins/youtrack/`
+holds `store.py` (formerly `factory/youtrack_tracker.py`) and provides
+tracker `youtrack`; `tracker.adapter: youtrack` selects it. YouTrack holds no
+pull requests, so `YouTrackTracker.from_config` builds the store from a
+tracker config block and asks the selected vcs class for the gate tracker
+over it (`GitHubCodeHost.gate_tracker`): the github plugin no longer imports
+YouTrack code, and `gate.tracker_of` has no fallback. The store declares its
+ticket effects (`stage`, `label`, `unlabel`, `set-field`) and its store kinds;
+the gate tracker takes them from any store. `set-field` stays a
+`<field>:<value>` tag, since the gate reads the attribute (the `risk` fact)
+back from the tags. Its hooks: `deploy.plan` (the `tags` and `fields` plan
+keys), `deploy.repo_tags` (the per-repository stage tags of the triggers),
+`deploy.tracker` (the tag and field-value provisioner the deploy drives
+between its label steps) and `doctor.probes`. The #892 comment wake rule had
+not merged and was not ported.
 
 `notify` (#1066) is the second feature plugin. Its declaration names the
 `notify` effect on `ticket` and `pr`, the `notify` CLI word

@@ -59,6 +59,8 @@ def validate(team_root):
     if not isinstance(descriptor, dict):
         return errors
     errors += config.tracker_errors(descriptor, config.PROJECT_DESCRIPTOR)
+    import scopes
+    errors += scopes.errors(descriptor, config.PROJECT_DESCRIPTOR)  # environments with their own trackers (#1069)
     repositories = descriptor.get("repositories")
     if isinstance(repositories, list):
         primaries = [r.get("name") for r in repositories if isinstance(r, dict) and r.get("role") == "primary"]

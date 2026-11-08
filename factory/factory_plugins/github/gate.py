@@ -22,6 +22,7 @@ import yaml
 import config
 from gate_tracker import GateTracker
 from gate_port import DescriptorPort, child_attrs, child_links, child_order, ticket_from_ref, ticket_repositories
+from scopes import matches
 from factory_plugins.github import graphql
 from factory_plugins.github.tracker import CountedRun, ProjectWriteRun, gh, project_repositories, random_color
 import derive
@@ -30,7 +31,6 @@ from derive import clean_notes, notes_block, parse_notes, redact  # noqa: F401  
 from ports.records import Lazy, PrRecord, TicketRecord
 from ports.system import Effect, Event, Query, Subject
 import vocab
-from youtrack_tracker import MissingRepository, YouTrackTicketStore, repo_stage_tags
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
 NOTES_PARKED = "[factory] Agent notes for the PR description"  # ticket comment that holds them until the PR exists
@@ -84,10 +84,16 @@ class GitHubCodeHost:
         self.repo, self.run = repo, run
 
     @classmethod
-    def from_config(cls, path=None, run=gh):
-        c = yaml.safe_load(Path(path).read_text()) if path else config.load()
+    def from_config(cls, path=None, run=gh, descriptor=None):
+        c = yaml.safe_load(Path(path).read_text()) if path else descriptor if descriptor is not None else config.load()
         return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"],
                    ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env")))
+
+    @staticmethod
+    def gate_tracker(c, tickets, run=gh):
+        """The gate tracker of a team whose tickets live in another system (`tickets`, a TicketStore built by that
+        system's plugin) and whose pull requests live here, in `code_host.repository`; `c` is the loaded descriptor."""
+        return GitHubGateTracker.from_config(run=run, tickets=tickets, descriptor=c)
 
     def ticket_for_pr(self, number, repository=None):
         """Resolve a PR number to its ticket from the live head ref, else the live title; `repository` (owner/repo)
@@ -148,10 +154,20 @@ def normalise_events(raw):
 
 class GitHubTicketStore:
     """The ticket side of the GitHub tracker (the TicketStore port, factory/gate_port.py): the issues of `repo`, read
-    and written with `gh`. `run` is the tracker's `CountedRun`, whose cache `GitHubGateTracker.prefetch` fills."""
+    and written with `gh`. `run` is the tracker's `CountedRun`, whose cache `GitHubGateTracker.prefetch` fills.
+    `scope` (`{label}`, #1069) is an environment's share of the repository's issues: its searches hold only the issues
+    with the label, and an issue it creates gets it."""
 
-    def __init__(self, repo, run=gh, bot=None):
+    def __init__(self, repo, run=gh, bot=None, scope=None):
         self.repo, self.run, self.bot = repo, run, bot  # `bot`: the factory's login, `targets.air.bot_login`
+        self.scope = scope
+
+    def scope_labels(self):
+        return [self.scope["label"]] if self.scope else []
+
+    def in_scope(self, n):
+        """Whether issue `n` carries the scope's label (every issue without a scope)."""
+        return not self.scope or matches(self.scope, self.issue(n)["attrs"])
 
     # --- reads
     def _cached(self, path, repo):
@@ -229,7 +245,8 @@ class GitHubTicketStore:
         """Issue numbers carrying one of the stage `attrs`: the open ones and, unless `open_only`, those closed in the
         last `gate_port.CLOSED_HOURS`, from one paged GraphQL search each."""
         found = set()
-        for q in graphql.search_query(self.repo, attrs, now)[:1 if open_only else 2] if attrs else []:
+        scoped = {"scope_label": self.scope["label"]} if self.scope else {}
+        for q in graphql.search_query(self.repo, attrs, now, **scoped)[:1 if open_only else 2] if attrs else []:
             after = None
             while True:
                 args = ["api", "graphql", "-f", f"query={graphql.SEARCH}", "-f", f"q={q}"]
@@ -291,7 +308,8 @@ class GitHubTicketStore:
         mark = f"<!-- factory:child of={n} -->"  # only an issue this ticket created is reused
         open_issues = {i["title"]: i for i in reversed(self.read_list("issues?state=open&per_page=100"))
                        if "pull_request" not in i and mark in (i.get("body") or "")}
-        risk = [x for x in self.issue(n)["attrs"] if x.startswith("risk:")]  # a slice keeps its parent's risk path
+        # a slice keeps its parent's risk path, and its environment's scope label
+        risk = [x for x in self.issue(n)["attrs"] if x.startswith("risk:")] + self.scope_labels()
         wrote, made, links = False, {}, child_links(children)  # made: child index -> (id, number); prerequisites go first
         parent_body = self.issue(n)["body"]
         for k in child_order(links):
@@ -358,12 +376,13 @@ class GitHubTicketStore:
     def park(self, n, check, triage):
         """Open or reuse the one `Main is red in Air: <check>` ticket, then block ticket `n` by it."""
         title = f"Main is red in Air: {check}"
-        red = next((i for i in self.read_list("issues?state=open&per_page=100") if "pull_request" not in i and i["title"] == title), None)
+        red = next((i for i in self.read_list("issues?state=open&per_page=100") if "pull_request" not in i and i["title"] == title
+                    and all(x in [y["name"] for y in i.get("labels") or []] for x in self.scope_labels())), None)
         if red is None:
             body = (f"[factory] The required check `{check}` fails identically on unchanged `main` in Air (found while working on #{n}). "
                     "Fix main; the tickets blocked by this one restart when it closes.")
             red = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={title}", "-f", f"body={body}",
-                                       "-f", f"labels[]={triage}"]))
+                                       *[x for label in [triage, *self.scope_labels()] for x in ("-f", f"labels[]={label}")]]))
         if red["id"] in {b["id"] for b in self.read_list(f"issues/{n}/dependencies/blocked_by")}:
             return False
         self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={red['id']}"])
@@ -394,33 +413,45 @@ class GitHubGateTracker(DescriptorPort):
         # the ticket side: every ticket read and write goes through it (GitHub issues unless a store is given)
         self.tickets = tickets or GitHubTicketStore(repo, self.run, bot_login)
         self.github = self.tickets if tickets is None else GitHubTicketStore(repo, self.run, bot_login)  # the code host's REST reads
-        if tickets:  # YouTrack: states are a field or tags, commands tags; its `repo` is the code host
-            self.state_kinds, self.command_kinds = ("field", "tag"), ("tag", "pr_label")
+        if tickets:  # another ticket system: its store kinds, and the ticket effects it declares replace these; `repo` is the code host
+            self.state_kinds = tuple(getattr(tickets, "state_kinds", self.state_kinds))
+            self.command_kinds = (*getattr(tickets, "command_kinds", ("label",)), "pr_label")
+            self.effects = (*type(self).effects, *getattr(tickets, "effects", ()))  # a later (kind, target) wins
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
     @classmethod
-    def from_config(cls, path=None, run=gh):
-        c = yaml.safe_load(Path(path).read_text()) if path else config.load()
+    def from_config(cls, path=None, run=gh, tickets=None, descriptor=None):
+        """From the descriptor at `path` (else `descriptor`, else the team's). With `tickets` (another system's
+        TicketStore) the tickets live there and the pull requests in `code_host.repository`. An environment's
+        descriptor (#1069) has its merged tracker block as `tracker`, whose `scope` narrows the issues."""
+        c = descriptor if descriptor is not None else yaml.safe_load(Path(path).read_text()) if path else config.load()
         bot = ((c.get("targets") or {}).get("air") or {}).get("bot_login")
         if not bot:
             raise ValueError("descriptor: targets.air.bot_login is not set")
         t, code_repo = c["tracker"], (c.get("code_host") or {}).get("repository")
-        tickets, repo = None, t.get("repository")
-        if t.get("adapter", "github-issues") == "youtrack":
-            if not code_repo:
-                raise ValueError("descriptor: code_host.repository is required with tracker.adapter youtrack")
-            field = next((s["store"]["field"]["name"] for s in (c.get("states") or {}).values()
-                          if isinstance((s.get("store") or {}).get("field"), dict)), None)
-            tickets = YouTrackTicketStore.from_config(t, state_field=field, bots=t.get("bot_logins") or (),
-                                                      repo_stages=repo_stage_tags(c), repositories=list(repository_names(c) or []))
-            repo = code_repo
+        repo = code_repo if tickets is not None else t.get("repository")
         return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"],
                    ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env")),
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
                    (c.get("ci") or {}).get("workflows") or ["quality-gates"],
                    (c.get("code_host") or {}).get("repository"),
                    {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,
-                   repository_names(c), tickets, (c.get("reviews") or {}).get("required"))._with_writable(c)
+                   repository_names(c), tickets, (c.get("reviews") or {}).get("required"))._with_scope(t)._with_writable(c)
+
+    def _with_scope(self, t):
+        """The scope of tracker block `t` on the GitHub issues (a store of another system takes its own)."""
+        if t.get("scope") and isinstance(self.tickets, GitHubTicketStore):
+            self.tickets.scope = t["scope"]
+        return self
+
+    @property
+    def scope(self):
+        """The environment's share of the tickets (ports/system.py Subject.scope); None is all of them."""
+        return getattr(self.tickets, "scope", None)
+
+    def in_scope(self, n):
+        """Whether ticket `n` is in this tracker's scope."""
+        return self.tickets.in_scope(n) if hasattr(self.tickets, "in_scope") else True
 
     def _with_writable(self, c):
         """The writable repositories of the environment in FACTORY_ENV, from the compiled definition (#994)."""
@@ -857,11 +888,7 @@ class GitHubGateTracker(DescriptorPort):
     def _fx_stage(self, e, ctx):
         n, value = e["ticket"], e["value"]
         want, have = self.stages[value], [x for x in self._issue_once(n, ctx)["attrs"] if x in self.stages.values()]
-        try:
-            return have != [want] and self.tickets.set_stage(n, want, have)
-        except MissingRepository as err:  # no repository to wake: say so and wait for a person
-            self.tickets.comment(n, f"[factory] Blocked: {err}")
-            return self.tickets.set_stage(n, self.stages["blocked"], have) or True
+        return have != [want] and self.tickets.set_stage(n, want, have)
 
     @staticmethod
     def _gone(labels, value):

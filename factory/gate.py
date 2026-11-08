@@ -23,6 +23,7 @@ uses factory/factory_plugins/github/gate.py (bot login from `targets.air.bot_log
 """
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -42,9 +43,11 @@ from gate_port import MemorySystem, ticket_from_ref  # noqa: E402
 import vocab  # noqa: E402
 import definition  # noqa: E402
 import plugins  # noqa: E402  (ADR-0026: a plugin's code is imported when the core calls it)
+import scopes  # noqa: E402
 
 ROOT = nodes_mod.ROOT
 GO, NO_GO, BAD, FAILED = 0, 10, 2, 1
+SKIP = "skip: {ticket} outside every environment scope"  # #1069: the one line of a step on no environment's ticket
 AGENT_KEYS = ("agent", "persona", "mentions", "mentions_on")  # node spec fields of a project with `agents:`
 
 
@@ -180,23 +183,58 @@ def from_trigger(d, code_host=None):
 
 def is_github(code_host):
     """Whether `code_host` is the github plugin's vcs; a plugin module never imported built none."""
+    if isinstance(code_host, scopes.ScopedTracker):  # environments with their own trackers: the vcs a PR is looked up on
+        code_host = code_host.vcs_for()[1]
     module = sys.modules.get("factory_plugins.github.gate")
     return module is not None and isinstance(code_host, module.GitHubCodeHost)
 
 
 def tracker_of(config):
-    """The gate tracker of `config`, from the plugin that provides `tracker.adapter` (ADR-0026). The github plugin's
-    tracker also builds the YouTrack store until the youtrack plugin (#1069)."""
+    """The gate tracker of `config`, from the plugin that provides `tracker.adapter` (ADR-0026): github-issues from
+    the github plugin, youtrack from the youtrack plugin (its tickets in YouTrack, its pull requests on the vcs)."""
     t = config.get("tracker")
-    tracker_cls = plugins.registry(config).impl("tracker", (t.get("adapter") if isinstance(t, dict) else None)
-                                                or "github-issues")
+    name = (t.get("adapter") if isinstance(t, dict) else None) or "github-issues"
+    tracker_cls = plugins.registry(config).impl("tracker", name)
     if tracker_cls is None:
-        from factory_plugins.github.gate import GitHubGateTracker as tracker_cls
+        raise ValueError(f"tracker.adapter {name}: no selected plugin provides this tracker")
     return tracker_cls.from_config()
 
 
+def env_descriptor(config, env):
+    """The descriptor of project environment `env` (#1069): its merged tracker block as `tracker`, its repositories
+    (its main one the primary) as `repositories`, and its main repository as the code host of its pull requests."""
+    by_name = {r["name"]: r for r in config.get("repositories") or []}
+    names = [n for n in ((config.get("environments") or {}).get(env) or {}).get("repositories") or [] if n in by_name]
+    repos = [{**by_name[n], "role": "primary" if i == 0 else "project"} for i, n in enumerate(names)] \
+        or config.get("repositories") or []
+    main = next((r["url"] for r in repos if r.get("role") == "primary"), None)
+    out = {**{k: v for k, v in config.items() if k != "vcs"}, "tracker": scopes.project_envs(config)[env],
+           "repositories": repos}
+    if main:
+        out["code_host"] = {**config_mod.vcs(config), "repository": "/".join(main.rstrip("/").split("/")[-2:])}
+    return out
+
+
+def env_systems(config, env, **runners):
+    """The (tracker, vcs) of project environment `env`, from the plugins that provide them; `runners` are passed to
+    both `from_config` (tests stub them)."""
+    c = env_descriptor(config, env)
+    block = c["tracker"]
+    tracker_cls = plugins.registry(config).impl("tracker", scopes.adapter(block))
+    if tracker_cls is None:
+        raise ValueError(f"environments.{env}.tracker.adapter {scopes.adapter(block)}: no selected plugin provides this tracker")
+    tracker = tracker_cls.from_config(descriptor=c, **runners)
+    vcs_cls = plugins.registry(config).impl("vcs", config_mod.vcs(c).get("adapter") or "github")
+    return tracker, vcs_cls.from_config(descriptor=c, **({"run": tracker.run} if hasattr(tracker, "run") else {}))
+
+
 def systems(config):
-    """The (tracker, vcs) of `config`, from the plugins that provide them; Space comes from gate_space until #1070."""
+    """The (tracker, vcs) of `config`, from the plugins that provide them; Space comes from gate_space until #1070.
+    With environments that have their own trackers (#1069), both are one `scopes.ScopedTracker`: each ticket goes to
+    its environment's tracker, the run's environment (FACTORY_ENV) first."""
+    if scopes.project_envs(config):
+        scoped = scopes.ScopedTracker(config, env_systems, os.environ.get("FACTORY_ENV"))
+        return scoped, scoped
     tracker = tracker_of(config)
     if config_mod.vcs(config).get("adapter") == "space":
         return tracker, space_from_config(config)
@@ -1065,6 +1103,10 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                     done_tickets.append(n)
                 if node == "finish" and outcome in ("merged", "children-done") and hasattr(tracker, "parent") and (p := tracker.parent(n)):
                     queue.append(p)
+            except scopes.OutOfScope:  # no environment's ticket: nothing to do (#1069)
+                if progress:
+                    progress({"ticket": n, "outcome": "skipped", "why": SKIP.format(ticket=n)})
+                break
             except Exception as e:  # one ticket failing does not stop the others
                 failed = True
                 r = {"ticket": n, "error": f"{type(e).__name__}: {e}", **({"kind": e.kind} if hasattr(e, "kind") else {})}
@@ -1079,6 +1121,8 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
             try:
                 dependents = tracker.blocking(source)
                 not_planned = hasattr(tracker, "not_planned") and tracker.not_planned(source)
+            except scopes.OutOfScope:  # no environment's ticket wakes nothing (#1069)
+                continue
             except Exception as e:  # a tracker lookup must not fail the whole sweep
                 results.append({"ticket": source, "error": f"{type(e).__name__}: {e}"})
                 continue
@@ -1401,6 +1445,10 @@ def main(argv):
                 payload, out_name = read(a.payload or "", "payload"), a.outcome or ""
             code, out = apply(a.node, out_name, payload, tracker, nodes, a.focus, a.tier)
             path and Path(path).write_text(json.dumps(tracker.tickets))
+    except scopes.OutOfScope as e:  # #1069: a ticket of no environment is left alone; a check must not go
+        reason = SKIP.format(ticket=e.args[0])
+        print(json.dumps({"go": False, "reason": reason} if a.cmd == "check" else {"skipped": True, "reason": reason}))
+        return NO_GO if a.cmd == "check" else GO
     except NoTicket as e:
         print(json.dumps({"go": False, "reason": str(e)}))
         return NO_GO
