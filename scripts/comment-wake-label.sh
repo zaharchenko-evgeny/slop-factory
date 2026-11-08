@@ -12,7 +12,7 @@ with open(sys.argv[1], encoding="utf-8") as event_file:
     event = json.load(event_file)
 number = (event.get("issue") or event.get("pull_request") or {}).get("number")
 body = (event.get("comment") or {}).get("body")
-if not number or body is None:
+if type(number) is not int or number < 1 or not isinstance(body, str):
     raise SystemExit("comment event has no issue number or comment body")
 if "<!-- factory:from " in body and "<!-- factory:ask " not in body:
     raise SystemExit(0)
