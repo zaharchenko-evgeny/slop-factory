@@ -69,8 +69,8 @@ def env_needs_tiers(nodes):
 
 
 def run_log(api, run, repo):
-    """Fetch the log of the latest finished workflow run (a run list alone does not need the logs permission)."""
-    runs = json.loads(api(f"repos/{repo}/actions/runs?per_page=1&status=completed"))["workflow_runs"]
+    """Fetch the log of the latest successful workflow run (a run list alone does not need the logs permission)."""
+    runs = json.loads(api(f"repos/{repo}/actions/runs?per_page=1&status=success"))["workflow_runs"]
     if not runs:
         raise RuntimeError("no finished workflow run to read a log from")
     return run(["run", "view", str(runs[0]["id"]), "-R", repo, "--log"])[:50]
