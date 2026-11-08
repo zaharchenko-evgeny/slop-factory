@@ -55,7 +55,9 @@ class Subject:
 @dataclass(frozen=True)
 class Query:
     """What a `find` lists: `children` (the sub-tickets of `of`), `stage` (ids of tickets holding one of `values`;
-    `open_only`) or `blocking` (the tickets `of` blocks). `scope` as on Subject."""
+    `open_only`) or `blocking` (the tickets `of` blocks). The local surface's poll (#1071) adds `labeled` (open
+    tickets and PRs with one of the (`issue`|`pr`, label) `values`, each with its latest labeled event id), `prs`
+    (the latest PRs in state `values[0]`) and `closed` (the latest closed tickets). `scope` as on Subject."""
     kind: str
     of: object = None
     values: tuple = ()

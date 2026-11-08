@@ -1,6 +1,6 @@
 # ADR-0026: Engine plugins: events in, records out, effects
 
-Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068, #1069, #1070). Amends
+Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068, #1069, #1070, #1071). Amends
 ADR-0025 and ADR-0004.
 
 ## Context
@@ -286,3 +286,24 @@ failed, then raises. A channel is a separate plugin that provides a
 requires `notify`. A `notify:` block, a `notify` effect or a notifier whose
 plugin is off is `module-off`, so a team turns notify on with
 `plugins: [notify, notify_email]` (`notify_email` alone turns on both).
+
+`local` (#1071) is the first surface plugin, and `claude`, `codex`, `junie`
+and `pi` are the agent runner plugins. `factory_plugins/local/surface.py`
+(formerly `factory/local.py`) provides surface `local` as `LocalSurface`
+(`ports.surface.Surface`: `plan`, `read_state`, `diff`, `apply`, `outputs`)
+and the CLI words `run` and `deploy --target local`, with the same flags and
+exit codes. A command that uses the surface turns it on, as `surface: local`
+does (`plugins.registry(config, use=...)`). Each runner provides `agent`
+under its harness name (claude: `claude-code`, alias `claude`) as
+`ports.agent.AgentRunner`: `cli`, `skill_dir`, `command(prompt, model,
+write)` and a PATH `probe`. They replace the `HARNESS_CLI` and `SKILL_DIR`
+tables and `harness_argv`. A role's harness (its mode's, the role's, its
+tier's `models.<alias>.harness`, `targets.local.harness`, else `claude-code`)
+turns its runner on when the role runs, and `models.<alias>.harness` turns it
+on through `plugins.implied`. An unknown harness is `unknown-agent`, naming
+the known ones; `deploy --target local` reports it as missing. The local
+poll reads the trackers (`gate.tracker_of`, or each environment's tracker
+with #1069 environments) through `find`, with three query kinds the GitHub
+tracker adds: `labeled`, `prs` and `closed`. These make the same `gh` calls
+the poll made: one paged search for every watched label, `/events` only for
+an id that does not decode, and the `pr list` and `issue list` reads.

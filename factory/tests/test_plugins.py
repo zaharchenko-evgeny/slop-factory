@@ -212,8 +212,8 @@ class LazinessTest(unittest.TestCase):
                     pass
                 """)
         self.assertEqual(mods, ["factory_plugins",
-                                *(f"factory_plugins.{p}" for p in ("comments", "github", "notify", "notify_email", "space",
-                                                                    "youtrack"))])
+                                *(f"factory_plugins.{p}" for p in ("claude", "codex", "comments", "github", "junie", "local",
+                                                                    "notify", "notify_email", "pi", "space", "youtrack"))])
 
     def test_notify_on_imports_its_code_only_when_called(self):
         with tempfile.TemporaryDirectory() as d:
@@ -229,8 +229,8 @@ class LazinessTest(unittest.TestCase):
 
     def test_on_imports_what_the_core_calls(self):
         mods = self.imported(FIXTURES / "v2", "defn = definition.load(config.team_root())")
-        self.assertEqual(mods, ["factory_plugins", "factory_plugins.comments", "factory_plugins.comments.mentions",
-                                "factory_plugins.github"])
+        self.assertEqual(mods, ["factory_plugins", "factory_plugins.claude", "factory_plugins.codex",  # models.<alias>.harness
+                                "factory_plugins.comments", "factory_plugins.comments.mentions", "factory_plugins.github"])
 
     def test_github_declaration_only_until_a_system_is_used(self):
         """#1068: the github plugin is on by default, yet the registry, `gate.plugin_registry()` and importing the
@@ -307,6 +307,31 @@ class LazinessTest(unittest.TestCase):
         self.assertIn("factory_plugins.space", listed)
         self.assertEqual([m for m in listed if m.startswith("factory_plugins.space.")], [])
         self.assertIn("factory_plugins.space.gate", used)
+
+    def test_local_and_runner_code_only_when_used(self):
+        """#1071: the core, the CLI, validation, doctor probes and a registry naming `surface: local` and runner
+        harnesses load the local and runner declarations at most; `deploy --target local` or `run` loads the
+        surface, and a role's run loads its harness's runner only."""
+        prefixes = tuple(f"factory_plugins.{p}." for p in ("local", "claude", "codex", "junie", "pi"))
+        idle = self.imported(FIXTURES / "v2", """
+            import cli, plugins
+            settings = {**config.load(), "surface": "local", "models": {"m": {"harness": "junie", "model": "x"}}}
+            registry = plugins.registry(settings)
+            assert registry.is_on("local") and registry.is_on("junie"), registry.names
+            registry.impls("surface"); registry.impls("agent"); registry.hook("doctor.probes"); plugins.owners()
+            definition.errors(definition.load(config.team_root()))
+            """)
+        self.assertEqual([m for m in idle if m.startswith(prefixes)], [])
+        used = self.imported(FIXTURES / "v2", """
+            import cli
+            cli.surface_command("local", "run")
+            from factory_plugins.local import surface
+            surface.runner("codex")
+            """)
+        self.assertIn("factory_plugins.local.surface", used)
+        self.assertIn("factory_plugins.codex.runner", used)
+        self.assertFalse({"factory_plugins.claude.runner", "factory_plugins.junie.runner", "factory_plugins.pi.runner"} & set(used))
+        self.assertFalse([m for m in used if m.startswith("factory_plugins.github.")])  # no tracker until a poll
 
 
 if __name__ == "__main__":
