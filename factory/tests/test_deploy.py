@@ -622,9 +622,11 @@ class WakeFilesPackagedTest(unittest.TestCase):
         """The installed engine reads the wake files from its package data, not from the source tree."""
         if not (self.ROOT / "pyproject.toml").exists():
             self.skipTest("not a source checkout")
+        if not shutil.which("uv"):
+            self.skipTest("uv is not installed")
         with tempfile.TemporaryDirectory() as out:
-            subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-deps", "--no-build-isolation", "-q", "-w", out,
-                            str(self.ROOT)], check=True, capture_output=True)
+            subprocess.run(["uv", "build", "--wheel", "--quiet", "--out-dir", out, str(self.ROOT)],
+                           check=True, capture_output=True)
             with zipfile.ZipFile(next(Path(out).glob("*.whl"))) as wheel:
                 names = set(wheel.namelist())
         for path in github_wake.COMMENT_WAKE_FILES:
