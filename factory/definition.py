@@ -468,10 +468,12 @@ def errors(defn):
                     key = "assign" if "assign" in effect else "unassign"
                     value = effect[key]
                     valid = isinstance(value, str) or (isinstance(value, list) and all(isinstance(v, str) for v in value))
+                    if key == "assign":
+                        valid = valid or (isinstance(value, dict) and set(value) == {"field"} and isinstance(value["field"], str))
                     if key == "unassign":
                         valid = valid or value == "all"
                     if not valid:
-                        errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins")
+                        errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins" + (" or {field: <name>}" if key == "assign" else ""))
             for effect in oc.get("effects") or []:
                 if isinstance(effect, dict) and "notify" in effect:
                     errs += _notify_effect_errors(where, o, effect["notify"], f.get("notify"))
