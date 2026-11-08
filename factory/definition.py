@@ -635,6 +635,7 @@ def to_project(defn):
         "states": states,
         "commands": commands,
         **({"write_mode": dset["write_mode"]} if dset.get("write_mode") else {}),
+        **({"issues_token_env": dset["issues_token_env"]} if dset.get("issues_token_env") else {}),
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
         "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},

@@ -130,7 +130,7 @@ class GitHubCodeHost:
     def from_config(cls, path=None, run=gh):
         c = yaml.safe_load(Path(path).read_text()) if path else config.load()
         return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"],
-                   ProjectWriteRun(run, project_repositories(c)))
+                   ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env")))
 
     def ticket_for_pr(self, number, repository=None):
         """Resolve a PR number to its ticket from the live head ref, else the live title; `repository` (owner/repo)
@@ -445,7 +445,7 @@ class GitHubGateTracker(DescriptorPort):
             tickets = YouTrackTicketStore.from_config(t, state_field=field, bots=t.get("bot_logins") or ())
             repo = code_repo
         return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"],
-                   ProjectWriteRun(run, project_repositories(c)),
+                   ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env")),
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
                    (c.get("ci") or {}).get("workflows") or ["quality-gates"],
                    (c.get("code_host") or {}).get("repository"),
