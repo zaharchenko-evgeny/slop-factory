@@ -7,7 +7,7 @@ one import of its declaration.
 
 - `selected(config, use)`: the plugins a config turns on: `plugins:` (alias `modules:`), the systems, surface and agent
   runners it names, the ones a command uses (`use`: `deploy --target local` uses the local surface, a local run its
-  agent runner), and every `requires`, closed.
+  agent runner, `chart` the chart tool), and every `requires`, closed.
 - `registry(config, use)`: the selection's effects, guards, triggers, outcomes, hooks, implementations and commands
   (cached per selection).
 - `owner(key, of)`: the plugin, on or off, that owns a workflow key; `refusal(where, key)` is the one message used
@@ -38,12 +38,14 @@ class Plugin:
 # Every planned plugin (#1064), so a team may list one before its slice lands: a planned plugin with no package yet
 # turns on nothing.
 KNOWN = {name: f"factory_plugins.{name}" for name in (
-    "comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi")}
-# The plugin a system, surface or agent runner name turns on implicitly.
+    "comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi",
+    "chart")}
+# The plugin a system, surface, agent runner or development tool name turns on implicitly (a tool only through `use`).
 IMPLIED = {"tracker": {"github-issues": "github", "github": "github", "youtrack": "youtrack"},
            "vcs": {"github": "github", "space": "space"},
            "surface": {"air": "air", "local": "local"},
-           "agent": {"claude": "claude", "claude-code": "claude", "codex": "codex", "junie": "junie", "pi": "pi"}}
+           "agent": {"claude": "claude", "claude-code": "claude", "codex": "codex", "junie": "junie", "pi": "pi"},
+           "tool": {"chart": "chart"}}
 LISTS = ("plugins", "modules")  # `modules:` is the ADR-0025 name of `plugins:`
 CATEGORIES = ("effect", "guard", "trigger", "outcome", "agent", "command", "config")
 

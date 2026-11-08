@@ -429,6 +429,13 @@ def surface_command(surface, word):
     return plugins.registry({}, use=(("surface", surface),)).command(word)
 
 
+def tool_command(word):
+    """The function (argv) -> exit code behind the CLI word of a development tool plugin (`chart`). Using it turns
+    the plugin on, whatever the config selects."""
+    import plugins
+    return plugins.registry({}, use=(("tool", word),)).command(word)
+
+
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
     try:
@@ -468,7 +475,7 @@ def _main(argv):
     if cmd == "contracts":
         return surface_command("air", "contracts")(rest)
     if cmd == "chart":
-        return nodes.main(["chart", *rest])
+        return tool_command("chart")(rest)
     if cmd == "migrate" and rest[:1] == ["workflow"]:
         from workflow import main as workflow_main
         return workflow_main(["migrate", *rest[1:]])
