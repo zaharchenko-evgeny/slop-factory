@@ -94,6 +94,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                                              scope["name"] if scope else None, repo_tags))
                     if project:
                         trig[-1] = core.scope_filter(trig[-1], trackers[project])
+                    if trig[-1].get("source") == "youtrack" and (linked := core.linked_project(config, scope)):
+                        trig[-1] = {**trig[-1], "filters": {**trig[-1].get("filters", {}), "projectShortName": linked}}
             automation_repository = core.repository(team if focus == "knowledge" else scope or repos.get(envs_def[env]["repository"]) or primary)
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)

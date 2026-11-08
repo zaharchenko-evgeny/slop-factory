@@ -17,7 +17,7 @@ from gate_port import CLOSED_HOURS, child_links, child_order
 from ports.system import Effect
 from scopes import matches
 
-ISSUE_FIELDS = ("idReadable,summary,description,resolved,updated,reporter(login),tags(id,name),"
+ISSUE_FIELDS = ("idReadable,summary,description,resolved,updated,reporter(login),tags(id,name),project(shortName),"
                 "customFields(name,value(name,login)),links(direction,linkType(name),issues(idReadable,resolved,tags(name)))")
 CHILD_FIELDS = "idReadable,resolved,tags(name),customFields(name,value(name))"
 ACTIVITY_FIELDS = "timestamp,author(login),category(id),added(name),removed(name),field(name)"
@@ -96,18 +96,19 @@ class YouTrackTicketStore:
     )
 
     def __init__(self, run, state_field=None, done_state="Done", project=None, bots=(), writers=(), assignee_field="Assignee",
-                 repository_field=None, repo_stages=(), repositories=(), scope=None):
+                 repository_field=None, repo_stages=(), repositories=(), scope=None, projects=None):
         self.run, self.state_field, self.done_state, self.project = run, state_field, done_state, project
         self.scope = scope
         self.bots, self.writers, self.assignee_field = set(bots), set(writers), assignee_field
         self.repository_field, self.repo_stages, self.repositories = repository_field, tuple(repo_stages), tuple(repositories)
+        self.projects = dict(projects or {})  # linked YouTrack project -> owner/repo (short names are case-sensitive)
 
     @classmethod
     def from_config(cls, tracker, run=None, **kw):
         """From the descriptor's `tracker`: `url`, `token_env` (default YOUTRACK_TOKEN), `done_state`, `project`."""
         run = run or urllib_runner(tracker["url"], os.environ[tracker.get("token_env", "YOUTRACK_TOKEN")])
         return cls(run, done_state=tracker.get("done_state", "Done"), project=tracker.get("project"),
-                   repository_field=tracker.get("repository_field"), scope=tracker.get("scope"), **kw)
+                   repository_field=tracker.get("repository_field"), scope=tracker.get("scope"), projects=tracker.get("projects"), **kw)
 
     # --- reads
     def _issue(self, n):
@@ -123,12 +124,23 @@ class YouTrackTicketStore:
         return next((v.get("name") for v in self._field(raw, self.repository_field)), None) if self.repository_field else None
 
     def repository(self, n):
-        """(repository, reason) of ticket `n`: the reason names the field when it is empty or holds an unknown value."""
+        """(repository, reason) of ticket `n`: from its linked project with `tracker.projects`, else the repository field;
+        the reason names the project or the field when it is unknown, empty or holds an unknown value."""
+        if self.projects:
+            project = (self._issue(n).get("project") or {}).get("shortName")
+            if project in self.projects:
+                return self.projects[project], None
+            return None, f"project {project!r} is not linked to a repository: link it in `tracker.projects` ({', '.join(self.projects)})"
         repo = self._repo(self._issue(n))
         if repo and (not self.repositories or repo in self.repositories):
             return repo, None
         return None, (f"field {self.repository_field!r} is empty: set it to one of {', '.join(self.repositories)}" if not repo else
                       f"field {self.repository_field!r} holds {repo!r}, not one of {', '.join(self.repositories)}")
+
+    def ticket_repositories(self, n):
+        """The repositories of ticket `n`: its one repository, or none when it has none."""
+        repo, _ = self.repository(n)
+        return [repo] if repo else []
 
     def in_scope(self, n):
         """Whether ticket `n`'s scope field holds the scope's value (every ticket without a scope)."""

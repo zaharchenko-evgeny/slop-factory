@@ -241,6 +241,26 @@ class TrackerFromConfigTest(unittest.TestCase):
             YouTrackTracker.from_config(path, run=lambda *a, **k: "", yt_run=FakeYouTrack())
 
 
+class LinkedProjectTest(unittest.TestCase):
+    """#981: with `tracker.projects`, a ticket's repository comes from its YouTrack project."""
+
+    def store(self, project):
+        issue = copy.deepcopy(ISSUE)
+        issue["project"] = {"shortName": project} if project else None
+        return yt.YouTrackTicketStore(FakeYouTrack(issue), projects={"API": "o/api", "WEB": "o/web"})
+
+    def test_ticket_repository_from_linked_project(self):
+        for project, want in (("API", ("o/api", None)), ("WEB", ("o/web", None)), ("api", None), ("OPS", None), (None, None)):
+            repo, reason = self.store(project).repository("T-1")
+            if want:
+                self.assertEqual((repo, reason), want)
+                self.assertEqual(self.store(project).ticket_repositories("T-1"), [want[0]])
+            else:  # the short name is case-sensitive; an unlinked or missing project names itself
+                self.assertIsNone(repo)
+                self.assertIn(f"project {project!r} is not linked", reason)
+                self.assertEqual(self.store(project).ticket_repositories("T-1"), [])
+
+
 class RepositoryTagsTest(unittest.TestCase):
     """#896: the stages that wake a per-repository node are tags `<tag>-<repo>`, the repository is a ticket field."""
 

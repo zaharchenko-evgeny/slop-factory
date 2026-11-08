@@ -417,6 +417,24 @@ def scope_filter(trig: dict, block: dict) -> dict:
     return trig
 
 
+def linked_project(config: dict, repo: dict | None) -> str | None:
+    """The YouTrack project that `tracker.projects` links to repository `repo`, else None."""
+    projects = (config.get("tracker") or {}).get("projects") or {}
+    return next((p for p, r in projects.items() if repo and r == repository(repo)["fullName"]), None)
+
+
+def unlistened_projects(nodes: dict, config: dict) -> list[str]:
+    """`unlinked-project` per project of `tracker.projects` that no node listens to: only a per-repository node with a
+    YouTrack ticket trigger gets a copy limited to a project, and only a project repository gets a copy."""
+    projects = (config.get("tracker") or {}).get("projects") or {}
+    listens = config.get("write_mode", "per-repo") == "per-repo" and len(config.get("repositories") or []) > 1 and any(
+        definition.per_repo_node(k) and any(str(t).startswith("youtrack.") for t in n.get("triggers") or [])
+        for k, n in nodes["nodes"].items() if n.get("enabled") is not False and n["role"] != "human")
+    names = {repository(r)["fullName"] for r in config.get("repositories") or []}
+    return [f"unlinked-project: tracker.projects.{p}: no node listens to project {p} ({r})"
+            for p, r in projects.items() if not (listens and r in names)]
+
+
 def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
     """The node, gate options and spec of one automation (`review-behaviour`, `fix-mid`) from the node graph."""
     roles, agents = config["roles"], agents_of(nodes, config)
@@ -594,6 +612,10 @@ def output_errors(nodes: dict, config: dict) -> list[str]:
     name = surface_name(config)
     if not name:
         return []
+    return unlistened_projects(nodes, config) + _output_errors(nodes, config, name)
+
+
+def _output_errors(nodes: dict, config: dict, name: str) -> list[str]:
     registry = plugins.registry(config, use=(("surface", name),))
     names = [name] if config.get("surface") else registry.impls("surface")
     if not (classes := [cls for n in names if (cls := registry.impl("surface", n))]):

@@ -832,6 +832,57 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertTrue({"factory:ready-api", "factory:ready-web"} <= set(plan["tags"]))
         self.assertNotIn("factory:ready", plan["tags"])
 
+    @staticmethod
+    def linked_projects(conf):
+        """#981: the #895 two-repository team (o/api, o/web) as a YouTrack team with one linked project each."""
+        tag_store(conf)
+        conf["tracker"] = {"adapter": "youtrack", "url": "https://y.example", "project": "LME",
+                           "projects": {"API": "o/api", "WEB": "o/web"}}
+
+    def two_repository_team(self, edit_conf, edit_nodes):
+        before = cfg.team_root()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "team"
+            shutil.copytree(HERE / "fixtures/v2", root)
+            f = yaml.safe_load((root / "factory.yaml").read_text())
+            engine = f["environments"]["engine"]
+            engine["repositories"] = [{"repo": "o/api", "main": True}, {"repo": "o/web"}]
+            f["environments"]["web"] = {**engine, "repositories": [{"repo": "o/web", "main": True}, {"repo": "o/api"}]}
+            (root / "factory.yaml").write_text(yaml.safe_dump(f, sort_keys=False))
+            try:
+                cfg.set_team(root)
+                conf, compiled = copy.deepcopy(cfg.load()), copy.deepcopy(nodes.load())
+                edit_conf(conf)
+                edit_nodes(compiled)
+                return conf, compiled, air.plan_air(compiled, conf)
+            finally:
+                cfg.set_team(before)
+
+    def test_copy_trigger_limited_to_linked_project(self):
+        def edit_nodes(compiled):
+            compiled["nodes"]["implement-medium"]["triggers"] = ["youtrack.tagAdded factory:ready"]
+        _, _, plan = self.two_repository_team(self.linked_projects, edit_nodes)
+        listens = {a["name"]: [t["filters"] for t in a["triggers"]] for a in plan["automations"]
+                   if any(t.get("filters", {}).get("tagAdded") == "factory:ready" for t in a["triggers"])}
+        self.assertEqual(listens, {
+            "[Slop factory] implement-medium api": [{"tagAdded": "factory:ready", "projectShortName": "API"}],
+            "[Slop factory] implement-medium web": [{"tagAdded": "factory:ready", "projectShortName": "WEB"}]})
+        self.assertNotIn("factory:ready-api", plan["tags"])  # shared tags as today
+        self.assertIsNone(deploy.linked_project({"tracker": {"projects": {"API": "o/api"}}}, None))
+
+    def test_unlinked_project_is_reported(self):
+        def edit_nodes(compiled):
+            compiled["nodes"]["implement-medium"]["triggers"] = ["youtrack.tagAdded factory:ready"]
+        conf, compiled, _ = self.two_repository_team(self.linked_projects, edit_nodes)
+        self.assertEqual(deploy.unlistened_projects(compiled, conf), [])
+        conf["tracker"]["projects"]["OPS"] = "o/ops"  # no such repository, so no copy
+        conf["tracker"]["projects"]["TEAM"] = "o/api"
+        self.assertEqual([e.split(":")[1].strip() for e in deploy.unlistened_projects(compiled, conf)], ["tracker.projects.OPS"])
+        compiled["nodes"]["implement-medium"]["triggers"] = ["issues.labeled factory:ready"]
+        for k in compiled["nodes"]:  # no node listens to YouTrack
+            compiled["nodes"][k]["triggers"] = [t for t in compiled["nodes"][k].get("triggers") or [] if not str(t).startswith("youtrack.")]
+        self.assertEqual(len(deploy.unlistened_projects(compiled, conf)), 4)
+
     def test_hand_added_connector_is_a_removal(self):
         planned = {"name": "[F] a", "mcpConnectors": []}
         plan = {"prefix": "[F] ", "environments": [], "automations": [planned]}

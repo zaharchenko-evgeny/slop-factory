@@ -49,6 +49,7 @@
         "repository": {"type": "string"},
         "url": {"type": "string"},
         "project": {"type": "string"},
+        "projects": {"type": "object", "additionalProperties": {"type": "string"}},
         "token_env": {"type": "string"},
         "done_state": {"type": "string"},
         "map_label": {"type": "string"},

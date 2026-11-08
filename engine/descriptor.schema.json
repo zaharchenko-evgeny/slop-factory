@@ -80,6 +80,10 @@
         "project": {
           "type": "string"
         },
+        "projects": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
         "token_env": {
           "type": "string"
         },
