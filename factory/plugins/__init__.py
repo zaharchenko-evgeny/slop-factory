@@ -12,6 +12,7 @@ one import of its declaration.
 - `owner(key, of)`: the plugin, on or off, that owns a workflow key; `refusal(where, key)` is the one message used
   when it is off.
 - `errors(config)`: the `plugins:` list checks of `factory validate`.
+- `impl_error(config, interface, name, where)`: why no selected plugin provides an implementation (a `vcs:` name).
 """
 import importlib
 from dataclasses import dataclass, field
@@ -159,6 +160,17 @@ def errors(config, where="factory.yaml"):
         else:
             errs += [f"unknown-plugin: {key}: {n}" for n in value if n not in KNOWN]
     return errs
+
+
+def impl_error(config, interface, name, where):
+    """Why no selected plugin provides `interface` `name` (a `vcs:` adapter, ...), else None: the module-off refusal
+    for a known implementation whose plugin is off, else `unknown-<interface>` naming the known ones."""
+    if name in registry(config).impls(interface):  # nothing is imported
+        return None
+    if name in IMPLIED.get(interface, {}):
+        return refusal(where, name, IMPLIED[interface][name])
+    return (f"unknown-{interface}: {where}: {name}: no selected plugin provides this {interface} "
+            f"(known: {', '.join(sorted(IMPLIED.get(interface, {})))})")
 
 
 class Registry:

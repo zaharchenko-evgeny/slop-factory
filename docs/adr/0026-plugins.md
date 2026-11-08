@@ -1,6 +1,6 @@
 # ADR-0026: Engine plugins: events in, records out, effects
 
-Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068, #1069). Amends
+Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068, #1069, #1070). Amends
 ADR-0025 and ADR-0004.
 
 ## Context
@@ -256,6 +256,22 @@ keys), `deploy.repo_tags` (the per-repository stage tags of the triggers),
 `deploy.tracker` (the tag and field-value provisioner the deploy drives
 between its label steps) and `doctor.probes`. The #892 comment wake rule had
 not merged and was not ported.
+
+`space` (#1070) is the third system plugin. `factory_plugins/space/gate.py`
+(formerly `factory/gate_space.py`) provides vcs `space`; `vcs: space` (alias
+`code_host:`), top-level or on an environment, selects it. `SpaceCodeHost`
+reads a ticket's merge request as a `PrRecord`, declares `label`, `unlabel`,
+`review`, `update-branch` and `merge` on `pr` as `effects`, and names the
+facts it owns (`pr_facts`). Its `gate.trigger` hook reads a merge request
+webhook in `gate.from_trigger`, so the core names no vendor. An environment's
+vcs is `config.vcs(config, env)`: its own `vcs:` over the top-level one, keys
+merged when the adapters match. A vcs that declares effects is put beside the
+tracker (`gate_tracker.OnVcs`): its PR effects and PR reads go to it, its
+facts replace the tracker's, and everything else stays the tracker's. GitHub's
+vcs declares none, because its tracker hosts the pull requests. `factory
+validate` reports a vcs that no selected plugin provides, and every node
+effect on a PR that its environment's vcs does not declare. `ci-sync` stays
+the github plugin's: a team whose vcs is another plugin's has none.
 
 `notify` (#1066) is the second feature plugin. Its declaration names the
 `notify` effect on `ticket` and `pr`, the `notify` CLI word

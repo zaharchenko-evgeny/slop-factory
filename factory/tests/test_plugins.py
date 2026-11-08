@@ -212,7 +212,8 @@ class LazinessTest(unittest.TestCase):
                     pass
                 """)
         self.assertEqual(mods, ["factory_plugins",
-                                *(f"factory_plugins.{p}" for p in ("comments", "github", "notify", "notify_email", "youtrack"))])
+                                *(f"factory_plugins.{p}" for p in ("comments", "github", "notify", "notify_email", "space",
+                                                                    "youtrack"))])
 
     def test_notify_on_imports_its_code_only_when_called(self):
         with tempfile.TemporaryDirectory() as d:
@@ -275,6 +276,37 @@ class LazinessTest(unittest.TestCase):
         self.assertEqual([m for m in listed if m.startswith("factory_plugins.youtrack.")], [])
         self.assertLessEqual({"factory_plugins.youtrack.gate", "factory_plugins.youtrack.store"}, set(used))
         self.assertNotIn("factory_plugins.youtrack.provision", used)
+
+    def test_space_code_only_when_selected_and_used(self):
+        """#1070: a GitHub team's gate, validation and registry load the space declaration at most (also when a
+        payload is read); a space team loads its code when the gate reads a payload or builds its vcs."""
+        github = self.imported(FIXTURES / "v2", """
+            import plugins
+            registry = plugins.registry(config.load())
+            assert not registry.is_on("space"), registry.names
+            definition.errors(definition.load(config.team_root()))
+            registry.hook("gate.trigger"); registry.impls("vcs"); plugins.owners()
+            gate.from_trigger({"action": "opened", "issue": {"number": 3}})
+            """)
+        self.assertEqual([m for m in github if m.startswith("factory_plugins.space.")], [])
+        with tempfile.TemporaryDirectory() as d:
+            team = Path(d) / "team"
+            shutil.copytree(FIXTURES / "v2", team)
+            path = team / "factory.yaml"
+            path.write_text(path.read_text().replace("plugins: [comments]", "plugins: [comments, space]"))
+            listed = self.imported(team, """
+                import plugins
+                registry = plugins.registry(config.load())
+                assert registry.is_on("space"), registry.names
+                registry.impls("vcs"); plugins.impl_error(config.load(), "vcs", "space", "vcs")
+                """)
+            used = self.imported(team, """
+                gate.from_trigger({"eventType": "space.merge_request.opened",
+                                   "data": {"merge_request": {"number": 7, "branch": "ez/5-x"}}})
+                """)
+        self.assertIn("factory_plugins.space", listed)
+        self.assertEqual([m for m in listed if m.startswith("factory_plugins.space.")], [])
+        self.assertIn("factory_plugins.space.gate", used)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,11 @@ The tracker gives `rules()` (derive.Rules) and `repositories` ({name: ...}, the 
 A team with no environment tracker resolves every environment to the one top-level tracker (`GateTracker.single`),
 so `env` is None and no read is scoped. With environment trackers (#1069) each environment's tracker carries its
 `scope` and `scopes.ScopedTracker` sends each ticket to its environment's tracker.
+
+An environment's vcs (#1070) is `config.vcs(config, env)`: its own `vcs:` over the top-level one. When that vcs is a
+system of its own (it declares `effects`, as the space plugin's does), `OnVcs` puts it beside the tracker: its
+`(kind, "pr")` effects and its PR reads go to it, and the facts it owns (`pr_facts`) replace the tracker's (`overlay`).
+A vcs that declares no effects (github) leaves its pull requests to the tracker, which hosts them too.
 """
 import derive
 import effects
@@ -52,3 +57,54 @@ class GateTracker:
 
     def apply(self, e):
         return effects.apply(self.tracker if effects.target(e) == "ticket" else self.vcs, e)
+
+
+def overlay(facts, vcs, n):
+    """`facts` with the facts `vcs` owns (its `pr_facts`) read from it, when ticket `n` has a pull request there."""
+    keys = getattr(vcs, "pr_facts", None)
+    if not keys:
+        return facts
+    own = vcs.facts(n)
+    return facts if own.get("pr") is None else {**facts, **{k: own[k] for k in keys if k in own}}
+
+
+def hosts_prs(vcs):
+    """Whether `vcs` is a system of its own that applies its PR effects (it declares `effects`)."""
+    return any(x.target == "pr" for x in getattr(vcs, "effects", ()) or ())
+
+
+class OnVcs(GateTracker):
+    """The gate's tracker when the pull requests live on another system (`vcs_for_env(env)`): an effect on a PR
+    that the vcs declares goes to it, under the core policies (factory/effects.py), every other to the tracker; a PR
+    read goes to it; `facts` are the tracker's with the vcs's own (`overlay`). Anything else is the tracker's."""
+
+    def __init__(self, tracker, vcs_for_env, env=None):
+        super().__init__(lambda env: tracker, vcs_for_env, env)
+
+    @classmethod
+    def of(cls, tracker, vcs):
+        """`tracker` with `vcs` beside it for every environment."""
+        return cls(tracker, lambda env: vcs)
+
+    def _on_vcs(self, e):
+        return effects.target(e) == "pr" and (e["kind"], "pr") in effects.registry(self.vcs)
+
+    @property
+    def effects(self):
+        """The tracker's effects, its PR ones replaced by the vcs's (what `order` and `refused` look up)."""
+        mine = effects.registry(self.vcs)
+        return (*(x for x in getattr(self.tracker, "effects", ()) if (x.kind, x.target) not in mine), *mine.values())
+
+    def facts(self, n):
+        return overlay(self.tracker.facts(n), self.vcs, n)
+
+    def read(self, subject, want=frozenset()):
+        return (self.vcs if subject.kind == "pr" else self.tracker).read(subject, want)
+
+    def apply(self, e):
+        return effects.apply(self.vcs, e) if self._on_vcs(e) else self.tracker.apply(e)
+
+    def __getattr__(self, name):
+        if name.startswith("_") or name in ("tracker_for_env", "vcs_for_env", "env"):
+            raise AttributeError(name)
+        return getattr(self.tracker_for_env(self.env), name)

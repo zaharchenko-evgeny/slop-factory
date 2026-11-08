@@ -4,7 +4,8 @@
 # dependencies = ["pyyaml>=6"]
 # ///
 """The system contract (factory/tests/system_contract.py) for the in-memory systems, for GitHub over a stubbed gh that
-keeps what was written, and for YouTrack tickets (a stubbed REST runner that keeps them) with GitHub pull requests.
+keeps what was written, for YouTrack tickets (a stubbed REST runner that keeps them) with GitHub pull requests, and
+for Space merge requests (a stubbed HTTP runner that keeps them) beside in-memory tickets.
 Run: uv run factory/tests/test_system_contract.py"""
 import json
 import sys
@@ -23,7 +24,9 @@ import derive  # noqa: E402
 import effects  # noqa: E402
 from factory_plugins.github import gate as gate_github  # noqa: E402
 from factory_plugins.youtrack.store import YouTrackTicketStore  # noqa: E402
+from factory_plugins.space.gate import SpaceCodeHost  # noqa: E402
 from gate_port import MemorySystem, TagTracker  # noqa: E402
+from gate_tracker import OnVcs  # noqa: E402
 
 LABELS = ["factory:in-review", "risk:low", "factory:fix-mid"]
 
@@ -257,6 +260,70 @@ class YouTrackContractTest(SystemContract, unittest.TestCase):
         self.assertTrue(s.apply({"ticket": 7, "kind": "set-field", "value": {"risk": "high"}}))
         self.assertEqual(s.yt.issues["7"]["tags"], [STAGES["in-review"], "factory:fix-mid", "risk:high"])
         self.assertEqual([w for w in s.gh.writes if "labels" in str(w)], [])
+
+
+class ContractSpace:
+    """Enough of Space's HTTP API for the contract, keeping what the host writes: merge request 5 of ticket 7 (branch
+    `ez/7-...`) with its labels, reviews (the bot's, at the posted head), its merge and its branch update."""
+
+    def __init__(self):
+        self.mrs = [{"number": 5, "title": "Ticket 7", "state": "open", "branch": "ez/7-thing", "head": "h1",
+                     "ci": "none", "labels": ["factory:fix-mid"], "reviews": [], "behind": True}]
+        self.writes = []
+
+    def __call__(self, method, path, body=None):
+        if method == "GET" and path.endswith("/code-reviews"):
+            return {"data": self.mrs}
+        number, _, action = path.split("/code-reviews/number:", 1)[1].partition("/")
+        mr = next(m for m in self.mrs if m["number"] == int(number))
+        if method == "GET":
+            return mr
+        self.writes.append((method, path, body))
+        if action == "labels":
+            mr["labels"].append(body["label"])
+        elif action.startswith("labels/"):
+            mr["labels"].remove(action.split("/", 1)[1])
+        elif action == "reviews":
+            mr["reviews"].append({"author": BOT, "verdict": body["verdict"], "commit_id": body["commitId"],
+                                  "body": body["body"], "submitted_at": "2026-01-03T00:00:00Z"})
+        elif action == "merge":
+            mr["state"] = "merged"
+        elif action == "update-branch":
+            mr["behind"] = False
+        else:
+            raise AssertionError(path)
+        return {}
+
+
+class SpaceContractTest(SystemContract, unittest.TestCase):
+    """The space plugin's vcs beside in-memory tickets (gate_tracker.OnVcs): every `(kind, "pr")` it declares goes
+    to Space over its HTTP runner and converges; the ticket effects stay the tracker's."""
+
+    def make(self):
+        space = ContractSpace()
+        vcs = SpaceCodeHost.from_config(descriptor={"vcs": {"adapter": "space", "url": "https://space.example",
+                                                             "project": "IJ"}}, http=space, env={"SPACE_TOKEN": "t"})
+        s = OnVcs.of(MemorySystemContractTest.make(self), vcs)
+        s.space = space
+        return s
+
+    def test_pr_effects_are_spaces_and_write_space(self):
+        s = self.make()
+        mine = {k for k, x in effects.registry(s).items() if getattr(x.apply, "__module__", "") == "factory_plugins.space.gate"}
+        self.assertEqual(mine, {("label", "pr"), ("unlabel", "pr"), ("review", "pr"), ("update-branch", "pr"),
+                                ("merge", "pr")})
+        self.assertTrue(s.apply({"ticket": 7, "kind": "label", "value": "factory:needs-human", "on": "pr"}))
+        self.assertEqual([(m, p.rsplit("/", 1)[1]) for m, p, _ in s.space.writes], [("POST", "labels")])
+        self.assertNotIn("factory:needs-human", s.tracker.tickets[7]["pr_labels"])
+        self.assertTrue(s.apply({"ticket": 7, "kind": "label", "value": "x"}))  # a ticket label: the tracker's
+        self.assertEqual(len(s.space.writes), 1)
+
+    def test_facts_are_the_trackers_with_the_merge_request_facts(self):
+        s = self.make()
+        s.space.mrs[0]["ci"] = "success"
+        f = s.facts(7)
+        self.assertEqual((f["pr"], f["head"], f["ci"], f["pr_labels"], f["stage"]),
+                         (5, "h1", "green", ["factory:fix-mid"], "in-review"))
 
 
 if __name__ == "__main__":

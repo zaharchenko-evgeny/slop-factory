@@ -90,6 +90,26 @@ adapter that no plugin provides, scope keys of another adapter, and projects
 that share one tracker with the same scope or with no scope. Without any
 environment `tracker`, nothing changes.
 
+### Per-environment vcs
+
+An environment can host its pull requests elsewhere with `vcs` (#1070). It
+takes a name (`vcs: space`) or a block (`{adapter, url, project, repository}`),
+and it overrides the top-level `vcs` (alias `code_host`). Unset keys come from
+the top-level block when the adapters match. Naming a vcs turns on its plugin.
+
+```yaml
+vcs: {adapter: github}
+environments:
+  ide: {repositories: [...], vcs: {adapter: space, url: https://space.example, project: IJ}}
+```
+
+A run's environment (`FACTORY_ENV`) picks the vcs that the gate builds. On
+Space, the merge request's reviews, CI and labels replace the tracker's PR
+facts, and each PR effect goes to Space. `factory validate` rejects a vcs that
+no plugin provides. It also rejects a node effect on a PR that the
+environment's vcs cannot apply; Space applies `label`, `unlabel`, `review`,
+`update-branch` and `merge`.
+
 ### Team-owned runtime files
 
 Runtime `roles/`, `skills/`, workflows, policies, and judgments come only from
