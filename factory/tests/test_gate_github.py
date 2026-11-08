@@ -1726,8 +1726,9 @@ def ticket_store_contract(test, make):
     """What every TicketStore does (factory/gate_port.py). `make(attrs, body, assignees, comments, events)` returns
     (store, ticket id) over a ticket seeded so: `alice` can write, `eve` cannot, one open and one closed blocker."""
     attrs, at = ["factory:in-review", "risk:low"], "2026-01-01T00:00:00Z"
-    comments = [{"author": "alice", "author_is_bot": False, "body": "hi", "at": at},
-                {"author": "ci[bot]", "author_is_bot": True, "body": "built", "at": at}]
+    comments = [{"author": "alice", "author_is_bot": False, "author_is_factory": False, "body": "hi", "at": at},
+                {"author": "ci[bot]", "author_is_bot": True, "author_is_factory": False, "body": "built", "at": at},
+                {"author": BOT, "author_is_bot": True, "author_is_factory": True, "body": "[factory] done", "at": at}]
     events = [{"kind": "labeled", "value": "factory:in-review", "actor": "alice", "at": at},
               {"kind": "closed", "value": None, "actor": "alice", "at": at}]
     store, n = make(attrs, "scope", ["alice"], comments, events)

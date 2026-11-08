@@ -149,8 +149,8 @@ class GitHubTicketStore:
     """The ticket side of the GitHub tracker (the TicketStore port, factory/gate_port.py): the issues of `repo`, read
     and written with `gh`. `run` is the tracker's `CountedRun`, whose cache `GitHubGateTracker.prefetch` fills."""
 
-    def __init__(self, repo, run=gh):
-        self.repo, self.run = repo, run
+    def __init__(self, repo, run=gh, bot=None):
+        self.repo, self.run, self.bot = repo, run, bot  # `bot`: the factory's login, `targets.air.bot_login`
 
     # --- reads
     def _cached(self, path, repo):
@@ -184,7 +184,8 @@ class GitHubTicketStore:
         for c in self.read_list(f"issues/{n}/comments"):
             login, user = (c.get("user") or {}).get("login", ""), c.get("user") or {}
             out.append({"id": c.get("id"), "author": login,
-                        "author_is_bot": user.get("type") == "Bot" or login.endswith("[bot]"), "body": c["body"], "at": c.get("created_at") or ""})
+                        "author_is_bot": user.get("type") == "Bot" or login.endswith("[bot]"),
+                        "author_is_factory": bool(self.bot) and login == self.bot, "body": c["body"], "at": c.get("created_at") or ""})
         return out
 
     def open_blockers(self, n):
@@ -390,8 +391,8 @@ class GitHubGateTracker(DescriptorPort):
         self.writable = None  # repository names this environment may write; None: every one (#994)
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, CountedRun(run)
         # the ticket side: every ticket read and write goes through it (GitHub issues unless a store is given)
-        self.tickets = tickets or GitHubTicketStore(repo, self.run)
-        self.github = self.tickets if tickets is None else GitHubTicketStore(repo, self.run)  # the code host's REST reads
+        self.tickets = tickets or GitHubTicketStore(repo, self.run, bot_login)
+        self.github = self.tickets if tickets is None else GitHubTicketStore(repo, self.run, bot_login)  # the code host's REST reads
         if tickets:  # YouTrack: states are a field or tags, commands tags; its `repo` is the code host
             self.state_kinds, self.command_kinds = ("field", "tag"), ("tag", "pr_label")
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
@@ -435,11 +436,12 @@ class GitHubGateTracker(DescriptorPort):
         return self.github.read_list(path, repo=repo)
 
     def pr_comments(self, n):
-        """The comments on ticket `n`'s PR, as `tickets.comments` gives them ({author, author_is_bot, body, at})."""
+        """The comments on ticket `n`'s PR, as `tickets.comments` gives them ({author, author_is_bot, author_is_factory, body, at})."""
         pr = self._pr(n)
         if not pr:
             return []
         return [{"id": c.get("id"), "author": (c.get("user") or {}).get("login"), "author_is_bot": (c.get("user") or {}).get("type") == "Bot",
+                 "author_is_factory": bool(self.bot) and (c.get("user") or {}).get("login") == self.bot,
                  "body": c.get("body") or "", "at": c.get("created_at")}
                 for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)]
 
@@ -640,6 +642,32 @@ class GitHubGateTracker(DescriptorPort):
             out[-1]["body"] = r.get("body") or ""  # #590: a mention in a review asks that agent
         return out
 
+    def changed_since(self, n, old):
+        """{file: [(first, last) head lines of each hunk] or None for the whole file} of what a fix changed between
+        head `old` and ticket `n`'s current head: files whose PR patch differs (so a merge from the base branch does
+        not count), with the fix's hunks. None when it cannot be compared."""
+        try:
+            number = self.facts(n).get("pr")
+            if not number:
+                return None
+            pr = self._api(f"pulls/{number}", repo=self.pr_repo)
+            before, after = self._pr_patch(pr["base"]["ref"], old), self._pr_patch(pr["base"]["ref"], pr["head"]["sha"])
+        except Exception:  # an unknown or force-pushed-away head: compare is not possible
+            return None
+        if before is None or after is None:
+            return None
+        files = {f for f in before.keys() | after.keys() if before.get(f) != after.get(f)}
+        try:  # the fix's own hunks, in head line numbers; a merge's hunks fall outside `files` or add nothing found
+            diff = self._api(f"compare/{old}...{pr['head']['sha']}", repo=self.pr_repo)["files"]
+        except Exception:
+            return {f: None for f in files}
+        out = {f: None for f in files}
+        for x in diff:
+            if x["filename"] in files and x.get("patch") is not None:
+                out[x["filename"]] = [(int(m[1]), int(m[1]) + int(m[2] or 1))
+                                      for m in re.finditer(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@", x["patch"], re.M)]
+        return out
+
     def _pr_patch(self, base, sha):
         """The PR's patch at `sha` as {file: patch with hunk line numbers dropped}, like `git patch-id --stable`.
         None when GitHub omits a patch (binary or huge diff) or the compare list may be cut at its 300-file limit,
@@ -793,7 +821,7 @@ class GitHubGateTracker(DescriptorPort):
         comments = self.tickets.comments(n)
         f["comments"] = comments
         got = [(c["at"], notes) for c in comments if c["at"] >= since
-               for notes in parse_notes(c["body"], c["author"], "Bot" if c["author_is_bot"] else "User")]
+               for notes in parse_notes(c["body"], "", "Bot" if c["author_is_factory"] else "User")]
         if stage == "needs-answers":
             waiting = [e for e in events if e["kind"] == "labeled" and e["value"] == self.stages["needs-answers"]]
             if waiting and comments:
@@ -1003,8 +1031,8 @@ class GitHubGateTracker(DescriptorPort):
                 return False
             if kind == "pr-notes-sync":  # the first gate step that sees the PR copies the parked notes
                 parked = [c for c in self.tickets.comments(n) if c["body"].startswith(NOTES_PARKED)]
-                found = parse_notes(parked[-1]["body"], parked[-1]["author"],
-                                    "Bot" if parked[-1]["author_is_bot"] else "User") if parked else []
+                found = parse_notes(parked[-1]["body"], "",
+                                    "Bot" if parked[-1]["author_is_factory"] else "User") if parked else []
                 if not found:
                     return False
                 value = notes_block(found[-1])
