@@ -84,12 +84,22 @@ class Tracker(Protocol):
 
 
 def fix_round_count(reviews, since=""):
-    """Rounds a fix answers: an agent change request, per head and dispute rereview, since the person's last
-    `factory:ready`, with at least one blocking finding (id `B<n>`). A round with none (a verdict bug,
-    environment noise) is not counted against `limits.fix_rounds`."""
-    return len({(r["commit_id"], r.get("rereview")) for r in reviews
-                if r.get("agent") and r.get("verdict") == "changes" and (r.get("submitted_at") or "") >= since
-                and any(str(i).startswith("B") for i in r.get("findings", []))})
+    """Rounds a fix answers and that count against `limits.fix_rounds`: agent change requests, per head and dispute
+    rereview, since the person's last `factory:ready`, with at least one blocking finding (id `B<n>`). A round with
+    none (a verdict bug, environment noise) is not a round. The first round counts; a later one counts only when it
+    still carries a blocking id an earlier round raised (the fix did not resolve it), so a review that finds a new
+    issue each round does not exhaust the developer's rounds (#1048). Backstop: at least half of all rounds count."""
+    rounds = {}
+    for r in sorted(reviews, key=lambda r: r.get("submitted_at") or ""):
+        if r.get("agent") and r.get("verdict") == "changes" and (r.get("submitted_at") or "") >= since:
+            ids = {str(i) for i in r.get("findings", []) if str(i).startswith("B")}
+            if ids:
+                rounds.setdefault((r["commit_id"], r.get("rereview")), set()).update(ids)
+    seen, counted = set(), 0
+    for ids in rounds.values():
+        counted += not seen or bool(ids & seen)
+        seen |= ids
+    return max(counted, (len(rounds) + 1) // 2)
 
 
 class UnsupportedStore(ValueError):
@@ -193,7 +203,9 @@ class TicketStore(Protocol):
     def events(self, n) -> list: ...
     """Oldest first: {kind: labeled|unlabeled|closed|reopened, value (the attr), actor, at}"""
     def comments(self, n) -> list: ...
-    """Oldest first: {author, author_is_bot, body, at, id?}; `id` (an integer that grows) is what the comment cursor reads"""
+    """Oldest first: {author, author_is_bot, author_is_factory, body, at, id?}; `id` (an integer that grows) is what the comment
+    cursor reads. `author_is_factory` is true only for the factory's own login (`targets.air.bot_login`; YouTrack `bot_logins`).
+    Callers that ask "did the factory write this?" read it, never `author_is_bot`, which is true for any bot"""
     def add_attr(self, n, attr): ...
     def remove_attr(self, n, *attrs): ...
     def set_stage(self, n, stage, have): ...  # `stage` replaces the stage attrs `have`
@@ -478,7 +490,7 @@ class MemoryTicketStore:
         return True
 
     def comment(self, n, body):
-        self.tickets[n]["comments"].append({"author": self.actor, "author_is_bot": True, "body": body, "at": None})
+        self.tickets[n]["comments"].append({"author": self.actor, "author_is_bot": True, "author_is_factory": True, "body": body, "at": None})
 
     def close(self, n, at=None):
         t = self.tickets[n]
