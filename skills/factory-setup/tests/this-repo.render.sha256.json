@@ -1,0 +1,23 @@
+{
+  ".air/cloud/startup.sh": "5c7e160234585a919e7eedbd4ad77b32326fe43f1a2fd2a3970c1c5d329276a6",
+  ".github/workflows/factory-workflow-check.yml": "9142a31106066f10d96f732dedeb45163f9c5c5858a94a51e5ea0d7e8932185d",
+  "README.md": "e537c6a86e4574f6c3e693d4d216a01bd224ce4b817cce6b5dc250a2db63ffc1",
+  "factory.yaml": "d665ccd0b4522cb2ff10037362a91c8dd0416f68418634366aafc1974f6ae340",
+  "roles/_common.md": "292a3854f8e7c330787f58c7c75cdcea65747d546f76f601c72abc94850eb1ed",
+  "roles/approver/role.md": "5b02df6f512089f897e31c8b378c6d38b7ec351d883435f37f263361ce9df365",
+  "roles/developer/role.md": "311969dbcbbdf2358abd5351ae999497f0a05171cae05eed60e6bc417b089435",
+  "roles/developer/setup.sh": "b9d9440895052efcd5f2a946d4123974f6222d091ff0aa97766cdf1d6e35ef3f",
+  "roles/dispatcher/role.md": "f2d769f53cc8eb244e600fda9f59565ff2e9843909be01ca9f6b7d3a1b2d59a3",
+  "roles/notify/role.md": "f1fe24be953a5a0c30dbc68cecd418bb0f1cf1e9cfdba1e5a9937bbe76526b74",
+  "roles/ops/role.md": "0f12b30792c726a7b419538e70e937b0c73c280088a0f1564ad15679b8cf716c",
+  "roles/retro/role.md": "8df2553dfbdcd213332783c6590f10c31771489aeb8367cc4e4247b67dcc0256",
+  "roles/reviewer/role.md": "d432c331a1416ee3d6b6e8cd3f06125ba2add5674ac219e8acddce6a5e850af5",
+  "roles/router/role.md": "29f57593812baa6db9cf1054e47506f21155bb1b82af72f0c38f6e4fd9b1c7e5",
+  "skills/merge-risk/SKILL.md": "beaa877ed588e9c703abde707980440671f1a5a52e193cc4913500da2cda6733",
+  "skills/pr/SKILL.md": "fc9c720b436757e3267ba12e6411a12f516b09ed7c9b97e0f244323cc28d769a",
+  "skills/simplified-technical-english/LICENSE": "6b139a9f272b079977795b1be7953cdec13a821098783cb58945c8887a49012b",
+  "skills/simplified-technical-english/NOTICE.md": "dc3ace9463787f78c4a33e5ed4616ab6712cca8c091e0e7bf80c5e9b58c5a666",
+  "skills/simplified-technical-english/SKILL.md": "979334a4a01e6d84765165b451ad28ca896852c6471e0a0e86f9903c206c9052",
+  "skills/walkthrough/SKILL.md": "1a8db9d2fb444e1eca923dac221e6e02c15009195bfd865c775312081664ea46",
+  "workflow.yaml": "dab71be8a68cf2ad5d265df4493b76a76b88e8111fa767743ad56e47386a58e9"
+}

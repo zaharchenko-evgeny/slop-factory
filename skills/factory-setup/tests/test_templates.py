@@ -4,6 +4,7 @@
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """The setup skill's templates. Run: uv run skills/factory-setup/tests/test_templates.py"""
+import hashlib
 import importlib.util
 import json
 import os
@@ -25,6 +26,9 @@ import render  # noqa: E402
 import statechart  # noqa: E402
 
 ANSWERS = json.loads((HERE / "this-repo.answers.json").read_text())
+THREE = json.loads((HERE / "three-repos.answers.json").read_text())
+# Answers that no template placeholder names: `render.py` reads them to derive blocks and options.
+OPTIONAL = {"CODE_REPOSITORIES", "CI_WORKFLOW", "TRACKER_REPOSITORY", "TRACKER", "BLOCKERS", "ISSUES_TOKEN_ENV"}
 # Values that identify this project; none may appear in a template.
 PROJECT = ["offline-eval", "zaharchenko", "Offline Evaluation", "hetzner", "Qwen", "claude-", "ez/", "slop", "Slop"]
 
@@ -66,10 +70,10 @@ class Templates(unittest.TestCase):
     def test_placeholders_documented_and_answered(self):
         doc = (SKILL / "SKILL.md").read_text()
         used = {m for f in [*files(render.T), *files(render.PROJECT_T)] for m in render.PH.findall(f.read_text())}
-        used.discard("ENGINE_SKILL_SOURCE")  # render.py derives this from ENGINE
-        for name in used:
+        derived = {"ENGINE_SKILL_SOURCE", *render.derive(ANSWERS)}  # render.py derives these from the answers
+        for name in used - derived | OPTIONAL:
             self.assertIn(f"`{name}`", doc, name)
-        self.assertEqual(used, set(ANSWERS))
+        self.assertEqual(used - derived, set(ANSWERS) - OPTIONAL)
 
     def test_workflow_has_ci_red_and_no_walkthrough_node(self):
         nodes = yaml.safe_load((render.PROJECT_T / "workflow.yaml").read_text())["nodes"]
@@ -113,6 +117,63 @@ class Templates(unittest.TestCase):
             self.assertEqual(pin["sha256"], "bd997445b6b34390926afd9cb2e4af665b773c46233a2ec5e5ec08ed2e6502bb")
             run = subprocess.run(["factory", "validate", "--team", tmp], capture_output=True, text=True)
             self.assertEqual(run.stdout.strip(), "factory: ok", run.stderr)
+
+    def test_one_repository_renders_the_same_files_as_before(self):
+        """`this-repo.render.sha256.json` holds the sha256 of each file as the single-repository template wrote it."""
+        want = json.loads((HERE / "this-repo.render.sha256.json").read_text())
+        got = {rel: hashlib.sha256(text.encode()).hexdigest() for rel, text in render.render_project(ANSWERS).items()}
+        self.assertEqual(got, want)
+
+    def test_three_repositories_with_youtrack_render_three_code_environments_and_the_hub(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel, text in render.render_project(THREE).items():
+                (Path(tmp) / rel).parent.mkdir(parents=True, exist_ok=True)
+                (Path(tmp) / rel).write_text(text)
+            defn = definition.load(tmp)
+            self.assertEqual(definition.errors(defn), [])  # no `per-repo-env`, no `deaf-trigger`
+            factory, workflow = defn["factory"], defn["workflow"]
+            envs = factory["environments"]
+            self.assertEqual(list(envs), ["api", "web", "docs", "hub", "knowledge", "team"])
+            main = {name: next(r["repo"] for r in e["repositories"] if r.get("main")) for name, e in envs.items()}
+            self.assertEqual(main["api"], "acme/api")
+            self.assertEqual(main["web"], "acme/web")
+            self.assertEqual(main["docs"], "acme/docs")
+            read_only = {name: [r["repo"] for r in envs[name]["repositories"] if not r.get("main")] for name in ("api", "web", "docs")}
+            self.assertEqual(read_only, {"api": ["acme/web", "acme/factory-team"], "web": ["acme/api", "acme/factory-team"],
+                                         "docs": ["acme/factory-team"]})
+            self.assertEqual(envs["web"]["repositories"][0]["default_branch"], "develop")
+            self.assertEqual(definition.per_repo_envs(defn), {"acme/api": "api", "acme/web": "web", "acme/docs": "docs"})
+            self.assertEqual(workflow["settings"]["environment"], "hub")
+            self.assertEqual(workflow["blockers"], "merge")
+            self.assertEqual(factory["tracker"], {"adapter": "youtrack", "url": "https://acme.youtrack.cloud", "project": "ACME",
+                                             "repository_field": "Repository"})
+            self.assertEqual(factory["defaults"]["settings"]["issues_token_env"], "FACTORY_ISSUES_TOKEN")
+            self.assertIn("FACTORY_ISSUES_TOKEN", factory["defaults"]["env"])
+            readme = (Path(tmp) / "README.md").read_text()
+            self.assertIn("## Repositories", readme)
+            for name in ("api", "web", "docs"):
+                self.assertIn(f"automation `<node> {name}`", readme)
+
+    def test_github_issues_in_several_repositories_validate(self):
+        answers = {**THREE, "TRACKER": {"adapter": "github-issues"}, "TRACKER_REPOSITORY": "acme/api"}
+        files = render.render_project(answers)
+        self.assertIn("  adapter: github-issues\n  repository: acme/api\n", files["factory.yaml"])
+        self.assertEqual(yaml.safe_load(files["factory.yaml"])["environments"]["hub"]["repositories"][0]["repo"], "acme/api")
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel, text in files.items():
+                (Path(tmp) / rel).parent.mkdir(parents=True, exist_ok=True)
+                (Path(tmp) / rel).write_text(text)
+            self.assertEqual(definition.errors(definition.load(tmp)), [])
+            run = subprocess.run(["factory", "validate", "--team", tmp], capture_output=True, text=True)
+            self.assertEqual(run.stdout.strip(), "factory: ok", run.stderr)
+
+    def test_code_repository_answers_that_cannot_render_are_refused(self):
+        repo = {"name": "api", "repo": "acme/api"}
+        for bad, why in (([], "at least one"), ([repo, {**repo, "repo": "acme/other"}], "own name"),
+                         ([repo, {"name": "web", "repo": "acme/api"}], "own name"),
+                         ([{**repo, "reads": ["nope"]}], "unknown repository")):
+            with self.assertRaisesRegex(ValueError, why):
+                render.render_project({**ANSWERS, "CODE_REPOSITORIES": bad})
 
     def test_readme_documents_factory_deploy(self):
         readme = render.render_project(ANSWERS)["README.md"]

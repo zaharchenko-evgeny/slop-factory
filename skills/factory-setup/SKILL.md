@@ -39,9 +39,15 @@ the user approves a plan. The layout is the engine's ADR-0021:
 
 Ask, one round at a time, with a recommended answer for each question:
 
-1. Repositories: the project's main repository, and the team repository that
-   holds this definition and the knowledge base.
-2. Tracker and project (see `references/trackers.md`).
+1. Repositories: every code repository (name, `owner/repo`, default branch), and the team
+   repository that holds this definition and the knowledge base. Recommended: one code
+   repository; several only when one workflow covers them. With several, also ask:
+   - which repositories each one reads (the read-only repositories of its environment);
+   - whether blockers are checked at start or at merge (`blockers: start | merge`).
+     Recommended for several repositories: `merge`.
+2. Tracker and project (see `references/trackers.md`). With several code repositories, ask
+   for GitHub issues in each repository (an issues token in `token_env`) or one YouTrack
+   project with a repository field (`tracker.repository_field`, one stage tag per repository).
 3. Channels: Slack Air Mate, local, Air session (`references/channels.md`).
 4. Targets: Air (project id) and/or local harnesses.
 5. Models: the Air model id for each alias (`cheap`, `mid`, `strong`, `review`,
@@ -63,7 +69,8 @@ Ask, one round at a time, with a recommended answer for each question:
     the server a role needs (for example the tracker for the router).
 12. Environment variables and secrets per environment: names, and for a
     secret never its value. A writable repository that is not `main` needs a
-    token secret named in its `token_env`.
+    token secret named in its `token_env`. With tickets in several GitHub repositories, name the
+    issues token secret (`ISSUES_TOKEN_ENV`, for example `FACTORY_ISSUES_TOKEN`).
 
 Look up facts yourself (repo remotes, default branches, existing automations,
 branch protection). Ask only for decisions.
@@ -77,6 +84,10 @@ startup script, which runs `factory setup`), `.github/workflows/factory-workflow
 `factory check-workflow` on pull requests, so a hand edit of `workflow.yaml` stays valid) and `README.md`, replacing every
 `{{NAME}}` placeholder with the interview answer (a missing answer is an
 error; Jinja's `{{ name }}` in role bodies is rendered later, by setup).
+`render.py` derives the environments from `CODE_REPOSITORIES`: one code repository renders the
+single `main` environment; several render one environment per repository (that repository is
+`main`, the repositories it reads are read-only) plus the `hub` environment for the shared nodes
+(`references/nodes.md`), and the README lists the repositories.
 `render.py --extras ANSWERS.json OUT_DIR` writes `templates/`: the
 "Development workflow" section of `AGENTS.md` (`AGENTS.workflow.md`) and
 `docs/agents/issue-tracker.md`. Never overwrite a file that has local edits
@@ -99,8 +110,11 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | `PROJECT_NAME` | Project name | `factory.yaml`, `workflow.yaml`, `README.md` |
 | `ENGINE` | The engine package the team pins, as `uv tool install` takes it | `factory.yaml` |
 | `ENGINE_SKILL_SOURCE` | Derived from `ENGINE`; the GitHub source for the pinned engine's `factory-deploy` skill | `factory.yaml` |
-| `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.yaml` |
-| `MAIN_REPOSITORY` | `owner/repo` of the project's main repository | `factory.yaml` |
+| `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker (`github-issues` only) | `factory.yaml` |
+| `CODE_REPOSITORIES` | List of code repositories: `name`, `repo` (`owner/repo`), `branch`, and `reads` (names of the repositories it reads) | `factory.yaml` environments, `README.md` |
+| `TRACKER` | Optional: `{adapter, url, project, repository_field}` (`url` and `project` for YouTrack); default `github-issues` | `factory.yaml` tracker |
+| `BLOCKERS` | Optional: `start` (default) or `merge` | `workflow.yaml` |
+| `ISSUES_TOKEN_ENV` | Optional: secret name of the issues token for tickets in several GitHub repositories | `factory.yaml` |
 | `TEAM_REPOSITORY` | `owner/repo` of this definition and the knowledge base | `factory.yaml` |
 | `GITHUB_USER` | GitHub login told about tickets that wait for a person (`owner`) | `factory.yaml` |
 | `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG`, `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Air model (`harness/model`) per alias | `factory.yaml` |

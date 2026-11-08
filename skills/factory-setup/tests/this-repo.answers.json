@@ -2,7 +2,13 @@
   "PROJECT_NAME": "Slop",
   "ENGINE": "git+https://github.com/zaharchenko-evgeny/slop-factory@main",
   "TRACKER_REPOSITORY": "zaharchenko-evgeny/slop-factory",
-  "MAIN_REPOSITORY": "zaharchenko-evgeny/slop-factory",
+  "CODE_REPOSITORIES": [
+    {
+      "name": "slop-factory",
+      "repo": "zaharchenko-evgeny/slop-factory",
+      "branch": "main"
+    }
+  ],
   "TEAM_REPOSITORY": "zaharchenko-evgeny/slop-eval-factory",
   "GITHUB_USER": "zaharchenko-evgeny",
   "MODEL_CHEAP": "codex/gpt-6-luna",
@@ -13,5 +19,5 @@
   "BRANCH_PATTERN": "ez/{ticket}-{slug}",
   "COMMIT_PREFIX": "#{ticket} ",
   "CI_WORKFLOW": "quality-gates",
-  "MODEL_POLICY": "Models: Air tiers come from `targets.air.models` in the team repository’s `factory.descriptor.yaml`."
+  "MODEL_POLICY": "Models: Air tiers come from `targets.air.models` in the team repository\u2019s `factory.descriptor.yaml`."
 }

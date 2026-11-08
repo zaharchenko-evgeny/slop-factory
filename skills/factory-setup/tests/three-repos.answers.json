@@ -1,0 +1,23 @@
+{
+  "PROJECT_NAME": "Acme",
+  "ENGINE": "git+https://github.com/zaharchenko-evgeny/slop-factory@main",
+  "TRACKER": { "adapter": "youtrack", "url": "https://acme.youtrack.cloud", "project": "ACME", "repository_field": "Repository" },
+  "BLOCKERS": "merge",
+  "ISSUES_TOKEN_ENV": "FACTORY_ISSUES_TOKEN",
+  "CODE_REPOSITORIES": [
+    { "name": "api", "repo": "acme/api", "branch": "main", "reads": ["web"] },
+    { "name": "web", "repo": "acme/web", "branch": "develop", "reads": ["api"] },
+    { "name": "docs", "repo": "acme/docs", "branch": "main" }
+  ],
+  "TEAM_REPOSITORY": "acme/factory-team",
+  "GITHUB_USER": "acme-owner",
+  "MODEL_CHEAP": "codex/gpt-6-luna",
+  "MODEL_MID": "claude/claude-sonnet-5-5[1m]",
+  "MODEL_STRONG": "claude/claude-sonnet-5-5[1m]",
+  "MODEL_REVIEW": "codex/gpt-6-luna",
+  "MODEL_REVIEW_STRONG": "codex/gpt-6.1-sol",
+  "BRANCH_PATTERN": "{ticket}-{slug}",
+  "COMMIT_PREFIX": "{ticket} ",
+  "CI_WORKFLOW": "ci",
+  "MODEL_POLICY": "Models: Air tiers come from the team descriptor."
+}

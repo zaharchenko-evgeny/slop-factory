@@ -41,3 +41,28 @@ Selected by `tracker.adapter` in `factory.yaml`.
 - Setting a stage removes the other stage labels in the same step.
 - Setup creates missing labels only after the user approves.
 - Event trigger for Air: issue labeled with the `ready` label.
+- Several repositories: see below.
+
+## Several repositories
+
+Use these when one workflow covers several code repositories (`CODE_REPOSITORIES` in the answers).
+
+GitHub issues in each repository:
+
+- `tracker.repository` is the hub's main repository. Each other repository keeps its own issues.
+- The gate writes labels and comments in every repository. Set `defaults.settings.issues_token_env`
+  (answer `ISSUES_TOKEN_ENV`) to a secret with Issues read/write on all of them.
+- A child ticket carries the label `repo:<name>`. The router sets `repo` on each child it creates, and
+  only that repository's nodes (`implement <name>`, `review <name>`, ...) answer it.
+
+YouTrack, one project:
+
+- Set `tracker.repository_field` (answer `TRACKER.repository_field`), a project field with one value per
+  repository name.
+- Each repository has its own stage tags: `<tag>-<name>` (for example `factory:ready-api`). Only the
+  automations of that repository listen to them.
+- The router sets the field on every child ticket it creates, from the child's `repo`. A ticket with an empty
+  field, or a value that is not a repository name, gets a comment that asks for one.
+
+Both: set `blockers: merge` (answer `BLOCKERS`) so a ticket in one repository can start while a blocker in
+another is open. The merge waits until every blocker is closed.

@@ -26,3 +26,14 @@ guards choose the outcome. `tests/test_templates.py` fails when a node has no ro
 | `accept-knowledge` | A person accepts or rejects the retro PR. | manual | `accepted`, `rejected` |
 | `reconcile` | Re-fires missed wakes and polls CI for merge. | schedule, every 15 minutes | `reconciled` |
 | `doctor-main`, `doctor-team` | Probe the main and team environments. | schedule, daily | `probed` |
+
+## Several repositories
+
+With several code repositories the template renders one environment per repository plus `hub`.
+
+- Per-repository nodes: `implement-*`, `fix`, `update`, `review-*`, `merge`, `finish`. Deploy plans each once per
+  repository, in that repository's environment, as the automation `<node> <repo>` (for example `implement-medium api`).
+  A node writes only to the `main` repository of its environment.
+- Shared nodes: `intake`, `dispatch`, `ci-red`, `automerge`, `notify`, the generated `mentions` and `reply-*`, `reconcile`, `doctor-main`. They run once
+  in `hub`, which reads every code repository. `retro`, `knowledge-review`, `accept-knowledge` and `doctor-team` keep their
+  `knowledge` and `team` environments.

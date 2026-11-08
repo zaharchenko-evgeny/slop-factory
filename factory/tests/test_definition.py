@@ -164,6 +164,11 @@ class DefinitionTest(unittest.TestCase):
             self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team", triggers=[trigger]))
             self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
 
+    def test_ticket_event_node_with_a_tracker_without_repository_is_not_deaf(self):
+        self.edit("factory.yaml", lambda f: f["tracker"].update(adapter="youtrack", project="P") or f["tracker"].pop("repository"))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team"))
+        self.assertEqual(self.errors(), [])
+
     def test_scheduled_node_in_any_environment_is_fine(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(environment="team"))
         self.assertEqual(self.errors(), [])

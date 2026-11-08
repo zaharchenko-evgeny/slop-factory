@@ -433,7 +433,7 @@ def errors(defn):
                 code_event = isinstance(trigger, dict) and next(iter(trigger), None) in ("pr", "ci")
                 pr_event = code_event or isinstance(trigger, dict) and pr_label in pr_labels
                 source_repos = pr_labels.get(pr_label)
-                if (source_repos and main_name not in source_repos) or (not pr_event and main_name != tracker_repo) \
+                if (source_repos and main_name not in source_repos) or (not pr_event and tracker_repo and main_name != tracker_repo) \
                         or (code_event and main_name not in {full_name(r) for r in code}):
                     errs.append(f"deaf-trigger: {where}: environment {env} main repository {main_repo} "
                                 f"does not match tracker {tracker_name}")
