@@ -221,6 +221,10 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["implement-small"].update(writes=7))
         self.assertError("bad-writes: nodes.implement-small")
 
+    def test_malformed_tracker_repositories_is_reported_not_a_crash(self):
+        self.edit("factory.yaml", lambda f: f["tracker"].update(repositories=7))
+        self.assertError("bad-tracker-repositories: factory.yaml")
+
     def _two_ticket_repositories(self):
         self.edit("factory.yaml", lambda f: f["tracker"].update(repositories=[MAIN, OTHER]))
         return definition.load(self.root)

@@ -151,7 +151,7 @@ def tracker_repositories(defn):
     listed = t.get("repositories")
     if listed is None:
         listed = [t["repository"]] if t.get("repository") else []
-    return [full_name(r) for r in listed if isinstance(r, str)]
+    return [full_name(r) for r in listed if isinstance(r, str)] if isinstance(listed, list) else []
 
 
 def _has_event_trigger(node):
@@ -480,6 +480,9 @@ def errors(defn):
                 errs.append(f"write-token: environments.{e}: {r.get('repo')} is writable without `token_env`")
             if r.get("token_env") and r["token_env"] not in declared:
                 errs.append(f"undeclared-env: environments.{e}: {r['token_env']}")
+    listed = (f.get("tracker") or {}).get("repositories")
+    if listed is not None and (not isinstance(listed, list) or not all(isinstance(r, str) for r in listed)):
+        errs.append("bad-tracker-repositories: factory.yaml: `tracker.repositories` is a list of repositories")
     if w.get("blockers", "start") not in ("start", "merge"):
         errs.append(f"bad-blockers: workflow.yaml: `blockers` is `start` or `merge`, not {w['blockers']!r}")
     default_env = (w.get("settings") or {}).get("environment")
