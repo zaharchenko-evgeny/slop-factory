@@ -23,6 +23,7 @@ import config as cfg  # noqa: E402
 cfg.set_team(HERE / "fixtures/team")
 import doctor  # noqa: E402
 import nodes  # noqa: E402
+from factory_plugins.github import probes as github_probes  # noqa: E402
 
 REPO = "o/r"
 
@@ -105,14 +106,14 @@ class ProjectWriteProbeTest(unittest.TestCase):
 
     def test_missing_write_token_in_token_mode_fails_and_writes_nothing(self):
         gh = FakeGh()
-        got = doctor.project_write_probes(self.SETTINGS, "ops", gh, {})
+        got = github_probes.project_write_probes(self.SETTINGS, "ops", gh, {})
         self.assertEqual(got, [{"probe": "write:label:o/app", "result": "fail",
                                 "detail": "FACTORY_WRITE_TOKEN is not set (write_mode: token)"}])
         self.assertEqual(gh.calls, [])
 
     def test_probe_label_is_created_and_deleted_with_the_write_token(self):
         gh = FakeGh()
-        got = doctor.project_write_probes(self.SETTINGS, "write", gh, {"FACTORY_WRITE_TOKEN": "pat"})
+        got = github_probes.project_write_probes(self.SETTINGS, "write", gh, {"FACTORY_WRITE_TOKEN": "pat"})
         self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])
         self.assertEqual([c[:2] + c[3:5] for c in gh.calls], [["label", "create", "-R", "o/app"], ["label", "delete", "-R", "o/app"]])
         self.assertEqual(gh.calls[0][2], gh.calls[1][2])
@@ -122,28 +123,28 @@ class ProjectWriteProbeTest(unittest.TestCase):
         settings = {**self.SETTINGS, "write_mode": "per-repo", "issues_token_env": "FACTORY_ISSUES_TOKEN",
                     "environments": {"read": {"secrets": []}}}  # deploy adds the issues token itself
         gh = FakeGh()
-        got = doctor.project_write_probes(settings, "read", gh, {"FACTORY_ISSUES_TOKEN": "iss"})
+        got = github_probes.project_write_probes(settings, "read", gh, {"FACTORY_ISSUES_TOKEN": "iss"})
         self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])
         self.assertEqual(gh.tokens, ["iss", "iss"])
         gh = FakeGh()
-        got = doctor.project_write_probes(settings, "read", gh, {})
+        got = github_probes.project_write_probes(settings, "read", gh, {})
         self.assertEqual(got, [{"probe": "write:label:o/app", "result": "fail",
                                 "detail": "FACTORY_ISSUES_TOKEN is not set (issues_token_env)"}])
         self.assertEqual(gh.calls, [])
 
     def test_an_environment_that_declares_the_token_is_probed_whatever_its_name(self):
         settings = {**self.SETTINGS, "environments": {"engine": {"secrets": ["FACTORY_WRITE_TOKEN"]}, "team": {"secrets": []}}}
-        got = doctor.project_write_probes(settings, "engine", FakeGh(), {"FACTORY_WRITE_TOKEN": "pat"})
+        got = github_probes.project_write_probes(settings, "engine", FakeGh(), {"FACTORY_WRITE_TOKEN": "pat"})
         self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])
-        self.assertEqual(doctor.project_write_probes(settings, "team", FakeGh(), {}), [])
+        self.assertEqual(github_probes.project_write_probes(settings, "team", FakeGh(), {}), [])
 
     def test_denied_write_without_token_mode_is_reported_and_read_env_is_not_probed(self):
         settings = {**self.SETTINGS, "write_mode": "per-repo"}
         gh = FakeGh(deny=("label create",))
-        got = doctor.project_write_probes(settings, "ops", gh, {})
+        got = github_probes.project_write_probes(settings, "ops", gh, {})
         self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "denied")])
         self.assertEqual(gh.tokens, [None])
-        self.assertEqual(doctor.project_write_probes(self.SETTINGS, "read", gh, {}), [])
+        self.assertEqual(github_probes.project_write_probes(self.SETTINGS, "read", gh, {}), [])
 
 
 class DoctorTest(unittest.TestCase):
@@ -159,7 +160,7 @@ class DoctorTest(unittest.TestCase):
             run_calls.append(args)
             return "log line"
 
-        self.assertEqual(doctor.run_log(api, run, REPO), "log line")
+        self.assertEqual(github_probes.run_log(api, run, REPO), "log line")
         self.assertEqual(api_calls, [f"repos/{REPO}/actions/runs?per_page=1&status=success"])
         self.assertEqual(run_calls, [["run", "view", "7", "-R", REPO, "--log"]])
 

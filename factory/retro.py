@@ -175,7 +175,7 @@ def collect(tracker, label):
 
 
 def main(argv):
-    from gate_github import GitHubGateTracker
+    from factory_plugins.github.gate import GitHubGateTracker
     if argv == ["collect"]:
         print(json.dumps(collect(GitHubGateTracker.from_config(), vocab.lesson()), indent=2))
         return 0

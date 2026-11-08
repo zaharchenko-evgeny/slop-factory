@@ -29,6 +29,7 @@ import gate  # noqa: E402
 import nodes  # noqa: E402
 import definition  # noqa: E402
 from factory_plugins.comments import node as comment_node  # noqa: E402
+from factory_plugins.github import ci_sync as gh_ci_sync, gate as gh_gate  # noqa: E402
 from gate_port import MemorySystem, TagTracker  # noqa: E402
 
 CONFIG = cfg.load()
@@ -693,7 +694,7 @@ class YouTrackGateTest(unittest.TestCase):
 
     def setUp(self):
         import project
-        from gate_github import GitHubGateTracker
+        from factory_plugins.github.gate import GitHubGateTracker
         from test_youtrack_tracker import FakeYouTrack
         from youtrack_tracker import YouTrackTicketStore
         self.addCleanup(cfg.set_team, cfg.team_root())  # importing the stub set a team of its own
@@ -730,7 +731,7 @@ class CliAndValidate(unittest.TestCase):
             calls.append(args)
             return json.dumps({"head": {"ref": "feature/x"}, "title": "INFRA-9 Add thing"})
 
-        host = gate.GitHubCodeHost("org/code", run)
+        host = gh_gate.GitHubCodeHost("org/code", run)
         self.assertEqual(host.ticket_for_pr(4), "INFRA-9")
         self.assertEqual(calls, [["api", "repos/org/code/pulls/4"]])
 
@@ -868,8 +869,8 @@ class TriggerTest(unittest.TestCase):
                                                                       "head": {"sha": "untrusted"}}}
         path = self.file(payload)
         host = type("Host", (), {"ticket_for_pr": lambda self, number: 7})()
-        with patch.object(gate.GitHubCodeHost, "from_config", return_value=host), \
-                patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker):
+        with patch.object(gh_gate.GitHubCodeHost, "from_config", return_value=host), \
+                patch.object(gh_gate.GitHubGateTracker, "from_config", return_value=tracker):
             code, out = self.run_main(["check", "--node", "review", "--event", str(path)])
         self.assertEqual(code, gate.GO)
         self.assertTrue(out["go"])
@@ -900,8 +901,8 @@ class TriggerTest(unittest.TestCase):
         from unittest.mock import patch
         stdout = io.StringIO()
         stderr = stderr or io.StringIO()
-        with patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), \
-                patch.object(gate.GitHubCodeHost, "from_config", return_value=host), \
+        with patch.object(gh_gate.GitHubGateTracker, "from_config", return_value=tracker), \
+                patch.object(gh_gate.GitHubCodeHost, "from_config", return_value=host), \
                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = gate.main(["sweep", *args])
         return code, json.loads(stdout.getvalue().splitlines()[0]), stderr.getvalue()
@@ -1999,13 +2000,13 @@ class CiSyncTest(unittest.TestCase):
              "w5": [ok()], "w6": [ok()]}, now="2026-11-05T11:00:00Z")
 
     def test_sync_sets_ci_label_from_head_checks(self):
-        repos = gate.project_repositories({"repositories": [
+        repos = gh_ci_sync.project_repositories({"repositories": [
             {"name": "main", "url": "https://github.com/o/main", "role": "primary"},
             {"name": "app", "url": "https://github.com/o/app", "role": "project"},
             {"name": "web", "url": "https://github.com/o/web/", "role": "project"}]})
         self.assertEqual(repos, ["o/app", "o/web"])
         host = self.host()
-        results, failed = gate.ci_sync(host, repos)
+        results, failed = gh_ci_sync.ci_sync(host, repos)
         self.assertFalse(failed)
         self.assertEqual([(r["repo"], r["pr"], r["ci"]) for r in results],  # PR 4 is no factory branch
                          [("o/app", 1, "green"), ("o/app", 2, "red"), ("o/app", 3, "pending"),
@@ -2016,12 +2017,12 @@ class CiSyncTest(unittest.TestCase):
         labels = {(repo, p["number"]): p["labels"] for repo, prs in host.prs.items() for p in prs}
         self.assertEqual(labels[("o/app", 3)], [self.GREEN])  # pending: no change
         self.assertEqual(labels[("o/web", 5)], [self.GREEN])  # labelled after this head's result: no change
-        gate.ci_sync(host, repos)
+        gh_ci_sync.ci_sync(host, repos)
         self.assertEqual(len(host.edits), 3)  # a second pass writes nothing
 
     def test_sync_dry_run_writes_nothing_and_one_failing_repository_does_not_stop_the_others(self):
         host = self.host()
-        results, failed = gate.ci_sync(host, ["o/missing", "o/app"], dry_run=True)
+        results, failed = gh_ci_sync.ci_sync(host, ["o/missing", "o/app"], dry_run=True)
         self.assertTrue(failed)
         self.assertEqual((results[0]["repo"], results[1]["added"], host.edits), ("o/missing", [self.GREEN], []))
 
@@ -2064,8 +2065,8 @@ class StatusTests(unittest.TestCase):
         path.write_text(json.dumps(payload))
         host = type("Host", (), {"ticket_for_pr": lambda self, number: 7})()
         out = StringIO()
-        with patch.object(gate.GitHubCodeHost, "from_config", return_value=host), \
-                patch.object(gate.GitHubGateTracker, "from_config", return_value=tracker), redirect_stdout(out):
+        with patch.object(gh_gate.GitHubCodeHost, "from_config", return_value=host), \
+                patch.object(gh_gate.GitHubGateTracker, "from_config", return_value=tracker), redirect_stdout(out):
             gate.main(["check", "--node", "fix", "--event", str(path)])
         st = json.loads(out.getvalue())["status"]
         self.assertEqual(st["reviews"]["behaviour"]["open"][0]["id"], "B1")

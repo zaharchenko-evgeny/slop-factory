@@ -49,11 +49,11 @@ Read it as in **Read an issue** above.
 ## Factory operations
 
 The gate (`factory/gate.py`, [ADR-0014](../adr/0014-node-model.md)) reaches the tracker only through
-these operations, in `factory/github_tracker.py`.
+these operations, in `factory/factory_plugins/github/tracker.py`.
 A state is a stage name from `factory.descriptor.yaml` `tracker.stages`; vars are the
 ticket's `factory-state` marker.
 
-| Operation | Does | GitHub Issues (`factory/github_tracker.py`) |
+| Operation | Does | GitHub Issues (`factory/factory_plugins/github/tracker.py`) |
 | --- | --- | --- |
 | `get_state(t)` | Read the ticket's stage | the one `tracker.stages` label on the issue |
 | `set_state(t, s)` | Set exactly one stage | add the stage label, remove the other stage labels |
@@ -81,7 +81,7 @@ Rules:
 
 ## GitHub Issues adapter
 
-`factory/github_tracker.py`. It reads `tracker.repository`,
+`factory/factory_plugins/github/tracker.py`. It reads `tracker.repository`,
 `tracker.stages` and `tracker.map_label` from `factory.descriptor.yaml` and calls `gh`
 through one runner (tests stub it).
 

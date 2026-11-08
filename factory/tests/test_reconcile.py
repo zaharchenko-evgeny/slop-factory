@@ -214,8 +214,8 @@ class ReconcileTest(unittest.TestCase):
         import json
         from unittest.mock import patch
         out, synced = io.StringIO(), {"repo": "o/app", "pr": 1, "ci": "green"}
-        with patch("gate_github.GitHubGateTracker.from_config", return_value=MemorySystem({})), \
-                patch.object(gate, "run_ci_sync", return_value=([synced], False)) as sync, \
+        with patch("factory_plugins.github.gate.GitHubGateTracker.from_config", return_value=MemorySystem({})), \
+                patch("factory_plugins.github.ci_sync.run_ci_sync", return_value=([synced], False)) as sync, \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(reconcile.main(["--dry-run"]), 0)
         self.assertTrue(sync.call_args.args[0])  # the pass's --dry-run

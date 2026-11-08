@@ -11,8 +11,9 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
-import github_graphql
 from ports.system import Effect
+
+CLOSED_HOURS = 48  # a ticket closed on merge while its finish run was lost (#567) is found for this long
 
 
 def ticket_from_ref(ref):
@@ -599,8 +600,8 @@ class MemoryTicketStore:
                  "attrs": list(t["attrs"])} for i, t in self.tickets.items() if t["parent"] == n]
 
     def tickets_by_stage(self, attrs, open_only=False, now=None):
-        """Open tickets and, unless `open_only`, those closed within `github_graphql.CLOSED_HOURS` of `now`."""
-        since = (now or datetime.now(timezone.utc)) - timedelta(hours=github_graphql.CLOSED_HOURS)
+        """Open tickets and, unless `open_only`, those closed within `CLOSED_HOURS` of `now`."""
+        since = (now or datetime.now(timezone.utc)) - timedelta(hours=CLOSED_HOURS)
 
         def listed(t):
             if t["state"] == "open":

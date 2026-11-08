@@ -20,10 +20,10 @@ from pathlib import Path
 import yaml
 
 import config
-import github_graphql
 from gate_tracker import GateTracker
 from gate_port import DescriptorPort, child_attrs, child_links, child_order, ticket_from_ref, ticket_repositories
-from github_tracker import CountedRun, ProjectWriteRun, gh, project_repositories, random_color
+from factory_plugins.github import graphql
+from factory_plugins.github.tracker import CountedRun, ProjectWriteRun, gh, project_repositories, random_color
 import derive
 import effects as effects_mod
 from derive import clean_notes, notes_block, parse_notes, redact  # noqa: F401  (the agent notes, ADR-0026)
@@ -227,12 +227,12 @@ class GitHubTicketStore:
 
     def tickets_by_stage(self, attrs, open_only=False, now=None):
         """Issue numbers carrying one of the stage `attrs`: the open ones and, unless `open_only`, those closed in the
-        last `github_graphql.CLOSED_HOURS`, from one paged GraphQL search each."""
+        last `gate_port.CLOSED_HOURS`, from one paged GraphQL search each."""
         found = set()
-        for q in github_graphql.search_query(self.repo, attrs, now)[:1 if open_only else 2] if attrs else []:
+        for q in graphql.search_query(self.repo, attrs, now)[:1 if open_only else 2] if attrs else []:
             after = None
             while True:
-                args = ["api", "graphql", "-f", f"query={github_graphql.SEARCH}", "-f", f"q={q}"]
+                args = ["api", "graphql", "-f", f"query={graphql.SEARCH}", "-f", f"q={q}"]
                 page = json.loads(self.run(args + (["-f", f"after={after}"] if after else [])))["data"]["search"]
                 found |= {x["number"] for x in page["nodes"] if x}
                 if not page["pageInfo"]["hasNextPage"]:
@@ -464,7 +464,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def sweep_tickets(self, stages, open_only=False, now=None):
         """Issue numbers whose stage label is one of `stages`: the open ones and, unless `open_only`, those closed in the
-        last `github_graphql.CLOSED_HOURS`, from one paged GraphQL search each."""
+        last `gate_port.CLOSED_HOURS`, from one paged GraphQL search each."""
         return self.tickets.tickets_by_stage([self.stages[st] for st in stages if st in self.stages], open_only, now)
 
     def prefetch(self, numbers):
@@ -472,14 +472,14 @@ class GitHubGateTracker(DescriptorPort):
         caches nothing: the gate then reads those tickets over REST."""
         owner, name = self.repo.split("/")
         numbers = sorted(set(numbers))
-        for i in range(0, len(numbers), github_graphql.BATCH):
-            batch = numbers[i:i + github_graphql.BATCH]
+        for i in range(0, len(numbers), graphql.BATCH):
+            batch = numbers[i:i + graphql.BATCH]
             try:
-                data = json.loads(self.run(["api", "graphql", "-f", f"query={github_graphql.batch_query(owner, name, batch)}"]))
+                data = json.loads(self.run(["api", "graphql", "-f", f"query={graphql.batch_query(owner, name, batch)}"]))
                 found = {}
                 for node in data["data"]["repository"].values():
                     if node:
-                        found.update(github_graphql.to_rest(node, list(self.stages.values())))
+                        found.update(graphql.to_rest(node, list(self.stages.values())))
                 self.run.cache.update(found)
             except Exception as e:  # an optimisation only: any failure reads over REST
                 print(f"prefetch of {batch} failed, reading over REST: {e}", file=sys.stderr)

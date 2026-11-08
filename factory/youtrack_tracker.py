@@ -11,8 +11,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-import github_graphql
-from gate_port import child_links, child_order
+from gate_port import CLOSED_HOURS, child_links, child_order
 
 ISSUE_FIELDS = ("idReadable,summary,description,resolved,updated,reporter(login),tags(id,name),"
                 "customFields(name,value(name,login)),links(direction,linkType(name),issues(idReadable,resolved,tags(name)))")
@@ -169,13 +168,13 @@ class YouTrackTicketStore:
 
     def tickets_by_stage(self, attrs, open_only=False, now=None):
         """Ids of the tickets holding one of `attrs`: the open ones and, unless `open_only`, those resolved in the
-        last `github_graphql.CLOSED_HOURS`."""
+        last `gate_port.CLOSED_HOURS`."""
         if not attrs:
             return []
         attrs = [x for a in attrs for x in ([f"{a}-{r}" for r in self.repositories] if a in self.repo_stages else [a])]
         query = " or ".join(f"tag: {{{a}}}" for a in attrs)
         if not open_only:
-            query = f"({query}) and (#Unresolved or resolved date: {{minus {github_graphql.CLOSED_HOURS}h}} .. Now)"
+            query = f"({query}) and (#Unresolved or resolved date: {{minus {CLOSED_HOURS}h}} .. Now)"
         else:
             query = f"({query}) and #Unresolved"
         found = self.run("GET", f"/api/issues?query={urllib.parse.quote(query)}&fields=idReadable&{TOP}")

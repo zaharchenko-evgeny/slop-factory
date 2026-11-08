@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod  # noqa: E402
 import deploy as deploy_mod  # noqa: E402
-import github_graphql as graphql  # noqa: E402
+from factory_plugins.github import graphql  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 from gate_port import ticket_from_ref  # noqa: E402
 
