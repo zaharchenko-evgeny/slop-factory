@@ -193,7 +193,9 @@ class TicketStore(Protocol):
     def events(self, n) -> list: ...
     """Oldest first: {kind: labeled|unlabeled|closed|reopened, value (the attr), actor, at}"""
     def comments(self, n) -> list: ...
-    """Oldest first: {author, author_is_bot, body, at, id?}; `id` (an integer that grows) is what the comment cursor reads"""
+    """Oldest first: {author, author_is_bot, author_is_factory, body, at, id?}; `id` (an integer that grows) is what the comment
+    cursor reads. `author_is_factory` is true only for the factory's own login (`targets.air.bot_login`; YouTrack `bot_logins`).
+    Callers that ask "did the factory write this?" read it, never `author_is_bot`, which is true for any bot"""
     def add_attr(self, n, attr): ...
     def remove_attr(self, n, *attrs): ...
     def set_stage(self, n, stage, have): ...  # `stage` replaces the stage attrs `have`
@@ -478,7 +480,7 @@ class MemoryTicketStore:
         return True
 
     def comment(self, n, body):
-        self.tickets[n]["comments"].append({"author": self.actor, "author_is_bot": True, "body": body, "at": None})
+        self.tickets[n]["comments"].append({"author": self.actor, "author_is_bot": True, "author_is_factory": True, "body": body, "at": None})
 
     def close(self, n, at=None):
         t = self.tickets[n]

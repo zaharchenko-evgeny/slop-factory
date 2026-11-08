@@ -182,8 +182,8 @@ class GitHubTicketStore:
     """The ticket side of the GitHub tracker (the TicketStore port, factory/gate_port.py): the issues of `repo`, read
     and written with `gh`. `run` is the tracker's `CountedRun`, whose cache `GitHubGateTracker.prefetch` fills."""
 
-    def __init__(self, repo, run=gh):
-        self.repo, self.run = repo, run
+    def __init__(self, repo, run=gh, bot=None):
+        self.repo, self.run, self.bot = repo, run, bot  # `bot`: the factory's login, `targets.air.bot_login`
 
     # --- reads
     def _cached(self, path, repo):
@@ -217,7 +217,8 @@ class GitHubTicketStore:
         for c in self.read_list(f"issues/{n}/comments"):
             login, user = (c.get("user") or {}).get("login", ""), c.get("user") or {}
             out.append({"id": c.get("id"), "author": login,
-                        "author_is_bot": user.get("type") == "Bot" or login.endswith("[bot]"), "body": c["body"], "at": c.get("created_at") or ""})
+                        "author_is_bot": user.get("type") == "Bot" or login.endswith("[bot]"),
+                        "author_is_factory": bool(self.bot) and login == self.bot, "body": c["body"], "at": c.get("created_at") or ""})
         return out
 
     def open_blockers(self, n):
@@ -423,8 +424,8 @@ class GitHubGateTracker(DescriptorPort):
         self.writable = None  # repository names this environment may write; None: every one (#994)
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, CountedRun(run)
         # the ticket side: every ticket read and write goes through it (GitHub issues unless a store is given)
-        self.tickets = tickets or GitHubTicketStore(repo, self.run)
-        self.github = self.tickets if tickets is None else GitHubTicketStore(repo, self.run)  # the code host's REST reads
+        self.tickets = tickets or GitHubTicketStore(repo, self.run, bot_login)
+        self.github = self.tickets if tickets is None else GitHubTicketStore(repo, self.run, bot_login)  # the code host's REST reads
         if tickets:  # YouTrack: states are a field or tags, commands tags; its `repo` is the code host
             self.state_kinds, self.command_kinds = ("field", "tag"), ("tag", "pr_label")
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
@@ -468,11 +469,12 @@ class GitHubGateTracker(DescriptorPort):
         return self.github.read_list(path, repo=repo)
 
     def pr_comments(self, n):
-        """The comments on ticket `n`'s PR, as `tickets.comments` gives them ({author, author_is_bot, body, at})."""
+        """The comments on ticket `n`'s PR, as `tickets.comments` gives them ({author, author_is_bot, author_is_factory, body, at})."""
         pr = self._pr(n)
         if not pr:
             return []
         return [{"id": c.get("id"), "author": (c.get("user") or {}).get("login"), "author_is_bot": (c.get("user") or {}).get("type") == "Bot",
+                 "author_is_factory": bool(self.bot) and (c.get("user") or {}).get("login") == self.bot,
                  "body": c.get("body") or "", "at": c.get("created_at")}
                 for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)]
 
@@ -826,7 +828,7 @@ class GitHubGateTracker(DescriptorPort):
         comments = self.tickets.comments(n)
         f["comments"] = comments
         got = [(c["at"], notes) for c in comments if c["at"] >= since
-               for notes in parse_notes(c["body"], c["author"], "Bot" if c["author_is_bot"] else "User")]
+               for notes in parse_notes(c["body"], "", "Bot" if c["author_is_factory"] else "User")]
         if stage == "needs-answers":
             waiting = [e for e in events if e["kind"] == "labeled" and e["value"] == self.stages["needs-answers"]]
             if waiting and comments:
@@ -1037,8 +1039,8 @@ class GitHubGateTracker(DescriptorPort):
                 return False
             if kind == "pr-notes-sync":  # the first gate step that sees the PR copies the parked notes
                 parked = [c for c in self.tickets.comments(n) if c["body"].startswith(NOTES_PARKED)]
-                found = parse_notes(parked[-1]["body"], parked[-1]["author"],
-                                    "Bot" if parked[-1]["author_is_bot"] else "User") if parked else []
+                found = parse_notes(parked[-1]["body"], "",
+                                    "Bot" if parked[-1]["author_is_factory"] else "User") if parked else []
                 if not found:
                     return False
                 value = notes_block(found[-1])
