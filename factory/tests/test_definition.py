@@ -165,6 +165,13 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual([r["name"] for r in project["repositories"] if r["role"] == "primary"], ["slop-factory"])
         self.assertEqual(definition.nodes(defn)["environments"]["engine"]["repository"], "primary")
 
+    def test_environment_without_repositories_is_refused(self):
+        def empty(f):
+            f["environments"]["engine"]["repositories"] = []
+            f["tracker"].pop("repositories", None)
+        self.edit("factory.yaml", empty)
+        self.assertError("empty-environment: environments.engine")
+
     def _two_ticket_repositories(self):
         self.edit("factory.yaml", lambda f: f["tracker"].update(repositories=[MAIN, OTHER]))
         return definition.load(self.root)

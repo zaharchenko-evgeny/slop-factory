@@ -469,6 +469,8 @@ def errors(defn):
     for e, spec in envs.items():
         repos = (spec or {}).get("repositories") or []
         declared = set(((f.get("defaults") or {}).get("env") or {})) | set((spec or {}).get("env") or {})
+        if not repos:  # compiling needs a repository for the node output (`_primary`)
+            errs.append(f"empty-environment: environments.{e}: lists no repositories")
         if sum(1 for r in repos if r.get("main")) > 1:
             errs.append(f"main-repository: environments.{e}: needs at most one `main: true`")
         for r in repos:
