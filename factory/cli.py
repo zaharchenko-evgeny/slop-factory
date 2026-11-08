@@ -295,7 +295,7 @@ def gate_error(stdout):
 def report_end_failure(state, outcome, error, run=subprocess.run):
     """One ticket comment naming the node, head, outcome and the error's last lines, so reconcile and a person see
     why the outcome did not land, and that a retry on this head fails the same way (#997)."""
-    if not state.get("ticket"):
+    if not state.get("ticket") or state.get("tracker"):  # a memory tracker (`--tracker`, tests) has no GitHub ticket
         return
     tail = "\n".join(line for line in error.strip().splitlines()[-5:])[:1500] or "no error output"
     body = (f"{END_FAILED} node={state['node']} head={state.get('head') or 'none'} outcome={outcome}\n\n```\n{tail}\n```\n\n"
