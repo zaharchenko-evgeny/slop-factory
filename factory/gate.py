@@ -39,7 +39,7 @@ import nodes as nodes_mod  # noqa: E402
 from derive import clean_notes, review_at_head  # noqa: E402
 import effects as effects_mod  # noqa: E402
 from gate_tracker import OnVcs, hosts_prs, overlay  # noqa: E402
-from gate_port import MemorySystem, ticket_from_ref  # noqa: E402
+from gate_port import REF, MemorySystem, number_of, split_ticket, ticket_from_ref  # noqa: E402
 import vocab  # noqa: E402
 import definition  # noqa: E402
 import plugins  # noqa: E402  (ADR-0026: a plugin's code is imported when the core calls it)
@@ -188,7 +188,9 @@ def from_trigger(d, code_host=None):
         if ticket is None:
             raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
     else:
-        ticket = number
+        repository = (d.get("repository") or {}).get("full_name") if isinstance(d.get("repository"), dict) else None
+        ref = getattr(code_host, "ticket_ref", None)  # ADR-0024: an issue of another ticket repository
+        ticket = ref(repository, number) if repository and callable(ref) else number
     action = d.get("action") or "event"
     return {"id": f"{name}:{ticket}:{action}", "ticket": ticket, "event_name": name, "action": action}
 
@@ -614,7 +616,7 @@ def branch_of(facts, config):
     title = facts.get("title") or ""
     words = [word for word in re.findall(r"[a-z0-9]+", title.lower()) if word not in {"a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "with", "from", "by"}]
     slug = explicit.group(1) if explicit else "-".join(words[:4]) or "ticket"
-    return config["branch_pattern"].format(ticket=facts["ticket"], slug=slug)
+    return config["branch_pattern"].format(ticket=number_of(facts["ticket"]), slug=slug)
 
 
 def matches(node, facts, event, outcome=None):
@@ -630,10 +632,22 @@ def matches(node, facts, event, outcome=None):
     return None if holds(node["when"], facts, event) else "condition does not hold"
 
 
+def outside_node_repository(ticket, tracker_repo):
+    """The reason a run of an automation copy (`FACTORY_NODE_REPO`, ADR-0024) must not act on `ticket`, else None:
+    the ticket is in another repository (a bare number is the tracker's). A run without it acts on any ticket."""
+    node_repo = os.environ.get("FACTORY_NODE_REPO")
+    repo = split_ticket(ticket, tracker_repo)[0]
+    if node_repo and repo and (isinstance(ticket, int) or REF.fullmatch(str(ticket))) and repo.lower() != node_repo.lower():
+        return f"ticket {ticket} is in {repo}, not in {node_repo}"
+    return None
+
+
 def check(name, event, tracker, nodes, config, code_host=None):
     node = load_node(name, nodes)
     if "id" not in event:
         raise Bad("malformed event: needs `id`")
+    if (why := outside_node_repository(event["ticket"], getattr(tracker, "repo", None))):
+        return NO_GO, {"go": False, "reason": why}
     facts = tracker.facts(event["ticket"])
     if isinstance(code_host, scopes.ScopedTracker):  # the vcs of the ticket's environment
         code_host = code_host.vcs_for()[1]
@@ -1342,7 +1356,7 @@ def main(argv):
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
     p.add_argument("--event", nargs="?", const="-")
-    p.add_argument("--issue", type=int)
+    p.add_argument("--issue", type=lambda t: t if REF.fullmatch(t) else int(t))  # N, or owner/repo#N (ADR-0024)
     p.add_argument("--pr", type=int)  # decide: the PR that woke the node; the gate finds its ticket
     p.add_argument("--outcome")
     p.add_argument("--payload")

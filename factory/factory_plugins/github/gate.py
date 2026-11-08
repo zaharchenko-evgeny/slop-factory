@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -21,7 +22,8 @@ import yaml
 
 import config
 from gate_tracker import GateTracker
-from gate_port import DescriptorPort, child_attrs, child_links, child_order, ticket_from_ref, ticket_repositories
+from gate_port import (DescriptorPort, child_attrs, child_links, child_order, in_ticket_repository, number_of, ticket_view,
+                       ticket_from_ref, ticket_ref, ticket_repositories, tracker_repositories)
 from scopes import matches
 from factory_plugins.github import graphql
 from factory_plugins.github.tracker import CountedRun, ProjectWriteRun, gh, project_repositories, random_color
@@ -80,14 +82,16 @@ def repository_names(c):
 class GitHubCodeHost:
     """The GitHub repository that hosts the pull requests; `code_host.repository`, else the tracker's."""
 
-    def __init__(self, repo, run=gh):
+    def __init__(self, repo, run=gh, ticket_repos=None):
         self.repo, self.run = repo, run
+        self.ticket_repos = list(ticket_repos or [])  # ADR-0024: the repositories that hold tickets, the tracker first
 
     @classmethod
     def from_config(cls, path=None, run=gh, descriptor=None):
         c = yaml.safe_load(Path(path).read_text()) if path else descriptor if descriptor is not None else config.load()
-        return cls((c.get("code_host") or {}).get("repository") or c["tracker"]["repository"],
-                   ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env")))
+        tickets = tracker_repositories(c["tracker"])
+        return cls((c.get("code_host") or {}).get("repository") or c["tracker"].get("repository") or tickets[0],
+                   ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env")), tickets)
 
     @staticmethod
     def gate_tracker(c, tickets, run=gh):
@@ -95,11 +99,19 @@ class GitHubCodeHost:
         system's plugin) and whose pull requests live here, in `code_host.repository`; `c` is the loaded descriptor."""
         return GitHubGateTracker.from_config(run=run, tickets=tickets, descriptor=c)
 
+    def ticket_ref(self, repository, number):
+        """The id of issue `number` of `repository` (ADR-0024): bare in the tracker, else `owner/repo#n`."""
+        return ticket_ref(repository, number, self.ticket_repos[0] if self.ticket_repos else None)
+
     def ticket_for_pr(self, number, repository=None):
         """Resolve a PR number to its ticket from the live head ref, else the live title; `repository` (owner/repo)
-        when the PR is in another of the ticket's repositories."""
-        pr = json.loads(self.run(["api", f"repos/{repository or self.repo}/pulls/{number}"]))
-        return ticket_from_ref((pr.get("head") or {}).get("ref")) or ticket_from_ref(pr.get("title"))
+        when the PR is in another of the ticket's repositories. The ticket is in the PR's own repository when that
+        holds tickets, else (a repository with no tickets) in the tracker."""
+        repository = repository or self.repo
+        pr = json.loads(self.run(["api", f"repos/{repository}/pulls/{number}"]))
+        ticket = ticket_from_ref((pr.get("head") or {}).get("ref")) or ticket_from_ref(pr.get("title"))
+        holds = repository.lower() in {r.lower() for r in self.ticket_repos}
+        return self.ticket_ref(repository, ticket) if holds and isinstance(ticket, int) else ticket
 
     def event(self, payload):
         """The Event of a pull request or PR comment payload, the ticket from the PR's live head ref (the Vcs port);
@@ -158,10 +170,28 @@ class GitHubTicketStore:
     `scope` (`{label}`, #1069) is an environment's share of the repository's issues: its searches hold only the issues
     with the label, and an issue it creates gets it."""
 
-    def __init__(self, repo, run=gh, bot=None, scope=None, repositories=None):
+    def __init__(self, repo, run=gh, bot=None, scope=None, repositories=None, ticket_repos=None):
         self.repo, self.run, self.bot = repo, run, bot  # `bot`: the factory's login, `targets.air.bot_login`
         self.scope = scope
         self.others = dict(repositories or {})  # {name: owner/repo} of the definition's other repositories
+        # ADR-0024: the repositories that hold tickets, the first is the tracker; a bare number is a ticket of `repo`
+        self.primary = repo
+        self.ticket_repos = list(ticket_repos or [repo])
+
+    def at(self, repo):
+        """This store on ticket repository `repo`: its bare numbers are that repository's issues."""
+        view = copy.copy(self)
+        view.repo = repo
+        return view
+
+    def ref(self, repo, number):
+        """The id of issue `number` of `repo`: bare in the tracker, `owner/repo#n` elsewhere."""
+        return ticket_ref(repo, number, self.primary)
+
+    def _id(self, item):
+        """The id of an issue body of the REST API: its own repository (`repository_url`), else this one."""
+        url = item.get("repository_url") or ""
+        return self.ref(url.split("/repos/", 1)[1] if "/repos/" in url else self.repo, item["number"])
 
     def repo_of(self, child):
         """The repository a child is created in: the one its `repo` names among the other repositories, else this one."""
@@ -170,6 +200,7 @@ class GitHubTicketStore:
     def scope_labels(self):
         return [self.scope["label"]] if self.scope else []
 
+    @in_ticket_repository
     def in_scope(self, n):
         """Whether issue `n` carries the scope's label (every issue without a scope)."""
         return not self.scope or matches(self.scope, self.issue(n)["attrs"])
@@ -178,7 +209,7 @@ class GitHubTicketStore:
     def _cached(self, path, repo):
         """A body `prefetch` read, until the first write (`CountedRun` drops them)."""
         cache = getattr(self.run, "cache", {})
-        return copy.deepcopy(cache[path]) if (repo or self.repo) == self.repo and path in cache else None
+        return copy.deepcopy(cache[path]) if (repo or self.repo) == self.primary and path in cache else None
 
     def api(self, path, *flags, repo=None):
         if not flags and (hit := self._cached(path, repo)) is not None:
@@ -191,6 +222,7 @@ class GitHubTicketStore:
         out = self.run(["api", "--paginate", f"repos/{repo or self.repo}/{path}", "--jq", ".[]"])
         return [json.loads(x) for x in out.splitlines() if x.strip()]
 
+    @in_ticket_repository
     def issue(self, n):
         i = self.api(f"issues/{n}")
         return {"title": i.get("title", ""), "body": i.get("body") or "", "state": i.get("state", "open"),
@@ -198,9 +230,11 @@ class GitHubTicketStore:
                 "updated_at": i.get("updated_at"), "attrs": [x["name"] for x in i["labels"]],
                 "assignees": [a["login"] for a in i.get("assignees", [])]}
 
+    @in_ticket_repository
     def events(self, n):
         return normalise_events(self.read_list(f"issues/{n}/events"))
 
+    @in_ticket_repository
     def comments(self, n):
         out = []
         for c in self.read_list(f"issues/{n}/comments"):
@@ -210,62 +244,71 @@ class GitHubTicketStore:
                         "author_is_factory": bool(self.bot) and login == self.bot, "body": c["body"], "at": c.get("created_at") or ""})
         return out
 
+    @in_ticket_repository
     def open_blockers(self, n):
         """Numbers of the open issues blocking `n`: native links, then `Blocked by: #<n>` body lines."""
-        blockers = [b["number"] for b in self.read_list(f"issues/{n}/dependencies/blocked_by") if b["state"] == "open"]
+        blockers = [self._id(b) for b in self.read_list(f"issues/{n}/dependencies/blocked_by") if b["state"] == "open"]
         for repo, number in re.findall(r"(?im)^Blocked by: (?:([\w.-]+/[\w.-]+))?#(\d+)\s*$", self.issue(n)["body"]):
             if self.api(f"issues/{number}", repo=repo or None).get("state") == "open":
-                blockers.append(int(number))
+                blockers.append(self.ref(repo or self.repo, int(number)))
         return blockers
 
+    @in_ticket_repository
     def parent(self, n):
         try:
-            return self.api(f"issues/{n}/parent").get("number")
+            parent = self.api(f"issues/{n}/parent")
+            return self._id(parent) if parent.get("number") else None
         except Exception as e:
             if "404" in str(e):
                 return None
             raise
 
+    @in_ticket_repository
     def children(self, n):
-        return [{"number": k.get("number"), "state": k.get("state"),
+        return [{"number": self._id(k), "state": k.get("state"),
                  "not_planned": k.get("state") == "closed" and k.get("state_reason") == "not_planned",
                  "attrs": [x["name"] for x in k.get("labels") or []]} for k in self.read_list(f"issues/{n}/sub_issues")]
 
+    @in_ticket_repository
     def blocked_by(self, n):
         """Every native blocker of `n`, open or closed (`[{number, state}]`)."""
-        return [{"number": b["number"], "state": b["state"]} for b in self.read_list(f"issues/{n}/dependencies/blocked_by")]
+        return [{"number": self._id(b), "state": b["state"]} for b in self.read_list(f"issues/{n}/dependencies/blocked_by")]
 
+    @in_ticket_repository
     def blocking(self, n, repo=None):
         """Issues whose native or body fallback dependency list names `n` as a blocker: `n` of `repo`; with no `repo`,
         of this repository or, in a body line, of another repository of the definition (the gate knows tickets by
         number, and a woken ticket re-checks its open blockers)."""
         other = repo if repo and repo != self.repo else None
-        dependents = self.read_list(f"issues/{n}/dependencies/blocking", repo=other)
-        known = {i["number"] for i in dependents}
+        dependents = [{**i, "number": self._id(i)} for i in self.read_list(f"issues/{n}/dependencies/blocking", repo=other)]
+        known = {number_of(i["number"]) for i in dependents}
         refs = [other] if other else [""] + [r for r in self.others.values() if r and r != self.repo] if repo is None else [""]
         line = "(?:" + "|".join(f"{re.escape(r)}#{n}" for r in refs) + ")"
         for issue in self.read_list("issues?state=open&per_page=100"):
             if issue["number"] != n and issue["number"] not in known and re.search(
                     rf"(?im)^Blocked by: {line}\s*$", issue.get("body") or ""):
-                dependents.append(issue)
+                dependents.append({**issue, "number": self.ref(self.repo, issue["number"])})
                 known.add(issue["number"])
         return dependents
 
     def tickets_by_stage(self, attrs, open_only=False, now=None):
         """Issue numbers carrying one of the stage `attrs`: the open ones and, unless `open_only`, those closed in the
         last `gate_port.CLOSED_HOURS`, from one paged GraphQL search each."""
-        found = set()
+        found = []  # the tracker's tickets, then each other ticket repository's: bare numbers, then `owner/repo#n`
         scoped = {"scope_label": self.scope["label"]} if self.scope else {}
-        for q in graphql.search_query(self.repo, attrs, now, **scoped)[:1 if open_only else 2] if attrs else []:
-            after = None
-            while True:
-                args = ["api", "graphql", "-f", f"query={graphql.SEARCH}", "-f", f"q={q}"]
-                page = json.loads(self.run(args + (["-f", f"after={after}"] if after else [])))["data"]["search"]
-                found |= {x["number"] for x in page["nodes"] if x}
-                if not page["pageInfo"]["hasNextPage"]:
-                    break
-                after = page["pageInfo"]["endCursor"]
-        return sorted(found)
+        for repo in self.ticket_repos:
+            numbers = set()
+            for q in graphql.search_query(repo, attrs, now, **scoped)[:1 if open_only else 2] if attrs else []:
+                after = None
+                while True:
+                    args = ["api", "graphql", "-f", f"query={graphql.SEARCH}", "-f", f"q={q}"]
+                    page = json.loads(self.run(args + (["-f", f"after={after}"] if after else [])))["data"]["search"]
+                    numbers |= {x["number"] for x in page["nodes"] if x}
+                    if not page["pageInfo"]["hasNextPage"]:
+                        break
+                    after = page["pageInfo"]["endCursor"]
+            found += [self.ref(repo, n) for n in sorted(numbers)]
+        return found
 
     def can_write(self, login, repo=None):
         """Write access from the collaborator permission API (author_association says nothing about the role)."""
@@ -280,21 +323,26 @@ class GitHubTicketStore:
         return self.can_write(login)
 
     # --- writes
+    @in_ticket_repository
     def edit_attrs(self, n, add=(), remove=()):
         flags = [x for a in add for x in ("--add-label", a)] + [x for r in remove for x in ("--remove-label", r)]
         self.run(["issue", "edit", str(n), "-R", self.repo, *flags])
         return True
 
+    @in_ticket_repository
     def add_attr(self, n, attr):
         return self.edit_attrs(n, [attr])
 
+    @in_ticket_repository
     def remove_attr(self, n, *attrs):
         return self.edit_attrs(n, remove=attrs)
 
+    @in_ticket_repository
     def set_stage(self, n, stage, have):
         """Stage `stage` replaces the stage attrs `have` the ticket holds."""
         return self.edit_attrs(n, [stage] if stage not in have else [], [x for x in have if x != stage])
 
+    @in_ticket_repository
     def assign(self, n, people):
         """The ticket's assignees become exactly `people`; True when that wrote."""
         current, desired = set(self.issue(n)["assignees"]), set(people)
@@ -305,9 +353,11 @@ class GitHubTicketStore:
         self.run(["issue", "edit", str(n), "-R", self.repo, *flags])
         return True
 
+    @in_ticket_repository
     def comment(self, n, body):
         self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
 
+    @in_ticket_repository
     def close(self, n):
         self.run(["issue", "close", str(n), "-R", self.repo])
 
@@ -417,7 +467,7 @@ class GitHubTicketStore:
 class GitHubGateTracker(DescriptorPort):
     def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8,
                  ci_workflows=("quality-gates",), pr_repo=None, project=None, repositories=None, tickets=None,
-                 required=None):
+                 required=None, ticket_repos=None):
         self.trusted, self.run_cap, self.ci_workflows = set(trusted_bots), run_cap, set(ci_workflows)
         self.required = {**FOCUSES, **(required or {})}  # review focuses by risk; `reviews.required` overrides
         import definition
@@ -431,7 +481,8 @@ class GitHubGateTracker(DescriptorPort):
         self.writable = None  # repository names this environment may write; None: every one (#994)
         self.repo, self.stages, self.bot, self.run = repo, stages, bot_login, CountedRun(run)
         # the ticket side: every ticket read and write goes through it (GitHub issues unless a store is given)
-        self.tickets = tickets or GitHubTicketStore(repo, self.run, bot_login,
+        self.ticket_repos = list(ticket_repos or [repo])  # ADR-0024: the repositories that hold tickets, the tracker first
+        self.tickets = tickets or GitHubTicketStore(repo, self.run, bot_login, ticket_repos=self.ticket_repos,
                                                     repositories=dict(list(self.repositories.items())[1:]))
         self.github = self.tickets if tickets is None else GitHubTicketStore(repo, self.run, bot_login)  # the code host's REST reads
         if tickets:  # another ticket system: its store kinds, and the ticket effects it declares replace these; `repo` is the code host
@@ -450,14 +501,15 @@ class GitHubGateTracker(DescriptorPort):
         if not bot:
             raise ValueError("descriptor: targets.air.bot_login is not set")
         t, code_repo = c["tracker"], (c.get("code_host") or {}).get("repository")
-        repo = code_repo if tickets is not None else t.get("repository")
+        repo = code_repo if tickets is not None else t.get("repository") or tracker_repositories(t)[0]
         return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"],
                    ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env")),
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
                    (c.get("ci") or {}).get("workflows") or ["quality-gates"],
                    (c.get("code_host") or {}).get("repository"),
                    {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,
-                   repository_names(c), tickets, (c.get("reviews") or {}).get("required"))._with_scope(t)._with_writable(c)
+                   repository_names(c), tickets, (c.get("reviews") or {}).get("required"),
+                   tracker_repositories(t) if tickets is None else None)._with_scope(t)._with_writable(c)
 
     @classmethod
     def for_repository(cls, repo, run=gh):
@@ -493,6 +545,7 @@ class GitHubGateTracker(DescriptorPort):
     def _list(self, path, repo=None):
         return self.github.read_list(path, repo=repo)
 
+    @in_ticket_repository
     def pr_comments(self, n):
         """The comments on ticket `n`'s PR, as `tickets.comments` gives them ({author, author_is_bot, author_is_factory, body, at})."""
         pr = self._pr(n)
@@ -528,7 +581,7 @@ class GitHubGateTracker(DescriptorPort):
         """Read tickets `numbers` in batched GraphQL queries into the cache `_api` and `_list` serve. A failed batch
         caches nothing: the gate then reads those tickets over REST."""
         owner, name = self.repo.split("/")
-        numbers = sorted(set(numbers))
+        numbers = sorted({n for n in numbers if isinstance(n, int)})  # the tracker's tickets: the cache holds its bodies
         for i in range(0, len(numbers), graphql.BATCH):
             batch = numbers[i:i + graphql.BATCH]
             try:
@@ -703,6 +756,7 @@ class GitHubGateTracker(DescriptorPort):
             out[-1]["body"] = r.get("body") or ""  # #590: a mention in a review asks that agent
         return out
 
+    @in_ticket_repository
     def changed_since(self, n, old):
         """{file: [(first, last) head lines of each hunk] or None for the whole file} of what a fix changed between
         head `old` and ticket `n`'s current head: files whose PR patch differs (so a merge from the base branch does
@@ -768,6 +822,10 @@ class GitHubGateTracker(DescriptorPort):
     def read(self, subject, want=frozenset()):
         """The TicketRecord of ticket `subject.id`, or the PrRecord of its PR in repository `subject.repo` (None
         without one). `want` "behind" reads how far the PR's base is ahead of its head."""
+        if subject.kind in ("ticket", "pr") and subject.id is not None:  # a ticket of another repository: its view
+            view, number = ticket_view(self, subject.id)
+            if view is not self:
+                return view.read(replace(subject, id=number), want)
         if subject.kind == "ticket":
             return self._ticket_record(subject.id)
         if subject.kind == "pr":
@@ -895,6 +953,7 @@ class GitHubGateTracker(DescriptorPort):
         issue = self.tickets.issue(n)
         return issue["state"] == "closed" and issue["close_reason"] == "not_planned"
 
+    @in_ticket_repository
     def facts(self, n):
         gate = GateTracker.single(self)  # this tracker hosts the PRs too: `read` finds each repository's view
         f = gate.facts(n)
@@ -907,6 +966,18 @@ class GitHubGateTracker(DescriptorPort):
         view.pr_repo = repo
         return view
 
+    def at(self, repo):
+        """This tracker on ticket repository `repo` (ADR-0024): its tickets and their pull requests are that
+        repository's, and a bare ticket number is its issue. `repo` is the view's primary repository."""
+        view = self._on(repo)
+        view.repo = repo
+        view.tickets = self.tickets.at(repo)
+        view.github = view.tickets if self.github is self.tickets else self.github
+        name = next((k for k, v in self.repositories.items() if v == repo), repo.rsplit("/", 1)[-1])
+        view.repositories = {name: repo, **{k: v for k, v in self.repositories.items() if v != repo}}
+        return view
+
+    @in_ticket_repository
     def stale_facts(self, n):
         """facts plus what the stale sweep needs: `since` (last label or commit event, ISO), the command label
         (`factory:implement-*` on the issue, `factory:fix-*` on the PR) and when it was added, the head commit
@@ -950,6 +1021,9 @@ class GitHubGateTracker(DescriptorPort):
         return True
 
     def apply(self, e):
+        view, number = ticket_view(self, e["ticket"]) if e.get("ticket") is not None else (self, None)
+        if view is not self:
+            return view.apply({**e, "ticket": number})
         return GateTracker.single(self).apply(e)
 
     # --- the effect handlers (ADR-0026): (system, effect, ctx) -> wrote, declared in `effects` below

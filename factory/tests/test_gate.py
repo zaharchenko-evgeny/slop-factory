@@ -32,6 +32,7 @@ import definition  # noqa: E402
 from factory_plugins.comments import node as comment_node  # noqa: E402
 from factory_plugins.github import ci_sync as gh_ci_sync, gate as gh_gate  # noqa: E402
 from gate_port import MemorySystem, TagTracker  # noqa: E402
+from ports.system import Query  # noqa: E402
 
 CONFIG = cfg.load()
 NODES = nodes.load()
@@ -2261,6 +2262,128 @@ class ReviewLoopTest(unittest.TestCase):
     def test_persisting_finding_counts_every_round(self):
         import gate_port
         self.assertEqual(gate_port.fix_round_count(self.rounds(["B1"], ["B1", "B2"], ["B2"])), 3)
+
+
+class TicketReposGh:
+    """`gh` over `o/r` (the tracker), `o/b` (a second ticket repository) and `o/code` (a repository with no tickets).
+    `data` maps a REST path to its body; `ready` and `staged` list each repository's issue numbers."""
+
+    def __init__(self, data=None, ready=None, staged=None, assignees=()):
+        self.data, self.ready, self.staged, self.assignees = data or {}, ready or {}, staged or {}, set(assignees)
+        self.calls = []
+
+    def __call__(self, args, **kw):
+        self.calls.append(list(args))
+        path = next((str(x) for x in args if str(x).startswith("repos/")), "")
+        if args[:2] == ["issue", "list"]:
+            repo = args[args.index("-R") + 1]
+            if "--search" in args or self.stages_label(args) != "ready":
+                return "[]"
+            return json.dumps([{"number": n, "assignees": [{"login": "x"}] if (repo, n) in self.assignees else []}
+                               for n in self.ready.get(repo, [])])
+        if args[:2] == ["api", "graphql"]:
+            q = next(x[2:] for x in args if x.startswith("q="))
+            repo = q.split()[0].removeprefix("repo:")
+            nodes = [{"number": n} for n in self.staged.get(repo, [])] if "is:open" in q else []
+            return json.dumps({"data": {"search": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}})
+        body = self.data.get(path.split("?")[0], [] if "--paginate" in args else {})
+        return "\n".join(json.dumps(x) for x in body) if "--paginate" in args else json.dumps(body)
+
+    @staticmethod
+    def stages_label(args):
+        label = args[args.index("--label") + 1] if "--label" in args else ""
+        return next((k for k, v in CONFIG["tracker"]["stages"].items() if v == label), label)
+
+
+class TicketRepositoriesTest(unittest.TestCase):
+    """ADR-0024: tickets live in several repositories; `owner/repo#n` names one outside the tracker (#982)."""
+    TICKETS = ["o/r", "o/b"]
+
+    def tracker(self, gh):
+        return gh_gate.GitHubGateTracker("o/r", CONFIG["tracker"]["stages"], "bot", run=gh, ticket_repos=self.TICKETS)
+
+    def test_pr_branch_maps_to_ticket_in_pr_repository(self):
+        pr = lambda ref: {"head": {"ref": ref}, "title": ""}  # noqa: E731
+        gh = TicketReposGh({"repos/o/b/pulls/3": pr("ez/5-x"), "repos/o/r/pulls/4": pr("ez/5-x"),
+                            "repos/o/code/pulls/9": pr("ez/5-x"), "repos/o/b/pulls/6": pr("main"),
+                            "repos/o/b/pulls/7": {"head": {"ref": "topic"}, "title": "5: fix"},
+                            "repos/o/b/pulls/8": pr("ez/INFRA-12-x")})
+        host = gh_gate.GitHubCodeHost("o/r", gh, self.TICKETS)
+        for repo, number, want in [("o/b", 3, "o/b#5"), ("o/r", 4, 5), ("o/code", 9, 5), ("o/b", 6, None),
+                                   ("o/b", 7, "o/b#5"), ("o/b", 8, "INFRA-12")]:
+            with self.subTest(repo=repo, pr=number):
+                self.assertEqual(host.ticket_for_pr(number, repo), want)
+                if number in (3, 4, 9):  # the trigger payload: a PR, then an issue of that repository
+                    ev = gate.from_trigger({"eventType": "pull_request.labeled", "action": "labeled",
+                                            "pull_request": {"number": number}, "repository": {"full_name": repo}}, host)
+                    self.assertEqual(ev["ticket"], want)
+        issue = lambda repo, n: gate.from_trigger({"eventType": "issues.labeled", "action": "labeled", "issue": {"number": n},  # noqa: E731
+                                                   "repository": {"full_name": repo}}, host)["ticket"]
+        self.assertEqual((issue("o/r", 982), issue("o/b", 5)), (982, "o/b#5"))
+        self.assertEqual(gate.branch_of({"ticket": "o/b#5", "title": "Fix it"}, CONFIG), "ez/5-fix-it")
+
+    def test_frontier_reads_every_ticket_repository(self):
+        from factory_plugins.github.tracker import GitHubTracker
+        gh = TicketReposGh(ready={"o/r": [3, 1], "o/b": [8, 4]}, assignees=[("o/b", 8)],
+                           data={"repos/o/r/issues/3/dependencies/blocked_by": [{"state": "open"}],
+                                 "repos/o/b/issues/4/dependencies/blocked_by": [{"state": "closed"}]})
+        tracker = GitHubTracker("o/r", CONFIG["tracker"]["stages"], run=gh, ticket_repos=self.TICKETS)
+        self.assertEqual(tracker.frontier(), [1, "o/b#4"])  # 3 is blocked, o/b#8 is claimed
+        gh.ready["o/b"] = [4]
+        self.assertEqual(tracker.in_stage("ready"), [1, 3, "o/b#4"])
+        self.assertEqual(GitHubTracker("o/r", CONFIG["tracker"]["stages"], run=gh).in_stage("ready"), [1, 3])
+
+    def test_children_fact_follows_cross_repository_sub_issues(self):
+        kid = lambda repo, n, state="open": {"number": n, "state": state, "labels": [],  # noqa: E731
+                                              "repository_url": f"https://api.github.com/repos/{repo}"}
+        gh = TicketReposGh({"repos/o/r/issues/1": {"labels": [], "body": ""},
+                            "repos/o/r/issues/1/sub_issues": [kid("o/r", 2), kid("o/b", 7, "closed")],
+                            "repos/o/b/issues/7/sub_issues": [kid("o/b", 9)],
+                            "repos/o/r/issues/1/dependencies/blocked_by": [kid("o/b", 7), kid("o/r", 2, "closed")]})
+        tracker = self.tracker(gh)
+        ids = lambda ticket: [(c["number"], c["state"]) for c in tracker.find(Query("children", of=ticket))]  # noqa: E731
+        self.assertEqual(ids(1), [(2, "open"), ("o/b#7", "closed")])
+        self.assertEqual(ids("o/b#7"), [("o/b#9", "open")])  # read from the ticket's own repository
+        self.assertEqual(tracker.tickets.open_blockers(1), ["o/b#7"])
+        gh.data["repos/o/r/issues/1/dependencies/blocking"] = [kid("o/b", 7)]
+        self.assertEqual([d["number"] for d in tracker.tickets.blocking(1)], ["o/b#7"])
+        self.assertEqual(tracker.tickets.blocked_by(1), [{"number": "o/b#7", "state": "open"}, {"number": 2, "state": "closed"}])
+        with self.assertRaises(ValueError):  # a repository with no tickets is never read
+            tracker.tickets.children("o/code#1")
+
+    def test_a_ticket_is_written_in_its_own_repository(self):
+        gh = TicketReposGh()
+        tracker = self.tracker(gh)
+        for ticket, repo, number in [(5, "o/r", "5"), ("o/b#5", "o/b", "5"), ("o/r#5", "o/r", "5")]:
+            with self.subTest(ticket=ticket):
+                gh.calls.clear()
+                tracker.tickets.comment(ticket, "hi")
+                tracker.tickets.add_attr(ticket, "factory:ready")
+                self.assertEqual(gh.calls, [["issue", "comment", number, "-R", repo, "--body", "hi"],
+                                            ["issue", "edit", number, "-R", repo, "--add-label", "factory:ready"]])
+
+    def test_begin_refuses_ticket_of_another_repository(self):
+        class Facts(MemorySystem):
+            repo = "o/r"
+
+            def facts(self, n):
+                self.read.append(n)
+                return super().facts(n)
+
+        for ticket, node_repo, refused in [("o/b#5", "o/r", True), ("o/b#5", "o/b", False), (5, "o/r", False), (5, "o/b", True),
+                                           ("o/r#5", "o/r", False), ("o/B#5", "o/b", False), ("INFRA-1", "o/b", False),
+                                           ("o/b#5", None, False)]:
+            with self.subTest(ticket=ticket, node_repo=node_repo):
+                tracker = Facts({ticket: {"stage": "ready"}})
+                tracker.read = []
+                env = {"FACTORY_NODE_REPO": node_repo} if node_repo else {}
+                with patch.dict(os.environ, env, clear=False):
+                    if not node_repo:
+                        os.environ.pop("FACTORY_NODE_REPO", None)
+                    code, out = gate.check("intake", {"id": "e", "ticket": ticket}, tracker, NODES, CONFIG)
+                self.assertEqual(code == gate.NO_GO and "is in" in (out["reason"] or ""), refused)
+                self.assertEqual(tracker.read, [] if refused else [ticket])  # no read, so no effect, for a refused ticket
+
 
 if __name__ == "__main__":
     unittest.main()
