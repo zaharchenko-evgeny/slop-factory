@@ -8,6 +8,7 @@ import contextlib
 import io
 import argparse
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -95,6 +96,39 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.run_cli("end", "done")
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-review")
+
+    def test_a_failing_apply_reports_the_error_on_the_ticket(self):
+        tracker = self.tracker()
+        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(cli.STATE.read_text())["ticket"], 7)
+        reports = []
+
+        def failing_gate(engine, argv, team=None, stderr=False):
+            print("RuntimeError: HTTP 403: Resource not accessible by integration", file=sys.stderr)
+            return 1
+        with mock.patch.object(cli, "run_gate", failing_gate), \
+                mock.patch.object(cli, "report_end_failure", lambda state, outcome, err: reports.append((state["node"], outcome, err))):
+            code, _ = self.run_cli("end", "done")
+        self.assertEqual(code, 1)
+        self.assertEqual([(n, o) for n, o, _ in reports], [("implement", "done")])
+        self.assertIn("HTTP 403", reports[0][2])
+
+    def test_a_gate_refusal_on_stdout_is_quoted_in_the_report(self):
+        tracker = self.tracker()
+        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        reports = []
+
+        def refusing_gate(engine, argv, team=None, stderr=False):
+            print(json.dumps({"error": "payload: missing field `message`"}))
+            return 2
+        with mock.patch.object(cli, "run_gate", refusing_gate), \
+                mock.patch.object(cli, "report_end_failure", lambda state, outcome, err: reports.append(err)):
+            code, out = self.run_cli("end", "done")
+        self.assertEqual(code, 2)
+        self.assertEqual(reports, ["payload: missing field `message`"])
+        self.assertIn("missing field", out)  # the agent still sees the gate's output (#1035)
 
     def test_end_env_broken_records_check_and_parks_ticket(self):
         tracker = self.tracker()
@@ -393,6 +427,119 @@ class EnvRolesTest(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out): self.assertEqual(cli.main(["env", "roles", env]), 0)
         return out.getvalue().splitlines()
+
+
+class CrashReportTest(unittest.TestCase):
+    """#984: a crash in an Air run opens one Doctor ticket through gh alone."""
+    def gh(self, open_titles):
+        calls = []
+
+        def run(args, **kw):
+            calls.append(args)
+            out = "\n".join(open_titles) if args[1:3] == ["issue", "list"] else "o/r" if args[1:3] == ["repo", "view"] else ""
+            return subprocess.CompletedProcess(args, 0, out, "")
+        return calls, run
+
+    def test_air_crash_opens_the_ticket_once(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"FACTORY_ENV": "engine"}):
+            os.environ.pop("GITHUB_REPOSITORY", None)
+            calls, run = self.gh([])
+            cli.report_crash("begin", FileNotFoundError("engine/defaults.yaml"), run=run)
+            create = next(c for c in calls if c[1:3] == ["issue", "create"])
+            self.assertEqual(create[create.index("--title") + 1], "Doctor: factory begin crashes")
+            self.assertIn("FileNotFoundError: engine/defaults.yaml", create[create.index("--body") + 1])
+            calls, run = self.gh(["Doctor: factory begin crashes"])
+            cli.report_crash("begin", FileNotFoundError("x"), run=run)
+            self.assertFalse([c for c in calls if c[1:3] == ["issue", "create"]])
+
+    def test_local_crash_reports_nothing(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {}):
+            os.environ.pop("FACTORY_ENV", None)
+            calls, run = self.gh([])
+            cli.report_crash("begin", RuntimeError("x"), run=run)
+            self.assertEqual(calls, [])
+
+    def test_crash_report_names_command_not_team_dir(self):
+        from unittest import mock
+        calls = []
+        with mock.patch.object(cli, "report_crash", lambda c, e: calls.append(c)), \
+                mock.patch.object(cli, "_main", side_effect=RuntimeError("x")):
+            with self.assertRaises(RuntimeError):
+                cli.main(["--team", "/home/workspace/factory-team", "deploy", "--dry-run"])
+        self.assertEqual(calls, ["deploy"])
+
+
+class EndFieldsTest(unittest.TestCase):
+    """#1035: every handoff field an effect reads can be written by a `factory end` option (or the gate derives it)."""
+    FILES = ("factory/tests/fixtures/slop/workflow.yaml", "skills/factory-setup/template/workflow.yaml")
+    READS = ("comment", "create-issues", "set-field", "route", "reply", "park-behind-main-red")
+
+    def effect_fields(self, doc):
+        found = set()
+        def walk(x):
+            if isinstance(x, dict):
+                for e in x.get("effects") or [] if isinstance(x.get("effects"), list) else []:
+                    if isinstance(e, dict):
+                        found.update(v for k, v in e.items() if k in self.READS and isinstance(v, str))
+                        found.update(v["field"] for k, v in e.items()
+                                     if k in ("assign", "unassign") and isinstance(v, dict) and "field" in v)
+                        found.update(re.findall(r"<([^>]+)>", " ".join(str(e.get(k, "")) for k in ("label", "unlabel"))))
+                for v in x.values():
+                    walk(v)
+            elif isinstance(x, list):
+                for v in x:
+                    walk(v)
+        walk(doc)
+        return found
+
+    def test_end_writes_every_effect_field(self):
+        import yaml
+        import gate
+        root = Path(__file__).resolve().parents[2]
+        args = ["x", "--size-estimate", "1"]
+        for action in cli.end_parser()._actions:
+            opt = next((o for o in action.option_strings if o.startswith("--")), None)
+            if opt and isinstance(action, argparse._StoreAction) and action.dest not in ("findings", "slices", "checks", "addressed", "notes"):
+                args += [opt, "1" if action.type is int else "x"]
+        handoff = cli.handoff_of(cli.end_parser().parse_args(args))
+        written = set(handoff) | set(gate.intake_fields(handoff))
+        for name in self.FILES:
+            with self.subTest(name):
+                missing = self.effect_fields(yaml.safe_load((root / name).read_text())) - written
+                self.assertEqual(missing, set(), f"no `factory end` option writes {sorted(missing)}")
+
+    def test_end_notified_message(self):
+        self.assertEqual(cli.handoff_of(cli.end_parser().parse_args(["notified", "--message", "@o hi"]))["message"], "@o hi")
+        self.assertEqual(cli.handoff_of(cli.end_parser().parse_args(["notified", "--assignee", "o"]))["assignee"], "o")
+
+
+class EndFailureTest(unittest.TestCase):
+    """#997: a failed `factory end` leaves one comment on the ticket that reconcile reads."""
+    def test_comment_names_node_head_outcome_and_the_error(self):
+        from unittest import mock
+        calls = []
+        with mock.patch.object(cli.config, "load", lambda: {"tracker": {"repository": "o/r"}}):
+            cli.report_end_failure({"ticket": 7, "node": "review-low", "head": "abc123def456"}, "approve-low",
+                                   "Traceback\nRuntimeError: HTTP 403: Resource not accessible by integration\n",
+                                   run=lambda args, **kw: calls.append(args))
+        args = calls[0]
+        self.assertEqual(args[:5], ["gh", "issue", "comment", "7", "-R"])
+        body = args[args.index("--body") + 1]
+        self.assertTrue(body.startswith("[factory] end failed: node=review-low head=abc123def456 outcome=approve-low"))
+        self.assertIn("HTTP 403", body)
+
+    def test_a_memory_tracker_run_posts_nothing(self):
+        calls = []
+        cli.report_end_failure({"ticket": 7, "node": "implement", "tracker": ["--tracker", "tickets.json"]}, "done", "boom",
+                               run=lambda args, **kw: calls.append(args))
+        self.assertEqual(calls, [])
+
+    def test_no_ticket_no_comment(self):
+        calls = []
+        cli.report_end_failure({"node": "reconcile"}, "reconciled", "boom", run=lambda args, **kw: calls.append(args))
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":
