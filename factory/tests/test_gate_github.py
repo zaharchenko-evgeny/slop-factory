@@ -906,7 +906,7 @@ class EffectsTest(unittest.TestCase):
 
     def test_blocking_matches_the_body_line_of_a_child_in_another_repository(self):
         for line, repo, want in [("Blocked by: o/web#41", "o/web", [12]), ("Blocked by: #41", "o/web", []),
-                                 ("Blocked by: o/web#41", None, []), ("Blocked by: #41", None, [12]), ("Blocked by: o/web#41", "o/other", [])]:
+                                 ("Blocked by: o/web#41", None, [12]), ("Blocked by: o/other#41", None, []), ("Blocked by: #41", None, [12]), ("Blocked by: o/web#41", "o/other", [])]:
             with self.subTest(line=line, repo=repo):
                 t, gh, _ = self.split_across_repositories()
                 gh.open_issues = [{"number": 12, "state": "open", "body": f"{line}\n\nParent"}]

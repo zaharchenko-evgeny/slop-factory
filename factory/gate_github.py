@@ -252,11 +252,14 @@ class GitHubTicketStore:
         return [{"number": b["number"], "state": b["state"]} for b in self.read_list(f"issues/{n}/dependencies/blocked_by")]
 
     def blocking(self, n, repo=None):
-        """Issues whose native or body fallback dependency list names `n` (of `repo`, else this repository) as a blocker."""
+        """Issues whose native or body fallback dependency list names `n` as a blocker: `n` of `repo`; with no `repo`,
+        of this repository or, in a body line, of another repository of the definition (the gate knows tickets by
+        number, and a woken ticket re-checks its open blockers)."""
         other = repo if repo and repo != self.repo else None
         dependents = self.read_list(f"issues/{n}/dependencies/blocking", repo=other)
         known = {i["number"] for i in dependents}
-        line = rf"{re.escape(other)}#{n}" if other else f"#{n}"
+        refs = [other] if other else [""] + [r for r in self.others.values() if r and r != self.repo] if repo is None else [""]
+        line = "(?:" + "|".join(f"{re.escape(r)}#{n}" for r in refs) + ")"
         for issue in self.read_list("issues?state=open&per_page=100"):
             if issue["number"] != n and issue["number"] not in known and re.search(
                     rf"(?im)^Blocked by: {line}\s*$", issue.get("body") or ""):
