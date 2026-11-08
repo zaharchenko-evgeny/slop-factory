@@ -179,7 +179,7 @@ nodes:
   # --- Notifications --------------------------------------------------------------------------
   notify:                         # a state that needs the owner: the agent writes one message, or skips
     agent: notify
-    environment: team
+    environment: engine
     triggers: [{ stage: blocked }, { stage: needs-answers }, { label: "factory:needs-human" }]
     output: read-only
     outcomes:

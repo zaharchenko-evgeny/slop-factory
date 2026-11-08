@@ -381,6 +381,53 @@ def review_at_head(facts):
     return "changes" if any(v != "approve" for v in verdicts) else "approve"
 
 
+def _resolved_ids(body):
+    """Finding ids a review summary says are resolved (not the finding lines, not `not resolved`)."""
+    ids = set()
+    for line in body.splitlines():
+        if line.startswith("**") or re.search(r"\b(not|un)\s?resolved\b", line, re.I) or not re.search(r"\bresolved\b", line, re.I):
+            continue
+        ids |= set(re.findall(r"\b([A-Z]\d+)\b", line))
+    return ids
+
+
+def status(facts, limit=2000, cut=160):
+    """The short computed `status` of `factory begin`: stage, PR, CI, fix rounds and, per review focus, the latest
+    review with its open blocking findings (a `B<n>` finding stays open until a later review of the focus says it is resolved)."""
+    failure = facts.get("ci_failure")
+    failure = failure if isinstance(failure, dict) else {}
+    ci = {"state": facts.get("ci"), **({"failing": [failure["job"]]} if failure.get("job") else {})}
+    focuses = {}
+    for r in facts.get("reviews") or []:
+        if not r.get("agent"):
+            continue
+        cur = focuses.setdefault(r.get("focus") or "review", {"open": {}})
+        for i in _resolved_ids(r.get("body") or ""):
+            cur["open"].pop(i, None)
+        if r.get("verdict") == "approve":
+            cur["open"].clear()
+        for m in re.finditer(r"^\*\*(B\d+)\*\*\s*(.*)$", r.get("body") or "", re.M):
+            cur["open"][m[1]] = m[2]
+        cur.update(round=r.get("round"), verdict=r.get("verdict"), head=r.get("commit_id"))
+    reviews = {f: {**{k: v for k, v in c.items() if k != "open"},
+                   "open": [{"id": i, "text": t if len(t) <= cut else t[:cut - 1] + "…"} for i, t in c["open"].items()]}
+               for f, c in focuses.items()}
+    out = {"stage": facts.get("stage"), "pr": facts.get("pr"), "head": facts.get("head"), "ci": ci,
+           "fix_rounds": facts.get("fix_rounds"), "fix_cap": facts.get("fix_cap"), "reviews": reviews}
+    while len(json.dumps(out)) > limit and cut > 20:  # keep the whole status under `limit`: cut finding lines further
+        cut //= 2
+        for c in reviews.values():
+            for f in c["open"]:
+                f["text"] = f["text"][:cut]
+    while len(json.dumps(out)) > limit:  # still too long (many findings): drop the last open findings and count them
+        c = max(reviews.values(), key=lambda c: len(c["open"]))
+        if not c["open"]:
+            break
+        c["open"].pop()
+        c["omitted"] = c.get("omitted", 0) + 1
+    return out
+
+
 def guard_holds(guard, facts, tracker=None, ticket=None):
     """True when the ticket holds an outcome's `if` guard (ADR-0021): the same facts as `when`."""
     if "children" in guard and "children_open" not in facts and tracker is not None and hasattr(tracker, "children"):
@@ -443,6 +490,7 @@ def mention_holds(agent, facts, tracker=None, ticket=None):
     return frozenset((marker[1], agent)) in definition.neighbours(definition.load(config_mod.team_root()))
 
 
+REMOTE_FIRST = ("review", "merge", "update-branch")  # effects that write to a code host and can fail there
 GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention"}
 FROM = re.compile(r"<!-- factory:from (\S+?)( reply)? -->")
 
@@ -529,7 +577,7 @@ def check(name, event, tracker, nodes, config, code_host=None):
         "focus": event.get("focus"),
         "role_file": config_mod.shown(f"roles/{role}/role.md") if role in roles else None,
         "skills": skills.read_text().split() if skills.exists() else [],
-        "context": facts, "outcomes": list(node["outcomes"]),
+        "context": facts, "status": status(facts), "outcomes": list(node["outcomes"]),
         "agent_notes": [n for n in notes if n["for"] in ("any", *NOTE_AUDIENCE.get(role, ()), *(("fixer",) if fixing else ()))],
         **({"mention": latest_mention(facts, tracker, event["ticket"])} if name.startswith("reply-") and definition_team() else {}),
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and fixing),
@@ -859,7 +907,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         effects[:0] = human_effects
     after = [*after, *comment_after, *unblocked(effects, tracker, facts)]
     effects[:0] = group_unlabels(effects, facts)
-    effects.sort(key=lambda e: e["kind"] == "stage")  # the stage change goes last
+    # Remote writes that can fail first, the stage change last: a failed review POST then leaves the labels and the
+    # stage as they were, instead of a ticket with its risk label removed and no node to wake it (#998).
+    effects.sort(key=lambda e: 0 if e["kind"] in REMOTE_FIRST else 2 if e["kind"] == "stage" else 1)
     for e in effects:
         if e["kind"] == "stage":
             e["event"] = payload.get("event")
@@ -868,6 +918,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             e["focus"] = payload.get("focus") or name
             e["round"] = payload.get("round")
             e["findings"], e["summary"], e["run_id"] = payload.get("findings"), payload.get("summary"), payload.get("run_id")
+            e["outcome"] = outcome  # the marker keeps it: a replay of a split approval needs the one that was reported
         if e["kind"] == "join":
             e["tier"] = payload.get("tier")
         if e["kind"] in ("merge", "update-branch"):
@@ -891,7 +942,11 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             e["summary"] = f"{e.get('summary') or ''}\n\n{comment_marker(name)}"
     if not any(e["kind"] == "stage" for e in effects) and payload.get("event") is not None:
         effects.append({"kind": "seen", "ticket": ticket, "value": payload["event"]})
-    why = matches(node, facts, {**payload, "id": payload.get("event")}, out) \
+    replay = (payload.get("review_replay") and facts.get("stage") == "in-review"
+              and stale_review_plan(facts, nodes) == (name, outcome, {"focus": payload.get("focus"),
+                                                               "round": payload.get("round"),
+                                                               "review_replay": True}))
+    why = (None if replay else matches(node, facts, {**payload, "id": payload.get("event")}, out)) \
         or merge_refused(effects, facts)
     if why:
         return NO_GO, {"applied": False, "reason": why}
@@ -901,9 +956,57 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         for e in posted:
             tracker.apply(e)
         raise RuntimeError("notify failed: " + "; ".join(failures))
-    written = [e["kind"] for e in effects + after if tracker.apply(e)]
+    written = []
+    for e in effects + after:
+        if payload.get("review_replay") and e["kind"] == "review":
+            continue  # the marker proves this review already landed
+        try:
+            if tracker.apply(e):
+                written.append(e["kind"])
+        except Exception as error:
+            if written:
+                report = {"kind": "comment", "ticket": ticket, "on": "pr",
+                          "value": f"[factory] Outcome stopped after these effects landed: {', '.join(written)}.",
+                          "run_id": payload.get("run_id") or "gate:partial-outcome"}
+                try:
+                    tracker.apply(report)
+                except Exception as report_error:
+                    raise RuntimeError(f"{error}; partial outcome report also failed: {report_error}") from error
+            raise
     parent = parent_decision(name, ticket, effects, tracker, nodes)
     return GO, {"applied": True, "written": written, **({"parent": parent} if parent else {})}
+
+
+def review_outcome(node, review):
+    """The outcome of a definition node whose review effect wrote `review`: the one its marker names, else the only
+    outcome with a matching review effect. None when it cannot be told."""
+    want = "approve" if review["verdict"] == "approve" else "request-changes"
+    writes = [o for o, spec in (node.get("outcomes") or {}).items()
+              if any(str(e.get("review", "")).startswith(want) for e in (spec or {}).get("effects") or [])]
+    named = review.get("outcome")
+    return named if named in writes else writes[0] if len(writes) == 1 and not named else None
+
+
+def stale_review_plan(facts, nodes=None):
+    """The review outcome whose marker landed at this head but whose command label remains. A definition team's
+    review is named after its node (ADR-0021) and waits on that node's trigger labels; `nodes` is its workflow."""
+    labels = set(facts.get("pr_labels") or [])
+    for review in reversed(facts.get("reviews") or []):
+        focus, verdict = review.get("focus"), review.get("verdict")
+        if not (review.get("agent") and review.get("commit_id") == facts.get("head")
+                and focus and verdict in ("approve", "changes")):
+            continue
+        plan = {"focus": focus, "round": review.get("round"), "review_replay": True}
+        if not definition_team():
+            if vocab.cmd("review-<focus>", focus) in labels:
+                return "review", verdict, plan
+            continue
+        import definition
+        node = ((nodes or definition.load(config_mod.team_root())["workflow"]).get("nodes") or {}).get(focus)
+        if node and (outcome := review_outcome(node, review)) and any(
+                isinstance(t, dict) and t.get("label") in labels for t in node.get("triggers") or []):
+            return focus, outcome, plan
+    return None
 
 
 def parent_decision(name, ticket, effects, tracker, nodes):
@@ -1027,6 +1130,8 @@ def blockers_mode(nodes):
 def sweep_plan(facts, auto_merge=None, default_tier="mid", blockers="start", start_waits=False):
     """(node, outcome, payload) of the first outcome whose facts hold, else None."""
     stage = facts["stage"]
+    if stage == "in-review" and (replay := stale_review_plan(facts)):
+        return replay
     waits = blockers == "merge" and facts.get("blockers_open")  # approved, but a blocker is still open
     if facts.get("pr_state") == "merged" and config_mod.load()["tracker"]["stage_kinds"].get(stage) != "final":
         comments = facts.get("comments", [])
