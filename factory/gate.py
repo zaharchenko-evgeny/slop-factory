@@ -514,26 +514,37 @@ REMOTE_FIRST = ("review", "merge", "update-branch")  # effects that write to a c
 GUARD_KEYS = {"stage", "label", "pr", "ci", "review", "blockers", "children", "ticket"}  # comments.GUARDS: the module's
 FROM = re.compile(r"<!-- factory:from (\S+?)( reply)? -->")
 REVIEW_MARKER = re.compile(r"<!-- factory:review focus=\S+ ")
+QUOTE = re.compile(r"^ {0,3}(?:> ?)+")
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+INDENTED = re.compile(r"^(?: {4}|\t)")
 INLINE_CODE = re.compile(r"(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
 
 
 def strip_code(body):
-    """`body` without fenced code blocks and inline code: a mention there is a quote, not an ask. Fences follow
-    CommonMark: an opening line of 3+ backticks or tildes, closed only by a line of the same character, at least as
-    long, with nothing after it; an unclosed fence runs to the end."""
-    kept, fence = [], None
+    """`body` without fenced code blocks, indented code blocks and inline code: a mention there is a quote, not an
+    ask. Fences follow CommonMark: an opening line of 3+ backticks or tildes, closed only by a line of the same
+    character, at least as long, with nothing after it; an unclosed fence runs to the end. Block-quote markers
+    (`>`) are ignored when reading a line. An indented block is a line with 4+ spaces or a tab after a blank line
+    or another indented line."""
+    kept, fence, blank, indented = [], None, True, False
     for line in body.split("\n"):
+        text = QUOTE.sub("", line)
+        m = FENCE.match(text)
         if fence:
-            m = FENCE.match(line)
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line[m.end():].strip():
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not text[m.end():].strip():
                 fence = None
             continue
-        m = FENCE.match(line)
-        if m and not (m.group(1)[0] == "`" and "`" in line[m.end():]):
+        if m and not (m.group(1)[0] == "`" and "`" in text[m.end():]):
             fence = m.group(1)
             continue
-        kept.append(line)
+        if not text.strip():
+            blank = True
+            kept.append(line)
+            continue
+        indented = bool(INDENTED.match(text)) and (blank or indented)
+        blank = False
+        if not indented:
+            kept.append(line)
     return INLINE_CODE.sub("", "\n".join(kept))
 
 

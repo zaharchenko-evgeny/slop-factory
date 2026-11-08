@@ -442,7 +442,16 @@ class GateTest(unittest.TestCase):
         self.assertFalse(self._mention("run:\n```\nx = '```' + y\n@factory:dev\n```"))  # a fence run inside a code line
         self.assertFalse(self._mention("run:\n```\n@factory:dev"))  # an unclosed fence runs to the end
         self.assertFalse(self._mention("ask ``a ` @factory:dev`` here"))
+        self.assertFalse(self._mention("run:\n\n    @factory:dev\n"))  # indented code block
+        self.assertFalse(self._mention("run:\n\n\t@factory:dev"))
+        self.assertFalse(self._mention("run:\n\n    a\n\n    @factory:dev"))  # blank line inside the block
+        self.assertFalse(self._mention("> ~~~\n> @factory:dev\n> ~~~"))  # fence inside a block quote
+        self.assertFalse(self._mention("> > ```\n> > @factory:dev\n> > ```"))
+        self.assertFalse(self._mention(">     @factory:dev"))  # indented code inside a block quote
+        self.assertFalse(self._mention("> ~~~\n> @factory:dev"))  # unclosed quote fence runs on
         self.assertTrue(self._mention("run:\n```\ncode\n```\n@factory:dev please look"))
+        self.assertTrue(self._mention("text\n    @factory:dev please look"))  # indent continues a paragraph: not code
+        self.assertTrue(self._mention("> @factory:dev please look"))  # a plain block quote still asks
         self.assertTrue(self._mention("a ``` b\n@factory:dev please look"))  # not a fence: not at line start
         self.assertIsNone(mentions.latest({"comments": [{"body": "see `@factory:dev`", "at": "1"}], "pr_comments": []}))
 
