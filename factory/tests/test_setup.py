@@ -68,6 +68,17 @@ class SetupTest(unittest.TestCase):
         self.install("knowledge")
         self.assertEqual(self.ran, [])   # retro's role has no setup.sh
 
+    def test_setup_exports_node_repo(self):
+        calls = []
+        team_setup.install(definition.load(self.root), "engine", self.home, lambda spec, tmp: self.src,
+                           run=lambda cmd, **kw: calls.append(kw), node_repo="o/web")
+        self.assertEqual({kw["env"]["FACTORY_NODE_REPO"] for kw in calls}, {"o/web"})
+        calls.clear()
+        self.install()   # no node repository: the scripts inherit the environment unchanged
+        team_setup.install(definition.load(self.root), "engine", self.home, lambda spec, tmp: self.src,
+                           run=lambda cmd, **kw: calls.append(kw))
+        self.assertTrue(all("env" not in kw for kw in calls))
+
     def test_local_skill_and_environment_script(self):
         (self.root / "roles/reviewer/skills/adr-reading").mkdir(parents=True)
         (self.root / "roles/reviewer/skills/adr-reading/SKILL.md").write_text("Read ADRs.\n")
