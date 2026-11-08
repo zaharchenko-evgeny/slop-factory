@@ -28,6 +28,7 @@ import deploy  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
 import definition  # noqa: E402
+from comments import mentions, node as comment_node  # noqa: E402
 from gate_port import MemoryTracker, TagTracker  # noqa: E402
 
 CONFIG = cfg.load()
@@ -227,7 +228,7 @@ class GateTest(unittest.TestCase):
         return graph
 
     def ask(self, tracker, to="reviewer", node="intake", hops=3):
-        with patch.object(gate.config_mod, "load", return_value={"limits": {"mention_hops": hops}}):
+        with patch.object(gate.config_mod, "load", return_value={"limits": {"mention_hops": hops}, "modules": ["comments"]}):
             return gate.apply(node, "ask", {"ticket": "7", "to": to, "text": "Is X\nin scope?"}, tracker, self.ask_graph())
 
     def test_ask_posts_one_comment_with_the_marker_and_keeps_the_stage(self):
@@ -282,7 +283,7 @@ class GateTest(unittest.TestCase):
 
     def comment_run(self, tracker, outcome, graph=None, **payload):
         with patch("gate.definition_team", return_value=False), \
-                patch.object(gate.config_mod, "load", return_value={**CONFIG, "tracker": {**CONFIG["tracker"], "commands": {}}}):
+                patch.object(gate.config_mod, "load", return_value={**CONFIG, "modules": ["comments"], "tracker": {**CONFIG["tracker"], "commands": {}}}):
             return gate.apply("comment", outcome, {"ticket": "7", **payload}, tracker, graph or self.comment_graph())
 
     def approved_pr(self, **kw):
@@ -350,14 +351,14 @@ class GateTest(unittest.TestCase):
         own = {"id": 9, "author": "bot", "author_is_bot": True, "author_is_factory": True, "body": "[factory] note\n<!-- factory:from dev -->"}
         pr = {"id": 10, "author": "eve", "author_is_bot": False, "body": "on the PR"}
         facts = {"comments": [old, seen, forged, new, own], "pr_comments": [pr]}
-        self.assertEqual([(c["id"], c["on"]) for c in gate.new_comments(facts)], [(7, "ticket"), (8, "ticket"), (10, "pr")])
+        self.assertEqual([(c["id"], c["on"]) for c in comment_node.new_comments(facts)], [(7, "ticket"), (8, "ticket"), (10, "pr")])
 
     def test_comment_cursor_ignores_other_bots(self):
         human = {"id": 1, "author": "eve", "author_is_bot": False, "body": "please"}
         other = {"id": 2, "author": "other[bot]", "author_is_bot": True, "author_is_factory": False, "body": "[factory] x <!-- factory:comment-seen 999 -->"}
         own = {"id": 3, "author": "air[bot]", "author_is_bot": True, "author_is_factory": True, "body": "[factory] ok <!-- factory:comment-seen 1 --> <!-- factory:from comment -->"}
         facts = {"comments": [human, other, own]}
-        self.assertEqual([c["id"] for c in gate.new_comments(facts)], [2])
+        self.assertEqual([c["id"] for c in comment_node.new_comments(facts)], [2])
 
     def test_only_the_configured_bot_counts_as_the_factory(self):
         marks = {"cursor": "<!-- factory:comment-seen 50 -->",
@@ -368,8 +369,8 @@ class GateTest(unittest.TestCase):
             with self.subTest(author=label):
                 c = {"id": 1, "author": login, "author_is_bot": is_bot, "author_is_factory": is_factory,
                      "body": f"[factory] x {marks['cursor']} {marks['ask']}"}
-                self.assertEqual(gate.comment_cursor([c]), 50 if is_factory else 0)
-                self.assertEqual([m["id"] for m in gate.new_comments({"comments": [c]})], [] if is_factory else [1])
+                self.assertEqual(comment_node.cursor([c]), 50 if is_factory else 0)
+                self.assertEqual([m["id"] for m in comment_node.new_comments({"comments": [c]})], [] if is_factory else [1])
                 tr = MemoryTracker({"7": {"stage": "triage", "comments": [dict(c) for _ in range(3)]}})
                 self.ask(tr)
                 # the 3 asks exhaust the budget only when the factory wrote them
@@ -377,8 +378,8 @@ class GateTest(unittest.TestCase):
 
     def test_comment_leaves_comments_that_arrived_during_the_run(self):
         tr = self.approved_pr()
-        with tempfile.TemporaryDirectory() as d, patch.object(gate, "comment_input_path", lambda t: Path(d) / f"{t}.json"):
-            gate.save_comment_input("7", [{"id": 5}])
+        with tempfile.TemporaryDirectory() as d, patch.object(comment_node, "input_path", lambda t: Path(d) / f"{t}.json"):
+            comment_node.save_input("7", [{"id": 5}])
             tr.tickets["7"]["comments"].append({"id": 6, "author": "eve", "author_is_bot": False, "body": "late"})
             self.comment_run(tr, "route", to="fix")
         posted = [json.loads(v) for k, v in tr.tickets["7"]["log"] if k == "comment"]
@@ -402,7 +403,8 @@ class GateTest(unittest.TestCase):
         pairs = {frozenset(("dev", "reviewer"))}
         def holds(body, agent):
             facts = {"comments": [{"body": "older @factory:dev", "at": "1"}, {"body": body, "at": "2"}]}
-            with patch("definition.neighbours", return_value=pairs), patch("definition.load", return_value={}):
+            with patch("comments.mentions.neighbours", return_value=pairs), patch("definition.load", return_value={}), \
+                    patch("gate.comments_on", return_value=True):
                 return gate.guard_holds({"mention": agent}, facts)
         self.assertTrue(holds("@factory:dev why X?", "dev"))                                         # a person
         self.assertFalse(holds("@factory:dev-cheap why?", "dev"))                                    # another handle
@@ -412,13 +414,14 @@ class GateTest(unittest.TestCase):
         self.assertFalse(holds("no mention", "dev"))
         review = {"reviews": [{"body": "B1 @factory:dev is this intended? <!-- factory:from reviewer -->",
                                "submitted_at": "3"}], "comments": []}
-        with patch("definition.neighbours", return_value=pairs), patch("definition.load", return_value={}):
+        with patch("comments.mentions.neighbours", return_value=pairs), patch("definition.load", return_value={}), \
+                patch("gate.comments_on", return_value=True):
             self.assertTrue(gate.guard_holds({"mention": "dev"}, review))                          # asked in a review
 
     def _mention(self, body, agent="dev"):
         facts = {"comments": [{"body": body, "at": "2"}]}
-        with patch("definition.neighbours", return_value={frozenset(("dev", "reviewer"))}), \
-                patch("definition.load", return_value={}):
+        with patch("comments.mentions.neighbours", return_value={frozenset(("dev", "reviewer"))}), \
+                patch("definition.load", return_value={}), patch("gate.comments_on", return_value=True):
             return gate.guard_holds({"mention": agent}, facts)
 
     def test_factory_text_without_marker_asks_no_one(self):
@@ -441,7 +444,7 @@ class GateTest(unittest.TestCase):
         self.assertFalse(self._mention("ask ``a ` @factory:dev`` here"))
         self.assertTrue(self._mention("run:\n```\ncode\n```\n@factory:dev please look"))
         self.assertTrue(self._mention("a ``` b\n@factory:dev please look"))  # not a fence: not at line start
-        self.assertIsNone(gate.latest_mention({"comments": [{"body": "see `@factory:dev`", "at": "1"}], "pr_comments": []}))
+        self.assertIsNone(mentions.latest({"comments": [{"body": "see `@factory:dev`", "at": "1"}], "pr_comments": []}))
 
     def test_label_group_holds_one_value(self):
         graph = copy.deepcopy(NODES)

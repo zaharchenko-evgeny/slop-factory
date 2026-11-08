@@ -10,11 +10,13 @@ from pathlib import Path
 
 import yaml
 
+import comments  # its names only; the feature code is imported when the module is on (ADR-0025)
+
 FACTORY = "factory.yaml"
 WORKFLOW = "workflow.yaml"
 ROLES = "roles"
 NO_ROLE = ("script", "human")  # harnesses that run no role
-GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children", "ticket", "mention")  # the facts a guard reads (gate.GUARD_KEYS)
+GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children", "ticket")  # the facts a guard reads (gate.GUARD_KEYS)
 # Nodes planned once per code repository when `write_mode` is `per-repo`: Air pushes only to an automation's own repository.
 PER_REPO = ("implement", "fix", "update", "review", "join", "merge", "finish")
 TIER_SUFFIXES = ("-small", "-medium", "-large", "-low", "-high")  # a tiered node: `implement-medium`, `review-high`
@@ -70,40 +72,16 @@ def load(root):
     workflow = _keys(yaml.safe_load((root / WORKFLOW).read_text()) or {})
     bodies = {p.parent.name: p.read_text() for p in sorted((root / ROLES).glob("*/role.md"))}
     defn = {"root": root, "factory": factory, "workflow": workflow, "bodies": bodies}
-    _add_mentions(defn)
+    if module_on(defn, comments.NAME):
+        from comments import mentions
+        mentions.add_nodes(defn)  # #590: the generated router and reply nodes of `mentionable` agents
     return defn
 
 
-ROUTER = "mentions"  # the generated node that routes @factory:<agent> to that agent's reply step (#590)
-
-
-def _add_mentions(defn):
-    """#590: an agent with `mentionable: true` can be asked with @factory:<agent>. Add, in memory, one router node
-    (a comment or review -> the asked agent's reply label, by the `mention` fact) and a `reply-<agent>` node per
-    mentionable agent (its role in reply mode, read-only, any stage). Both are marked `generated`."""
-    f, w = defn["factory"], defn["workflow"]
-    agents, nodes = f.setdefault("agents", {}), w.setdefault("nodes", {})
-    prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
-    askable = [a for a, spec in agents.items() if (spec or {}).get("mentionable")]
-    if not askable or ROUTER in nodes:
-        return
-    pairs = neighbours(defn)
-    for n in nodes.values():  # an `ask` outcome (#591): the agents its agent may ask, the deploy-time allowlist
-        if n.get("agent") in askable and n.get("mention") is not False and not n.get("generated") \
-                and not all(isinstance(t, dict) and "schedule" in t for t in n.get("triggers") or [None]):
-            to = sorted(b for b in askable if frozenset((n["agent"], b)) in pairs)
-            n.setdefault("outcomes", {}).setdefault("ask", {"to": to, "effects": [{"comment": "text"}]})
-    agents.setdefault("mention-router", {"run": "decide", "model": (f.get("defaults") or {}).get("model"),
-                                         "access": "read-only", "generated": True})
-    nodes[ROUTER] = {"agent": "mention-router", "generated": True,
-                     "triggers": [{"ticket": "commented"}, {"pr": "commented"}, {"pr": "reviewed"}],
-                     "outcomes": {**{f"reply-{a}": {"if": {"mention": a}, "effects": [{"label": f"{prefix}reply-{a}"}]}
-                                     for a in askable}, "none": {}}}
-    for a in askable:
-        nodes.setdefault(f"reply-{a}", {
-            "agent": a, "generated": True, "triggers": [{"label": f"{prefix}reply-{a}"}], "output": "read-only",
-            "settings": {"mode": "reply"},
-            "outcomes": {"replied": {"effects": [{"unlabel": f"{prefix}reply-{a}"}, {"comment": "reply", "on": "mention"}]}}})
+def module_on(defn, name):
+    """True when the team's factory.yaml turns on engine module `name` (`modules: [comments]`, ADR-0025)."""
+    modules = defn["factory"].get("modules") or []
+    return isinstance(modules, list) and name in modules
 
 
 def merge(base, over):
@@ -128,6 +106,57 @@ def _parts(defn, name):
     env_name = node.get("environment") or (w.get("settings") or {}).get("environment")
     env = (f.get("environments") or {}).get(env_name) or {}
     return node, agent, role, env
+
+
+def node_writes(defn, name):
+    """Full names of the repositories node `name` writes, in environment order; `writes: all` is every repository of
+    its environment. `[]` when the node writes nothing."""
+    node, _, _, env = _parts(defn, name)
+    writes = node.get("writes")
+    listed = [full_name(r["repo"]) for r in env.get("repositories") or []]
+    if writes == "all":
+        return listed
+    if not isinstance(writes, list):  # malformed: `factory validate` reports `bad-writes`
+        return []
+    wanted = {full_name(r) for r in writes if isinstance(r, str)}
+    return [r for r in listed if r in wanted]
+
+
+def tracker_repositories(defn):
+    """Full names of the ticket repositories, in order; the first is the tracker. `tracker.repositories`, or the
+    single `tracker.repository`."""
+    t = defn["factory"].get("tracker") or {}
+    listed = t.get("repositories")
+    if listed is None:
+        listed = [t["repository"]] if t.get("repository") else []
+    return [full_name(r) for r in listed if isinstance(r, str)] if isinstance(listed, list) else []
+
+
+def _has_event_trigger(node):
+    return any(isinstance(t, dict) and not {"schedule", "webhook"} & t.keys() for t in node.get("triggers") or [])
+
+
+def node_listens(defn, name):
+    """Full names of the ticket repositories node `name` listens to: `tracker` is the first one, `tickets` (the
+    default) all of them. A node with no event trigger (schedule, webhook, manual) listens to nothing: `[]`."""
+    node = _parts(defn, name)[0]
+    if not _has_event_trigger(node):
+        return []
+    tickets = tracker_repositories(defn)
+    listens = node.get("listens", "tickets")
+    if listens == "tracker":
+        return tickets[:1]
+    if listens == "tickets":
+        return tickets
+    return [full_name(r) for r in listens if isinstance(r, str)] if isinstance(listens, list) else []
+
+
+def _primary(defn, env):
+    """The repository the node output applies to in environment `env`: its `main`, else the tracker repository
+    (an environment may have no `main`), else its first repository."""
+    repos = (env or {}).get("repositories") or []
+    return next((r["repo"] for r in repos if r.get("main")),
+                next(iter(tracker_repositories(defn)), None) or repos[0]["repo"])
 
 
 def environment_secrets(defn, env_name):
@@ -275,25 +304,6 @@ def render(defn, name):
     return j.from_string(body).render(ctx)
 
 
-def neighbours(defn):
-    """{frozenset({a, b})}: agents a and b are neighbours when an outcome of a node of one adds a label that a node
-    of the other triggers on (#590: they may mention each other). Generated mention nodes do not count."""
-    nodes = [n for n in (defn["workflow"].get("nodes") or {}).values() if not n.get("generated")]
-    woken = {}
-    for n in nodes:
-        for t in n.get("triggers") or []:
-            if isinstance(t, dict) and "label" in t:
-                woken.setdefault(t["label"], set()).add(n.get("agent"))
-    pairs = set()
-    for n in nodes:
-        for oc in (n.get("outcomes") or {}).values():
-            for e in (oc or {}).get("effects") or []:
-                for b in woken.get(e.get("label"), ()):
-                    if b and b != n.get("agent"):
-                        pairs.add(frozenset((n.get("agent"), b)))
-    return pairs
-
-
 def role_skills(defn, role):
     """{name: spec} of every skill an agent of `role` gets: defaults, then the role's (named or inline)."""
     f = defn["factory"]
@@ -349,6 +359,43 @@ def _notify_effect_errors(where, outcome, spec, config):
     return errs
 
 
+def _writes_errors(where, node, agent, env):
+    repos = (env or {}).get("repositories") or []
+    writes = node.get("writes")
+    errs = []
+    if writes is not None and writes != "all":
+        listed = {full_name(r["repo"]) for r in repos}
+        if not isinstance(writes, list) or not all(isinstance(r, str) for r in writes):
+            return [f"bad-writes: {where}: `writes` is `all` or a list of repositories"]
+        errs = [f"bad-writes: {where}: {r} is not in the environment" for r in writes if full_name(r) not in listed]
+    if writes and agent.get("access") == "read-only":
+        errs.append(f"writes-read-only: {where}: a node with `writes` runs an agent with `access: read-only`")
+    if not writes and agent.get("access") == "full" and not node.get("generated") and not any(r.get("main") for r in repos):
+        errs.append(f"no-writes: {where}: an environment without `main` needs `writes` on a node with `access: full`")
+    return errs
+
+
+def _listens_errors(defn, where, node):
+    listens = node.get("listens")
+    if listens is None or listens in ("tracker", "tickets"):
+        return []
+    if not isinstance(listens, list) or not all(isinstance(r, str) for r in listens):
+        return [f"bad-listens: {where}: `listens` is `tracker`, `tickets` or a list of ticket repositories"]
+    return [f"bad-listens: {where}: {r} is not a ticket repository" for r in listens
+            if full_name(r) not in tracker_repositories(defn)]
+
+
+def _event_errors(defn, name, node):
+    """`writes-not-heard` and `schedule-writes-several` of node `name`."""
+    where, writes = f"nodes.{name}", node_writes(defn, name)
+    listens = node_listens(defn, name)
+    errs = [f"writes-not-heard: {where}: writes {r} but does not listen to it" for r in writes
+            if _has_event_trigger(node) and r not in listens]
+    if len(writes) > 1 and any(isinstance(t, dict) and "schedule" in t for t in node.get("triggers") or []):
+        errs.append(f"schedule-writes-several: {where}: a scheduled node writes at most one repository")
+    return errs
+
+
 def errors(defn):
     f, w = defn["factory"], defn["workflow"]
     errs = []
@@ -359,6 +406,7 @@ def errors(defn):
     envs = f.get("environments") or {}
     hooks = f.get("webhooks") or {}
     nodes = w.get("nodes") or {}
+    on = module_on(defn, comments.NAME)
     if not f.get("owner"):
         errs.append("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)")
     errs += [e for n, s in skills.items() for e in _skill_spec_errors(f"skills.{n}", s)]
@@ -372,8 +420,6 @@ def errors(defn):
     errs += [f"unlisted-role: {ROLES}/{r}: not in `roles`" for r in defn["bodies"] if r not in roles]
     for a, spec in agents.items():
         spec = spec or {}
-        if spec.get("mentionable") and (spec.get("run") or spec.get("harness") in NO_ROLE):
-            errs.append(f"mentionable-needs-role: agents.{a}: only an agent with a role can reply")
         if spec.get("harness") not in NO_ROLE and not spec.get("run") and spec.get("role") not in roles:
             errs.append(f"unknown-role: agents.{a}: {spec.get('role')}")
         if spec.get("model") is not None and spec["model"] not in models:
@@ -383,23 +429,31 @@ def errors(defn):
     for e, spec in envs.items():
         repos = (spec or {}).get("repositories") or []
         declared = set(((f.get("defaults") or {}).get("env") or {})) | set((spec or {}).get("env") or {})
-        if sum(1 for r in repos if r.get("main")) != 1:
-            errs.append(f"main-repository: environments.{e}: needs exactly one `main: true`")
+        if not repos:  # compiling needs a repository for the node output (`_primary`)
+            errs.append(f"empty-environment: environments.{e}: lists no repositories")
+        if sum(1 for r in repos if r.get("main")) > 1:
+            errs.append(f"main-repository: environments.{e}: needs at most one `main: true`")
         for r in repos:
             if r.get("write") and not r.get("main") and not r.get("token_env"):
                 errs.append(f"write-token: environments.{e}: {r.get('repo')} is writable without `token_env`")
             if r.get("token_env") and r["token_env"] not in declared:
                 errs.append(f"undeclared-env: environments.{e}: {r['token_env']}")
+    listed = (f.get("tracker") or {}).get("repositories")
+    if listed is not None and (not isinstance(listed, list) or not all(isinstance(r, str) for r in listed)):
+        errs.append("bad-tracker-repositories: factory.yaml: `tracker.repositories` is a list of repositories")
     if w.get("blockers", "start") not in ("start", "merge"):
         errs.append(f"bad-blockers: workflow.yaml: `blockers` is `start` or `merge`, not {w['blockers']!r}")
     default_env = (w.get("settings") or {}).get("environment")
+    in_envs = {full_name(r["repo"]) for spec in envs.values() for r in (spec or {}).get("repositories") or []}
+    errs += [f"tracker-repository: factory.yaml: tracker repository {r} is in no environment"
+             for r in tracker_repositories(defn) if r not in in_envs]
     code = code_repos(defn)
     tracker_repo = full_name((f.get("tracker") or {}).get("repository") or "")
     tracker_name = (f.get("tracker") or {}).get("repository")
     pr_labels = {}
     for source in nodes.values():
         source_env = envs.get(source.get("environment") or default_env) or {}
-        source_repo = next((r.get("repo") for r in source_env.get("repositories") or [] if r.get("main")), "")
+        source_repo = _primary(defn, source_env) if source_env.get("repositories") else ""
         for outcome in (source.get("outcomes") or {}).values():
             for effect in (outcome or {}).get("effects") or []:
                 if isinstance(effect, dict) and effect.get("on") == "pr" and ("label" in effect or "unlabel" in effect):
@@ -407,7 +461,7 @@ def errors(defn):
                     pr_labels.setdefault(label, set()).add(full_name(source_repo))
     for source_env in envs.values():
         if (source_env or {}).get("ci"):
-            source_repo = next((r.get("repo") for r in source_env.get("repositories") or [] if r.get("main")), "")
+            source_repo = _primary(defn, source_env) if source_env.get("repositories") else ""
             for state in ("green", "red"):
                 label = f"{(w.get('stages') or {}).get('label_prefix', 'factory:')}ci-{state}"
                 pr_labels.setdefault(label, set()).add(full_name(source_repo))
@@ -423,8 +477,8 @@ def errors(defn):
         human = (agents[n["agent"]] or {}).get("harness") == "human"
         env = n.get("environment") or default_env
         if not human and env in envs:
-            main_repo = next((r.get("repo") for r in (envs.get(env) or {}).get("repositories") or []
-                              if r.get("main")), "")
+            env_repos = (envs.get(env) or {}).get("repositories") or []
+            main_repo = _primary(defn, envs.get(env)) if env_repos else ""  # no `main`: the tracker (ADR-0024)
             main_name = full_name(main_repo)
             for trigger in n.get("triggers") or []:
                 if trigger == "manual" or isinstance(trigger, dict) and ("schedule" in trigger or "webhook" in trigger):
@@ -438,12 +492,12 @@ def errors(defn):
                     errs.append(f"deaf-trigger: {where}: environment {env} main repository {main_repo} "
                                 f"does not match tracker {tracker_name}")
                     break
-        if n.get("generated") is not True and name == ROUTER or (name.startswith("reply-") and not n.get("generated")):
-            errs.append(f"reserved-node: {where}: `{ROUTER}` and `reply-<agent>` are generated from `mentionable`")
         if (agents[n["agent"]] or {}).get("run") not in (None, "decide"):
             errs.append(f"unknown-command: agents.{n['agent']}: run {agents[n['agent']]['run']}")
         if not human and env not in envs:
             errs.append(f"unknown-environment: {where}: {env}")
+        errs += _writes_errors(where, n, agents[n["agent"]] or {}, envs.get(env) or {})
+        errs += _listens_errors(defn, where, n) + _event_errors(defn, name, n)
         if n.get("model") is not None and n["model"] not in models:
             errs.append(f"unknown-model: {where}: {n['model']}")
         if not n.get("triggers"):
@@ -460,9 +514,16 @@ def errors(defn):
             oc = oc or {}
             if oc.get("else") is not None and oc["else"] not in outcomes:
                 errs.append(f"unknown-else: {where}.{o}: {oc['else']}")
-            errs += [f"unknown-guard: {where}.{o}: {k}" for k in (oc.get("if") or {}) if k not in GUARDS]
-            errs += [f"unknown-effect: {where}.{o}: {next(k for k in e if k != 'on')}" for e in oc.get("effects") or []
-                     if next((k for k in e if k != "on"), None) not in EFFECTS]
+            guards = [k for k in oc.get("if") or {} if k not in GUARDS]
+            kinds = [next((k for k in e if k != "on"), None) for e in oc.get("effects") or []]
+            errs += [f"module-off: {where}.{o}: {k} needs modules: [{comments.NAME}]" for k in [*guards, *kinds]
+                     if k in (*comments.GUARDS, *comments.EFFECTS) and not on]
+            errs += [f"module-off: {where}.{o}: `on: mention` needs modules: [{comments.NAME}]"
+                     for e in oc.get("effects") or [] if e.get("on") == "mention" and not on]
+            if o == "ask" and not on:  # the gate refuses an `ask` outcome while the module is off
+                errs.append(f"module-off: {where}.ask: ask needs modules: [{comments.NAME}]")
+            errs += [f"unknown-guard: {where}.{o}: {k}" for k in guards if k not in comments.GUARDS]
+            errs += [f"unknown-effect: {where}.{o}: {k}" for k in kinds if k not in EFFECTS and k not in comments.EFFECTS]
             for effect in oc.get("effects") or []:
                 if isinstance(effect, dict) and ("assign" in effect or "unassign" in effect):
                     key = "assign" if "assign" in effect else "unassign"
@@ -499,19 +560,30 @@ def errors(defn):
                 render(defn, name)
             except __import__("jinja2").TemplateError as e:
                 errs.append(f"render: {where}: {e}")
+    if on:
+        from comments import mentions
+        errs += mentions.errors(defn, NO_ROLE)
+    if not isinstance(f.get("modules") or [], list):
+        errs.append(f"bad-modules: factory.yaml: `modules` must be a list, for example [{comments.NAME}]")
+    else:
+        errs += [f"unknown-module: modules: {m}" for m in f.get("modules") or [] if m != comments.NAME]
     return errs + _mcp_errors(defn) + _notify_errors(f.get("notify"))
 
 
 def warnings(defn):
-    """A label an outcome adds that no node triggers on (a person may add it, so it is not an error)."""
+    """A label an outcome adds that no node triggers on (a person may add it, so it is not an error); a
+    `mentionable` agent while the comments module is off (it is then ignored)."""
     nodes = (defn["workflow"].get("nodes") or {}).values()
     triggered = {t["label"] for n in nodes for t in n.get("triggers") or [] if isinstance(t, dict) and "label" in t}
     added = {e["label"] for n in nodes for oc in (n.get("outcomes") or {}).values()
              for e in (oc or {}).get("effects") or [] if isinstance(e, dict) and "label" in e}
     prefix = (defn["workflow"].get("stages") or {}).get("label_prefix", "factory:")
     # A routing label (the stage prefix) should wake a node; `risk:low` and the like are states, read by guards.
+    off = [] if module_on(defn, comments.NAME) else [
+        f"module-off: agents.{a}: mentionable needs modules: [{comments.NAME}]"
+        for a, spec in (defn["factory"].get("agents") or {}).items() if (spec or {}).get("mentionable")]
     return [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
-            if label.startswith(prefix) and label not in triggered]
+            if label.startswith(prefix) and label not in triggered] + off
 
 
 # --- Compile into the shapes the engine reads (#669, #677) ---------------------------------------
@@ -522,7 +594,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed", ("pr", "commented"): "pr commented",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red", "assign", "unassign", "notify", "route", "reply", "skip")
+           "request-reviewers", "park-behind-main-red", "assign", "unassign", "notify")  # and comments.EFFECTS
 
 
 def _name(label, prefix):
@@ -598,7 +670,7 @@ def to_project(defn):
     default_env = wset.get("environment")
 
     # Repositories: every listed one; the primary is the main repository of the default environment.
-    primary = next(r["repo"] for r in envs[default_env]["repositories"] if r.get("main"))
+    primary = _primary(defn, envs[default_env])
     names, repositories = {}, []
     for e in envs.values():
         for r in e.get("repositories") or []:
@@ -683,6 +755,7 @@ def to_project(defn):
                   "confirm_external_writes_scope": dset.get("confirm_external_writes_scope") or []},
         "reviews": {"trusted_bots": []},
         **({"owner": f["owner"]} if f.get("owner") else {}),
+        **({"modules": list(f["modules"])} if f.get("modules") else {}),
     }
     return descriptor, {"format": 2, "adapters": {"ticket": (f.get("tracker") or {}).get("adapter", "github-issues"),
                                                   "pr": "github"},
@@ -838,7 +911,7 @@ def nodes(defn):
     wset = w.get("settings") or {}
     prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
     default_env, all_stages = wset.get("environment"), sorted(_used_stages(w))
-    primary = next(r["repo"] for r in envs[default_env]["repositories"] if r.get("main"))
+    primary = _primary(defn, envs[default_env])
     on_pr = {f"{prefix}ci-green", f"{prefix}ci-red"}
     for n in (w.get("nodes") or {}).values():
         for oc in (n.get("outcomes") or {}).values():

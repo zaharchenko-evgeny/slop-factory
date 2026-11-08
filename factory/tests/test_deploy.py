@@ -553,12 +553,14 @@ class CommentWakeDeployTest(unittest.TestCase):
             writes.append(endpoint)
             return "{}"
 
-        settings = {"repositories": [
+        settings = {"modules": ["comments"], "repositories": [
             {"name": "main", "url": "https://github.com/o/main", "role": "primary"},
             {"name": "app", "url": "https://github.com/o/app", "role": "project"},
         ]}
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
+            self.assertEqual(deploy.sync_comment_wake_files({**settings, "modules": []}, gh, True), 0)
+            self.assertEqual(writes, [])  # ADR-0025: the module is off
             self.assertEqual(deploy.sync_comment_wake_files(settings, gh, True), 0)
             self.assertEqual(deploy.sync_comment_wake_files(settings, gh, True), 0)
         self.assertEqual(len(writes), 4)
@@ -700,16 +702,25 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual([n for n in by_name if n.startswith("[Slop factory] intake")], ["[Slop factory] intake"])
 
     def test_mentionable_agents_get_a_reply_node(self):
-        """fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node and the mention router; the others do not."""
-        nodes_ = {a["spec"]["node"] for a in definition_plan()["automations"]}
+        """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node and
+        the mention router; the others do not. With it off (the fixture as it is, ADR-0025) none deploy."""
+        def comments_on(f):
+            f["modules"] = ["comments"]
+        plan = definition_plan(edit_factory=comments_on)
+        nodes_ = {a["spec"]["node"] for a in plan["automations"]}
         self.assertTrue({"mentions", "reply-dev", "reply-reviewer"} <= nodes_)
         self.assertFalse({"reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
+        self.assertIn("factory:comment", plan["labels"])
 
         def none_mentionable(f):
+            comments_on(f)
             for spec in f["agents"].values():
                 spec.pop("mentionable", None)
-        nodes_ = {a["spec"]["node"] for a in definition_plan(edit_factory=none_mentionable)["automations"]}
-        self.assertFalse({n for n in nodes_ if n == "mentions" or n.startswith("reply-")})
+        for edit in (none_mentionable, None):
+            plan = definition_plan(edit_factory=edit)
+            nodes_ = {a["spec"]["node"] for a in plan["automations"]}
+            self.assertFalse({n for n in nodes_ if n == "mentions" or n.startswith("reply-")})
+        self.assertIn("factory:comment", plan["labels"])  # kept while off: a wake workflow installed earlier still adds it
 
     def test_mcp_connectors_come_from_node_then_agent_then_role(self):
         def edit_factory(f):

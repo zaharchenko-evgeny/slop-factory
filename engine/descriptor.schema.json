@@ -105,6 +105,7 @@
       }
     },
     "owner": {"type": "string"},
+    "modules": {"type": "array", "items": {"enum": ["comments"]}, "description": "Opt-in engine modules (ADR-0025): `comments` reacts to comments (mentions, asks, the comment node)."},
     "notify": {
       "type": "object",
       "additionalProperties": false,
