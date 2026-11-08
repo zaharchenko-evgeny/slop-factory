@@ -923,6 +923,15 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(t.tickets._blocked_body("b", 41, "o/web", "o/r"), "Blocked by: o/web#41\n\nb")
         self.assertEqual(t.tickets._blocked_body("b", 41, "o/r", "o/r"), "Blocked by: #41\n\nb")
 
+    def test_split_children_report_the_stage_and_state_their_own_repository_holds(self):
+        for state, labels, want in [("open", ["factory:blocked"], True), ("open", ["factory:ready"], False), ("closed", ["factory:blocked"], False)]:
+            with self.subTest(state=state, labels=labels):
+                t, gh, _ = self.split_across_repositories(sub=["Web"])
+                gh.sub_repos, gh.sub_state, gh.sub_labels = {"Web": "https://api.github.com/repos/o/web"}, [state], [labels]
+                child = t.tickets.children(7)[0]
+                self.assertEqual((child["state"], STAGES["blocked"] in child["attrs"]), (state, STAGES["blocked"] in labels))
+                self.assertEqual(t.facts(7)["children"][0]["blocked"], want)
+
     def test_create_children_falls_back_to_blocked_by_line(self):
         gh = FakeGh(labels=("factory:split", "risk:low"))
         gh.blocked, gh.fail_blocked_by = [], True
