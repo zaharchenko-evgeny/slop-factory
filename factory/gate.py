@@ -38,7 +38,6 @@ if __name__ == "__main__":  # run as a script: `import gate` (a plugin's code) m
     sys.modules.setdefault("gate", sys.modules[__name__])
 import config as config_mod  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
-import notify as notifiers  # noqa: E402
 from gate_github import BAD_CI, GOOD_CI, GitHubCodeHost, GitHubGateTracker, clean_notes  # noqa: E402
 from gate_space import SpaceCodeHost, from_config as space_from_config, space_event  # noqa: E402
 from gate_port import MemoryTracker, ticket_from_ref  # noqa: E402
@@ -659,53 +658,10 @@ def resolve(effect, payload, ticket):
         return {**out, "on": on} if on else out
     if kind in ("park-behind-main-red", "route", "reply"):
         return {"kind": kind, "ticket": ticket, "value": field(arg)}
-    if kind == "notify":  # `notify: message` or `notify: {message: message, people: [logins]}` (ADR-0022)
-        message = {"issue": ticket, "problem": field("problem"), "links": payload.get("links", []), "options": payload.get("options", []), "recommended": payload.get("recommended")}
-        try:
-            notifiers.validate_message(message)
-        except ValueError as e:
-            raise Bad(f"notify: {e}")
-        return {"kind": kind, "ticket": ticket, "value": {"message": message, "people": arg.get("people") if isinstance(arg, dict) else None},
-                **({"on": on} if on else {})}
+    if plugins.owner(kind, "effect"):  # a plugin's effect (notify): its handler reads the payload (ADR-0026)
+        out = {"kind": kind, "ticket": ticket, "value": arg}
+        return {**out, "on": on} if on else out
     return {"kind": kind, "ticket": ticket, "value": arg}  # stage, review, merge, join
-
-
-
-def notify_config():
-    """`notify` of the team's factory.yaml; Bad when the team has none."""
-    import definition
-    config = (definition.load(config_mod.team_root())["factory"] or {}).get("notify")
-    if not config:
-        raise Bad("notify: the team's factory.yaml has no `notify` config")
-    return config
-
-
-def notify_effects(effects, tracker, ticket, name):
-    """Replace each `notify` effect with the one `[factory]` comment ADR-0022 asks for: the rendered text and one
-    `factory:notify` marker per send. The comment is posted even when a send failed (it lists the sends that went
-    out); the failures then raise. Returns the effects, the failures and the notify comments alone. A retry sends
-    again: nothing reads the markers."""
-    out, failures, posted = [], [], []
-    for e in effects:
-        if e["kind"] != "notify":
-            out.append(e)
-            continue
-        message = {**e["value"]["message"], "pr": ""}
-        if e.get("on") == "pr":
-            message["pr"] = tracker.facts(ticket).get("pr") or ""
-        try:
-            sent, errors = notifiers.send_all(notify_config(), message, e["value"]["people"])
-        except ValueError as err:
-            raise Bad(str(err))
-        failures += errors
-        if sent:
-            body = "[factory] " + notifiers.render(message) + "\n\nNotified: " + ", ".join(f"{p} via {v}" for v, p, _ in sent)
-            body += "".join("\n" + notifiers.marker(v, p, r) for v, p, r in sent)
-            if definition_team():
-                body += f"\n\n{comment_marker(name)}"
-            posted.append({"kind": "comment", "ticket": ticket, "value": body, **({"on": e["on"]} if e.get("on") else {})})
-            out.append(posted[-1])
-    return out, failures, posted
 
 
 def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
@@ -741,7 +697,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
     # ADR-0026: the effects, `on:` targets and outcome a plugin owns; the config is read only when there are some
     owns = plugins.owner(outcome, "outcome")
-    used = {(outcome, owns)} | {(e["kind"], plugins.owner(e["kind"], "effect")) for e in effects if e.get("on") is None}
+    used = {(outcome, owns)} | {(e["kind"], plugins.owner(e["kind"], "effect")) for e in effects
+                                if plugins.owner(e.get("on"), "trigger") is None}  # `on: pr` too, not `on: mention`
     used |= {(f"`on: {e['on']}`", plugins.owner(e["on"], "trigger")) for e in effects if isinstance(e.get("on"), str)}
     used = sorted((k, p) for k, p in used if p)
     registry = plugin_registry() if used else plugins.registry({})
@@ -762,8 +719,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         raise Bad(scope)
     comment_after = []  # what a plugin's effects must write after the stage change (the comment node's reply)
     handlers = {}  # a plugin's effects, by handler: it turns them into core effects (comments: route, reply, skip)
-    for e in effects:
-        if e.get("on") is None and (spec := registry.effect(e["kind"])):
+    for e in effects:  # or reads their payload before anything is written (notify on the ticket or its PR)
+        target = e.get("on") or "ticket"
+        if target not in registry.triggers() and (spec := registry.effect(e["kind"], target)):
             handlers.setdefault(spec, []).append(e)
     for spec, mine in handlers.items():
         moved, later = plugins.load(spec)(mine, name, payload, facts, tracker, nodes, ticket)
@@ -821,7 +779,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
                 e["heads"] = facts["heads"]  # one per repository of a multi-repository ticket
         if e["kind"] == "comment" and payload.get("run_id"):
             e["run_id"] = payload["run_id"]
-        if isinstance(e.get("on"), str) and (spec := registry.effect(e["kind"], e["on"])):  # a plugin's target
+        if e.get("on") in registry.triggers() and (spec := registry.effect(e["kind"], e["on"])):  # a plugin's target
             plugins.load(spec)(e, facts, tracker, ticket)  # #590 `on: mention`: answer where, and whom, it was asked
         if e["kind"] == "comment" and definition_team():
             e["value"] = f"{e['value']}\n\n{comment_marker(name)}"
@@ -838,7 +796,10 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if why:
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
-    effects, failures, posted = notify_effects(effects, tracker, ticket, name)
+    failures, posted = [], []
+    for send in registry.hook("gate.send"):  # notify: the sends, each effect replaced by its `[factory]` comment
+        effects, failed, sent = send(effects, tracker, ticket, name)
+        failures, posted = failures + failed, posted + sent
     if failures:  # keep the markers of the sends that went out; skip the stage change and the other effects
         for e in posted:
             tracker.apply(e)
