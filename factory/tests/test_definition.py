@@ -246,6 +246,12 @@ class DefinitionTest(unittest.TestCase):
                 self.assertTrue(set(env["writable"]) <= set(env["repositories"]))
                 self.assertIn(env["repositories"][0], env["writable"])  # the main repository is always writable
 
+    def test_issues_token_env_setting_passes_validation(self):
+        self.edit("factory.yaml", lambda f: f["defaults"].setdefault("settings", {}).update(issues_token_env="FACTORY_ISSUES_TOKEN"))
+        run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
+                             text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
+        self.assertEqual((run.returncode, run.stdout.strip()), (0, "factory: ok"), run.stdout + run.stderr)
+
     def test_settings_merge_order(self):
         defn = definition.load(self.root)
         s = definition.settings(defn, "fix")
