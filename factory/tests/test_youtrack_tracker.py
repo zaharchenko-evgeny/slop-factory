@@ -85,7 +85,7 @@ class StoreTest(unittest.TestCase):
                     for e in events]
             cs = [{"text": c["body"], "created": ms(c["at"]), "author": {"login": c["author"]}} for c in comments]
             fake = FakeYouTrack(issue, acts, cs)
-            return yt.YouTrackTicketStore(fake, bots=["ci[bot]"], writers=["alice"]), "T-1"
+            return yt.YouTrackTicketStore(fake, bots=[contract.BOT], writers=["alice"]), "T-1"
 
         contract.ticket_store_contract(self, make)
 
