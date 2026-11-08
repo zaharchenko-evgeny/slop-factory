@@ -476,8 +476,8 @@ def reconcile_main(argv):
     dry_run = "--dry-run" in argv
     spec = next((a[7:] for a in argv if a.startswith("memory:")), None)
     if spec:
-        from gate_port import MemoryTracker
-        tracker = MemoryTracker(json.loads(Path(spec).read_text()))
+        from gate_port import MemorySystem
+        tracker = MemorySystem(json.loads(Path(spec).read_text()))
     else:
         from gate_github import GitHubGateTracker
         tracker = GitHubGateTracker.from_config()

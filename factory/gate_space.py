@@ -46,6 +46,16 @@ class SpaceCodeHost:
         mr = self.api(f"projects/key:{repository or self.project}/code-reviews/number:{number}")
         return ticket_from_ref(mr.get("branch")) or ticket_from_ref(mr.get("title"))
 
+    def event(self, payload):
+        """The Event of a Space merge request payload (the Vcs port), else None when it names no factory ticket."""
+        from ports.system import Event
+        try:
+            ev = space_event(payload)
+        except ValueError:
+            return None
+        return None if ev["ticket"] is None else Event(ev["ticket"], "merge_request", ev["action"], ev["number"],
+                                                         ev["project"], payload)
+
     def merge_request(self, ticket):
         """The ticket's merge request: the open one with the highest number, else the latest closed or merged."""
         mine = [m for m in self._merge_requests() if (ticket_from_ref(m.get("branch")) or ticket_from_ref(m.get("title"))) == ticket]

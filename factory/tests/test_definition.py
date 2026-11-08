@@ -493,12 +493,12 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(self.root)
         try:
             n = nodes_mod.load()
-            t = MemoryTracker({"7": {"stage": "triage", "head": "h1", "pr": 5, "pr_state": "open", "ci": "green"}})
+            t = MemorySystem({"7": {"stage": "triage", "head": "h1", "pr": 5, "pr_state": "open", "ci": "green"}})
             written, plain = [], t.apply
             t.apply = lambda e: written.append(e) or plain(e)
             for node, outcome, extra in [("intake", "medium-high", {}), ("dispatch", "medium", {}),
@@ -515,7 +515,7 @@ class DefinitionTest(unittest.TestCase):
             t.tickets["7"]["pr_state"] = "merged"
             self.assertEqual(gate.decide("finish", "7", t, n)[1]["outcome"], "done")
             self.assertEqual(t.facts("7")["stage"], "done")
-            risky = MemoryTracker({"8": {"stage": "approved", "attrs": ["risk:high"], "pr": 6, "pr_state": "open"}})
+            risky = MemorySystem({"8": {"stage": "approved", "attrs": ["risk:high"], "pr": 6, "pr_state": "open"}})
             gate.apply("automerge", "merge", {"ticket": "8", "reason": "[factory] fine"}, risky, n)
             self.assertIn("factory:needs-human", risky.facts("8")["attrs"])   # the guard sent it to a person
         finally:
@@ -525,12 +525,12 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(self.root)
         try:
             n = nodes_mod.load()
-            t = MemoryTracker({"9": {"stage": "split"}, "7": {"stage": "approved", "pr_state": "merged"},
+            t = MemorySystem({"9": {"stage": "split"}, "7": {"stage": "approved", "pr_state": "merged"},
                                "8": {"stage": "done"}})
             state = {"7": "open", "8": "closed"}
             t.parent = lambda x: "9" if str(x) in ("7", "8") else None
@@ -578,13 +578,13 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(self.root)
         try:
             n = nodes_mod.load()
             for conflict, want in ((True, True), (False, False)):
-                t = MemoryTracker({"7": {"stage": "changes-requested", "pr": 5, "head": "h1", "conflict": conflict}})
+                t = MemorySystem({"7": {"stage": "changes-requested", "pr": 5, "head": "h1", "conflict": conflict}})
                 for node in ("fix", "update"):
                     with self.subTest(node=node, conflict=conflict):
                         code, out = gate.check(node, {"id": "e1", "ticket": "7"}, t, n, config.load())
@@ -596,12 +596,12 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(ROOT / "tests/fixtures/slop")  # its review outcomes replace the risk label (#998)
         try:
             n = nodes_mod.load()
-            t = MemoryTracker({"7": {"stage": "in-review", "pr": 5, "head": "h1", "ci": "green", "attrs": ["risk:low"],
+            t = MemorySystem({"7": {"stage": "in-review", "pr": 5, "head": "h1", "ci": "green", "attrs": ["risk:low"],
                                      "pr_labels": ["factory:review-low"]}})
             apply = t.apply
 
@@ -621,12 +621,12 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(self.root)
         try:
             n = nodes_mod.load()
-            t = MemoryTracker({"7": {"stage": "in-review", "pr": 5, "head": "h1"}})
+            t = MemorySystem({"7": {"stage": "in-review", "pr": 5, "head": "h1"}})
             t.pr_comments = lambda ticket: [{"author": "alice", "body": "@factory:dev why the retry?", "at": "2"}]
             status, out = gate.decide("mentions", "7", t, n)
             self.assertEqual(out["outcome"], "reply-dev")
@@ -651,7 +651,7 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(self.root)
         try:
@@ -660,7 +660,7 @@ class DefinitionTest(unittest.TestCase):
             for name, node in n["nodes"].items():
                 self.assertEqual("ask" in node["outcomes"], agents[name] in ("dev", "reviewer") and not name.startswith("reply-"), name)
             self.assertEqual(n["nodes"]["implement-medium"]["outcomes"]["ask"]["to"], ["reviewer"])
-            t = MemoryTracker({"7": {"stage": "in-dev"}})
+            t = MemorySystem({"7": {"stage": "in-dev"}})
             gate.apply("implement-medium", "ask", {"ticket": "7", "to": "reviewer", "text": "Is X in scope?"}, t, n)
             ask = next(json.loads(v) for k, v in t.tickets["7"]["log"] if k == "comment")
             self.assertTrue(ask.startswith("[factory] **dev (developer):** @factory:reviewer Is X in scope?\n"))
@@ -731,12 +731,12 @@ class SlopBugPathTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(ROOT / "tests/fixtures/slop")
         try:
             n = nodes_mod.load()
-            t = MemoryTracker({"7": {"stage": "triage"}})
+            t = MemorySystem({"7": {"stage": "triage"}})
             self.assertTrue(gate.apply("intake", "bug", {"ticket": "7"}, t, n)[1]["applied"])
             self.assertEqual(t.facts("7")["stage"], "investigating")
             code, _ = gate.apply("investigate", outcome, {"ticket": "7", "reason": reason}, t, n)
