@@ -146,7 +146,7 @@ def pr_ticket(code_host, number, repository=None):
 def from_trigger(d, code_host=None):
     """Extract the event kind and ticket number; tracker facts supply mutable metadata."""
     event_name = d.get("eventType") or d.get("event_name")
-    if isinstance(d.get("issue"), int) and all(isinstance(d.get(k), str) for k in ("via", "user", "text", "ref")):
+    if type(d.get("issue")) is int and all(isinstance(d.get(k), str) for k in ("via", "user", "text", "ref")):  # not a bool
         # ADR-0022: a reply the relay POSTs to the webhook of a `notify-reply` node
         return {"id": f"notify_reply:{d['issue']}:{d['via']}:{d['ref']}", "ticket": d["issue"],
                 "reply_event": {k: d[k] for k in ("via", "user", "text", "ref")}}

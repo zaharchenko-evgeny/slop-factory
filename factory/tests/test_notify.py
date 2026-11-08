@@ -187,6 +187,15 @@ class ReplyTest(unittest.TestCase):
     def raw(self, **change):
         return {"issue": 7, "pr": 0, "via": "email", "user": "ann@example.com", "text": "try\nagain", "ref": self.REF, **change}
 
+    def test_a_malformed_reply_payload_is_not_a_reply(self):
+        for change in ({"issue": "7"}, {"issue": True}, {"via": 1}, {"user": None}, {"text": ["x"]}, {"ref": 5}):
+            with self.subTest(change=change):
+                try:
+                    event = gate.from_trigger(self.raw(**change))
+                except gate.MissingNumber:
+                    continue
+                self.assertNotIn("reply_event", event)
+
     def test_ack_shows_no_bare_run_id(self):
         effects = [{"kind": "stage", "value": "ready"}]
         self.assertEqual(gate.ack_text(effects, {"ticket": 7, "run_id": "notify-reply"}), "Received. Ticket #7 moved to ready.")
