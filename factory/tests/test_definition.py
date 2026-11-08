@@ -566,8 +566,8 @@ class DefinitionTest(unittest.TestCase):
     def test_mentionable_agents_get_a_generated_reply_step(self):
         defn = definition.load(self.root)
         nodes = defn["workflow"]["nodes"]
-        self.assertEqual(set(nodes["mentions"]["outcomes"]), {"reply-dev", "reply-reviewer", "none"})
-        self.assertEqual(nodes["mentions"]["outcomes"]["reply-dev"]["if"], {"mention": "dev"})
+        self.assertNotIn("mentions", nodes)  # #893: the comment node routes a mention to `reply-<agent>`
+        self.assertIn({"wake": "asker"}, nodes["reply-dev"]["outcomes"]["replied"]["effects"])
         self.assertEqual((nodes["reply-dev"]["agent"], nodes["reply-dev"]["output"]), ("dev", "read-only"))
         self.assertIn("Someone asked you", definition.render(defn, "reply-reviewer"))
         self.edit("workflow.yaml", lambda w: w["nodes"].update({"reply-x": {"agent": "dev", "triggers": ["manual"],
@@ -628,9 +628,7 @@ class DefinitionTest(unittest.TestCase):
             n = nodes_mod.load()
             t = MemorySystem({"7": {"stage": "in-review", "pr": 5, "head": "h1"}})
             t.pr_comments = lambda ticket: [{"author": "alice", "body": "@factory:dev why the retry?", "at": "2"}]
-            status, out = gate.decide("mentions", "7", t, n)
-            self.assertEqual(out["outcome"], "reply-dev")
-            self.assertIn("factory:reply-dev", t.facts("7")["attrs"])
+            t.apply({"kind": "label", "ticket": "7", "value": "factory:reply-dev"})  # the comment node's `reply: dev`
             begin = gate.check("reply-dev", {"id": "e1", "ticket": "7"}, t, n, config.load())[1]
             self.assertEqual({k: begin["mention"][k] for k in ("by", "on")}, {"by": "alice", "on": "pr"})
             sent = []
@@ -642,8 +640,10 @@ class DefinitionTest(unittest.TestCase):
             self.assertTrue(reply["value"].startswith("@alice It covers the flaky API."))
             self.assertIn("<!-- factory:from dev reply -->", reply["value"])
             self.assertNotIn("factory:reply-dev", t.facts("7")["attrs"])
+            self.assertFalse([e for e in sent if e["kind"] == "label"])  # a person asked: nobody is woken
             t.pr_comments = lambda ticket: [{"author": "bot", "body": reply["value"], "at": "3"}]
-            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "none")  # a reply asks no one
+            from factory_plugins.comments import mentions
+            self.assertFalse(mentions.holds("dev", t.facts("7"), t, "7"))  # a reply asks no one
         finally:
             config.set_team(before)
 
@@ -665,15 +665,22 @@ class DefinitionTest(unittest.TestCase):
             ask = next(json.loads(v) for k, v in t.tickets["7"]["log"] if k == "comment")
             self.assertTrue(ask.startswith("[factory] **dev (developer):** @factory:reviewer Is X in scope?\n"))
             self.assertEqual(t.facts("7")["stage"], "in-dev")
+            self.assertIn("factory:comment", t.facts("7")["attrs"])                    # the comment node wakes
             t.tickets["7"]["comments"] = [{"author": "bot", "body": ask, "at": "1"}]
-            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "reply-reviewer")   # the target wakes
+            t.apply({"kind": "label", "ticket": "7", "value": "factory:reply-reviewer"})  # its `reply: reviewer`
             t.tickets["7"]["log"].clear()
             with self.assertRaises(gate.Bad):
                 gate.apply("reply-reviewer", "ask", {"ticket": "7", "to": "dev", "text": "?"}, t, n)
+            sent = []
+            apply = t.apply
+            t.apply = lambda e: sent.append(e) or apply(e)
             gate.apply("reply-reviewer", "replied", {"ticket": "7", "reply": "Yes."}, t, n)
-            answer = next(json.loads(v) for k, v in t.tickets["7"]["log"] if k == "comment")
-            t.tickets["7"]["comments"].append({"author": "bot", "body": answer, "at": "2"})
-            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "reply-dev")        # the asker wakes
+            answer = next(e for e in sent if e["kind"] == "comment")
+            self.assertTrue(answer["value"].startswith("@factory:dev Yes."))
+            self.assertEqual(answer["notes"]["context"], "Answer to ask 7-1: Yes.")
+            self.assertEqual([e["kind"] for e in sent if e["value"] == "factory:implement-medium"],
+                             ["unlabel", "label"])                                       # the asker wakes
+            self.assertEqual(t.facts("7")["stage"], "in-dev")
         finally:
             config.set_team(before)
 

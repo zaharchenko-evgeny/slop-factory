@@ -123,7 +123,8 @@ roles:
     mcp: {}
 
 # Agents: a role (above; roles/<role>/: role.md, setup.sh) + a model. With `plugins: [comments]` (ADR-0026, off
-# by default), `mentionable: true`: @factory:<agent> in a comment or review asks it; deploy adds its reply step (#590).
+# by default), `mentionable: true`: @factory:<agent> in a comment asks it (the comment node routes it, ADR-0023);
+# deploy adds its reply step (#590).
 # + access + settings. `gate` and `human` have no role.
 agents:
   human:          { harness: human }                               # a person; never deployed

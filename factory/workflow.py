@@ -24,6 +24,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
+import plugins  # noqa: E402  (ADR-0026: a plugin's effects; definition.errors refuses them while it is off)
 import project as project_mod  # noqa: E402
 
 FORMAT = 2
@@ -149,7 +150,7 @@ def validate(project, wf):
                 covered.add(s)
             for e in o.get("effects") or []:
                 keys = [k for k in e if k != "on"] if isinstance(e, dict) else []
-                if len(keys) != 1 or keys[0] not in EFFECTS:
+                if len(keys) != 1 or keys[0] not in EFFECTS and not plugins.owner(keys[0], "effect"):
                     errs.append(f"unknown-effect: {name}.{oname}: {e}")
                 elif keys[0] == "state":
                     state(f"{name}.{oname}", e["state"])

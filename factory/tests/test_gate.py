@@ -230,7 +230,7 @@ class GateTest(unittest.TestCase):
         return graph
 
     def ask(self, tracker, to="reviewer", node="intake", hops=3):
-        with patch.object(gate.config_mod, "load", return_value={"limits": {"mention_hops": hops}, "plugins": ["comments"]}):
+        with patch.object(gate.config_mod, "load", return_value={**CONFIG, "limits": {"mention_hops": hops}, "plugins": ["comments"]}):
             return gate.apply(node, "ask", {"ticket": "7", "to": to, "text": "Is X\nin scope?"}, tracker, self.ask_graph())
 
     def test_ask_posts_one_comment_with_the_marker_and_keeps_the_stage(self):
@@ -271,6 +271,52 @@ class GateTest(unittest.TestCase):
         tr = MemorySystem({"7": {"stage": "triage"}})
         with self.assertRaisesRegex(gate.Bad, "a reply cannot ask"):
             self.ask(tr, node="reply-dev")
+
+    def test_ask_adds_comment_label(self):
+        """#893: the ask wakes the comment node in the same apply, after its comment; a refused ask wakes nothing."""
+        tr = MemorySystem({"7": {"stage": "triage"}})
+        self.ask(tr)
+        self.assertEqual([k for k, _ in tr.tickets["7"]["log"]], ["comment", "label"])
+        self.assertIn("factory:comment", tr.facts("7")["attrs"])
+        asks = [{"author_is_bot": True, "author_is_factory": True, "body": f"[factory] q <!-- factory:ask id=7-{i} from=intake to=reply-reviewer hop={i} -->"} for i in (1, 2, 3)]
+        tr = MemorySystem({"7": {"stage": "triage", "comments": asks}})
+        self.ask(tr)
+        self.assertNotIn("factory:comment", tr.facts("7")["attrs"])
+
+    def answer(self, tracker, comments):
+        graph = self.ask_graph()
+        graph["nodes"]["reply-reviewer"] = {**graph["nodes"]["intake"], "agent": "reviewer", "when": {"always": True},
+                                            "triggers": ["issues.labeled factory:reply-reviewer"], "outcomes": {"replied": {"effects": [
+                                                {"unlabel": "factory:reply-reviewer"}, {"comment": "reply", "on": "mention"}, {"wake": "asker"}]}}}
+        tracker.tickets["7"]["comments"] = comments
+        sent, apply = [], tracker.apply
+        tracker.apply = lambda e: sent.append(e) or apply(e)
+        with patch.object(gate.config_mod, "load", return_value={**CONFIG, "plugins": ["comments"]}):
+            gate.apply("reply-reviewer", "replied", {"ticket": "7", "reply": "Yes, X is in scope."}, tracker, graph)
+        return sent
+
+    def test_answer_wakes_asker(self):
+        """#893: an answer to an agent's ask wakes the asking node (`from=` in the marker) with the answer in its
+        agent notes; an answer to a person, or to an asker whose `when` fails, wakes nothing."""
+        ask = {"author": "bot", "author_is_bot": True, "author_is_factory": True, "at": "1",
+               "body": "[factory] **dev (developer):** @factory:reviewer Is X in scope?\n"
+                       "<!-- factory:ask id=7-1 from=intake to=reply-reviewer hop=1 -->\n<!-- factory:from dev -->"}
+        sent = self.answer(MemorySystem({"7": {"stage": "triage"}}), [ask])
+        answer = next(e for e in sent if e["kind"] == "comment")
+        self.assertTrue(answer["value"].startswith("@factory:dev Yes, X is in scope."))
+        self.assertEqual(answer["notes"], {"for": "any", "context": "Answer to ask 7-1: Yes, X is in scope."})
+        self.assertEqual([(e["kind"], e["value"]) for e in sent if e["value"] == "factory:triage"],
+                         [("unlabel", "factory:triage"), ("label", "factory:triage")])   # intake's trigger fires again
+        self.assertLess(sent.index(answer), [e["value"] for e in sent].index("factory:triage"))
+        person = {"author": "alice", "at": "1", "body": "@factory:reviewer Is X in scope?"}
+        sent = self.answer(MemorySystem({"7": {"stage": "triage"}}), [person])
+        self.assertEqual([e["kind"] for e in sent], ["unlabel", "comment"])
+        self.assertNotIn("notes", sent[1])
+        tr = MemorySystem({"7": {"stage": "ready"}})   # the asker's `when` (stage triage) no longer holds
+        sent = self.answer(tr, [ask])
+        self.assertFalse([e for e in sent if e["kind"] in ("label", "unlabel") and e["value"] == "factory:triage"])
+        self.assertIn("did not wake `intake`", sent[-1]["value"])
+        self.assertEqual(tr.facts("7")["stage"], "ready")
 
     def comment_graph(self, when=None):
         graph = copy.deepcopy(NODES)
