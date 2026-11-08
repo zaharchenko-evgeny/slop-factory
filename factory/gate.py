@@ -720,11 +720,13 @@ def notify_config():
 
 
 def latest_run(comments):
-    """The `Factory-Run:` value of the latest `[factory]` stage comment, else None. Skipped: notify, lesson, reconcile
-    and recover comments, and the comment node's and `reply-<agent>` runs' comments, which answer without a stage move."""
+    """The `Factory-Run:` value of the latest `[factory]` stage comment, else None. Skipped: notify, lesson, reconcile,
+    recover and `end failed` comments, and the comment node's and `reply-<agent>` runs' comments, which answer without
+    a stage move."""
     for c in reversed(comments or []):
         body = c.get("body") or ""
-        if body.startswith("[factory]") and not body.startswith(("[factory] recover:", "[factory] reconcile:")) \
+        if body.startswith("[factory]") \
+                and not body.startswith(("[factory] recover:", "[factory] reconcile:", "[factory] end failed:")) \
                 and "<!-- factory:notify " not in body and LESSON_MARKER not in body and not _answer_comment(body) \
                 and (m := re.search(r"(?m)^Factory-Run:\s*(\S+)\s*$", body)):
             return m[1]
