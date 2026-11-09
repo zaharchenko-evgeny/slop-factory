@@ -9,6 +9,7 @@ from plugins import Plugin
 
 PLUGIN = Plugin(
     name="space",
-    provides={"vcs": {"space": "factory_plugins.space.gate:SpaceCodeHost"}},
+    provides={"vcs": {"space": "factory_plugins.space.gate:SpaceCodeHost"},
+              "vcs-contract": {"space": "factory_plugins.space.contract:VCS"}},  # ADR-0027
     hooks={"gate.trigger": "factory_plugins.space.gate:trigger"},
 )

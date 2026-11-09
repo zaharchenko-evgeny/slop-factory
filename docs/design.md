@@ -176,16 +176,18 @@ per repository.
 
 ## 9. Repositories and branches
 
-- A ticket names every affected repository. A node declares the repositories
-  it writes (`writes`, ADR-0024). The developer runs once per written
-  repository and opens that repository's PR, linked to the ticket. The ticket
-  reaches `done` when all its PRs are merged. (Superseded in part by ADR-0024:
-  the multi-repo environment with one `main`.)
+- A ticket lives in the repository it changes (ADR-0027). Each repository of an
+  environment declares its `tracker` (GitHub issues, a YouTrack project and
+  scope, or `none`), its `vcs`, and whether runs may `write` to it; on Air an
+  environment has at most one writable repository. A node declares the
+  `environments` it runs in, and deploy makes one copy per environment and
+  repository it listens to. Work across repositories is split into one ticket
+  per repository, linked by blocked-by.
 - Repository roles (ADR-0017): `factory.project.yaml` marks exactly one
   repository `role: primary`; the others are `role: project`. An Air project
   automation checks out the project repositories and the factory repository
-  (read-only); the repository it writes is its main (ADR-0024, which
-  supersedes in part ADR-0017). Retro, distill, the knowledge review and the ops nodes run in
+  (read-only); its main repository is where its events happen (ADR-0027, which
+  supersedes ADR-0024 and in part ADR-0017). Retro, distill, the knowledge review and the ops nodes run in
   the factory repository.
 - The team repository may also be listed as a `role: project` repository, so
   the factory delivers tickets that change it (ADR-0019,

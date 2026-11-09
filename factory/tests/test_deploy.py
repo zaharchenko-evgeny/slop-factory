@@ -588,6 +588,27 @@ class CommentWakeDeployTest(unittest.TestCase):
         })
         return settings, gh, files, writes
 
+    def test_engine_repository_keeps_its_own_wake_files(self):
+        """The engine's repository ships the wake files from its own tree: deploy never deletes them there, even when
+        it is also a project repository (slop-factory, 9 Nov), nor installs them."""
+        for source in ("git+https://github.com/o/main@main", "https://github.com/o/main.git", "git@github.com:o/main.git"):
+            with self.subTest(source=source):
+                self.assertEqual(github_wake.engine_repository({"engine": source}), "o/main")
+        with mock.patch.object(github_wake.subprocess, "run") as run:  # `engine: 1`: the git origin
+            run.return_value.stdout = "https://github.com/o/engine\n"
+            self.assertEqual(github_wake.engine_repository({"engine": 1}), "o/engine")
+        calls = []
+
+        def gh(args):
+            calls.append(args)
+            raise RuntimeError("HTTP 404: Not Found")
+        settings = {"plugins": ["comments"], "engine": "git+https://github.com/o/main@main", "repositories": [
+            {"name": "main", "url": "https://github.com/o/main", "role": "primary"}]}
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(deploy.sync_wake_files(settings, gh, True), 0)
+            self.assertEqual(deploy.sync_wake_files({**settings, "plugins": []}, gh, True), 0)
+        self.assertEqual(calls, [])
+
     def test_turning_comments_off_removes_the_installed_files(self):
         """#1057: a deploy with the comments plugin off deletes the comment wake files an earlier deploy installed."""
         settings, gh, files, writes = self.install()
@@ -825,23 +846,20 @@ class ProjectPlanTest(unittest.TestCase):
                                                 "FACTORY_ENV_REPOSITORY": "zaharchenko-evgeny/slop-eval-factory"})
 
     def test_mentionable_agents_get_a_reply_node(self):
-        """With the comments module on, fixtures/v2's `mentionable: true` agents (ADR-0021) deploy a reply node;
-        the others do not, and no mention router deploys (#893). With it off (ADR-0025) none deploy. fixtures/slop
-        has it off (slop-eval-factory#93) and deploys none."""
+        """With the comments module on, `mentionable: true` agents (ADR-0021) deploy a reply node; the others do
+        not, and no mention router deploys (#893). With it off (ADR-0025) none deploy. The Slop fixture has it off."""
         def comments_on(f):
             f["plugins"] = ["comments"]
+            f["agents"]["dev"]["mentionable"] = True  # the Slop reviewer role has no reply mode any more
 
         def comments_off(f):
             f.pop("plugins", None)
             f.pop("modules", None)
-        self.assertFalse({a["spec"]["node"] for a in definition_plan()["automations"]
-                          if a["spec"]["node"].startswith("reply-")})
-        plan = definition_plan(edit_factory=comments_on, source="fixtures/v2")
-        self.assertEqual({a["spec"]["node"] for a in plan["automations"]},
-                         {a["spec"]["node"] for a in definition_plan(source="fixtures/v2")["automations"]})
+        plan = definition_plan(edit_factory=comments_on)
+        self.assertFalse({a["spec"]["node"] for a in definition_plan()["automations"]} & {"reply-dev", "reply-reviewer"})
         nodes_ = {a["spec"]["node"] for a in plan["automations"]}
-        self.assertTrue({"reply-dev", "reply-reviewer"} <= nodes_)
-        self.assertFalse({"mentions", "reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
+        self.assertIn("reply-dev", nodes_)
+        self.assertFalse({"mentions", "reply-reviewer", "reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
         self.assertIn("factory:comment", plan_labels(plan))
 
         def none_mentionable(f):
@@ -849,7 +867,7 @@ class ProjectPlanTest(unittest.TestCase):
             for spec in f["agents"].values():
                 spec.pop("mentionable", None)
         for edit in (none_mentionable, comments_off):
-            plan = definition_plan(edit_factory=edit, source="fixtures/v2")
+            plan = definition_plan(edit_factory=edit)
             nodes_ = {a["spec"]["node"] for a in plan["automations"]}
             self.assertFalse({n for n in nodes_ if n.startswith("reply-")})
         self.assertIn("factory:comment", plan_labels(plan))  # kept while off: a wake workflow installed earlier still adds it

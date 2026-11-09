@@ -1,5 +1,7 @@
 # ADR-0024: Nodes declare the repositories they write
 
+Superseded by ADR-0027: repositories declare their tracker, vcs and write; nodes declare environments.
+
 Status: accepted, requested by #975 (slice 1 of 6, #976). Supersedes in part
 ADR-0017 and ADR-0021. Replaces the open design in #327.
 
