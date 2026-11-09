@@ -4,6 +4,22 @@ Each node of `template/workflow.yaml` is an agent, an environment, triggers and 
 reports one outcome; the gate applies its effects. Nodes with agent `clerk` run no model: the node's
 guards choose the outcome. `tests/test_templates.py` fails when a node has no row here.
 
+## `listens` and `writes`
+
+ADR-0024. An environment lists checkouts and has no `main`. Two keys on a node say how it uses them:
+
+- `writes`: the repositories the node writes, `all` or a list. A node with `writes` runs one Air automation per written
+  repository; Air's platform push writes there. Without `writes` the node writes nothing.
+- `listens`: the ticket repositories the node hears: `tickets` (default, every ticket repository), `tracker` (the
+  first) or a list. A node with no ticket trigger (schedule, webhook, manual) listens to nothing.
+
+A node that listens to more than one repository gets one automation per repository, named `<node> <repo-name>` in the
+deploy plan (for example `implement-medium api`). With one repository the name is just `<node>`.
+
+In the template, the developer nodes (`implement-*`, `fix`, `update`) have `writes: all`. The router, review, `automerge`,
+`merge`, `finish` and `notify` nodes write nothing. `retro` writes only the team repository. A scheduled node
+writes at most one repository. The generated README lists each repository with the automations that run in it.
+
 | Node | Purpose | Trigger | Outcomes |
 | --- | --- | --- | --- |
 | `human` | A person resumes a ticket from any stage but `done`. | manual | `triage`, `ready` |

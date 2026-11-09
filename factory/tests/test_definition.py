@@ -235,6 +235,24 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(definition.node_listens(defn, "human"), [])
         self.assertEqual(definition.tracker_repositories(definition.load(self.root)), [MAIN, OTHER])
 
+    def test_youtrack_projects_link_the_ticket_repositories(self):
+        def youtrack(f):
+            f["tracker"] = {"adapter": "youtrack", "url": "https://y", "project": "API", "projects": {"API": MAIN, "WEB": OTHER}}
+        self.edit("factory.yaml", youtrack)
+        defn = definition.load(self.root)
+        self.assertEqual(definition.tracker_repositories(defn), [MAIN, OTHER])
+        self.assertEqual(definition.node_listens(defn, "implement-small"), [MAIN, OTHER])
+        self.assertFalse([e for e in definition.errors(defn) if e.startswith("deaf-trigger")])  # YouTrack wakes any repository
+
+    def test_mainless_environment_of_several_repositories_needs_no_environment_per_repository(self):
+        def two_repos(f):
+            f["environments"]["engine"]["repositories"] = [{"repo": MAIN}, {"repo": "o/web"}]
+            f["tracker"]["repositories"] = [MAIN, "o/web"]
+        self.edit("factory.yaml", two_repos)
+        self.edit("workflow.yaml", lambda w: [w["nodes"][n].update(writes="all") for n in self._full_nodes()
+                                              if not any("schedule" in t for t in w["nodes"][n]["triggers"] if isinstance(t, dict))])
+        self.assertEqual(self.errors(), [])
+
     def test_listens_tracker_is_the_first_ticket_repository(self):
         self._two_ticket_repositories()
         self.edit("workflow.yaml", lambda w: w["nodes"]["implement-small"].update(listens="tracker"))

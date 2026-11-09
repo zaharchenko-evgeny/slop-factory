@@ -117,10 +117,12 @@ def node_writes(defn, name):
 
 
 def tracker_repositories(defn):
-    """Full names of the ticket repositories, in order; the first is the tracker. `tracker.repositories`, or the
-    single `tracker.repository`."""
+    """Full names of the ticket repositories, in order; the first is the tracker. `tracker.repositories`, the
+    repositories linked by `tracker.projects` (YouTrack, #981), or the single `tracker.repository`."""
     t = defn["factory"].get("tracker") or {}
     listed = t.get("repositories")
+    if listed is None and isinstance(t.get("projects"), dict):
+        listed = list(t["projects"].values())
     if listed is None:
         listed = [t["repository"]] if t.get("repository") else []
     return [full_name(r) for r in listed if isinstance(r, str)] if isinstance(listed, list) else []
@@ -445,7 +447,7 @@ def errors(defn):
             return False
         block = project_envs.get(env)
         if block is None:
-            return main_name != tracker_repo
+            return scopes.adapter(f.get("tracker")) == "github-issues" and main_name != tracker_repo
         return scopes.adapter(block) == "github-issues" and main_name != full_name(block.get("repository") or "")
     pr_labels = {}
     for source in nodes.values():
@@ -462,7 +464,7 @@ def errors(defn):
             for state in ("green", "red"):
                 label = f"{(w.get('stages') or {}).get('label_prefix', 'factory:')}ci-{state}"
                 pr_labels.setdefault(label, set()).add(full_name(source_repo))
-    if len(code) > 1 and any(per_repo_node(n) for n in nodes) \
+    if len(code) > 1 and any(per_repo_node(n) for n in nodes) and per_repo_envs(defn) \
             and ((f.get("defaults") or {}).get("settings") or {}).get("write_mode", "per-repo") == "per-repo":
         errs += [f"per-repo-env: {r}: a per-repository node needs an environment where it is `main`"
                  for r in code if r not in per_repo_envs(defn)]

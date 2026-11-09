@@ -71,6 +71,7 @@ nodes:
     triggers: [{ label: "factory:implement-small" }]
     when: { stage: in-dev }
     output: create-pr
+    writes: all                   # one copy per code repository, listening to its tickets (ADR-0024)
     settings: { mode: implement }
     outcomes:
       done-low:   { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
@@ -83,6 +84,7 @@ nodes:
     triggers: [{ label: "factory:implement-medium" }]
     when: { stage: in-dev }
     output: create-pr
+    writes: all                   # one copy per code repository, listening to its tickets (ADR-0024)
     settings: { mode: implement }
     outcomes:
       done-low:   { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
@@ -95,6 +97,7 @@ nodes:
     triggers: [{ label: "factory:implement-large" }]
     when: { stage: in-dev }
     output: create-pr
+    writes: all                   # one copy per code repository, listening to its tickets (ADR-0024)
     settings: { mode: implement }
     outcomes:
       done-low:   { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
@@ -143,6 +146,7 @@ nodes:
     triggers: [{ label: "factory:fix" }]
     when: { stage: [in-review, changes-requested, approved], fix-rounds: below-cap }
     output: push-to-source
+    writes: all                   # one copy per code repository, listening to its tickets (ADR-0024)
     settings: { mode: fix, fix_rounds: 3 }
     outcomes:
       done-low:  { effects: [{ unlabel: "factory:fix" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
@@ -154,6 +158,7 @@ nodes:
     triggers: [{ label: "factory:update" }]
     when: { stage: changes-requested }
     output: push-to-source
+    writes: all                   # one copy per code repository, listening to its tickets (ADR-0024)
     settings: { mode: update }
     outcomes:
       resolved:     { effects: [{ unlabel: "factory:update" }, { label: "factory:automerge", on: pr }, { stage: approved }] }
@@ -206,6 +211,7 @@ nodes:
   retro:
     agent: retro
     environment: knowledge
+    writes: ["{{TEAM_REPOSITORY}}"]  # the knowledge base; the code repositories are evidence
     triggers: [{ schedule: "0 2 * * *" }]
     output: push-to-new-branch    # the platform opens one PR to the knowledge base
     outcomes:
