@@ -825,18 +825,20 @@ class ProjectPlanTest(unittest.TestCase):
                                                 "FACTORY_ENV_REPOSITORY": "zaharchenko-evgeny/slop-eval-factory"})
 
     def test_mentionable_agents_get_a_reply_node(self):
-        """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node;
-        the others do not, and no mention router deploys (#893). With it off (ADR-0025) none deploy. The fixture has
-        it on (#1083)."""
+        """With the comments module on, fixtures/v2's `mentionable: true` agents (ADR-0021) deploy a reply node;
+        the others do not, and no mention router deploys (#893). With it off (ADR-0025) none deploy. fixtures/slop
+        has it off (slop-eval-factory#93) and deploys none."""
         def comments_on(f):
             f["plugins"] = ["comments"]
 
         def comments_off(f):
             f.pop("plugins", None)
             f.pop("modules", None)
-        plan = definition_plan(edit_factory=comments_on)
+        self.assertFalse({a["spec"]["node"] for a in definition_plan()["automations"]
+                          if a["spec"]["node"].startswith("reply-")})
+        plan = definition_plan(edit_factory=comments_on, source="fixtures/v2")
         self.assertEqual({a["spec"]["node"] for a in plan["automations"]},
-                         {a["spec"]["node"] for a in definition_plan()["automations"]})
+                         {a["spec"]["node"] for a in definition_plan(source="fixtures/v2")["automations"]})
         nodes_ = {a["spec"]["node"] for a in plan["automations"]}
         self.assertTrue({"reply-dev", "reply-reviewer"} <= nodes_)
         self.assertFalse({"mentions", "reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
@@ -847,7 +849,7 @@ class ProjectPlanTest(unittest.TestCase):
             for spec in f["agents"].values():
                 spec.pop("mentionable", None)
         for edit in (none_mentionable, comments_off):
-            plan = definition_plan(edit_factory=edit)
+            plan = definition_plan(edit_factory=edit, source="fixtures/v2")
             nodes_ = {a["spec"]["node"] for a in plan["automations"]}
             self.assertFalse({n for n in nodes_ if n.startswith("reply-")})
         self.assertIn("factory:comment", plan_labels(plan))  # kept while off: a wake workflow installed earlier still adds it

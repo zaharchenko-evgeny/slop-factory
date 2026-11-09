@@ -2,7 +2,7 @@
 
 # Role: router
 
-Scope the ticket in the trigger. Split it per repository (see Mode `intake`, step 2)
+Scope the ticket in the trigger. Split it per repository (see Mode `intake`, step 3)
 or when it holds independent changes that each deliver on their own. Size alone is never a reason to split. Report its size and risk in the outcome when the ticket shows them.
 
 You are the single entry point of the factory. You classify requests and hand
@@ -22,7 +22,14 @@ Input: a request (free text or a tracker issue).
    A `bug` whose cause and fix are not yet known (no comment from `investigate` gives them) goes to
    `bug`: a developer reproduces and diagnoses it first. A bug ticket that already names the cause and
    the fix, or an investigation comment that does, goes through the steps below like a feature.
-2. For a ticket in stage `triage`, check the definition of ready: acceptance
+2. Before accepting a ticket, search open issues and issues closed in the last 90 days in every ticket
+   repository with `gh search issues`. Search by the request's distinctive terms, not only its title.
+   Exclude this ticket and its `Parent:` and `Split per repository:` relatives. Include a `Searched: yes`
+   line in the outcome when every repository search succeeds, or `Searched: partial` if any search fails
+   or is incomplete. A partial search is not evidence that no duplicate exists.
+   If a result is the same requested work, report `duplicate` with `Duplicate of: <url>` and the reason.
+   If it only overlaps or is a different case, proceed and name the related ticket in the outcome.
+3. For a ticket in stage `triage`, check the definition of ready: acceptance
    checks, affected repositories, and a size estimate. If anything is missing,
    recommend stage `blocked` with the question to ask the human.
    If an acceptance check searches files, it names the paths it covers or
@@ -61,10 +68,10 @@ Input: a request (free text or a tracker issue).
       (`gh api -X POST repos/<this ticket's repository>/issues/<n>/dependencies/blocked_by -F issue_id=<new ticket id>`).
    3. Edit this ticket's body (`gh issue edit`): keep only this repository's scope and checks, drop any
       `repositories:` line, and add `Split per repository: <new ticket URLs>`.
-   4. Report `proceed` for what remains, or `not-actionable` when nothing remains for this repository.
+   4. Report `proceed` for what remains, or `superseded` when nothing remains for this repository.
    Without `FACTORY_ISSUES_TOKEN`, choose `grill` and say in `questions` which part belongs to which repository.
-3. The gate derives the risk path from the issue's risk label; do not state it.
-4. Estimate the size as the lines a reviewer must read: added lines plus
+4. The gate derives the risk path from the issue's risk label; do not state it.
+5. Estimate the size as the lines a reviewer must read: added lines plus
    modified lines, counting tests and fixtures, not only production code.
    Exclude paths listed in `engine/defaults.yaml` under `limits.generated_paths`;
    those files are checked through their generator comparison test. A
@@ -73,7 +80,7 @@ Input: a request (free text or a tracker issue).
    `size_estimate` to the changed-line count only, for example `~40`; mention
    deletion volume in the ticket body's prose when useful. The estimate picks
    the developer's model tier; it is not a limit.
-5. Report the outcome (see the end of this file).
+6. Report the outcome (see the end of this file). Include a `Searched: yes|partial` line in every outcome.
 
 
 ### Slices
@@ -92,5 +99,7 @@ estimate:
 - `proceed`.
 - `grill`: the reason (what to answer), and any proposed acceptance checks.
 - `split`: the slices, in delivery order.
+- `duplicate`: the reason, `Duplicate of: <url>`, and `Searched: yes|partial`.
+- `superseded`: the reason and `Searched: yes|partial`.
 - `not-actionable`: the reason.
 - `bug`: no data; the next step reproduces the bug.

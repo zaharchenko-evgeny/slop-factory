@@ -1,7 +1,7 @@
 # Slop factory workflow: how the factory works. Stages, shared settings, then the nodes in delivery
 # order. Every node is an agent + an environment + triggers + outcomes: the agent reports one outcome and
 # the gate applies its effects (ADR-0021). Several triggers on a node are OR. States are stage labels, other
-# labels (`risk:*` and `complexity:*` hold one value each) and PR states; routing is the labels outcomes add.
+# labels (`risk:*`, `complexity:*` and `close:*` hold one value each) and PR states; routing is the labels outcomes add.
 # Deterministic rules live only in `when`, an outcome's `if` (when it fails the gate applies `else`, or
 # refuses) and the effects' own checks (a merge needs an approved head with green CI).
 # Agents and environments are defined in factory.yaml; nodes name them.
@@ -74,7 +74,9 @@ nodes:
       ready:          { effects: [{ stage: ready }] }               # no estimate: dispatch makes one
       grill:          { effects: [{ comment: questions }, { stage: needs-answers }] }
       split:          { effects: [{ create-issues: children }, { stage: split }] }
-      not-actionable: { effects: [{ comment: reason }, { stage: not-actionable }] }
+      not-actionable: { effects: [{ comment: reason }, { label: "close:wont-do" }, { stage: not-actionable }] }
+      duplicate:      { effects: [{ comment: reason }, { label: "close:duplicate" }, { stage: not-actionable }] }
+      superseded:     { effects: [{ comment: reason }, { label: "close:superseded" }, { stage: not-actionable }] }
       bug:            { effects: [{ stage: investigating }] }       # a bug report with an unknown cause
 
   # --- Investigate: a bug report -> reproduced and diagnosed, or rejected with evidence ----------
@@ -87,7 +89,7 @@ nodes:
     settings: { mode: investigate }
     outcomes:
       bug:              { effects: [{ comment: reason }, { label: "factory:implement-medium" }, { stage: in-dev }] }
-      intended:         { effects: [{ comment: reason }, { stage: not-actionable }] }   # the evidence is in the comment
+      intended:         { effects: [{ comment: reason }, { label: "close:intended" }, { stage: not-actionable }] }   # the evidence is in the comment
       cannot-reproduce: { effects: [{ comment: reason }, { stage: needs-answers }] }
 
   # --- Ready: estimate if needed, start the developer the size needs ----------------------------
