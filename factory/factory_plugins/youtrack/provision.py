@@ -9,6 +9,7 @@ YouTrack project linked to it (#981), `deploy.errors` checks `tracker.projects`,
 """
 import definition
 import deploy as core
+import scopes
 from factory_plugins.youtrack.store import MissingField, YouTrackTicketStore, repo_stage_tags
 
 
@@ -40,7 +41,7 @@ def errors(nodes: dict, config: dict) -> list[str]:
     """Hook `deploy.errors`: per `tracker.projects` entry, `unknown-repository` when it names no repository,
     `duplicate-repository` when another project already links its repository (Air ANDs a trigger's filters, so one
     trigger cannot select two projects), and `unlinked-project` when no planned copy listens to it: the projects the
-    YouTrack triggers of the copies `deploy.node_scopes` plans are limited to (`trigger_filters`)."""
+    YouTrack triggers of a node's copies are limited to (ADR-0024: one copy per listened repository, `trigger_filters`)."""
     projects = (config.get("tracker") or {}).get("projects") or {}
     repos = {definition.full_name(r["url"]).lower() for r in config.get("repositories") or []}
     errs, linked = [], {}
@@ -51,12 +52,17 @@ def errors(nodes: dict, config: dict) -> list[str]:
             errs.append(f"duplicate-repository: tracker.projects.{project}: {repo} is already linked to {linked[str(repo).lower()]}")
         else:
             linked[str(repo).lower()] = project
-    listened = set()
-    for name, scopes in (core.node_scopes(nodes, config, core.team_definition()) if linked else {}).items():
-        sources = {core.trigger(t, None).get("source") for t in nodes["nodes"][name].get("triggers") or []
+    listened, defn = set(), core.team_definition() if linked else None
+    trackers = scopes.project_envs(config)  # #1069: a default-environment node runs once per project, not per repository
+    default_env = core.default_environment(nodes, defn) if trackers else None
+    for name, n in (nodes["nodes"] if defn else {}).items():
+        if n.get("enabled") is False or n["role"] == "human" or n.get("runner") or trackers and n["env"] == default_env:
+            continue
+        sources = {core.trigger(t, None).get("source") for t in n.get("triggers") or []
                    if not str(t).startswith(("schedule ", "webhook ")) and str(t) != "manual"}
-        listened |= {f["projectShortName"] for scope in scopes if scope
-                     for source, f in trigger_filters(config, scope).items() if source in sources}
+        copies = definition.node_listens(defn, name)
+        listened |= {f["projectShortName"] for repo in (copies if len(copies) > 1 else [])
+                     for source, f in trigger_filters(config, {"url": repo}).items() if source in sources}
     return errs + [f"unlinked-project: tracker.projects.{p}: no node listens to project {p} ({projects[p]})"
                    for p in linked.values() if p not in listened]
 

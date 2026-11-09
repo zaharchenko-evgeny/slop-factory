@@ -97,8 +97,8 @@ class CountedRun:
         return out
 
 
-# `write_mode: token`: Air's GitHub token writes only the factory repository, so writes to a `role: project`
-# repository use this secret (deploy.py adds it to WRITE_TOKEN_ENVS). It is read from the environment, never printed.
+# Air's GitHub token writes only the automation's own repository, so writes to a `role: project` repository use this
+# secret when a person sets it (ADR-0024: deploy no longer adds it). It is read from the environment, never printed.
 WRITE_TOKEN = "FACTORY_WRITE_TOKEN"
 WRITE_TOKEN_ENVS = ("write", "ops")
 

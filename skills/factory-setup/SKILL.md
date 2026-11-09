@@ -62,8 +62,7 @@ Ask, one round at a time, with a recommended answer for each question:
 11. Which MCP servers per role (`roles.<role>.mcp`). Recommended: none, then only
     the server a role needs (for example the tracker for the router).
 12. Environment variables and secrets per environment: names, and for a
-    secret never its value. A writable repository that is not `main` needs a
-    token secret named in its `token_env`.
+    secret never its value.
 
 Look up facts yourself (repo remotes, default branches, existing automations,
 branch protection). Ask only for decisions.

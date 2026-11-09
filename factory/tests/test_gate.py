@@ -555,7 +555,7 @@ class GateTest(unittest.TestCase):
 
     def test_new_labels_created_at_merge(self):
         plan = air.plan_air(NODES, CONFIG)
-        self.assertIn("factory:needs-human", plan["labels"])
+        self.assertIn("factory:needs-human", plan["label_plan"][CONFIG["tracker"]["repository"]])
 
     def test_low_risk_wakes_full_only(self):
         facts = {"stage": "in-review", "ci": "green", "focus_missing": ["full"]}
