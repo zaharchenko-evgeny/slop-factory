@@ -193,6 +193,12 @@ class GitHubTicketStore:
         url = item.get("repository_url") or ""
         return self.ref(url.split("/repos/", 1)[1] if "/repos/" in url else self.repo, item["number"])
 
+    def child_labels(self, child):
+        """The labels a created child carries besides its risk: `child_attrs`, without the ADR-0024 `repo:` routing
+        label when the child lives in its own repository (ADR-0027: no copy routes on it, and the label may not exist
+        there)."""
+        return [x for x in child_attrs(child) if not (getattr(self, "one_repository", False) and x.startswith("repo:"))]
+
     def repo_of(self, child):
         """The repository a child is created in: the one its `repo` names (a name or `owner/repo`) among the other
         repositories, else this one."""
@@ -396,7 +402,7 @@ class GitHubTicketStore:
             if new is None:
                 new = json.loads(self.run(["api", "-X", "POST", f"repos/{repo}/issues", "-f", f"title={c['title']}",
                                            "-f", f"body={want}",
-                                           *[x for r in [*risk, *child_attrs(c)] for x in ("-f", f"labels[]={r}")]]))  # no stage yet: not runnable
+                                           *[x for r in [*risk, *self.child_labels(c)] for x in ("-f", f"labels[]={r}")]]))  # no stage yet: not runnable
                 chained, have = set(), set()
             else:  # a reused child converges too: body, risk labels, chain
                 path = f"repos/{repo}/issues/{new['number']}"
@@ -407,9 +413,9 @@ class GitHubTicketStore:
                 stale = [x for x in have if x.startswith("risk:") and x not in risk] if risk else []
                 for x in stale:  # an opposing risk label would pick the wrong review path
                     self.run(["api", "-X", "DELETE", f"{path}/labels/{x}"])
-                missing = [r for r in [*risk, *child_attrs(c)] if r not in have]
+                missing = [r for r in [*risk, *self.child_labels(c)] if r not in have]
                 if missing:
-                    self.run(["api", "-X", "POST", f"{path}/labels", *[x for r in [*risk, *child_attrs(c)] for x in ("-f", f"labels[]={r}")]])
+                    self.run(["api", "-X", "POST", f"{path}/labels", *[x for r in [*risk, *self.child_labels(c)] for x in ("-f", f"labels[]={r}")]])
                 wrote = wrote or bool(stale or missing)
                 chained = {b["id"] for b in self.read_list(f"issues/{new['number']}/dependencies/blocked_by", repo=repo)} if prereqs else set()
             for prev, prev_number, prev_repo in prereqs:
@@ -537,6 +543,7 @@ class GitHubGateTracker(DescriptorPort):
     def _with_one(self, c):
         """ADR-0027: a ticket changes the one repository it lives in, so its body's `repositories:` line is ignored."""
         self.one_repository = bool(c.get("one_repository_per_ticket"))
+        self.tickets.one_repository = self.one_repository  # its created children carry no `repo:` label
         return self
 
     def _with_writable(self, c):

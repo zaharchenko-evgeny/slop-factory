@@ -2043,6 +2043,15 @@ class OneRepositoryPerTicketTest(unittest.TestCase):
         t._with_one({"one_repository_per_ticket": True})
         self.assertEqual(t.ticket_repositories(7, body), ["primary"])
 
+    def test_child_in_its_own_repository_has_no_repo_label(self):
+        """#1155: GitHub refused `repo:<owner/repo>` on a child in slop-eval-factory (HTTP 403, the label did not
+        exist there); under ADR-0027 the child's repository is where it lives, so the label goes."""
+        t = tr(FakeGh())
+        child = {"title": "x", "repo": "o/app", "subsystem": "s1"}
+        self.assertEqual(t.tickets.child_labels(child), ["repo:o/app", "subsystem:s1"])
+        t._with_one({"one_repository_per_ticket": True})
+        self.assertEqual(t.tickets.child_labels(child), ["subsystem:s1"])
+
     def test_create_issues_into_named_repository(self):
         t = tr(FakeGh())
         t.tickets.others = {"app": "o/App"}
