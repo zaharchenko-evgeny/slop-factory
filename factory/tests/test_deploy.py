@@ -825,21 +825,20 @@ class ProjectPlanTest(unittest.TestCase):
                                                 "FACTORY_ENV_REPOSITORY": "zaharchenko-evgeny/slop-eval-factory"})
 
     def test_mentionable_agents_get_a_reply_node(self):
-        """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node;
-        the others do not, and no mention router deploys (#893). With it off (ADR-0025) none deploy. The fixture has
-        it on (#1083)."""
+        """With the comments module on, `mentionable: true` agents (ADR-0021) deploy a reply node; the others do
+        not, and no mention router deploys (#893). With it off (ADR-0025) none deploy. The Slop fixture has it off."""
         def comments_on(f):
             f["plugins"] = ["comments"]
+            f["agents"]["dev"]["mentionable"] = True  # the Slop reviewer role has no reply mode any more
 
         def comments_off(f):
             f.pop("plugins", None)
             f.pop("modules", None)
         plan = definition_plan(edit_factory=comments_on)
-        self.assertEqual({a["spec"]["node"] for a in plan["automations"]},
-                         {a["spec"]["node"] for a in definition_plan()["automations"]})
+        self.assertFalse({a["spec"]["node"] for a in definition_plan()["automations"]} & {"reply-dev", "reply-reviewer"})
         nodes_ = {a["spec"]["node"] for a in plan["automations"]}
-        self.assertTrue({"reply-dev", "reply-reviewer"} <= nodes_)
-        self.assertFalse({"mentions", "reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
+        self.assertIn("reply-dev", nodes_)
+        self.assertFalse({"mentions", "reply-reviewer", "reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
         self.assertIn("factory:comment", plan_labels(plan))
 
         def none_mentionable(f):

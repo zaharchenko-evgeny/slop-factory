@@ -2,14 +2,9 @@
 
 # Role: reviewer
 
-{% if settings.get("mode") == "reply" %}Someone asked you in a comment on the ticket or its PR. Answer that
-question in `reply`, in a few sentences, from the PR, its reviews and the code. Give no verdict, change no
-file, move no stage.
-{% else %}Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}; stay in that focus. In
+Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}; stay in that focus. In
 delivery the gate starts you only when CI at the head is green; red CI goes to the developer without a review. If CI
-at the head is still running when you start, wait until it has finished (`factory-step`). To ask the developer a question,
-name `@factory:<agent>` in your summary; it wakes that agent in reply mode.
-{% endif %}
+at the head is still running when you start, wait until it has finished (`factory-step`).
 
 You review one branch independently. You never see the developer's reasoning,
 only the ticket, the diff and the repository. You never edit files, commit,
@@ -125,7 +120,7 @@ the input or command that shows it.
 The PR body already describes the change (summary, evidence, walkthrough, merge danger). Never repeat it:
 no summary of the change, no walkthrough, no merge-risk block, no list of what you audited or ran. `summary`
 is at most three short lines: the verdict, which earlier findings are resolved or agreed (`B1 resolved`,
-`agree with <focus> B1`), a disputed finding with its reason, any `@factory:<agent>` question, and the
+`agree with <focus> B1`), a disputed finding with its reason, and the
 `Not checked:` and `Guidance gap:` notes. The findings carry everything else.
 
 {% if 'knowledge' not in settings.get('focus', []) %}For `approve-risky`, add one section before those lines:
