@@ -72,7 +72,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     repo_tags = tuple(t for hook in plugins.registry(config).hook("deploy.repo_tags") for t in hook(config))
     used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
     unscoped = set()  # environments some automation shares across the project
-    scoped = []  # (env, node) of the per-node automations
+    scoped = []  # (env, node, repository) of the per-node automations and of the copies in another repository
     defn = core.team_definition()
     filter_hooks = plugins.registry(config).hook("deploy.trigger_filters")  # a copy's ticket triggers, narrowed to its repository
     # #1069: environments with their own trackers are the factory's projects; a node of the default environment runs
@@ -118,9 +118,14 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
             # A node with custom MCP servers runs in an environment of its own: setup writes `.mcp.json` per environment
             env_node = name if defn and focus != "knowledge" and definition.mcp_custom(definition.mcp(defn, name)) else None
-            if env_node:
-                if (env, env_node) not in scoped:
-                    scoped.append((env, env_node))
+            env_repo = repos.get(envs_def[env]["repository"]) or primary
+            # #1112: a copy in another repository runs in that repository's variant of its environment
+            variant = copy_["repo"] if copy_ and focus != "knowledge" and \
+                definition.full_name(copy_["repo"]["url"]) != definition.full_name(env_repo["url"]) else None
+            env_suffix = (f" {env_node}" if env_node else "") + (f" {variant['name']}" if variant else "")
+            if env_node or variant:
+                if (env, env_node, variant) not in scoped:
+                    scoped.append((env, env_node, variant))
             else:
                 unscoped.add(env)
             automation = {
@@ -130,7 +135,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
-                "environmentConfigId": f"{prefix}{env}" + (f" {env_node}" if env_node else ""),
+                "environmentConfigId": f"{prefix}{env}{env_suffix}",
                 "mcpConnectors": core.mcp_connectors(n, config, focus),
                 "prompt": core.script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else core.agent_prompt(
                     name, n, config, aname, focus, automation_repository, tier_arg or tier),
@@ -149,11 +154,11 @@ def plan_air(nodes: dict, config: dict) -> dict:
     envs = []
     registry = plugins.registry(config)
     issues_token = config.get("issues_token_env")  # the gate's issue, label and comment writes to project repositories
-    for env, node_name in [(e, None) for e in used if e in unscoped] + scoped:
+    for env, node_name, variant in [(e, None, None) for e in used if e in unscoped] + scoped:
         d = envs_def[env]
-        repo = repos.get(d["repository"]) or primary
+        repo = variant or repos.get(d["repository"]) or primary
         envs.append({
-            "name": f"{prefix}{env}" + (f" {node_name}" if node_name else ""),
+            "name": f"{prefix}{env}" + (f" {node_name}" if node_name else "") + (f" {variant['name']}" if variant else ""),
             "repository": repo["url"],
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env, **({"FACTORY_NODE": node_name} if node_name else {})},
