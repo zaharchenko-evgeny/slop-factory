@@ -43,3 +43,12 @@ class AirSurface:
 
     def outputs(self):
         return set(OUTPUTS)
+
+    def environment_errors(self, defn):
+        """ADR-0027: Air pushes only to an automation's main repository, so an environment has at most one writable
+        repository."""
+        import definition
+        return [f"several-writable: environments.{e}: {', '.join(writable)}: the air surface allows one writable "
+                f"repository per environment"
+                for e in (defn["factory"].get("environments") or {})
+                if len(writable := [r["repo"] for r in definition.repositories(defn, e) if r["write"]]) > 1]

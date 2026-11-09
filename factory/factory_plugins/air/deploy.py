@@ -56,6 +56,30 @@ def node_copies(defn: dict, name: str, n: dict, config: dict) -> list[dict]:
     return copies
 
 
+def definition_copies(defn: dict, name: str, n: dict, config: dict) -> list[dict]:
+    """ADR-0027: the automation copies of node `name` from `definition.copies`, in `node_copies`' shape plus the
+    copy's `env` and its tracker's trigger `filters`. A copy is named after its main repository when the node has
+    several, and after its environment too when two of them share that repository."""
+    by_name = {definition.full_name(r["url"]).lower(): r for r in config["repositories"]}
+
+    def repo_of(full: str) -> dict:
+        return by_name.get(full.lower()) or {"name": full.split("/")[-1], "url": f"https://github.com/{full}",
+                                             "default_branch": "main"}
+    found = definition.copies(defn, name)
+    out = []
+    for c in found:
+        shared = sum(1 for x in found if x["main"] == c["main"]) > 1
+        suffix = (f" {c['main'].split('/')[-1]}" if len(found) > 1 else "") + (f" {c['env']}" if shared else "")
+        contract = definition.contract(defn, "tracker", c["tracker"]) if c["tracker"] else None
+        out.append({"env": c["env"], "repo": repo_of(c["main"]), "suffix": suffix,
+                    "additional": [{"repository": core.repository(repo_of(o)), "branch": repo_of(o)["default_branch"]}
+                                   for o in c["additional"]],
+                    "output": n.get("output", "read-only") if c["write"] else "read-only",
+                    "filters": contract.filters(c["tracker"]) if contract and hasattr(contract, "filters") else {},
+                    "event": contract.event if contract and hasattr(contract, "event") else None})
+    return out
+
+
 def plan_air(nodes: dict, config: dict) -> dict:
     air, roles, agents = config["targets"]["air"]["models"], config["roles"], core.agents_of(nodes, config)
     for aid in sorted({a["id"] for a in agents.values() if a.get("effort")}):
@@ -77,13 +101,17 @@ def plan_air(nodes: dict, config: dict) -> dict:
     filter_hooks = plugins.registry(config).hook("deploy.trigger_filters")  # a copy's ticket triggers, narrowed to its repository
     # #1069: environments with their own trackers are the factory's projects; a node of the default environment runs
     # once per project, in its environment (FACTORY_ENV), and the gate takes only that environment's tickets
-    trackers = scopes_mod.project_envs(config)
+    adopted = bool(defn) and definition.adopted(defn)  # ADR-0027: copies come from the definition, no #1069 fan-out
+    trackers = {} if adopted else scopes_mod.project_envs(config)
     default_env = core.default_environment(nodes, defn) if trackers else None
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
         fan = list(trackers) if trackers and n["env"] == default_env else [None]
-        own = node_copies(defn, name, n, config) if defn and fan == [None] else [None]  # #1069: per project instead
+        if adopted:
+            own = definition_copies(defn, name, n, config) or [None]
+        else:
+            own = node_copies(defn, name, n, config) if defn and fan == [None] else [None]  # #1069: per project instead
         for project, copy_, (aname, tier_arg, tier, focus) in [
                 (p, c, v) for p in fan for c in own for v in core.variants(name, n, roles, agents.get(name))]:
             if project and focus == "knowledge" and project != fan[0]:
@@ -91,9 +119,12 @@ def plan_air(nodes: dict, config: dict) -> dict:
             project = None if focus == "knowledge" else project
             if project and project not in used:
                 used.append(project)
-            env = project or n["env"]
-            # one of several copies (ADR-0024): its ticket triggers narrow to its repository (youtrack: its project)
-            scope = copy_["repo"] if copy_ and copy_["suffix"] else None
+            env = (copy_ or {}).get("env") or project or n["env"]
+            if env not in used:
+                used.append(env)
+            # one of several copies (ADR-0024): its ticket triggers narrow to its repository (youtrack: its project);
+            # ADR-0027: the copy's tracker contract gives its `filters` instead
+            scope = copy_["repo"] if copy_ and copy_["suffix"] and not adopted else None
             agent, _, model = air[tier].partition("/")
             trig = []
             webhook = any(str(t).startswith("webhook ") for t in n["triggers"])
@@ -106,11 +137,14 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 elif str(t).startswith("webhook "):
                     trig.append({"triggerType": "WEBHOOK"})
                 elif str(t) != "manual":
+                    t = (copy_ or {}).get("event")(t) if (copy_ or {}).get("event") else t  # ADR-0027: the copy's tracker
                     trig.append(core.trigger(t, tier_arg, bot if aname.startswith(core.BOT_FILTERED) else None, focus,
                                              scope["name"] if scope else None, repo_tags))
                     if project:
                         trig[-1] = core.scope_filter(trig[-1], trackers[project])
-                    if more := narrow.get(trig[-1].get("source")):
+                    more = {**narrow.get(trig[-1].get("source"), {}),
+                            **(((copy_ or {}).get("filters") or {}).get(trig[-1].get("source")) or {})}
+                    if more:
                         trig[-1] = {**trig[-1], "filters": {**trig[-1].get("filters", {}), **more}}
             automation_repository = core.repository(team if focus == "knowledge" else (copy_ or {}).get("repo")
                                                     or repos.get(envs_def[env]["repository"]) or primary)
@@ -177,6 +211,9 @@ def plan_air(nodes: dict, config: dict) -> dict:
     project_repos = [r for r in dict.fromkeys(b.get("repository") for b in trackers.values()  # a project's GitHub issues
                                               if scopes_mod.adapter(b) == "github-issues") if r]
     label_repos += [r for r in project_repos if r not in label_repos]
+    if adopted:  # ADR-0027: where copies hear events; a repository with no tickets and no writes gets none
+        cased = {core.repository(r)["fullName"].lower(): core.repository(r)["fullName"] for r in config["repositories"]}
+        label_repos = [cased.get(h, h) for h in definition.event_repositories(defn)]
     # the tracker's own setup (youtrack: tags and field values); none keeps a GitHub plan (and its fixture) unchanged
     tag_plan = {k: v for hook in registry.hook("deploy.plan") for k, v in hook(nodes, config).items()}
     schema = core.tracker_schema(nodes, config)

@@ -2009,5 +2009,95 @@ class MissingMcpEnvTest(unittest.TestCase):
         self.assertIn("FACTORY_MCP_AIR_AUTOMATIONS", err.getvalue())
 
 
+
+SLOP, TEAM = "zaharchenko-evgeny/slop-factory", "zaharchenko-evgeny/slop-eval-factory"
+
+
+def adr27(envs, node_envs=None):
+    """(edit_factory, edit_workflow) that put fixtures/slop in the ADR-0027 form: `envs` {name: [(repo, keys)]};
+    every node runs in `node_envs.get(node, ["engine", "team"])`."""
+    def factory(f):
+        base = {k: v for k, v in f["environments"]["engine"].items() if k != "repositories"}
+        f["environments"] = {n: {**base, "repositories": [{"repo": r, **k} for r, k in rs]} for n, rs in envs.items()}
+        f["tracker"].pop("repositories", None)
+        for spec in f["agents"].values():
+            spec.pop("access", None)
+
+    def workflow(w):
+        (w.get("settings") or {}).pop("environment", None)
+        for name, spec in w["nodes"].items():
+            for k in ("writes", "listens", "environment"):
+                spec.pop(k, None)
+            spec["environments"] = (node_envs or {}).get(name, [e for e in ("engine", "team") if e in envs])
+    return factory, workflow
+
+
+SLOP_ENVS = {"engine": [(SLOP, {"write": True}), (TEAM, {})], "team": [(TEAM, {"write": True}), (SLOP, {"tracker": "none"})],
+             "intake": [(SLOP, {}), (TEAM, {})]}
+
+
+class RepositoryCopiesTest(unittest.TestCase):
+    """ADR-0027 (#1134): Air automations from `definition.copies`."""
+
+    def plan(self, envs=SLOP_ENVS, node_envs=None):
+        f, w = adr27(envs, {"intake": ["intake"], **(node_envs or {})})
+        return definition_plan(edit_factory=f, edit_workflow=w)
+
+    @staticmethod
+    def of(plan, node):
+        return sorted((a for a in plan["automations"] if a["spec"]["node"] == node), key=lambda a: a["name"])
+
+    def test_copy_main_is_the_listened_github_repository(self):
+        plan = self.plan()
+        dev = self.of(plan, "implement-small")
+        self.assertEqual([(a["name"], a["repository"]["fullName"], a["environmentConfigId"]) for a in dev],
+                         [("[Slop factory] implement-small slop-eval-factory", TEAM, "[Slop factory] team"),
+                          ("[Slop factory] implement-small slop-factory", SLOP, "[Slop factory] engine")])
+        self.assertTrue(all(v["outputBehaviour"] != "read-only" for a in dev for v in a["triggerVcs"]))
+        self.assertEqual([[r["repository"]["fullName"] for r in a["additionalRepositories"]] for a in dev], [[SLOP], [TEAM]])
+        self.assertTrue(all(v["outputBehaviour"] == "read-only" for a in self.of(plan, "review-low") for v in a["triggerVcs"]))
+        self.assertFalse([t for a in dev for t in a["triggers"] if "repo_label" in t.get("filters", {})])  # no suffix routing
+
+    def test_read_only_environment_copies_every_ticket_place(self):
+        intake = self.of(self.plan(), "intake")
+        self.assertEqual([(a["name"], a["repository"]["fullName"], a["environmentConfigId"]) for a in intake],
+                         [("[Slop factory] intake slop-eval-factory", TEAM, "[Slop factory] intake slop-eval-factory"),
+                          ("[Slop factory] intake slop-factory", SLOP, "[Slop factory] intake")])
+        self.assertTrue(all(v["outputBehaviour"] == "read-only" for a in intake for v in a["triggerVcs"]))
+
+    def test_youtrack_copy_filters_by_its_scope(self):
+        yt = {"adapter": "youtrack", "url": "https://yt.example", "project": "LME", "scope": {"field": "Subsystem", "value": "S3"}}
+        plan = self.plan(envs={"engine": [(SLOP, {"write": True})], "b": [(TEAM, {"write": True, "tracker": yt})],
+                               "intake": [(SLOP, {})]}, node_envs={"implement-small": ["b"]})
+        (dev,) = self.of(plan, "implement-small")
+        self.assertEqual(dev["repository"]["fullName"], TEAM)
+        ticket = [t for t in dev["triggers"] if t.get("source") == "youtrack"]
+        self.assertTrue(ticket, dev["triggers"])
+        self.assertEqual({k: ticket[0]["filters"][k] for k in ("projectShortName", "Subsystem")},
+                         {"projectShortName": "LME", "Subsystem": "S3"})
+
+    def test_labels_only_where_copies_hear_events(self):
+        plan = self.plan(envs={**SLOP_ENVS, "intake": [(SLOP, {}), (TEAM, {}), ("o/context", {"tracker": "none"})]})
+        self.assertEqual(sorted(r for r, labels in plan["label_plan"].items() if labels), sorted([SLOP, TEAM]))
+        self.assertFalse(plan["label_plan"].get("o/context"))
+
+    def test_air_refuses_two_writable_repositories(self):
+        f, w = adr27({"engine": [(SLOP, {"write": True}), (TEAM, {"write": True})], "intake": [(SLOP, {})]},
+                     {"intake": ["intake"]})
+        before = cfg.team_root()
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(HERE / "fixtures/slop", tmp, dirs_exist_ok=True)
+            for name, edit in ((definition.FACTORY, f), (definition.WORKFLOW, w)):
+                data = yaml.safe_load((Path(tmp) / name).read_text())
+                edit(data)
+                (Path(tmp) / name).write_text(yaml.safe_dump(data, sort_keys=False))
+            cfg.set_team(tmp)
+            try:
+                errs = deploy.output_errors(nodes.load(), cfg.load())
+            finally:
+                cfg.set_team(before)
+        self.assertIn(f"several-writable: environments.engine: {SLOP}, {TEAM}: the air surface allows one writable "
+                      "repository per environment", errs)
+
 if __name__ == "__main__":
     unittest.main()
