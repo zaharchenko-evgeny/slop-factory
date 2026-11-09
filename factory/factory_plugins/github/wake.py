@@ -32,7 +32,7 @@ def engine_repository(config: dict) -> str | None:
     source = str(config.get("engine") or "")
     if not source:
         try:
-            source = subprocess.run(["git", "-C", str(ROOT), "remote", "get-url", "origin"], capture_output=True,
+            source = subprocess.run(["git", "-C", str(Path(__file__).resolve().parents[3]), "remote", "get-url", "origin"], capture_output=True,
                                     text=True, timeout=10).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             source = ""
