@@ -588,6 +588,24 @@ class CommentWakeDeployTest(unittest.TestCase):
         })
         return settings, gh, files, writes
 
+    def test_engine_repository_keeps_its_own_wake_files(self):
+        """The engine's repository ships the wake files from its own tree: deploy never deletes them there, even when
+        it is also a project repository (slop-factory, 9 Nov), nor installs them."""
+        for source in ("git+https://github.com/o/main@main", "https://github.com/o/main.git", "git@github.com:o/main.git"):
+            with self.subTest(source=source):
+                self.assertEqual(github_wake.engine_repository({"engine": source}), "o/main")
+        calls = []
+
+        def gh(args):
+            calls.append(args)
+            raise RuntimeError("HTTP 404: Not Found")
+        settings = {"plugins": ["comments"], "engine": "git+https://github.com/o/main@main", "repositories": [
+            {"name": "main", "url": "https://github.com/o/main", "role": "primary"}]}
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(deploy.sync_wake_files(settings, gh, True), 0)
+            self.assertEqual(deploy.sync_wake_files({**settings, "plugins": []}, gh, True), 0)
+        self.assertEqual(calls, [])
+
     def test_turning_comments_off_removes_the_installed_files(self):
         """#1057: a deploy with the comments plugin off deletes the comment wake files an earlier deploy installed."""
         settings, gh, files, writes = self.install()
