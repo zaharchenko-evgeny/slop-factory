@@ -278,7 +278,8 @@ class ProjectWriteToken(unittest.TestCase):
         run(link)
         run.for_repository("o/team")(link)
         run.for_repository("o/engine")(link)  # a child of the own repository: Air's token
-        self.assertEqual(calls, [None, "pat", None])
+        github_tracker.CountedRun(run).for_repository("o/team")(link)  # the gate's counter keeps it (#1155)
+        self.assertEqual(calls, [None, "pat", None, "pat"])
 
     def test_without_the_token_every_call_runs_as_before(self):
         calls = []
