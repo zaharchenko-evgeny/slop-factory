@@ -201,6 +201,17 @@ class DefinitionTest(unittest.TestCase):
                          (["engine", "team"], ["team"]))
         self.assertEqual(definition.default_environment(defn), "engine")
 
+    def test_per_repository_tracker_keys_are_refused(self):
+        """ADR-0027: the repository's tracker block says where its tickets are; `repository_field`, `projects` and
+        `repositories` would repeat it per repository."""
+        for where, put in (("tracker.repository_field", lambda f: f["tracker"].update(repository_field="Repository")),
+                           ("tracker.projects", lambda f: f["tracker"].update(projects={"LME": MAIN})),
+                           ("tracker.repositories", lambda f: f["tracker"].update(repositories=[MAIN]))):
+            with self.subTest(where=where):
+                self.setUp()
+                self.edit("factory.yaml", lambda f: (self._envs(f, engine=[(MAIN, {"write": True})]), put(f)))
+                self.assertError(f"removed-key: {where}")
+
     def test_removed_repository_keys_are_reported(self):
         """ADR-0027: an environment repository's `main` and `token_env` are gone (`write` is back: its writable repository)."""
         for key in ("main", "token_env"):

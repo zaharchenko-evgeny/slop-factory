@@ -2050,7 +2050,7 @@ class OneRepositoryPerTicketTest(unittest.TestCase):
         child = {"title": "x", "repo": "o/app", "subsystem": "s1"}
         self.assertEqual(t.tickets.child_labels(child), ["repo:o/app", "subsystem:s1"])
         t._with_one({"one_repository_per_ticket": True})
-        self.assertEqual(t.tickets.child_labels(child), ["subsystem:s1"])
+        self.assertEqual(t.tickets.child_labels(child), [])  # its place says the repository: no label repeats it
 
     def test_create_issues_into_named_repository(self):
         t = tr(FakeGh())

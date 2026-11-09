@@ -194,10 +194,10 @@ class GitHubTicketStore:
         return self.ref(url.split("/repos/", 1)[1] if "/repos/" in url else self.repo, item["number"])
 
     def child_labels(self, child):
-        """The labels a created child carries besides its risk: `child_attrs`, without the ADR-0024 `repo:` routing
-        label when the child lives in its own repository (ADR-0027: no copy routes on it, and the label may not exist
-        there)."""
-        return [x for x in child_attrs(child) if not (getattr(self, "one_repository", False) and x.startswith("repo:"))]
+        """The labels a created child carries besides its risk: `child_attrs` (ADR-0024 `repo:` and `subsystem:`), or
+        none under ADR-0027, where the child's place says its repository: the repository whose issues it is, or its
+        tracker's scope field (the environment defines it once; a label per repository would repeat it)."""
+        return [] if getattr(self, "one_repository", False) else child_attrs(child)
 
     def repo_of(self, child):
         """The repository a child is created in: the one its `repo` names (a name or `owner/repo`) among the other
