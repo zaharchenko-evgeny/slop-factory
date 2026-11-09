@@ -67,6 +67,7 @@ nodes:
   # --- Implement: the developer sets the risk it found and picks the review ---------------------
   implement-small:
     agent: dev-cheap
+    writes: [zaharchenko-evgeny/slop-factory]
     triggers: [{ label: "factory:implement-small" }]
     when: { stage: in-dev }
     output: create-pr
@@ -79,6 +80,7 @@ nodes:
 
   implement-medium:
     agent: dev
+    writes: [zaharchenko-evgeny/slop-factory]
     triggers: [{ label: "factory:implement-medium" }]
     when: { stage: in-dev }
     output: create-pr
@@ -91,6 +93,7 @@ nodes:
 
   implement-large:
     agent: dev-strong
+    writes: [zaharchenko-evgeny/slop-factory]
     triggers: [{ label: "factory:implement-large" }]
     when: { stage: in-dev }
     output: create-pr
@@ -124,6 +127,7 @@ nodes:
   # --- Fix: review findings, red CI included -> a new head, reviewed again ---------------------
   fix:
     agent: dev
+    writes: [zaharchenko-evgeny/slop-factory]
     triggers: [{ label: "factory:fix" }]
     when: { stage: [in-review, changes-requested, approved], fix-rounds: below-cap }
     output: push-to-source
@@ -135,6 +139,7 @@ nodes:
 
   update:                         # a merge conflict
     agent: dev-cheap
+    writes: [zaharchenko-evgeny/slop-factory]
     triggers: [{ label: "factory:update" }]
     when: { stage: changes-requested }
     output: push-to-source
@@ -189,6 +194,7 @@ nodes:
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
   retro:
     agent: retro
+    writes: [zaharchenko-evgeny/slop-eval-factory]
     environment: knowledge
     triggers: [{ schedule: "0 2 * * *" }]
     output: push-to-new-branch    # the platform opens one PR to the knowledge base
@@ -216,6 +222,7 @@ nodes:
   # --- Routines -------------------------------------------------------------------------------
   reconcile:                      # re-fires missed wakes; polls CI for merge (Air has no CI-success trigger)
     agent: ops
+    writes: [zaharchenko-evgeny/slop-eval-factory]
     environment: team
     triggers: [{ schedule: "*/15 * * * *" }]
     settings: { routine: reconcile }
@@ -224,6 +231,7 @@ nodes:
 
   doctor-engine:
     agent: ops
+    writes: [zaharchenko-evgeny/slop-factory]   # its main checkout; no output, so Air pushes nothing
     settings: { routine: doctor }
     triggers: [{ schedule: "0 5 * * *" }]
     outcomes:
@@ -231,6 +239,7 @@ nodes:
 
   doctor-team:
     agent: ops
+    writes: [zaharchenko-evgeny/slop-eval-factory]
     settings: { routine: doctor }
     environment: team
     triggers: [{ schedule: "0 5 * * *" }]

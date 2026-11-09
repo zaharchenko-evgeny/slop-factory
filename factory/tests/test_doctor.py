@@ -101,16 +101,9 @@ class YouTrackDoctorTest(unittest.TestCase):
 
 
 class ProjectWriteProbeTest(unittest.TestCase):
-    SETTINGS = {"write_mode": "token", "repositories": [
+    SETTINGS = {"repositories": [
         {"name": "main", "url": "https://github.com/o/r", "role": "primary"},
         {"name": "app", "url": "https://github.com/o/app", "role": "project"}]}
-
-    def test_missing_write_token_in_token_mode_fails_and_writes_nothing(self):
-        gh = FakeGh()
-        got = github_probes.project_write_probes(self.SETTINGS, "ops", gh, {})
-        self.assertEqual(got, [{"probe": "write:label:o/app", "result": "fail",
-                                "detail": "FACTORY_WRITE_TOKEN is not set (write_mode: token)"}])
-        self.assertEqual(gh.calls, [])
 
     def test_probe_label_is_created_and_deleted_with_the_write_token(self):
         gh = FakeGh()
@@ -121,7 +114,7 @@ class ProjectWriteProbeTest(unittest.TestCase):
         self.assertEqual(gh.tokens, ["pat", "pat"])
 
     def test_issues_token_probe_uses_the_issues_token_and_names_a_missing_secret(self):
-        settings = {**self.SETTINGS, "write_mode": "per-repo", "issues_token_env": "FACTORY_ISSUES_TOKEN",
+        settings = {**self.SETTINGS, "issues_token_env": "FACTORY_ISSUES_TOKEN",
                     "environments": {"read": {"secrets": []}}}  # deploy adds the issues token itself
         gh = FakeGh()
         got = github_probes.project_write_probes(settings, "read", gh, {"FACTORY_ISSUES_TOKEN": "iss"})
@@ -139,8 +132,8 @@ class ProjectWriteProbeTest(unittest.TestCase):
         self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])
         self.assertEqual(github_probes.project_write_probes(settings, "team", FakeGh(), {}), [])
 
-    def test_denied_write_without_token_mode_is_reported_and_read_env_is_not_probed(self):
-        settings = {**self.SETTINGS, "write_mode": "per-repo"}
+    def test_denied_write_without_a_token_is_reported_and_read_env_is_not_probed(self):
+        settings = self.SETTINGS
         gh = FakeGh(deny=("label create",))
         got = github_probes.project_write_probes(settings, "ops", gh, {})
         self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "denied")])

@@ -21,7 +21,7 @@ the user approves a plan. The layout is the engine's ADR-0021:
 
 - `factory.yaml` lists what the factory has: tracker, models (aliases), skills
   (local or pinned by source and sha256), roles (skills, mcp), agents (role +
-  model + access + settings), environments (repositories with one `main`,
+  model + access + settings), environments (the repositories checked out together,
   domains, env, setup script) and webhooks.
 - `workflow.yaml` says how it works: stages, shared settings (limits) and the
   nodes in delivery order. A node is an agent + an environment + triggers +
@@ -62,8 +62,7 @@ Ask, one round at a time, with a recommended answer for each question:
 11. Which MCP servers per role (`roles.<role>.mcp`). Recommended: none, then only
     the server a role needs (for example the tracker for the router).
 12. Environment variables and secrets per environment: names, and for a
-    secret never its value. A writable repository that is not `main` needs a
-    token secret named in its `token_env`.
+    secret never its value. A node names the repositories it writes with `writes`.
 
 Look up facts yourself (repo remotes, default branches, existing automations,
 branch protection). Ask only for decisions.

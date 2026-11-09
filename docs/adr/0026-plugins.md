@@ -233,7 +233,7 @@ loads the implementation the registry names. Its hooks:
   labels of a `ports.system.TrackerSchema`. The core still computes the
   labels, so the plan keys stay unchanged; a plugin adds labels with
   `deploy.schema`. `factory:comment` stays a core label (ADR-0025).
-- `deploy.secrets` adds `FACTORY_WRITE_TOKEN` under `write_mode: token`, and
+- `deploy.secrets` adds the secrets a plugin needs, and
   `deploy.run` gives the deploy its project-write `gh` runner.
 - `deploy.plan_files` renders the Actions workflows of `runner: actions`
   nodes. `deploy.files` syncs the wake files of `wake_rules(features)`: the

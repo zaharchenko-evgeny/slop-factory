@@ -39,7 +39,7 @@ class MissingRepository(RuntimeError):
     """The ticket has no repository field value, or one that is not a repository of the definition."""
 
 
-REPO_STAGES = ("ready", "changes-requested")  # the stages that wake a PER_REPO node
+REPO_STAGES = ("ready", "changes-requested")  # the stages whose tag carries a repository suffix
 
 
 def repo_stage_tags(config):

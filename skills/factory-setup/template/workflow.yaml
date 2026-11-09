@@ -5,6 +5,8 @@
 # Deterministic rules live only in `when`, an outcome's `if` (when it fails the gate applies `else`, or
 # refuses) and the effects' own checks (a merge needs an approved head with green CI).
 # Agents, environments and webhooks are defined in factory.yaml; nodes name them.
+# ADR-0024: `listens` names the ticket repositories whose events wake a node (default: every one); `writes` the
+# repositories Air pushes to. A node with `writes` runs once per written repository.
 # Merge order: factory.yaml defaults -> environment -> role -> agent -> settings below -> node.
 
 # Stage names come from the nodes (`when`, triggers, effects). Labels are <label_prefix><stage>.
@@ -68,6 +70,7 @@ nodes:
   # --- Implement: the developer sets the risk it found and picks the review ---------------------
   implement-small:
     agent: dev-cheap
+    writes: ["{{MAIN_REPOSITORY}}"]
     triggers: [{ label: "factory:implement-small" }]
     when: { stage: in-dev }
     output: create-pr
@@ -80,6 +83,7 @@ nodes:
 
   implement-medium:
     agent: dev
+    writes: ["{{MAIN_REPOSITORY}}"]
     triggers: [{ label: "factory:implement-medium" }]
     when: { stage: in-dev }
     output: create-pr
@@ -92,6 +96,7 @@ nodes:
 
   implement-large:
     agent: dev-strong
+    writes: ["{{MAIN_REPOSITORY}}"]
     triggers: [{ label: "factory:implement-large" }]
     when: { stage: in-dev }
     output: create-pr
@@ -140,6 +145,7 @@ nodes:
   # --- Fix: review findings, red CI included -> a new head, reviewed again ---------------------
   fix:
     agent: dev
+    writes: ["{{MAIN_REPOSITORY}}"]
     triggers: [{ label: "factory:fix" }]
     when: { stage: [in-review, changes-requested, approved], fix-rounds: below-cap }
     output: push-to-source
@@ -151,6 +157,7 @@ nodes:
 
   update:                         # a merge conflict
     agent: dev-cheap
+    writes: ["{{MAIN_REPOSITORY}}"]
     triggers: [{ label: "factory:update" }]
     when: { stage: changes-requested }
     output: push-to-source
@@ -205,6 +212,7 @@ nodes:
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
   retro:
     agent: retro
+    writes: ["{{TEAM_REPOSITORY}}"]
     environment: knowledge
     triggers: [{ schedule: "0 2 * * *" }]
     output: push-to-new-branch    # the platform opens one PR to the knowledge base
@@ -232,6 +240,7 @@ nodes:
   # --- Routines -------------------------------------------------------------------------------
   reconcile:                      # re-fires missed wakes; polls CI for merge (Air has no CI-success trigger)
     agent: ops
+    writes: ["{{TEAM_REPOSITORY}}"]   # its main checkout; no output, so Air pushes nothing
     environment: team
     triggers: [{ schedule: "*/15 * * * *" }]
     settings: { routine: reconcile }
@@ -240,6 +249,7 @@ nodes:
 
   doctor-main:
     agent: ops
+    writes: ["{{MAIN_REPOSITORY}}"]   # its main checkout; no output, so Air pushes nothing
     settings: { routine: doctor }
     triggers: [{ schedule: "0 5 * * *" }]
     outcomes:
@@ -247,6 +257,7 @@ nodes:
 
   doctor-team:
     agent: ops
+    writes: ["{{TEAM_REPOSITORY}}"]   # its main checkout; no output, so Air pushes nothing
     settings: { routine: doctor }
     environment: team
     triggers: [{ schedule: "0 5 * * *" }]

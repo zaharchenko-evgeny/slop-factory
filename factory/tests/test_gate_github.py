@@ -765,8 +765,8 @@ class EffectsTest(unittest.TestCase):
             if args[:2] == ["issue", "create"]:
                 return "https://github.com/o/r/issues/99"
             return "{}"
-        before = {"automations": [], "environments": [], "labels": [], "files": {}}
-        after = {"automations": [], "environments": [], "labels": ["factory:mapped", "team:unmapped"], "files": {},
+        before = {"automations": [], "environments": [], "label_plan": {}, "files": {}}
+        after = {"automations": [], "environments": [], "label_plan": {"o/r": ["factory:mapped", "team:unmapped"]}, "files": {},
                  "label_specs": {"factory:mapped": {"color": "0e8a16"}}}
         with patch("factory_plugins.github.gate.deploy_plan_at", side_effect=[before, after]):
             GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
@@ -791,8 +791,8 @@ class EffectsTest(unittest.TestCase):
             if args[:2] == ["issue", "create"]:
                 return "https://github.com/o/r/issues/99"
             return "{}"
-        before = {"automations": [], "environments": [], "labels": [], "files": {}}
-        after = {"automations": [{"name": "new"}], "environments": [], "labels": ["factory:new"], "files": {}}
+        before = {"automations": [], "environments": [], "labels": [], "label_repositories": [], "files": {}}  # a plan of the old shape
+        after = {"automations": [{"name": "new"}], "environments": [], "label_plan": {"o/r": ["factory:new"]}, "files": {}}
         with patch("factory_plugins.github.gate.deploy_plan_at", side_effect=[before, after]):
             GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
         self.assertTrue(any("repos/o/r/labels" in c and "name=factory:new" in c and "color=ededed" not in c for c in calls))

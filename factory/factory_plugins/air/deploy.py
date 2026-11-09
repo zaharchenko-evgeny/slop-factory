@@ -72,41 +72,30 @@ def plan_air(nodes: dict, config: dict) -> dict:
     repo_tags = tuple(t for hook in plugins.registry(config).hook("deploy.repo_tags") for t in hook(config))
     used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
     unscoped = set()  # environments some automation shares across the project
-    scoped = []  # (env, repository name, node) of the per-repository or per-node automations
+    scoped = []  # (env, node) of the per-node automations
     defn = core.team_definition()
-    # ADR-0021: a definition's environments list their repositories, so only a code repository that is `main` in an
-    # environment gets per-repository automations, in that environment
-    code_envs = definition.per_repo_envs(defn) if defn else {}
-    per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(core.code_scopes(config, defn)) > 1
-    node_scopes = core.node_scopes(nodes, config, defn)
-    filter_hooks = plugins.registry(config).hook("deploy.trigger_filters")  # a copy's ticket triggers, narrowed to its repository
     # #1069: environments with their own trackers are the factory's projects; a node of the default environment runs
     # once per project, in its environment (FACTORY_ENV), and the gate takes only that environment's tickets
     trackers = scopes_mod.project_envs(config)
     default_env = core.default_environment(nodes, defn) if trackers else None
-    if per_repo and not trackers:
-        used += [e for e in code_envs.values() if e not in used]
     for name, n in nodes["nodes"].items():
         if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
             continue
         fan = list(trackers) if trackers and n["env"] == default_env else [None]
-        scopes = node_scopes[name]
-        own = node_copies(defn, name, n, config) if defn and definition.mainless(defn, name) else [None]
-        for project, scope, copy_, (aname, tier_arg, tier, focus) in [
-                (p, sc, c, v) for p in fan for sc in scopes for c in own
+        own = node_copies(defn, name, n, config) if defn else [None]
+        for project, copy_, (aname, tier_arg, tier, focus) in [
+                (p, c, v) for p in fan for c in ([None] if p else own)  # a project's copy runs in its environment's repository
                 for v in core.variants(name, n, roles, agents.get(name))]:
             if project and focus == "knowledge" and project != fan[0]:
                 continue  # the knowledge review runs once, in the team's environment
             project = None if focus == "knowledge" else project
             if project and project not in used:
                 used.append(project)
-            env = project or next((e for r, e in code_envs.items() if scope and definition.full_name(r) == definition.full_name(scope["url"])),
-                                  n["env"])  # a definition: the environment where the scope repository is `main`
+            env = project or n["env"]
             agent, _, model = air[tier].partition("/")
             trig = []
             webhook = any(str(t).startswith("webhook ") for t in n["triggers"])
             spec = core.node_spec(name, n, config, tier_arg or tier, focus, nodes)
-            narrow = {k: v for hook in filter_hooks for k, v in hook(config, scope).items()} if scope else {}
             for t in n["triggers"]:
                 if str(t).startswith("schedule "):
                     trig.append({"triggerType": "SCHEDULED", "cronExpression": scheds[str(t)[9:]]["cron"],
@@ -115,33 +104,29 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     trig.append({"triggerType": "WEBHOOK"})
                 elif str(t) != "manual":
                     trig.append(core.trigger(t, tier_arg, bot if aname.startswith(core.BOT_FILTERED) else None, focus,
-                                             scope["name"] if scope else None, repo_tags))
+                                             None, repo_tags))
                     if project:
                         trig[-1] = core.scope_filter(trig[-1], trackers[project])
-                    if more := narrow.get(trig[-1].get("source")):
-                        trig[-1] = {**trig[-1], "filters": {**trig[-1].get("filters", {}), **more}}
-            automation_repository = core.repository(team if focus == "knowledge" else scope or (copy_ or {}).get("repo")
+            automation_repository = core.repository(team if focus == "knowledge" else (copy_ or {}).get("repo")
                                                     or repos.get(envs_def[env]["repository"]) or primary)
             if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
                 env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
-            scope_name = scope["name"] if scope else None
-            env_scope = None if focus == "knowledge" or defn else scope_name  # a knowledge review runs in the team's own environment
             # A node with custom MCP servers runs in an environment of its own: setup writes `.mcp.json` per environment
             env_node = name if defn and focus != "knowledge" and definition.mcp_custom(definition.mcp(defn, name)) else None
-            if env_scope or env_node:
-                if (env, env_scope, env_node) not in scoped:
-                    scoped.append((env, env_scope, env_node))
+            if env_node:
+                if (env, env_node) not in scoped:
+                    scoped.append((env, env_node))
             else:
                 unscoped.add(env)
             automation = {
-                "name": f"{prefix}{aname}" + (f" {scope_name}" if scope_name else "") + (copy_ or {}).get("suffix", "")
+                "name": f"{prefix}{aname}" + (copy_ or {}).get("suffix", "")
                         + (f" {project}" if project else ""),
                 "triggers": trig,
                 "triggerVcs": [{"outputBehaviour": (copy_ or n).get("output", "read-only")} for _ in trig],
                 "spec": spec,
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
-                "environmentConfigId": f"{prefix}{env}" + (f" {env_scope}" if env_scope else "") + (f" {env_node}" if env_node else ""),
+                "environmentConfigId": f"{prefix}{env}" + (f" {env_node}" if env_node else ""),
                 "mcpConnectors": core.mcp_connectors(n, config, focus),
                 "prompt": core.script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else core.agent_prompt(
                     name, n, config, aname, focus, automation_repository, tier_arg or tier),
@@ -160,11 +145,11 @@ def plan_air(nodes: dict, config: dict) -> dict:
     envs = []
     registry = plugins.registry(config)
     issues_token = config.get("issues_token_env")  # the gate's issue, label and comment writes to project repositories
-    for env, scope_name, node_name in [(e, None, None) for e in used if e in unscoped] + scoped:
+    for env, node_name in [(e, None) for e in used if e in unscoped] + scoped:
         d = envs_def[env]
-        repo = repos[scope_name] if scope_name else repos.get(d["repository"]) or primary
+        repo = repos.get(d["repository"]) or primary
         envs.append({
-            "name": f"{prefix}{env}" + (f" {scope_name}" if scope_name else "") + (f" {node_name}" if node_name else ""),
+            "name": f"{prefix}{env}" + (f" {node_name}" if node_name else ""),
             "repository": repo["url"],
             "startup": d["startup"],
             "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env, **({"FACTORY_NODE": node_name} if node_name else {})},
@@ -174,18 +159,13 @@ def plan_air(nodes: dict, config: dict) -> dict:
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })
-    label_repos = list(dict.fromkeys(x for x in ((config.get("tracker") or {}).get("repository"),
-                                                 core.repository(primary)["fullName"]) if x))
     project_repos = [r for r in dict.fromkeys(b.get("repository") for b in trackers.values()  # a project's GitHub issues
                                               if scopes_mod.adapter(b) == "github-issues") if r]
-    label_repos += [r for r in project_repos if r not in label_repos]
     # the tracker's own setup (youtrack: tags and field values); none keeps a GitHub plan (and its fixture) unchanged
     tag_plan = {k: v for hook in registry.hook("deploy.plan") for k, v in hook(nodes, config).items()}
-    schema = core.tracker_schema(nodes, config, label_repos)
-    label_keys = ({"label_plan": core.label_plan(nodes, config, project_repos)}  # ADR-0024: labels per repository
-                  if (config.get("tracker") or {}).get("repositories")
-                  else {"labels": list(schema.labels), "label_repositories": list(schema.repositories)})
-    return {"prefix": prefix, "automations": automations, "environments": envs, **label_keys,
+    schema = core.tracker_schema(nodes, config)
+    return {"prefix": prefix, "automations": automations, "environments": envs,
+            "label_plan": core.label_plan(nodes, config, project_repos),  # ADR-0024: labels per repository
             "label_specs": schema.specs, "owned_label_prefixes": list(schema.owned_prefixes),
             **tag_plan, "files": core.actions_files(nodes, config)}
 

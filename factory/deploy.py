@@ -24,7 +24,6 @@ import config as config_mod
 import definition
 import plugins
 import project as project_mod
-import scopes as scopes_mod
 import vocab
 from ports.system import TrackerSchema
 
@@ -247,25 +246,18 @@ def additional_repositories(main_repository: dict, team: dict, config: dict) -> 
     return projects if team_is_project(team, config) else projects + [{"repository": repository(team), "branch": "main"}]
 
 
-def checkout_instructions(main_repository: dict | None, config: dict, push_other_projects: bool = False) -> str:
+def checkout_instructions(main_repository: dict | None, config: dict) -> str:
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     team = {"url": config.get("team_repository") or primary["url"]}
     if not main_repository:
         return ""
-    push = ""
-    if push_other_projects and config.get("write_mode") == "token" and other_projects(main_repository, team, config):
-        push = ("For each other changed project repository, push this ticket branch and open or update its PR. "
-                "Use `FACTORY_WRITE_TOKEN` without printing it. Push with `git -c credential.helper= push "
-                "https://x-access-token:$FACTORY_WRITE_TOKEN@github.com/<owner>/<repo> HEAD:<branch>`, "
-                "then use `gh pr create` or `gh pr edit` with a `[factory]` body that includes `Refs #<n>`. "
-                "Use the same `ez/<n>-<slug>` branch in each repository.\n\n")
     if main_repository["fullName"] == repository(team)["fullName"]:
         # Air's gh picks its token from the working directory's origin: the tracker's checkout reaches the tracker.
         tracker = (config.get("tracker") or {}).get("repository") or repository(primary)["fullName"]
         if tracker == main_repository["fullName"]:
-            return push
+            return ""
         return (f"## Working directory\n\nRun every command from `/workspaces/{tracker.rsplit('/', 1)[-1]}`: "
-                "GitHub access there reaches the tracker. This automation's own checkout is the team repository.\n\n" + push)
+                "GitHub access there reaches the tracker. This automation's own checkout is the team repository.\n\n")
     project = main_repository["fullName"].rsplit("/", 1)[-1]
     others = ", ".join(f"`/workspaces/{repository(r)['fullName'].rsplit('/', 1)[-1]}`"
                        for r in other_projects(main_repository, team, config))
@@ -277,7 +269,7 @@ def checkout_instructions(main_repository: dict | None, config: dict, push_other
         tail = "The factory repository is checked out beside it and is read-only.\n\n"
     return (f"## Project checkout\n\nBefore running project commands, `cd /workspaces/{project}`. "
             + (f"The other project repositories are checked out beside it: {others}. " if others else "")
-            + tail + push)
+            + tail)
 
 
 def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None,
@@ -358,7 +350,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     role = n["role"]
     servers = mcp_connectors(n, config, focus)
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
-    checkout = checkout_instructions(main_repository, config, name in {"implement", "fix", "update"})
+    checkout = checkout_instructions(main_repository, config)
     import definition
     if definition.present(config_mod.team_root()):  # ADR-0021: the node's role body, rendered with its settings
         defn = definition.load(config_mod.team_root())
@@ -375,7 +367,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     else:
         text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
         skills = skill_lines(role)
-    checkout = checkout_instructions(main_repository, config, name in {"implement", "fix", "update"})
+    checkout = checkout_instructions(main_repository, config)
     mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
@@ -423,27 +415,6 @@ def team_definition() -> dict | None:
     return definition.load(config_mod.team_root()) if definition.present(config_mod.team_root()) else None
 
 
-def code_scopes(config: dict, defn: dict | None) -> list[dict]:
-    """The repositories a per-repository node may get a copy for: a definition's code repositories (`main` in an
-    environment), else every repository."""
-    if not defn:
-        return config["repositories"]
-    code = {definition.full_name(c) for c in definition.per_repo_envs(defn)}
-    return [r for r in config["repositories"] if definition.full_name(r["url"]) in code]
-
-
-def node_scopes(nodes: dict, config: dict, defn: dict | None) -> dict:
-    """{node: its copies' repositories, [None] for one automation} of every node deploy plans (#895): with
-    `write_mode: per-repo` and more than one code repository a per-repository node gets one copy per code repository,
-    except in the default environment when environments have their own trackers (#1069: it runs once per project)."""
-    scopes = code_scopes(config, defn)
-    per_repo = config.get("write_mode", "per-repo") == "per-repo" and len(scopes) > 1
-    trackers = scopes_mod.project_envs(config)
-    default_env = default_environment(nodes, defn) if trackers else None
-    return {name: scopes if per_repo and definition.per_repo_node(name) and not (trackers and n["env"] == default_env) else [None]
-            for name, n in nodes["nodes"].items() if n.get("enabled") is not False and n["role"] != "human" and not n.get("runner")}
-
-
 def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
     """The node, gate options and spec of one automation (`review-behaviour`, `fix-mid`) from the node graph."""
     roles, agents = config["roles"], agents_of(nodes, config)
@@ -457,12 +428,7 @@ def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
     raise KeyError(f"unknown automation: {automation}")
 
 
-# Nodes planned once per project repository when `write_mode` is `per-repo` (default) and the project has several
-# repositories: Air pushes only to an automation's primary repository. Only triage sees every repository.
-PER_REPO = definition.PER_REPO
-
-
-def tracker_schema(nodes: dict, config: dict, repositories=()) -> TrackerSchema:
+def tracker_schema(nodes: dict, config: dict) -> TrackerSchema:
     """The labels the trackers and code hosts must carry: the core's `labels()` and `label_specs()`, plus what the
     selected plugins' `deploy.schema` hooks add ({label: spec})."""
     names, specs = labels(nodes, config), label_specs(nodes, config)
@@ -470,7 +436,7 @@ def tracker_schema(nodes: dict, config: dict, repositories=()) -> TrackerSchema:
     if extra:
         names = sorted({*names, *extra})
         specs = {**{k: v for k, v in extra.items() if v}, **specs}
-    return TrackerSchema(tuple(names), tuple(repositories), specs, tuple(owned_label_prefixes(config)))
+    return TrackerSchema(tuple(names), specs, tuple(owned_label_prefixes(config)))
 
 
 def actions_files(nodes: dict, config: dict) -> dict:
@@ -530,12 +496,14 @@ def label_specs(nodes: dict, config: dict) -> dict:
 
 
 def label_plan(nodes: dict, config: dict, tickets=()) -> dict[str, list[str]]:
-    """{repository: [labels]} for a definition with `tracker.repositories` (ADR-0024). Every ticket repository (those,
-    then `tickets`) gets the tracker schema's labels and the hold and review-trigger labels; the tracker (the first one)
-    also gets the map label. A project repository that holds no tickets maps to `[]`, so `reconcile_labels` removes
-    the factory-owned labels it still has."""
+    """{repository: [labels]} (ADR-0024). Every ticket repository (`tracker.repositories`, else `tracker.repository`
+    and the primary repository; then `tickets`) gets the tracker schema's labels and the hold and review-trigger
+    labels; the tracker (the first one) also gets the map label. A project repository that holds no tickets maps to
+    `[]`, so `reconcile_labels` removes the factory-owned labels it still has."""
     t = config.get("tracker") or {}
-    tickets = list(dict.fromkeys([*(definition.full_name(r) for r in t.get("repositories") or []), *tickets]))
+    primary = next(r for r in config["repositories"] if r.get("role") == "primary")
+    listed = t.get("repositories") or [x for x in (t.get("repository"), repository(primary)["fullName"]) if x]
+    tickets = list(dict.fromkeys([*(definition.full_name(r) for r in listed), *tickets]))
     common = sorted({*tracker_schema(nodes, config).labels,
                      *(x for x in (t.get("hold_label"), t.get("review_trigger")) if x)})
     out = {r: [*common, *([t["map_label"]] if i == 0 and t.get("map_label") else [])] for i, r in enumerate(tickets)}
@@ -547,7 +515,7 @@ def label_plan(nodes: dict, config: dict, tickets=()) -> dict[str, list[str]]:
 def reconcile_labels(plan: dict, run=None, config=None) -> list[tuple]:
     """(action, repository, label, changed fields) per required label to create or update, and per factory-owned
     label no longer required to remove, from the selected plugins' `deploy.labels` hooks (github: each repository of
-    the plan's `label_plan`, else of `label_repositories`, independently)."""
+    the plan's `label_plan`, independently)."""
     schema = TrackerSchema.from_plan(plan)
     return [c for hook in plugins.registry(config).hook("deploy.labels") for c in hook(schema, run)]
 

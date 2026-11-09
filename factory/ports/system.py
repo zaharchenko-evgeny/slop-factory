@@ -68,11 +68,10 @@ class Query:
 @dataclass(frozen=True)
 class TrackerSchema:
     """What a tracker must carry before the gate writes to it, as `factory deploy` plans it: the `labels` (or tags),
-    the `repositories` that hold them, their `specs` ({label: {color[, description]}}) and the `owned_prefixes` the
-    deploy may remove from. Plugins add labels through the `deploy.schema` hook. `per_repository` ({repository:
-    (labels)}, ADR-0024) replaces `labels` and `repositories` when the tracker spans several repositories."""
+    their `specs` ({label: {color[, description]}}) and the `owned_prefixes` the deploy may remove from. Plugins add
+    labels through the `deploy.schema` hook. `per_repository` ({repository: (labels)}, ADR-0024) holds the labels
+    of each repository that has tickets or PRs."""
     labels: tuple = ()
-    repositories: tuple = ()
     specs: dict = field(default_factory=dict, hash=False)
     owned_prefixes: tuple = ()
     per_repository: dict | None = field(default=None, hash=False)
@@ -80,13 +79,13 @@ class TrackerSchema:
     @classmethod
     def from_plan(cls, plan: dict):
         per_repo = plan.get("label_plan")
-        return cls(tuple(plan.get("labels") or ()), tuple(plan.get("label_repositories") or ()),
-                   dict(plan.get("label_specs") or {}), tuple(plan.get("owned_label_prefixes") or ()),
+        return cls(tuple(plan.get("labels") or ()), dict(plan.get("label_specs") or {}),
+                   tuple(plan.get("owned_label_prefixes") or ()),
                    {r: tuple(ls) for r, ls in per_repo.items()} if per_repo else None)
 
     def by_repository(self) -> dict:
-        """{repository: (labels)}: `per_repository`, else `labels` in each of `repositories`."""
-        return self.per_repository if self.per_repository is not None else {r: self.labels for r in self.repositories}
+        """{repository: (labels)}: `per_repository`, else none."""
+        return self.per_repository or {}
 
 
 class System(Protocol):
