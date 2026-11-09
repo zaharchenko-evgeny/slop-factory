@@ -619,6 +619,34 @@ class CommentWakeDeployTest(unittest.TestCase):
 
 
 class BackendTest(unittest.TestCase):
+    def _response(self, body):
+        r = mock.MagicMock()
+        r.__enter__.return_value = r
+        r.read.return_value = body
+        return r
+
+    def _forbidden(self):
+        return air.urllib.error.HTTPError("https://backend.test/automations", 403, "Forbidden", {}, None)
+
+    def test_set_additional_retries_the_write_while_a_new_automation_settles(self):
+        """#1122: Air answers 403 to the write on an automation created a moment ago; a later try succeeds."""
+        record = json.dumps({"automationId": "a1", "name": "[F] a"}).encode()
+        backend = air.Backend("https://backend.test", token="t")
+        with mock.patch.object(air.urllib.request, "urlopen", side_effect=[
+                self._response(record), self._forbidden(), self._response(b"{}")]) as request, \
+                mock.patch.object(air.time, "sleep") as sleep:
+            backend.set_additional("a1", [{"repository": {"fullName": "o/team"}, "branch": "main"}])
+        self.assertEqual([c.args[0].get_method() for c in request.call_args_list], ["GET", "POST", "POST"])
+        self.assertEqual(sleep.call_count, 1)
+
+    def test_set_additional_raises_a_lasting_refusal(self):
+        record = json.dumps({"automationId": "a1"}).encode()
+        backend = air.Backend("https://backend.test", token="t")
+        with mock.patch.object(air.urllib.request, "urlopen", side_effect=[
+                self._response(record), self._forbidden(), self._forbidden(), self._forbidden()]), \
+                mock.patch.object(air.time, "sleep"), self.assertRaises(air.urllib.error.HTTPError):
+            backend.set_additional("a1", [], attempts=3)
+
     def test_set_additional_preserves_the_full_automation_record(self):
         existing = {"automationId": "a1", "name": "[F] a", "repository": {"fullName": "o/project"},
                     "branch": "main", "prompt": "keep this", "environmentConfigId": "e1",

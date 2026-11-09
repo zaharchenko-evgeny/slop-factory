@@ -263,22 +263,27 @@ class Backend:
     def get_automation(self, automation_id: str) -> dict:
         return self.request("GET", f"/automations/{urllib.parse.quote(automation_id, safe='')}")
 
-    def set_additional(self, automation_id: str, repositories: list[dict], attempts: int = 12, pause: float = 10) -> None:
-        for attempt in range(attempts):  # an automation created a moment ago answers 403 until Air settles
+    @staticmethod
+    def _settled(call, attempts: int, pause: float):
+        """`call()`, retried while Air answers 403 or 404: an automation created a moment ago does until it settles,
+        for reads and writes alike (#1122)."""
+        for attempt in range(attempts):
             try:
-                current = self.get_automation(automation_id)
-                break
+                return call()
             except urllib.error.HTTPError as e:
                 if e.code not in (403, 404) or attempt == attempts - 1:
                     raise
                 time.sleep(pause)
+
+    def set_additional(self, automation_id: str, repositories: list[dict], attempts: int = 12, pause: float = 10) -> None:
+        current = self._settled(lambda: self.get_automation(automation_id), attempts, pause)
         body = {key: current[key] for key in self.SPEC_FIELDS if current.get(key) is not None}  # the API rejects nulls
         if "triggers" in body:
             body["triggers"] = [{key: value for key, value in trigger.items()
                                  if key not in ("triggerId", "automationSnapshotId")}
                                 for trigger in body["triggers"]]
         body.update({"id": current.get("automationId", automation_id), "additionalRepositories": repositories})
-        self.request("POST", "/automations", body)
+        self._settled(lambda: self.request("POST", "/automations", body), attempts, pause)
 
 
 def _items(res) -> list[dict]:
