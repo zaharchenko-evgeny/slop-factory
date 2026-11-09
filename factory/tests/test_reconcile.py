@@ -411,32 +411,50 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual([e["value"] for e in written if e["kind"] == "stage"], ["blocked"])
 
     def test_label_no_copy_hears_is_stuck_at_once(self):
-        defn = copy.deepcopy(self.defn)
         factory_repo, team_repo = "zaharchenko-evgeny/slop-factory", "zaharchenko-evgeny/slop-eval-factory"
-        defn["factory"]["tracker"]["repositories"] = [factory_repo, team_repo]
-        defn["factory"]["environments"]["intake"]["repositories"] = [{"repo": factory_repo}]
-        ticket = {"stage": "triage", "attrs": ["factory:triage"], "since": None}
-        written = []
-        class Tracker:
-            def sweep_tickets(self, stages, open_only=False):
-                return [f"{team_repo}#7"]
-
-            def stale_facts(self, _):
-                return ticket
-
-            def apply(self, effect):
-                written.append(effect)
-
-        tr = Tracker()
         tracker = self.config["tracker"]
-        results = reconcile.recover_definition(tr, defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
-                                               self.config["limits"], now=NOW)
-        self.assertEqual([(r["reconcile"], r["node"]) for r in results], [("stuck", "intake")])
-        self.assertEqual([e["value"] for e in written if e["kind"] == "label"], ["factory:needs-human"])
-        self.assertEqual([e["value"] for e in written if e["kind"] == "stage"], ["blocked"])
-        note = next(e["value"] for e in written if e["kind"] == "comment")
-        self.assertIn("slop-eval-factory", note)
-        self.assertIn("Open the ticket in a repository where intake listens", note)
+        cases = [
+            ("stage trigger", {"stage": "triage", "attrs": []}, {"stage": "triage"}, True, False),
+            ("issue label trigger", {"label": "factory:custom"}, {"stage": "ready", "attrs": ["factory:custom"]}, True, False),
+            ("PR label trigger", {"label": "factory:custom"}, {"stage": "ready", "pr_labels": ["factory:custom"]}, True, False),
+            ("missing label", {"label": "factory:custom"}, {"stage": "ready", "attrs": [], "pr_labels": []}, False, False),
+            ("other stage", {"stage": "triage"}, {"stage": "ready", "attrs": []}, False, False),
+            ("another copy hears same trigger", {"stage": "triage", "attrs": []}, {"stage": "triage"}, False, True),
+        ]
+        for name, trigger, facts, stuck, another_listener in cases:
+            with self.subTest(name=name):
+                defn = copy.deepcopy(self.defn)
+                defn["factory"]["tracker"]["repositories"] = [factory_repo, team_repo]
+                defn["factory"]["environments"]["intake"]["repositories"] = [{"repo": factory_repo}]
+                defn["workflow"]["nodes"]["intake"]["triggers"] = [trigger]
+                if another_listener:
+                    defn["workflow"]["nodes"]["another-intake"] = {
+                        "agent": "router", "environment": "team", "triggers": [trigger]}
+                ticket = {**facts, "since": None}
+                written = []
+
+                class Tracker:
+                    def sweep_tickets(self, stages, open_only=False):
+                        return [f"{team_repo}#7"]
+
+                    def stale_facts(self, _):
+                        return ticket
+
+                    def apply(self, effect):
+                        written.append(effect)
+
+                results = reconcile.recover_definition(Tracker(), defn, list(tracker["stages"]),
+                                                       tracker.get("stage_kinds", {}), self.config["limits"], now=NOW)
+                if stuck:
+                    self.assertEqual([(r["reconcile"], r["node"]) for r in results], [("stuck", "intake")])
+                    self.assertEqual([e["value"] for e in written if e["kind"] == "label"], ["factory:needs-human"])
+                    self.assertEqual([e["value"] for e in written if e["kind"] == "stage"], ["blocked"])
+                    note = next(e["value"] for e in written if e["kind"] == "comment")
+                    self.assertIn("slop-eval-factory", note)
+                    self.assertIn("Open the ticket in a repository where intake listens", note)
+                else:
+                    self.assertEqual(results, [])
+                    self.assertEqual(written, [])
 
     def test_stuck_label_that_is_young_or_behind_a_blocker_is_left_alone(self):
         labels = {"ci": "none", "attrs": ["risk:low"], "pr_labels": ["factory:review-low"]}

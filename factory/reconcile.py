@@ -324,29 +324,38 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             ticket_repos = definition.tracker_repositories(defn)
             repo, _ = gate_port.split_ticket(n, ticket_repos[0] if ticket_repos else None)
             if repo:
-                stuck = False
+                triggers = {}
                 for node, trigger in ((name, trigger) for name, spec in nodes.items()
                                       for trigger in spec.get("triggers") or []):
                     label = (trigger.get("label") if isinstance(trigger, dict) else None)
-                    if isinstance(trigger, dict) and trigger.get("stage"):
+                    stage_trigger = isinstance(trigger, dict) and trigger.get("stage")
+                    if stage_trigger:
                         label = vocab.stage(trigger["stage"])
-                    if label not in facts.get("attrs", []):
+                        on = "issue" if stage == trigger["stage"] else None
+                    else:
+                        on = "issue" if label in facts.get("attrs", []) else \
+                            "pr" if label in facts.get("pr_labels", []) else None
+                    if not on:
                         continue
-                    if not any(definition.full_name(copy["main"]).lower() == repo.lower()
-                               for copy in definition.copies(defn, node)):
-                        why = f"{label} wakes no {node} copy in {repo}. Open the ticket in a repository where {node} listens"
-                        r = {"ticket": n, "stage": stage, "node": node, "reconcile": "stuck", "why": why}
-                        results.append(r)
-                        if not dry_run:
-                            send(tracker, n, nodes, stage, head, "stuck", label, "issue", why)
-                        if progress:
-                            progress(r)
-                        stuck = True
-                        break
-                else:
-                    if not since:
+                    triggers.setdefault((label, on), []).append(node)
+                stuck = False
+                for (label, on), waking in triggers.items():
+                    if any(definition.full_name(copy["main"]).lower() == repo.lower()
+                           for node in waking for copy in definition.copies(defn, node)):
                         continue
+                    node = waking[0]
+                    why = f"{label} wakes no {node} copy in {repo}. Open the ticket in a repository where {node} listens"
+                    r = {"ticket": n, "stage": stage, "node": node, "reconcile": "stuck", "why": why}
+                    results.append(r)
+                    if not dry_run:
+                        send(tracker, n, nodes, stage, head, "stuck", label, on, why)
+                    if progress:
+                        progress(r)
+                    stuck = True
+                    break
                 if stuck:
+                    continue
+                if not since:
                     continue
             elif not since:
                 continue
