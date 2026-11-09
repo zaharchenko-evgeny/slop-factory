@@ -300,7 +300,7 @@ class DeployTest(unittest.TestCase):
         envs = {e["name"]: e for e in plan["environments"]}
         for env in [*SUBSYSTEMS, "web"]:
             self.assertEqual(envs[f"[Slop factory] {env}"]["variables"]["FACTORY_ENV"], env)
-        self.assertIn("o/web", plan["label_repositories"])
+        self.assertIn("o/web", plan["label_plan"])
 
 
 class ValidationTest(unittest.TestCase):

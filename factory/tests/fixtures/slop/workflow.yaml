@@ -6,6 +6,9 @@
 # refuses) and the effects' own checks (a merge needs an approved head with green CI).
 # Agents and environments are defined in factory.yaml; nodes name them.
 # Merge order: factory.yaml defaults -> environment -> role -> agent -> settings below -> node.
+# ADR-0024: `listens` names the ticket repositories whose events wake a node (default: every one); `writes` the
+# repositories Air pushes to. Event nodes listen to both ticket repositories, so each runs as one automation
+# per repository; the developer nodes write both, and each copy pushes only its own repository.
 
 # Stage names come from the nodes (`when`, triggers, effects). Labels are <label_prefix><stage>.
 stages:
@@ -78,6 +81,7 @@ nodes:
   investigate:
     agent: dev
     triggers: [{ stage: investigating }]
+    writes: all                   # output read-only: it only reproduces
     when: { stage: investigating }
     output: read-only
     settings: { mode: investigate }
@@ -102,6 +106,7 @@ nodes:
   implement-small:
     agent: dev-cheap
     triggers: [{ label: "factory:implement-small" }]
+    writes: all
     when: { stage: in-dev }
     output: create-pr
     settings: { mode: implement }
@@ -114,6 +119,7 @@ nodes:
   implement-medium:
     agent: dev
     triggers: [{ label: "factory:implement-medium" }]
+    writes: all
     when: { stage: in-dev }
     output: create-pr
     settings: { mode: implement }
@@ -126,6 +132,7 @@ nodes:
   implement-large:
     agent: dev-strong
     triggers: [{ label: "factory:implement-large" }]
+    writes: all
     when: { stage: in-dev }
     output: create-pr
     settings: { mode: implement }
@@ -174,6 +181,7 @@ nodes:
   fix:
     agent: dev
     triggers: [{ label: "factory:fix" }]
+    writes: all
     when: { stage: [in-review, changes-requested, approved], fix-rounds: below-cap }
     output: push-to-source
     settings: { mode: fix, fix_rounds: 3 }
@@ -192,6 +200,7 @@ nodes:
   update:                         # a merge conflict
     agent: dev-cheap
     triggers: [{ label: "factory:update" }]
+    writes: all
     when: { stage: changes-requested }
     output: push-to-source
     settings: { mode: update }
@@ -256,6 +265,7 @@ nodes:
     agent: retro
     environment: knowledge
     triggers: [{ schedule: "0 2 * * *" }]
+    writes: [zaharchenko-evgeny/slop-eval-factory]
     output: push-to-new-branch    # the platform opens one PR to the knowledge base
     outcomes:
       proposed: { effects: [{ label: "factory:knowledge-review", on: pr }] }
@@ -265,6 +275,7 @@ nodes:
     agent: reviewer
     environment: knowledge
     triggers: [{ label: "factory:knowledge-review" }]
+    listens: [zaharchenko-evgeny/slop-eval-factory]   # retro's PRs are in the knowledge base
     output: read-only
     settings: { focus: [knowledge] }
     outcomes:
@@ -281,8 +292,8 @@ nodes:
   # --- Routines -------------------------------------------------------------------------------
   reconcile:                      # re-fires missed wakes; polls CI for merge (Air has no CI-success trigger)
     agent: ops
-    environment: team
     triggers: [{ schedule: "*/15 * * * *" }]
+    writes: [zaharchenko-evgeny/slop-eval-factory]   # its main checkout; no output, so Air pushes nothing
     settings: { routine: reconcile }
     outcomes:
       reconciled: {}
@@ -291,13 +302,14 @@ nodes:
     agent: ops
     settings: { routine: doctor }
     triggers: [{ schedule: "0 5 * * *" }]
+    writes: [zaharchenko-evgeny/slop-factory]   # its main checkout; no output, so Air pushes nothing
     outcomes:
       probed: {}
 
   doctor-team:
     agent: ops
     settings: { routine: doctor }
-    environment: team
     triggers: [{ schedule: "0 5 * * *" }]
+    writes: [zaharchenko-evgeny/slop-eval-factory]   # its main checkout; no output, so Air pushes nothing
     outcomes:
       probed: {}

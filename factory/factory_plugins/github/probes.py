@@ -93,12 +93,12 @@ def cleanup(repo, made, run):
 def project_write_probes(settings, env, run, environ=os.environ):
     """In an environment that writes with a project token (github_tracker.token_env, or `issues_token_env` in a multi-repository team), one `write:label:<owner/repo>` probe per `role: project` repository: create
     a probe label, then delete it, with the issues token (`issues_token_env`) or $FACTORY_WRITE_TOKEN when it is set
-    (github_tracker.ProjectWriteRun). With `issues_token_env` or `write_mode: token`, a missing token is a `fail` that
-    names the secret, and nothing is written."""
-    repos = github_tracker.project_repositories(settings)
+    (github_tracker.ProjectWriteRun). With `issues_token_env`, a missing token is a `fail` that names the secret, and
+    nothing is written. The environment's own repository ($FACTORY_ENV_REPOSITORY) is not probed: Air's token writes it."""
+    repos = github_tracker.foreign_projects(github_tracker.project_repositories(settings), environ)
     issues = settings.get("issues_token_env")
-    # deploy adds the issues token to every environment of a multi-repository team (deploy.py), declared or not
-    if not (github_tracker.token_env(env, settings) or (issues and len(settings.get("repositories") or []) > 1)):
+    # deploy adds the issues token to every environment with another project repository (#1126), declared or not
+    if not repos or not (github_tracker.token_env(env, settings) or (issues and len(settings.get("repositories") or []) > 1)):
         return []
     run = github_tracker.ProjectWriteRun(run, repos, environ, issues)
     results = []
@@ -106,9 +106,6 @@ def project_write_probes(settings, env, run, environ=os.environ):
         name = f"write:label:{repo}"
         if issues and not environ.get(issues) and not environ.get(github_tracker.WRITE_TOKEN):
             results.append({"probe": name, "result": "fail", "detail": f"{issues} is not set (issues_token_env)"})
-            continue
-        if not issues and settings.get("write_mode") == "token" and not environ.get(github_tracker.WRITE_TOKEN):
-            results.append({"probe": name, "result": "fail", "detail": f"{github_tracker.WRITE_TOKEN} is not set (write_mode: token)"})
             continue
         label = f"factory-doctor-probe-{uuid.uuid4().hex[:12]}"
         probe(results, name, lambda: run(["label", "create", label, "-R", repo, "--description", "doctor probe, deleted at once"]))

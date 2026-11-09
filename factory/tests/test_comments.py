@@ -49,21 +49,22 @@ class DefinitionModuleTest(unittest.TestCase):
     def off(self):
         self.edit(definition.FACTORY, lambda f: f.pop("plugins"))
 
-    def test_slop_fixture_has_the_plugin_on(self):
-        """#1083: the Slop team lists `plugins: [comments]`, so its mentionable agents get reply nodes."""
+    def test_slop_fixture_has_the_plugin_off(self):
+        """The Slop team removed the comments plugin (9 Nov): no mentionable agents, no reply or mention nodes."""
         defn = definition.load(FIXTURES / "slop")
-        self.assertTrue(plugins.registry(defn["factory"]).is_on("comments"))
-        self.assertTrue({"mentions", "reply-dev", "reply-reviewer"} <= set(defn["workflow"]["nodes"]))
+        self.assertFalse(plugins.registry(defn["factory"]).is_on("comments"))
+        self.assertFalse({n for n in defn["workflow"]["nodes"] if n.startswith("reply-") or n == "mentions"})
         self.assertFalse([w for w in definition.warnings(defn) if w.startswith("module-off")])
 
     def test_off_generates_nothing_and_warns_for_each_mentionable_agent(self):
         on = definition.load(self.root)
-        self.assertTrue({"mentions", "reply-dev", "reply-reviewer"} <= set(on["workflow"]["nodes"]))
+        self.assertTrue({"reply-dev", "reply-reviewer"} <= set(on["workflow"]["nodes"]))
+        self.assertIn({"wake": "asker"}, on["workflow"]["nodes"]["reply-dev"]["outcomes"]["replied"]["effects"])
         self.assertIn("ask", on["workflow"]["nodes"]["implement-medium"]["outcomes"])
         self.assertFalse([w for w in definition.warnings(on) if w.startswith("module-off")])
         self.off()
         off = definition.load(self.root)
-        self.assertFalse({n for n in off["workflow"]["nodes"] if n == "mentions" or n.startswith("reply-")})
+        self.assertFalse({n for n in off["workflow"]["nodes"] if n.startswith("reply-")})
         self.assertNotIn("ask", off["workflow"]["nodes"]["implement-medium"]["outcomes"])
         self.assertEqual([w for w in definition.warnings(off) if w.startswith("module-off")],
                          ["module-off: agents.dev: mentionable needs plugins: [comments]",
@@ -98,7 +99,7 @@ class DefinitionModuleTest(unittest.TestCase):
         """A team that turned the module on with ADR-0025's `modules:` keeps it on."""
         self.edit(definition.FACTORY, lambda f: f.update(modules=f.pop("plugins")))
         defn = definition.load(self.root)
-        self.assertIn("mentions", defn["workflow"]["nodes"])
+        self.assertIn("reply-dev", defn["workflow"]["nodes"])
         self.assertFalse([e for e in definition.errors(defn) if e.startswith(("module-off", "unknown-", "bad-"))])
 
     def test_off_refuses_a_hand_written_ask_outcome(self):

@@ -24,14 +24,33 @@ def wake_rules(features) -> dict:
     return {"install": list(COMMENT_WAKE_FILES) if on else [], "remove": [] if on else list(COMMENT_WAKE_FILES)}
 
 
+def engine_repository(config: dict) -> str | None:
+    """`owner/repo` (lowercase) of the repository the engine comes from: the team's `engine:` source
+    (`git+https://github.com/o/r@main`), else the git origin of this engine checkout; None when neither names one."""
+    import re
+    import subprocess
+    source = str(config.get("engine") or "")
+    if not source:
+        try:
+            source = subprocess.run(["git", "-C", str(ROOT), "remote", "get-url", "origin"], capture_output=True,
+                                    text=True, timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            source = ""
+    m = re.search(r"github\.com[/:]([^/@\s]+/[^/@\s]+?)(?:\.git)?(?:@[^/\s]*)?/?$", source)
+    return m[1].lower() if m else None
+
+
 def sync_wake_files(config: dict, run, apply: bool) -> int:
     """Install the files `wake_rules` names in every configured GitHub project repository, and delete the ones it
     removes where an earlier deploy installed them."""
     import deploy
     rules = wake_rules(plugins.selected(config))
     files = {path: wake_file_text(path) for path in dict.fromkeys(rules["install"])}
+    engine = engine_repository(config)
     for repo in [r for r in config.get("repositories", []) if "github.com" in r["url"]]:
         name = deploy.repository(repo)["fullName"]
+        if name.lower() == engine:  # the engine ships these files from its own tree: never install or delete them there
+            continue
         for path in [*files, *rules["remove"]]:
             endpoint = f"repos/{name}/contents/{path}"
             try:

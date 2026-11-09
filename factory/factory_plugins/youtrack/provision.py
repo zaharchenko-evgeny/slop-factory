@@ -3,9 +3,13 @@ definition's state and command stores name. Deploy creates missing tags and valu
 ones no longer required (a tag still used by another project's issues stays); it never creates a custom field.
 
 Hooks: `deploy.plan` adds the plan keys (`tags`, `fields`, their owned prefixes, `tag_tracker`), `deploy.repo_tags`
-names the per-repository stage tags a trigger listens to, and `deploy.tracker` returns the `Provisioner` that
-the Air deploy (`factory_plugins.air.deploy.deploy`) drives between its label steps.
+names the per-repository stage tags a trigger listens to, `deploy.trigger_filters` limits a repository's copy to the
+YouTrack project linked to it (#981), `deploy.errors` checks `tracker.projects`, and `deploy.tracker` returns the
+`Provisioner` that the Air deploy (`factory_plugins.air.deploy.deploy`) drives between its label steps.
 """
+import definition
+import deploy as core
+import scopes
 from factory_plugins.youtrack.store import MissingField, YouTrackTicketStore, repo_stage_tags
 
 
@@ -16,6 +20,51 @@ def youtrack(config):
 def repo_tags(config: dict) -> list[str]:
     """Hook `deploy.repo_tags`: the stage tags stored per repository (`<tag>-<repo>`)."""
     return repo_stage_tags(config)
+
+
+def linked_project(config: dict, repo: dict | None) -> str | None:
+    """The YouTrack project `tracker.projects` links to repository `repo` (repository names compare case-insensitively,
+    project short names are case-sensitive), else None."""
+    projects = (config.get("tracker") or {}).get("projects") or {}
+    want = definition.full_name(repo["url"]).lower() if repo else None
+    return next((p for p, r in projects.items() if str(r).lower() == want), None)
+
+
+def trigger_filters(config: dict, scope: dict | None) -> dict:
+    """Hook `deploy.trigger_filters`: {source: filters} that repository `scope`'s copy adds to its ticket triggers: Air's
+    project selector `projectShortName` of the project linked to it (the value is case-sensitive, AIRA-790)."""
+    project = linked_project(config, scope)
+    return {"youtrack": {"projectShortName": project}} if project else {}
+
+
+def errors(nodes: dict, config: dict) -> list[str]:
+    """Hook `deploy.errors`: per `tracker.projects` entry, `unknown-repository` when it names no repository,
+    `duplicate-repository` when another project already links its repository (Air ANDs a trigger's filters, so one
+    trigger cannot select two projects), and `unlinked-project` when no planned copy listens to it: the projects the
+    YouTrack triggers of a node's copies are limited to (ADR-0024: one copy per listened repository, `trigger_filters`)."""
+    projects = (config.get("tracker") or {}).get("projects") or {}
+    repos = {definition.full_name(r["url"]).lower() for r in config.get("repositories") or []}
+    errs, linked = [], {}
+    for project, repo in projects.items():
+        if str(repo).lower() not in repos:
+            errs.append(f"unknown-repository: tracker.projects.{project}: {repo} is not a repository")
+        elif str(repo).lower() in linked:
+            errs.append(f"duplicate-repository: tracker.projects.{project}: {repo} is already linked to {linked[str(repo).lower()]}")
+        else:
+            linked[str(repo).lower()] = project
+    listened, defn = set(), core.team_definition() if linked else None
+    trackers = scopes.project_envs(config)  # #1069: a default-environment node runs once per project, not per repository
+    default_env = core.default_environment(nodes, defn) if trackers else None
+    for name, n in (nodes["nodes"] if defn else {}).items():
+        if n.get("enabled") is False or n["role"] == "human" or n.get("runner") or trackers and n["env"] == default_env:
+            continue
+        sources = {core.trigger(t, None).get("source") for t in n.get("triggers") or []
+                   if not str(t).startswith(("schedule ", "webhook ")) and str(t) != "manual"}
+        copies = definition.node_listens(defn, name)
+        listened |= {f["projectShortName"] for repo in (copies if len(copies) > 1 else [])
+                     for source, f in trigger_filters(config, {"url": repo}).items() if source in sources}
+    return errs + [f"unlinked-project: tracker.projects.{p}: no node listens to project {p} ({projects[p]})"
+                   for p in linked.values() if p not in listened]
 
 
 def youtrack_tags(nodes: dict, config: dict) -> list[str]:

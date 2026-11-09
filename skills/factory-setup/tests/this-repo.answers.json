@@ -1,8 +1,9 @@
 {
   "PROJECT_NAME": "Slop",
   "ENGINE": "git+https://github.com/zaharchenko-evgeny/slop-factory@main",
-  "TRACKER_REPOSITORY": "zaharchenko-evgeny/slop-factory",
-  "MAIN_REPOSITORY": "zaharchenko-evgeny/slop-factory",
+  "CODE_REPOSITORIES": [
+    "zaharchenko-evgeny/slop-factory"
+  ],
   "TEAM_REPOSITORY": "zaharchenko-evgeny/slop-eval-factory",
   "GITHUB_USER": "zaharchenko-evgeny",
   "MODEL_CHEAP": "codex/gpt-6-luna",

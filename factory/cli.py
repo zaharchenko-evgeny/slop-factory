@@ -110,7 +110,9 @@ def begin(argv, team=None):
     if a.issue or a.pr:  # a number is all the gate needs: it reads every fact from the tracker
         name, _, action = str(nodes.load()["nodes"][compiled["node"]]["triggers"][0]).split(" ")[0].partition(".")
         number = {"pull_request" if a.pr else "issue": {"number": a.pr or a.issue}}
-        text = json.dumps({"eventType": f"{name}.{action}", "action": action, **number})
+        node_repo = os.environ.get("FACTORY_NODE_REPO")  # a copy's number is in its own repository (ADR-0024)
+        text = json.dumps({"eventType": f"{name}.{action}", "action": action, **number,
+                           **({"repository": {"full_name": node_repo}} if node_repo else {})})
     else:
         text = Path(a.payload).read_text() if a.payload else sys.stdin.read()
     event.write_text(text)
@@ -302,8 +304,9 @@ def report_end_failure(state, outcome, error, run=subprocess.run):
             f"The outcome did not land; a retry on this head fails the same way until the cause is fixed.\n\n"
             f"Factory-Run: {os.environ.get('FACTORY_NODE') or state['node']}")
     try:
-        repo = config.load()["tracker"].get("repository")
-        run(["gh", "issue", "comment", str(state["ticket"]), *(["-R", repo] if repo else []), "--body", body],
+        from gate_port import split_ticket
+        repo, number = split_ticket(state["ticket"], config.load()["tracker"].get("repository"))
+        run(["gh", "issue", "comment", str(number), *(["-R", repo] if repo else []), "--body", body],
             capture_output=True, text=True, timeout=60)
     except Exception as e:
         print(f"factory: could not report the failed end: {e}", file=sys.stderr)
