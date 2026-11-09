@@ -126,6 +126,13 @@ class ProjectWriteProbeTest(unittest.TestCase):
                                 "detail": "FACTORY_ISSUES_TOKEN is not set (issues_token_env)"}])
         self.assertEqual(gh.calls, [])
 
+    def test_the_environment_repository_is_not_probed_for_the_issues_token(self):
+        """#1126: Air's own token writes the environment's repository, so the issues token is not needed there."""
+        settings = {**self.SETTINGS, "issues_token_env": "FACTORY_ISSUES_TOKEN", "environments": {"team": {"secrets": []}}}
+        gh = FakeGh()
+        self.assertEqual(github_probes.project_write_probes(settings, "team", gh, {"FACTORY_ENV_REPOSITORY": "O/App"}), [])
+        self.assertEqual(gh.calls, [])
+
     def test_an_environment_that_declares_the_token_is_probed_whatever_its_name(self):
         settings = {**self.SETTINGS, "environments": {"engine": {"secrets": ["FACTORY_WRITE_TOKEN"]}, "team": {"secrets": []}}}
         got = github_probes.project_write_probes(settings, "engine", FakeGh(), {"FACTORY_WRITE_TOKEN": "pat"})

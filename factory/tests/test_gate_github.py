@@ -2012,6 +2012,16 @@ class CiSyncCodeHostTest(unittest.TestCase):
                 tracker.run(["issue", "comment", "1", "-R", "o/app", "--body", "b"])
         self.assertEqual([t for _, _, t in seen], ["iss", "iss", None, "pat"])
 
+    def test_issues_token_is_not_used_for_the_environment_repository(self):
+        """#1126: in an environment on o/app, Air's GH_TOKEN writes o/app; the issues token is for the other repositories."""
+        seen = []
+        run = lambda args, token=None: seen.append(token) or ""  # noqa: E731
+        environ = {"FACTORY_ISSUES_TOKEN": "iss", "FACTORY_ENV_REPOSITORY": "o/app"}
+        writes = M_GH.ProjectWriteRun(run, ["o/app", "o/web"], environ, "FACTORY_ISSUES_TOKEN")
+        writes(["issue", "edit", "1", "-R", "o/app", "--add-label", "x"])
+        writes(["issue", "edit", "1", "-R", "o/web", "--add-label", "x"])
+        self.assertEqual(seen, [None, "iss"])
+
 
 class GateTrackerChildrenTest(unittest.TestCase):
     def test_children_come_from_the_tickets(self):

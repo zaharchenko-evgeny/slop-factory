@@ -101,6 +101,7 @@ class CountedRun:
 # secret when a person sets it (ADR-0024: deploy no longer adds it). It is read from the environment, never printed.
 WRITE_TOKEN = "FACTORY_WRITE_TOKEN"
 WRITE_TOKEN_ENVS = ("write", "ops")
+ENV_REPOSITORY = "FACTORY_ENV_REPOSITORY"  # owner/repo of the environment's Air repository, set by deploy (#1126)
 
 
 def token_env(env, config):
@@ -115,6 +116,12 @@ def project_repositories(config):
     """owner/repo of each `role: project` repository of the descriptor: the CI label sync's repositories."""
     return ["/".join(r["url"].rstrip("/").split("/")[-2:]) for r in config.get("repositories") or []
             if r.get("role") == "project"]
+
+
+def foreign_projects(repositories, environ=os.environ):
+    """`repositories` without the environment's own repository ($FACTORY_ENV_REPOSITORY): Air's GH_TOKEN writes it."""
+    own = (environ.get(ENV_REPOSITORY) or "").lower()
+    return [r for r in repositories if r.lower() != own]
 
 
 def gh_target(args):
@@ -138,10 +145,11 @@ def gh_writes(args):
 class ProjectWriteRun:
     """Wrap a `gh` runner: a write to one of `repositories` runs with the issues token (the variable named by the
     `issues_token_env` setting) as its GH_TOKEN, else with $FACTORY_WRITE_TOKEN, when one is set; every other
-    call, and every call without a token, runs as before."""
+    call, every call without a token and every write to the environment's own repository runs as before."""
 
     def __init__(self, run, repositories, environ=os.environ, issues_token_env=None):
-        self.run, self.repositories, self.environ = run, {r.lower() for r in repositories}, environ
+        self.run, self.environ = run, environ
+        self.repositories = {r.lower() for r in foreign_projects(repositories, environ)}
         self.issues_token_env = issues_token_env
 
     def __call__(self, args, **kw):
