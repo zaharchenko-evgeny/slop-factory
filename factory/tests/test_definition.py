@@ -167,6 +167,12 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", workflow)
         defn = definition.load(self.root)
         self.assertEqual((definition.errors(defn), definition.warnings(defn)), ([], []))
+
+        def comments_on(f):
+            f["plugins"] = ["comments"]
+            f["agents"]["dev"]["mentionable"] = True
+        self.edit("factory.yaml", comments_on)
+        defn = definition.load(self.root)
         self.assertEqual([(c["env"], c["main"], c["write"]) for c in definition.copies(defn, "reply-dev")],
                          [("engine", MAIN, True), ("team", OTHER, True)])  # a generated node takes its agent's environments
 
