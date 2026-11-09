@@ -86,8 +86,7 @@ def _parts(defn, name, env_name=None):
     agent = (f.get("agents") or {}).get(node.get("agent")) or {}
     role = (f.get("roles") or {}).get(agent.get("role")) or {}
     if env_name is None:
-        listed = node.get("environments") if isinstance(node.get("environments"), list) else None
-        env_name = (listed or [None])[0] or node.get("environment") or (w.get("settings") or {}).get("environment")
+        env_name = _first_env(node, w.get("settings")) or (w.get("settings") or {}).get("environment")
     env = (f.get("environments") or {}).get(env_name) or {}
     return node, agent, role, env
 
@@ -192,12 +191,15 @@ env_repositories = repositories  # the name `to_project` can still reach under i
 
 
 def node_environments(defn, name):
-    """The environments node `name` runs in: its `environments` list, else its `environment`, else the workflow's."""
+    """The environments node `name` runs in: its `environments` list, else its `environment`, else the workflow's
+    `settings.environments` list, else its `settings.environment`."""
     w = defn["workflow"]
     node = (w.get("nodes") or {}).get(name) or {}
-    if isinstance(node.get("environments"), list):
-        return [e for e in node["environments"] if isinstance(e, str)]
-    one = node.get("environment") or (w.get("settings") or {}).get("environment")
+    wset = w.get("settings") or {}
+    for listed in (node.get("environments"), None if node.get("environment") else wset.get("environments")):
+        if isinstance(listed, list):
+            return [e for e in listed if isinstance(e, str)]
+    one = node.get("environment") or wset.get("environment")
     return [one] if one else []
 
 
@@ -242,15 +244,20 @@ def event_repositories(defn):
 def default_environment(defn):
     """The workflow's `settings.environment`, else (ADR-0027) the first environment a node names, else the first."""
     w = defn["workflow"]
-    named = (w.get("settings") or {}).get("environment") or next(
+    wset = w.get("settings") or {}
+    listed = wset.get("environments") if isinstance(wset.get("environments"), list) else []
+    named = wset.get("environment") or (listed[0] if listed else None) or next(
         (e for n in (w.get("nodes") or {}).values() if (e := _first_env(n or {}))), None)
     return named or next(iter(defn["factory"].get("environments") or {}), None)
 
 
-def _first_env(node):
-    """A node's first environment: of its `environments` list (ADR-0027), else its `environment`."""
+def _first_env(node, wset=None):
+    """A node's first environment: of its `environments` list (ADR-0027), else its `environment`, else the first of
+    the workflow's `settings.environments`."""
     listed = node.get("environments")
-    return (listed[0] if isinstance(listed, list) and listed else None) or node.get("environment")
+    default = (wset or {}).get("environments") if not node.get("environment") else None
+    return (listed[0] if isinstance(listed, list) and listed else None) or node.get("environment") \
+        or (default[0] if isinstance(default, list) and default else None)
 
 
 def adopted(defn):
@@ -259,7 +266,8 @@ def adopted(defn):
     f, w = defn["factory"], defn["workflow"]
     return any(isinstance(r, dict) and ({"write", "tracker", "vcs"} & r.keys())
                for e in (f.get("environments") or {}).values() for r in (e or {}).get("repositories") or []) \
-        or any("environments" in (n or {}) for n in (w.get("nodes") or {}).values())
+        or any("environments" in (n or {}) for n in (w.get("nodes") or {}).values()) \
+        or "environments" in (w.get("settings") or {})
 
 
 def _repository_errors(defn):

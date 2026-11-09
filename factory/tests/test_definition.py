@@ -188,6 +188,19 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(c["environments"]["b"]["writable"], ["c"])
         self.assertNotIn("tracker", c["environments"]["b"])  # a place, not a #1069 project environment
 
+    def test_workflow_environments_list_is_the_default(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True})], team=[(OTHER, {"write": True})]))
+
+        def workflow(w):
+            w["settings"].pop("environment", None)
+            w["settings"]["environments"] = ["engine", "team"]
+            w["nodes"]["intake"]["environment"] = "team"
+        self.edit("workflow.yaml", workflow)
+        defn = definition.load(self.root)
+        self.assertEqual((definition.node_environments(defn, "fix"), definition.node_environments(defn, "intake")),
+                         (["engine", "team"], ["team"]))
+        self.assertEqual(definition.default_environment(defn), "engine")
+
     def test_removed_repository_keys_are_reported(self):
         """ADR-0027: an environment repository's `main` and `token_env` are gone (`write` is back: its writable repository)."""
         for key in ("main", "token_env"):
