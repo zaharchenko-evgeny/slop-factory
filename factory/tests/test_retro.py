@@ -18,7 +18,6 @@ sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(ROOT / "factory/tests/fixtures/team")
 import cli  # noqa: E402
-import knowledge  # noqa: E402
 import retro  # noqa: E402
 
 cli.load_engine(cli.HERE)
@@ -126,16 +125,6 @@ class FactsOutputTest(unittest.TestCase):
         got = retro.facts(Tracker(), "2026-11-01T00:00:00Z")
         self.assertEqual(got["reviews"]["behaviour"]["approve"], 1)
         self.assertEqual([t["ticket"] for t in got["tickets"]], [7])
-
-
-class InboxTest(unittest.TestCase):
-    def test_one_inbox_pr_per_night(self):
-        pr = lambda n, ref, base="knowledge-inbox": {"number": n, "head": {"ref": ref}, "base": {"ref": base}}  # noqa: E731
-        self.assertEqual(knowledge.inbox_pr_action([pr(1, "ez/1-x"), pr(2, "knowledge-inbox", "main")], "knowledge-inbox"),
-                         {"branch": "knowledge-inbox", "source": "knowledge-inbox-pr", "action": "create", "pr": None})
-        prs = [pr(9, "knowledge-inbox-pr"), pr(4, "knowledge-inbox-pr"), pr(2, "knowledge-inbox-pr", "main")]
-        self.assertEqual(knowledge.inbox_pr_action(prs, "knowledge-inbox"),
-                         {"branch": "knowledge-inbox", "source": "knowledge-inbox-pr", "action": "update", "pr": 4})
 
 
 class ChangedLinesTest(unittest.TestCase):

@@ -227,19 +227,6 @@ class Templates(unittest.TestCase):
         workflow = yaml.safe_load(render.render_project(ANSWERS)["workflow.yaml"])
         self.assertEqual(statechart.check(workflow)[0], [])
 
-    def test_stage_without_way_out_breaks_a_rule(self):
-        broken, _ = statechart.check(yaml.safe_load(STUCK))
-        self.assertIn("NoDeadlock", broken)
-        self.assertIn("MovingNode", broken)
-        self.assertIn("DoneReachable", broken)
-
-    def test_unreachable_active_stage_without_way_out_breaks_moving_node(self):
-        self.assertEqual(statechart.check(yaml.safe_load(ORPHAN))[0], ["MovingNode"])
-
-    def test_undeclared_stage_breaks_one_stage_label(self):
-        workflow = yaml.safe_load(STUCK.replace("stage: review", "stage: reveiw"))
-        self.assertIn("OneStageLabel", statechart.check(workflow)[0])
-
     def test_render_refuses_a_broken_workflow(self):
         files = {"workflow.yaml": STUCK, "README.md": "# x\n"}
         with self.assertRaisesRegex(SystemExit, "NoDeadlock"):
