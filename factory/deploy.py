@@ -406,7 +406,7 @@ def default_environment(nodes: dict, defn: dict | None) -> str | None:
     """The environment a node runs in unless it names one: the definition's `settings.environment`, else the one
     most nodes run in."""
     if defn:
-        return (defn["workflow"].get("settings") or {}).get("environment")
+        return definition.default_environment(defn)
     envs = [n["env"] for n in nodes["nodes"].values() if n.get("env")]
     return max(dict.fromkeys(envs), key=envs.count) if envs else None
 
@@ -607,7 +607,10 @@ def _output_errors(nodes: dict, config: dict, name: str) -> list[str]:
     if not (classes := [cls for n in names if (cls := registry.impl("surface", n))]):
         return [plugins.impl_error(config, "surface", name, "surface")]
     supported = set().union(*(cls().outputs() for cls in classes))
-    return [f"unsupported-output: nodes.{k}: output {n['output']!r} is not supported by surface {', '.join(names)} "
+    defn = team_definition()
+    env_errs = [e for cls in classes if hasattr(cls, "environment_errors") and defn is not None
+                and definition.adopted(defn) for e in cls().environment_errors(defn)]  # ADR-0027
+    return env_errs + [f"unsupported-output: nodes.{k}: output {n['output']!r} is not supported by surface {', '.join(names)} "
             f"(supported: {', '.join(sorted(supported))})"
             for k, n in nodes["nodes"].items() if n.get("output") and n["output"] not in supported
             and n.get("enabled") is not False and n.get("role") != "human" and not n.get("runner")]

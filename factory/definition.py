@@ -222,6 +222,34 @@ def copies(defn, name):
     return out
 
 
+def event_repositories(defn):
+    """The repositories whose events wake copies (ADR-0027), in order: each tracker's `home` (its GitHub issues) and
+    each writable repository's vcs `home` (its PRs). Their labels are planned; a tracker with no home (YouTrack)
+    plans its own tags."""
+    out = []
+    for env in (defn["factory"].get("environments") or {}):
+        for r in repositories(defn, env):
+            for kind, on in (("tracker", r["tracker"] is not None), ("vcs", r["write"])):
+                c = contract(defn, kind, r[kind]) if on else None
+                if c and (home := c.home(r[kind], r["repo"])):
+                    out.append(home)
+    return list(dict.fromkeys(out))
+
+
+def default_environment(defn):
+    """The workflow's `settings.environment`, else (ADR-0027) the first environment a node names, else the first."""
+    w = defn["workflow"]
+    named = (w.get("settings") or {}).get("environment") or next(
+        (e for n in (w.get("nodes") or {}).values() if (e := _first_env(n or {}))), None)
+    return named or next(iter(defn["factory"].get("environments") or {}), None)
+
+
+def _first_env(node):
+    """A node's first environment: of its `environments` list (ADR-0027), else its `environment`."""
+    listed = node.get("environments")
+    return (listed[0] if isinstance(listed, list) and listed else None) or node.get("environment")
+
+
 def adopted(defn):
     """Whether the definition uses the ADR-0027 model (a repository's `write`, `tracker` or `vcs`, a node's
     `environments`): only then do the repository checks run, as errors."""
@@ -290,7 +318,7 @@ def environment_secrets(defn, env_name):
     layers = [(f.get("defaults") or {}), ((f.get("environments") or {}).get(env_name) or {})]
     for name in w.get("nodes") or {}:
         node, agent, role, _ = _parts(defn, name)
-        if (node.get("environment") or (w.get("settings") or {}).get("environment")) == env_name:
+        if env_name in node_environments(defn, name):
             layers += [role, agent, node]
     out = {}
     for layer in layers:
@@ -323,7 +351,7 @@ def _mcp_layers(defn, name):
     environment -> role -> agent -> node."""
     node, agent, role, env = _parts(defn, name)
     f = defn["factory"]
-    env_name = node.get("environment") or (defn["workflow"].get("settings") or {}).get("environment")
+    env_name = (node_environments(defn, name) or [None])[0]
     raw = [("defaults", f.get("defaults") or {}), (f"environments.{env_name}", env), (f"roles.{agent.get('role')}", role),
            (f"agents.{node.get('agent')}", agent), (f"nodes.{name}", node)]
     declared, out = set(), []
@@ -543,7 +571,7 @@ def errors(defn):
         errs.append("bad-tracker-repositories: factory.yaml: `tracker.repositories` is a list of repositories")
     if w.get("blockers", "start") not in ("start", "merge"):
         errs.append(f"bad-blockers: workflow.yaml: `blockers` is `start` or `merge`, not {w['blockers']!r}")
-    default_env = (w.get("settings") or {}).get("environment")
+    default_env = default_environment(defn)
     errs += scopes.vcs_errors(f, nodes={  # each node's PR effects on its environment's vcs (#1070)
         name: (n.get("environment") or default_env,
                [e for o in (n.get("outcomes") or {}).values() for e in (o or {}).get("effects") or []])
@@ -793,7 +821,7 @@ def to_project(defn):
     dset, wset = defaults.get("settings") or {}, w.get("settings") or {}
     stages = w.get("stages") or {}
     prefix = stages.get("label_prefix", "factory:")
-    default_env = wset.get("environment")
+    default_env = default_environment(defn)
 
     # Repositories: every listed one; the primary is the main repository of the default environment.
     primary = _primary(defn, envs[default_env])
@@ -926,7 +954,7 @@ def _effect(e, prefix):
 
 
 def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_stages, pr_cmds):
-    env_name = n.get("environment") or default_env
+    env_name = _first_env(n) or default_env
     a = agents[n["agent"]]
     role = role_of(n["agent"])
     when = dict(n.get("when") or {})
@@ -1041,7 +1069,7 @@ def nodes(defn):
     agents, envs, defaults = f.get("agents") or {}, f.get("environments") or {}, f.get("defaults") or {}
     wset = w.get("settings") or {}
     prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
-    default_env, all_stages = wset.get("environment"), sorted(_used_stages(w))
+    default_env, all_stages = default_environment(defn), sorted(_used_stages(w))
     primary = _primary(defn, envs[default_env])
     on_pr = {f"{prefix}ci-green", f"{prefix}ci-red"}
     for n in (w.get("nodes") or {}).values():
@@ -1060,7 +1088,7 @@ def nodes(defn):
     for name, n in (w.get("nodes") or {}).items():
         a = agents[n["agent"]]
         role = {"script": "script", "human": "human"}.get(a.get("harness")) or a.get("role") or n["agent"]
-        env_name = n.get("environment") or default_env
+        env_name = _first_env(n) or default_env
         when = dict(n.get("when") or {}) or {"always": True}
         triggers = [_trigger(t, name, prefix, on_pr, schedules, envs.get(env_name) or {}) for t in n.get("triggers") or []]
         node = {"env": env_name} if role != "human" else {}

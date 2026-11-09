@@ -18,6 +18,20 @@ class YouTrack:
         return None
 
     @staticmethod
+    def event(trigger):
+        """A ticket label wake is a tag on YouTrack; a PR, CI or schedule event stays the vcs's."""
+        event, _, arg = str(trigger).partition(" ")
+        return f"youtrack.tagAdded {arg}" if event == "issues.labeled" else trigger
+
+    @staticmethod
+    def filters(block):
+        """Air's project selector (`projectShortName`, case-sensitive: AIRA-790) and the scope field's value."""
+        b = block or {}
+        scope = b.get("scope") or {}
+        out = {"projectShortName": b["project"]} if b.get("project") else {}
+        return {"youtrack": {**out, **({scope["field"]: scope["value"]} if scope.get("field") else {})}} if out or scope else {}
+
+    @staticmethod
     def check(block, where):
         b, errs = block or {}, []
         if not b.get("project"):

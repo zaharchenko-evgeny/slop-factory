@@ -21,6 +21,14 @@ class Issues:
         return _full((block or {}).get("repository") or repo).lower()
 
     @staticmethod
+    def event(trigger):
+        return trigger
+
+    @staticmethod
+    def filters(block):
+        return {}  # the copy's main repository is the issues' repository: Air delivers only its events
+
+    @staticmethod
     def check(block, where):
         scope = (block or {}).get("scope")
         if scope is not None and (not isinstance(scope, dict) or set(scope) != {"label"}):

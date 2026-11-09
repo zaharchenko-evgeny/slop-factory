@@ -20,6 +20,14 @@ class TrackerContract(Protocol):
     def check(self, block: dict, where: str) -> list[str]:
         """The config errors of the block."""
 
+    def event(self, trigger: str) -> str:
+        """A ticket wake in the GitHub form the node graph uses (`issues.labeled <label>`), in this tracker's form
+        (`youtrack.tagAdded <tag>`); any other event (PR, CI, schedule) unchanged."""
+
+    def filters(self, block: dict) -> dict:
+        """{trigger source: filters} that narrow a copy's ticket triggers to this place (YouTrack: project and scope);
+        {} when the copy's main repository already narrows them (GitHub Issues)."""
+
 
 class VcsContract(Protocol):
     def home(self, block: dict, repo: str) -> str | None:
