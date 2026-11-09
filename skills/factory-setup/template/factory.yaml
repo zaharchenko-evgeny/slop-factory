@@ -4,8 +4,8 @@ name: {{PROJECT_NAME}}
 engine: "{{ENGINE}}"              # what the Air startup script installs (uv tool install)
 owner: {{GITHUB_USER}}            # the GitHub login the notify node tells
 tracker:
-  adapter: github-issues
-  repository: {{TRACKER_REPOSITORY}}
+{{TRACKER}}
+{{CODE_HOST}}
 
 # Model aliases: the only place a model ID appears.
 models:
@@ -123,8 +123,7 @@ roles:
     mcp: {}
 
 # Agents: a role (above; roles/<role>/: role.md, setup.sh) + a model. With `plugins: [comments]` (ADR-0026, off
-# by default), `mentionable: true`: @factory:<agent> in a comment asks it (the comment node routes it, ADR-0023);
-# deploy adds its reply step (#590).
+# by default), `mentionable: true`: @factory:<agent> in a comment or review asks it; deploy adds its reply step (#590).
 # + access + settings. `gate` and `human` have no role.
 agents:
   human:          { harness: human }                               # a person; never deployed
@@ -147,8 +146,7 @@ agents:
 environments:
   main:                           # tickets and PRs of the project
     repositories:
-      - repo: {{MAIN_REPOSITORY}}
-      - repo: {{TEAM_REPOSITORY}} # the knowledge base, read-only
+      - repo: {{CODE_REPOSITORIES}}
     ci: { workflow: {{CI_WORKFLOW}} }   # `ci: failed` = Air workflow_run.failed for this workflow
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               "*.blob.core.windows.net", pypi.org, files.pythonhosted.org]
@@ -157,7 +155,7 @@ environments:
   knowledge:                      # retro: the knowledge base is written, the project is evidence
     repositories:
       - repo: {{TEAM_REPOSITORY}}
-      - repo: {{MAIN_REPOSITORY}}
+      - repo: {{CODE_REPOSITORIES}}
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               pypi.org, files.pythonhosted.org]
     vm: default

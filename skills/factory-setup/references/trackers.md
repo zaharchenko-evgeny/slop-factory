@@ -43,3 +43,15 @@ Selected by `tracker.adapter` in `factory.yaml`.
 - Setting a stage removes the other stage labels in the same step.
 - Setup creates missing labels only after the user approves.
 - Event trigger for Air: issue labeled with the `ready` label.
+
+## Several repositories
+
+Use one code repository when you can. Use several only when one workflow covers them (ADR-0024). A node's `listens`
+(`tickets`, the default; `tracker`; or a list) says which ticket repositories it hears.
+
+- **GitHub Issues**: tickets live in the repository they change. `tracker.repositories` lists them. The first is the
+  tracker: parents and work across repositories live there. `tracker.repository` stays the first one. When the
+  repositories need one issues token, name it with `issues_token_env`.
+- **YouTrack**: one linked project per repository, `tracker.projects: {<project>: <owner/repo>}`. `tracker.project` is
+  the first project. A copy of a node listens only to its linked project. Each project links one repository.
+  `render.py` writes only `tracker` and `code_host`; add the YouTrack state stores after rendering (see above), then run `factory validate`.

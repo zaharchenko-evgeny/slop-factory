@@ -67,6 +67,8 @@ class Templates(unittest.TestCase):
         doc = (SKILL / "SKILL.md").read_text()
         used = {m for f in [*files(render.T), *files(render.PROJECT_T)] for m in render.PH.findall(f.read_text())}
         used.discard("ENGINE_SKILL_SOURCE")  # render.py derives this from ENGINE
+        used.discard("CODE_HOST")  # derived from CODE_REPOSITORIES and the optional YouTrack answers
+        used.discard("TRACKER")
         for name in used:
             self.assertIn(f"`{name}`", doc, name)
         self.assertEqual(used, set(ANSWERS))
@@ -113,6 +115,82 @@ class Templates(unittest.TestCase):
             self.assertEqual(pin["sha256"], "bd997445b6b34390926afd9cb2e4af665b773c46233a2ec5e5ec08ed2e6502bb")
             run = subprocess.run(["factory", "validate", "--team", tmp], capture_output=True, text=True)
             self.assertEqual(run.stdout.strip(), "factory: ok", run.stderr)
+
+    def validate(self, answers, cli=True):
+        """The loaded definition of a team rendered from `answers`; its definition errors are empty and, with `cli`,
+        `factory validate` passes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel, text in render.render_project(answers).items():
+                (Path(tmp) / rel).parent.mkdir(parents=True, exist_ok=True)
+                (Path(tmp) / rel).write_text(text)
+            defn = definition.load(tmp)
+            self.assertEqual(definition.errors(defn), [])
+            if cli:
+                run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "factory/cli.py"), "validate"], capture_output=True,
+                                     text=True, env={**os.environ, "FACTORY_TEAM": tmp})
+                self.assertEqual(run.stdout.strip(), "factory: ok", run.stdout + run.stderr)
+            return defn
+
+    def test_two_repository_answers_render_a_valid_definition(self):
+        defn = self.validate({**ANSWERS, "CODE_REPOSITORIES": ["o/api", "o/web"]})
+        factory, workflow = defn["factory"], defn["workflow"]
+        self.assertEqual(factory["tracker"]["repository"], "o/api")
+        self.assertEqual(factory["tracker"]["repositories"], ["o/api", "o/web"])
+        for env in factory["environments"].values():
+            self.assertFalse(any(r.get("main") for r in env["repositories"]), env)
+        self.assertEqual([r["repo"] for r in factory["environments"]["main"]["repositories"]], ["o/api", "o/web"])
+        nodes = workflow["nodes"]
+        for name in ("implement-small", "implement-medium", "implement-large", "fix", "update"):
+            self.assertEqual(nodes[name]["writes"], "all", name)
+            self.assertNotIn("listens", nodes[name], name)  # the default: tickets
+        self.assertEqual(nodes["retro"]["writes"], [ANSWERS["TEAM_REPOSITORY"]])
+        for name in ("intake", "dispatch", "review-low", "review-high", "automerge", "merge", "finish", "notify",
+                     "knowledge-review", "reconcile", "doctor-main", "doctor-team"):
+            self.assertNotIn("writes", nodes[name], name)
+
+    def test_one_repository_answers_render_the_single_tracker(self):
+        defn = self.validate(ANSWERS)
+        self.assertEqual(defn["factory"]["tracker"], {"adapter": "github-issues", "repository": "zaharchenko-evgeny/slop-factory"})
+        self.assertEqual([r["repo"] for r in defn["factory"]["environments"]["main"]["repositories"]],
+                         ["zaharchenko-evgeny/slop-factory"])
+
+    def test_youtrack_projects_render_tracker_projects(self):
+        projects = {"API": "o/api", "WEB": "o/web"}
+        # `factory validate` also wants YouTrack state stores, which the setup interview adds after rendering
+        defn = self.validate({**ANSWERS, "CODE_REPOSITORIES": ["o/api", "o/web"], "TRACKER_URL": "https://example.youtrack.cloud",
+                              "TRACKER_PROJECTS": projects}, cli=False)
+        self.assertEqual(defn["factory"]["tracker"], {"adapter": "youtrack", "url": "https://example.youtrack.cloud",
+                                                      "project": "API", "projects": projects})
+        self.assertEqual(defn["factory"]["code_host"], {"adapter": "github", "repository": "o/api"})
+
+    def test_youtrack_project_of_an_unknown_repository_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "o/other"):
+            render.render_project({**ANSWERS, "TRACKER_URL": "https://y", "TRACKER_PROJECTS": {"API": "o/other"}})
+
+    def test_no_code_repository_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "CODE_REPOSITORIES"):
+            render.render_project({**ANSWERS, "CODE_REPOSITORIES": []})
+
+    def test_list_placeholder_repeats_its_line(self):
+        for items, want in ((["a"], "- repo: a\nend"), (["a", "b"], "- repo: a\n- repo: b\nend"), ([], "end"),
+                            ("a", "- repo: a\nend")):
+            self.assertEqual(render.fill("- repo: {{X}}\nend", {"X": items}), want, items)
+        self.assertEqual(render.fill("  {{X}}\n  {{Y}}", {"X": ["a", "b"], "Y": "c"}), "  a\n  b\n  c")
+
+    def test_readme_lists_each_repository_with_its_automations(self):
+        files = render.render_project({**ANSWERS, "CODE_REPOSITORIES": ["o/api", "o/web"]})
+        readme = files["README.md"]
+        section = readme[readme.index("## Repositories"):]
+        by_repo = {line.split("`")[1]: line for line in section.splitlines() if line.startswith("- `")}
+        self.assertEqual(list(by_repo), ["o/api", "o/web", ANSWERS["TEAM_REPOSITORY"]])
+        self.assertIn("`implement-medium api`", by_repo["o/api"])
+        self.assertIn("`implement-medium web`", by_repo["o/web"])
+        self.assertNotIn("api`", by_repo["o/web"].replace("o/web", ""))
+        self.assertIn("`reconcile`", by_repo["o/api"])  # a scheduled node runs in the tracker repository
+        self.assertEqual(by_repo[ANSWERS["TEAM_REPOSITORY"]].split(": ")[1], "`retro`")
+        single = render.render_project(ANSWERS)["README.md"]
+        self.assertIn("`implement-medium`", single)
+        self.assertNotIn("implement-medium slop", single)
 
     def test_readme_documents_factory_deploy(self):
         readme = render.render_project(ANSWERS)["README.md"]
