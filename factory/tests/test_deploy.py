@@ -488,8 +488,10 @@ class ApplyTest(unittest.TestCase):
             cfg.set_team(before)
         a = {x["name"]: x for x in plan["automations"]}
         for name, label in (("review-low", "factory:ci-green"), ("review-high", "factory:ci-green"), ("ci-red", "factory:ci-red")):
-            events = [t["eventType"] for t in a[f"[Slop factory] {name}"]["triggers"] if t["filters"].get("label") == label]
-            self.assertEqual(events, ["pull_request.labeled"], name)
+            for repo in ("slop-factory", "slop-eval-factory"):  # one copy per ticket repository (ADR-0024)
+                events = [t["eventType"] for t in a[f"[Slop factory] {name} {repo}"]["triggers"]
+                          if t["filters"].get("label") == label]
+                self.assertEqual(events, ["pull_request.labeled"], f"{name} {repo}")
 
     def test_apply_prints_webhook_registration_when_unchanged(self):
         state = ([{"name": "[F] hook", "webhooks": [{"id": "t1", "url": "https://air/hook/t1"}]}], [])

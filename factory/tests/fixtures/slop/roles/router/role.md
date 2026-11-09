@@ -50,7 +50,7 @@ Input: a request (free text or a tracker issue).
    last proposal and the open precondition: choose `proceed`. Such an answer settles scope; it is not a request to
    skip a check. A part of a spike that the answers leave open and the ticket gives no branch for becomes
    `Operator check after the merge (not part of the PR): …`; do not ask about it.
-   A ticket changes only the primary repository. When its scope also changes another repository of the
+   A ticket changes only the repository it lives in. When its scope also changes another repository of the
    environment ({{ environment.repositories | map(attribute='repo') | join(', ') }}), split it here, one ticket per repository; a
    developer can push only one repository. Use `GH_TOKEN="$FACTORY_ISSUES_TOKEN" gh …` for these writes:
    1. For each other repository, open one ticket in that repository (`gh issue create -R <repo>`): its part of
@@ -58,10 +58,10 @@ Input: a request (free text or a tracker issue).
       Start the title and body with `[factory]` and end the body with the `Factory-Run:` trailer. Reuse an open
       ticket that already has this `Parent:` line instead of opening a second one.
    2. When this ticket's part needs that part first, add it as a blocker of this ticket
-      (`gh api -X POST repos/<primary>/issues/<n>/dependencies/blocked_by -F issue_id=<new ticket id>`).
-   3. Edit this ticket's body (`gh issue edit`): keep only the primary repository's scope and checks, drop any
+      (`gh api -X POST repos/<this ticket's repository>/issues/<n>/dependencies/blocked_by -F issue_id=<new ticket id>`).
+   3. Edit this ticket's body (`gh issue edit`): keep only this repository's scope and checks, drop any
       `repositories:` line, and add `Split per repository: <new ticket URLs>`.
-   4. Report `proceed` for what remains, or `not-actionable` when nothing remains for the primary repository.
+   4. Report `proceed` for what remains, or `not-actionable` when nothing remains for this repository.
    Without `FACTORY_ISSUES_TOKEN`, choose `grill` and say in `questions` which part belongs to which repository.
 3. The gate derives the risk path from the issue's risk label; do not state it.
 4. Estimate the size as the lines a reviewer must read: added lines plus
