@@ -171,6 +171,11 @@ class GitHubTracker:
         """The id of issue `number` of `repo`: bare in the tracker, `owner/repo#n` elsewhere."""
         return ticket_ref(repo, number, self.primary)
 
+    def _id(self, item):
+        """The id of an issue body of the REST API: its own repository (`repository_url`), else this one."""
+        url = item.get("repository_url") or ""
+        return self.ref(url.split("/repos/", 1)[1] if "/repos/" in url else self.repo, item["number"])
+
     def login(self):
         """The authenticated gh user: the only author whose vars comments are trusted."""
         if self._login is None:
@@ -354,8 +359,7 @@ class GitHubTracker:
     def _frontier(self):
         maps = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
                                     self.map_label, "--json", "number", "--limit", "100"]))
-        order = [self.ref(self.repo, c["number"]) for m in sorted(x["number"] for x in maps)
-                 for c in self._api_list(f"issues/{m}/sub_issues")]
+        order = [self._id(c) for m in sorted(x["number"] for x in maps) for c in self._api_list(f"issues/{m}/sub_issues")]
         out = [n for repo in self.ticket_repos for n in self.at(repo)._ready()]
         return sorted(out, key=lambda n: order.index(n) if n in order else len(order))
 

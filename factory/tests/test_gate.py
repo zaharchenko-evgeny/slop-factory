@@ -2268,7 +2268,8 @@ class TicketReposGh:
     """`gh` over `o/r` (the tracker), `o/b` (a second ticket repository) and `o/code` (a repository with no tickets).
     `data` maps a REST path to its body; `ready` and `staged` list each repository's issue numbers."""
 
-    def __init__(self, data=None, ready=None, staged=None, assignees=()):
+    def __init__(self, data=None, ready=None, staged=None, assignees=(), maps=()):
+        self.maps = maps
         self.data, self.ready, self.staged, self.assignees = data or {}, ready or {}, staged or {}, set(assignees)
         self.calls = []
 
@@ -2277,6 +2278,8 @@ class TicketReposGh:
         path = next((str(x) for x in args if str(x).startswith("repos/")), "")
         if args[:2] == ["issue", "list"]:
             repo = args[args.index("-R") + 1]
+            if "--label" in args and args[args.index("--label") + 1] == "factory:map":
+                return json.dumps([{"number": n} for n in self.maps])
             if "--search" in args or self.stages_label(args) != "ready":
                 return "[]"
             return json.dumps([{"number": n, "assignees": [{"login": "x"}] if (repo, n) in self.assignees else []}
@@ -2321,6 +2324,18 @@ class TicketRepositoriesTest(unittest.TestCase):
                                                    "repository": {"full_name": repo}}, host)["ticket"]
         self.assertEqual((issue("o/r", 982), issue("o/b", 5)), (982, "o/b#5"))
         self.assertEqual(gate.branch_of({"ticket": "o/b#5", "title": "Fix it"}, CONFIG), "ez/5-fix-it")
+
+    def test_frontier_orders_map_children_by_their_own_repository(self):
+        from factory_plugins.github.tracker import GitHubTracker
+        api = "https://api.github.com/repos/"
+        for children, want in [([{"number": 7, "repository_url": api + "o/b"}], ["o/b#7", 7]),
+                               ([{"number": 7, "repository_url": api + "o/r"}], [7, "o/b#7"]),
+                               ([{"number": 7}], [7, "o/b#7"])]:
+            with self.subTest(children=children):
+                gh = TicketReposGh(ready={"o/r": [7], "o/b": [7]}, maps=[99],
+                                   data={"repos/o/r/issues/99/sub_issues": children})
+                tracker = GitHubTracker("o/r", CONFIG["tracker"]["stages"], run=gh, ticket_repos=self.TICKETS)
+                self.assertEqual(tracker.frontier(), want)
 
     def test_frontier_reads_every_ticket_repository(self):
         from factory_plugins.github.tracker import GitHubTracker
