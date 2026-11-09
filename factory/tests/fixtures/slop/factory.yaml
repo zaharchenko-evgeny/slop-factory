@@ -9,7 +9,7 @@ tracker:
   repository: zaharchenko-evgeny/slop-factory
   repositories:               # ADR-0024: the ticket repositories; the first is the tracker
     - zaharchenko-evgeny/slop-factory
-    - zaharchenko-evgeny/slop-eval-factory   # retro's PRs wake knowledge-review here
+    - zaharchenko-evgeny/slop-eval-factory   # team tickets; retro's PRs wake knowledge-review here
 
 # Model aliases: the only place a model ID appears.
 models:
@@ -148,7 +148,7 @@ environments:
   engine:                         # tickets and PRs of the engine
     repositories:
       - repo: zaharchenko-evgeny/slop-factory
-      - repo: zaharchenko-evgeny/slop-eval-factory   # the team repository: no node in this environment writes it
+      - repo: zaharchenko-evgeny/slop-eval-factory   # the team repository: its tickets' developer copies write it
     ci: { workflow: quality-gates }   # `ci: failed` = Air workflow_run.failed for this workflow
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               "*.blob.core.windows.net", pypi.org, files.pythonhosted.org, registry.npmjs.org]

@@ -7,7 +7,8 @@
 # Agents and environments are defined in factory.yaml; nodes name them.
 # Merge order: factory.yaml defaults -> environment -> role -> agent -> settings below -> node.
 # ADR-0024: `listens` names the ticket repositories whose events wake a node (default: every one); `writes` the
-# repositories Air pushes to. Delivery nodes listen to the tracker only, so each stays one automation.
+# repositories Air pushes to. Event nodes listen to both ticket repositories, so each runs as one automation
+# per repository; the developer nodes write both, and each copy pushes only its own repository.
 
 # Stage names come from the nodes (`when`, triggers, effects). Labels are <label_prefix><stage>.
 stages:
@@ -40,7 +41,6 @@ nodes:
   human-reply:                    # a person comments on a ticket or PR that waits for them: resume it
     agent: resume
     triggers: [{ ticket: commented }, { pr: commented }]
-    listens: tracker
     when: { label: "factory:needs-human" }   # the label is on the PR (`on: pr`); resuming removes it
     output: read-only
     outcomes:
@@ -51,7 +51,6 @@ nodes:
   ticket-reply:                   # a person answers a ticket that waits in blocked or needs-answers: resume it
     agent: resume
     triggers: [{ ticket: commented }]
-    listens: tracker
     when: { stage: [blocked, needs-answers] }
     output: read-only
     outcomes:
@@ -63,7 +62,6 @@ nodes:
   intake:
     agent: router
     triggers: [{ stage: triage }]
-    listens: tracker
     when: { stage: triage }
     output: read-only
     settings: { max_repositories: 3 }
@@ -83,8 +81,7 @@ nodes:
   investigate:
     agent: dev
     triggers: [{ stage: investigating }]
-    listens: tracker
-    writes: [zaharchenko-evgeny/slop-factory]   # output read-only: it only reproduces
+    writes: all                   # output read-only: it only reproduces
     when: { stage: investigating }
     output: read-only
     settings: { mode: investigate }
@@ -97,7 +94,6 @@ nodes:
   dispatch:
     agent: dispatcher
     triggers: [{ stage: ready }]
-    listens: tracker
     when: { stage: ready, blockers: closed }
     output: read-only
     settings: { small_lines: 150, medium_lines: 400 }
@@ -110,8 +106,7 @@ nodes:
   implement-small:
     agent: dev-cheap
     triggers: [{ label: "factory:implement-small" }]
-    listens: tracker
-    writes: [zaharchenko-evgeny/slop-factory]
+    writes: all
     when: { stage: in-dev }
     output: create-pr
     settings: { mode: implement }
@@ -124,8 +119,7 @@ nodes:
   implement-medium:
     agent: dev
     triggers: [{ label: "factory:implement-medium" }]
-    listens: tracker
-    writes: [zaharchenko-evgeny/slop-factory]
+    writes: all
     when: { stage: in-dev }
     output: create-pr
     settings: { mode: implement }
@@ -138,8 +132,7 @@ nodes:
   implement-large:
     agent: dev-strong
     triggers: [{ label: "factory:implement-large" }]
-    listens: tracker
-    writes: [zaharchenko-evgeny/slop-factory]
+    writes: all
     when: { stage: in-dev }
     output: create-pr
     settings: { mode: implement }
@@ -152,7 +145,6 @@ nodes:
   review-low:
     agent: reviewer-cheap
     triggers: [{ label: "factory:review-low" }, { label: "factory:ci-green" }]   # CI labels the PR when it finishes
-    listens: tracker
     when: { stage: in-review, ci: green, label: "risk:low" }   # never on pending or red CI; risk:low picks this review
     output: read-only
     settings: { focus: [behaviour] }
@@ -166,7 +158,6 @@ nodes:
   review-high:
     agent: reviewer
     triggers: [{ label: "factory:review-high" }, { label: "factory:ci-green" }]   # CI labels the PR when it finishes
-    listens: tracker
     when: { stage: in-review, ci: green, label: "risk:high" }   # never on pending or red CI; risk:high picks this review
     output: read-only
     settings: { focus: [full, structure-security] }
@@ -180,7 +171,6 @@ nodes:
   ci-red:                         # red CI needs no reviewer: the guards send it straight to the developer
     agent: clerk
     triggers: [{ label: "factory:ci-red" }]
-    listens: tracker
     when: { stage: in-review }
     outcomes:
       fix:     { if: { ci: red }, effects: [{ unlabel: "factory:review-low" }, { unlabel: "factory:review-high" },
@@ -191,8 +181,7 @@ nodes:
   fix:
     agent: dev
     triggers: [{ label: "factory:fix" }]
-    listens: tracker
-    writes: [zaharchenko-evgeny/slop-factory]
+    writes: all
     when: { stage: [in-review, changes-requested, approved], fix-rounds: below-cap }
     output: push-to-source
     settings: { mode: fix, fix_rounds: 3 }
@@ -204,7 +193,6 @@ nodes:
   rounds-out:                     # a fix label at the fix cap: no round left, a person decides (notify tells them)
     agent: clerk
     triggers: [{ label: "factory:fix" }]
-    listens: tracker
     when: { stage: [in-review, changes-requested, approved], fix-rounds: at-cap }
     outcomes:
       blocked: { effects: [{ unlabel: "factory:fix", on: pr }, { stage: blocked }] }
@@ -212,8 +200,7 @@ nodes:
   update:                         # a merge conflict
     agent: dev-cheap
     triggers: [{ label: "factory:update" }]
-    listens: tracker
-    writes: [zaharchenko-evgeny/slop-factory]
+    writes: all
     when: { stage: changes-requested }
     output: push-to-source
     settings: { mode: update }
@@ -225,7 +212,6 @@ nodes:
   automerge:                      # an agent decides; high risk always goes to a person
     agent: approver
     triggers: [{ label: "factory:automerge" }]
-    listens: tracker
     when: { stage: approved }
     output: read-only
     settings: { risky_paths: ["engine/**", ".github/**", ".air/**", "AGENTS.md", "**/AGENTS.md", "CLAUDE.md", "**/CLAUDE.md",
@@ -239,7 +225,6 @@ nodes:
   merge:                          # the guards choose; the merge effect checks head, approval and CI itself
     agent: clerk
     triggers: [{ label: "factory:merge" }]
-    listens: tracker
     when: { stage: approved }
     outcomes:
       conflict: { if: { pr: conflicting }, effects: [{ unlabel: "factory:merge" }, { label: "factory:update", on: pr }, { stage: changes-requested }] }
@@ -253,7 +238,6 @@ nodes:
   finish:                         # a merged PR or finished split: done; the gate then wakes unblocked dependents
     agent: clerk
     triggers: [{ pr: merged }, { ticket: closed }]
-    listens: tracker
     outcomes:
       done:          { if: { pr: merged, stage: "!done" }, effects: [{ stage: done }] }
       children-done: { if: { stage: split, children: closed }, effects: [{ stage: done }] }
@@ -263,7 +247,6 @@ nodes:
   notify:                         # a state that needs the owner: the agent writes one message, or skips
     agent: notify
     triggers: [{ stage: blocked }, { stage: needs-answers }]
-    listens: tracker
     output: read-only
     outcomes:
       notified: { effects: [{ comment: message }, { assign: { field: assignee } }] }
@@ -272,7 +255,6 @@ nodes:
   notify-pr:                      # a PR that waits for the owner: the message goes on the PR
     agent: notify
     triggers: [{ label: "factory:needs-human" }]
-    listens: tracker
     output: read-only
     outcomes:
       notified: { effects: [{ comment: message, on: pr }, { assign: { field: assignee }, on: pr }] }
