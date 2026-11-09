@@ -14,7 +14,9 @@ from plugins import Plugin
 PLUGIN = Plugin(
     name="github",
     provides={"tracker": {"github-issues": "factory_plugins.github.gate:GitHubGateTracker"},
-              "vcs": {"github": "factory_plugins.github.gate:GitHubCodeHost"}},
+              "vcs": {"github": "factory_plugins.github.gate:GitHubCodeHost"},
+              "tracker-contract": {"github-issues": "factory_plugins.github.contract:ISSUES"},  # ADR-0027
+              "vcs-contract": {"github": "factory_plugins.github.contract:VCS"}},
     commands={"ci-sync": "factory_plugins.github.ci_sync:command"},
     hooks={"reconcile.passes": "factory_plugins.github.ci_sync:reconcile_pass",
            "deploy.labels": "factory_plugins.github.provision:reconcile",

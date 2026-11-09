@@ -132,6 +132,10 @@ def implied(config):
               if isinstance(e, dict) and e.get("vcs")]
     names += [("tracker", _named(e.get("tracker")) or "github-issues") for e in (envs.values() if isinstance(envs, dict) else [])
               if isinstance(e, dict) and isinstance(e.get("tracker"), dict)]  # an environment's own tracker (#1069)
+    repos = [r for e in (envs.values() if isinstance(envs, dict) else []) if isinstance(e, dict)
+             for r in e.get("repositories") or [] if isinstance(r, dict)]
+    names += [(kind, _named(r.get(kind))) for r in repos for kind in ("tracker", "vcs")
+              if r.get(kind) not in (None, "none", False)]  # a repository's own tracker or vcs (ADR-0027)
     models = config.get("models")
     names += [("agent", m.get("harness")) for m in (models.values() if isinstance(models, dict) else [])
               if isinstance(m, dict)]
