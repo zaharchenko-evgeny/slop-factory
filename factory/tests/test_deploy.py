@@ -594,6 +594,9 @@ class CommentWakeDeployTest(unittest.TestCase):
         for source in ("git+https://github.com/o/main@main", "https://github.com/o/main.git", "git@github.com:o/main.git"):
             with self.subTest(source=source):
                 self.assertEqual(github_wake.engine_repository({"engine": source}), "o/main")
+        with mock.patch.object(github_wake.subprocess, "run") as run:  # `engine: 1`: the git origin
+            run.return_value.stdout = "https://github.com/o/engine\n"
+            self.assertEqual(github_wake.engine_repository({"engine": 1}), "o/engine")
         calls = []
 
         def gh(args):

@@ -3,6 +3,8 @@ the factory repository, and the comment wake files (ADR-0023) installed in every
 comments plugin is on, and removed once it is off."""
 import base64
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -22,9 +24,8 @@ def wake_rules(features) -> dict:
 def engine_repository(config: dict) -> str | None:
     """`owner/repo` (lowercase) of the repository the engine comes from: the team's `engine:` source
     (`git+https://github.com/o/r@main`), else the git origin of this engine checkout; None when neither names one."""
-    import re
-    import subprocess
-    source = str(config.get("engine") or "")
+    source = config.get("engine")
+    source = source if isinstance(source, str) and "github.com" in source else ""  # the compiled config's `engine: 1` is a schema version
     if not source:
         try:
             source = subprocess.run(["git", "-C", str(ROOT), "remote", "get-url", "origin"], capture_output=True,
