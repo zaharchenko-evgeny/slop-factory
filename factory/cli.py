@@ -374,11 +374,16 @@ def env_roles(env):
     """Sorted roles of the enabled agent nodes (not human or script) whose `env` is `env`, from the project's workflow."""
     import project
     import workflow
+    import definition
     root = config.team_root()
     wf = workflow.load(root, project.load(root))
     has_role_files = (root / "factory.yaml").is_file()
-    roles = {n["role"] for n in (wf.get("nodes") or {}).values()
-             if n.get("env") == env and n.get("enabled") is not False
+    defn = definition.load(root) if definition.present(root) else None
+    # ADR-0027: a node runs in every environment it names, not only its first (the compiled `env`)
+    runs_in = (lambda name, n: env in definition.node_environments(defn, name)) if defn else \
+        (lambda name, n: n.get("env") == env)
+    roles = {n["role"] for name, n in (wf.get("nodes") or {}).items()
+             if runs_in(name, n) and n.get("enabled") is not False
              and (not has_role_files or n.get("role") == "clerk"
                   or (root / "roles" / n.get("role", "") / "role.md").is_file())
              and n.get("role") not in (None, "human", "script")}

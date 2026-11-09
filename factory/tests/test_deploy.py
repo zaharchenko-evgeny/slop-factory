@@ -831,14 +831,14 @@ class ProjectPlanTest(unittest.TestCase):
 
     def test_every_automation_runs_in_an_environment_of_its_repository(self):
         """#1112: Air rejects an automation whose repository is not its environment's, so a copy in a second ticket
-        repository (`reply-dev slop-eval-factory`) runs in that repository's variant of its environment."""
+        repository (`intake slop-eval-factory`, ADR-0027) runs in that repository's variant of its environment."""
         plan = definition_plan()
         envs = {e["name"]: e for e in plan["environments"]}
         for a in plan["automations"]:
             env = envs[a["environmentConfigId"]]
             self.assertEqual(definition.full_name(env["repository"]), a["repository"]["fullName"], a["name"])
-        variant = envs["[Slop factory] engine slop-eval-factory"]
-        engine = envs["[Slop factory] engine"]
+        variant = envs["[Slop factory] intake slop-eval-factory"]
+        engine = envs["[Slop factory] intake"]
         own = ("name", "repository", "variables", "secrets")  # #1126: its repository, and no issues token for it
         self.assertEqual({k: v for k, v in variant.items() if k not in own},
                          {k: v for k, v in engine.items() if k not in own})
@@ -903,14 +903,11 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertFalse([x for x in plan_labels(plan) if "<" in x])
 
     def test_environment_repositories_come_from_the_definition(self):
-        def edit(f):
-            f["environments"]["knowledge"]["repositories"] = [{"repo": "o/other"}]
-
-        def writes_other(w):  # a node that runs in o/other (#1112: else it runs in a repository variant)
-            w["nodes"]["retro"]["writes"] = ["o/other"]
-        plan = definition_plan(edit_factory=edit, edit_workflow=writes_other)
+        def edit(f):  # ADR-0027: retro runs in the team environment's writable repository
+            f["environments"]["team"]["repositories"] = [{"repo": "o/other", "write": True}]
+        plan = definition_plan(edit_factory=edit)
         envs = {e["name"]: e["repository"] for e in plan["environments"]}
-        self.assertEqual(envs["[Slop factory] knowledge"], "https://github.com/o/other")
+        self.assertEqual(envs["[Slop factory] team"], "https://github.com/o/other")
         self.assertEqual(envs["[Slop factory] engine"], "https://github.com/zaharchenko-evgeny/slop-factory")
 
     def test_youtrack_tracker_renders_ticket_triggers_as_youtrack_events(self):
@@ -1754,52 +1751,53 @@ class LabelColorTest(unittest.TestCase):
 
 
 class LabelPlanTest(unittest.TestCase):
-    """ADR-0024: labels per repository for a definition with `tracker.repositories`."""
+    """ADR-0027: labels in each repository whose events wake copies (its tickets or its PRs)."""
     TRACKER, WEB, DOCS = "zaharchenko-evgeny/slop-factory", "o/web", "o/docs"
+    TEAM = "zaharchenko-evgeny/slop-eval-factory"
 
-    def plan(self, tickets=None):
+    def plan(self, tickets=(), tracker=None):
+        """ADR-0027: WEB and DOCS join the engine environment; one in `tickets` holds tickets (its own issues), the
+        other is context only (`tracker: none`). `tracker` moves `tracker.repository` (the map label's home)."""
         def edit(f):
-            f["environments"]["engine"]["repositories"] += [{"repo": self.WEB}, {"repo": self.DOCS}]
-            f["tracker"].pop("repositories", None)  # the Slop team lists its own (ADR-0024)
-            if tickets:
-                f["tracker"]["repositories"] = tickets
+            f["environments"]["engine"]["repositories"] += [
+                {"repo": r, **({} if r in tickets else {"tracker": "none"})} for r in (self.WEB, self.DOCS)]
+            if tracker:
+                f["tracker"]["repository"] = tracker
         return definition_plan(edit)
 
     def test_every_ticket_repository_gets_stage_and_pr_labels(self):
-        plan = self.plan([self.TRACKER, self.WEB])
+        plan = self.plan([self.WEB])
         self.assertNotIn("labels", plan)
         self.assertNotIn("label_repositories", plan)
         want = {"factory:in-dev", "risk:high", "complexity:medium", "factory:needs-human", "factory:hold",
                 "factory:implement-medium", "factory:ci-green", "factory:ci-red", "factory:review-high", "factory:review"}
-        for repo in (self.TRACKER, self.WEB):
+        for repo in (self.TRACKER, self.WEB, self.TEAM):
             self.assertLessEqual(want, set(plan["label_plan"][repo]), repo)
 
     def test_map_label_only_in_tracker(self):
-        plan = self.plan([self.TRACKER, self.WEB])
+        plan = self.plan([self.WEB])
         self.assertIn("factory:map", plan["label_plan"][self.TRACKER])
         self.assertNotIn("factory:map", plan["label_plan"][self.WEB])
-        swapped = self.plan([self.WEB, self.TRACKER])  # the first ticket repository is the tracker
-        self.assertIn("factory:map", swapped["label_plan"][self.WEB])
-        self.assertNotIn("factory:map", swapped["label_plan"][self.TRACKER])
+        moved = self.plan([self.WEB], tracker=self.WEB)  # `tracker.repository` holds the map
+        self.assertIn("factory:map", moved["label_plan"][self.WEB])
+        self.assertNotIn("factory:map", moved["label_plan"][self.TRACKER])
 
     def test_repository_without_tickets_gets_no_labels(self):
-        plan = self.plan([self.TRACKER, self.WEB])
+        plan = self.plan([self.WEB])
         self.assertEqual(plan["label_plan"][self.DOCS], [])
-        self.assertEqual(plan["label_plan"]["zaharchenko-evgeny/slop-eval-factory"], [])
 
-    def test_plan_without_tracker_repositories_labels_only_the_tracker(self):
-        """ADR-0024 (#983): every plan carries `label_plan`; without `tracker.repositories` only the tracker gets labels,
-        the map label included."""
+    def test_plan_labels_only_where_copies_hear_events(self):
+        """ADR-0027: the Slop ticket repositories get the labels; a context repository (`tracker: none`, not
+        writable) gets none."""
         plan = self.plan()
         self.assertNotIn("label_repositories", plan)
         self.assertLessEqual({"factory:needs-human", "factory:map"}, set(plan["label_plan"][self.TRACKER]))
-        self.assertEqual({r: v for r, v in plan["label_plan"].items() if r != self.TRACKER},
-                         {self.WEB: [], self.DOCS: [], "zaharchenko-evgeny/slop-eval-factory": []})
+        self.assertEqual({r: v for r, v in plan["label_plan"].items() if not v}, {self.WEB: [], self.DOCS: []})
 
     def test_reconcile_removes_labels_from_a_repository_no_longer_holding_tickets(self):
-        plan = self.plan([self.TRACKER])
+        plan = self.plan()
         have = {"factory:ready": ("c2e0c6", ""), "factory:hold": ("ededed", ""), "bug": ("ff0000", "")}
-        run = fake_labels({self.TRACKER: {}, self.WEB: have, self.DOCS: {}, "zaharchenko-evgeny/slop-eval-factory": {}})
+        run = fake_labels({self.TRACKER: {}, self.WEB: have, self.DOCS: {}, self.TEAM: {}})
         got = deploy.reconcile_labels(plan, run=run)
         self.assertEqual([(a, n) for a, r, n, *_ in got if r == self.WEB],
                          [("remove", "factory:hold"), ("remove", "factory:ready")])  # `bug` is not factory-owned

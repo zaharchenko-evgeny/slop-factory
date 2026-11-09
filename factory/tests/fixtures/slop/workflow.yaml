@@ -17,7 +17,7 @@ stages:
   waiting: [draft, blocked, needs-answers]
 
 settings:                         # every node inherits these; a node overrides them
-  environment: engine             # where a node runs unless it names one
+  environments: [engine, team]    # ADR-0027: where a node runs unless it names its own (one copy per environment)
   limits:
     concurrent_deliveries: 2
     agent_runs_per_ticket: 8
@@ -61,6 +61,7 @@ nodes:
   # --- Triage: scope, estimate when it can ------------------------------------------------------
   intake:
     agent: router
+    environment: intake             # reads every repository, writes none
     triggers: [{ stage: triage }]
     when: { stage: triage }
     output: read-only
@@ -83,7 +84,6 @@ nodes:
   investigate:
     agent: dev
     triggers: [{ stage: investigating }]
-    writes: all                   # output read-only: it only reproduces
     when: { stage: investigating }
     output: read-only
     settings: { mode: investigate }
@@ -108,7 +108,6 @@ nodes:
   implement-small:
     agent: dev-cheap
     triggers: [{ label: "factory:implement-small" }]
-    writes: all
     when: { stage: in-dev }
     output: create-pr
     settings: { mode: implement }
@@ -121,7 +120,6 @@ nodes:
   implement-medium:
     agent: dev
     triggers: [{ label: "factory:implement-medium" }]
-    writes: all
     when: { stage: in-dev }
     output: create-pr
     settings: { mode: implement }
@@ -134,7 +132,6 @@ nodes:
   implement-large:
     agent: dev-strong
     triggers: [{ label: "factory:implement-large" }]
-    writes: all
     when: { stage: in-dev }
     output: create-pr
     settings: { mode: implement }
@@ -183,7 +180,6 @@ nodes:
   fix:
     agent: dev
     triggers: [{ label: "factory:fix" }]
-    writes: all
     when: { stage: [in-review, changes-requested, approved], fix-rounds: below-cap }
     output: push-to-source
     settings: { mode: fix, fix_rounds: 3 }
@@ -202,7 +198,6 @@ nodes:
   update:                         # a merge conflict
     agent: dev-cheap
     triggers: [{ label: "factory:update" }]
-    writes: all
     when: { stage: changes-requested }
     output: push-to-source
     settings: { mode: update }
@@ -265,9 +260,8 @@ nodes:
   # --- Knowledge: lessons -> retro -> review -> a person accepts ------------------------------
   retro:
     agent: retro
-    environment: knowledge
+    environment: team
     triggers: [{ schedule: "0 2 * * *" }]
-    writes: [zaharchenko-evgeny/slop-eval-factory]
     output: push-to-new-branch    # the platform opens one PR to the knowledge base
     outcomes:
       proposed: { effects: [{ label: "factory:knowledge-review", on: pr }] }
@@ -275,9 +269,8 @@ nodes:
 
   knowledge-review:               # not a `review-<focus>` variant: it reviews retro's PR, outside delivery
     agent: reviewer
-    environment: knowledge
+    environment: team
     triggers: [{ label: "factory:knowledge-review" }]
-    listens: [zaharchenko-evgeny/slop-eval-factory]   # retro's PRs are in the knowledge base
     output: read-only
     settings: { focus: [knowledge] }
     outcomes:
@@ -294,24 +287,24 @@ nodes:
   # --- Routines -------------------------------------------------------------------------------
   reconcile:                      # re-fires missed wakes; polls CI for merge (Air has no CI-success trigger)
     agent: ops
+    environment: team
     triggers: [{ schedule: "*/15 * * * *" }]
-    writes: [zaharchenko-evgeny/slop-eval-factory]   # its main checkout; no output, so Air pushes nothing
     settings: { routine: reconcile }
     outcomes:
       reconciled: {}
 
   doctor-engine:
     agent: ops
+    environment: engine
     settings: { routine: doctor }
     triggers: [{ schedule: "0 5 * * *" }]
-    writes: [zaharchenko-evgeny/slop-factory]   # its main checkout; no output, so Air pushes nothing
     outcomes:
       probed: {}
 
   doctor-team:
     agent: ops
+    environment: team
     settings: { routine: doctor }
     triggers: [{ schedule: "0 5 * * *" }]
-    writes: [zaharchenko-evgeny/slop-eval-factory]   # its main checkout; no output, so Air pushes nothing
     outcomes:
       probed: {}

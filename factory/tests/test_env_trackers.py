@@ -280,7 +280,9 @@ class DeployTest(unittest.TestCase):
             for name in [*SUBSYSTEMS, "web"]:
                 compiled["environments"][name] = {**compiled["environments"]["engine"], "repository": name}
             compiled["nodes"]["implement-medium"]["triggers"] = ["youtrack.tagAdded factory:implement-medium"]
-            return air.plan_air(compiled, conf)
+            # #1069's fan-out is the path of a definition not in the ADR-0027 form; the Slop fixture now is
+            with mock.patch.object(air.core, "team_definition", return_value=None):
+                return air.plan_air(compiled, conf)
         finally:
             cfg.set_team(before)
 
