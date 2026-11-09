@@ -1,5 +1,5 @@
 """`factory ci-sync [--dry-run]`: `factory:ci-green` / `factory:ci-red` on the open factory PRs of every
-`role: project` repository, from their head check runs and commit statuses. `factory reconcile` runs it on its
+`role: project` and ticket repository, from their head check runs and commit statuses. `factory reconcile` runs it on its
 schedule through the `reconcile.passes` hook."""
 import argparse
 import json
@@ -8,6 +8,7 @@ import sys
 import config as config_mod
 import plugins
 import vocab
+from gate_port import tracker_repositories
 from factory_plugins.github.gate import BAD_CI, GOOD_CI, GitHubCodeHost
 from factory_plugins.github.tracker import project_repositories
 
@@ -75,7 +76,8 @@ def run_ci_sync(dry_run=False, progress=None):
     config = config_mod.load()
     if plugins.registry(config).impl("vcs", config_mod.vcs(config).get("adapter") or "github") is not GitHubCodeHost:
         return [], False
-    return ci_sync(GitHubCodeHost.from_config(), project_repositories(config), dry_run, progress)
+    repositories = [*project_repositories(config), *tracker_repositories(config["tracker"])]  # and every ticket repository
+    return ci_sync(GitHubCodeHost.from_config(), list(dict.fromkeys(repositories)), dry_run, progress)
 
 
 def reconcile_pass(config, dry_run, progress):

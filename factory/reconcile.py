@@ -193,7 +193,8 @@ def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress)
     """GitHub closes a ticket on merge; when the `finish` run was lost the ticket is closed but still in a PR stage.
     A closed ticket there whose PR is merged gets the `finish` outcome, as `gate.py sweep --issue <n>` would."""
     import gate
-    closed = sorted(set(tracker.sweep_tickets(stages)) - set(open_listed))
+    still_open = set(open_listed)
+    closed = [n for n in dict.fromkeys(tracker.sweep_tickets(stages)) if n not in still_open]  # ids mix numbers and refs
     gate.prefetch(tracker, closed)
     for n in closed:
         try:

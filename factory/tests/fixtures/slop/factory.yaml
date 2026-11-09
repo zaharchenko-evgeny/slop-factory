@@ -7,6 +7,9 @@ plugins: [comments]         # ADR-0026: mentions, asks and the comment node
 tracker:
   adapter: github-issues
   repository: zaharchenko-evgeny/slop-factory
+  repositories:               # ADR-0024: the ticket repositories; the first is the tracker
+    - zaharchenko-evgeny/slop-factory
+    - zaharchenko-evgeny/slop-eval-factory   # retro's PRs wake knowledge-review here
 
 # Model aliases: the only place a model ID appears.
 models:
@@ -134,27 +137,26 @@ agents:
   reviewer-cheap: { role: reviewer, model: luna, access: read-only }
   approver:       { role: approver, model: luna, access: read-only }
   clerk:          { run: decide, model: luna, access: read-only }  # runs `factory decide`: the node's guards choose
-  ops:            { role: ops, model: luna, access: read-only }
+  ops:            { role: ops, model: luna, access: full }   # its nodes declare `writes` to pick their main checkout; output stays read-only
   retro:          { role: retro, model: sonnet, access: full }
   notify:         { role: notify, model: luna, access: read-only }
   resume:         { role: resume, model: luna, access: read-only }
 
-# Environments: where agents run. One repository is `main`; the others are additional.
+# Environments: where agents run, only the set of checkouts (ADR-0024). A node's `listens` and `writes`
+# in workflow.yaml choose its main repository; every other one is a read-only checkout.
 environments:
   engine:                         # tickets and PRs of the engine
     repositories:
       - repo: zaharchenko-evgeny/slop-factory
-        main: true                # branches, PRs and the node's output apply here
-      - repo: zaharchenko-evgeny/slop-eval-factory   # the team repository, read-only here: a person changes it locally
+      - repo: zaharchenko-evgeny/slop-eval-factory   # the team repository: no node in this environment writes it
     ci: { workflow: quality-gates }   # `ci: failed` = Air workflow_run.failed for this workflow
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               "*.blob.core.windows.net", pypi.org, files.pythonhosted.org, registry.npmjs.org]
     vm: default
     setup: null                   # optional script path, run after the engine's bootstrap; installs the environment's tools
-  knowledge:                      # retro: the knowledge base is main, the project is evidence
+  knowledge:                      # retro: the knowledge base, with the project as evidence
     repositories:
       - repo: zaharchenko-evgeny/slop-eval-factory
-        main: true
       - repo: zaharchenko-evgeny/slop-factory
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               pypi.org, files.pythonhosted.org]
@@ -162,7 +164,7 @@ environments:
   team:                           # routines on the team repository
     repositories:
       - repo: zaharchenko-evgeny/slop-eval-factory
-        main: true
+      - repo: zaharchenko-evgeny/slop-factory   # read-only: the routines read the engine's tickets and PRs
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               pypi.org, files.pythonhosted.org]
     vm: default

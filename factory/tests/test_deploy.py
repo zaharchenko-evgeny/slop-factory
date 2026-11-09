@@ -60,6 +60,11 @@ def definition_plan(edit_factory=None, edit_workflow=None, source="fixtures/slop
             cfg.set_team(before)
 
 
+def plan_labels(plan):
+    """Every label of a plan's `label_plan`, in any repository."""
+    return sorted({x for labels in plan["label_plan"].values() for x in labels})
+
+
 def youtrack_plan(edit, edit_nodes=None):
     """The Air plan of fixtures/slop's definition config after `edit` made it a YouTrack team (and `edit_nodes`
     changed its compiled nodes): the compiled config (states, commands, tracker) is where the stage and command
@@ -713,38 +718,53 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(sorted(str(p.relative_to(slop)) for p in slop.rglob("*") if p.is_file()),
                          sorted(str(Path(p).relative_to(tmp)) for p in written))
 
-    def test_definition_with_two_code_repositories_plans_per_repository_automations(self):
-        """#895: the tiered `implement-*` and `review-*` nodes and `fix` run once per code repository, in the environment where it is `main`; the router node (`intake`) stays one."""
+    @staticmethod
+    @contextlib.contextmanager
+    def two_repository_team(web=True):
+        """ADR-0024: fixtures/v2 with the ticket repositories o/api and, with `web`, o/web in its engine environment;
+        the router listens to the tracker and the engine's developers write every repository. Yields its root."""
         before = cfg.team_root()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "team"
             shutil.copytree(HERE / "fixtures/v2", root)
             f, w = (yaml.safe_load((root / n).read_text()) for n in ("factory.yaml", "workflow.yaml"))
-            engine = f["environments"]["engine"]
-            engine["repositories"] = [{"repo": "o/api", "main": True}, {"repo": "o/web"}]
-            f["environments"]["web"] = {**engine, "repositories": [{"repo": "o/web", "main": True}, {"repo": "o/api"}]}
+            repos = ["o/api", "o/web"] if web else ["o/api"]
+            f["tracker"]["repositories"] = repos
+            f["environments"]["engine"]["repositories"] = [{"repo": r} for r in repos]
+            w["nodes"]["intake"]["listens"] = "tracker"
+            for n in w["nodes"].values():
+                if n.get("writes") and not n.get("environment"):
+                    n["writes"] = "all"
             for n, d in (("factory.yaml", f), ("workflow.yaml", w)):
                 (root / n).write_text(yaml.safe_dump(d, sort_keys=False))
             try:
                 cfg.set_team(root)
-                plan = air.plan_air(nodes.load(), cfg.load())
+                yield root
             finally:
                 cfg.set_team(before)
+
+    def test_definition_with_two_ticket_repositories_plans_per_repository_automations(self):
+        """#895, ADR-0024: a node that listens to both ticket repositories runs once per repository, with that
+        repository as its main and the other one checked out beside it; the router (`listens: tracker`) stays one."""
+        with self.two_repository_team():
+            plan = air.plan_air(nodes.load(), cfg.load())
         by_name = {a["name"]: a for a in plan["automations"]}
-        envs = {e["name"]: e["repository"] for e in plan["environments"]}
-        for repo, env in (("api", "engine"), ("web", "web")):
+        for repo, other in (("api", "web"), ("web", "api")):
             for node in ("implement-small", "implement-medium", "implement-large", "review-low", "review-high", "fix"):
                 self.assertIn(f"[Slop factory] {node} {repo}", by_name)
             a = by_name[f"[Slop factory] implement-medium {repo}"]
             self.assertEqual(a["repository"]["fullName"], f"o/{repo}")
-            self.assertEqual(a["environmentConfigId"], f"[Slop factory] {env}")
-            self.assertEqual(envs[a["environmentConfigId"]], f"https://github.com/o/{repo}")
+            self.assertEqual([r["repository"]["fullName"] for r in a["additionalRepositories"]], [f"o/{other}"])
+            self.assertEqual(a["triggerVcs"], [{"outputBehaviour": "create-pr"}])
+            self.assertEqual(by_name[f"[Slop factory] review-low {repo}"]["triggerVcs"], [{"outputBehaviour": "read-only"}])
+            self.assertNotIn("repo_label", a["triggers"][0]["filters"])  # Air wakes a copy only for its own repository
         self.assertNotIn("[Slop factory] implement-medium", by_name)
         self.assertEqual([n for n in by_name if n.startswith("[Slop factory] intake")], ["[Slop factory] intake"])
 
     def test_mentionable_agents_get_a_reply_node(self):
-        """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node and
-        the mention router; the others do not. With it off (ADR-0025) none deploy. The fixture has it on (#1083)."""
+        """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node;
+        the others do not, and no mention router deploys (#893). With it off (ADR-0025) none deploy. The fixture has
+        it on (#1083)."""
         def comments_on(f):
             f["plugins"] = ["comments"]
 
@@ -755,9 +775,9 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual({a["spec"]["node"] for a in plan["automations"]},
                          {a["spec"]["node"] for a in definition_plan()["automations"]})
         nodes_ = {a["spec"]["node"] for a in plan["automations"]}
-        self.assertTrue({"mentions", "reply-dev", "reply-reviewer"} <= nodes_)
-        self.assertFalse({"reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
-        self.assertIn("factory:comment", plan["labels"])
+        self.assertTrue({"reply-dev", "reply-reviewer"} <= nodes_)
+        self.assertFalse({"mentions", "reply-dev-cheap", "reply-router", "reply-approver"} & nodes_)
+        self.assertIn("factory:comment", plan_labels(plan))
 
         def none_mentionable(f):
             comments_on(f)
@@ -766,8 +786,8 @@ class ProjectPlanTest(unittest.TestCase):
         for edit in (none_mentionable, comments_off):
             plan = definition_plan(edit_factory=edit)
             nodes_ = {a["spec"]["node"] for a in plan["automations"]}
-            self.assertFalse({n for n in nodes_ if n == "mentions" or n.startswith("reply-")})
-        self.assertIn("factory:comment", plan["labels"])  # kept while off: a wake workflow installed earlier still adds it
+            self.assertFalse({n for n in nodes_ if n.startswith("reply-")})
+        self.assertIn("factory:comment", plan_labels(plan))  # kept while off: a wake workflow installed earlier still adds it
 
     def test_mcp_connectors_come_from_node_then_agent_then_role(self):
         def edit_factory(f):
@@ -793,15 +813,15 @@ class ProjectPlanTest(unittest.TestCase):
                         t["label"] = t["label"].replace("factory:", "work:", 1)
         plan = definition_plan(edit_workflow=edit)
         for want in ("work:ready", "work:in-dev"):
-            self.assertIn(want, plan["labels"])
-        self.assertNotIn("factory:ready", plan["labels"])
+            self.assertIn(want, plan_labels(plan))
+        self.assertNotIn("factory:ready", plan_labels(plan))
         a = {x["spec"]["node"]: x for x in plan["automations"]}
         self.assertEqual({t["filters"]["label"] for t in a["implement-medium"]["triggers"]}, {"work:implement-medium"})
-        self.assertFalse([x for x in plan["labels"] if "<" in x])
+        self.assertFalse([x for x in plan_labels(plan) if "<" in x])
 
     def test_environment_repositories_come_from_the_definition(self):
         def edit(f):
-            f["environments"]["team"]["repositories"] = [{"repo": "o/other", "main": True}]
+            f["environments"]["team"]["repositories"] = [{"repo": "o/other"}]
         plan = definition_plan(edit_factory=edit)
         envs = {e["name"]: e["repository"] for e in plan["environments"]}
         self.assertEqual(envs["[Slop factory] team"], "https://github.com/o/other")
@@ -820,14 +840,10 @@ class ProjectPlanTest(unittest.TestCase):
         """#896: with `tracker.repository_field`, `implement api` listens to `factory:ready-api`, `implement web` to `-web`."""
         def edit(conf):
             tag_store(conf)
-            conf["tracker"]["repository_field"] = "Repository"
-            conf["states"]["ready"]["store"] = {"tag": "factory:ready"}
-            conf["repositories"] = [{**conf["repositories"][0], "name": "api"},
-                                    {**conf["repositories"][0], "name": "web", "role": "project"}]
-
-        def edit_nodes(compiled):
-            compiled["nodes"]["implement-medium"]["triggers"] = ["youtrack.tagAdded factory:ready"]
-        plan = youtrack_plan(edit, edit_nodes)
+            conf["tracker"] = {"adapter": "youtrack", "url": "https://y.example", "project": "LME",
+                               "repository_field": "Repository"}
+        with self.linked_team(edit, self.youtrack_ready) as (_, _, plan):
+            pass
         listens = {a["name"]: [t["filters"] for t in a["triggers"]] for a in plan["automations"]
                    if any(t.get("filters", {}).get("tagAdded", "").startswith("factory:ready") for t in a["triggers"])}
         self.assertEqual(listens, {"[Slop factory] implement-medium api": [{"tagAdded": "factory:ready-api"}],
@@ -837,7 +853,7 @@ class ProjectPlanTest(unittest.TestCase):
 
     @staticmethod
     def linked_projects(conf):
-        """#981: the #895 two-repository team (o/api, o/web) as a YouTrack team with one linked project each."""
+        """#981: the two-repository team (o/api, o/web) as a YouTrack team with one linked project each."""
         tag_store(conf)
         conf["tracker"] = {"adapter": "youtrack", "url": "https://y.example", "project": "LME",
                            "projects": {"API": "o/api", "WEB": "o/web"}}
@@ -845,26 +861,12 @@ class ProjectPlanTest(unittest.TestCase):
     @staticmethod
     @contextlib.contextmanager
     def linked_team(edit_conf, edit_nodes, web=True):
-        """The team set (`node_scopes` reads its definition) with code repositories o/api and, with `web`, o/web:
-        (conf, compiled, plan)."""
-        before = cfg.team_root()
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "team"
-            shutil.copytree(HERE / "fixtures/v2", root)
-            f = yaml.safe_load((root / "factory.yaml").read_text())
-            engine = f["environments"]["engine"]
-            engine["repositories"] = [{"repo": "o/api", "main": True}] + ([{"repo": "o/web"}] if web else [])
-            if web:
-                f["environments"]["web"] = {**engine, "repositories": [{"repo": "o/web", "main": True}, {"repo": "o/api"}]}
-            (root / "factory.yaml").write_text(yaml.safe_dump(f, sort_keys=False))
-            try:
-                cfg.set_team(root)
-                conf, compiled = copy.deepcopy(cfg.load()), copy.deepcopy(nodes.load())
-                edit_conf(conf)
-                edit_nodes(compiled)
-                yield conf, compiled, air.plan_air(compiled, conf)
-            finally:
-                cfg.set_team(before)
+        """The team set (deploy reads its definition) by `two_repository_team`: (conf, compiled, plan)."""
+        with ProjectPlanTest.two_repository_team(web):
+            conf, compiled = copy.deepcopy(cfg.load()), copy.deepcopy(nodes.load())
+            edit_conf(conf)
+            edit_nodes(compiled)
+            yield conf, compiled, air.plan_air(compiled, conf)
 
     @staticmethod
     def youtrack_ready(compiled):
@@ -905,7 +907,7 @@ class ProjectPlanTest(unittest.TestCase):
                                                      ["unlinked-project", " tracker.projects.WEB"]])
 
     def test_linked_project_of_a_single_repository_team_is_unlinked(self):
-        """One code repository: no per-repository copy, so no trigger is limited to the project and nobody listens."""
+        """One ticket repository: no per-repository copy, so no trigger is limited to the project and nobody listens."""
         def edit(conf):
             self.linked_projects(conf)
             conf["tracker"]["projects"] = {"API": "o/api"}
@@ -919,8 +921,7 @@ class ProjectPlanTest(unittest.TestCase):
         with self.linked_team(self.linked_projects, self.youtrack_ready) as (conf, compiled, _):
             env = deploy.default_environment(compiled, deploy.team_definition())
             conf["environments"] = {env: {"tracker": {"scope": {"field": "Team", "value": "Engine"}}}}
-            self.assertEqual({k: v for k, v in deploy.node_scopes(compiled, conf, deploy.team_definition()).items()
-                              if v != [None]}, {})
+            self.assertEqual(self.project_filters(air.plan_air(compiled, conf)), {})
             self.assertEqual([e.split(":")[0] for e in deploy.output_errors(compiled, conf)], ["unlinked-project"] * 2)
 
     def test_hand_added_connector_is_a_removal(self):
@@ -998,7 +999,7 @@ class PlanTest(unittest.TestCase):
         base = cfg.load()
         other = {"name": "other", "url": "https://github.com/o/other", "default_branch": "develop", "role": "project"}
         plan = air.plan_air(nodes.load(), {**base, "team_repository": "https://github.com/o/team",
-                                              "write_mode": "token", "repositories": [*base["repositories"], other]})
+                                              "repositories": [*base["repositories"], other]})
         want = [{"repository": deploy.repository(other), "branch": "develop"},
                 {"repository": deploy.repository({"url": "https://github.com/o/team"}), "branch": "main"}]
         project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
@@ -1017,7 +1018,7 @@ class PlanTest(unittest.TestCase):
     def test_team_repository_listed_as_a_project_is_one_writable_checkout(self):
         base = cfg.load()
         teamrepo = {"name": "team", "url": "https://github.com/o/team", "default_branch": "trunk", "role": "project"}
-        plan = air.plan_air(nodes.load(), {**base, "team_repository": teamrepo["url"], "write_mode": "token",
+        plan = air.plan_air(nodes.load(), {**base, "team_repository": teamrepo["url"],
                                               "repositories": [*base["repositories"], teamrepo]})
         want = [{"repository": deploy.repository(teamrepo), "branch": "trunk"}]
         project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
@@ -1053,8 +1054,8 @@ class PlanTest(unittest.TestCase):
         plan = air.plan_air(nodes.load(), cfg.load())
         for want in ("factory:ready", "factory:implement-cheap", "factory:fix-strong",
                      "complexity:small", "risk:high"):
-            self.assertIn(want, plan["labels"])
-        self.assertFalse([x for x in plan["labels"] if "<" in x])
+            self.assertIn(want, plan_labels(plan))
+        self.assertFalse([x for x in plan_labels(plan) if "<" in x])
 
     def test_script_nodes_only_run_the_sweep(self):
         plan = json.loads((FIX / "air-plan.json").read_text())
@@ -1150,21 +1151,20 @@ class PlanTest(unittest.TestCase):
                                            "role": "project"} for n in ("api", "client"))]
         return air.plan_air(nodes.load(), {**base, "team_repository": "", "repositories": repos, **extra})
 
-    def test_three_repositories_per_repo_automations_filter_on_repo_label(self):
-        plan = self.three_repositories()
+    def test_three_repositories_deploy_one_node_set_without_a_write_token(self):
+        """ADR-0024 (#983): a descriptor team plans one automation per node, with the other repositories checked out
+        beside it; no copy per repository, no `repo:` filter and no write token."""
+        plan = self.three_repositories(team_repository="https://github.com/o/team")
         by_name = {a["name"]: a for a in plan["automations"]}
-        triage = by_name["[Slop factory] intake"]
-        self.assertEqual({r["repository"]["fullName"] for r in triage["additionalRepositories"]},
-                         {"o/api", "o/client"})
-        self.assertNotIn("repo_label", triage["triggers"][0]["filters"])
-        for repo in ("api", "client"):
-            a = by_name[f"[Slop factory] implement-mid {repo}"]
-            self.assertEqual(a["repository"]["fullName"], f"o/{repo}")
-            self.assertEqual(a["triggers"][0]["filters"]["repo_label"], f"repo:{repo}")
-            self.assertEqual(a["environmentConfigId"], f"[Slop factory] write {repo}")
-        self.assertNotIn("[Slop factory] implement-mid", by_name)
-        envs = {e["name"]: e["repository"] for e in plan["environments"]}
-        self.assertEqual(envs["[Slop factory] write api"], "https://github.com/o/api")
+        self.assertEqual({r["repository"]["fullName"] for r in by_name["[Slop factory] intake"]["additionalRepositories"]},
+                         {"o/api", "o/client", "o/team"})
+        self.assertIn("[Slop factory] implement-mid", by_name)
+        self.assertFalse([n for n in by_name if n.endswith((" api", " client"))])
+        self.assertFalse([a["name"] for a in plan["automations"] for t in a["triggers"] if "repo_label" in t.get("filters", {})])
+        self.assertFalse([e["name"] for e in plan["environments"] if "FACTORY_WRITE_TOKEN" in e["secrets"]])
+        for node in ("implement-mid", "fix-mid", "update-mid"):
+            self.assertNotIn("FACTORY_WRITE_TOKEN", by_name[f"[Slop factory] {node}"]["prompt"])
+        self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
 
     def test_scoped_knowledge_review_uses_team_environment(self):
         plan = self.three_repositories(team_repository="https://github.com/o/team")
@@ -1175,18 +1175,6 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(knowledge)
         self.assertTrue(all(a["repository"]["browseUrl"] == "https://github.com/o/team" for a in knowledge))
 
-    def test_token_write_mode_deploys_one_node_set(self):
-        plan = self.three_repositories(write_mode="token")
-        names = {a["name"] for a in plan["automations"]}
-        self.assertIn("[Slop factory] implement-mid", names)
-        self.assertFalse([n for n in names if n.endswith((" api", " client"))])
-        envs = {e["name"]: e["secrets"] for e in plan["environments"]}
-        self.assertEqual(github_tracker.WRITE_TOKEN, "FACTORY_WRITE_TOKEN")
-        self.assertIn(github_tracker.WRITE_TOKEN, envs["[Slop factory] write"])
-        self.assertIn(github_tracker.WRITE_TOKEN, envs["[Slop factory] ops"])  # reconcile's CI label sync
-        self.assertNotIn(github_tracker.WRITE_TOKEN, envs["[Slop factory] read"])
-        self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
-
     def test_issues_token_is_deployed_to_every_environment_and_adds_no_write_token(self):
         plan = self.three_repositories(issues_token_env="FACTORY_ISSUES_TOKEN")
         envs = {e["name"]: e["secrets"] for e in plan["environments"]}
@@ -1194,29 +1182,6 @@ class PlanTest(unittest.TestCase):
         for name, secrets in envs.items():
             self.assertIn("FACTORY_ISSUES_TOKEN", secrets, name)
             self.assertNotIn("FACTORY_WRITE_TOKEN", secrets, name)
-
-    def test_token_write_mode_prompts_push_extra_project_repositories(self):
-        token = self.three_repositories(write_mode="token", team_repository="https://github.com/o/team")
-        per_repo = self.three_repositories(write_mode="per-repo", team_repository="https://github.com/o/team")
-        prompts = {a["name"]: a["prompt"] for a in token["automations"]}
-        per_repo_prompts = {a["name"]: a["prompt"] for a in per_repo["automations"]}
-        for node in ("implement-mid", "fix-mid", "update-mid"):
-            prompt = prompts[f"[Slop factory] {node}"]
-            self.assertIn("FACTORY_WRITE_TOKEN", prompt)
-            self.assertIn("git -c credential.helper= push", prompt)
-            self.assertIn("gh pr create` or `gh pr edit`", prompt)
-            self.assertIn("`[factory]`", prompt)
-            self.assertIn("Refs #<n>", prompt)
-            self.assertTrue(any(key.startswith(f"[Slop factory] {node} ") for key in per_repo_prompts))
-            self.assertFalse(any("FACTORY_WRITE_TOKEN" in value for key, value in per_repo_prompts.items()
-                                 if key.startswith(f"[Slop factory] {node} ")))
-        base = cfg.load()
-        team_project = {"name": "team", "url": "https://github.com/o/team", "role": "project",
-                        "default_branch": "main"}
-        config = {**base, "team_repository": team_project["url"], "write_mode": "token",
-                  "repositories": [*base["repositories"], team_project]}
-        prompt = deploy.checkout_instructions(deploy.repository(team_project), config, True)
-        self.assertIn("FACTORY_WRITE_TOKEN", prompt)
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(deploy.config_mod, "team_root", return_value=Path(d)):
@@ -1415,10 +1380,10 @@ class DefinitionPlanTest(unittest.TestCase):
 
     def test_ci_result_labels_are_kept(self):
         plan = self.plan
-        self.assertTrue({"factory:ci-green", "factory:ci-red"} <= set(plan["labels"]))  # deploy never removes them
+        self.assertTrue({"factory:ci-green", "factory:ci-red"} <= set(plan_labels(plan)))  # deploy never removes them
 
     def test_comment_label_is_kept(self):
-        self.assertIn("factory:comment", self.plan["labels"])  # scripts/comment-wake-label.sh adds it
+        self.assertIn("factory:comment", plan_labels(self.plan))  # scripts/comment-wake-label.sh adds it
 
     def test_a_pr_woken_node_begins_with_its_pr(self):
         def arg(name):
@@ -1448,9 +1413,9 @@ class DefinitionPlanTest(unittest.TestCase):
         for label in ("factory:implement-small", "factory:review-high", "factory:knowledge-review", "factory:done",
                       "factory:automerge", "risk:low", "complexity:large",
                       "factory:lesson", "factory:comment"):
-            self.assertIn(label, self.plan["labels"])
+            self.assertIn(label, plan_labels(self.plan))
         for label in ("factory:reply-dev", "factory:reply-reviewer", "factory:needs-human"):  # generated reply and needs-human labels
-            self.assertIn(label, self.plan["labels"])
+            self.assertIn(label, plan_labels(self.plan))
         self.assertEqual(self.plan["owned_label_prefixes"], ["complexity:", "factory:", "risk:"])
 
 
@@ -1679,6 +1644,7 @@ class LabelPlanTest(unittest.TestCase):
     def plan(self, tickets=None):
         def edit(f):
             f["environments"]["engine"]["repositories"] += [{"repo": self.WEB}, {"repo": self.DOCS}]
+            f["tracker"].pop("repositories", None)  # the Slop team lists its own (ADR-0024)
             if tickets:
                 f["tracker"]["repositories"] = tickets
         return definition_plan(edit)
@@ -1705,11 +1671,14 @@ class LabelPlanTest(unittest.TestCase):
         self.assertEqual(plan["label_plan"][self.DOCS], [])
         self.assertEqual(plan["label_plan"]["zaharchenko-evgeny/slop-eval-factory"], [])
 
-    def test_plan_without_tracker_repositories_is_unchanged(self):
+    def test_plan_without_tracker_repositories_labels_only_the_tracker(self):
+        """ADR-0024 (#983): every plan carries `label_plan`; without `tracker.repositories` only the tracker gets labels,
+        the map label included."""
         plan = self.plan()
-        self.assertNotIn("label_plan", plan)
-        self.assertEqual(plan["label_repositories"], [self.TRACKER])
-        self.assertNotIn("factory:map", plan["labels"])
+        self.assertNotIn("label_repositories", plan)
+        self.assertLessEqual({"factory:needs-human", "factory:map"}, set(plan["label_plan"][self.TRACKER]))
+        self.assertEqual({r: v for r, v in plan["label_plan"].items() if r != self.TRACKER},
+                         {self.WEB: [], self.DOCS: [], "zaharchenko-evgeny/slop-eval-factory": []})
 
     def test_reconcile_removes_labels_from_a_repository_no_longer_holding_tickets(self):
         plan = self.plan([self.TRACKER])

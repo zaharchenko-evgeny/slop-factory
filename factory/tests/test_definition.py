@@ -50,20 +50,12 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
-    def test_per_repository_node_needs_an_environment_per_code_repository(self):
-        def two_repos(f):
-            f["environments"]["engine"]["repositories"] += [{"repo": "o/web"}]
-            f["environments"]["web"] = {**f["environments"]["engine"], "repositories": [{"repo": "o/web", "main": True}]}
-        self.edit("factory.yaml", two_repos)
-        self.assertEqual(self.errors(), [])
-        self.edit("factory.yaml", lambda f: f["environments"].pop("web"))
-        self.assertError("per-repo-env: o/web")
-
-    def test_write_mode_compiles_from_the_default_settings(self):
-        self.edit("factory.yaml", lambda f: f["defaults"]["settings"].update(write_mode="token"))
-        self.assertEqual(self.errors(), [])
-        project, _ = definition.to_project(definition.load(self.root))
-        self.assertEqual(project["write_mode"], "token")
+    def test_removed_repository_keys_are_reported(self):
+        """ADR-0024 (#983): a node's `writes` replaced an environment repository's `main`, `write` and `token_env`."""
+        for key in ("main", "write", "token_env"):
+            with self.subTest(key=key):
+                self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update({key: True}))
+                self.assertError(f"removed-key: environments.engine: zaharchenko-evgeny/slop-eval-factory: `{key}`")
 
     def test_role_secret_reaches_the_environments_of_its_nodes_only(self):
         self.edit("factory.yaml", lambda f: f["roles"]["router"].update(
@@ -150,20 +142,12 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["notify"]["triggers"].append({"webhook": "nope"}))
         self.assertError("unknown-webhook: nodes.notify: nope")
 
-    def test_event_node_in_non_tracker_environment_is_deaf_trigger(self):
-        self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team"))
-        self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
-
-    def test_pr_label_node_outside_pr_repository_is_deaf_trigger(self):
-        self.edit("workflow.yaml", lambda w: w["nodes"]["automerge"]["outcomes"]["needs-human"]["effects"][-1].update(on="pr"))
-        self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(
-            environment="team", triggers=[{"label": "factory:needs-human"}]))
-        self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
-
-    def test_pr_and_ci_triggers_outside_code_repositories_are_deaf_triggers(self):
-        for trigger in ({"pr": "merged"}, {"ci": "failed"}):
-            self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team", triggers=[trigger]))
-            self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
+    def test_event_node_in_any_environment_hears_its_ticket_repository(self):
+        """ADR-0024: a copy's main is the repository it listens to, whatever the first checkout of its environment."""
+        for trigger in ({"label": "factory:needs-human"}, {"pr": "merged"}, {"ci": "failed"}):
+            with self.subTest(trigger=trigger):
+                self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team", triggers=[trigger]))
+                self.assertFalse([e for e in self.errors() if e.startswith("deaf-trigger")])
 
     def test_scheduled_node_in_any_environment_is_fine(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(environment="team"))
@@ -172,10 +156,10 @@ class DefinitionTest(unittest.TestCase):
     def test_pr_label_node_in_pr_repository_environment_is_fine(self):
         def add_pr_repository(factory):
             factory["environments"]["engine"]["repositories"].append({"repo": "owner/web"})
-            factory["environments"]["web"] = {"repositories": [{"repo": "owner/web", "main": True}]}
+            factory["environments"]["web"] = {"repositories": [{"repo": "owner/web"}]}
         self.edit("factory.yaml", add_pr_repository)
         self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(
-            environment="web", outcomes={**w["nodes"]["retro"]["outcomes"],
+            environment="web", writes=["owner/web"], outcomes={**w["nodes"]["retro"]["outcomes"],
                                          "proposed": {"effects": [{"label": "factory:knowledge-review", "on": "pr"},
                                                                       {"label": "factory:review-low", "on": "pr"}]}}))
         self.edit("workflow.yaml", lambda w: w["nodes"]["review-low"].update(
@@ -183,26 +167,16 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["knowledge-review"].update(environment="web"))
         self.assertEqual(self.errors(), [])
 
-    def test_one_main_repository(self):
-        self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(main=True))
-        self.assertError("main-repository: environments.engine")
-
-    def _no_main(self, f):
-        for r in f["environments"]["engine"]["repositories"]:
-            r.pop("main", None)
-
     def _full_nodes(self):
         w = definition.load(self.root)
         agents = w["factory"]["agents"]
         return [n for n, spec in w["workflow"]["nodes"].items() if (agents.get(spec.get("agent")) or {}).get("access") == "full" and not spec.get("generated")]
 
     def test_environment_without_main_is_valid(self):
-        self.edit("factory.yaml", self._no_main)
         self.edit("workflow.yaml", lambda w: [w["nodes"][n].update(writes=[MAIN]) for n in self._full_nodes()])
         self.assertEqual(self.errors(), [])
 
     def test_environment_without_main_compiles(self):
-        self.edit("factory.yaml", self._no_main)
         self.edit("workflow.yaml", lambda w: [w["nodes"][n].update(writes=[MAIN]) for n in self._full_nodes()])
         defn = definition.load(self.root)
         self.assertEqual(definition.errors(defn), [])
@@ -301,19 +275,10 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(writes="all"))
         self.assertError("writes-read-only: nodes.intake")
 
-    def test_full_access_node_without_writes_needs_main(self):
-        self.edit("factory.yaml", self._no_main)
-        self.assertError("no-writes: nodes.%s" % self._full_nodes()[0])
-
-    def test_writable_repository_needs_token(self):
-        self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(write=True))
-        self.assertError("write-token: environments.engine")
-
-    def test_token_env_must_be_declared(self):
-        self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(write=True, token_env="T"))
-        self.assertError("undeclared-env: environments.engine: T")
-        self.edit("factory.yaml", lambda f: f["environments"]["engine"].update(env={"T": {"secret": True}}))
-        self.assertEqual(self.errors(), [])
+    def test_full_access_node_without_writes_is_refused(self):
+        node = self._full_nodes()[0]
+        self.edit("workflow.yaml", lambda w: w["nodes"][node].pop("writes"))
+        self.assertError("no-writes: nodes.%s" % node)
 
     def test_role_needs_body_and_body_needs_role(self):
         (self.root / "roles/router/role.md").unlink()
@@ -405,10 +370,9 @@ class DefinitionTest(unittest.TestCase):
     def test_compile_lists_the_writable_repositories_of_each_environment(self):
         import definition
         envs = definition.to_project(definition.load(self.root))[0]["environments"]
-        for name, env in envs.items():
-            with self.subTest(env=name):
-                self.assertTrue(set(env["writable"]) <= set(env["repositories"]))
-                self.assertIn(env["repositories"][0], env["writable"])  # the main repository is always writable
+        # ADR-0024: what the environment's nodes write (developers the engine, retro the knowledge base)
+        self.assertEqual({name: env["writable"] for name, env in envs.items()},
+                         {"engine": ["slop-factory"], "knowledge": ["slop-eval-factory"], "team": []})
 
     def test_issues_token_env_setting_passes_validation(self):
         self.edit("factory.yaml", lambda f: f["defaults"].setdefault("settings", {}).update(issues_token_env="FACTORY_ISSUES_TOKEN"))
@@ -428,8 +392,8 @@ class DefinitionTest(unittest.TestCase):
 
     def test_render_uses_environment_repositories(self):
         defn = definition.load(self.root)
-        body = definition.render(defn, "knowledge-review")
-        self.assertIn("`zaharchenko-evgeny/slop-eval-factory` (main)", body)
+        body = definition.render(defn, "knowledge-review", "zaharchenko-evgeny/slop-eval-factory")  # the copy's repository
+        self.assertIn("`zaharchenko-evgeny/slop-eval-factory` (main), `zaharchenko-evgeny/slop-factory`.", body)
         self.assertIn("with focus knowledge;", body)
         self.assertIn("in mode `fix`", definition.render(defn, "fix"))          # what differs comes from settings
 
@@ -584,8 +548,8 @@ class DefinitionTest(unittest.TestCase):
     def test_mentionable_agents_get_a_generated_reply_step(self):
         defn = definition.load(self.root)
         nodes = defn["workflow"]["nodes"]
-        self.assertEqual(set(nodes["mentions"]["outcomes"]), {"reply-dev", "reply-reviewer", "none"})
-        self.assertEqual(nodes["mentions"]["outcomes"]["reply-dev"]["if"], {"mention": "dev"})
+        self.assertNotIn("mentions", nodes)  # #893: the comment node routes a mention to `reply-<agent>`
+        self.assertIn({"wake": "asker"}, nodes["reply-dev"]["outcomes"]["replied"]["effects"])
         self.assertEqual((nodes["reply-dev"]["agent"], nodes["reply-dev"]["output"]), ("dev", "read-only"))
         self.assertIn("Someone asked you", definition.render(defn, "reply-reviewer"))
         self.edit("workflow.yaml", lambda w: w["nodes"].update({"reply-x": {"agent": "dev", "triggers": ["manual"],
@@ -646,9 +610,7 @@ class DefinitionTest(unittest.TestCase):
             n = nodes_mod.load()
             t = MemorySystem({"7": {"stage": "in-review", "pr": 5, "head": "h1"}})
             t.pr_comments = lambda ticket: [{"author": "alice", "body": "@factory:dev why the retry?", "at": "2"}]
-            status, out = gate.decide("mentions", "7", t, n)
-            self.assertEqual(out["outcome"], "reply-dev")
-            self.assertIn("factory:reply-dev", t.facts("7")["attrs"])
+            t.apply({"kind": "label", "ticket": "7", "value": "factory:reply-dev"})  # the comment node's `reply: dev`
             begin = gate.check("reply-dev", {"id": "e1", "ticket": "7"}, t, n, config.load())[1]
             self.assertEqual({k: begin["mention"][k] for k in ("by", "on")}, {"by": "alice", "on": "pr"})
             sent = []
@@ -660,8 +622,10 @@ class DefinitionTest(unittest.TestCase):
             self.assertTrue(reply["value"].startswith("@alice It covers the flaky API."))
             self.assertIn("<!-- factory:from dev reply -->", reply["value"])
             self.assertNotIn("factory:reply-dev", t.facts("7")["attrs"])
+            self.assertFalse([e for e in sent if e["kind"] == "label"])  # a person asked: nobody is woken
             t.pr_comments = lambda ticket: [{"author": "bot", "body": reply["value"], "at": "3"}]
-            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "none")  # a reply asks no one
+            from factory_plugins.comments import mentions
+            self.assertFalse(mentions.holds("dev", t.facts("7"), t, "7"))  # a reply asks no one
         finally:
             config.set_team(before)
 
@@ -683,15 +647,22 @@ class DefinitionTest(unittest.TestCase):
             ask = next(json.loads(v) for k, v in t.tickets["7"]["log"] if k == "comment")
             self.assertTrue(ask.startswith("[factory] **dev (developer):** @factory:reviewer Is X in scope?\n"))
             self.assertEqual(t.facts("7")["stage"], "in-dev")
+            self.assertIn("factory:comment", t.facts("7")["attrs"])                    # the comment node wakes
             t.tickets["7"]["comments"] = [{"author": "bot", "body": ask, "at": "1"}]
-            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "reply-reviewer")   # the target wakes
+            t.apply({"kind": "label", "ticket": "7", "value": "factory:reply-reviewer"})  # its `reply: reviewer`
             t.tickets["7"]["log"].clear()
             with self.assertRaises(gate.Bad):
                 gate.apply("reply-reviewer", "ask", {"ticket": "7", "to": "dev", "text": "?"}, t, n)
+            sent = []
+            apply = t.apply
+            t.apply = lambda e: sent.append(e) or apply(e)
             gate.apply("reply-reviewer", "replied", {"ticket": "7", "reply": "Yes."}, t, n)
-            answer = next(json.loads(v) for k, v in t.tickets["7"]["log"] if k == "comment")
-            t.tickets["7"]["comments"].append({"author": "bot", "body": answer, "at": "2"})
-            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "reply-dev")        # the asker wakes
+            answer = next(e for e in sent if e["kind"] == "comment")
+            self.assertTrue(answer["value"].startswith("@factory:dev Yes."))
+            self.assertEqual(answer["notes"]["context"], "Answer to ask 7-1: Yes.")
+            self.assertEqual([e["kind"] for e in sent if e["value"] == "factory:implement-medium"],
+                             ["unlabel", "label"])                                       # the asker wakes
+            self.assertEqual(t.facts("7")["stage"], "in-dev")
         finally:
             config.set_team(before)
 
