@@ -956,5 +956,21 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(self.plan(stage="approved", ci="pending", pr_labels=labels, ci_label="green"), None)
 
 
+class NodesLoadTest(unittest.TestCase):
+    def test_nodes_load_reads_the_definition(self):
+        import config
+        import nodes
+        config.set_team(FIXTURE)
+        try:
+            read = nodes.load()
+        finally:
+            config.set_team(None)
+        self.assertEqual(read["nodes"]["dispatch"]["triggers"], ["issues.labeled factory:ready"])
+        self.assertEqual(read["nodes"]["dispatch"]["outcomes"]["large"]["effects"],
+                         [{"label": "complexity:large"}, {"label": "factory:implement-large"}, {"stage": "in-dev"}])
+        self.assertEqual(read["nodes"]["automerge"]["triggers"], ["pull_request.labeled factory:automerge"])
+        self.assertEqual(read["nodes"]["automerge"]["when"], {"stage": "approved"})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,2 +1,0 @@
-{"paths": ["pyproject.toml", "factory/x.py"], "lines_changed": 6, "ci": "passed", "risk": "low",
- "reviews": [{"reviewer": "review_full", "verdict": "approved"}], "dependency_changes": ["pyproject.toml"]}
