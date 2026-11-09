@@ -436,7 +436,7 @@ class EnvRolesTest(unittest.TestCase):
         self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
         fixture = ROOT / "factory/tests/fixtures/slop"
         cfg.set_team(fixture)
-        for env in ("engine", "knowledge", "team"):
+        for env in ("engine", "knowledge"):  # slop-eval-factory#91: `team` merged into `engine`
             self.assert_slop_roles(fixture, env, self.roles(env))
 
         with tempfile.TemporaryDirectory() as tmp:

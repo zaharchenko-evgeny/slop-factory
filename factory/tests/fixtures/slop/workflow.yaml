@@ -292,7 +292,6 @@ nodes:
   # --- Routines -------------------------------------------------------------------------------
   reconcile:                      # re-fires missed wakes; polls CI for merge (Air has no CI-success trigger)
     agent: ops
-    environment: team
     triggers: [{ schedule: "*/15 * * * *" }]
     writes: [zaharchenko-evgeny/slop-eval-factory]   # its main checkout; no output, so Air pushes nothing
     settings: { routine: reconcile }
@@ -310,7 +309,6 @@ nodes:
   doctor-team:
     agent: ops
     settings: { routine: doctor }
-    environment: team
     triggers: [{ schedule: "0 5 * * *" }]
     writes: [zaharchenko-evgeny/slop-eval-factory]   # its main checkout; no output, so Air pushes nothing
     outcomes:
