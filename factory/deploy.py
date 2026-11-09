@@ -271,12 +271,23 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
             + tail)
 
 
+def node_repository_prefix(main_repository: dict | None, config: dict) -> str:
+    """Select this ticket repository when a copied automation starts a factory command."""
+    if not main_repository:
+        return ""
+    tracker = (config.get("tracker") or {}).get("repository")
+    tickets = (config.get("tracker") or {}).get("repositories") or ([tracker] if tracker else [])
+    repo = main_repository["fullName"]
+    return f"FACTORY_NODE_REPO={repo} " if repo != tracker and repo in tickets else ""
+
+
 def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None,
                   webhook: bool = False) -> str:
     checkout = checkout_instructions(main_repository, config) if config else ""
+    command_prefix = node_repository_prefix(main_repository, config) if config else ""
     if name.startswith("doctor"):
         engine = name == "doctor-ops"
-        command = "`factory doctor --engine`" if engine else "`factory doctor`"
+        command = f"`{command_prefix}factory doctor --engine`" if engine else f"`{command_prefix}factory doctor`"
         prompt = (f"Run the installed {command} command exactly once in the foreground with "
                   + ("only the `--engine` argument. " if engine else "no arguments. ")
                   + f"Do not use `uv run`, `--help` or add {'other ' if engine else ''}arguments. Report every JSON probe line and the command's exit code. "
@@ -285,10 +296,10 @@ def script_prompt(name: str, main_repository: dict | None = None, config: dict |
                   "`report` probe line. You must not create, edit or close tickets yourself.")
     elif name == "reconcile":
         prompt = ("This step runs one command and judges nothing: it changes no file, label, comment or review itself. "
-                  "Run `factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
+                  f"Run `{command_prefix}factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
     else:
         args = SCRIPT_ARGS.get(name, "")
-        prompt = SCRIPT_PROMPT.format(args=args)
+        prompt = SCRIPT_PROMPT.format(args=args).replace("`factory ", f"`{command_prefix}factory ")
         if "--issue" in args:
             prompt += " Copy only that one number; never write the payload or any JSON."
         if webhook:
@@ -355,7 +366,8 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
         defn = definition.load(config_mod.team_root())
         agent = (defn["factory"].get("agents") or {}).get(((defn["workflow"].get("nodes") or {}).get(name) or {}).get("agent")) or {}
         if agent.get("run"):  # ADR-0021: a step with no judgement: the agent only runs the engine command
-            return (f"{who}\n\n{checkout}Run `factory {agent['run']} --node {name} {begin_arg(name, n)}` once, in the "
+            prefix = node_repository_prefix(main_repository, config)
+            return (f"{who}\n\n{checkout}Run `{prefix}factory {agent['run']} --node {name} {begin_arg(name, n)}` once, in the "
                     "foreground, and wait until it exits. Copy only that one number. It applies "
                     "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
                     "Report its JSON output." + INSTALLED_FACTORY)
@@ -369,9 +381,10 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
+    command_prefix = node_repository_prefix(main_repository, config)
     return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skills}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
-            f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
+            f"1. Run `{command_prefix}factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts and the branch or PR head. "
             "If it exits 10 the node must not act: report the reason and stop.\n"
             "2. Do the role's work. As the last thing you do, report one outcome above with `factory end <outcome>` "

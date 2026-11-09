@@ -979,6 +979,23 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(air.diff(plan, [{"id": "a1", "name": "[F] a"}], []), [])  # a record without the field has none
 
 class PlanTest(unittest.TestCase):
+    def test_copy_prompt_names_its_repository(self):
+        plan = definition_plan()
+        copies = [a for a in plan["automations"] if a["name"].endswith(" slop-eval-factory")]
+        tracker = [a for a in plan["automations"] if a["name"].endswith(" slop-factory")]
+        self.assertTrue(copies)
+        commands = []
+        for automation in copies:
+            prompt = automation["prompt"]
+            if "factory begin " in prompt or "factory sweep" in prompt:
+                command = next(line for line in prompt.splitlines() if "factory begin " in line or "factory sweep" in line)
+                commands.append((automation["name"], command))
+        self.assertTrue(commands)
+        for name, command in commands:
+            self.assertIn("FACTORY_NODE_REPO=zaharchenko-evgeny/slop-eval-factory", command, name)
+        self.assertTrue(tracker)
+        self.assertTrue(all("FACTORY_NODE_REPO" not in a["prompt"] for a in tracker))
+
     def test_routines_target_team_repository(self):
         url = "https://github.com/o/team"
         plan = air.plan_air(nodes.load(), {**cfg.load(), "team_repository": url})
