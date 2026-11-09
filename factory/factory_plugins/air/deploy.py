@@ -484,6 +484,9 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
             p = {k: v for k, v in p.items() if k in changed or k in pair}
         if kind == "environment" and isinstance(p.get("variables"), dict):
             p["variables"] = [{"key": key, "value": value} for key, value in p["variables"].items()]
+        if kind == "environment" and action == "update" and "domains" in p:  # edit_environment takes `allowedDomains`
+            live = (x or {}).get("domains") or []
+            p["allowedDomains"] = live + [d for d in p.pop("domains") or [] if d not in live]
         tool_action = ("edit" if kind == "environment" else "update") if action == "update" else action
         id_key = "automationId" if kind == "automation" else "id"
         if action == "update":
