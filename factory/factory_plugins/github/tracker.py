@@ -79,6 +79,21 @@ class CountedRun:
     def __init__(self, run):
         self.run, self.calls, self.memo, self.cache = run, 0, {}, {}
 
+    def for_repository(self, repo):
+        """The wrapped runner's `for_repository` (ProjectWriteRun: a link to another repository's issue takes the
+        issues token), counted like any call; this runner itself when it has none."""
+        inner = getattr(self.run, "for_repository", None)
+        if inner is None:
+            return self
+        forward = inner(repo)
+
+        def run(args, **kw):
+            self.calls += 1
+            self.memo.clear()
+            self.cache.clear()
+            return forward(args, **kw)
+        return run
+
     def __call__(self, args, **kw):
         read = args[:2] in (["issue", "view"], ["issue", "list"], ["pr", "view"], ["pr", "list"], ["run", "list"]) or (
             args[0] == "api" and not {"-X", "--method", "-f", "-F"} & set(args)) or (
@@ -152,11 +167,16 @@ class ProjectWriteRun:
         self.repositories = {r.lower() for r in foreign_projects(repositories, environ)}
         self.issues_token_env = issues_token_env
 
-    def __call__(self, args, **kw):
+    def __call__(self, args, touches=None, **kw):
         token = (self.issues_token_env and self.environ.get(self.issues_token_env)) or self.environ.get(WRITE_TOKEN)
-        if token and gh_writes(args) and (gh_target(args) or "").lower() in self.repositories:
+        if token and gh_writes(args) and {(gh_target(args) or "").lower(), (touches or "").lower()} & self.repositories:
             kw["token"] = token
         return self.run(args, **kw)
+
+    def for_repository(self, repo):
+        """This runner for a write to the own repository that refers to an issue of `repo` (a sub-issue or blocker
+        link): Air's token cannot read another repository's issue, so a foreign `repo` takes the issues token too."""
+        return lambda args, **kw: self(args, touches=repo, **kw)
 
 
 class GitHubTracker:

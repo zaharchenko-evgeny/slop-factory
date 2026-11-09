@@ -82,6 +82,17 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.run_cli("begin", "implement-mid", "--issue", "7", "--tracker", "memory:tickets.json")
         self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
 
+    def test_begin_issue_number_is_in_the_copys_repository(self):
+        """#1155: a copy whose main is not the tracker (slop-eval-factory) reads `--issue 98` as its own repository's
+        issue; Air sets the copy's main as FACTORY_ENV_REPOSITORY."""
+        self.tracker()
+        Path("event.json").unlink()
+        with mock.patch.dict(os.environ, {"FACTORY_ENV_REPOSITORY": "o/team"}):
+            os.environ.pop("FACTORY_NODE_REPO", None)
+            self.run_cli("begin", "implement-mid", "--issue", "7", "--tracker", "memory:tickets.json")
+        event = json.loads(Path(".factory/event/implement-mid.json").read_text())
+        self.assertEqual(event["repository"], {"full_name": "o/team"})
+
     def test_begin_with_pr_number_only(self):
         self.tracker(stage="changes-requested", pr=300, pr_state="open", round_complete=True)
         with mock.patch.object(cli, "from_main", return_value=str(ROOT)):

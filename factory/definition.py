@@ -274,6 +274,14 @@ def _repository_errors(defn):
     """The ADR-0027 checks: `write` is a boolean, each block's adapter is provided and valid, no two repositories
     share a tracker place, and no node hears one place from two environments."""
     f, errs, places = defn["factory"], [], {}
+    # a repository's own tracker block (its issues, or a project and `scope`) says where its tickets are; these
+    # repeat it per repository (YouTrack per-repository stage tags, a project per repository)
+    blocks = [("tracker", f.get("tracker"))] + [(f"environments.{e}.tracker", (s or {}).get("tracker"))
+                                                for e, s in (f.get("environments") or {}).items()]
+    blocks += [(f"environments.{e}: {r.get('repo')}: tracker", r.get("tracker")) for e, s in (f.get("environments") or {}).items()
+               for r in (s or {}).get("repositories") or [] if isinstance(r, dict)]
+    errs += [f"removed-key: {where}.{k} (ADR-0027: each repository's tracker block and `scope` say where its tickets are)"
+             for where, b in blocks if isinstance(b, dict) for k in ("repository_field", "projects", "repositories") if k in b]
     for e, spec in (f.get("environments") or {}).items():
         for r in (spec or {}).get("repositories") or []:
             if isinstance(r, dict) and "write" in r and not isinstance(r["write"], bool):
@@ -313,7 +321,7 @@ def _repository_warnings(defn):
     out += [f"deprecated-key: agents.{a}: `access` (ADR-0027: a repository's `write` decides what a run may push)"
             for a, spec in (f.get("agents") or {}).items() if "access" in (spec or {})]
     out += [f"deprecated-key: tracker.{k} (ADR-0027: each repository names its tracker)"
-            for k in ("repositories", "projects") if k in (f.get("tracker") or {})]
+            for k in ("repositories", "projects") if k in (f.get("tracker") or {}) and not adopted(defn)]
     for e, spec in (f.get("environments") or {}).items():  # raw flags: no plugin code is imported here
         writable = [str(r.get("repo")) for r in (spec or {}).get("repositories") or [] if isinstance(r, dict) and r.get("write") is True]
         if len(writable) > 1:
