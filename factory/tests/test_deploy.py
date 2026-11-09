@@ -353,6 +353,15 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--apply"), 0)
         self.assertEqual(self.calls("environment"), [["edit_environment", {"startup": "x", "id": "e1"}]])
 
+    def test_apply_widens_environment_domains_as_allowed_domains(self):
+        """`edit_environment` takes `allowedDomains` and ignores `domains`: a domain-only change must reach Air."""
+        self.plan["environments"][0]["domains"] = ["github.com", "pypi.org"]
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                       "domains": ["github.com"]}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        self.assertEqual(self.calls("environment"), [["edit_environment", {
+            "allowedDomains": ["github.com", "pypi.org"], "id": "e1"}]])
+
     def test_apply_serializes_variables_and_removes_team_repository(self):
         self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
         self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
