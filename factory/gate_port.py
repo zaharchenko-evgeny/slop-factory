@@ -6,6 +6,7 @@ focus_missing (list), round_complete (bool), round_verdict (changes|approve|None
 state differs; it returns True when it wrote. The stage effect also records `event` in `seen`; so does the `seen` effect, which apply appends to an
 outcome without a stage effect.
 """
+import functools
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -21,6 +22,62 @@ def ticket_from_ref(ref):
     (GitHub issue), an opaque id such as `INFRA-123` stays a string. None when `ref` names no ticket."""
     m = re.match(r"(?:refs/heads/)?ez/([A-Za-z][A-Za-z0-9]*-\d+|\d+)-", ref or "") or re.match(r"#?([A-Za-z][A-Za-z0-9]*-\d+|\d+)(?=[ :])", ref or "")
     return None if not m else int(m[1]) if m[1].isdigit() else m[1]
+
+
+REF = re.compile(r"([\w.-]+/[\w.-]+)#(\d+)")
+
+
+def ticket_ref(repo, number, tracker=None):
+    """The id of issue `number` of `repo` (ADR-0024): `<owner>/<repo>#<n>`, or the bare number when `repo` is the
+    tracker (the first ticket repository; no `tracker` given: the ticket has no other repository to tell apart)."""
+    return number if not repo or not tracker or repo.lower() == tracker.lower() else f"{repo}#{number}"
+
+
+def split_ticket(ticket, default=None):
+    """`(repository, number)` of a ticket id: `<owner>/<repo>#<n>` names its repository; a bare `n` or `#n` is
+    in `default` (the tracker). An opaque id such as `INFRA-123` is returned whole, in `default`."""
+    if isinstance(ticket, str):
+        if m := REF.fullmatch(ticket):
+            return m[1], int(m[2])
+        if re.fullmatch(r"#\d+", ticket):
+            return default, int(ticket[1:])
+    return default, ticket
+
+
+def tracker_repositories(tracker):
+    """The ticket repositories of a descriptor's `tracker` block as `owner/repo`, the tracker first: `repositories`,
+    else the one `repository`."""
+    listed = tracker.get("repositories")
+    listed = listed if isinstance(listed, list) else [tracker["repository"]] if tracker.get("repository") else []
+    return list(dict.fromkeys("/".join(str(r).removesuffix(".git").rstrip("/").split("/")[-2:]) for r in listed
+                              if isinstance(r, str)))
+
+
+def number_of(ticket):
+    """The issue number of a ticket id, without its repository: what a branch `ez/<n>-<slug>` carries."""
+    return split_ticket(ticket)[1]
+
+
+def ticket_view(obj, ticket):
+    """`(view, number)` of a ticket id for `obj`, an object with `repo` (the repository its bare ticket numbers belong
+    to), `ticket_repos` and `at(repo)` (the same object on another ticket repository). A repository that holds no
+    tickets is refused: nothing is read or written there."""
+    repo, number = split_ticket(ticket, obj.repo)
+    if repo.lower() == obj.repo.lower():
+        return obj, number
+    if repo.lower() not in {r.lower() for r in obj.ticket_repos}:
+        raise ValueError(f"{ticket}: {repo} is not a ticket repository")
+    return obj.at(repo), number
+
+
+def in_ticket_repository(method):
+    """A method of such an object that takes the ticket first: a ticket of another repository runs on that
+    repository's view, with its bare number."""
+    @functools.wraps(method)
+    def run(self, ticket, *args, **kwargs):
+        view, number = ticket_view(self, ticket)
+        return getattr(view, method.__name__)(number, *args, **kwargs) if view is not self else method(self, number, *args, **kwargs)
+    return run
 
 
 def ticket_repositories(body, names, primary):

@@ -918,7 +918,7 @@ class EffectsTest(unittest.TestCase):
         seen = []
         run = gh.__call__
         t.tickets.run = lambda args, timeout=None: (seen.append(args), json.dumps({"state": "open"}) if "issues/41" in " ".join(args) else run(args, timeout))[1]
-        self.assertEqual(t.tickets.open_blockers(7), [41])
+        self.assertEqual(t.tickets.open_blockers(7), ["o/web#41"])
         self.assertIn(["api", "repos/o/web/issues/41"], seen)
         self.assertEqual(t.tickets._blocked_body("b", 41, "o/web", "o/r"), "Blocked by: o/web#41\n\nb")
         self.assertEqual(t.tickets._blocked_body("b", 41, "o/r", "o/r"), "Blocked by: #41\n\nb")
@@ -1491,7 +1491,7 @@ class SweepTest(unittest.TestCase):
 
     def test_blocking_lists_native_dependents(self):
         gh = FakeGh()
-        gh.blocking_issues = [{"number": 12, "state": "open"}]
+        gh.blocking_issues = [{"number": 12, "state": "open", "repository_url": "https://api.github.com/repos/o/r"}]
         self.assertEqual([(i["number"], i["state"]) for i in tr(gh).blocking(7)], [(12, "open")])
 
     def test_blocking_lists_body_fallback_dependents(self):
