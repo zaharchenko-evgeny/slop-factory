@@ -6,9 +6,6 @@ guard fact; `latest` and `reply_target` (the `comment` effect `on: mention`) tel
 """
 import re
 
-ROUTER = "mentions"  # the generated node that routes @factory:<agent> to that agent's reply step
-
-
 def neighbours(defn):
     """{frozenset({a, b})}: agents a and b are neighbours when an outcome of a node of one adds a label that a node
     of the other triggers on (they may mention each other). Generated mention nodes do not count."""
@@ -29,14 +26,12 @@ def neighbours(defn):
 
 
 def add_nodes(defn):
-    """An agent with `mentionable: true` can be asked with @factory:<agent>. Add, in memory, one router node
-    (a comment or review -> the asked agent's reply label, by the `mention` fact) and a `reply-<agent>` node per
-    mentionable agent (its role in reply mode, read-only, any stage). Both are marked `generated`."""
+    """Add `ask` outcomes and one `reply-<agent>` node per mentionable agent."""
     f, w = defn["factory"], defn["workflow"]
     agents, nodes = f.setdefault("agents", {}), w.setdefault("nodes", {})
     prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
     askable = [a for a, spec in agents.items() if (spec or {}).get("mentionable")]
-    if not askable or ROUTER in nodes:
+    if not askable:
         return
     pairs = neighbours(defn)
     for n in nodes.values():  # an `ask` outcome (#591): the agents its agent may ask, the deploy-time allowlist
@@ -44,12 +39,6 @@ def add_nodes(defn):
                 and not all(isinstance(t, dict) and "schedule" in t for t in n.get("triggers") or [None]):
             to = sorted(b for b in askable if frozenset((n["agent"], b)) in pairs)
             n.setdefault("outcomes", {}).setdefault("ask", {"to": to, "effects": [{"comment": "text"}]})
-    agents.setdefault("mention-router", {"run": "decide", "model": (f.get("defaults") or {}).get("model"),
-                                         "access": "read-only", "generated": True})
-    nodes[ROUTER] = {"agent": "mention-router", "generated": True,
-                     "triggers": [{"ticket": "commented"}, {"pr": "commented"}, {"pr": "reviewed"}],
-                     "outcomes": {**{f"reply-{a}": {"if": {"mention": a}, "effects": [{"label": f"{prefix}reply-{a}"}]}
-                                     for a in askable}, "none": {}}}
     for a in askable:
         nodes.setdefault(f"reply-{a}", {
             "agent": a, "generated": True, "triggers": [{"label": f"{prefix}reply-{a}"}], "output": "read-only",
@@ -66,8 +55,8 @@ def errors(defn):
         if spec.get("mentionable") and (spec.get("run") or spec.get("harness") in no_role):
             errs.append(f"mentionable-needs-role: agents.{a}: only an agent with a role can reply")
     for name, n in (defn["workflow"].get("nodes") or {}).items():
-        if n.get("generated") is not True and name == ROUTER or (name.startswith("reply-") and not n.get("generated")):
-            errs.append(f"reserved-node: nodes.{name}: `{ROUTER}` and `reply-<agent>` are generated from `mentionable`")
+        if name.startswith("reply-") and not n.get("generated"):
+            errs.append(f"reserved-node: nodes.{name}: `reply-<agent>` nodes are generated from `mentionable`")
     return errs
 
 

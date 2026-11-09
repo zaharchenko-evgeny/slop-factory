@@ -225,12 +225,13 @@ class GateTest(unittest.TestCase):
     def ask_graph(self):
         graph = copy.deepcopy(NODES)
         graph["nodes"]["intake"].update(agent="dev", role="developer")
+        graph["nodes"]["intake"]["triggers"] = [{"label": "factory:implement-small"}]
         graph["nodes"]["intake"]["outcomes"]["ask"] = {"to": ["reviewer"], "effects": [{"comment": "text"}]}
         graph["nodes"]["reply-dev"] = {**graph["nodes"]["intake"], "outcomes": {"replied": {"effects": []}}}
         return graph
 
     def ask(self, tracker, to="reviewer", node="intake", hops=3):
-        with patch.object(gate.config_mod, "load", return_value={"limits": {"mention_hops": hops}, "plugins": ["comments"]}):
+        with patch.object(gate.config_mod, "load", return_value={**CONFIG, "limits": {"mention_hops": hops}, "plugins": ["comments"]}):
             return gate.apply(node, "ask", {"ticket": "7", "to": to, "text": "Is X\nin scope?"}, tracker, self.ask_graph())
 
     def test_ask_posts_one_comment_with_the_marker_and_keeps_the_stage(self):
@@ -242,6 +243,73 @@ class GateTest(unittest.TestCase):
         self.assertIn("<!-- factory:ask id=7-1 from=intake to=reply-reviewer hop=1 -->", posted[0])
         self.assertEqual(tr.facts("7")["stage"], "triage")
 
+    def test_ask_adds_comment_label(self):
+        tr = MemorySystem({"7": {"stage": "triage"}})
+        self.ask(tr)
+        labels = [json.loads(v) for k, v in tr.tickets["7"]["log"] if k == "label"]
+        self.assertIn("factory:comment", labels)
+
+    def test_answer_wakes_asker(self):
+        graph = self.ask_graph()
+        graph["factory"] = {"roles": {"developer": {}}, "agents": {"dev": {"role": "developer"}}}
+        graph["nodes"]["intake"]["triggers"] = [{"label": "factory:implement-small"}]
+        graph["nodes"]["reply-reviewer"] = {**graph["nodes"]["intake"], "agent": "reviewer", "outcomes": {
+            "replied": {"effects": [{"comment": "reply", "on": "mention"}]}}}
+        team_def = {"factory": graph["factory"], "workflow": {"nodes": graph["nodes"]}}
+        ask = {"id": 1, "author_is_factory": True, "body":
+               "[factory] @factory:reviewer Is X in scope? <!-- factory:ask id=7-1 from=intake to=reply-reviewer hop=1 -->"}
+        class Capture(MemorySystem):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.captured = []
+
+            def apply(self, effect):
+                self.captured.append(copy.deepcopy(effect))
+                return super().apply(effect)
+        tr = Capture({"7": {"stage": "triage", "comments": [ask]}})
+        with patch.object(gate.config_mod, "load", return_value={**CONFIG, "plugins": ["comments"]}), \
+                patch.object(gate.config_mod, "team_root", return_value=ROOT), \
+                patch.object(definition, "load", return_value=team_def), patch("gate.definition_team", return_value=True):
+            gate.apply("reply-reviewer", "replied", {"ticket": "7", "reply": "Yes, it is in scope."}, tr, graph)
+        written = [(k, json.loads(v)) for k, v in tr.tickets["7"]["log"]]
+        self.assertIn("factory:implement-small", [e for k, e in written if k == "label"])
+        answer = next(e for e in tr.captured if e["kind"] == "comment")
+        self.assertIn("Yes, it is in scope.", answer["value"])
+        self.assertEqual(answer["notes"], {"for": "developer", "hint": "Yes, it is in scope."})
+
+    def test_answer_wake_requires_the_latest_factory_ask(self):
+        from factory_plugins.comments.asks import answer_effects
+        team_def = {"factory": {"roles": {"developer": {}}, "agents": {"dev": {"role": "developer"}}},
+                    "workflow": {"nodes": {"intake": {"agent": "dev", "triggers": [
+                        {"label": "factory:implement-small"}]}}}}
+        ask = {"author": "air[bot]", "author_is_bot": True, "author_is_factory": True, "at": "1",
+               "body": "[factory] @factory:reviewer Question? <!-- factory:ask id=7-1 from=intake "
+                       "to=reply-reviewer hop=1 -->"}
+        rows = [
+            ("factory ticket comment", [ask], [], [], True),
+            ("factory PR comment", [], [ask], [], True),
+            ("other bot", [{**ask, "author_is_factory": False}], [], [], False),
+            ("person with prefix", [{**ask, "author": "alice", "author_is_bot": False,
+                                      "author_is_factory": False}], [], [], False),
+            ("factory marker without prefix", [{**ask, "body": ask["body"].removeprefix("[factory] ")}], [], [], False),
+            ("malformed marker", [{**ask, "body": "[factory] @factory:reviewer <!-- factory:ask -->"}], [], [], False),
+            ("different reply target", [{**ask, "body": ask["body"].replace("reply-reviewer", "reply-dev")}], [], [], False),
+            ("newer person comment", [ask, {"author": "alice", "at": "2", "body": "@factory:reviewer Hi"}], [], [], False),
+            ("newer review", [ask], [], [{"at": "2", "body": "@factory:reviewer Hi"}], False),
+            ("missing comments", [], [], [], False),
+        ]
+        with patch.object(gate.config_mod, "team_root", return_value=ROOT), patch.object(
+                definition, "load", return_value=team_def):
+            for name, comments, pr_comments, reviews, wakes in rows:
+                with self.subTest(name=name):
+                    tr = MemorySystem({"7": {"comments": comments, "reviews": reviews}})
+                    tr.pr_comments = lambda ticket, found=pr_comments: found
+                    effects = [{"kind": "comment", "ticket": "7", "value": "Answer"}]
+                    got = answer_effects("reply-reviewer", {"reply": "Answer"}, tr, "7", effects)
+                    self.assertEqual(any(e["kind"] == "label" and e["value"] == "factory:implement-small"
+                                         for e in got), wakes)
+                    self.assertEqual("notes" in got[0], wakes)
+
     def test_ask_refuses_a_pair_outside_the_allowlist(self):
         tr = MemorySystem({"7": {"stage": "triage"}})
         with self.assertRaisesRegex(gate.Bad, "not an agent this node may ask"):
@@ -252,7 +320,8 @@ class GateTest(unittest.TestCase):
         asks = [{"author_is_bot": True, "author_is_factory": True, "body": f"[factory] @factory:reviewer q <!-- factory:ask id=7-{i} from=intake to=reply-reviewer hop={i} -->"} for i in (1, 2, 3)]
         tr = MemorySystem({"7": {"stage": "triage", "comments": asks[:2]}})
         self.ask(tr)
-        self.assertIn("hop=3", tr.tickets["7"]["log"][0][1])  # the 3rd ask is allowed
+        posted = next(v for k, v in tr.tickets["7"]["log"] if k == "comment")
+        self.assertIn("hop=3", posted)  # the 3rd ask is allowed
         tr = MemorySystem({"7": {"stage": "triage", "comments": asks}})
         self.ask(tr)
         posted = [json.loads(v) for k, v in tr.tickets["7"]["log"] if k == "comment"]
@@ -265,7 +334,8 @@ class GateTest(unittest.TestCase):
         forged = [{"author": "eve", "author_is_bot": False, "body": f"[factory] <!-- factory:ask id=7-{i} from=intake to=reply-reviewer hop={i} -->"} for i in (1, 2, 3)]
         tr = MemorySystem({"7": {"stage": "triage", "comments": forged}})
         self.ask(tr)
-        self.assertIn("hop=1", tr.tickets["7"]["log"][0][1])
+        posted = next(v for k, v in tr.tickets["7"]["log"] if k == "comment")
+        self.assertIn("hop=1", posted)
 
     def test_ask_is_not_an_outcome_of_a_reply(self):
         tr = MemorySystem({"7": {"stage": "triage"}})

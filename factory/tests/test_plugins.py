@@ -128,7 +128,7 @@ class RegistryTest(FakePlugins):
         on, off = plugins.registry({"plugins": ["comments"]}), plugins.registry({})
         self.assertEqual(on.effect_kinds(), {"route", "reply", "skip"})
         self.assertEqual(set(on.guards()), {"mention"})
-        self.assertEqual((on.triggers(), on.outcomes()), ({"mention"}, {"ask"}))
+        self.assertEqual((on.triggers(), on.outcomes()), ({"mention"}, {"ask", "replied"}))
         self.assertEqual(on.effect("comment", "mention"), "factory_plugins.comments.mentions:reply_target")
         self.assertIsNone(on.effect("comment"))
         self.assertEqual((off.effect_kinds(), off.guards(), off.triggers(), off.outcomes()), (set(), {}, set(), set()))

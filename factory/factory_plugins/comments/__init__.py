@@ -1,8 +1,8 @@
 """The comments plugin (ADR-0025, ADR-0026): the factory reacts to comments on tickets and PRs. It is off unless the
 team's factory.yaml lists `plugins: [comments]`; while it is off the core imports this declaration only.
 
-- `mentions`: `@factory:<agent>` wakes that agent in reply mode (#590): the `mention` guard fact, the generated
-  `mentions` router and `reply-<agent>` nodes, and the `on: mention` reply target.
+- `mentions`: `@factory:<agent>` targets the reply flow (#590): the `mention` guard fact, generated
+  `reply-<agent>` nodes, and the `on: mention` reply target.
 - `asks`: an agent asks another agent in the thread, with a hop budget (#591): the `ask` outcome.
 - `node`: one comment node routes person comments and agent asks (ADR-0023): the cursor, the step input and the
   `route`, `reply` and `skip` effects.
@@ -18,7 +18,7 @@ PLUGIN = Plugin(
              ("comment", "mention"): "factory_plugins.comments.mentions:reply_target"},
     guards={"mention": "factory_plugins.comments.mentions:holds"},
     triggers=("mention",),
-    outcomes=("ask",),
+    outcomes=("ask", "replied"),
     agent_keys=("mentionable",),
     hooks={"definition.load": "factory_plugins.comments.mentions:add_nodes",
            "definition.errors": "factory_plugins.comments.mentions:errors",
