@@ -761,6 +761,19 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertNotIn("[Slop factory] implement-medium", by_name)
         self.assertEqual([n for n in by_name if n.startswith("[Slop factory] intake")], ["[Slop factory] intake"])
 
+    def test_every_automation_runs_in_an_environment_of_its_repository(self):
+        """#1112: Air rejects an automation whose repository is not its environment's, so a copy in a second ticket
+        repository (`reply-dev slop-eval-factory`) runs in that repository's variant of its environment."""
+        plan = definition_plan()
+        envs = {e["name"]: e for e in plan["environments"]}
+        for a in plan["automations"]:
+            env = envs[a["environmentConfigId"]]
+            self.assertEqual(definition.full_name(env["repository"]), a["repository"]["fullName"], a["name"])
+        variant = envs["[Slop factory] engine slop-eval-factory"]
+        engine = envs["[Slop factory] engine"]
+        self.assertEqual({k: v for k, v in variant.items() if k not in ("name", "repository")},
+                         {k: v for k, v in engine.items() if k not in ("name", "repository")})
+
     def test_mentionable_agents_get_a_reply_node(self):
         """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node;
         the others do not, and no mention router deploys (#893). With it off (ADR-0025) none deploy. The fixture has
@@ -822,7 +835,10 @@ class ProjectPlanTest(unittest.TestCase):
     def test_environment_repositories_come_from_the_definition(self):
         def edit(f):
             f["environments"]["team"]["repositories"] = [{"repo": "o/other"}]
-        plan = definition_plan(edit_factory=edit)
+
+        def writes_other(w):  # a node that runs in o/other (#1112: else it runs in a repository variant)
+            w["nodes"]["reconcile"]["writes"] = ["o/other"]
+        plan = definition_plan(edit_factory=edit, edit_workflow=writes_other)
         envs = {e["name"]: e["repository"] for e in plan["environments"]}
         self.assertEqual(envs["[Slop factory] team"], "https://github.com/o/other")
         self.assertEqual(envs["[Slop factory] engine"], "https://github.com/zaharchenko-evgeny/slop-factory")
@@ -1404,7 +1420,12 @@ class DefinitionPlanTest(unittest.TestCase):
     def test_environments_and_labels(self):
         envs = {e["name"]: e for e in self.plan["environments"]}
         self.assertEqual(envs["[Slop factory] engine"]["secrets"], [])          # no Air automation writes the factory
-        self.assertEqual(sorted(envs), ["[Slop factory] engine", "[Slop factory] knowledge", "[Slop factory] team"])
+        # #1112: the knowledge and team nodes run in slop-factory (no `writes`), so in its variant of their environment
+        self.assertEqual(sorted(envs), ["[Slop factory] engine", "[Slop factory] knowledge",
+                                        "[Slop factory] knowledge slop-factory", "[Slop factory] team slop-factory"])
+        for a in self.plan["automations"]:
+            self.assertEqual(definition.full_name(envs[a["environmentConfigId"]]["repository"]),
+                             a["repository"]["fullName"], a["name"])
         names = {a["name"] for a in self.plan["automations"]}
         self.assertIn("[Slop factory] fix", names)                                  # no per-repository copies
         self.assertNotIn("[Slop factory] fix slop-eval-factory", names)
@@ -1467,7 +1488,8 @@ class MainlessEnvironmentPlanTest(unittest.TestCase):
             self.assertEqual([v["outputBehaviour"] for v in a["triggerVcs"]], ["create-pr"])
             others = {"o/api", "o/web", "o/team"} - {a["repository"]["fullName"]}
             self.assertEqual({x["repository"]["fullName"] for x in a["additionalRepositories"]}, others)
-        self.assertEqual({a["environmentConfigId"] for a in copies}, {"[Slop factory] engine"})
+        self.assertEqual({a["repository"]["fullName"]: a["environmentConfigId"] for a in copies},
+                         {"o/api": "[Slop factory] engine", "o/web": "[Slop factory] engine web"})
 
     def test_read_only_copy_has_read_only_output(self):
         copies = self.copies("review-low")
@@ -1486,10 +1508,14 @@ class MainlessEnvironmentPlanTest(unittest.TestCase):
         self.assertEqual(a["repository"]["fullName"], "o/team")
         self.assertEqual([v["outputBehaviour"] for v in a["triggerVcs"]], ["push-to-new-branch"])
 
-    def test_one_air_environment_per_definition_environment(self):
-        names = [e["name"] for e in self.plan["environments"]]
-        self.assertEqual(len(names), len(set(names)))
-        self.assertFalse([n for n in names if n.endswith((" api", " web"))], names)
+    def test_a_copy_runs_in_an_environment_of_its_repository(self):
+        """#1112: Air runs an automation only in an environment of its own repository."""
+        envs = {e["name"]: e for e in self.plan["environments"]}
+        self.assertEqual(len(envs), len(self.plan["environments"]))
+        for a in self.automations:
+            self.assertEqual(definition.full_name(envs[a["environmentConfigId"]]["repository"]),
+                             a["repository"]["fullName"], a["name"])
+        self.assertEqual(envs["[Slop factory] engine web"]["variables"], envs["[Slop factory] engine"]["variables"])
 
     def test_node_repo_is_the_copys_repository_in_the_prompt(self):
         def edit_factory(f):
