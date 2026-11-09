@@ -13,7 +13,8 @@ from plugins import Plugin
 
 PLUGIN = Plugin(
     name="youtrack",
-    provides={"tracker": {"youtrack": "factory_plugins.youtrack.gate:YouTrackTracker"}},
+    provides={"tracker": {"youtrack": "factory_plugins.youtrack.gate:YouTrackTracker"},
+              "tracker-contract": {"youtrack": "factory_plugins.youtrack.contract:TRACKER"}},  # ADR-0027
     hooks={"deploy.plan": "factory_plugins.youtrack.provision:plan",
            "deploy.repo_tags": "factory_plugins.youtrack.provision:repo_tags",
            "deploy.trigger_filters": "factory_plugins.youtrack.provision:trigger_filters",

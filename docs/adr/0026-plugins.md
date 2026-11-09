@@ -142,6 +142,10 @@ no environment tracker resolves every environment to the one top-level tracker
 
 ### Per-environment trackers
 
+Amended by ADR-0027: a repository of an environment carries its own `tracker` and `vcs` (the
+environment's blocks are its defaults), and a node names its `environments` instead of the default-environment
+fan-out below.
+
 A factory may serve several projects (#1069). Each project is an environment
 with its own tracker, `environments.<env>.tracker`, in the same `factory.yaml`
 and one deploy:

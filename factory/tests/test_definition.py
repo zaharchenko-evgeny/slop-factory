@@ -23,6 +23,15 @@ FIXTURE = ROOT / "tests/fixtures/v2"
 MAIN, OTHER = "zaharchenko-evgeny/slop-factory", "zaharchenko-evgeny/slop-eval-factory"
 
 
+
+def live_warnings(defn):
+    """The warnings, less `deprecated-key`: the Slop fixture keeps its ADR-0024 keys until slop-eval-factory#92."""
+    return [w for w in definition.warnings(defn) if not w.startswith("deprecated-key:")]
+
+
+def ok_lines(stdout):
+    return "\n".join(line for line in stdout.strip().splitlines() if not line.startswith("warning: deprecated-key:"))
+
 class DefinitionTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -50,9 +59,120 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    # --- ADR-0027: repository tracker, vcs and write; node environments ----------------------------------------
+    def _envs(self, f, **envs):
+        """Replace the environments with `envs`: {name: [(repo, {keys})]}, keeping the engine's other settings."""
+        base = {k: v for k, v in f["environments"]["engine"].items() if k != "repositories"}
+        f["environments"] = {n: {**base, "repositories": [{"repo": r, **extra} for r, extra in rs]} for n, rs in envs.items()}
+
+    def _node_envs(self, w, name, *envs):
+        w["nodes"][name]["environments"] = list(envs)
+
+    def test_repository_blocks_layer_over_environment_and_top(self):
+        self.edit("factory.yaml", lambda f: (
+            self._envs(f, engine=[(MAIN, {"write": True}),
+                                  (OTHER, {"tracker": {"adapter": "youtrack", "scope": {"field": "Subsystem", "value": "S3"}}})]),
+            f["environments"]["engine"].update(tracker={"adapter": "youtrack", "url": "https://yt", "project": "LME"})))
+        defn = definition.load(self.root)
+        main, other = definition.repositories(defn, "engine")
+        self.assertEqual((main["repo"], main["write"], other["write"]), (MAIN, True, False))
+        self.assertEqual((main["tracker"]["adapter"], main["tracker"]["project"], main["tracker"].get("scope")), ("youtrack", "LME", None))
+        self.assertEqual(other["tracker"]["scope"], {"field": "Subsystem", "value": "S3"})
+        self.assertNotIn("repository", other["tracker"])  # the github system key does not cross to youtrack
+        self.assertEqual(main["vcs"]["adapter"], "github")
+
+    def test_github_issues_place_defaults_to_the_repository(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})]))
+        defn = definition.load(self.root)
+        places = [definition.contract(defn, "tracker", r["tracker"]).place(r["tracker"], r["repo"])
+                  for r in definition.repositories(defn, "engine")]
+        self.assertEqual(places, [f"github-issues:{MAIN}", f"github-issues:{OTHER}"])  # top `tracker.repository` stays out
+        self.assertEqual(definition._repository_errors(defn), [])
+
+    def test_context_repository_has_no_tracker(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"tracker": "none"})]))
+        self.assertIsNone(definition.repositories(definition.load(self.root), "engine")[1]["tracker"])
+
+    def test_copies_per_environment_and_listened_repository(self):
+        self.edit("factory.yaml", lambda f: self._envs(
+            f, engine=[(MAIN, {"write": True}), (OTHER, {})], team=[(OTHER, {"write": True}), (MAIN, {"tracker": "none"})],
+            intake=[(MAIN, {}), (OTHER, {})]))
+        self.edit("workflow.yaml", lambda w: (self._node_envs(w, "implement-small", "engine", "team"),
+                                              self._node_envs(w, "intake", "intake")))
+        defn = definition.load(self.root)
+        dev = definition.copies(defn, "implement-small")
+        self.assertEqual([(c["env"], c["main"], c["write"], c["additional"]) for c in dev],
+                         [("engine", MAIN, True, [OTHER]), ("team", OTHER, True, [MAIN])])
+        self.assertEqual([(c["env"], c["main"], c["write"]) for c in definition.copies(defn, "intake")],
+                         [("intake", MAIN, False), ("intake", OTHER, False)])  # read-only: every ticket place
+        self.assertEqual(definition._repository_errors(defn), [])
+
+    def test_schedule_copies_once_per_environment(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True})], team=[(MAIN, {}), (OTHER, {})]))
+        self.edit("workflow.yaml", lambda w: self._node_envs(w, "reconcile", "engine", "team"))
+        got = [(c["env"], c["repo"], c["main"], c["write"]) for c in definition.copies(definition.load(self.root), "reconcile")]
+        self.assertEqual(got, [("engine", None, MAIN, True), ("team", None, MAIN, False)])  # home: writable, else first
+
+    def test_youtrack_copy_has_no_home_repository(self):
+        yt = {"adapter": "youtrack", "url": "https://yt", "project": "LME", "scope": {"field": "Subsystem", "value": "S3"}}
+        self.edit("factory.yaml", lambda f: self._envs(f, b=[(OTHER, {"write": True, "tracker": yt}), (MAIN, {"tracker": "none"})]))
+        self.edit("workflow.yaml", lambda w: self._node_envs(w, "implement-small", "b"))
+        defn = definition.load(self.root)
+        (c,) = definition.copies(defn, "implement-small")
+        self.assertEqual((c["main"], c["write"], c["place"]), (OTHER, True, "youtrack:https://yt/LME|Subsystem=S3"))
+
+    def test_node_hears_twice_is_refused(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {})], all=[(MAIN, {}), (OTHER, {})]))
+        self.edit("workflow.yaml", lambda w: self._node_envs(w, "intake", "engine", "all"))
+        self.assertError(f"node-hears-twice: nodes.intake: environments all, engine both listen to github-issues:{MAIN}")
+
+    def test_place_in_two_repositories_is_refused(self):
+        yt = {"adapter": "youtrack", "url": "https://yt", "project": "LME"}
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True, "tracker": yt}), (OTHER, {"tracker": yt})]))
+        self.assertError("place-in-two-repositories: youtrack:https://yt/LME: holds the tickets of")
+
+    def test_unknown_or_invalid_repository_blocks_are_refused(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": "yes", "tracker": {"adapter": "jira"}}),
+                                                                  (OTHER, {"tracker": {"adapter": "youtrack"}})]))
+        errs = self.errors()
+        for want in (f"bad-write: environments.engine: {MAIN}", f"unknown-tracker: environments.engine: {MAIN}: jira",
+                     f"youtrack-project: environments.engine: {OTHER}"):
+            with self.subTest(want=want):
+                self.assertTrue(any(e.startswith(want) for e in errs), errs)
+
+    def test_deprecated_keys_and_several_writable_are_warned(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"write": True})]))
+        warns = definition.warnings(definition.load(self.root))
+        self.assertIn(f"several-writable: environments.engine: {MAIN}, {OTHER}: the air surface allows one writable "
+                      "repository per environment", warns)
+        self.assertTrue(any(w.startswith("deprecated-key: nodes.implement-small: `writes`") for w in warns), warns)
+        self.assertTrue(any(w.startswith("deprecated-key: agents.") and "`access`" in w for w in warns), warns)
+
+    def test_migrated_slop_definition_validates_clean(self):
+        """The Slop definition in the ADR-0027 form (slop-eval-factory#92): no errors, no warnings, the copies below."""
+        def factory(f):
+            self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})], team=[(OTHER, {"write": True}), (MAIN, {"tracker": "none"})],
+                       intake=[(MAIN, {}), (OTHER, {})])
+            f["tracker"].pop("repositories", None)
+            for spec in f["agents"].values():
+                spec.pop("access", None)
+
+        def workflow(w):
+            (w.get("settings") or {}).pop("environment", None)
+            for name, spec in w["nodes"].items():
+                for k in ("writes", "listens", "environment"):
+                    spec.pop(k, None)
+                spec["environments"] = ["intake"] if name == "intake" else ["engine", "team"]
+        self.edit("factory.yaml", factory)
+        self.edit("workflow.yaml", workflow)
+        defn = definition.load(self.root)
+        self.assertEqual((definition.errors(defn), definition.warnings(defn)), ([], []))
+        self.assertEqual([(c["env"], c["main"], c["write"]) for c in definition.copies(defn, "reply-dev")],
+                         [("engine", MAIN, True), ("team", OTHER, True)])  # a generated node takes its agent's environments
+
     def test_removed_repository_keys_are_reported(self):
-        """ADR-0024 (#983): a node's `writes` replaced an environment repository's `main`, `write` and `token_env`."""
-        for key in ("main", "write", "token_env"):
+        """ADR-0027: an environment repository's `main` and `token_env` are gone (`write` is back: its writable repository)."""
+        for key in ("main", "token_env"):
             with self.subTest(key=key):
                 self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update({key: True}))
                 self.assertError(f"removed-key: environments.engine: zaharchenko-evgeny/slop-eval-factory: `{key}`")
@@ -101,10 +221,10 @@ class DefinitionTest(unittest.TestCase):
         self.assertNotIn("notify", descriptor)
 
     def test_fixture_warns_only_about_labels_a_person_adds(self):
-        self.assertEqual(definition.warnings(definition.load(self.root)), [])
+        self.assertEqual(live_warnings(definition.load(self.root)), [])
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"]["effects"]
                   .append({"label": "factory:nobody"}))
-        self.assertEqual(definition.warnings(definition.load(self.root)),
+        self.assertEqual(live_warnings(definition.load(self.root)),
                          ["unwatched-label: factory:nobody: no node triggers on it"])
 
     def test_unknown_agent(self):
@@ -378,7 +498,7 @@ class DefinitionTest(unittest.TestCase):
         self.edit("factory.yaml", lambda f: f["defaults"].setdefault("settings", {}).update(issues_token_env="FACTORY_ISSUES_TOKEN"))
         run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
                              text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
-        self.assertEqual((run.returncode, run.stdout.strip()), (0, "factory: ok"), run.stdout + run.stderr)
+        self.assertEqual((run.returncode, ok_lines(run.stdout)), (0, "factory: ok"), run.stdout + run.stderr)
 
     def test_settings_merge_order(self):
         defn = definition.load(self.root)
@@ -701,7 +821,7 @@ class DefinitionTest(unittest.TestCase):
     def test_cli_validate(self):
         run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
                              text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
-        self.assertEqual((run.returncode, run.stdout.strip()), (0, "factory: ok"), run.stderr)
+        self.assertEqual((run.returncode, ok_lines(run.stdout)), (0, "factory: ok"), run.stderr)
 
     def test_cli_validate_rejects_redundant_label_group_unlabel(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"]["effects"].extend(

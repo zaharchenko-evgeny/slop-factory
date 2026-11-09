@@ -44,7 +44,11 @@ def add_nodes(defn):
             to = sorted(b for b in askable if frozenset((n["agent"], b)) in pairs)
             n.setdefault("outcomes", {}).setdefault("ask", {"to": to, "effects": [{"comment": "text"}]})
     for a in askable:
+        # ADR-0027: it answers wherever the agent's other nodes run (none listed: the workflow's default environment)
+        envs = list(dict.fromkeys(e for n in nodes.values() if n.get("agent") == a and not n.get("generated")
+                                  for e in (n["environments"] if isinstance(n.get("environments"), list) else [])))
         nodes.setdefault(f"reply-{a}", {
+            **({"environments": envs} if envs else {}),
             "agent": a, "generated": True, "triggers": [{"label": f"{prefix}reply-{a}"}], "output": "read-only",
             "settings": {"mode": "reply"},
             "outcomes": {"replied": {"effects": [{"unlabel": f"{prefix}reply-{a}"}, {"comment": "reply", "on": "mention"},
