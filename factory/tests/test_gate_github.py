@@ -2031,6 +2031,26 @@ class GateTrackerChildrenTest(unittest.TestCase):
         self.assertEqual(g.children(1), [{"number": 2, "state": "closed"}])   # the children guard can hold
 
 
+
+class OneRepositoryPerTicketTest(unittest.TestCase):
+    """ADR-0027 (#1135): a ticket changes the one repository it lives in, so its PR is there."""
+
+    def test_pr_of_ticket_is_in_its_repository(self):
+        t = tr(FakeGh())
+        t.repositories = {"primary": REPO, "app": "o/app"}
+        body = "Scope.\n\nrepositories: primary, app\n"
+        self.assertEqual(t.ticket_repositories(7, body), ["primary", "app"])  # ADR-0017, before the definition adopts
+        t._with_one({"one_repository_per_ticket": True})
+        self.assertEqual(t.ticket_repositories(7, body), ["primary"])
+
+    def test_create_issues_into_named_repository(self):
+        t = tr(FakeGh())
+        t.tickets.others = {"app": "o/App"}
+        for child, want in (({"repo": "app"}, "o/App"), ({"repo": "o/app"}, "o/App"), ({}, t.tickets.repo),
+                            ({"repo": "unknown"}, t.tickets.repo)):
+            with self.subTest(child=child):
+                self.assertEqual(t.tickets.repo_of(child), want)
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -175,12 +175,16 @@ def lesson(text):
 
 
 def slice_of(path):
-    """A slice file: its first line is the title (a leading `#` is dropped), the rest is the ticket body."""
+    """A slice file: its first line is the title (a leading `#` is dropped), the rest is the ticket body. A `repo:
+    <name or owner/repo>` line right under the title creates the ticket in that repository (ADR-0027)."""
     title, _, body = Path(path).read_text().strip().partition("\n")
     title = title.lstrip("#").strip()
     if not title:
         raise ValueError(f"slice {path} has no title line")
-    return {"title": title, "body": body.strip() or title}
+    first, _, rest = body.strip().partition("\n")
+    repo = first.partition(":")[2].strip() if first.lower().startswith("repo:") else None
+    body = rest if repo is not None else body
+    return {"title": title, "body": body.strip() or title, **({"repo": repo} if repo else {})}
 
 
 def handoff_of(a):

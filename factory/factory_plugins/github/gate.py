@@ -194,8 +194,11 @@ class GitHubTicketStore:
         return self.ref(url.split("/repos/", 1)[1] if "/repos/" in url else self.repo, item["number"])
 
     def repo_of(self, child):
-        """The repository a child is created in: the one its `repo` names among the other repositories, else this one."""
-        return self.others.get(child.get("repo")) or self.repo
+        """The repository a child is created in: the one its `repo` names (a name or `owner/repo`) among the other
+        repositories, else this one."""
+        want = str(child.get("repo") or "")
+        return self.others.get(want) or next((r for r in self.others.values() if r and r.lower() == want.lower()), None) \
+            or self.repo
 
     def scope_labels(self):
         return [self.scope["label"]] if self.scope else []
@@ -509,7 +512,7 @@ class GitHubGateTracker(DescriptorPort):
                    (c.get("code_host") or {}).get("repository"),
                    {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,
                    repository_names(c), tickets, (c.get("reviews") or {}).get("required"),
-                   tracker_repositories(t) if tickets is None else None)._with_scope(t)._with_writable(c)
+                   tracker_repositories(t) if tickets is None else None)._with_scope(t)._with_writable(c)._with_one(c)
 
     @classmethod
     def for_repository(cls, repo, run=gh):
@@ -530,6 +533,11 @@ class GitHubGateTracker(DescriptorPort):
     def in_scope(self, n):
         """Whether ticket `n` is in this tracker's scope."""
         return self.tickets.in_scope(n) if hasattr(self.tickets, "in_scope") else True
+
+    def _with_one(self, c):
+        """ADR-0027: a ticket changes the one repository it lives in, so its body's `repositories:` line is ignored."""
+        self.one_repository = bool(c.get("one_repository_per_ticket"))
+        return self
 
     def _with_writable(self, c):
         """The writable repositories of the environment in FACTORY_ENV, from the compiled definition (#994)."""
@@ -1215,7 +1223,11 @@ class GitHubGateTracker(DescriptorPort):
         repositories (YouTrack `tracker.projects`, #981), else the ticket's `repositories:` line in `body`."""
         own = getattr(self.tickets, "ticket_repositories", None)
         linked = own(n) if own else None
-        return linked if linked is not None else ticket_repositories(body, list(self.repositories), next(iter(self.repositories)))
+        if linked is not None:
+            return linked
+        if getattr(self, "one_repository", False):  # ADR-0027: the ticket's own repository (`at` puts it first)
+            return [next(iter(self.repositories))]
+        return ticket_repositories(body, list(self.repositories), next(iter(self.repositories)))
 
     def _views(self, n):
         """(repository name, view, PR or None) per repository of ticket `n`, in the ticket's order (ADR-0017)."""

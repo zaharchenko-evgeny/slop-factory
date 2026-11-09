@@ -2431,5 +2431,31 @@ class TicketRepositoriesTest(unittest.TestCase):
                 self.assertEqual(tracker.read, [] if refused else [ticket])  # no read, so no effect, for a refused ticket
 
 
+
+class TicketPlacesTest(unittest.TestCase):
+    """ADR-0027 (#1135): the gate routes a ticket to its place: GitHub tickets (a number or `owner/repo#n`) to the
+    GitHub tracker, a YouTrack ticket to the place of its project and scope; a PR to the place that lists its
+    repository first."""
+
+    class Fake:
+        def in_scope(self, ticket):
+            return True
+
+    def scoped(self):
+        import scopes
+        envs = {"github": {"adapter": "github-issues", "repository": "o/a", "repositories": ["o/a", "o/b"]},
+                "place:o/c": {"adapter": "youtrack", "project": "LME", "scope": {"field": "Subsystem", "value": "S3"}}}
+        repos = {"github": ["o/a", "o/b"], "place:o/c": ["o/c", "o/a"]}
+        return scopes.ScopedTracker({}, lambda config, key: (self.Fake(), self.Fake()), None, envs, repos)
+
+    def test_ticket_resolves_to_repository_by_place(self):
+        t = self.scoped()
+        self.assertEqual([t.env_of(x) for x in (7, "o/b#3", "O/A#4", "LME-5", "OTHER-1", "o/z#2")],
+                         ["github", "github", "github", "place:o/c", None, None])
+
+    def test_pr_repository_picks_its_place(self):
+        t = self.scoped()
+        self.assertEqual([t.env_of_repository(r) for r in ("o/c", "o/b", "o/a")], ["place:o/c", "github", "github"])
+
 if __name__ == "__main__":
     unittest.main()

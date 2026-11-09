@@ -176,6 +176,18 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual([(c["env"], c["main"], c["write"]) for c in definition.copies(defn, "reply-dev")],
                          [("engine", MAIN, True), ("team", OTHER, True)])  # a generated node takes its agent's environments
 
+    def test_config_compiles_ticket_places(self):
+        yt = {"adapter": "youtrack", "url": "https://yt", "project": "LME", "scope": {"field": "Subsystem", "value": "S3"}}
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})],
+                                                       b=[("o/c", {"write": True, "tracker": yt}), (MAIN, {"tracker": "none"})]))
+        c = definition.config(definition.load(self.root))
+        self.assertTrue(c["one_repository_per_ticket"])
+        self.assertEqual(c["tracker"]["repositories"], [MAIN, OTHER])  # the GitHub Issues homes, the tracker first
+        self.assertEqual([(p["repository"], p["tracker"]["project"], p["repositories"]) for p in c["ticket_places"]],
+                         [("o/c", "LME", ["o/c", MAIN])])
+        self.assertEqual(c["environments"]["b"]["writable"], ["c"])
+        self.assertNotIn("tracker", c["environments"]["b"])  # a place, not a #1069 project environment
+
     def test_removed_repository_keys_are_reported(self):
         """ADR-0027: an environment repository's `main` and `token_env` are gone (`write` is back: its writable repository)."""
         for key in ("main", "token_env"):
