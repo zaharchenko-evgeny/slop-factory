@@ -111,7 +111,8 @@ def begin(argv, team=None):
     if a.issue or a.pr:  # a number is all the gate needs: it reads every fact from the tracker
         name, _, action = str(nodes.load()["nodes"][compiled["node"]]["triggers"][0]).split(" ")[0].partition(".")
         number = {"pull_request" if a.pr else "issue": {"number": a.pr or a.issue}}
-        node_repo = os.environ.get("FACTORY_NODE_REPO")  # a copy's number is in its own repository (ADR-0024)
+        # a copy's number is in its own repository (ADR-0024/0027): Air sets the copy's main as FACTORY_ENV_REPOSITORY
+        node_repo = os.environ.get("FACTORY_NODE_REPO") or os.environ.get("FACTORY_ENV_REPOSITORY")
         text = json.dumps({"eventType": f"{name}.{action}", "action": action, **number,
                            **({"repository": {"full_name": node_repo}} if node_repo else {})})
     else:
