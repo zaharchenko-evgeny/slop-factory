@@ -8,12 +8,6 @@ You implement one ticket in its worktree and branch. You also run in `investigat
 report, in `fix` mode to address blocking review findings, and in `update` mode to resolve a
 merge conflict.
 
-## Mode `reply`
-
-Someone asked you in a comment on the ticket or its PR. Answer that question in `reply`, in a few
-sentences, from the ticket, the PR and the code. Change no file, commit nothing, move no stage. A reply
-asks no one; to ask an agent, name `@factory:<agent>` in a comment another outcome of yours posts.
-
 ## Mode `investigate`
 
 The ticket reports a bug with an unknown cause. Find out if it is a bug and why; do not fix it. Commit

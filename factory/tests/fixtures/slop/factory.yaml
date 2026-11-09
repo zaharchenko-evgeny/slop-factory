@@ -3,7 +3,6 @@
 name: Slop factory
 engine: "git+https://github.com/zaharchenko-evgeny/slop-factory@main"   # what the Air startup script installs
 owner: zaharchenko-evgeny   # the GitHub login the notify node tells
-plugins: [comments]         # ADR-0026: mentions, asks and the comment node
 tracker:
   adapter: github-issues
   repository: zaharchenko-evgeny/slop-factory
@@ -131,9 +130,9 @@ agents:
   router:         { role: router, model: sonnet, access: read-only }        # judges answers; luna re-asked answered questions (#782)
   dispatcher:     { role: dispatcher, model: luna, access: read-only }
   dev-cheap:      { role: developer, model: luna, access: full }
-  dev:            { role: developer, model: sonnet, reasoning: high, access: full, mentionable: true }
+  dev:            { role: developer, model: sonnet, reasoning: high, access: full }
   dev-strong:     { role: developer, model: sonnet, reasoning: max, access: full }
-  reviewer:       { role: reviewer, model: sol, access: read-only, mentionable: true }   # @factory:reviewer
+  reviewer:       { role: reviewer, model: sol, access: read-only }
   reviewer-cheap: { role: reviewer, model: luna, access: read-only }
   approver:       { role: approver, model: luna, access: read-only }
   clerk:          { run: decide, model: luna, access: read-only }  # runs `factory decide`: the node's guards choose
