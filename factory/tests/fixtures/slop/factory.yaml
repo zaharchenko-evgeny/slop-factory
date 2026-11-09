@@ -157,7 +157,7 @@ environments:
       - { repo: zaharchenko-evgeny/slop-eval-factory, write: true }
       - { repo: zaharchenko-evgeny/slop-factory, tracker: none }   # evidence for retro; its tickets are engine's
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
-              pypi.org, files.pythonhosted.org]
+              "*.blob.core.windows.net", pypi.org, files.pythonhosted.org, registry.npmjs.org]   # developers run the engine's tests
     vm: default
   intake:                         # triage of every ticket: both repositories, nothing writable
     repositories:
