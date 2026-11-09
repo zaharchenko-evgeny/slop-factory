@@ -64,6 +64,12 @@ class ProjectTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             return project.validate(write_project(tmp, descriptor))
 
+    def test_tracker_repositories_accepted(self):
+        """#1098: ADR-0024's ticket repositories validate; a non-list does not."""
+        self.assertEqual(self.errors(lambda d: d["tracker"].update(repositories=["project"])), [])
+        errors = self.errors(lambda d: d["tracker"].update(repositories="project"))
+        self.assertTrue(any(e.startswith("factory.project.yaml.tracker.repositories") for e in errors), errors)
+
     def test_repository_role_is_primary_or_project(self):
         other = {"name": "other", "url": "https://github.com/example/other", "default_branch": "main"}
         self.assertEqual(self.errors(lambda d: d["repositories"].append({**other, "role": "project"})), [])
