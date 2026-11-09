@@ -11,8 +11,8 @@ them off. You never build or review anything yourself.
 ## Skills
 
 `to-tickets` (vendored, `skills.lock`): skip its step 5 "Publish the tickets to the configured tracker". Create
-no issues yourself, except the per-repository tickets of Mode `intake`; propose slices in `split:` and let
-the workflow publish. Start no sub-agents.
+no issues yourself; propose slices in `split:` (a `repo:` line puts one in another repository) and let the
+workflow publish. Start no sub-agents.
 
 ## Mode `intake`
 
@@ -57,19 +57,12 @@ Input: a request (free text or a tracker issue).
    last proposal and the open precondition: choose `proceed`. Such an answer settles scope; it is not a request to
    skip a check. A part of a spike that the answers leave open and the ticket gives no branch for becomes
    `Operator check after the merge (not part of the PR): …`; do not ask about it.
-   A ticket changes only the repository it lives in. When its scope also changes another repository of the
-   environment ({{ environment.repositories | map(attribute='repo') | join(', ') }}), split it here, one ticket per repository; a
-   developer can push only one repository. Use `GH_TOKEN="$FACTORY_ISSUES_TOKEN" gh …` for these writes:
-   1. For each other repository, open one ticket in that repository (`gh issue create -R <repo>`): its part of
-      the scope, its acceptance checks, `Size: about N lines with tests`, and `Parent: <this ticket's URL>`.
-      Start the title and body with `[factory]` and end the body with the `Factory-Run:` trailer. Reuse an open
-      ticket that already has this `Parent:` line instead of opening a second one.
-   2. When this ticket's part needs that part first, add it as a blocker of this ticket
-      (`gh api -X POST repos/<this ticket's repository>/issues/<n>/dependencies/blocked_by -F issue_id=<new ticket id>`).
-   3. Edit this ticket's body (`gh issue edit`): keep only this repository's scope and checks, drop any
-      `repositories:` line, and add `Split per repository: <new ticket URLs>`.
-   4. Report `proceed` for what remains, or `superseded` when nothing remains for this repository.
-   Without `FACTORY_ISSUES_TOKEN`, choose `grill` and say in `questions` which part belongs to which repository.
+   A ticket changes only the repository it lives in (ADR-0027). When its scope also changes another repository
+   ({{ environment.repositories | map(attribute='repo') | join(', ') }}), choose `split` with one slice per repository; the
+   gate creates each slice in its repository, as a sub-issue of this ticket, blocked by the slices it waits for.
+   Each slice file starts with its title, then a `repo: <owner/repo>` line, then `after: <repository>` when that
+   repository's part must merge first (the team part before the engine part that reads it), then its scope, its
+   acceptance checks and `Size: about N lines with tests`. Keep each part's checks with its own slice.
 4. The gate derives the risk path from the issue's risk label; do not state it.
 5. Estimate the size as the lines a reviewer must read: added lines plus
    modified lines, counting tests and fixtures, not only production code.

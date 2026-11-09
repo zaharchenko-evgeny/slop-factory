@@ -447,8 +447,10 @@ class EnvRolesTest(unittest.TestCase):
         self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
         fixture = ROOT / "factory/tests/fixtures/slop"
         cfg.set_team(fixture)
-        for env in ("engine", "knowledge"):  # slop-eval-factory#91: `team` merged into `engine`
+        for env in ("engine", "team", "intake"):  # slop-eval-factory#96 (ADR-0027)
             self.assert_slop_roles(fixture, env, self.roles(env))
+        self.assertIn("developer", self.roles("team"))  # a node of [engine, team] runs in team too
+        self.assertEqual(self.roles("intake"), ["router"])
 
         with tempfile.TemporaryDirectory() as tmp:
             team = Path(tmp) / "team"
