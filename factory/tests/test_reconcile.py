@@ -410,6 +410,34 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual({e["ticket"] for e in written}, {"o/b#7"})  # needs-human, the comment and `blocked`: all in o/b
         self.assertEqual([e["value"] for e in written if e["kind"] == "stage"], ["blocked"])
 
+    def test_label_no_copy_hears_is_stuck_at_once(self):
+        defn = copy.deepcopy(self.defn)
+        factory_repo, team_repo = "zaharchenko-evgeny/slop-factory", "zaharchenko-evgeny/slop-eval-factory"
+        defn["factory"]["tracker"]["repositories"] = [factory_repo, team_repo]
+        defn["factory"]["environments"]["intake"]["repositories"] = [{"repo": factory_repo}]
+        ticket = {"stage": "triage", "attrs": ["factory:triage"], "since": None}
+        written = []
+        class Tracker:
+            def sweep_tickets(self, stages, open_only=False):
+                return [f"{team_repo}#7"]
+
+            def stale_facts(self, _):
+                return ticket
+
+            def apply(self, effect):
+                written.append(effect)
+
+        tr = Tracker()
+        tracker = self.config["tracker"]
+        results = reconcile.recover_definition(tr, defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
+                                               self.config["limits"], now=NOW)
+        self.assertEqual([(r["reconcile"], r["node"]) for r in results], [("stuck", "intake")])
+        self.assertEqual([e["value"] for e in written if e["kind"] == "label"], ["factory:needs-human"])
+        self.assertEqual([e["value"] for e in written if e["kind"] == "stage"], ["blocked"])
+        note = next(e["value"] for e in written if e["kind"] == "comment")
+        self.assertIn("slop-eval-factory", note)
+        self.assertIn("Open the ticket in a repository where intake listens", note)
+
     def test_stuck_label_that_is_young_or_behind_a_blocker_is_left_alone(self):
         labels = {"ci": "none", "attrs": ["risk:low"], "pr_labels": ["factory:review-low"]}
         young = (NOW - timedelta(minutes=45)).isoformat()

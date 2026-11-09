@@ -307,6 +307,7 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
     stage name here). A conflicting PR in a fix-able stage with no fix label goes to fix; a waking label whose node
     `when` holds and that outlived the node's timeout is re-fired once per head, the second miss blocks the ticket."""
     import gate
+    import gate_port
     now, results = now or datetime.now(timezone.utc), []
     default = limits.get("run_timeout_minutes", 30)
     fix, wakes = definition_recovery(defn, vocab._tracker()["stages"], vocab.needs_human(), default)
@@ -318,7 +319,36 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
         try:
             facts = tracker.stale_facts(n)
             stage, since, head = facts["stage"], facts.get("since"), (facts.get("head") or "")[:12]
-            if facts.get("issue_state", "open") != "open" or not since or vocab.needs_human() in facts.get("attrs", []):
+            if facts.get("issue_state", "open") != "open" or vocab.needs_human() in facts.get("attrs", []):
+                continue
+            ticket_repos = definition.tracker_repositories(defn)
+            repo, _ = gate_port.split_ticket(n, ticket_repos[0] if ticket_repos else None)
+            if repo:
+                stuck = False
+                for node, trigger in ((name, trigger) for name, spec in nodes.items()
+                                      for trigger in spec.get("triggers") or []):
+                    label = (trigger.get("label") if isinstance(trigger, dict) else None)
+                    if isinstance(trigger, dict) and trigger.get("stage"):
+                        label = vocab.stage(trigger["stage"])
+                    if label not in facts.get("attrs", []):
+                        continue
+                    if not any(definition.full_name(copy["main"]).lower() == repo.lower()
+                               for copy in definition.copies(defn, node)):
+                        why = f"{label} wakes no {node} copy in {repo}. Open the ticket in a repository where {node} listens"
+                        r = {"ticket": n, "stage": stage, "node": node, "reconcile": "stuck", "why": why}
+                        results.append(r)
+                        if not dry_run:
+                            send(tracker, n, nodes, stage, head, "stuck", label, "issue", why)
+                        if progress:
+                            progress(r)
+                        stuck = True
+                        break
+                else:
+                    if not since:
+                        continue
+                if stuck:
+                    continue
+            elif not since:
                 continue
             ago = lambda at: now - datetime.fromisoformat(at.replace("Z", "+00:00"))  # noqa: E731
             step = None
