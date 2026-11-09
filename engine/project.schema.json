@@ -46,6 +46,7 @@
       "properties": {
         "adapter": {"type": "string"},
         "repository": {"type": "string"},
+        "repositories": {"type": "array", "items": {"type": "string"}, "description": "Ticket repositories (ADR-0024); the first is the tracker."},
         "url": {"type": "string"},
         "project": {"type": "string"},
         "projects": {"type": "object", "propertyNames": {"minLength": 1},

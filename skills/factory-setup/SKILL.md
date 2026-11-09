@@ -21,11 +21,13 @@ the user approves a plan. The layout is the engine's ADR-0021:
 
 - `factory.yaml` lists what the factory has: tracker, models (aliases), skills
   (local or pinned by source and sha256), roles (skills, mcp), agents (role +
-  model + access + settings), environments (repositories with one `main`,
-  domains, env, setup script) and webhooks.
+  model + access + settings), environments (checkouts: repositories with no
+  `main`, domains, env, setup script) and webhooks.
 - `workflow.yaml` says how it works: stages, shared settings (limits) and the
   nodes in delivery order. A node is an agent + an environment + triggers +
-  outcomes; the gate applies an outcome's effects.
+  outcomes; the gate applies an outcome's effects. A node's `writes` names the
+  repositories it writes and its `listens` the ticket repositories it hears
+  (ADR-0024; `references/nodes.md`).
 - `assign` takes a GitHub login, a list of logins or `owner` (the top-level
   `factory.yaml` owner). `unassign` takes the same values or `all`. With
   `on: pr`, `assign` targets every open PR. Without `on`, it targets the ticket.
@@ -39,9 +41,16 @@ the user approves a plan. The layout is the engine's ADR-0021:
 
 Ask, one round at a time, with a recommended answer for each question:
 
-1. Repositories: the project's main repository, and the team repository that
-   holds this definition and the knowledge base.
-2. Tracker and project (see `references/trackers.md`).
+1. Repositories: every code repository (`owner/repo`, default branch), and the
+   team repository that holds this definition and the knowledge base.
+   Recommended: one code repository. Use several only when one workflow covers
+   them.
+2. Tracker and project (see `references/trackers.md`). With several code
+   repositories:
+   - GitHub: tickets live in the repository they change. `tracker.repositories`
+     lists them; the first is the tracker (parents and cross-repository work).
+   - YouTrack: one linked project per repository,
+     `tracker.projects: {<project>: <owner/repo>}`.
 3. Channels: Slack Air Mate, local, Air session (`references/channels.md`).
 4. Targets: Air (project id) and/or local harnesses.
 5. Models: the Air model id for each alias (`cheap`, `mid`, `strong`, `review`,
@@ -62,7 +71,9 @@ Ask, one round at a time, with a recommended answer for each question:
 11. Which MCP servers per role (`roles.<role>.mcp`). Recommended: none, then only
     the server a role needs (for example the tracker for the router).
 12. Environment variables and secrets per environment: names, and for a
-    secret never its value.
+    secret never its value. When tickets live in several GitHub repositories,
+    name the issues token secret (`issues_token_env`): the gate writes issues,
+    labels and comments to each of them.
 
 Look up facts yourself (repo remotes, default branches, existing automations,
 branch protection). Ask only for decisions.
@@ -82,6 +93,12 @@ error; Jinja's `{{ name }}` in role bodies is rendered later, by setup).
 without showing the diff. Then apply the interview's choices to the generated
 files and run `factory validate --team OUT_DIR`.
 
+Optional answers (not placeholders): `TRACKER_URL` and `TRACKER_PROJECTS`
+(`{<project>: <owner/repo>}`) make the tracker YouTrack with one linked project
+per repository. `render.py` derives the `tracker` block from them and from
+`CODE_REPOSITORIES`, and the README lists each repository with the automations
+that run in it.
+
 Before it writes any file, `render.py` checks the rendered `workflow.yaml` with the pinned `statechart` skill
 (`skills.lock`, fetched at its pin with the sha256 check; the step stops when the fetch fails): `statechart.py` turns the stages and node outcomes into a
 TLA+ spec and runs TLC. It needs Node 22.18+ and Java 11+. The rules are one stage label per ticket
@@ -98,9 +115,8 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | `PROJECT_NAME` | Project name | `factory.yaml`, `workflow.yaml`, `README.md` |
 | `ENGINE` | The engine package the team pins, as `uv tool install` takes it | `factory.yaml` |
 | `ENGINE_SKILL_SOURCE` | Derived from `ENGINE`; the GitHub source for the pinned engine's `factory-deploy` skill | `factory.yaml` |
-| `TRACKER_REPOSITORY` | `owner/repo` of the issue tracker | `factory.yaml` |
-| `MAIN_REPOSITORY` | `owner/repo` of the project's main repository | `factory.yaml` |
-| `TEAM_REPOSITORY` | `owner/repo` of this definition and the knowledge base | `factory.yaml` |
+| `CODE_REPOSITORIES` | List of `owner/repo`, one per code repository; a line holding it repeats once per item. The first is the tracker on GitHub | `factory.yaml` |
+| `TEAM_REPOSITORY` | `owner/repo` of this definition and the knowledge base | `factory.yaml`, `workflow.yaml` |
 | `GITHUB_USER` | GitHub login told about tickets that wait for a person (`owner`) | `factory.yaml` |
 | `MODEL_CHEAP`, `MODEL_MID`, `MODEL_STRONG`, `MODEL_REVIEW`, `MODEL_REVIEW_STRONG` | Air model (`harness/model`) per alias | `factory.yaml` |
 | `BRANCH_PATTERN`, `COMMIT_PREFIX` | Branch name and commit subject prefix, with `{ticket}` and `{slug}` | `factory.yaml` |
