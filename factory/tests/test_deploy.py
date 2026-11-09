@@ -884,13 +884,13 @@ class ProjectPlanTest(unittest.TestCase):
 
     def test_environment_repositories_come_from_the_definition(self):
         def edit(f):
-            f["environments"]["team"]["repositories"] = [{"repo": "o/other"}]
+            f["environments"]["knowledge"]["repositories"] = [{"repo": "o/other"}]
 
         def writes_other(w):  # a node that runs in o/other (#1112: else it runs in a repository variant)
-            w["nodes"]["reconcile"]["writes"] = ["o/other"]
+            w["nodes"]["retro"]["writes"] = ["o/other"]
         plan = definition_plan(edit_factory=edit, edit_workflow=writes_other)
         envs = {e["name"]: e["repository"] for e in plan["environments"]}
-        self.assertEqual(envs["[Slop factory] team"], "https://github.com/o/other")
+        self.assertEqual(envs["[Slop factory] knowledge"], "https://github.com/o/other")
         self.assertEqual(envs["[Slop factory] engine"], "https://github.com/zaharchenko-evgeny/slop-factory")
 
     def test_youtrack_tracker_renders_ticket_triggers_as_youtrack_events(self):

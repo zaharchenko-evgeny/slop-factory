@@ -161,10 +161,3 @@ environments:
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               pypi.org, files.pythonhosted.org]
     vm: default
-  team:                           # routines on the team repository
-    repositories:
-      - repo: zaharchenko-evgeny/slop-eval-factory
-      - repo: zaharchenko-evgeny/slop-factory   # read-only: the routines read the engine's tickets and PRs
-    domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
-              pypi.org, files.pythonhosted.org]
-    vm: default
