@@ -175,16 +175,20 @@ def lesson(text):
 
 
 def slice_of(path):
-    """A slice file: its first line is the title (a leading `#` is dropped), the rest is the ticket body. A `repo:
-    <name or owner/repo>` line right under the title creates the ticket in that repository (ADR-0027)."""
+    """A slice file: its first line is the title (a leading `#` is dropped), the rest is the ticket body. Header
+    lines right under the title (ADR-0027): `repo: <name or owner/repo>` creates the ticket in that repository,
+    `after: <repository or slice position>, ...` makes it wait for those slices (blocked-by)."""
     title, _, body = Path(path).read_text().strip().partition("\n")
     title = title.lstrip("#").strip()
     if not title:
         raise ValueError(f"slice {path} has no title line")
-    first, _, rest = body.strip().partition("\n")
-    repo = first.partition(":")[2].strip() if first.lower().startswith("repo:") else None
-    body = rest if repo is not None else body
-    return {"title": title, "body": body.strip() or title, **({"repo": repo} if repo else {})}
+    head, lines = {}, body.strip().split("\n")
+    while lines and (key := lines[0].partition(":")[0].strip().lower()) in ("repo", "after") and ":" in lines[0]:
+        head[key] = lines.pop(0).partition(":")[2].strip()
+    after = [int(x) if x.isdigit() else x for x in re.split(r"[,\s]+", head.get("after", "")) if x]
+    body = "\n".join(lines)
+    return {"title": title, "body": body.strip() or title, **({"repo": head["repo"]} if head.get("repo") else {}),
+            **({"after": after} if after else {})}
 
 
 def handoff_of(a):
