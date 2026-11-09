@@ -86,8 +86,7 @@ def _parts(defn, name, env_name=None):
     agent = (f.get("agents") or {}).get(node.get("agent")) or {}
     role = (f.get("roles") or {}).get(agent.get("role")) or {}
     if env_name is None:
-        listed = node.get("environments") if isinstance(node.get("environments"), list) else None
-        env_name = (listed or [None])[0] or node.get("environment") or (w.get("settings") or {}).get("environment")
+        env_name = _first_env(node, w.get("settings")) or (w.get("settings") or {}).get("environment")
     env = (f.get("environments") or {}).get(env_name) or {}
     return node, agent, role, env
 
@@ -188,13 +187,19 @@ def repositories(defn, env_name):
             for r in env.get("repositories") or [] if isinstance(r, dict) and r.get("repo")]
 
 
+env_repositories = repositories  # the name `to_project` can still reach under its local `repositories` list
+
+
 def node_environments(defn, name):
-    """The environments node `name` runs in: its `environments` list, else its `environment`, else the workflow's."""
+    """The environments node `name` runs in: its `environments` list, else its `environment`, else the workflow's
+    `settings.environments` list, else its `settings.environment`."""
     w = defn["workflow"]
     node = (w.get("nodes") or {}).get(name) or {}
-    if isinstance(node.get("environments"), list):
-        return [e for e in node["environments"] if isinstance(e, str)]
-    one = node.get("environment") or (w.get("settings") or {}).get("environment")
+    wset = w.get("settings") or {}
+    for listed in (node.get("environments"), None if node.get("environment") else wset.get("environments")):
+        if isinstance(listed, list):
+            return [e for e in listed if isinstance(e, str)]
+    one = node.get("environment") or wset.get("environment")
     return [one] if one else []
 
 
@@ -239,15 +244,20 @@ def event_repositories(defn):
 def default_environment(defn):
     """The workflow's `settings.environment`, else (ADR-0027) the first environment a node names, else the first."""
     w = defn["workflow"]
-    named = (w.get("settings") or {}).get("environment") or next(
+    wset = w.get("settings") or {}
+    listed = wset.get("environments") if isinstance(wset.get("environments"), list) else []
+    named = wset.get("environment") or (listed[0] if listed else None) or next(
         (e for n in (w.get("nodes") or {}).values() if (e := _first_env(n or {}))), None)
     return named or next(iter(defn["factory"].get("environments") or {}), None)
 
 
-def _first_env(node):
-    """A node's first environment: of its `environments` list (ADR-0027), else its `environment`."""
+def _first_env(node, wset=None):
+    """A node's first environment: of its `environments` list (ADR-0027), else its `environment`, else the first of
+    the workflow's `settings.environments`."""
     listed = node.get("environments")
-    return (listed[0] if isinstance(listed, list) and listed else None) or node.get("environment")
+    default = (wset or {}).get("environments") if not node.get("environment") else None
+    return (listed[0] if isinstance(listed, list) and listed else None) or node.get("environment") \
+        or (default[0] if isinstance(default, list) and default else None)
 
 
 def adopted(defn):
@@ -256,7 +266,8 @@ def adopted(defn):
     f, w = defn["factory"], defn["workflow"]
     return any(isinstance(r, dict) and ({"write", "tracker", "vcs"} & r.keys())
                for e in (f.get("environments") or {}).values() for r in (e or {}).get("repositories") or []) \
-        or any("environments" in (n or {}) for n in (w.get("nodes") or {}).values())
+        or any("environments" in (n or {}) for n in (w.get("nodes") or {}).values()) \
+        or "environments" in (w.get("settings") or {})
 
 
 def _repository_errors(defn):
@@ -837,14 +848,16 @@ def to_project(defn):
     for en, e in envs.items():
         repos = e.get("repositories") or []
         help_ = environment_secrets(defn, en)
-        written = {r for name in nodes if (nodes[name].get("environment") or default_env) == en
-                   for r in node_writes(defn, name)}
+        new_model = adopted(defn)
+        written = {r["repo"] for r in env_repositories(defn, en) if r["write"]} if new_model else \
+            {r for name in nodes if (nodes[name].get("environment") or default_env) == en for r in node_writes(defn, name)}
         environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": list(help_),
                             # where the gate may write in this environment (#994): what its nodes write (ADR-0024)
                             "writable": [names[r["repo"]] for r in repos if full_name(r["repo"]) in written],
                             "secret_help": help_,
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP,
-                            **({"tracker": dict(e["tracker"])} if isinstance(e.get("tracker"), dict) else {}),
+                            # ADR-0027: a repository's own tracker is a ticket place (`ticket_places`), not a #1069 project
+                            **({"tracker": dict(e["tracker"])} if isinstance(e.get("tracker"), dict) and not new_model else {}),
                             **({"vcs": e["vcs"]} if e.get("vcs") else {})}  # its own vcs (#1070)
 
     # Stages: every name the nodes use, plus the engine's PR facts.
@@ -1123,10 +1136,34 @@ def config(defn):
     tracker's `stages`, `stage_kinds` and `commands` that the gate reads."""
     descriptor = to_project(defn)[0]
     states = {name: s for name, s in descriptor["states"].items() if "label" in s["store"]}
-    return {**descriptor, "tracker": {**descriptor["tracker"],
-                                      "stages": {name: s["store"]["label"] for name, s in states.items()},
-                                      "stage_kinds": {name: s["kind"] for name, s in states.items()},
-                                      "commands": {name: c["store"] for name, c in descriptor["commands"].items()}}}
+    out = {**descriptor, "tracker": {**descriptor["tracker"],
+                                     "stages": {name: s["store"]["label"] for name, s in states.items()},
+                                     "stage_kinds": {name: s["kind"] for name, s in states.items()},
+                                     "commands": {name: c["store"] for name, c in descriptor["commands"].items()}}}
+    return {**out, **ticket_places(defn, out["tracker"])} if adopted(defn) else out
+
+
+def ticket_places(defn, tracker):
+    """ADR-0027, for the gate: one ticket, one repository, one PR (`one_repository_per_ticket`). The GitHub Issues
+    homes are the tracker's `repositories` (#982: one GitHub tracker reads tickets `owner/repo#n` of each), the top
+    `tracker.repository` first; every repository whose tracker has no home (YouTrack) is a `ticket_places` entry the
+    gate routes to by id and scope, its PRs on its own vcs."""
+    homes, places = [], []
+    for env in (defn["factory"].get("environments") or {}):
+        repos = repositories(defn, env)
+        for r in repos:
+            c = contract(defn, "tracker", r["tracker"]) if r["tracker"] else None
+            if c is None:
+                continue
+            if home := c.home(r["tracker"], r["repo"]):
+                homes.append(next((x["repo"] for x in repos if x["repo"].lower() == home), home))
+            elif r["repo"] not in {p["repository"] for p in places}:
+                places.append({"repository": r["repo"], "tracker": r["tracker"], "vcs": r["vcs"],
+                               "repositories": [r["repo"], *(x["repo"] for x in repos if x["repo"] != r["repo"])]})
+    top = next((h for h in homes if h.lower() == full_name(tracker.get("repository") or "").lower()), None)
+    ordered = list(dict.fromkeys([*([top] if top else []), *homes]))
+    return {"tracker": {**tracker, "repositories": ordered, **({"repository": ordered[0]} if ordered and not top else {})},
+            "ticket_places": places, "one_repository_per_ticket": True}
 
 
 # --- The sweep's decisions, read from the node graph ------------------------------------------------

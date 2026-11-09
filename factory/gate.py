@@ -257,12 +257,50 @@ def env_systems(config, env, **runners):
     return beside(tracker, vcs_cls.from_config(descriptor=c, **({"run": tracker.run} if hasattr(tracker, "run") else {})))
 
 
+def place_keys(config):
+    """({key: tracker block}, {key: [owner/repo, ...]}) of the ADR-0027 ticket places: `github` for the GitHub
+    tracker's repositories (when it has any), then `place:<owner/repo>` per `ticket_places` entry."""
+    t, envs, repos = config.get("tracker") or {}, {}, {}
+    if t.get("repositories"):
+        envs["github"], repos["github"] = t, list(t["repositories"])
+    for p in config["ticket_places"]:
+        key = f"place:{p['repository']}"
+        envs[key], repos[key] = scopes.merged(config, p["tracker"]), p["repositories"]
+    return envs, repos
+
+
+def place_systems(config, key, **runners):
+    """The (tracker, vcs) of ticket place `key` (`place_keys`): the GitHub tracker of the config, or a place's own
+    tracker on its repository's vcs."""
+    if key == "github":
+        tracker = tracker_of({k: v for k, v in config.items() if k != "ticket_places"}, **runners)
+        vcs_cls = vcs_class(config, config_mod.vcs(config))
+        return beside(tracker, vcs_cls.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {})))
+    place = next(p for p in config["ticket_places"] if f"place:{p['repository']}" == key)
+    by = {"/".join(r["url"].rstrip("/").split("/")[-2:]).lower(): r for r in config.get("repositories") or []}
+    repos = [{**by[n.lower()], "role": "primary" if i == 0 else "project"} for i, n in enumerate(place["repositories"])
+             if n.lower() in by]
+    c = {**{k: v for k, v in config.items() if k not in ("vcs", "ticket_places")},
+         "tracker": scopes.merged(config, place["tracker"]), "repositories": repos,
+         "code_host": {**(place.get("vcs") or {}), "repository": place["repository"]}}
+    block = c["tracker"]
+    tracker_cls = plugins.registry(config).impl("tracker", scopes.adapter(block))
+    if tracker_cls is None:
+        raise ValueError(f"{key}: tracker.adapter {scopes.adapter(block)}: no selected plugin provides this tracker")
+    tracker = tracker_cls.from_config(descriptor=c, **runners)
+    vcs_cls = vcs_class(config, c["code_host"], f"{key}.vcs")
+    return beside(tracker, vcs_cls.from_config(descriptor=c, **({"run": tracker.run} if hasattr(tracker, "run") else {})))
+
+
 def systems(config):
     """The (tracker, vcs) of `config`, from the plugins that provide them; the vcs is the run's environment's
     (FACTORY_ENV: its own `vcs:` over the top-level one, #1070). With environments that have their own trackers
     (#1069), both are one `scopes.ScopedTracker`: each ticket goes to its environment's tracker, the run's environment
     first."""
     env = os.environ.get("FACTORY_ENV")
+    if config.get("ticket_places"):  # ADR-0027: the GitHub tickets on one tracker, each other place on its own
+        scoped = scopes.ScopedTracker(config, place_systems, None, *place_keys(config))
+        return scoped, scoped
     if scopes.project_envs(config):
         scoped = scopes.ScopedTracker(config, env_systems, env)
         return scoped, scoped

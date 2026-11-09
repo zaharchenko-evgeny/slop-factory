@@ -241,6 +241,17 @@ class BeginEndTest(unittest.TestCase):
                 data = self.handoff("x", f"--{f.replace('_', '-')}", "v")
                 self.assertEqual(data.get(f), "v")
 
+    def test_slice_names_its_repository(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "s.md").write_text("# Team part\nrepo: zaharchenko-evgeny/slop-eval-factory\nThe body.\n")
+            Path(d, "t.md").write_text("Engine part\nrepo: slop-factory\nafter: slop-eval-factory, 1\nThe body.\n")
+            Path(d, "u.md").write_text("Plain\nThe body.\n")
+            self.assertEqual(cli.slice_of(Path(d, "s.md")), {"title": "Team part", "body": "The body.",
+                                                             "repo": "zaharchenko-evgeny/slop-eval-factory"})
+            self.assertEqual(cli.slice_of(Path(d, "t.md")), {"title": "Engine part", "body": "The body.",
+                                                             "repo": "slop-factory", "after": ["slop-eval-factory", 1]})
+            self.assertEqual(cli.slice_of(Path(d, "u.md")), {"title": "Plain", "body": "The body."})
+
     def test_end_plain_text_findings(self):
         data = self.handoff("changes", "--blocking", "B1 src/x.py:10 the empty input crashes | case: x.run('') raises",
                             "--minor", "M1 src/y.py:3 name is vague")
