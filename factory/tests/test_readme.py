@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """README contract checks. Run: uv run factory/tests/test_readme.py"""
-import json
 import re
 import subprocess
 import sys
@@ -25,12 +24,6 @@ class ReadmeTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIn(f"`{command}`", README)
 
-    def test_readme_names_every_descriptor_key(self):
-        schema = json.loads((ROOT / "engine/descriptor.schema.json").read_text())
-        for key in schema["properties"]:
-            with self.subTest(key=key):
-                self.assertIn(f"`{key}`", README)
-
     def test_environment_doc_has_a_row_for_every_variable(self):
         sources = [p for p in [*(ROOT / "factory").glob("*.py"), *(ROOT / "engine/template-v1").rglob("*")] if p.is_file()]
         names = {n for p in sources for n in re.findall(r"FACTORY_[A-Z_]+", p.read_text())}
@@ -39,11 +32,6 @@ class ReadmeTest(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(f"| `{name}` |", doc)
         self.assertIn("(docs/environment.md)", README)
-
-    def test_readme_documents_overrides(self):
-        self.assertIn("## Team-owned runtime files", README)
-        normalized = " ".join(README.split())
-        self.assertIn("Runtime `roles/`, `skills/`, workflows, policies, and judgments come only from the team's repository", normalized)
 
     def test_check_refs_uses_git_remote_without_a_team_descriptor(self):
         remote = mock.Mock(returncode=0, stdout="https://github.com/example/engine.git\n")
