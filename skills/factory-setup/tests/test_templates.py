@@ -51,6 +51,13 @@ def files(root):
     return [f for f in root.rglob("*") if f.is_file() and "__pycache__" not in f.parts]
 
 
+
+def _ok(stdout):
+    """The validate output less the ADR-0027 `deprecated-key` warnings: the template keeps `writes` and `access`
+    until deploy reads the new model (#1134)."""
+    return "\n".join(line for line in stdout.strip().splitlines() if not line.startswith("warning: deprecated-key:"))
+
+
 class Templates(unittest.TestCase):
     def test_agents_section_reproduces_this_repository(self):
         text = render.render(ANSWERS)["AGENTS.workflow.md"]
@@ -107,14 +114,14 @@ class Templates(unittest.TestCase):
                 (Path(tmp) / rel).write_text(text)
             defn = definition.load(tmp)
             self.assertEqual(definition.errors(defn), [])
-            self.assertEqual(definition.warnings(defn), [])
+            self.assertEqual([w for w in definition.warnings(defn) if not w.startswith("deprecated-key:")], [])  # until #1134
             self.assertEqual(defn["factory"]["tracker"]["repository"], "zaharchenko-evgeny/slop-factory")
             pin = defn["factory"]["skills"]["factory-deploy"]
             self.assertEqual(pin["source"], "github:zaharchenko-evgeny/slop-factory@main")
             self.assertEqual(pin["path"], ".agents/skills/factory-deploy")
             self.assertEqual(pin["sha256"], "bd997445b6b34390926afd9cb2e4af665b773c46233a2ec5e5ec08ed2e6502bb")
             run = subprocess.run(["factory", "validate", "--team", tmp], capture_output=True, text=True)
-            self.assertEqual(run.stdout.strip(), "factory: ok", run.stderr)
+            self.assertEqual(_ok(run.stdout), "factory: ok", run.stderr)
 
     def validate(self, answers, cli=True):
         """The loaded definition of a team rendered from `answers`; its definition errors are empty and, with `cli`,
@@ -128,7 +135,7 @@ class Templates(unittest.TestCase):
             if cli:
                 run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "factory/cli.py"), "validate"], capture_output=True,
                                      text=True, env={**os.environ, "FACTORY_TEAM": tmp})
-                self.assertEqual(run.stdout.strip(), "factory: ok", run.stdout + run.stderr)
+                self.assertEqual(_ok(run.stdout), "factory: ok", run.stdout + run.stderr)
             return defn
 
     def test_two_repository_answers_render_a_valid_definition(self):
@@ -249,7 +256,7 @@ class Templates(unittest.TestCase):
             self.assertIn("stateDiagram", (Path(tmp) / "README.md").read_text())
             run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "factory/cli.py"), "validate"], capture_output=True,
                                  text=True, env={**os.environ, "FACTORY_TEAM": tmp})
-            self.assertEqual(run.stdout.strip(), "factory: ok", run.stderr)
+            self.assertEqual(_ok(run.stdout), "factory: ok", run.stderr)
 
 
 
