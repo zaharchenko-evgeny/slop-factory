@@ -4,6 +4,7 @@ One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails whe
 
 | Variable | Set by | Read in | Required |
 |---|---|---|---|
+| `FACTORY_ENV_REPOSITORY` | Air deploy: owner/repo for the repository that hosts this environment | `factory/cli.py` (ticket routing), `factory/factory_plugins/github/tracker.py`, `factory/factory_plugins/github/probes.py` | optional outside Air; unset when not deployed by Air |
 | `FACTORY_ENV` | Air deploy: the only variable of a planned environment (`factory deploy` owns an environment's whole variable set) | `factory/doctor.py`, `factory/factory_plugins/air/deploy.py` (written to the plan) | required in an Air run (`read`, `write` or `ops`) |
 | `FACTORY_NODE` | Air deploy: only in the environment of a node with custom MCP servers | `factory/team_setup.py` | optional; the node whose custom MCP servers `factory setup` writes to `.mcp.json`; unset: no file |
 | `FACTORY_NODE_REPO` | `factory setup` (from the checkout's `origin`: the main repository of the automation copy, ADR-0024) | setup scripts (`environments/*/setup.sh`, `roles/*/setup.sh`); `factory begin` (exit 10 for a ticket of another repository) | optional; unset without an `origin` |
