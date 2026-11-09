@@ -191,7 +191,7 @@ class RecordedTest(unittest.TestCase):
         self.assertEqual(by_name["[Slop factory] ops"][5], ["repository"])
         for name in ("read", "write"):
             change = by_name[f"[Slop factory] {name}"]
-            self.assertEqual((change[0], change[5]), ("update", ["domains"]))
+            self.assertEqual((change[0], change[5]), ("update", ["variables", "domains"]))  # + FACTORY_ENV_REPOSITORY
             self.assertIn("FACTORY_TEAM_REPOSITORY", change[4]["variables"])
 
     def read_recorded(self):
@@ -371,7 +371,7 @@ class ApplyTest(unittest.TestCase):
         changes = air.diff(self.plan, [], [live])
         self.assertEqual([c for c in changes if c[1] == "environment"], [])
 
-    def test_slop_fixture_environments_have_only_factory_env(self):
+    def test_slop_fixture_environments_have_only_factory_env_and_its_repository(self):
         slop = HERE / "fixtures/slop"
         before = cfg.team_root()
         try:
@@ -381,14 +381,15 @@ class ApplyTest(unittest.TestCase):
             cfg.set_team(before)
         self.assertTrue(plan["environments"])
         for e in plan["environments"]:
-            self.assertEqual(set(e["variables"]), {"FACTORY_ENV"})
+            self.assertEqual(set(e["variables"]), {"FACTORY_ENV", "FACTORY_ENV_REPOSITORY"})
 
     def test_declared_variable_is_planned_beside_factory_env(self):
         data = nodes.load()
         data["environments"]["read"] = {**data["environments"]["read"], "variables": {"YOUTRACK_URL": "https://y.example"},
                                         "secrets": ["YOUTRACK_TOKEN"]}
         env = next(e for e in air.plan_air(data, cfg.load())["environments"] if e["name"].endswith(" read"))
-        self.assertEqual(env["variables"], {"YOUTRACK_URL": "https://y.example", "FACTORY_ENV": "read"})
+        self.assertEqual(env["variables"], {"YOUTRACK_URL": "https://y.example", "FACTORY_ENV": "read",
+                                            "FACTORY_ENV_REPOSITORY": "zaharchenko-evgeny/slop-factory"})
         self.assertEqual(env["secrets"], ["YOUTRACK_TOKEN"])
 
     def test_apply_sends_trigger_destinations_with_changed_triggers(self):
@@ -773,6 +774,22 @@ class ProjectPlanTest(unittest.TestCase):
             finally:
                 cfg.set_team(before)
 
+    def test_issues_token_is_deployed_only_where_a_project_repository_is_foreign(self):
+        """#1126: Air's GH_TOKEN writes the environment's own repository, so the copy of `engine` on o/web, the only
+        project repository, needs no issues token; every environment names its repository for the gate."""
+        with self.two_repository_team():
+            c = cfg.load()
+            c = {**c, "issues_token_env": "FACTORY_ISSUES_TOKEN",
+                 "repositories": [r for r in c["repositories"] if r["url"].startswith("https://github.com/o/")]}
+            plan = air.plan_air(nodes.load(), c)
+        envs = {e["name"]: e for e in plan["environments"]}
+        self.assertIn("FACTORY_ISSUES_TOKEN", envs["[Slop factory] engine"]["secrets"])
+        self.assertNotIn("FACTORY_ISSUES_TOKEN", envs["[Slop factory] engine web"]["secrets"])
+        self.assertEqual({e["variables"]["FACTORY_ENV_REPOSITORY"] for e in envs.values()
+                          if e["name"].startswith("[Slop factory] engine")}, {"o/api", "o/web"})
+        for e in envs.values():
+            self.assertEqual(e["variables"]["FACTORY_ENV_REPOSITORY"], definition.full_name(e["repository"]), e["name"])
+
     def test_definition_with_two_ticket_repositories_plans_per_repository_automations(self):
         """#895, ADR-0024: a node that listens to both ticket repositories runs once per repository, with that
         repository as its main and the other one checked out beside it; the router (`listens: tracker`) stays one."""
@@ -801,8 +818,11 @@ class ProjectPlanTest(unittest.TestCase):
             self.assertEqual(definition.full_name(env["repository"]), a["repository"]["fullName"], a["name"])
         variant = envs["[Slop factory] engine slop-eval-factory"]
         engine = envs["[Slop factory] engine"]
-        self.assertEqual({k: v for k, v in variant.items() if k not in ("name", "repository")},
-                         {k: v for k, v in engine.items() if k not in ("name", "repository")})
+        own = ("name", "repository", "variables", "secrets")  # #1126: its repository, and no issues token for it
+        self.assertEqual({k: v for k, v in variant.items() if k not in own},
+                         {k: v for k, v in engine.items() if k not in own})
+        self.assertEqual(variant["variables"], {**engine["variables"],
+                                                "FACTORY_ENV_REPOSITORY": "zaharchenko-evgeny/slop-eval-factory"})
 
     def test_mentionable_agents_get_a_reply_node(self):
         """With the comments module on, fixtures/slop's `mentionable: true` agents (ADR-0021) deploy a reply node;
@@ -1022,12 +1042,13 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(json.dumps(plan, indent=2, sort_keys=True) + "\n", (FIX / "air-plan.json").read_text())
         self.assertFalse([a["name"] for a in plan["automations"] if {"agent", "persona", "mentions"} & set(a["spec"])])
 
-    def test_environments_only_export_the_environment_name(self):
+    def test_environments_only_export_the_environment_name_and_repository(self):
         url = "https://github.com/o/team"
         plan = air.plan_air(nodes.load(), {**cfg.load(), "team_repository": url})
         self.assertTrue(plan["environments"])
         for e in plan["environments"]:
-            self.assertEqual(e["variables"], {"FACTORY_ENV": e["variables"]["FACTORY_ENV"]})
+            self.assertEqual(e["variables"], {"FACTORY_ENV": e["variables"]["FACTORY_ENV"],
+                                              "FACTORY_ENV_REPOSITORY": definition.full_name(e["repository"])})
         plain = air.plan_air(nodes.load(), {**cfg.load(), "team_repository": ""})
         self.assertTrue(all("FACTORY_TEAM_REPOSITORY" not in e["variables"] for e in plain["environments"]))
 
@@ -1106,9 +1127,9 @@ class PlanTest(unittest.TestCase):
         for name, want in (("intake", "read"), ("join", "read"), ("finish", "read"), ("review-full", "read"),
                            ("implement-mid", "write"), ("fix-cheap", "write"), ("update-strong", "write")):
             self.assertEqual(env[f"[Slop factory] {name}"], f"[Slop factory] {want}")
-        self.assertEqual({e["name"]: e["variables"] for e in plan["environments"]},
-                         {"[Slop factory] read": {"FACTORY_ENV": "read"}, "[Slop factory] write": {"FACTORY_ENV": "write"},
-                          "[Slop factory] ops": {"FACTORY_ENV": "ops"}})  # ops: only a disabled node, still planned
+        self.assertEqual({e["name"]: e["variables"]["FACTORY_ENV"] for e in plan["environments"]},
+                         {"[Slop factory] read": "read", "[Slop factory] write": "write",
+                          "[Slop factory] ops": "ops"})  # ops: only a disabled node, still planned
 
     def test_local_target_is_rejected(self):
         self.assertEqual(deploy.main(["plan", "--target", "local"]), 2)
@@ -1426,7 +1447,8 @@ class DefinitionPlanTest(unittest.TestCase):
         self.assertEqual(dev["environmentConfigId"], "[Slop factory] engine implement-medium")
         envs = {e["name"]: e["variables"] for e in plan["environments"]}
         self.assertEqual(envs["[Slop factory] engine implement-medium"],
-                         {"FACTORY_ENV": "engine", "FACTORY_NODE": "implement-medium"})
+                         {"FACTORY_ENV": "engine", "FACTORY_NODE": "implement-medium",
+                          "FACTORY_ENV_REPOSITORY": "zaharchenko-evgeny/slop-factory"})
         self.assertNotIn("FACTORY_NODE", envs["[Slop factory] engine"])
 
     def test_prompts_are_rendered(self):
@@ -1562,7 +1584,8 @@ class MainlessEnvironmentPlanTest(unittest.TestCase):
         for a in self.automations:
             self.assertEqual(definition.full_name(envs[a["environmentConfigId"]]["repository"]),
                              a["repository"]["fullName"], a["name"])
-        self.assertEqual(envs["[Slop factory] engine web"]["variables"], envs["[Slop factory] engine"]["variables"])
+        self.assertEqual(envs["[Slop factory] engine web"]["variables"],
+                         {**envs["[Slop factory] engine"]["variables"], "FACTORY_ENV_REPOSITORY": "o/web"})
 
     def test_node_repo_is_the_copys_repository_in_the_prompt(self):
         def edit_factory(f):

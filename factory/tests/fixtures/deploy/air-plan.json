@@ -1170,7 +1170,8 @@
       "secrets": [],
       "startup": ".air/cloud/startup.sh",
       "variables": {
-        "FACTORY_ENV": "read"
+        "FACTORY_ENV": "read",
+        "FACTORY_ENV_REPOSITORY": "o/main"
       },
       "vm": "default"
     },
@@ -1185,7 +1186,8 @@
       "secrets": [],
       "startup": ".air/cloud/startup.sh",
       "variables": {
-        "FACTORY_ENV": "write"
+        "FACTORY_ENV": "write",
+        "FACTORY_ENV_REPOSITORY": "o/main"
       },
       "vm": "default"
     },
@@ -1200,7 +1202,8 @@
       "secrets": [],
       "startup": ".air/cloud/startup.sh",
       "variables": {
-        "FACTORY_ENV": "ops"
+        "FACTORY_ENV": "ops",
+        "FACTORY_ENV_REPOSITORY": "o/main"
       },
       "vm": "default"
     }

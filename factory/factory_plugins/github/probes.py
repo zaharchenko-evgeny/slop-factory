@@ -94,11 +94,11 @@ def project_write_probes(settings, env, run, environ=os.environ):
     """In an environment that writes with a project token (github_tracker.token_env, or `issues_token_env` in a multi-repository team), one `write:label:<owner/repo>` probe per `role: project` repository: create
     a probe label, then delete it, with the issues token (`issues_token_env`) or $FACTORY_WRITE_TOKEN when it is set
     (github_tracker.ProjectWriteRun). With `issues_token_env`, a missing token is a `fail` that names the secret, and
-    nothing is written."""
-    repos = github_tracker.project_repositories(settings)
+    nothing is written. The environment's own repository ($FACTORY_ENV_REPOSITORY) is not probed: Air's token writes it."""
+    repos = github_tracker.foreign_projects(github_tracker.project_repositories(settings), environ)
     issues = settings.get("issues_token_env")
-    # deploy adds the issues token to every environment of a multi-repository team (deploy.py), declared or not
-    if not (github_tracker.token_env(env, settings) or (issues and len(settings.get("repositories") or []) > 1)):
+    # deploy adds the issues token to every environment with another project repository (#1126), declared or not
+    if not repos or not (github_tracker.token_env(env, settings) or (issues and len(settings.get("repositories") or []) > 1)):
         return []
     run = github_tracker.ProjectWriteRun(run, repos, environ, issues)
     results = []
