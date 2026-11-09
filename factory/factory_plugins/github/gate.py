@@ -429,11 +429,12 @@ class GitHubTicketStore:
                     want = self._blocked_body(want, prev_number, prev_repo, repo) if prev_number else want
                     self.run(["api", "-X", "PATCH", f"repos/{repo}/issues/{new['number']}", "-f", f"body={want}"])
                 wrote = True
-            if not linked:
-                self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
+            link = self.run.for_repository(repo) if repo != self.repo and hasattr(self.run, "for_repository") else self.run
+            if not linked:  # a child of another repository: the issues token links it (#1155: Air's token cannot)
+                link(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/sub_issues", "-F", f"sub_issue_id={new['id']}"])
             if new["id"] not in blockers:
                 try:
-                    self.run(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={new['id']}"])
+                    link(["api", "-X", "POST", f"repos/{self.repo}/issues/{n}/dependencies/blocked_by", "-F", f"issue_id={new['id']}"])
                 except RuntimeError as e:
                     if "403" not in str(e) and "Resource not accessible" not in str(e):
                         raise
