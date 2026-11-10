@@ -22,14 +22,15 @@ from test_gate_github import BOT, C, M, REPO, STAGES, FakeGh, GitHubGateTracker,
 import gate  # noqa: E402
 import nodes  # noqa: E402
 
-# step -> gh calls that reached the runner (after CountedRun's memo), measured at 5b8d9a3 + #1065 + #1066
+# step -> gh calls that reached the runner (after CountedRun's memo), measured at 5b8d9a3 + #1065 + #1066;
+# #1207: CI also reads the head's commit statuses, one more call per facts read
 BASELINE = {
     "facts in-review": 15,
-    "facts approved (behind)": 13,
-    "facts needs-answers": 12,
-    "facts split": 13,
-    "facts two repositories": 20,
-    "check fix": 12,
+    "facts approved (behind)": 14,
+    "facts needs-answers": 13,
+    "facts split": 14,
+    "facts two repositories": 22,
+    "check fix": 13,
     "apply stage": 2,
     "apply stage done": 3,
     "apply label pr": 3,
@@ -39,14 +40,14 @@ BASELINE = {
     "apply assign pr": 3,
     "apply comment": 2,
     "apply comment pr": 4,
-    "apply review": 16,
-    "apply join": 17,
+    "apply review": 17,
+    "apply join": 18,
     "apply merge": 9,
     "apply merge two repositories": 17,
-    "outcome reviewer approve": 26,
-    "outcome fix done": 20,
+    "outcome reviewer approve": 28,
+    "outcome fix done": 21,
     "sweep in-review": 48,
-    "sweep approved dry": 16,
+    "sweep approved dry": 17,
 }
 
 
