@@ -157,7 +157,8 @@ class Templates(unittest.TestCase):
 
     def test_one_repository_answers_render_the_single_tracker(self):
         defn = self.validate(ANSWERS)
-        self.assertEqual(defn["factory"]["tracker"], {"adapter": "github-issues", "repository": "zaharchenko-evgeny/slop-factory"})
+        self.assertEqual(defn["factory"]["tracker"], {"label_prefix": "factory:", "adapter": "github-issues",
+                                                  "repository": "zaharchenko-evgeny/slop-factory"})
         self.assertEqual([r["repo"] for r in defn["factory"]["environments"]["main"]["repositories"]],
                          ["zaharchenko-evgeny/slop-factory"])
 
@@ -166,8 +167,8 @@ class Templates(unittest.TestCase):
         # `factory validate` also wants YouTrack state stores, which the setup interview adds after rendering
         defn = self.validate({**ANSWERS, "CODE_REPOSITORIES": ["o/api", "o/web"], "TRACKER_URL": "https://example.youtrack.cloud",
                               "TRACKER_PROJECTS": projects}, cli=False)
-        self.assertEqual(defn["factory"]["tracker"], {"adapter": "youtrack", "url": "https://example.youtrack.cloud",
-                                                      "project": "API", "projects": projects})
+        self.assertEqual(defn["factory"]["tracker"], {"label_prefix": "factory:", "adapter": "youtrack",
+                                                      "url": "https://example.youtrack.cloud", "project": "API", "projects": projects})
         self.assertEqual(defn["factory"]["code_host"], {"adapter": "github", "repository": "o/api"})
 
     def test_youtrack_project_of_an_unknown_repository_is_refused(self):
