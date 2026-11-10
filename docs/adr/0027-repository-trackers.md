@@ -38,7 +38,17 @@ Option 2.
    `{repo, write, tracker, vcs}`:
    - `write`: whether runs may push to it (default `false`);
    - `tracker`: an adapter block, or `none` (context only, no tickets);
-   - `vcs`: an adapter block.
+   - `vcs`: an adapter block;
+   - `token`: the name of the secret that holds the gate's write token for
+     this repository (issues, labels, comments, sub-issue and blocked-by
+     links). Air's token has no issues permission on another repository, even
+     one the run checks out. The gate writes the environment's own repository
+     (`FACTORY_ENV_REPOSITORY`) with Air's token, and every other repository
+     with its `token`. Deploy adds each `token` secret to its environment, and
+     `factory validate` fails (`missing-token`) when a repository that holds
+     tickets, other than the environment's own, has none. This replaces the
+     removed `token_env` key and the tracker-wide `issues_token_env` setting:
+     the token belongs to a repository in an environment, like `write`.
 
    The blocks layer as top-level `tracker`/`vcs`, then the environment's, then
    the repository's own. A narrower block with another adapter keeps only the
@@ -83,7 +93,8 @@ Option 2.
    - Deprecated (warnings) until the team migrates (slop-eval-factory#92),
      then removed: node `listens` and `writes`, agent `access`,
      `tracker.repositories` and `tracker.projects`.
-   - Already gone: environment `main` and `token_env`.
+   - Already gone: environment `main`, `token_env` and the `issues_token_env`
+     setting (`token` on a repository replaces them).
    - The #1069 default-environment fan-out goes in #1134.
 
 ## Checks (`factory validate`)

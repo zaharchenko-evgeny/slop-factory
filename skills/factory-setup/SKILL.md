@@ -72,8 +72,9 @@ Ask, one round at a time, with a recommended answer for each question:
     the server a role needs (for example the tracker for the router).
 12. Environment variables and secrets per environment: names, and for a
     secret never its value. When tickets live in several GitHub repositories,
-    name the issues token secret (`issues_token_env`): the gate writes issues,
-    labels and comments to each of them.
+    name the secret of each repository's write token (`token: <SECRET_NAME>` on
+    its `environments.<env>.repositories[]` entry, except the environment's
+    own repository): the gate writes issues, labels and comments to it with that token.
 
 Look up facts yourself (repo remotes, default branches, existing automations,
 branch protection). Ask only for decisions.

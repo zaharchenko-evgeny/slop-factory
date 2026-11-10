@@ -187,13 +187,11 @@ def plan_air(nodes: dict, config: dict) -> dict:
             automations.append(automation)
     envs = []
     registry = plugins.registry(config)
-    issues_token = config.get("issues_token_env")  # the gate's issue, label and comment writes to project repositories
-    project_names = {definition.full_name(r["url"]).lower() for r in config.get("repositories") or []
-                     if r.get("role") == "project"}
+    urls = {r["name"]: definition.full_name(r["url"]) for r in config.get("repositories") or []}
     for env, node_name, variant in [(e, None, None) for e in used if e in unscoped] + scoped:
         d = envs_def[env]
         repo = variant or repos.get(d["repository"]) or primary
-        own = definition.full_name(repo["url"])  # Air's GH_TOKEN writes it: the issues token is for the others (#1126)
+        own = definition.full_name(repo["url"])  # Air's GH_TOKEN writes it: a repository's `token` is for the others
         envs.append({
             "name": f"{prefix}{env}" + (f" {node_name}" if node_name else "") + (f" {variant['name']}" if variant else ""),
             "repository": repo["url"],
@@ -202,7 +200,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                           **({"FACTORY_NODE": node_name} if node_name else {})},
             "secrets": list(dict.fromkeys([*d.get("secrets", []),
                                            *(s for hook in registry.hook("deploy.secrets") for s in hook(env, config)),
-                                           *([issues_token] if issues_token and project_names - {own.lower()} else [])])),
+                                           *(t for r, t in ((config.get("environments") or {}).get(env) or {}).get("tokens", {}).items() if urls.get(r, r).lower() != own.lower())])),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
         })

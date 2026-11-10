@@ -19,7 +19,7 @@ ROLES = "roles"
 NO_ROLE = ("script", "human")  # harnesses that run no role
 GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children", "ticket")  # the facts a guard reads (gate.GUARD_KEYS)
 # ADR-0024: keys a node's `writes` replaced; `factory validate` names them (`removed-key`)
-REMOVED_REPOSITORY_KEYS = ("main", "token_env")  # `write` names the environment's writable repository (ADR-0027)
+REMOVED_REPOSITORY_KEYS = ("main", "token_env")  # `write` names the environment's writable repository; `token` the secret (ADR-0027)
 DEPRECATED_NODE_KEYS = ("listens", "writes")  # ADR-0027: a node declares `environments`, a repository its `write`
 DEFAULT_ADAPTER = {"tracker": "github-issues", "vcs": "github"}
 TIER_SUFFIXES = ("-small", "-medium", "-large", "-low", "-high")  # a tiered node: `implement-medium`, `review-high`
@@ -179,10 +179,10 @@ def _layered(defn, kind, env, entry):
 
 
 def repositories(defn, env_name):
-    """The repositories of environment `env_name` in order, each `{repo, write, tracker, vcs}`: its full name, whether
-    runs may push to it, and its layered blocks (`tracker` None: context only, no tickets)."""
+    """The repositories of environment `env_name` in order, each `{repo, write, token, tracker, vcs}`: its full name, whether
+    runs may push to it, the secret of its `token` (or None), and its layered blocks (`tracker` None: context only, no tickets)."""
     env = ((defn["factory"].get("environments") or {}).get(env_name)) or {}
-    return [{"repo": full_name(r["repo"]), "write": r.get("write") is True,
+    return [{"repo": full_name(r["repo"]), "write": r.get("write") is True, "token": r.get("token"),
              "tracker": _layered(defn, "tracker", env, r), "vcs": _layered(defn, "vcs", env, r)}
             for r in env.get("repositories") or [] if isinstance(r, dict) and r.get("repo")]
 
@@ -306,8 +306,13 @@ def _repository_errors(defn):
         for r in (spec or {}).get("repositories") or []:
             if isinstance(r, dict) and "write" in r and not isinstance(r["write"], bool):
                 errs.append(f"bad-write: environments.{e}: {r.get('repo')}: `write` is true or false")
-        for r in repositories(defn, e):
+            if isinstance(r, dict) and "token" in r and not (isinstance(r["token"], str) and r["token"]):
+                errs.append(f"bad-token: environments.{e}: {r.get('repo')}: `token` is the name of a secret")
+        for i, r in enumerate(repositories(defn, e)):
             where = f"environments.{e}: {r['repo']}"
+            if i and r["tracker"] is not None and not r["token"]:  # the first is the environment's own: Air's token
+                errs.append(f"missing-token: {where}: holds tickets and is not the environment's own repository; "
+                            "add `token: <SECRET_NAME>` (ADR-0027)")
             for kind in ("tracker", "vcs"):
                 block = r[kind]
                 if block is None:
@@ -884,7 +889,9 @@ def to_project(defn):
         new_model = adopted(defn)
         written = {r["repo"] for r in env_repositories(defn, en) if r["write"]} if new_model else \
             {r for name in nodes if (nodes[name].get("environment") or default_env) == en for r in node_writes(defn, name)}
+        tokens = {names[r["repo"]]: r["token"] for r in repos if isinstance(r.get("token"), str) and r["token"]}
         environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": list(help_),
+                            **({"tokens": tokens} if tokens else {}),  # a repository's write token secret (ADR-0027)
                             # where the gate may write in this environment (#994): what its nodes write (ADR-0024)
                             "writable": [names[r["repo"]] for r in repos if full_name(r["repo"]) in written],
                             "secret_help": help_,
@@ -946,7 +953,6 @@ def to_project(defn):
         "workflow": WORKFLOW,
         "states": states,
         "commands": commands,
-        **({"issues_token_env": dset["issues_token_env"]} if dset.get("issues_token_env") else {}),
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
         "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},

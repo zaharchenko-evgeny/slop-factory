@@ -128,16 +128,18 @@ def token_env(env, config):
 WRITE_VERBS = {"create", "edit", "merge", "review", "comment", "close", "reopen", "delete", "ready", "update-branch"}
 
 
-def checked_out(config, environ=os.environ):
-    """owner/repo of the repositories of the run's environment (FACTORY_ENV): each copy checks them all out (its main
-    and its additional repositories, ADR-0027), and Air's installation token writes every checkout (AIRF-51)."""
-    env = ((config.get("environments") or {}).get(environ.get("FACTORY_ENV") or "") or {})
+def repository_tokens(config, environ=os.environ):
+    """{owner/repo (lower case): secret name} of the repositories' `token` (ADR-0027) in the run's environment
+    (FACTORY_ENV); every environment's when none is set (deploy, doctor)."""
+    envs = config.get("environments") or {}
+    names = [environ.get("FACTORY_ENV")] if environ.get("FACTORY_ENV") else list(envs)
     urls = {r.get("name"): r.get("url") for r in config.get("repositories") or [] if isinstance(r, dict)}
-    out = []
-    for r in env.get("repositories") or []:
-        url = urls.get(r, r) if isinstance(r, str) else (r or {}).get("repo", "")
-        out.append("/".join(str(url).rstrip("/").removesuffix(".git").split("/")[-2:]))
-    return [x for x in out if x]
+    out = {}
+    for env in names:
+        for name, secret in ((envs.get(env) or {}).get("tokens") or {}).items():
+            repo = "/".join(str(urls.get(name, name)).rstrip("/").removesuffix(".git").split("/")[-2:]).lower()
+            out.setdefault(repo, secret)
+    return out
 
 
 def project_repositories(config):
@@ -171,20 +173,27 @@ def gh_writes(args):
 
 
 class ProjectWriteRun:
-    """Wrap a `gh` runner: a write to one of `repositories` runs with the issues token (the variable named by the
-    `issues_token_env` setting) as its GH_TOKEN, else with $FACTORY_WRITE_TOKEN, when one is set; every other
-    call, every call without a token and every write to the environment's own repository runs as before."""
+    """Wrap a `gh` runner: a write to one of `repositories` runs with that repository's `token` (the secret
+    `tokens` names for it) as its GH_TOKEN, else with $FACTORY_WRITE_TOKEN, when one is set; every other call,
+    every call without a token and every write to the environment's own repository runs as before."""
 
-    def __init__(self, run, repositories, environ=os.environ, issues_token_env=None, checkouts=()):
-        """`checkouts`: the run's other checkouts, which Air's token writes too (AIRF-51): never the issues token."""
+    def __init__(self, run, repositories, environ=os.environ, tokens=None):
+        """`tokens`: {owner/repo: secret name}, as `repository_tokens` reads it."""
         self.run, self.environ = run, environ
-        self.repositories = {r.lower() for r in foreign_projects(repositories, environ)} - {c.lower() for c in checkouts}
-        self.issues_token_env = issues_token_env
+        self.repositories = {r.lower() for r in foreign_projects(repositories, environ)}
+        self.tokens = {r.lower(): secret for r, secret in (tokens or {}).items()}
+
+    def token(self, repo):
+        """The token for a write to `repo`: its declared one, else $FACTORY_WRITE_TOKEN; None when neither is set."""
+        return (self.environ.get(self.tokens.get(repo.lower(), "")) or self.environ.get(WRITE_TOKEN)) or None
 
     def __call__(self, args, touches=None, **kw):
-        token = (self.issues_token_env and self.environ.get(self.issues_token_env)) or self.environ.get(WRITE_TOKEN)
-        if token and gh_writes(args) and {(gh_target(args) or "").lower(), (touches or "").lower()} & self.repositories:
-            kw["token"] = token
+        if gh_writes(args):
+            for repo in (gh_target(args) or "", touches or ""):
+                token = repo.lower() in self.repositories and self.token(repo)
+                if token:
+                    kw["token"] = token
+                    break
         return self.run(args, **kw)
 
     def for_repository(self, repo):
