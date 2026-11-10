@@ -14,7 +14,7 @@ command (`command -v factory`), never `uv run` or a path into the engine.
 | --- | --- |
 | start the step and see its facts, branch and outcomes | `factory begin` with the arguments the prompt gives |
 | wait until CI at the PR head has finished | `factory ci --wait --issue <ticket>`: prints `green`, or `red` with the failing checks |
-| read the run facts of recently finished tickets | `factory retro facts --since <ISO time>` |
+| read the run facts of recently finished tickets | `factory facts --since <ISO time>` |
 | collect the lessons agents reported | `factory retro collect`: the uncollected lesson comments as `[{ticket, url, id, body}]`; it writes nothing |
 | mark collected lessons, after the PR that publishes them is open at the pushed commit | `factory retro mark <comment id>...`: marks those comments collected and unlabels a ticket once all its lessons are collected |
 | run the routine named in your settings | `factory <routine>` (`reconcile`, `doctor`) with no other arguments |
