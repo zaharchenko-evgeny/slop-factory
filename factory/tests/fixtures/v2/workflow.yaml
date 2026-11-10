@@ -7,9 +7,8 @@
 # Agents and environments are defined in factory.yaml; nodes name them.
 # Merge order: factory.yaml defaults -> environment -> role -> agent -> settings below -> node.
 
-# Stage names come from the nodes (`when`, triggers, effects). Labels are <label_prefix><stage>.
+# Stage names come from the nodes (`when`, triggers, effects). Labels are <tracker.label_prefix><stage> (factory.yaml).
 stages:
-  label_prefix: "factory:"
   final: [done, not-actionable]
   waiting: [draft, blocked, needs-answers]
 

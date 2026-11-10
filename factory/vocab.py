@@ -51,6 +51,11 @@ def stage(name):
     return _tracker()["stages"][name]
 
 
+def stage_prefix():
+    """The prefix of every stage label (`tracker.label_prefix`): `factory:`, `slop:`."""
+    return _tracker().get("label_prefix") or "factory:"
+
+
 def ci(fact):
     """The PR label of a CI fact: `ci-green` or `ci-red`."""
     return _tracker()["pr_fact_labels"][fact]

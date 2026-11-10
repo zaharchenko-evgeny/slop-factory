@@ -473,7 +473,7 @@ def owned_label_prefixes(config: dict) -> list[str]:
     t = config.get("tracker") or {}
     ready = (t.get("stages") or {}).get("ready") or vocab.stage("ready")
     risks = (t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values()
-    return sorted({ready.partition(":")[0] + ":", "complexity:", *(r.partition(":")[0] + ":" for r in risks)})
+    return sorted({t.get("label_prefix") or ready.partition(":")[0] + ":", "complexity:", *(r.partition(":")[0] + ":" for r in risks)})
 
 
 def label_specs(nodes: dict, config: dict) -> dict:

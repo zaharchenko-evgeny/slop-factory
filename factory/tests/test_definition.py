@@ -140,6 +140,73 @@ class DefinitionTest(unittest.TestCase):
             with self.subTest(want=want):
                 self.assertTrue(any(e.startswith(want) for e in errs), errs)
 
+    def _relabel(self, prefix):
+        """Rename every `factory:` trigger label of the copy's workflow to `prefix`."""
+        def workflow(w):
+            for n in w["nodes"].values():
+                for t in n.get("triggers") or []:
+                    if isinstance(t, dict) and "label" in t:
+                        t["label"] = t["label"].replace("factory:", prefix, 1)
+                for oc in (n.get("outcomes") or {}).values():
+                    for e in (oc or {}).get("effects") or []:
+                        for k in ("label", "unlabel"):
+                            if isinstance(e.get(k), str):
+                                e[k] = e[k].replace("factory:", prefix, 1)
+        self.edit("workflow.yaml", workflow)
+
+    def test_tracker_label_prefix_compiles_stage_labels_and_owned_prefix(self):
+        import deploy
+        for where in ("top", "environment", "repository"):
+            with self.subTest(where=where):
+                shutil.rmtree(self.root)
+                shutil.copytree(FIXTURE, self.root)
+                self._relabel("slop:")
+
+                def factory(f):
+                    f["tracker"].pop("label_prefix", None)
+                    env = f["environments"]["engine"]
+                    entry = env["repositories"][0]
+                    if where == "top":
+                        f["tracker"]["label_prefix"] = "slop:"
+                    elif where == "environment":
+                        env["tracker"] = {"adapter": "github-issues", "label_prefix": "slop:"}
+                    else:
+                        entry["tracker"] = {"adapter": "github-issues", "label_prefix": "slop:"}
+                self.edit("factory.yaml", factory)
+                defn = definition.load(self.root)
+                if where != "top":  # only the default environment's primary repository decides
+                    defn["factory"]["environments"].pop("team", None)
+                self.assertEqual(definition.label_prefix(defn), "slop:")
+                self.assertEqual(self.errors(), [])
+                conf = definition.config(defn)
+                self.assertEqual(conf["tracker"]["stages"]["ready"], "slop:ready")
+                self.assertTrue(all(v.startswith("slop:") for v in conf["tracker"]["stages"].values()))
+                self.assertIn("slop:", deploy.owned_label_prefixes(conf))
+                self.assertNotIn("factory:", deploy.owned_label_prefixes(conf))
+
+    def test_workflow_label_prefix_is_a_fallback_that_warns_about_the_move(self):
+        """Table: where the prefix is set -> the compiled prefix and whether `validate` warns about the move."""
+        moved = "deprecated-key: workflow.yaml stages.label_prefix moved to tracker.label_prefix in factory.yaml"
+        table = [(None, None, "factory:", False), (None, "work:", "work:", True), ("slop:", None, "slop:", False),
+                 ("slop:", "work:", "slop:", True)]  # the tracker key wins over the fallback
+        for tracker, workflow_key, want, warns in table:
+            with self.subTest(tracker=tracker, workflow=workflow_key):
+                shutil.rmtree(self.root)
+                shutil.copytree(FIXTURE, self.root)
+                self.edit("factory.yaml", lambda f: f["tracker"].pop("label_prefix", None) if tracker is None
+                          else f["tracker"].update(label_prefix=tracker))
+                if workflow_key:
+                    self.edit("workflow.yaml", lambda w: w["stages"].update(label_prefix=workflow_key))
+                defn = definition.load(self.root)
+                self.assertEqual(definition.label_prefix(defn), want)
+                self.assertEqual(moved in definition.warnings(defn), warns)
+
+    def test_empty_or_non_string_label_prefix_is_an_error(self):
+        for bad in ("", 7, ["slop:"]):
+            with self.subTest(bad=bad):
+                self.edit("factory.yaml", lambda f: f["tracker"].update(label_prefix=bad))
+                self.assertIn("bad-label-prefix: factory.yaml: `tracker.label_prefix` is a non-empty string", self.errors())
+
     def test_deprecated_keys_and_several_writable_are_warned(self):
         self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"write": True})]))
         warns = definition.warnings(definition.load(self.root))

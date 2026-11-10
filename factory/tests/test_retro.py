@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,6 +53,15 @@ class FactsTest(unittest.TestCase):
                  label("done", "2026-11-01T06:00:00Z")]
         f = retro.ticket_facts(7, issue, pr, [], [], {BOT["login"]})
         self.assertEqual((f["fix_rounds"], f["update_rounds"], f["ready_to_done_hours"]), (3, 1, 6.0))
+
+    def test_operator_interventions_follow_the_stage_prefix(self):
+        """Table: stage prefix -> the labels a person set that count (`ready` is quiet; other prefixes never match)."""
+        events = [{**label(name, "T1", ME), "label": {"name": full}}
+                  for name, full in (("approved", "slop:approved"), ("ready", "slop:ready"), ("approved", "factory:approved"))]
+        for prefix, want in (("slop:", ["slop:approved"]), ("factory:", ["factory:approved"]), ("work:", [])):
+            with self.subTest(prefix=prefix), mock.patch.object(retro.vocab, "stage_prefix", return_value=prefix):
+                f = retro.ticket_facts(7, events, [], [], [], {BOT["login"]})
+                self.assertEqual([x["label"] for x in f["operator_interventions"]], want)
 
     def test_operator_interventions_listed(self):
         issue = [label("ready", "T1", ME), label("triage", "T0", ME), label("blocked", "T2"),

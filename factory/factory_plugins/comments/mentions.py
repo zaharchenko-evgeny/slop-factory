@@ -33,7 +33,8 @@ def add_nodes(defn):
     agent's ask wakes the asker (`wake: asker`)."""
     f, w = defn["factory"], defn["workflow"]
     agents, nodes = f.setdefault("agents", {}), w.setdefault("nodes", {})
-    prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
+    import definition
+    prefix = definition.label_prefix(defn)
     askable = [a for a, spec in agents.items() if (spec or {}).get("mentionable")]
     if not askable:
         return
