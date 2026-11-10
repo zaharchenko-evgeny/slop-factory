@@ -100,6 +100,19 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
         try:
             facts, stage = tracker.stale_facts(n), None
             stage, since = facts["stage"], facts.get("since")
+            if stage_kinds.get(stage) == "final":
+                continue
+            red = RED_TITLE.match(facts.get("title") or "")
+            if red and facts.get("issue_state", "open") == "open" and tracker.main_green():
+                r = {"ticket": n, "stage": stage, "reconcile": "stale-red", "why": f"{red[1]} is green on the main head"}
+                results.append(r)
+                if not dry_run:
+                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "comment",
+                                   "value": f"{PREFIX} CI is green on the main head. Closing this ticket; tickets it blocks resume."})
+                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "close"})
+                if progress:
+                    progress(r)
+                continue
             if stage_kinds.get(stage) == "waiting":
                 stage_since = facts.get("stage_at") or since
                 if (facts.get("issue_state", "open") != "open" or not stage_since
@@ -117,19 +130,6 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                                        "value": f"{marker}: {people}, this ticket is still waiting for you."})
                     if progress:
                         progress(r)
-                continue
-            if stage_kinds.get(stage) == "final":
-                continue
-            red = RED_TITLE.match(facts.get("title") or "")
-            if red and facts.get("issue_state", "open") == "open" and tracker.main_green():
-                r = {"ticket": n, "stage": stage, "reconcile": "stale-red", "why": f"{red[1]} is green on the main head"}
-                results.append(r)
-                if not dry_run:
-                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "comment",
-                                   "value": f"{PREFIX} CI is green on the main head. Closing this ticket; tickets it blocks resume."})
-                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "close"})
-                if progress:
-                    progress(r)
                 continue
             if (facts.get("issue_state", "open") != "open" or not since
                     or vocab.needs_human() in facts.get("attrs", [])):

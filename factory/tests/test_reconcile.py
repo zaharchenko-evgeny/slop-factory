@@ -196,9 +196,11 @@ class ReconcileTest(unittest.TestCase):
 
     def test_open_main_red_closes_only_when_main_ci_is_green(self):
         """Table: CI at the main head -> the Main is red ticket is closed (green) or left open (red, pending); others stay open."""
-        for ci, closed in ((True, True), (False, False)):
-            with self.subTest(green=ci):
-                tracker = MemorySystem({1: {"stage": "ready", "since": FRESH, "title": "Main is red: agnix"},
+        cases = [(stage, ci, ci) for stage in ("ready", "draft", "needs-answers", "blocked", "investigating")
+                 for ci in (True, False)]
+        for stage, ci, closed in cases:
+            with self.subTest(stage=stage, green=ci):
+                tracker = MemorySystem({1: {"stage": stage, "since": FRESH, "title": "Main is red: agnix"},
                                         2: {"stage": "ready", "since": FRESH, "title": "Other ticket"}})
                 tracker.green_main = ci
                 results, _ = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
