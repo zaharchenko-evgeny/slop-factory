@@ -640,9 +640,9 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(descriptor["commands"]["risk:low"], {"store": {"label": "risk:low"}})
 
     def test_ci_result_labels_are_pr_labels(self):
-        """#790: CI labels the PR itself, so no effect needs `on: pr` for a CI result label."""
+        """#790: ci-sync labels the PR itself, so no effect needs `on: pr` for a CI result label (ci-failed's)."""
         descriptor = definition.to_project(definition.load(ROOT / "tests/fixtures/slop"))[0]
-        for fact in ("ci-green", "ci-red"):
+        for fact in ("ci-red",):
             self.assertEqual(descriptor["commands"][fact], {"store": {"pr_label": f"factory:{fact}"}})
 
     def test_compile_triggers(self):
