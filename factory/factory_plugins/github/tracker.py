@@ -190,10 +190,11 @@ class ProjectWriteRun:
     `tokens` names for it) as its GH_TOKEN, else with $FACTORY_WRITE_TOKEN, when one is set; every other call,
     every call without a token and every write to the environment's own repository runs as before."""
 
-    def __init__(self, run, repositories, environ=os.environ, tokens=None, checkouts=()):
+    def __init__(self, run, repositories, environ=os.environ, tokens=None, checkouts=(), issues_token_env=None):
         """`tokens`: {owner/repo: secret name}, as `repository_tokens` reads it. `checkouts`: the run's checkouts; a
-        call to one without a declared token runs from its directory, where Air's token writes it (#1246)."""
-        self.run, self.environ = run, environ
+        call to one without a declared token runs from its directory, where Air's token writes it (#1246).
+        `issues_token_env`: deprecated (#1236), the token of a repository that is not checked out and of a link."""
+        self.run, self.environ, self.issues_token_env = run, environ, issues_token_env
         self.tokens = {r.lower(): secret for r, secret in (tokens or {}).items()}
         self.checkouts = {c.lower(): c for c in checkouts}
         # a repository with a declared token is written with it whatever its role (a foreign primary included)
@@ -204,7 +205,11 @@ class ProjectWriteRun:
         out here; None otherwise."""
         repo = repo.lower()
         declared = self.environ.get(self.tokens.get(repo, ""))
-        return declared or (None if repo in self.checkouts else self.environ.get(WRITE_TOKEN)) or None
+        return declared or (None if repo in self.checkouts else self.fallback()) or None
+
+    def fallback(self):
+        """The deprecated issues token, else $FACTORY_WRITE_TOKEN; None when neither is set."""
+        return (self.issues_token_env and self.environ.get(self.issues_token_env)) or self.environ.get(WRITE_TOKEN) or None
 
     def checkout_dir(self, repo):
         """The directory of the run's checkout of `repo`, or None when it is not checked out here."""
@@ -217,6 +222,8 @@ class ProjectWriteRun:
         if gh_writes(args):  # a link to another repository's issue: a token that reads both, from either side
             token = next((t for repo in (target, (touches or "").lower())
                           if repo in self.repositories and (t := self.token(repo))), None)
+            if not token and touches and touches.lower() != target:  # no checkout's own token reads both issues
+                token = self.fallback()
             if token:
                 kw["token"] = token
                 return self.run(args, **kw)

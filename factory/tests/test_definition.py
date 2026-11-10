@@ -621,18 +621,17 @@ class DefinitionTest(unittest.TestCase):
                 else:
                     self.assertEqual(errs, [])
 
-    def test_issues_token_env_is_a_deprecated_token_for_every_repository(self):
-        """#1236: until the team declares `token:`, `issues_token_env` is the token of each repository without one."""
+    def test_issues_token_env_is_deprecated_and_still_compiled(self):
+        """#1236: until the team declares `token:`, `issues_token_env` keeps its old meaning, with a warning."""
         def change(f):
             self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})])
             f["defaults"].setdefault("settings", {})["issues_token_env"] = "OLD"
         self.edit("factory.yaml", change)
         defn = definition.load(self.root)
-        self.assertEqual(definition.to_project(defn)[0]["environments"]["engine"]["tokens"],
-                         {"slop-factory": "OLD", "slop-eval-factory": "OLD"})
+        project = definition.to_project(defn)[0]
+        self.assertEqual(project["issues_token_env"], "OLD")
+        self.assertNotIn("tokens", project["environments"]["engine"])  # never a declared token: checkouts keep Air's
         self.assertTrue(any(w.startswith("deprecated-key: defaults.settings.issues_token_env") for w in definition.warnings(defn)))
-        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"token": "NEW"})]))
-        self.assertEqual(definition.to_project(definition.load(self.root))[0]["environments"]["engine"]["tokens"]["slop-eval-factory"], "NEW")
 
     def test_compile_lists_each_repository_token(self):
         self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"token": "T"})]))

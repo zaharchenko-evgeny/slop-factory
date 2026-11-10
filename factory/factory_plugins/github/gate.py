@@ -124,7 +124,7 @@ class GitHubCodeHost:
         c = yaml.safe_load(Path(path).read_text()) if path else descriptor if descriptor is not None else config.load()
         tickets = tracker_repositories(c["tracker"])
         return cls((c.get("code_host") or {}).get("repository") or c["tracker"].get("repository") or tickets[0],
-                   ProjectWriteRun(run, project_repositories(c), tokens=repository_tokens(c), checkouts=checked_out(c)), tickets)
+                   ProjectWriteRun(run, project_repositories(c), tokens=repository_tokens(c), checkouts=checked_out(c), issues_token_env=c.get("issues_token_env")), tickets)
 
     @staticmethod
     def gate_tracker(c, tickets, run=gh):
@@ -542,7 +542,7 @@ class GitHubGateTracker(DescriptorPort):
         t, code_repo = c["tracker"], (c.get("code_host") or {}).get("repository")
         repo = code_repo if tickets is not None else t.get("repository") or tracker_repositories(t)[0]
         return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"],
-                   ProjectWriteRun(run, project_repositories(c), tokens=repository_tokens(c), checkouts=checked_out(c)),
+                   ProjectWriteRun(run, project_repositories(c), tokens=repository_tokens(c), checkouts=checked_out(c), issues_token_env=c.get("issues_token_env")),
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
                    (c.get("code_host") or {}).get("repository"),
                    {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,

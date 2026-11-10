@@ -47,9 +47,10 @@ Option 2.
      written from its checkout's directory with Air's token (#1246), and the
      environment's own repository (`FACTORY_ENV_REPOSITORY`) always with Air's
      token. Deploy adds each `token` secret to its environment. This replaces
-     the removed `token_env` key; the tracker-wide `issues_token_env` setting
-     still works as every repository's token until a repository declares its
-     own, and `factory validate` warns about it (`deprecated-key`).
+     the removed `token_env` key. The tracker-wide `issues_token_env` setting
+     keeps its old meaning until it is removed: the token of a repository the
+     run does not check out, and of a link between two repositories. `factory
+     validate` warns about it (`deprecated-key`).
 
    The blocks layer as top-level `tracker`/`vcs`, then the environment's, then
    the repository's own. A narrower block with another adapter keeps only the

@@ -360,6 +360,19 @@ class ProjectWriteToken(unittest.TestCase):
         run.for_repository("o/engine")(link)
         self.assertEqual(calls, ["pat", None])
 
+    def test_deprecated_issues_token_never_overrides_a_checkout(self):
+        """#1236: `issues_token_env` writes a repository that is not checked out and links; a checkout keeps Air's (#1246)."""
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / "team").mkdir()
+            calls = []
+            env = {"OLD": "pat", "FACTORY_ENV_REPOSITORY": "o/engine", "FACTORY_WORKSPACES": root}
+            run = github_tracker.ProjectWriteRun(lambda args, **kw: calls.append(kw) or "", ["o/team", "o/far"], env,
+                                                 {}, ["o/engine", "o/team"], issues_token_env="OLD")
+            run(["issue", "edit", "3", "-R", "o/team", "--add-label", "x"])
+            run(["issue", "edit", "3", "-R", "o/far", "--add-label", "x"])
+            run.for_repository("o/team")(["api", "-X", "POST", "repos/o/engine/issues/7/sub_issues", "-F", "sub_issue_id=9"])
+            self.assertEqual(calls, [{"cwd": str(Path(root) / "team")}, {"token": "pat"}, {"token": "pat"}])
+
     def test_without_the_token_every_call_runs_as_before(self):
         calls = []
         run = github_tracker.ProjectWriteRun(lambda args, **kw: calls.append(kw) or "", ["o/app"], {})

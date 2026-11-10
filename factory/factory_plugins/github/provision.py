@@ -44,4 +44,5 @@ def provision(schema, changes, apply, run=None) -> list[str]:
 def write_run(config: dict):
     """The `gh` runner deploy writes with: project repositories get their `token` or the write token."""
     return github_tracker.ProjectWriteRun(github_tracker.gh, github_tracker.project_repositories(config),
-                                          tokens=github_tracker.repository_tokens(config))
+                                          tokens=github_tracker.repository_tokens(config),
+                                          issues_token_env=config.get("issues_token_env"))

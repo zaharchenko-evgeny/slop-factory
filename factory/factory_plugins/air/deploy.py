@@ -188,6 +188,9 @@ def plan_air(nodes: dict, config: dict) -> dict:
     envs = []
     registry = plugins.registry(config)
     urls = {r["name"]: definition.full_name(r["url"]) for r in config.get("repositories") or []}
+    issues_token = config.get("issues_token_env")  # deprecated (#1236): the old tracker-wide token, as before
+    project_names = {definition.full_name(r["url"]).lower() for r in config.get("repositories") or []
+                     if r.get("role") == "project"}
     for env, node_name, variant in [(e, None, None) for e in used if e in unscoped] + scoped:
         d = envs_def[env]
         repo = variant or repos.get(d["repository"]) or primary
@@ -200,6 +203,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                           **({"FACTORY_NODE": node_name} if node_name else {})},
             "secrets": list(dict.fromkeys([*d.get("secrets", []),
                                            *(s for hook in registry.hook("deploy.secrets") for s in hook(env, config)),
+                                           *([issues_token] if issues_token and project_names - {own.lower()} else []),
                                            *(t for r, t in ((config.get("environments") or {}).get(env) or {}).get("tokens", {}).items() if urls.get(r, r).lower() != own.lower())])),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),

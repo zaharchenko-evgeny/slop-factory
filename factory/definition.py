@@ -892,8 +892,7 @@ def to_project(defn):
         new_model = adopted(defn)
         written = {r["repo"] for r in env_repositories(defn, en) if r["write"]} if new_model else \
             {r for name in nodes if (nodes[name].get("environment") or default_env) == en for r in node_writes(defn, name)}
-        legacy = dset.get("issues_token_env")  # deprecated (#1236): every repository's token unless it declares one
-        tokens = {names[r["repo"]]: r.get("token") or legacy for r in repos if isinstance(r, dict) and (r.get("token") or legacy)}
+        tokens = {names[r["repo"]]: r["token"] for r in repos if isinstance(r, dict) and isinstance(r.get("token"), str) and r["token"]}
         environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": list(help_),
                             **({"tokens": tokens} if tokens else {}),  # a repository's write token secret (ADR-0027)
                             # where the gate may write in this environment (#994): what its nodes write (ADR-0024)
@@ -957,6 +956,7 @@ def to_project(defn):
         "workflow": WORKFLOW,
         "states": states,
         "commands": commands,
+        **({"issues_token_env": dset["issues_token_env"]} if dset.get("issues_token_env") else {}),  # deprecated (#1236)
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
         "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},

@@ -100,15 +100,16 @@ def project_write_probes(settings, env, run, environ=os.environ):
     declared = github_tracker.project_repositories(settings)
     declared += [r for r in tokens if r not in {x.lower() for x in declared}]  # a token-declared repository of any role
     repos = github_tracker.foreign_projects(declared, environ)
-    if not github_tracker.token_env(env, settings):
+    issues = settings.get("issues_token_env")  # deprecated (#1236): probes every project repository, as before
+    if not github_tracker.token_env(env, settings) and not issues:
         repos = [r for r in repos if r.lower() in tokens]
     if not repos:
         return []
-    run = github_tracker.ProjectWriteRun(run, repos, environ, tokens)
+    run = github_tracker.ProjectWriteRun(run, repos, environ, tokens, issues_token_env=issues)
     results = []
     for repo in repos:
         name = f"write:label:{repo}"
-        secret = tokens.get(repo.lower())
+        secret = tokens.get(repo.lower()) or issues
         if secret and not environ.get(secret) and not environ.get(github_tracker.WRITE_TOKEN):
             results.append({"probe": name, "result": "fail", "detail": f"{secret} is not set (token of {repo})"})
             continue
