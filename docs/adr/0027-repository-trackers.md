@@ -42,13 +42,14 @@ Option 2.
    - `token`: the name of the secret that holds the gate's write token for
      this repository (issues, labels, comments, sub-issue and blocked-by
      links). Air's token has no issues permission on another repository, even
-     one the run checks out. The gate writes the environment's own repository
-     (`FACTORY_ENV_REPOSITORY`) with Air's token, and every other repository
-     with its `token`. Deploy adds each `token` secret to its environment, and
-     `factory validate` fails (`missing-token`) when a repository that holds
-     tickets, other than the environment's own, has none. This replaces the
-     removed `token_env` key and the tracker-wide `issues_token_env` setting:
-     the token belongs to a repository in an environment, like `write`.
+     one the run checks out, so a link between issues of two repositories
+     needs it. A repository with a `token` is written with it; one without is
+     written from its checkout's directory with Air's token (#1246), and the
+     environment's own repository (`FACTORY_ENV_REPOSITORY`) always with Air's
+     token. Deploy adds each `token` secret to its environment. This replaces
+     the removed `token_env` key; the tracker-wide `issues_token_env` setting
+     still works as every repository's token until a repository declares its
+     own, and `factory validate` warns about it (`deprecated-key`).
 
    The blocks layer as top-level `tracker`/`vcs`, then the environment's, then
    the repository's own. A narrower block with another adapter keeps only the
@@ -93,8 +94,8 @@ Option 2.
    - Deprecated (warnings) until the team migrates (slop-eval-factory#92),
      then removed: node `listens` and `writes`, agent `access`,
      `tracker.repositories` and `tracker.projects`.
-   - Already gone: environment `main`, `token_env` and the `issues_token_env`
-     setting (`token` on a repository replaces them).
+   - Already gone: environment `main` and `token_env`. Deprecated: the
+     `issues_token_env` setting (`token` on a repository replaces it).
    - The #1069 default-environment fan-out goes in #1134.
 
 ## Checks (`factory validate`)

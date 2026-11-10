@@ -70,7 +70,7 @@ def holds(when, facts, event):
         if key == "focus":
             miss = facts["focus_missing"]
             focus = event.get("focus", miss[0] if miss else None)
-            return focus in miss or event.get("rereview") == focus
+            return focus in miss
         if key == "round":
             value(want, ("complete", "complete-at-head"))
             return facts["round_complete"] and (want != "complete-at-head" or facts["round_head"] == facts["head"])
@@ -527,7 +527,7 @@ def _open_blocking(reviews, focus):
     return open_ids
 
 
-def rereview_scope(effects, payload, facts, focus, tracker, ticket):
+def later_review_scope(effects, payload, facts, focus, tracker, ticket):
     """Why a re-review's change request is refused, or None (#1048). On a re-review (the focus has an agent review at
     an earlier head), each blocking finding must continue an open earlier finding (its id), sit on a file whose PR
     patch changed since the last reviewed head (within the fix's hunks when the line is known), or say why the earlier round could not see it (`unseen`). Anything
@@ -637,14 +637,6 @@ def fix_tier(facts, default="mid"):
     return default
 
 
-def review_wake_labels(facts, completed_head=None):
-    """The per-focus reviewer commands needed for this green PR head."""
-    ci = "green" if completed_head and facts.get("head") == completed_head else facts.get("ci")
-    if facts.get("stage") != "in-review" or ci != "green":
-        return []
-    return [vocab.cmd("review-<focus>", focus) for focus in facts.get("focus_missing", [])]
-
-
 def branch_of(facts, config):
     """The ticket's branch: the PR's head, else `branch_pattern` from the issue title."""
     if facts.get("branch"):
@@ -697,11 +689,6 @@ def check(name, event, tracker, nodes, config, code_host=None):
         if facts.get("heads"):
             event["heads"] = facts["heads"]
         event["actor"] = facts.get("event_actor")
-        pending = facts.get("pending_rereviews", [])
-        labels = facts.get("pr_labels", [])
-        event["rereview"] = next(iter(pending), None) or next(
-            (x.removeprefix(vocab.prefix("rereview-<focus>")) for x in labels
-             if x.startswith(vocab.prefix("rereview-<focus>"))), None)
     why = matches(node, facts, event)
     branch = branch_of({**facts, "ticket": event["ticket"]}, config)
     notes = facts.get("agent_notes", [])
@@ -845,7 +832,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             if e["kind"] in ("review", "comment"):
                 e["notes"] = notes
     facts = tracker.facts(ticket)
-    if scope := rereview_scope(effects, payload, facts, focus, tracker, ticket):
+    if scope := later_review_scope(effects, payload, facts, focus, tracker, ticket):
         raise Bad(scope)
     comment_after = []  # what a plugin's effects must write after the stage change (the comment node's reply)
     # A plugin's effects, by handler: it turns them into core effects (comments: route, reply, skip) or reads their
@@ -1034,16 +1021,9 @@ def join_decision(facts):
     """The join's outcome and payload, or None while the round is open. Uses the adapter's `round_verdict`,
     which counts every required agent focus, human change requests and CI. A fix label takes the ticket's
     complexity tier (mid when unlabelled)."""
-    rereviewed = has_dispute_rereview(facts)
-    if (facts.get("handed_to_fix") and not rereviewed) or facts.get("pending_rereviews") \
-            or not facts.get("round_complete") or facts.get("round_verdict") is None:
+    if facts.get("handed_to_fix") or not facts.get("round_complete") or facts.get("round_verdict") is None:
         return None  # an open round, or a head whose round already went to a fix (its push comes next)
     return ("changes" if facts["round_verdict"] == "changes" else "approved"), {"tier": fix_tier(facts)}
-
-
-def has_dispute_rereview(facts):
-    return any(r.get("agent") and r.get("rereview") and r.get("commit_id") == facts.get("head")
-               for r in facts.get("reviews", []))
 
 
 RISK_RANK = {"low": 0, "high": 1}
@@ -1060,16 +1040,6 @@ def merge_decision(facts, auto_merge):
         next_step = f"Merge PR #{facts['pr']}" if facts.get("pr") else "waiting for a person to merge"
         return "waiting", {"reason": f"[factory] {next_step}: auto-merge is off or this PR exceeds its risk limit."}
     return ("updated" if facts.get("behind") else "merged"), {}
-
-
-def retro_payload(facts):
-    """The `finish` retro comment of a merged ticket, from its facts."""
-    agent = [r for r in facts["reviews"] if r["agent"]]
-    pr = f"PR #{facts['pr']} {facts['pr_state']}" if facts["pr"] else "no PR found"
-    text = (f"Retro: {pr}; fix rounds {facts['fix_rounds']}; "
-            f"reviews {len(agent)} ({sum(r['verdict'] == 'approve' for r in agent)} approve, "
-            f"{sum(r['verdict'] == 'changes' for r in agent)} changes)")
-    return {"retro": text, "run_id": "finish:retro"}
 
 
 AFTER_MERGE_CHECK = re.compile(r"(?im)^\s*[-*] \[ \] Operator check after the merge \(not part of the PR\):\s*(.+?)\s*$")
@@ -1096,44 +1066,6 @@ def blockers_mode(nodes):
     if mode not in ("start", "merge"):
         raise Bad(f"bad blockers mode {mode!r}: allowed start, merge")
     return mode
-
-
-def sweep_plan(facts, auto_merge=None, default_tier="mid", blockers="start", start_waits=False):
-    """(node, outcome, payload) of the first outcome whose facts hold, else None."""
-    stage = facts["stage"]
-    if stage == "in-review" and (replay := stale_review_plan(facts)):
-        return replay
-    waits = blockers == "merge" and facts.get("blockers_open")  # approved, but a blocker is still open
-    if facts.get("pr_state") == "merged" and config_mod.load()["tracker"]["stage_kinds"].get(stage) != "final":
-        comments = facts.get("comments", [])
-        return ("finish", "merged", {}) if not after_merge_checks(facts.get("body")) \
-            or not after_merge_comment(comments) or after_merge_complete(comments) else None
-    if stage == "ready" and (blockers == "merge" and not start_waits or not facts.get("blockers_open")) \
-            and facts.get("issue_state", "open") == "open":
-        return "start", "started", {"tier": fix_tier(facts, default_tier)}
-    if stage == "needs-answers" and facts.get("answered"):
-        return "finish", "answered", {}
-    if stage == "approved" and facts.get("pr_state") == "open" and facts.get("conflict"):
-        return "finish", "conflict", {}  # the cheap updater merges main; the reviewers then check the resolution
-    if stage == "approved" and facts.get("pr_state") == "open" \
-            and ((facts.get("round_head") is not None and facts.get("head") != facts.get("round_head"))
-                 or facts.get("ci") == "red"):
-        return "reopen", "reopened", {}
-    if stage == "approved" and not waits and (m := merge_decision(facts, auto_merge)):
-        return "merge", *m
-    if stage == "split" and (kids := facts.get("children")):
-        if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
-            what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)
-            return "finish", "child-blocked", {"reason": f"[factory] Blocked: child tickets need a person: {what}. "
-                                                         f"Fix them, then set {vocab.stage('ready')} on this ticket."}
-        if all(c["state"] == "closed" for c in kids):
-            return "finish", "children-done", {}
-    if stage == "in-review" and facts.get("waiting_reviewers") and (
-            not facts.get("handed_to_fix") or has_dispute_rereview(facts)):
-        return "join", "waiting", {}  # ask them again; nothing moves until they decide
-    if stage == "in-review" and (j := join_decision(facts)):
-        return "join", *j
-    return None
 
 
 def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, default_tier="mid", progress=None,
@@ -1388,7 +1320,7 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
 
 def main(argv):
     p = argparse.ArgumentParser(prog="gate.py")
-    p.add_argument("cmd", choices=["check", "apply", "sweep", "wake-reviewers", "decide", "ci"])
+    p.add_argument("cmd", choices=["check", "apply", "sweep", "decide", "ci"])
     p.add_argument("--wait", action="store_true")
     p.add_argument("--node", default="")
     p.add_argument("--dry-run", action="store_true")
@@ -1404,7 +1336,6 @@ def main(argv):
     p.add_argument("--spec")
     p.add_argument("--focus")  # the automation's focus and tier: the trigger payload carries neither
     p.add_argument("--tier")
-    p.add_argument("--completed-head")  # CI's terminal label step runs before Actions marks its workflow completed
     try:
         a = p.parse_args(config_mod.pop_team(argv))
     except SystemExit:
@@ -1439,15 +1370,6 @@ def main(argv):
             status, out = decide(a.node, ticket, tracker, nodes, dry_run=a.dry_run)
             print(json.dumps(out))
             return status
-        if a.cmd == "wake-reviewers":
-            if not a.issue:
-                raise Bad("wake-reviewers needs --issue TICKET")
-            facts = tracker.facts(a.issue)
-            labels = review_wake_labels(facts, a.completed_head)
-            for label in labels:
-                tracker.apply({"ticket": a.issue, "kind": "label", "value": label, "on": "pr"})
-            print(json.dumps({"ticket": a.issue, "labels": labels}))
-            return GO
         if a.cmd == "sweep":
             if not hasattr(tracker, "sweep_tickets"):
                 raise Bad("sweep needs --tracker github")

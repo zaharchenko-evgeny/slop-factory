@@ -3,16 +3,13 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Deterministic run facts for the nightly `retro` (ADR-0015): the agent writes lessons, it never counts.
+"""Lesson collection for the nightly `retro` (ADR-0015, ADR-0021): the agent writes lessons, it never counts.
 
-Usage: uv run factory/retro.py facts --since <ISO time>   (JSON: `tickets`, one object per ticket that reached `done` since,
-                                                           and `reviews`, the per-focus totals over them)
-       uv run factory/retro.py collect                     (JSON: the uncollected lesson comments; marks them collected)
-`ticket_facts` is pure: it takes the ticket's and PR's events, reviews and comments as the GitHub API returns them.
+Usage: uv run factory/retro.py collect                     (JSON: the uncollected lesson comments; writes nothing)
+       uv run factory/retro.py mark <comment id>...        (marks those comments collected; unlabels tickets with none left)
+The run facts are the facts plugin's (`factory facts`, ADR-0026).
 """
-import fnmatch
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -21,157 +18,47 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as cfg  # noqa: E402
 import vocab  # noqa: E402
 
-QUIET = ("triage", "ready")  # stage labels a person sets in the normal flow: not an intervention
-REGRESSION = re.compile(r"(?i)regression|broke")
-MARKER = re.compile(r"<!-- factory:review focus=(\S+) .*?verdict=(\w+)")
-SIZE = re.compile(r"(?i)size:\s*about\s*([\d,]+)\s*lines")
-
-
-def person(user, bots=()):
-    login = (user or {}).get("login", "")
-    return bool(login) and (user or {}).get("type") != "Bot" and not login.endswith("[bot]") and login not in bots
-
-
-def labeled(events, prefix):
-    return [e for e in events if e.get("event") == "labeled" and e["label"]["name"].startswith(prefix)]
-
-
-def references(text, numbers):
-    """The numbers of `numbers` that `text` mentions as `#N` or as an issue or pull request URL."""
-    found = re.findall(r"(?<![\w/])#(\d+)\b|/(?:issues|pull)/(\d+)\b", text or "")
-    return {int(a or b) for a, b in found} & set(numbers)
-
-
-def escaped(numbers, later):
-    """How many `later` tickets ({number, body, labels}) report a bug in work numbered `numbers` (the ticket and its PR):
-    a line that names it with `regression` or `broke`, or a `bug` label with a link to it."""
-    return sum(1 for t in later
-               if any(references(line, numbers) and REGRESSION.search(line) for line in (t.get("body") or "").splitlines())
-               or ("bug" in t.get("labels", ()) and references(t.get("body"), numbers)))
-
-
-def ticket_facts(number, issue_events, pr_events, reviews, comments, bots=(), body="", pr_lines=None,
-                 pr_number=None, merged=False, later=()):
-    """Facts of one ticket, counted across its whole life (a person's `factory:ready` resets nothing)."""
-    stage = lambda name: [e for e in issue_events if e.get("event") == "labeled" and e["label"]["name"] == f"factory:{name}"]
-    first_ready, done = (stage("ready") or [{}])[0].get("created_at"), (stage("done") or [{}])[-1].get("created_at")
-    marked = [(m[1], m[2], r["body"], r.get("commit_id")) for r in reviews if (m := MARKER.search(r.get("body") or ""))]
-    by_focus = {}
-    for i, (focus, verdict, text, head) in enumerate(marked):
-        c = by_focus.setdefault(focus, {"reviews": 0, "approve": 0, "changes": 0, "blocking": 0, "changes_without_finding": 0,
-                                        "confirmed": 0, "withdrawn": 0, "escaped": 0})
-        found = len(re.findall(r"\*\*B\d+\*\*", text))
-        c["reviews"] += 1
-        c[verdict] = c.get(verdict, 0) + 1
-        c["blocking"] += found
-        c["changes_without_finding"] += verdict == "changes" and not found
-        nxt = next(((v, h) for f, v, _, h in marked[i + 1:] if f == focus), None)  # the same focus's next review
-        if verdict == "changes" and nxt and nxt[1] != head:
-            c["confirmed"] += found  # a new head followed: the developer acted on it
-        elif verdict == "changes" and nxt and nxt[0] == "approve":
-            c["withdrawn"] += found  # approved at the same head: a false alarm
-    if merged:
-        for c in by_focus.values():
-            c["escaped"] = escaped({number, pr_number} - {None}, later) if c["approve"] else 0
-    stops = [e for n in ("blocked", "needs-answers") for e in stage(n)]
-    def reason(at):  # the first line of the bot's next comment on the ticket
-        later = [c for c in comments if not person(c.get("user"), bots) and (c.get("created_at") or "") >= at]
-        return ((later[0].get("body") or "").splitlines() or [""])[0] if later else ""
-    actor = lambda e: e.get("actor")
-    operator = (
-        [{"kind": "label", "label": e["label"]["name"], "by": actor(e)["login"], "at": e["created_at"]}
-         for e in issue_events + pr_events
-         if e.get("event") in ("labeled", "unlabeled") and e["label"]["name"].startswith(vocab.stage_prefix())
-         and e["label"]["name"][len(vocab.stage_prefix()):] not in QUIET and person(actor(e), bots)]
-        + [{"kind": "review", "by": r["user"]["login"], "at": r.get("submitted_at")} for r in reviews if person(r.get("user"), bots)]
-        + [{"kind": "comment", "by": c["user"]["login"], "at": c.get("created_at")} for c in comments if person(c.get("user"), bots)])
-    estimate = SIZE.search(body or "")
-    return {
-        "ticket": number,
-        "fix_rounds": len(labeled(pr_events, vocab.prefix("fix-<tier>"))),
-        "update_rounds": len(labeled(pr_events, vocab.prefix("update-<tier>"))),
-        "reviews": by_focus,
-        "stops": [{"stage": e["label"]["name"], "at": e["created_at"], "reason": reason(e["created_at"])} for e in stops],
-        "operator_interventions": operator,
-        "aborted_runs": None,  # Air run status is not readable from GitHub
-        "ready_to_done_hours": round((_t(done) - _t(first_ready)) / 3600, 1) if first_ready and done else None,
-        "size": {"estimate": int(estimate[1].replace(",", "")) if estimate else None, "actual": pr_lines},
-    }
-
-
-def review_totals(tickets):
-    """The per-focus counters of `ticket_facts` summed over `tickets`."""
-    totals = {}
-    for t in tickets:
-        for focus, c in t["reviews"].items():
-            sums = totals.setdefault(focus, dict.fromkeys(c, 0))
-            for k, v in c.items():
-                sums[k] += v
-    return totals
-
-
-def changed_lines(files, generated_paths=()):
-    """The repository's sizing rule over a PR's files: generated and vendored paths are excluded, a whole deleted
-    file counts as one line, removed lines of a remaining file count as modified."""
-    total = 0
-    for f in files:
-        name = f["filename"]
-        if name.startswith("engine/template-v1/skills/") or any(fnmatch.fnmatchcase(name, g) for g in generated_paths):
-            continue
-        total += 1 if f.get("status") == "removed" else f.get("additions", 0) + f.get("deletions", 0)
-    return total
-
-
-def _t(iso):
-    from datetime import datetime
-    return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
-
-
-def facts(tracker, since):
-    """Facts of every ticket whose `factory:done` label was added at or after `since`."""
-    done = tracker.stages["done"]
-    out = []
-    later = [{"number": i["number"], "body": i.get("body") or "", "created_at": i["created_at"],
-              "labels": [x["name"] for x in i.get("labels") or []]}
-             for i in tracker._list(f"issues?state=all&since={since}&per_page=100") if "pull_request" not in i]
-    for i in tracker._list(f"issues?state=all&labels={done}&since={since}&per_page=100"):
-        n = i["number"]
-        if "pull_request" in i:
-            continue
-        events = tracker._list(f"issues/{n}/events")
-        if not any(e.get("event") == "labeled" and e["label"]["name"] == done and e["created_at"] >= since for e in events):
-            continue
-        pr = tracker._pr(n)
-        pr_events = tracker._list(f"issues/{pr['number']}/events") if pr else []
-        reviews = tracker._list(f"pulls/{pr['number']}/reviews") if pr else []
-        comments = tracker._list(f"issues/{n}/comments")
-        lines = changed_lines(tracker._list(f"pulls/{pr['number']}/files?per_page=100"),
-                              cfg.load().get("limits", {}).get("generated_paths", [])) if pr else None
-        finished = max(e["created_at"] for e in events if e.get("event") == "labeled" and e["label"]["name"] == done)
-        out.append(ticket_facts(n, events, pr_events, reviews, comments, {tracker.bot, *tracker.trusted},
-                                i.get("body") or "", lines, pr and pr["number"], bool(pr and pr.get("merged")),
-                                [t for t in later if t["created_at"] > finished and t["number"] != n]))
-    return {"tickets": out, "reviews": review_totals(out)}
-
-
 LESSON, COLLECTED = "<!-- factory:lesson -->", "<!-- factory:lesson collected -->"
 
 
 def collect(tracker, label):
-    """ADR-0021: the uncollected lesson comments of every ticket labelled `label`, as [{ticket, url, body}]. The
-    label goes first, then each comment taken is marked collected, so a lesson posted meanwhile labels the ticket
-    again and the next run takes it; nothing is read twice."""
+    """ADR-0021: the uncollected lesson comments of every ticket labelled `label`, as [{ticket, url, id, body}].
+    It only reads: `mark` marks them once retro has published them."""
     out = []
     for i in tracker._list(f"issues?state=all&labels={label}&per_page=100"):
         n = i["number"]
-        tracker._edit(n, remove=[label])
         for c in tracker._list(f"issues/{n}/comments"):
             body = c.get("body") or ""
-            if LESSON not in body:
-                continue
-            out.append({"ticket": n, "url": c.get("html_url"), "body": body.replace(LESSON, "").strip()})
-            tracker._api(f"issues/comments/{c['id']}", "-X", "PATCH", "-f", f"body={body.replace(LESSON, COLLECTED)}")
+            if LESSON in body:
+                out.append({"ticket": n, "url": c.get("html_url"), "id": c["id"], "body": body.replace(LESSON, "").strip()})
     return out
+
+
+def mark(tracker, label, ids):
+    """Mark the lesson comments `ids` collected and take `label` off each ticket that has no uncollected lesson
+    comment left. The label comes off first and goes back on when a lesson remains or a write fails, so a lesson
+    posted (and labelled) while `mark` runs is never hidden by a stale read. Returns the ids marked. An id that is
+    not an uncollected lesson comment of a labelled ticket is left alone."""
+    wanted, done = {int(i) for i in ids}, []
+    for i in tracker._list(f"issues?state=all&labels={label}&per_page=100"):
+        n, left = i["number"], False
+        tracker._edit(n, remove=[label])
+        try:
+            for c in tracker._list(f"issues/{n}/comments"):
+                body = c.get("body") or ""
+                if LESSON not in body:
+                    continue
+                if c["id"] in wanted:
+                    tracker._api(f"issues/comments/{c['id']}", "-X", "PATCH", "-f", f"body={body.replace(LESSON, COLLECTED)}")
+                    done.append(c["id"])
+                else:
+                    left = True
+        except BaseException:
+            tracker._edit(n, add=[label])
+            raise
+        if left:
+            tracker._edit(n, add=[label])
+    return done
 
 
 def main(argv):
@@ -179,11 +66,11 @@ def main(argv):
     if argv == ["collect"]:
         print(json.dumps(collect(gate.tracker_of(cfg.load()), vocab.lesson()), indent=2))
         return 0
-    if len(argv) != 3 or argv[0] != "facts" or argv[1] != "--since":
-        print(__doc__)
-        return 2
-    print(json.dumps(facts(gate.tracker_of(cfg.load()), argv[2]), indent=2))
-    return 0
+    if argv[:1] == ["mark"] and len(argv) > 1 and all(a.isdigit() for a in argv[1:]):
+        print(json.dumps(mark(gate.tracker_of(cfg.load()), vocab.lesson(), argv[1:])))
+        return 0
+    print(__doc__)
+    return 2
 
 
 if __name__ == "__main__":

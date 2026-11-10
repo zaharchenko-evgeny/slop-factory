@@ -166,7 +166,6 @@ def pr_facts(pr, required, since, trusted):
     head = pr.head
     reviews = carry_approvals([dict(r) for r in pr.reviews], head, pr.clean_advance)
     pr_labels = set(pr.labels)
-    pending_rereviews = [focus for focus in required if vocab.cmd("rereview-<focus>", focus) in pr_labels]
     latest = {r["focus"]: r for r in reviews if r["agent"]}  # the later review of a focus wins
     heads = {latest[x]["commit_id"] for x in required if x in latest}
     requested = list(pr.requested_reviewers)
@@ -183,12 +182,12 @@ def pr_facts(pr, required, since, trusted):
             "pr_state": "merged" if pr.merged else "closed" if pr.state == "closed" else "open",
             "pr": pr.number, "head": head, "mergeable": pr.mergeable, "conflict": pr.mergeable is False,
             "ci": pr.ci, "reviews": reviews, "requested_reviewers": requested, "round_verdict": verdict,
-            "ignored_reviews": ignored, "waiting_reviewers": waiting, "pending_rereviews": pending_rereviews,
+            "ignored_reviews": ignored, "waiting_reviewers": waiting,
             "pr_labels": sorted(pr_labels),
             "focus_missing": [x for x in required if latest.get(x, {}).get("commit_id") != head],
             "round_complete": complete,
             "round_head": heads.pop() if all(x in latest for x in required) and len(heads) == 1 else None,
-            "fix_rounds": fix_round_count(reviews, since)}, got  # same-head dispute rereviews count as a new round
+            "fix_rounds": fix_round_count(reviews, since)}, got
 
 
 def review_at_head(facts):
@@ -222,7 +221,7 @@ def facts(ticket, prs, rules, children=None):
          "head": None, "pr": None, "mergeable": None, "conflict": False, "ci": "none", "reviews": [], "requested_reviewers": [],
          "focus_missing": [], "round_complete": False, "round_verdict": None, "round_head": None,
          "ignored_reviews": [], "waiting_reviewers": [], "fix_rounds": 0,
-         "fix_cap": rules.fix_cap, "due": False, "seen": [], "pr_state": "none", "pending_rereviews": [],
+         "fix_cap": rules.fix_cap, "due": False, "seen": [], "pr_state": "none",
          "agent_runs": runs, "run_cap": rules.run_cap,
          "handed_to_fix": False, "risk": rk, "behind": False,
          "issue_state": ticket.state, "updated_at": ticket.updated_at,

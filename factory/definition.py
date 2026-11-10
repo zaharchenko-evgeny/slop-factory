@@ -308,11 +308,8 @@ def _repository_errors(defn):
                 errs.append(f"bad-write: environments.{e}: {r.get('repo')}: `write` is true or false")
             if isinstance(r, dict) and "token" in r and not (isinstance(r["token"], str) and r["token"]):
                 errs.append(f"bad-token: environments.{e}: {r.get('repo')}: `token` is the name of a secret")
-        for i, r in enumerate(repositories(defn, e)):
+        for r in repositories(defn, e):
             where = f"environments.{e}: {r['repo']}"
-            if i and r["tracker"] is not None and not r["token"]:  # the first is the environment's own: Air's token
-                errs.append(f"missing-token: {where}: holds tickets and is not the environment's own repository; "
-                            "add `token: <SECRET_NAME>` (ADR-0027)")
             for kind in ("tracker", "vcs"):
                 block = r[kind]
                 if block is None:
@@ -701,8 +698,11 @@ def errors(defn):
         outcomes = n.get("outcomes") or {}
         if not outcomes:
             errs.append(f"no-outcome: {where}")
+        routine = bool(n.get("triggers")) and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"])
         for o, oc in outcomes.items():
             oc = oc or {}
+            if routine and oc.get("effects"):  # ADR-0015: `apply_routine` applies no effects
+                errs.append(f"routine-effects: {where}.{o}")
             if oc.get("else") is not None and oc["else"] not in outcomes:
                 errs.append(f"unknown-else: {where}.{o}: {oc['else']}")
             guards = [k for k in oc.get("if") or {} if k not in GUARDS]
@@ -783,9 +783,12 @@ def warnings(defn):
     off = [plugins.refusal(f"agents.{a}", k, owner) for a, spec in (defn["factory"].get("agents") or {}).items()
            for k in spec or {} if (spec or {})[k] and (owner := plugins.owner(k, "agent")) and not registry.is_on(owner)]
     more = [w for check in registry.hook("definition.warnings") for w in check(defn)]
+    legacy = ["deprecated-key: defaults.settings.issues_token_env: declare `token: <SECRET_NAME>` on each environment "
+              "repository the gate writes with it (ADR-0027)"] \
+        if ((defn["factory"].get("defaults") or {}).get("settings") or {}).get("issues_token_env") else []
     moved = ["deprecated-key: workflow.yaml stages.label_prefix moved to tracker.label_prefix in factory.yaml"] \
         if "label_prefix" in (defn["workflow"].get("stages") or {}) else []
-    return moved + [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
+    return legacy + moved + [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
             if label.startswith(prefix) and label not in triggered] + off + more + _repository_warnings(defn)
 
 
@@ -889,7 +892,8 @@ def to_project(defn):
         new_model = adopted(defn)
         written = {r["repo"] for r in env_repositories(defn, en) if r["write"]} if new_model else \
             {r for name in nodes if (nodes[name].get("environment") or default_env) == en for r in node_writes(defn, name)}
-        tokens = {names[r["repo"]]: r["token"] for r in repos if isinstance(r.get("token"), str) and r["token"]}
+        legacy = dset.get("issues_token_env")  # deprecated (#1236): every repository's token unless it declares one
+        tokens = {names[r["repo"]]: r.get("token") or legacy for r in repos if isinstance(r, dict) and (r.get("token") or legacy)}
         environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": list(help_),
                             **({"tokens": tokens} if tokens else {}),  # a repository's write token secret (ADR-0027)
                             # where the gate may write in this environment (#994): what its nodes write (ADR-0024)
@@ -1254,8 +1258,8 @@ def plan(graph, facts, auto_merge=None, default_tier="mid", blockers="start", st
                                                              f"Fix them, then set {gate.vocab.stage('ready')} on this ticket."}
         elif all(c["state"] == "closed" for c in kids) and allowed("finish", "children-done"):
             return "finish", "children-done", {}
-    if stage == "in-review" and allowed("join", "waiting") and facts.get("waiting_reviewers") and (
-            not facts.get("handed_to_fix") or gate.has_dispute_rereview(facts)):
+    if stage == "in-review" and allowed("join", "waiting") and facts.get("waiting_reviewers") \
+            and not facts.get("handed_to_fix"):
         return "join", "waiting", {}  # ask them again; nothing moves until they decide
     if stage == "in-review" and allowed("join", "approved") and (j := gate.join_decision(facts)):
         return "join", *j

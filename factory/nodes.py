@@ -117,6 +117,8 @@ def validate(nodes, config):
         if n.get("output", "read-only") not in OUTPUTS:
             errs.append(f"bad-output: {name}: {n.get('output')}")
         for oname, o in n["outcomes"].items():
+            if n.get("routine") and n.get("triggers") and all(str(t).startswith("schedule ") for t in n["triggers"]) and (o or {}).get("effects"):  # ADR-0015: `apply_routine` applies no effects
+                errs.append(f"routine-effects: {name}.{oname}")
             for e in (o or {}).get("effects") or []:
                 keys = [k for k in e if k != "on"] if isinstance(e, dict) else []
                 if len(keys) != 1 or keys[0] not in effects:

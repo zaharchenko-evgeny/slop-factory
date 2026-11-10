@@ -7,6 +7,7 @@
   "properties": {
     "engine": {"type": ["integer", "string"]},
     "team_repository": {"type": "string"},
+    "issues_token_env": {"type": "string", "description": "Deprecated (#1236): the secret every environment repository without its own `token` is written with."},
     "engine_repository": {"type": "string", "default": "https://github.com/zaharchenko-evgeny/slop-factory.git"},
     "project": {
       "type": "object",

@@ -198,7 +198,7 @@ nodes:
     triggers: [{ schedule: "0 2 * * *" }]
     output: push-to-new-branch    # the platform opens one PR to the knowledge base
     outcomes:
-      proposed: { effects: [{ label: "factory:knowledge-review", on: pr }] }
+      proposed: {}
       nothing:  {}
 
   knowledge-review:               # not a `review-<focus>` variant: it reviews retro's PR, outside delivery

@@ -72,7 +72,7 @@ class ReconcileTest(unittest.TestCase):
     def test_stale_review_label_without_review_refired(self):
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": FRESH,
                              "focus_missing": ["behaviour"],
-                             "review_labels": [("factory:rereview-behaviour", OLD)]})
+                             "review_labels": [("factory:review-behaviour", OLD)]})
         self.assertEqual(results[0]["node"], "review")
         self.assertIn('"factory:review-behaviour"', logged(t, "label"))
 
@@ -194,15 +194,19 @@ class ReconcileTest(unittest.TestCase):
         t, results, _ = run({"stage": "approved", "pr": 5, "pr_state": "open", "issue_state": "closed", "since": OLD})
         self.assertEqual(([r["reconcile"] for r in results], t.tickets[1]["stage"]), (["orphan-pr"], "approved"))  # #1052
 
-    def test_open_main_red_with_green_main_reports_stale_red(self):
-        tracker = MemorySystem({1: {"stage": "ready", "since": FRESH, "title": "Main is red: agnix"},
-                                 2: {"stage": "ready", "since": FRESH, "title": "Other ticket"}})
-        tracker.green_main = True
-        results, _ = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
-        self.assertEqual([(r["ticket"], r["reconcile"]) for r in results], [(1, "stale-red")])
-        tracker.green_main = False
-        results, _ = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
-        self.assertEqual(results, [])
+    def test_open_main_red_closes_only_when_main_ci_is_green(self):
+        """Table: CI at the main head -> the Main is red ticket is closed (green) or left open (red, pending); others stay open."""
+        cases = [(stage, ci, ci) for stage in ("ready", "draft", "needs-answers", "blocked", "investigating")
+                 for ci in (True, False)]
+        for stage, ci, closed in cases:
+            with self.subTest(stage=stage, green=ci):
+                tracker = MemorySystem({1: {"stage": stage, "since": FRESH, "title": "Main is red: agnix"},
+                                        2: {"stage": "ready", "since": FRESH, "title": "Other ticket"}})
+                tracker.green_main = ci
+                results, _ = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
+                self.assertEqual([(r["ticket"], r["reconcile"]) for r in results], [(1, "stale-red")] if closed else [])
+                self.assertEqual(logged(tracker, "close") != [], closed)
+                self.assertEqual([k for k, _ in tracker.tickets[2].get("log", [])], [])
 
     def test_fresh_step_waits_for_the_timeout(self):
         _, results, _ = run({"stage": "in-dev", "since": FRESH, "command": "factory:implement-mid"})

@@ -102,7 +102,7 @@ def ticket_repositories(body, names, primary):
 PR_DEFAULTS = {"head": None, "pr": None, "branch": None, "mergeable": None, "conflict": False, "ci": "none",
                "reviews": [], "requested_reviewers": [], "focus_missing": [], "round_complete": False,
                "round_verdict": None, "round_head": None, "ignored_reviews": [], "waiting_reviewers": [],
-               "pending_rereviews": [], "pr_labels": [], "fix_rounds": 0, "pr_state": "none",
+               "pr_labels": [], "fix_rounds": 0, "pr_state": "none",
                "handed_to_fix": False, "behind": False}
 
 
@@ -134,7 +134,7 @@ def combine_prs(prs):
             "handed_to_fix": any(p["handed_to_fix"] for p in prs), "fix_rounds": max(p["fix_rounds"] for p in prs),
             "reviews": [{**r, "repo": p["repo"]} for p in prs for r in p["reviews"]],
             **{k: union(k) for k in ("requested_reviewers", "focus_missing", "ignored_reviews", "waiting_reviewers",
-                                     "pending_rereviews", "pr_labels")}}
+                                     "pr_labels")}}
 
 
 class Tracker(Protocol):
@@ -143,8 +143,7 @@ class Tracker(Protocol):
 
 
 def fix_round_count(reviews, since=""):
-    """Rounds a fix answers and that count against `limits.fix_rounds`: agent change requests, per head and dispute
-    rereview, since the person's last `factory:ready`, with at least one blocking finding (id `B<n>`). A round with
+    """Rounds a fix answers and that count against `limits.fix_rounds`: agent change requests, per head, since the person's last `factory:ready`, with at least one blocking finding (id `B<n>`). A round with
     none (a verdict bug, environment noise) is not a round. The first round counts; a later one counts only when it
     still carries a blocking id an earlier round raised (the fix did not resolve it), so a review that finds a new
     issue each round does not exhaust the developer's rounds (#1048). Backstop: at least half of all rounds count."""
@@ -153,7 +152,7 @@ def fix_round_count(reviews, since=""):
         if r.get("agent") and r.get("verdict") == "changes" and (r.get("submitted_at") or "") >= since:
             ids = {str(i) for i in r.get("findings", []) if str(i).startswith("B")}
             if ids:
-                rounds.setdefault((r["commit_id"], r.get("rereview")), set()).update(ids)
+                rounds.setdefault(r["commit_id"], set()).update(ids)
     seen, counted = set(), 0
     for ids in rounds.values():
         counted += not seen or bool(ids & seen)
@@ -360,7 +359,7 @@ class MemorySystem(DescriptorPort):
 
     def __init__(self, tickets=None, fail_on=None, project=None):
         self.tickets, self.fail_on, self.project = tickets or {}, fail_on, project
-        self.green_main = False  # the latest quality-gates run on the main head passed
+        self.green_main = False  # CI at the main head is green
 
     def main_green(self):
         return self.green_main
@@ -459,7 +458,7 @@ class MemorySystem(DescriptorPort):
         t = self._t(ticket)
         base = {"head": None, "blockers_open": 0, "focus_missing": [], "round_complete": False,
                 "round_verdict": None, "round_head": None, "attrs": [], "agent_runs": 0, "run_cap": 8, "handed_to_fix": False,
-                "pending_rereviews": [], "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False, "conflict": False,
+                "fix_rounds": 0, "fix_cap": 3, "ci": "none", "due": False, "conflict": False,
                 "pr_state": "none", "risk": "high", "behind": False, "answered": False, "updated_at": None,
                 "review_labels": [], "assignees": []}
         t = {**t, "fix_rounds": fix_round_count(t["reviews"])} if "reviews" in t and "fix_rounds" not in t else t
@@ -548,7 +547,7 @@ class MemorySystem(DescriptorPort):
         return self._drop(self._t(effect["ticket"]), effect["value"])
 
     def _fx_log(self, effect, ctx):  # label, comment, review, create-issues, merge, join: a set of applied values
-        t, kind, value = self._t(effect["ticket"]), effect["kind"], effect["value"]
+        t, kind, value = self._t(effect["ticket"]), effect["kind"], effect.get("value")
         log = t.setdefault("log", [])
         entry = [kind, json.dumps(value, sort_keys=True)]
         if entry in log:

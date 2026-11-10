@@ -391,7 +391,7 @@ class DefinitionTest(unittest.TestCase):
             factory["environments"]["web"] = {"repositories": [{"repo": "owner/web"}]}
         self.edit("factory.yaml", add_pr_repository)
         self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(
-            environment="web", writes=["owner/web"], outcomes={**w["nodes"]["retro"]["outcomes"],
+            environment="web", writes=["owner/web"], triggers=["manual"], outcomes={**w["nodes"]["retro"]["outcomes"],
                                          "proposed": {"effects": [{"label": "factory:knowledge-review", "on": "pr"},
                                                                       {"label": "factory:review-low", "on": "pr"}]}}))
         self.edit("workflow.yaml", lambda w: w["nodes"]["review-low"].update(
@@ -488,7 +488,7 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["implement-small"].update(writes="all", triggers=[{"schedule": "0 * * * *"}]))
         self.assertError("schedule-writes-several: nodes.implement-small")
         self.edit("workflow.yaml", lambda w: w["nodes"]["implement-small"].update(writes=[MAIN]))
-        self.assertEqual(self.errors(), [])
+        self.assertFalse([e for e in self.errors() if e.startswith("schedule-writes")])
 
     def test_writes_all_expands_to_environment_repositories(self):
         node = self._full_nodes()[0]
@@ -606,25 +606,33 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual({name: env["writable"] for name, env in envs.items()},
                          {"engine": ["slop-factory"], "knowledge": ["slop-eval-factory"], "team": []})
 
-    def test_ticket_holding_repository_needs_a_token_unless_it_is_the_environments_own(self):
-        """#1236: table of (the second repository's keys, the error): `token` only matters when it holds tickets."""
-        for extra, error in (({}, "missing-token: environments.engine: " + OTHER),
-                             ({"token": ""}, "bad-token: environments.engine: " + OTHER),
+    def test_repository_token_is_a_secret_name_and_optional(self):
+        """#1236: (the second repository's keys, the error). Every listed repository is checked out, where Air's token
+        writes it (#1246), so a ticket-holding one validates without a `token` too."""
+        for extra, error in (({}, None), ({"token": ""}, "bad-token: environments.engine: " + OTHER),
                              ({"token": 3}, "bad-token: environments.engine: " + OTHER),
-                             ({"token": "FACTORY_ISSUES_TOKEN"}, None),
-                             ({"tracker": "none"}, None),
-                             ({"tracker": {"adapter": "github-issues"}}, "missing-token: environments.engine: " + OTHER)):
+                             ({"token": "FACTORY_ISSUES_TOKEN"}, None), ({"tracker": {"adapter": "github-issues"}}, None)):
             with self.subTest(extra=extra):
                 self.setUp()
                 self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, extra)]))
-                errs = self.errors()
+                errs = [e for e in self.errors() if "token" in e]
                 if error:
                     self.assertTrue(any(e.startswith(error) for e in errs), errs)
                 else:
-                    self.assertEqual([e for e in errs if "token" in e], [])
-        self.setUp()  # the environment's own (first) repository needs none
-        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True})]))
-        self.assertEqual([e for e in self.errors() if "token" in e], [])
+                    self.assertEqual(errs, [])
+
+    def test_issues_token_env_is_a_deprecated_token_for_every_repository(self):
+        """#1236: until the team declares `token:`, `issues_token_env` is the token of each repository without one."""
+        def change(f):
+            self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})])
+            f["defaults"].setdefault("settings", {})["issues_token_env"] = "OLD"
+        self.edit("factory.yaml", change)
+        defn = definition.load(self.root)
+        self.assertEqual(definition.to_project(defn)[0]["environments"]["engine"]["tokens"],
+                         {"slop-factory": "OLD", "slop-eval-factory": "OLD"})
+        self.assertTrue(any(w.startswith("deprecated-key: defaults.settings.issues_token_env") for w in definition.warnings(defn)))
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"token": "NEW"})]))
+        self.assertEqual(definition.to_project(definition.load(self.root))[0]["environments"]["engine"]["tokens"]["slop-eval-factory"], "NEW")
 
     def test_compile_lists_each_repository_token(self):
         self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"token": "T"})]))
@@ -923,6 +931,19 @@ class DefinitionTest(unittest.TestCase):
             self.assertEqual(t.facts("7")["stage"], "in-dev")
         finally:
             config.set_team(before)
+
+    def test_routine_with_effects_is_rejected_and_bare_outcomes_pass(self):
+        for effects in ([{"label": "factory:x", "on": "pr"}], [{"comment": "hi"}], [{"label": "factory:x"}]):
+            self.edit("workflow.yaml", lambda w: w["nodes"]["retro"]["outcomes"].update(proposed={"effects": effects}))
+            self.assertError("routine-effects: nodes.retro.proposed")
+        self.edit("workflow.yaml", lambda w: w["nodes"]["retro"]["outcomes"].update(proposed={}, nothing=None))
+        self.assertEqual(self.errors(), [])
+
+    def test_ticket_node_keeps_its_effects(self):
+        self.assertFalse([e for e in self.errors() if e.startswith("routine-effects")])
+        self.edit("workflow.yaml", lambda w: w["nodes"]["retro"]["triggers"].append({"label": "factory:retro-now"}))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["retro"]["outcomes"].update(proposed={"effects": [{"comment": "hi"}]}))
+        self.assertFalse([e for e in self.errors() if e.startswith("routine-effects")])
 
     def test_scheduled_nodes_are_routines(self):
         n = definition.to_project(definition.load(self.root))[1]["nodes"]

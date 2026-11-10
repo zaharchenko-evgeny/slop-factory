@@ -102,11 +102,11 @@ every adapter: the stage policy, the merge gates, idempotency and the
    `deploy.plan_files`).
 9. **Core commands** stay in `cli.py`: `begin`, `end`, `check`, `apply`,
    `sweep`, `decide`, `ci`, `deploy`, `migrate`, `upgrade`,
-   `check-workflow`, `validate`, `retro`, `setup`, `env`, `doctor` and
+   `check-workflow`, `validate`, `retro` (`collect` only), `setup`, `env`, `doctor` and
    `reconcile`. `ci-sync` is the github plugin's command (#1068); `run` and
    `deploy --target local` are the local plugin's (#1071), `contracts` and
    `deploy --target air` the air plugin's (#1072), and `chart` the chart
-   plugin's (#1073). `cli` asks the registry for a word it does not know
+   plugin's (#1073), and `facts` the facts plugin's. `cli` asks the registry for a word it does not know
    before it prints help.
 
 ## Consequences
@@ -350,10 +350,17 @@ the surface class, never the Air deploy code.
   `plugins: [chart]` is accepted but changes nothing. Without the command
   the core imports only its declaration; `nodes.py validate` never loads the
   renderer. The generated docs blocks did not change.
-- **`retro` stays in the core.** It collects the lessons every role writes
-  (ADR-0021): the gate turns a result's `lessons` into one marked comment and
-  the lesson label after every outcome it applies (`gate.lesson_effects`),
-  and `retro collect` reads those comments back. Moving retro into a plugin
-  would need a core-to-plugin hook for that `lesson` effect on every applied
-  outcome, while the lessons are written whether or not a team runs the
-  retro node. `factory retro`, `retro.py` and the `retro` node are unchanged.
+- **`collect` and the lesson effect stay in the core.** The gate turns a
+  result's `lessons` into one marked comment and the lesson label after every
+  outcome it applies (`gate.lesson_effects`, ADR-0021), and `retro collect`
+  reads those comments back. Moving them into a plugin would need a
+  core-to-plugin hook for that `lesson` effect on every applied outcome, while
+  the lessons are written whether or not a team runs the retro node.
+- **Run facts are the `facts` plugin.** `ticket_facts`, `review_totals`,
+  `escaped`, `changed_lines` and `facts` are optional analytics that only the
+  `retro` role reads, and no core code needs them. They moved from
+  `factory/retro.py` to `factory_plugins/facts/report.py`, and the plugin adds
+  the CLI word `facts`. Like `chart`, using the command turns the plugin on
+  and a team need not list it. `factory facts --since <ISO time>` prints the
+  JSON that the old `retro` subcommand `facts` printed; that subcommand is removed.
+  `factory retro collect` and the `retro` node are unchanged.
