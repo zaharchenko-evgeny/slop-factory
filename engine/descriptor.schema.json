@@ -55,6 +55,15 @@
         }
       }
     },
+    "vcs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string"
+        }
+      }
+    },
     "tracker": {
       "type": "object",
       "additionalProperties": false,
@@ -71,8 +80,22 @@
         "project": {
           "type": "string"
         },
+        "projects": {
+          "type": "object",
+          "propertyNames": {"minLength": 1},
+          "additionalProperties": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"}
+        },
+        "repositories": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Repositories that hold tickets (ADR-0024): each names a `repositories[]` entry."
+        },
         "token_env": {
           "type": "string"
+        },
+        "label_prefix": {
+          "type": "string",
+          "minLength": 1
         },
         "done_state": {
           "type": "string"
@@ -105,6 +128,9 @@
       }
     },
     "owner": {"type": "string"},
+    "plugins": {"type": "array", "items": {"enum": ["comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi"]}, "description": "Engine plugins to turn on (ADR-0026): `comments` reacts to comments (mentions, asks, the comment node); `notify` sends the `notify` effect and adds `factory notify test`; `notify_email` is its email channel (and turns on `notify`). Systems, surfaces and agent runners turn on implicitly."},
+    "modules": {"type": "array", "items": {"enum": ["comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi"]}, "description": "The ADR-0025 name of `plugins`."},
+    "surface": {"type": "string", "description": "Where the nodes run (ADR-0026): `air` (Air automations, the default when `targets.air` is set) or `local` (ADR-0017). `factory deploy` with no `--target` deploys to it, and `factory validate` checks every node `output:` against what it supports."},
     "notify": {
       "type": "object",
       "additionalProperties": false,
@@ -301,16 +327,6 @@
       "type": "object",
       "additionalProperties": {
         "type": "boolean"
-      }
-    },
-    "ci": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "workflows": {
-          "type": "array",
-          "items": { "type": "string" }
-        }
       }
     },
     "reviews": {

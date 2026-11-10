@@ -288,7 +288,7 @@ Each slice is a factory ticket under #100 and ends in a state that can be checke
 
 ## Node chart
 
-Generated from `engine/nodes.yaml` by `uv run factory/nodes.py chart` (ADR-0014); a test fails when it is stale. Rounded boxes are stages (the label `factory:<stage>`). Boxes are automation nodes, each with the labels or events that start it. Dashed nodes and edges are planned, with their ticket. Edge text is the outcome and the labels it adds.
+Generated from `engine/nodes.yaml` by `uv run factory/nodes.py chart` (ADR-0014; the chart plugin, `factory/factory_plugins/chart/`, ADR-0026); a test fails when it is stale. Rounded boxes are stages (the label `factory:<stage>`). Boxes are automation nodes, each with the labels or events that start it. Dashed nodes and edges are planned, with their ticket. Edge text is the outcome and the labels it adds.
 
 <!-- nodes-chart -->
 ```mermaid

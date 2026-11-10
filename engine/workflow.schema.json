@@ -44,6 +44,7 @@
           "output": {"type": "string"},
           "mcp": {"type": "array", "items": {"type": "string"}},
           "run": {"type": "string"},
+          "timeout_minutes": {"type": "integer", "minimum": 1},
           "outcomes": {
             "type": "object",
             "additionalProperties": {

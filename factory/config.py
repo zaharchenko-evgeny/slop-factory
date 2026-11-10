@@ -122,6 +122,26 @@ def owner(cfg=None):
     return cfg.get("owner") or (cfg.get("notify") or {}).get("github_user")
 
 
+def _vcs_block(value):
+    """A `vcs:` value as a block: a mapping as it is, a name as `{adapter: name}`."""
+    return {"adapter": value} if isinstance(value, str) else dict(value) if isinstance(value, dict) else {}
+
+
+def vcs(cfg, env=None):
+    """The `vcs:` block that hosts the pull requests (`code_host:` is its old name); {} when neither is set. With
+    `env`, environment `env`'s own `vcs:` (#1070) overrides it: unset keys come from the top-level block when the
+    adapters match, else only the environment's keys count."""
+    top = (cfg or {}).get("vcs") or (cfg or {}).get("code_host") or {}
+    envs = (cfg or {}).get("environments")
+    own = ((envs.get(env) if isinstance(envs, dict) else None) or {}).get("vcs") if env else None
+    if not own or not isinstance(own, (str, dict)):
+        return _vcs_block(top) if isinstance(top, str) else top
+    top, own = _vcs_block(top), _vcs_block(own)
+    if (own.get("adapter") or top.get("adapter") or "github") == (top.get("adapter") or "github"):
+        return {**top, **own}
+    return own
+
+
 def _check(schema, value, where, errs, root_schema=None):
     root_schema = schema if root_schema is None else root_schema
     if "$ref" in schema:
@@ -170,13 +190,13 @@ def _check(schema, value, where, errs, root_schema=None):
 
 def tracker_errors(descriptor, where):
     """Cross-field errors of `tracker` the schema cannot say: a youtrack tracker names its url and project and needs
-    `code_host.repository` for the pull requests; a github-issues tracker needs `repository`."""
+    `vcs.repository` (alias `code_host.repository`) for the pull requests; a github-issues tracker needs `repository`."""
     t = descriptor.get("tracker") if isinstance(descriptor, dict) else None
     if not isinstance(t, dict):
         return []
     if t.get("adapter") == "youtrack":
         need = [f"{where}.tracker.{k}: required with adapter youtrack" for k in ("url", "project") if k not in t]
-        if not ((descriptor.get("code_host") or {}).get("repository")):
+        if not vcs(descriptor).get("repository"):
             need.append(f"{where}.code_host.repository: required with tracker.adapter youtrack")
         return need
     if t.get("adapter") == "github-issues" and "repository" not in t:

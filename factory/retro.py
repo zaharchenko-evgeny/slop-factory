@@ -81,8 +81,8 @@ def ticket_facts(number, issue_events, pr_events, reviews, comments, bots=(), bo
     operator = (
         [{"kind": "label", "label": e["label"]["name"], "by": actor(e)["login"], "at": e["created_at"]}
          for e in issue_events + pr_events
-         if e.get("event") in ("labeled", "unlabeled") and e["label"]["name"].startswith("factory:")
-         and e["label"]["name"][8:] not in QUIET and person(actor(e), bots)]
+         if e.get("event") in ("labeled", "unlabeled") and e["label"]["name"].startswith(vocab.stage_prefix())
+         and e["label"]["name"][len(vocab.stage_prefix()):] not in QUIET and person(actor(e), bots)]
         + [{"kind": "review", "by": r["user"]["login"], "at": r.get("submitted_at")} for r in reviews if person(r.get("user"), bots)]
         + [{"kind": "comment", "by": c["user"]["login"], "at": c.get("created_at")} for c in comments if person(c.get("user"), bots)])
     estimate = SIZE.search(body or "")
@@ -175,14 +175,14 @@ def collect(tracker, label):
 
 
 def main(argv):
-    from gate_github import GitHubGateTracker
+    import gate
     if argv == ["collect"]:
-        print(json.dumps(collect(GitHubGateTracker.from_config(), vocab.lesson()), indent=2))
+        print(json.dumps(collect(gate.tracker_of(cfg.load()), vocab.lesson()), indent=2))
         return 0
     if len(argv) != 3 or argv[0] != "facts" or argv[1] != "--since":
         print(__doc__)
         return 2
-    print(json.dumps(facts(GitHubGateTracker.from_config(), argv[2]), indent=2))
+    print(json.dumps(facts(gate.tracker_of(cfg.load()), argv[2]), indent=2))
     return 0
 
 

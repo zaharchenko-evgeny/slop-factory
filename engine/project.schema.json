@@ -7,7 +7,6 @@
   "properties": {
     "engine": {"type": ["integer", "string"]},
     "team_repository": {"type": "string"},
-    "write_mode": {"enum": ["per-repo", "token"], "default": "per-repo"},
     "issues_token_env": {"type": "string", "description": "Variable that holds the token for the gate's issue, label and comment writes to project repositories (#652)."},
     "engine_repository": {"type": "string", "default": "https://github.com/zaharchenko-evgeny/slop-factory.git"},
     "project": {
@@ -17,6 +16,16 @@
       "properties": {"name": {"type": "string"}}
     },
     "code_host": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {"enum": ["github", "space"]},
+        "repository": {"type": "string"},
+        "project": {"type": "string"},
+        "url": {"type": "string"}
+      }
+    },
+    "vcs": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -37,9 +46,15 @@
       "properties": {
         "adapter": {"type": "string"},
         "repository": {"type": "string"},
+        "repositories": {"type": "array", "items": {"type": "string"}, "description": "Ticket repositories (ADR-0024); the first is the tracker."},
         "url": {"type": "string"},
         "project": {"type": "string"},
+        "projects": {"type": "object", "propertyNames": {"minLength": 1},
+                     "additionalProperties": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"}},
+        "repositories": {"type": "array", "items": {"type": "string", "minLength": 1},
+                         "description": "Repositories that hold tickets (ADR-0024): each names a `repositories[]` entry."},
         "token_env": {"type": "string"},
+        "label_prefix": {"type": "string", "minLength": 1, "description": "Prefix of a stage label: `<label_prefix><stage>` (default `factory:`)."},
         "done_state": {"type": "string"},
         "map_label": {"type": "string"},
         "review_trigger": {"type": "string"},
@@ -83,7 +98,44 @@
           "secret_help": {"type": "object", "additionalProperties": {"type": "string"}},
           "variables": {"type": "object", "additionalProperties": {"type": "string"}},
           "vm": {"type": "string"},
-          "startup": {"type": "string"}
+          "startup": {"type": "string"},
+          "vcs": {
+            "type": ["string", "object"],
+            "description": "This environment's own vcs (#1070), a name or a block: it overrides the top-level `vcs` (alias `code_host`); unset keys come from it when the adapters match. A selected plugin must provide it.",
+            "additionalProperties": false,
+            "properties": {
+              "adapter": {"type": "string"},
+              "repository": {"type": "string"},
+              "project": {"type": "string"},
+              "url": {"type": "string"}
+            }
+          },
+          "tracker": {
+            "type": "object",
+            "description": "This environment's own tracker (#1069): unset keys come from the top-level `tracker` when the adapters match; `scope` names its share of that tracker (`label` on github-issues, `field` and `value` on youtrack).",
+            "additionalProperties": false,
+            "required": ["adapter"],
+            "properties": {
+              "adapter": {"type": "string"},
+              "repository": {"type": "string"},
+              "url": {"type": "string"},
+              "project": {"type": "string"},
+              "token_env": {"type": "string"},
+              "done_state": {"type": "string"},
+              "repository_field": {"type": "string"},
+              "bot_logins": {"type": "array", "items": {"type": "string"}},
+              "scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "label": {"type": "string"},
+                  "field": {"type": "string"},
+                  "value": {"type": "string"},
+                  "type": {"type": "string"}
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -114,6 +166,9 @@
     "branch_pattern": {"type": "string"},
     "commit_prefix": {"type": "string"},
     "owner": {"type": "string"},
+    "plugins": {"type": "array", "items": {"enum": ["comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi"]}, "description": "Engine plugins to turn on (ADR-0026): `comments` reacts to comments (mentions, asks, the comment node); `notify` sends the `notify` effect and adds `factory notify test`; `notify_email` is its email channel (and turns on `notify`). Systems, surfaces and agent runners turn on implicitly."},
+    "modules": {"type": "array", "items": {"enum": ["comments", "notify", "notify_email", "github", "youtrack", "space", "air", "local", "claude", "codex", "junie", "pi"]}, "description": "The ADR-0025 name of `plugins`."},
+    "surface": {"type": "string", "description": "Where the nodes run (ADR-0026): `air` (Air automations, the default when `targets.air` is set) or `local` (ADR-0017). `factory deploy` with no `--target` deploys to it, and `factory validate` checks every node `output:` against what it supports."},
     "notify": {
       "type": "object",
       "properties": {

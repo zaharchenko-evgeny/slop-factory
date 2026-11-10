@@ -23,6 +23,15 @@ FIXTURE = ROOT / "tests/fixtures/v2"
 MAIN, OTHER = "zaharchenko-evgeny/slop-factory", "zaharchenko-evgeny/slop-eval-factory"
 
 
+
+def live_warnings(defn):
+    """The warnings, less `deprecated-key`: the Slop fixture keeps its ADR-0024 keys until slop-eval-factory#92."""
+    return [w for w in definition.warnings(defn) if not w.startswith("deprecated-key:")]
+
+
+def ok_lines(stdout):
+    return "\n".join(line for line in stdout.strip().splitlines() if not line.startswith("warning: deprecated-key:"))
+
 class DefinitionTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -50,20 +59,232 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
-    def test_per_repository_node_needs_an_environment_per_code_repository(self):
-        def two_repos(f):
-            f["environments"]["engine"]["repositories"] += [{"repo": "o/web"}]
-            f["environments"]["web"] = {**f["environments"]["engine"], "repositories": [{"repo": "o/web", "main": True}]}
-        self.edit("factory.yaml", two_repos)
-        self.assertEqual(self.errors(), [])
-        self.edit("factory.yaml", lambda f: f["environments"].pop("web"))
-        self.assertError("per-repo-env: o/web")
+    # --- ADR-0027: repository tracker, vcs and write; node environments ----------------------------------------
+    def _envs(self, f, **envs):
+        """Replace the environments with `envs`: {name: [(repo, {keys})]}, keeping the engine's other settings."""
+        base = {k: v for k, v in f["environments"]["engine"].items() if k != "repositories"}
+        f["environments"] = {n: {**base, "repositories": [{"repo": r, **extra} for r, extra in rs]} for n, rs in envs.items()}
 
-    def test_write_mode_compiles_from_the_default_settings(self):
-        self.edit("factory.yaml", lambda f: f["defaults"]["settings"].update(write_mode="token"))
-        self.assertEqual(self.errors(), [])
-        project, _ = definition.to_project(definition.load(self.root))
-        self.assertEqual(project["write_mode"], "token")
+    def _node_envs(self, w, name, *envs):
+        w["nodes"][name]["environments"] = list(envs)
+
+    def test_repository_blocks_layer_over_environment_and_top(self):
+        self.edit("factory.yaml", lambda f: (
+            self._envs(f, engine=[(MAIN, {"write": True}),
+                                  (OTHER, {"tracker": {"adapter": "youtrack", "scope": {"field": "Subsystem", "value": "S3"}}})]),
+            f["environments"]["engine"].update(tracker={"adapter": "youtrack", "url": "https://yt", "project": "LME"})))
+        defn = definition.load(self.root)
+        main, other = definition.repositories(defn, "engine")
+        self.assertEqual((main["repo"], main["write"], other["write"]), (MAIN, True, False))
+        self.assertEqual((main["tracker"]["adapter"], main["tracker"]["project"], main["tracker"].get("scope")), ("youtrack", "LME", None))
+        self.assertEqual(other["tracker"]["scope"], {"field": "Subsystem", "value": "S3"})
+        self.assertNotIn("repository", other["tracker"])  # the github system key does not cross to youtrack
+        self.assertEqual(main["vcs"]["adapter"], "github")
+
+    def test_github_issues_place_defaults_to_the_repository(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})]))
+        defn = definition.load(self.root)
+        places = [definition.contract(defn, "tracker", r["tracker"]).place(r["tracker"], r["repo"])
+                  for r in definition.repositories(defn, "engine")]
+        self.assertEqual(places, [f"github-issues:{MAIN}", f"github-issues:{OTHER}"])  # top `tracker.repository` stays out
+        self.assertEqual(definition._repository_errors(defn), [])
+
+    def test_context_repository_has_no_tracker(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"tracker": "none"})]))
+        self.assertIsNone(definition.repositories(definition.load(self.root), "engine")[1]["tracker"])
+
+    def test_copies_per_environment_and_listened_repository(self):
+        self.edit("factory.yaml", lambda f: self._envs(
+            f, engine=[(MAIN, {"write": True}), (OTHER, {})], team=[(OTHER, {"write": True}), (MAIN, {"tracker": "none"})],
+            intake=[(MAIN, {}), (OTHER, {})]))
+        self.edit("workflow.yaml", lambda w: (self._node_envs(w, "implement-small", "engine", "team"),
+                                              self._node_envs(w, "intake", "intake")))
+        defn = definition.load(self.root)
+        dev = definition.copies(defn, "implement-small")
+        self.assertEqual([(c["env"], c["main"], c["write"], c["additional"]) for c in dev],
+                         [("engine", MAIN, True, [OTHER]), ("team", OTHER, True, [MAIN])])
+        self.assertEqual([(c["env"], c["main"], c["write"]) for c in definition.copies(defn, "intake")],
+                         [("intake", MAIN, False), ("intake", OTHER, False)])  # read-only: every ticket place
+        self.assertEqual(definition._repository_errors(defn), [])
+
+    def test_schedule_copies_once_per_environment(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True})], team=[(MAIN, {}), (OTHER, {})]))
+        self.edit("workflow.yaml", lambda w: self._node_envs(w, "reconcile", "engine", "team"))
+        got = [(c["env"], c["repo"], c["main"], c["write"]) for c in definition.copies(definition.load(self.root), "reconcile")]
+        self.assertEqual(got, [("engine", None, MAIN, True), ("team", None, MAIN, False)])  # home: writable, else first
+
+    def test_youtrack_copy_has_no_home_repository(self):
+        yt = {"adapter": "youtrack", "url": "https://yt", "project": "LME", "scope": {"field": "Subsystem", "value": "S3"}}
+        self.edit("factory.yaml", lambda f: self._envs(f, b=[(OTHER, {"write": True, "tracker": yt}), (MAIN, {"tracker": "none"})]))
+        self.edit("workflow.yaml", lambda w: self._node_envs(w, "implement-small", "b"))
+        defn = definition.load(self.root)
+        (c,) = definition.copies(defn, "implement-small")
+        self.assertEqual((c["main"], c["write"], c["place"]), (OTHER, True, "youtrack:https://yt/LME|Subsystem=S3"))
+
+    def test_node_hears_twice_is_refused(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {})], all=[(MAIN, {}), (OTHER, {})]))
+        self.edit("workflow.yaml", lambda w: self._node_envs(w, "intake", "engine", "all"))
+        self.assertError(f"node-hears-twice: nodes.intake: environments all, engine both listen to github-issues:{MAIN}")
+
+    def test_place_in_two_repositories_is_refused(self):
+        yt = {"adapter": "youtrack", "url": "https://yt", "project": "LME"}
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True, "tracker": yt}), (OTHER, {"tracker": yt})]))
+        self.assertError("place-in-two-repositories: youtrack:https://yt/LME: holds the tickets of")
+
+    def test_unknown_or_invalid_repository_blocks_are_refused(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": "yes", "tracker": {"adapter": "jira"}}),
+                                                                  (OTHER, {"tracker": {"adapter": "youtrack"}})]))
+        errs = self.errors()
+        for want in (f"bad-write: environments.engine: {MAIN}", f"unknown-tracker: environments.engine: {MAIN}: jira",
+                     f"youtrack-project: environments.engine: {OTHER}"):
+            with self.subTest(want=want):
+                self.assertTrue(any(e.startswith(want) for e in errs), errs)
+
+    def _relabel(self, prefix):
+        """Rename every `factory:` trigger label of the copy's workflow to `prefix`."""
+        def workflow(w):
+            for n in w["nodes"].values():
+                for t in n.get("triggers") or []:
+                    if isinstance(t, dict) and "label" in t:
+                        t["label"] = t["label"].replace("factory:", prefix, 1)
+                for oc in (n.get("outcomes") or {}).values():
+                    for e in (oc or {}).get("effects") or []:
+                        for k in ("label", "unlabel"):
+                            if isinstance(e.get(k), str):
+                                e[k] = e[k].replace("factory:", prefix, 1)
+        self.edit("workflow.yaml", workflow)
+
+    def test_tracker_label_prefix_compiles_stage_labels_and_owned_prefix(self):
+        import deploy
+        for where in ("top", "environment", "repository"):
+            with self.subTest(where=where):
+                shutil.rmtree(self.root)
+                shutil.copytree(FIXTURE, self.root)
+                self._relabel("slop:")
+
+                def factory(f):
+                    f["tracker"].pop("label_prefix", None)
+                    env = f["environments"]["engine"]
+                    entry = env["repositories"][0]
+                    if where == "top":
+                        f["tracker"]["label_prefix"] = "slop:"
+                    elif where == "environment":
+                        env["tracker"] = {"adapter": "github-issues", "label_prefix": "slop:"}
+                    else:
+                        entry["tracker"] = {"adapter": "github-issues", "label_prefix": "slop:"}
+                self.edit("factory.yaml", factory)
+                defn = definition.load(self.root)
+                if where != "top":  # only the default environment's primary repository decides
+                    defn["factory"]["environments"].pop("team", None)
+                self.assertEqual(definition.label_prefix(defn), "slop:")
+                self.assertEqual(self.errors(), [])
+                conf = definition.config(defn)
+                self.assertEqual(conf["tracker"]["stages"]["ready"], "slop:ready")
+                self.assertTrue(all(v.startswith("slop:") for v in conf["tracker"]["stages"].values()))
+                self.assertIn("slop:", deploy.owned_label_prefixes(conf))
+                self.assertNotIn("factory:", deploy.owned_label_prefixes(conf))
+
+    def test_workflow_label_prefix_is_a_fallback_that_warns_about_the_move(self):
+        """Table: where the prefix is set -> the compiled prefix and whether `validate` warns about the move."""
+        moved = "deprecated-key: workflow.yaml stages.label_prefix moved to tracker.label_prefix in factory.yaml"
+        table = [(None, None, "factory:", False), (None, "work:", "work:", True), ("slop:", None, "slop:", False),
+                 ("slop:", "work:", "slop:", True)]  # the tracker key wins over the fallback
+        for tracker, workflow_key, want, warns in table:
+            with self.subTest(tracker=tracker, workflow=workflow_key):
+                shutil.rmtree(self.root)
+                shutil.copytree(FIXTURE, self.root)
+                self.edit("factory.yaml", lambda f: f["tracker"].pop("label_prefix", None) if tracker is None
+                          else f["tracker"].update(label_prefix=tracker))
+                if workflow_key:
+                    self.edit("workflow.yaml", lambda w: w["stages"].update(label_prefix=workflow_key))
+                defn = definition.load(self.root)
+                self.assertEqual(definition.label_prefix(defn), want)
+                self.assertEqual(moved in definition.warnings(defn), warns)
+
+    def test_empty_or_non_string_label_prefix_is_an_error(self):
+        for bad in ("", 7, ["slop:"]):
+            with self.subTest(bad=bad):
+                self.edit("factory.yaml", lambda f: f["tracker"].update(label_prefix=bad))
+                self.assertIn("bad-label-prefix: factory.yaml: `tracker.label_prefix` is a non-empty string", self.errors())
+
+    def test_deprecated_keys_and_several_writable_are_warned(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"write": True})]))
+        warns = definition.warnings(definition.load(self.root))
+        self.assertIn(f"several-writable: environments.engine: {MAIN}, {OTHER}: the air surface allows one writable "
+                      "repository per environment", warns)
+        self.assertTrue(any(w.startswith("deprecated-key: nodes.implement-small: `writes`") for w in warns), warns)
+        self.assertTrue(any(w.startswith("deprecated-key: agents.") and "`access`" in w for w in warns), warns)
+
+    def test_migrated_slop_definition_validates_clean(self):
+        """The Slop definition in the ADR-0027 form (slop-eval-factory#92): no errors, no warnings, the copies below."""
+        def factory(f):
+            self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})], team=[(OTHER, {"write": True}), (MAIN, {"tracker": "none"})],
+                       intake=[(MAIN, {}), (OTHER, {})])
+            f["tracker"].pop("repositories", None)
+            for spec in f["agents"].values():
+                spec.pop("access", None)
+
+        def workflow(w):
+            (w.get("settings") or {}).pop("environment", None)
+            for name, spec in w["nodes"].items():
+                for k in ("writes", "listens", "environment"):
+                    spec.pop(k, None)
+                spec["environments"] = ["intake"] if name == "intake" else ["engine", "team"]
+        self.edit("factory.yaml", factory)
+        self.edit("workflow.yaml", workflow)
+        defn = definition.load(self.root)
+        self.assertEqual((definition.errors(defn), definition.warnings(defn)), ([], []))
+
+        def comments_on(f):
+            f["plugins"] = ["comments"]
+            f["agents"]["dev"]["mentionable"] = True
+        self.edit("factory.yaml", comments_on)
+        defn = definition.load(self.root)
+        self.assertEqual([(c["env"], c["main"], c["write"]) for c in definition.copies(defn, "reply-dev")],
+                         [("engine", MAIN, True), ("team", OTHER, True)])  # a generated node takes its agent's environments
+
+    def test_config_compiles_ticket_places(self):
+        yt = {"adapter": "youtrack", "url": "https://yt", "project": "LME", "scope": {"field": "Subsystem", "value": "S3"}}
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})],
+                                                       b=[("o/c", {"write": True, "tracker": yt}), (MAIN, {"tracker": "none"})]))
+        c = definition.config(definition.load(self.root))
+        self.assertTrue(c["one_repository_per_ticket"])
+        self.assertEqual(c["tracker"]["repositories"], [MAIN, OTHER])  # the GitHub Issues homes, the tracker first
+        self.assertEqual([(p["repository"], p["tracker"]["project"], p["repositories"]) for p in c["ticket_places"]],
+                         [("o/c", "LME", ["o/c", MAIN])])
+        self.assertEqual(c["environments"]["b"]["writable"], ["c"])
+        self.assertNotIn("tracker", c["environments"]["b"])  # a place, not a #1069 project environment
+
+    def test_workflow_environments_list_is_the_default(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True})], team=[(OTHER, {"write": True})]))
+
+        def workflow(w):
+            w["settings"].pop("environment", None)
+            w["settings"]["environments"] = ["engine", "team"]
+            w["nodes"]["intake"]["environment"] = "team"
+        self.edit("workflow.yaml", workflow)
+        defn = definition.load(self.root)
+        self.assertEqual((definition.node_environments(defn, "fix"), definition.node_environments(defn, "intake")),
+                         (["engine", "team"], ["team"]))
+        self.assertEqual(definition.default_environment(defn), "engine")
+
+    def test_per_repository_tracker_keys_are_refused(self):
+        """ADR-0027: the repository's tracker block says where its tickets are; `repository_field`, `projects` and
+        `repositories` would repeat it per repository."""
+        for where, put in (("tracker.repository_field", lambda f: f["tracker"].update(repository_field="Repository")),
+                           ("tracker.projects", lambda f: f["tracker"].update(projects={"LME": MAIN})),
+                           ("tracker.repositories", lambda f: f["tracker"].update(repositories=[MAIN]))):
+            with self.subTest(where=where):
+                self.setUp()
+                self.edit("factory.yaml", lambda f: (self._envs(f, engine=[(MAIN, {"write": True})]), put(f)))
+                self.assertError(f"removed-key: {where}")
+
+    def test_removed_repository_keys_are_reported(self):
+        """ADR-0027: an environment repository's `main` and `token_env` are gone (`write` is back: its writable repository)."""
+        for key in ("main", "token_env"):
+            with self.subTest(key=key):
+                self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update({key: True}))
+                self.assertError(f"removed-key: environments.engine: zaharchenko-evgeny/slop-eval-factory: `{key}`")
 
     def test_role_secret_reaches_the_environments_of_its_nodes_only(self):
         self.edit("factory.yaml", lambda f: f["roles"]["router"].update(
@@ -109,10 +330,10 @@ class DefinitionTest(unittest.TestCase):
         self.assertNotIn("notify", descriptor)
 
     def test_fixture_warns_only_about_labels_a_person_adds(self):
-        self.assertEqual(definition.warnings(definition.load(self.root)), [])
+        self.assertEqual(live_warnings(definition.load(self.root)), [])
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"]["effects"]
                   .append({"label": "factory:nobody"}))
-        self.assertEqual(definition.warnings(definition.load(self.root)),
+        self.assertEqual(live_warnings(definition.load(self.root)),
                          ["unwatched-label: factory:nobody: no node triggers on it"])
 
     def test_unknown_agent(self):
@@ -150,20 +371,12 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["notify"]["triggers"].append({"webhook": "nope"}))
         self.assertError("unknown-webhook: nodes.notify: nope")
 
-    def test_event_node_in_non_tracker_environment_is_deaf_trigger(self):
-        self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team"))
-        self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
-
-    def test_pr_label_node_outside_pr_repository_is_deaf_trigger(self):
-        self.edit("workflow.yaml", lambda w: w["nodes"]["automerge"]["outcomes"]["needs-human"]["effects"][-1].update(on="pr"))
-        self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(
-            environment="team", triggers=[{"label": "factory:needs-human"}]))
-        self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
-
-    def test_pr_and_ci_triggers_outside_code_repositories_are_deaf_triggers(self):
-        for trigger in ({"pr": "merged"}, {"ci": "failed"}):
-            self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team", triggers=[trigger]))
-            self.assertError("deaf-trigger: nodes.notify: environment team main repository zaharchenko-evgeny/slop-eval-factory")
+    def test_event_node_in_any_environment_hears_its_ticket_repository(self):
+        """ADR-0024: a copy's main is the repository it listens to, whatever the first checkout of its environment."""
+        for trigger in ({"label": "factory:needs-human"}, {"pr": "merged"}, {"ci": "failed"}):
+            with self.subTest(trigger=trigger):
+                self.edit("workflow.yaml", lambda w: w["nodes"]["notify"].update(environment="team", triggers=[trigger]))
+                self.assertFalse([e for e in self.errors() if e.startswith("deaf-trigger")])
 
     def test_scheduled_node_in_any_environment_is_fine(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(environment="team"))
@@ -172,10 +385,10 @@ class DefinitionTest(unittest.TestCase):
     def test_pr_label_node_in_pr_repository_environment_is_fine(self):
         def add_pr_repository(factory):
             factory["environments"]["engine"]["repositories"].append({"repo": "owner/web"})
-            factory["environments"]["web"] = {"repositories": [{"repo": "owner/web", "main": True}]}
+            factory["environments"]["web"] = {"repositories": [{"repo": "owner/web"}]}
         self.edit("factory.yaml", add_pr_repository)
         self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(
-            environment="web", outcomes={**w["nodes"]["retro"]["outcomes"],
+            environment="web", writes=["owner/web"], outcomes={**w["nodes"]["retro"]["outcomes"],
                                          "proposed": {"effects": [{"label": "factory:knowledge-review", "on": "pr"},
                                                                       {"label": "factory:review-low", "on": "pr"}]}}))
         self.edit("workflow.yaml", lambda w: w["nodes"]["review-low"].update(
@@ -183,26 +396,16 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["knowledge-review"].update(environment="web"))
         self.assertEqual(self.errors(), [])
 
-    def test_one_main_repository(self):
-        self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(main=True))
-        self.assertError("main-repository: environments.engine")
-
-    def _no_main(self, f):
-        for r in f["environments"]["engine"]["repositories"]:
-            r.pop("main", None)
-
     def _full_nodes(self):
         w = definition.load(self.root)
         agents = w["factory"]["agents"]
         return [n for n, spec in w["workflow"]["nodes"].items() if (agents.get(spec.get("agent")) or {}).get("access") == "full" and not spec.get("generated")]
 
     def test_environment_without_main_is_valid(self):
-        self.edit("factory.yaml", self._no_main)
         self.edit("workflow.yaml", lambda w: [w["nodes"][n].update(writes=[MAIN]) for n in self._full_nodes()])
         self.assertEqual(self.errors(), [])
 
     def test_environment_without_main_compiles(self):
-        self.edit("factory.yaml", self._no_main)
         self.edit("workflow.yaml", lambda w: [w["nodes"][n].update(writes=[MAIN]) for n in self._full_nodes()])
         defn = definition.load(self.root)
         self.assertEqual(definition.errors(defn), [])
@@ -234,6 +437,24 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(definition.node_listens(defn, "implement-small"), [MAIN, OTHER])
         self.assertEqual(definition.node_listens(defn, "human"), [])
         self.assertEqual(definition.tracker_repositories(definition.load(self.root)), [MAIN, OTHER])
+
+    def test_youtrack_projects_link_the_ticket_repositories(self):
+        def youtrack(f):
+            f["tracker"] = {"adapter": "youtrack", "url": "https://y", "project": "API", "projects": {"API": MAIN, "WEB": OTHER}}
+        self.edit("factory.yaml", youtrack)
+        defn = definition.load(self.root)
+        self.assertEqual(definition.tracker_repositories(defn), [MAIN, OTHER])
+        self.assertEqual(definition.node_listens(defn, "implement-small"), [MAIN, OTHER])
+        self.assertFalse([e for e in definition.errors(defn) if e.startswith("deaf-trigger")])  # YouTrack wakes any repository
+
+    def test_mainless_environment_of_several_repositories_needs_no_environment_per_repository(self):
+        def two_repos(f):
+            f["environments"]["engine"]["repositories"] = [{"repo": MAIN}, {"repo": "o/web"}]
+            f["tracker"]["repositories"] = [MAIN, "o/web"]
+        self.edit("factory.yaml", two_repos)
+        self.edit("workflow.yaml", lambda w: [w["nodes"][n].update(writes="all") for n in self._full_nodes()
+                                              if not any("schedule" in t for t in w["nodes"][n]["triggers"] if isinstance(t, dict))])
+        self.assertEqual(self.errors(), [])
 
     def test_listens_tracker_is_the_first_ticket_repository(self):
         self._two_ticket_repositories()
@@ -283,19 +504,10 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"].update(writes="all"))
         self.assertError("writes-read-only: nodes.intake")
 
-    def test_full_access_node_without_writes_needs_main(self):
-        self.edit("factory.yaml", self._no_main)
-        self.assertError("no-writes: nodes.%s" % self._full_nodes()[0])
-
-    def test_writable_repository_needs_token(self):
-        self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(write=True))
-        self.assertError("write-token: environments.engine")
-
-    def test_token_env_must_be_declared(self):
-        self.edit("factory.yaml", lambda f: f["environments"]["engine"]["repositories"][1].update(write=True, token_env="T"))
-        self.assertError("undeclared-env: environments.engine: T")
-        self.edit("factory.yaml", lambda f: f["environments"]["engine"].update(env={"T": {"secret": True}}))
-        self.assertEqual(self.errors(), [])
+    def test_full_access_node_without_writes_is_refused(self):
+        node = self._full_nodes()[0]
+        self.edit("workflow.yaml", lambda w: w["nodes"][node].pop("writes"))
+        self.assertError("no-writes: nodes.%s" % node)
 
     def test_role_needs_body_and_body_needs_role(self):
         (self.root / "roles/router/role.md").unlink()
@@ -387,16 +599,15 @@ class DefinitionTest(unittest.TestCase):
     def test_compile_lists_the_writable_repositories_of_each_environment(self):
         import definition
         envs = definition.to_project(definition.load(self.root))[0]["environments"]
-        for name, env in envs.items():
-            with self.subTest(env=name):
-                self.assertTrue(set(env["writable"]) <= set(env["repositories"]))
-                self.assertIn(env["repositories"][0], env["writable"])  # the main repository is always writable
+        # ADR-0024: what the environment's nodes write (developers the engine, retro the knowledge base)
+        self.assertEqual({name: env["writable"] for name, env in envs.items()},
+                         {"engine": ["slop-factory"], "knowledge": ["slop-eval-factory"], "team": []})
 
     def test_issues_token_env_setting_passes_validation(self):
         self.edit("factory.yaml", lambda f: f["defaults"].setdefault("settings", {}).update(issues_token_env="FACTORY_ISSUES_TOKEN"))
         run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
                              text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
-        self.assertEqual((run.returncode, run.stdout.strip()), (0, "factory: ok"), run.stdout + run.stderr)
+        self.assertEqual((run.returncode, ok_lines(run.stdout)), (0, "factory: ok"), run.stdout + run.stderr)
 
     def test_settings_merge_order(self):
         defn = definition.load(self.root)
@@ -410,8 +621,8 @@ class DefinitionTest(unittest.TestCase):
 
     def test_render_uses_environment_repositories(self):
         defn = definition.load(self.root)
-        body = definition.render(defn, "knowledge-review")
-        self.assertIn("`zaharchenko-evgeny/slop-eval-factory` (main)", body)
+        body = definition.render(defn, "knowledge-review", "zaharchenko-evgeny/slop-eval-factory")  # the copy's repository
+        self.assertIn("`zaharchenko-evgeny/slop-eval-factory` (main), `zaharchenko-evgeny/slop-factory`.", body)
         self.assertIn("with focus knowledge;", body)
         self.assertIn("in mode `fix`", definition.render(defn, "fix"))          # what differs comes from settings
 
@@ -429,9 +640,9 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(descriptor["commands"]["risk:low"], {"store": {"label": "risk:low"}})
 
     def test_ci_result_labels_are_pr_labels(self):
-        """#790: CI labels the PR itself, so no effect needs `on: pr` for a CI result label."""
+        """#790: ci-sync labels the PR itself, so no effect needs `on: pr` for a CI result label (ci-failed's)."""
         descriptor = definition.to_project(definition.load(ROOT / "tests/fixtures/slop"))[0]
-        for fact in ("ci-green", "ci-red"):
+        for fact in ("ci-red",):
             self.assertEqual(descriptor["commands"][fact], {"store": {"pr_label": f"factory:{fact}"}})
 
     def test_compile_triggers(self):
@@ -454,6 +665,13 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(n["dispatch"]["outcomes"]["small"]["effects"],
                          [{"command": "complexity:small"}, {"command": "implement-small"}, {"state": "in-dev"}])
         self.assertEqual(desc["states"]["done"]["kind"], "final")
+
+    def test_node_timeout_reaches_reconcile(self):  # a review that waits for CI is not a missed run
+        self.edit("workflow.yaml", lambda w: w["nodes"]["fix"].update(timeout_minutes=50))
+        defn = definition.load(self.root)
+        self.assertEqual(definition.nodes(defn)["nodes"]["fix"]["timeout_minutes"], 50)
+        self.assertEqual(definition.to_project(defn)[1]["nodes"]["fix"]["timeout_minutes"], 50)
+        self.assertNotIn("timeout_minutes", definition.nodes(defn)["nodes"]["merge"])
 
     def test_nodes_read_the_definition_in_the_gate_shape(self):
         graph = definition.nodes(definition.load(self.root))
@@ -493,12 +711,12 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(self.root)
         try:
             n = nodes_mod.load()
-            t = MemoryTracker({"7": {"stage": "triage", "head": "h1", "pr": 5, "pr_state": "open", "ci": "green"}})
+            t = MemorySystem({"7": {"stage": "triage", "head": "h1", "pr": 5, "pr_state": "open", "ci": "green"}})
             written, plain = [], t.apply
             t.apply = lambda e: written.append(e) or plain(e)
             for node, outcome, extra in [("intake", "medium-high", {}), ("dispatch", "medium", {}),
@@ -515,7 +733,7 @@ class DefinitionTest(unittest.TestCase):
             t.tickets["7"]["pr_state"] = "merged"
             self.assertEqual(gate.decide("finish", "7", t, n)[1]["outcome"], "done")
             self.assertEqual(t.facts("7")["stage"], "done")
-            risky = MemoryTracker({"8": {"stage": "approved", "attrs": ["risk:high"], "pr": 6, "pr_state": "open"}})
+            risky = MemorySystem({"8": {"stage": "approved", "attrs": ["risk:high"], "pr": 6, "pr_state": "open"}})
             gate.apply("automerge", "merge", {"ticket": "8", "reason": "[factory] fine"}, risky, n)
             self.assertIn("factory:needs-human", risky.facts("8")["attrs"])   # the guard sent it to a person
         finally:
@@ -525,12 +743,12 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(self.root)
         try:
             n = nodes_mod.load()
-            t = MemoryTracker({"9": {"stage": "split"}, "7": {"stage": "approved", "pr_state": "merged"},
+            t = MemorySystem({"9": {"stage": "split"}, "7": {"stage": "approved", "pr_state": "merged"},
                                "8": {"stage": "done"}})
             state = {"7": "open", "8": "closed"}
             t.parent = lambda x: "9" if str(x) in ("7", "8") else None
@@ -545,7 +763,8 @@ class DefinitionTest(unittest.TestCase):
             config.set_team(before)
 
     def test_neighbours_come_from_the_workflow(self):
-        pairs = definition.neighbours(definition.load(self.root))
+        from factory_plugins.comments import mentions
+        pairs = mentions.neighbours(definition.load(self.root))
         for a, b in [("dev", "reviewer"), ("dev", "reviewer-cheap"), ("reviewer", "approver"), ("dispatcher", "dev"),
                      ("approver", "clerk"), ("dev", "dev-strong")]:
             self.assertIn(frozenset((a, b)), pairs, (a, b))
@@ -565,8 +784,8 @@ class DefinitionTest(unittest.TestCase):
     def test_mentionable_agents_get_a_generated_reply_step(self):
         defn = definition.load(self.root)
         nodes = defn["workflow"]["nodes"]
-        self.assertEqual(set(nodes["mentions"]["outcomes"]), {"reply-dev", "reply-reviewer", "none"})
-        self.assertEqual(nodes["mentions"]["outcomes"]["reply-dev"]["if"], {"mention": "dev"})
+        self.assertNotIn("mentions", nodes)  # #893: the comment node routes a mention to `reply-<agent>`
+        self.assertIn({"wake": "asker"}, nodes["reply-dev"]["outcomes"]["replied"]["effects"])
         self.assertEqual((nodes["reply-dev"]["agent"], nodes["reply-dev"]["output"]), ("dev", "read-only"))
         self.assertIn("Someone asked you", definition.render(defn, "reply-reviewer"))
         self.edit("workflow.yaml", lambda w: w["nodes"].update({"reply-x": {"agent": "dev", "triggers": ["manual"],
@@ -577,13 +796,13 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(self.root)
         try:
             n = nodes_mod.load()
             for conflict, want in ((True, True), (False, False)):
-                t = MemoryTracker({"7": {"stage": "changes-requested", "pr": 5, "head": "h1", "conflict": conflict}})
+                t = MemorySystem({"7": {"stage": "changes-requested", "pr": 5, "head": "h1", "conflict": conflict}})
                 for node in ("fix", "update"):
                     with self.subTest(node=node, conflict=conflict):
                         code, out = gate.check(node, {"id": "e1", "ticket": "7"}, t, n, config.load())
@@ -595,12 +814,12 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(ROOT / "tests/fixtures/slop")  # its review outcomes replace the risk label (#998)
         try:
             n = nodes_mod.load()
-            t = MemoryTracker({"7": {"stage": "in-review", "pr": 5, "head": "h1", "ci": "green", "attrs": ["risk:low"],
+            t = MemorySystem({"7": {"stage": "in-review", "pr": 5, "head": "h1", "ci": "green", "attrs": ["risk:low"],
                                      "pr_labels": ["factory:review-low"]}})
             apply = t.apply
 
@@ -620,16 +839,14 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(self.root)
         try:
             n = nodes_mod.load()
-            t = MemoryTracker({"7": {"stage": "in-review", "pr": 5, "head": "h1"}})
+            t = MemorySystem({"7": {"stage": "in-review", "pr": 5, "head": "h1"}})
             t.pr_comments = lambda ticket: [{"author": "alice", "body": "@factory:dev why the retry?", "at": "2"}]
-            status, out = gate.decide("mentions", "7", t, n)
-            self.assertEqual(out["outcome"], "reply-dev")
-            self.assertIn("factory:reply-dev", t.facts("7")["attrs"])
+            t.apply({"kind": "label", "ticket": "7", "value": "factory:reply-dev"})  # the comment node's `reply: dev`
             begin = gate.check("reply-dev", {"id": "e1", "ticket": "7"}, t, n, config.load())[1]
             self.assertEqual({k: begin["mention"][k] for k in ("by", "on")}, {"by": "alice", "on": "pr"})
             sent = []
@@ -641,8 +858,10 @@ class DefinitionTest(unittest.TestCase):
             self.assertTrue(reply["value"].startswith("@alice It covers the flaky API."))
             self.assertIn("<!-- factory:from dev reply -->", reply["value"])
             self.assertNotIn("factory:reply-dev", t.facts("7")["attrs"])
+            self.assertFalse([e for e in sent if e["kind"] == "label"])  # a person asked: nobody is woken
             t.pr_comments = lambda ticket: [{"author": "bot", "body": reply["value"], "at": "3"}]
-            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "none")  # a reply asks no one
+            from factory_plugins.comments import mentions
+            self.assertFalse(mentions.holds("dev", t.facts("7"), t, "7"))  # a reply asks no one
         finally:
             config.set_team(before)
 
@@ -650,7 +869,7 @@ class DefinitionTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(self.root)
         try:
@@ -659,20 +878,27 @@ class DefinitionTest(unittest.TestCase):
             for name, node in n["nodes"].items():
                 self.assertEqual("ask" in node["outcomes"], agents[name] in ("dev", "reviewer") and not name.startswith("reply-"), name)
             self.assertEqual(n["nodes"]["implement-medium"]["outcomes"]["ask"]["to"], ["reviewer"])
-            t = MemoryTracker({"7": {"stage": "in-dev"}})
+            t = MemorySystem({"7": {"stage": "in-dev"}})
             gate.apply("implement-medium", "ask", {"ticket": "7", "to": "reviewer", "text": "Is X in scope?"}, t, n)
             ask = next(json.loads(v) for k, v in t.tickets["7"]["log"] if k == "comment")
             self.assertTrue(ask.startswith("[factory] **dev (developer):** @factory:reviewer Is X in scope?\n"))
             self.assertEqual(t.facts("7")["stage"], "in-dev")
+            self.assertIn("factory:comment", t.facts("7")["attrs"])                    # the comment node wakes
             t.tickets["7"]["comments"] = [{"author": "bot", "body": ask, "at": "1"}]
-            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "reply-reviewer")   # the target wakes
+            t.apply({"kind": "label", "ticket": "7", "value": "factory:reply-reviewer"})  # its `reply: reviewer`
             t.tickets["7"]["log"].clear()
             with self.assertRaises(gate.Bad):
                 gate.apply("reply-reviewer", "ask", {"ticket": "7", "to": "dev", "text": "?"}, t, n)
+            sent = []
+            apply = t.apply
+            t.apply = lambda e: sent.append(e) or apply(e)
             gate.apply("reply-reviewer", "replied", {"ticket": "7", "reply": "Yes."}, t, n)
-            answer = next(json.loads(v) for k, v in t.tickets["7"]["log"] if k == "comment")
-            t.tickets["7"]["comments"].append({"author": "bot", "body": answer, "at": "2"})
-            self.assertEqual(gate.decide("mentions", "7", t, n)[1]["outcome"], "reply-dev")        # the asker wakes
+            answer = next(e for e in sent if e["kind"] == "comment")
+            self.assertTrue(answer["value"].startswith("@factory:dev Yes."))
+            self.assertEqual(answer["notes"]["context"], "Answer to ask 7-1: Yes.")
+            self.assertEqual([e["kind"] for e in sent if e["value"] == "factory:implement-medium"],
+                             ["unlabel", "label"])                                       # the asker wakes
+            self.assertEqual(t.facts("7")["stage"], "in-dev")
         finally:
             config.set_team(before)
 
@@ -711,7 +937,7 @@ class DefinitionTest(unittest.TestCase):
     def test_cli_validate(self):
         run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
                              text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
-        self.assertEqual((run.returncode, run.stdout.strip()), (0, "factory: ok"), run.stderr)
+        self.assertEqual((run.returncode, ok_lines(run.stdout)), (0, "factory: ok"), run.stderr)
 
     def test_cli_validate_rejects_redundant_label_group_unlabel(self):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"]["effects"].extend(
@@ -730,12 +956,12 @@ class SlopBugPathTest(unittest.TestCase):
         import config
         import gate
         import nodes as nodes_mod
-        from gate_port import MemoryTracker
+        from gate_port import MemorySystem
         before = config._team
         config.set_team(ROOT / "tests/fixtures/slop")
         try:
             n = nodes_mod.load()
-            t = MemoryTracker({"7": {"stage": "triage"}})
+            t = MemorySystem({"7": {"stage": "triage"}})
             self.assertTrue(gate.apply("intake", "bug", {"ticket": "7"}, t, n)[1]["applied"])
             self.assertEqual(t.facts("7")["stage"], "investigating")
             code, _ = gate.apply("investigate", outcome, {"ticket": "7", "reason": reason}, t, n)
@@ -813,6 +1039,22 @@ class PlanTest(unittest.TestCase):
         labels = ["factory:ci-red", "factory:ci-green"]
         self.assertEqual(self.plan(stage="approved", pr_labels=labels), ("merge", "merged", {}))
         self.assertEqual(self.plan(stage="approved", ci="pending", pr_labels=labels, ci_label="green"), None)
+
+
+class NodesLoadTest(unittest.TestCase):
+    def test_nodes_load_reads_the_definition(self):
+        import config
+        import nodes
+        config.set_team(FIXTURE)
+        try:
+            read = nodes.load()
+        finally:
+            config.set_team(None)
+        self.assertEqual(read["nodes"]["dispatch"]["triggers"], ["issues.labeled factory:ready"])
+        self.assertEqual(read["nodes"]["dispatch"]["outcomes"]["large"]["effects"],
+                         [{"label": "complexity:large"}, {"label": "factory:implement-large"}, {"stage": "in-dev"}])
+        self.assertEqual(read["nodes"]["automerge"]["triggers"], ["pull_request.labeled factory:automerge"])
+        self.assertEqual(read["nodes"]["automerge"]["when"], {"stage": "approved"})
 
 
 if __name__ == "__main__":

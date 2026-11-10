@@ -20,7 +20,7 @@ pushes the tag; the tag is not created by this change.
 `end`, `check`, `apply`, `sweep`, `deploy`, `contracts`, `chart`, `validate`, `setup`, `migrate`, `upgrade`, and `doctor`.
 `begin` starts a node and prints its handoff path; `end` applies the completed
 handoff. `check` and `apply` operate the gate, while `sweep` runs its event
-processing. `deploy` creates Air automations, `chart` renders the workflow,
+processing. `deploy` creates Air automations, `chart` renders the workflow (the chart plugin, on whenever the command runs),
 `validate` checks configuration, `setup` prepares an Air run's environment, and
 `doctor` diagnoses the local setup.
 `contracts refresh` re-records the Air service contracts and is operator-only.
@@ -30,8 +30,12 @@ processing. `deploy` creates Air automations, `chart` renders the workflow,
 Each team keeps settings in `factory.descriptor.yaml`. The descriptor supports
 these top-level keys, defined by `engine/descriptor.schema.json`:
 `engine`, `project`, `repositories`, `branch_pattern`, `commit_prefix`,
-`team_repository`, `tracker`, `code_host`, `owner`, `notify` (v1: `github_user`), `targets`, `models`, `roles`,
-`limits`, `gates`, `ci`, `knowledge`, `nodes`, `reviews`, and `checks`.
+`team_repository`, `tracker`, `vcs` (alias `code_host`), `owner`, `notify` (v1: `github_user`), `targets`, `models`, `roles`,
+`limits`, `gates`, `ci`, `knowledge`, `nodes`, `reviews`, `checks`, `surface` (where the nodes run: `air`, the
+default when `targets.air` is set, or `local`; `factory deploy` with no `--target` deploys there and `factory validate`
+checks each node `output:` against it), and `plugins` (alias `modules`;
+engine plugins to turn on: `comments` turns on mentions, agent asks and the comment node, ADR-0025, ADR-0026;
+`notify` turns on the `notify` effect and `factory notify test <login>`, and `notify_email` its email channel, ADR-0022).
 
 ### Project descriptor
 
@@ -50,17 +54,59 @@ converts the old pair. `repositories[]` marks exactly one repository
 in it since the project's `engine` version, and `factory upgrade --apply PATH`
 takes one file.
 
-`write_mode` says how the factory writes to the `role: project` repositories.
-`per-repo` (the default) deploys the write nodes once per repository. With
-`token`, `factory deploy` keeps one node set and adds the secret
-`FACTORY_WRITE_TOKEN` to the `write` and `ops` environments, never to `read`.
-A person sets it in Air to a fine-grained personal access token with Contents,
-Pull requests and Issues write on every project repository. Air's own token
-can write only the factory repository. While the token is set, each `gh` write
-that names a project repository runs with it as `GH_TOKEN`, for example a CI
-label or a merge. In `write` and `ops`, `factory doctor` runs one
-`write:label:<owner/repo>` probe per project repository and reports `fail`
-when the token is missing in `token` mode.
+A node's `writes` names the repositories its agent pushes to; `listens` names
+the ticket repositories it wakes on (ADR-0024). A node that listens to several
+repositories is deployed once per repository, with that repository as its
+main checkout. No environment repository is `main`, and `factory deploy` adds
+no write token. The engine no longer reads the `write_mode` setting, and
+`factory validate` reports `main`, `write` or `token_env` on a checkout as a
+`removed-key` error.
+
+### Per-environment trackers
+
+One factory can serve several projects, each with its own tracker (#1069,
+ADR-0026 "Per-environment trackers"). A project is an environment with a
+`tracker` block. Unset keys come from the top-level `tracker` when the
+adapters match. `scope` names the project's share of that tracker: `label` on
+`github-issues`, `field` and `value` on `youtrack`.
+
+```yaml
+tracker: {adapter: youtrack, url: https://yt.example, project: PRJ}
+environments:
+  backend:  {repositories: [...], tracker: {adapter: youtrack, scope: {field: Subsystem, value: Backend}}}
+  frontend: {repositories: [...], tracker: {adapter: youtrack, scope: {field: Subsystem, value: Frontend}}}
+  web:      {repositories: [...], tracker: {adapter: github-issues, repository: owner/web, scope: {label: "area:web"}}}
+```
+
+Each node of the default environment is deployed once per project, in that
+project's Air environment. The gate reads and writes each ticket through its
+project's tracker. A ticket inside no project's scope is left alone: the
+step prints `skip: <ticket> outside every environment scope` and writes
+nothing. Sweeps query each project with its scope, and tickets the factory
+creates get the project's label or field value. `factory validate` rejects an
+adapter that no plugin provides, scope keys of another adapter, and projects
+that share one tracker with the same scope or with no scope. Without any
+environment `tracker`, nothing changes.
+
+### Per-environment vcs
+
+An environment can host its pull requests elsewhere with `vcs` (#1070). It
+takes a name (`vcs: space`) or a block (`{adapter, url, project, repository}`),
+and it overrides the top-level `vcs` (alias `code_host`). Unset keys come from
+the top-level block when the adapters match. Naming a vcs turns on its plugin.
+
+```yaml
+vcs: {adapter: github}
+environments:
+  ide: {repositories: [...], vcs: {adapter: space, url: https://space.example, project: IJ}}
+```
+
+A run's environment (`FACTORY_ENV`) picks the vcs that the gate builds. On
+Space, the merge request's reviews, CI and labels replace the tracker's PR
+facts, and each PR effect goes to Space. `factory validate` rejects a vcs that
+no plugin provides. It also rejects a node effect on a PR that the
+environment's vcs cannot apply; Space applies `label`, `unlabel`, `review`,
+`update-branch` and `merge`.
 
 ### Team-owned runtime files
 

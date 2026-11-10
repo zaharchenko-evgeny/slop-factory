@@ -82,6 +82,17 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.run_cli("begin", "implement-mid", "--issue", "7", "--tracker", "memory:tickets.json")
         self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
 
+    def test_begin_issue_number_is_in_the_copys_repository(self):
+        """#1155: a copy whose main is not the tracker (slop-eval-factory) reads `--issue 98` as its own repository's
+        issue; Air sets the copy's main as FACTORY_ENV_REPOSITORY."""
+        self.tracker()
+        Path("event.json").unlink()
+        with mock.patch.dict(os.environ, {"FACTORY_ENV_REPOSITORY": "o/team"}):
+            os.environ.pop("FACTORY_NODE_REPO", None)
+            self.run_cli("begin", "implement-mid", "--issue", "7", "--tracker", "memory:tickets.json")
+        event = json.loads(Path(".factory/event/implement-mid.json").read_text())
+        self.assertEqual(event["repository"], {"full_name": "o/team"})
+
     def test_begin_with_pr_number_only(self):
         self.tracker(stage="changes-requested", pr=300, pr_state="open", round_complete=True)
         with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
@@ -241,6 +252,17 @@ class BeginEndTest(unittest.TestCase):
                 data = self.handoff("x", f"--{f.replace('_', '-')}", "v")
                 self.assertEqual(data.get(f), "v")
 
+    def test_slice_names_its_repository(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "s.md").write_text("# Team part\nrepo: zaharchenko-evgeny/slop-eval-factory\nThe body.\n")
+            Path(d, "t.md").write_text("Engine part\nrepo: slop-factory\nafter: slop-eval-factory, 1\nThe body.\n")
+            Path(d, "u.md").write_text("Plain\nThe body.\n")
+            self.assertEqual(cli.slice_of(Path(d, "s.md")), {"title": "Team part", "body": "The body.",
+                                                             "repo": "zaharchenko-evgeny/slop-eval-factory"})
+            self.assertEqual(cli.slice_of(Path(d, "t.md")), {"title": "Engine part", "body": "The body.",
+                                                             "repo": "slop-factory", "after": ["slop-eval-factory", 1]})
+            self.assertEqual(cli.slice_of(Path(d, "u.md")), {"title": "Plain", "body": "The body."})
+
     def test_end_plain_text_findings(self):
         data = self.handoff("changes", "--blocking", "B1 src/x.py:10 the empty input crashes | case: x.run('') raises",
                             "--minor", "M1 src/y.py:3 name is vague")
@@ -358,14 +380,14 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(cli.PR_NODES, cli.deploy.PR_TRIGGERED_NODES)
 
     def test_deploy_target_local_goes_to_the_local_target(self):
-        with mock.patch("local.deploy", return_value=0) as local_deploy, \
+        with mock.patch("factory_plugins.local.surface.deploy", return_value=0) as local_deploy, \
                 mock.patch.object(cli.deploy, "main", side_effect=AssertionError("the Air deploy ran")):
             code, _ = self.run_cli("deploy", "--target", "local", "--apply")
         self.assertEqual(code, 0)
         local_deploy.assert_called_once_with(["--apply"])
 
     def test_run_local_goes_to_the_local_loop(self):
-        with mock.patch("local.main", return_value=0) as local_main:
+        with mock.patch("factory_plugins.local.surface.main", return_value=0) as local_main:
             code, _ = self.run_cli("run", "--local", "--once")
         self.assertEqual(code, 0)
         local_main.assert_called_once_with(["--local", "--once"])
@@ -445,8 +467,10 @@ class EnvRolesTest(unittest.TestCase):
         self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
         fixture = ROOT / "factory/tests/fixtures/slop"
         cfg.set_team(fixture)
-        for env in ("engine", "knowledge", "team"):
+        for env in ("engine", "team", "intake"):  # slop-eval-factory#96 (ADR-0027)
             self.assert_slop_roles(fixture, env, self.roles(env))
+        self.assertIn("developer", self.roles("team"))  # a node of [engine, team] runs in team too
+        self.assertEqual(self.roles("intake"), ["router"])
 
         with tempfile.TemporaryDirectory() as tmp:
             team = Path(tmp) / "team"

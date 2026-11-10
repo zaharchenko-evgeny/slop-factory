@@ -30,7 +30,7 @@ by hand, see the `factory-delivery` skill.
 | Retro, distill, knowledge review, ops nodes (notify, reconcile, doctor-ops) | the factory repository | every project repository in the descriptor, at its `default_branch` |
 
 The prompt's "Project checkout" section names each checkout under `/workspaces/<name>`.
-`deploy.py` writes `additionalRepositories` through the Air REST API (`Backend.set_additional`), because
+The Air surface (`factory/factory_plugins/air/deploy.py`) writes `additionalRepositories` through the Air REST API (`Backend.set_additional`), because
 the automations MCP does not expose it.
 
 ### Delivering to the team repository (ADR-0019)
@@ -75,7 +75,7 @@ replaces its mode's, and a mode's replaces its role's. No list means no connecto
 
 - `factory validate` reports `unknown-mcp-connector: <where>: <name>` for a name missing from
   `targets.air.mcp_connectors`.
-- `deploy.py` writes each automation's `mcpConnectors` and adds a "Your MCP servers" section to its prompt. The
+- The Air surface (`factory/factory_plugins/air/deploy.py`) writes each automation's `mcpConnectors` and adds a "Your MCP servers" section to its prompt. The
   diff compares the field, so a connector added by hand in Air shows as a removal in `--dry-run`.
 - `factory deploy --target local` prints a warning for each role whose connectors are not provided locally.
 - A change of the create call needs a refreshed Air contract recording: the operator runs
@@ -109,7 +109,7 @@ roles:
   entries (`<env> <node>`, with `FACTORY_NODE=<node>`), so a node never sees the servers of another node.
 - `factory validate` reports `unknown-mcp-connector: <where>: <name>` for a name missing from
   `targets.air.mcp_connectors`.
-- `deploy.py` writes each automation's `mcpConnectors` and adds a "Your MCP servers" section to its prompt. The
+- The Air surface (`factory/factory_plugins/air/deploy.py`) writes each automation's `mcpConnectors` and adds a "Your MCP servers" section to its prompt. The
   diff compares the field, so a connector added by hand in Air shows as a removal in `--dry-run`.
 - `factory deploy --target local` prints a warning for each role whose connectors are not provided locally.
 - A change of the create call needs a refreshed Air contract recording: the operator runs
@@ -145,6 +145,15 @@ roles:
   same or an outer layer), `mcp-literal-secret` (a secret-like `env` or `headers` value that is not a `${VAR}`
   reference), `mcp-mixed-entry` (`connector` with `command`/`url`) and `bad-mcp-entry`.
 - The prompt's "Your MCP servers" section lists both kinds by key.
+
+## YouTrack workflow
+
+For a YouTrack tracker with the comments plugin on (`plugins: [comments]`), `factory deploy --dry-run` lists the
+comment-wake workflow upload (the youtrack plugin's `deploy.files` hook). Apply uses the
+[@jetbrains/youtrack-scripting](https://www.npmjs.com/package/@jetbrains/youtrack-scripting) upload command with
+`npx --yes`, `factory/factory_plugins/youtrack/comment-wake`, `--host <tracker url>` and `--token $<token_env>`.
+Set the named token as an environment variable before apply. Attach the uploaded workflow to the project once in
+YouTrack under Project settings → Workflows.
 
 ## Local target (ADR-0017)
 

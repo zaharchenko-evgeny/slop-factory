@@ -27,6 +27,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -110,7 +111,10 @@ def begin(argv, team=None):
     if a.issue or a.pr:  # a number is all the gate needs: it reads every fact from the tracker
         name, _, action = str(nodes.load()["nodes"][compiled["node"]]["triggers"][0]).split(" ")[0].partition(".")
         number = {"pull_request" if a.pr else "issue": {"number": a.pr or a.issue}}
-        text = json.dumps({"eventType": f"{name}.{action}", "action": action, **number})
+        # a copy's number is in its own repository (ADR-0024/0027): Air sets the copy's main as FACTORY_ENV_REPOSITORY
+        node_repo = os.environ.get("FACTORY_NODE_REPO") or os.environ.get("FACTORY_ENV_REPOSITORY")
+        text = json.dumps({"eventType": f"{name}.{action}", "action": action, **number,
+                           **({"repository": {"full_name": node_repo}} if node_repo else {})})
     else:
         text = Path(a.payload).read_text() if a.payload else sys.stdin.read()
     event.write_text(text)
@@ -173,12 +177,20 @@ def lesson(text):
 
 
 def slice_of(path):
-    """A slice file: its first line is the title (a leading `#` is dropped), the rest is the ticket body."""
+    """A slice file: its first line is the title (a leading `#` is dropped), the rest is the ticket body. Header
+    lines right under the title (ADR-0027): `repo: <name or owner/repo>` creates the ticket in that repository,
+    `after: <repository or slice position>, ...` makes it wait for those slices (blocked-by)."""
     title, _, body = Path(path).read_text().strip().partition("\n")
     title = title.lstrip("#").strip()
     if not title:
         raise ValueError(f"slice {path} has no title line")
-    return {"title": title, "body": body.strip() or title}
+    head, lines = {}, body.strip().split("\n")
+    while lines and (key := lines[0].partition(":")[0].strip().lower()) in ("repo", "after") and ":" in lines[0]:
+        head[key] = lines.pop(0).partition(":")[2].strip()
+    after = [int(x) if x.isdigit() else x for x in re.split(r"[,\s]+", head.get("after", "")) if x]
+    body = "\n".join(lines)
+    return {"title": title, "body": body.strip() or title, **({"repo": head["repo"]} if head.get("repo") else {}),
+            **({"after": after} if after else {})}
 
 
 def handoff_of(a):
@@ -302,8 +314,9 @@ def report_end_failure(state, outcome, error, run=subprocess.run):
             f"The outcome did not land; a retry on this head fails the same way until the cause is fixed.\n\n"
             f"Factory-Run: {os.environ.get('FACTORY_NODE') or state['node']}")
     try:
-        repo = config.load()["tracker"].get("repository")
-        run(["gh", "issue", "comment", str(state["ticket"]), *(["-R", repo] if repo else []), "--body", body],
+        from gate_port import split_ticket
+        repo, number = split_ticket(state["ticket"], config.load()["tracker"].get("repository"))
+        run(["gh", "issue", "comment", str(number), *(["-R", repo] if repo else []), "--body", body],
             capture_output=True, text=True, timeout=60)
     except Exception as e:
         print(f"factory: could not report the failed end: {e}", file=sys.stderr)
@@ -318,12 +331,13 @@ def validate():
             import project
             import workflow
             errs = [f"compiled: {e}" for e in config.validate() or
-                    workflow.validate(project.load(config.team_root()), workflow.load(config.team_root()))]
+                    workflow.validate(project.load(config.team_root()), workflow.load(config.team_root())) or
+                    deploy.output_errors(nodes.load(), config.load())]
         print("\n".join([*errs, *(f"warning: {w}" for w in definition.warnings(defn)), *([] if errs else ["factory: ok"])]))
         return 1 if errs else 0
     errs = config.validate()
     if not errs:
-        errs = nodes.validate(nodes.load(), config.load())
+        errs = nodes.validate(nodes.load(), config.load()) or deploy.output_errors(nodes.load(), config.load())
     print("\n".join(errs) or "factory: ok")
     return 1 if errs else 0
 
@@ -361,11 +375,16 @@ def env_roles(env):
     """Sorted roles of the enabled agent nodes (not human or script) whose `env` is `env`, from the project's workflow."""
     import project
     import workflow
+    import definition
     root = config.team_root()
     wf = workflow.load(root, project.load(root))
     has_role_files = (root / "factory.yaml").is_file()
-    roles = {n["role"] for n in (wf.get("nodes") or {}).values()
-             if n.get("env") == env and n.get("enabled") is not False
+    defn = definition.load(root) if definition.present(root) else None
+    # ADR-0027: a node runs in every environment it names, not only its first (the compiled `env`)
+    runs_in = (lambda name, n: env in definition.node_environments(defn, name)) if defn else \
+        (lambda name, n: n.get("env") == env)
+    roles = {n["role"] for name, n in (wf.get("nodes") or {}).items()
+             if runs_in(name, n) and n.get("enabled") is not False
              and (not has_role_files or n.get("role") == "clerk"
                   or (root / "roles" / n.get("role", "") / "role.md").is_file())
              and n.get("role") not in (None, "human", "script")}
@@ -409,6 +428,32 @@ def report_crash(cmd, error, run=subprocess.run):
         print(f"factory: could not report the crash: {e}", file=sys.stderr)
 
 
+def plugin_command(word):
+    """The function (argv) -> exit code a turned-on plugin adds as CLI word `word` (ADR-0026), else None. A team
+    whose config cannot be read has no plugin words: the help is printed instead."""
+    import plugins
+    try:
+        settings = config.load()
+    except (Exception, SystemExit):
+        return None
+    return plugins.registry(settings).command(word)
+
+
+def surface_command(surface, word):
+    """The function (argv) -> exit code behind CLI word `word` of surface `surface` (`local`: `run`,
+    `deploy --target local`; `air`: `deploy --target air`, `contracts`). Using it turns its plugin on, whatever the
+    config selects."""
+    import plugins
+    return plugins.registry({}, use=(("surface", surface),)).command(word)
+
+
+def tool_command(word):
+    """The function (argv) -> exit code behind the CLI word of a development tool plugin (`chart`). Using it turns
+    the plugin on, whatever the config selects."""
+    import plugins
+    return plugins.registry({}, use=(("tool", word),)).command(word)
+
+
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
     try:
@@ -437,21 +482,18 @@ def _main(argv):
     load_engine(HERE)
     if team:
         config.set_team(team)
-    if cmd in ("check", "apply", "sweep", "ci-sync", "decide", "ci"):
+    if cmd in ("check", "apply", "sweep", "decide", "ci"):
         return gate.main([cmd, *rest])
     if cmd == "deploy" and rest[:2] == ["--target", "local"]:
-        from local import deploy as local_deploy
-        return local_deploy(rest[2:])
+        return surface_command("local", "deploy --target local")(rest[2:])
     if cmd == "run":
-        from local import main as local_main
-        return local_main(rest)
+        return surface_command("local", "run")(rest)
     if cmd == "deploy":
         return deploy.main(rest)
     if cmd == "contracts":
-        from contracts import main as contracts_main
-        return contracts_main(rest)
+        return surface_command("air", "contracts")(rest)
     if cmd == "chart":
-        return nodes.main(["chart", *rest])
+        return tool_command("chart")(rest)
     if cmd == "migrate" and rest[:1] == ["workflow"]:
         from workflow import main as workflow_main
         return workflow_main(["migrate", *rest[1:]])
@@ -480,6 +522,8 @@ def _main(argv):
     if cmd == "reconcile":
         from reconcile import main as reconcile_main
         return reconcile_main(rest)
+    if cmd and not cmd.startswith("-") and (command := plugin_command(cmd)):
+        return command(rest)
     print(__doc__)
     return 0 if cmd in ("-h", "--help") else 2
 

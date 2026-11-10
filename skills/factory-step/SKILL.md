@@ -18,7 +18,7 @@ command (`command -v factory`), never `uv run` or a path into the engine.
 | collect the lessons agents reported | `factory retro collect`: the uncollected lesson comments, marked collected |
 | run the routine named in your settings | `factory <routine>` (`reconcile`, `doctor`) with no other arguments |
 | answer the mention that woke you (`mention` in the step's facts) | `factory end replied --reply "…"`: the gate posts it where the question was, to whoever asked |
-| ask another agent a question in the thread (only when the step lists `ask`) | `factory end ask --to <persona> --text "…"`: the gate posts it with `@factory:<persona>` and your run ends; a reply cannot ask; each ask counts against `limits.mention_hops` |
+| ask another agent a question in the thread (only when the step lists `ask`) | `factory end ask --to <persona> --text "…"`: the gate posts it with `@factory:<persona>` and your run ends; the answer wakes your node again, with the answer in `agent_notes`; a reply cannot ask; each ask counts against `limits.mention_hops` |
 | report your outcome | `factory end <outcome>`, as below |
 
 1. `factory begin` (the prompt gives its arguments) prints the facts, the
@@ -37,7 +37,7 @@ command (`command -v factory`), never `uv run` or a path into the engine.
 | re-review: new blocking finding on a file the fix did not change | append `\| unseen: <why the earlier round could not see it>`, or report it `--minor`; the gate refuses it otherwise |
 | any other payload field | `--field KEY=VALUE` (repeatable) |
 | finding fixed or disputed | `--fixed "<id> <sha>"`, `--disputed "<id> <reason>"`, `--disputed-focuses a,b` |
-| new ticket (slice) | `--slice <file.md>`: first line the title, the rest the body |
+| new ticket (slice) | `--slice <file.md>`: first line the title, the rest the body; a `repo: <repository>` line under the title creates it in that repository, an `after: <repository or slice number>` line makes it wait for those slices |
 | proposed acceptance check | `--propose-check "<check>"` |
 | note for a later agent | `--note-for <fixer\|reviewer\|developer\|any>` with `--note-hint "…"`, `--note-repro "<cmd>"`, `--note-file <path>` (≤2,000 chars, no secrets) |
 | lesson for later runs | `--lesson "<project\|factory\|engine> <about> \| <text> \| evidence: <x>"` (evidence optional) |

@@ -5,11 +5,10 @@
 {% if settings.get("mode") == "reply" %}Someone asked you in a comment on the ticket or its PR. Answer that
 question in `reply`, in a few sentences, from the PR, its reviews and the code. Give no verdict, change no
 file, move no stage.
-{% else %}Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}; stay in that focus. In
-delivery the gate starts you only when CI at the head is green; red CI goes to the developer without a review. If CI
-is still running or turned red when you start, wait until it has finished (`factory-step`) and review
-what failed like any other finding. To ask the developer a question,
-name `@factory:<agent>` in your summary; it wakes that agent in reply mode.
+{% else %}Review the PR in the trigger with focus {{ settings.focus | join(" and ") }}; stay in that focus. You start
+when the PR is ready for review; CI at the head may still run. Do not wait for it: the gate never approves on
+red CI, and CI that fails after your approval goes back to the developer.{% if "comments" in ((factory.get("plugins") or []) + (factory.get("modules") or [])) %} To ask the developer a question,
+name `@factory:<agent>` in your summary; it wakes that agent in reply mode.{% endif %}
 {% endif %}
 
 You review one branch independently. You never see the developer's reasoning,
@@ -72,9 +71,9 @@ focus; stay in yours.
    and every test the diff adds or changes, one by one with its `file:line`, and check each against the
    repository guidance: a comment that misstates the code, or a test that cannot fail when the behaviour
    breaks, is a finding. In focus `full` or `behaviour`, when CI at the head has a `mutation` job, read its
-   summary (`gh run view <run> --job <job>`): a surviving mutant on a behaviour line the PR adds or changes
+   summary (`gh run view <run> --job <job>`) if it has finished: a surviving mutant on a behaviour line the PR adds or changes
    is a `blocking` finding (the tests cannot see that line break) unless the PR says why the mutant is
-   equivalent. Quote the survivor's `file:line: mutation` in the `case`. No `mutation` job is no finding.
+   equivalent. Quote the survivor's `file:line: mutation` in the `case`. No `mutation` result is no finding.
 6. Before posting, try to disprove every candidate: reread the changed code
    path and run the relevant test or command when cheap. Keep a finding only
    when its case is defensible; drop the rest. Executable proof beats argument.
@@ -128,7 +127,7 @@ of the PR a person gets; no other node comments on it.
   - `**Check:**` one to three steps, each a `file:line` to read or a command to run, with the result that
     means "merge".
   - `**If you merge / if you do not:**` one line each: what changes, and what to do instead (close, comment
-    with the change you want, or ask `@factory:dev`).
+    with the change you want{% if "comments" in ((factory.get("plugins") or []) + (factory.get("modules") or [])) %}, or ask `@factory:dev`{% endif %}).
 - `## Summary`: what the change does in a few lines, the verdict, resolved and agreed findings, and the
   `Not checked:` and `Guidance gap:` notes.
 - `## Walkthrough`: the walkthrough of the PR, written with the `walkthrough` skill.

@@ -69,7 +69,7 @@ def wakes(nodes, facts):
         for t in n.get("triggers") or []:
             event, _, label = str(t).partition(" ")
             on = "issue" if event.startswith("issues.") else "pr"
-            if not label.startswith("factory:"):
+            if not label.startswith(vocab.stage_prefix()):
                 continue
             if "<focus>" in label:
                 for focus in facts.get("focus_missing") or []:
@@ -193,7 +193,8 @@ def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress)
     """GitHub closes a ticket on merge; when the `finish` run was lost the ticket is closed but still in a PR stage.
     A closed ticket there whose PR is merged gets the `finish` outcome, as `gate.py sweep --issue <n>` would."""
     import gate
-    closed = sorted(set(tracker.sweep_tickets(stages)) - set(open_listed))
+    still_open = set(open_listed)
+    closed = [n for n in dict.fromkeys(tracker.sweep_tickets(stages)) if n not in still_open]  # ids mix numbers and refs
     gate.prefetch(tracker, closed)
     for n in closed:
         try:
@@ -439,10 +440,10 @@ def main(argv, run=None):
     if "--dry-run" in argv or any(a.startswith("memory:") for a in argv):
         return reconcile_main(argv)
     import doctor
-    import github_tracker
+    from factory_plugins.github import tracker as github_tracker
     run = run or github_tracker.gh
     settings = config_mod.load()
-    repo = settings["tracker"].get("repository") or settings["code_host"]["repository"]
+    repo = settings["tracker"].get("repository") or config_mod.vcs(settings)["repository"]
     try:
         code = reconcile_main(argv)
     except Exception as e:
@@ -456,9 +457,9 @@ def main(argv, run=None):
 def report_systemic(config, systemic, run=None):
     """Open `Doctor: runs end without an outcome` (no new comment while it is open), or close it when no run missed."""
     import doctor
-    import github_tracker
+    from factory_plugins.github import tracker as github_tracker
     run = run or github_tracker.gh
-    repo = config["tracker"].get("repository") or config["code_host"]["repository"]
+    repo = config["tracker"].get("repository") or config_mod.vcs(config)["repository"]
     probe = "runs-without-outcome"
     if not systemic:
         return doctor.close_ticket(repo, probe, run, run_id=RUN)
@@ -476,11 +477,11 @@ def reconcile_main(argv):
     dry_run = "--dry-run" in argv
     spec = next((a[7:] for a in argv if a.startswith("memory:")), None)
     if spec:
-        from gate_port import MemoryTracker
-        tracker = MemoryTracker(json.loads(Path(spec).read_text()))
+        from gate_port import MemorySystem
+        tracker = MemorySystem(json.loads(Path(spec).read_text()))
     else:
-        from gate_github import GitHubGateTracker
-        tracker = GitHubGateTracker.from_config()
+        import gate
+        tracker = gate.tracker_of(config_mod.load())
     config = config_mod.load()
     if definition.present(config_mod.team_root()):  # ADR-0021: the waits the gate cannot see, from the definition
         progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
@@ -499,13 +500,11 @@ def reconcile_main(argv):
                                 stage_kinds=config["tracker"].get("stage_kinds", {}),
                                 dry_run=dry_run, progress=progress)
     out = {"dry_run": dry_run, "reconcile": results}
-    if not spec:
-        import gate
-        try:
-            out["ci_sync"], sync_failed = gate.run_ci_sync(dry_run, progress)
-        except Exception as e:  # the reconcile results above are still reported
-            out["ci_sync"], sync_failed = [{"error": f"{type(e).__name__}: {e}"}], True
-        failed = failed or sync_failed
+    if not spec:  # the plugins' scheduled passes (github: the CI label sync); each reports its own errors
+        import plugins
+        for passes in plugins.registry(config).hook("reconcile.passes"):
+            for name, (got, pass_failed) in passes(config, dry_run, progress).items():
+                out[name], failed = got, failed or pass_failed
     print(json.dumps(out))
     return 1 if failed else 0
 

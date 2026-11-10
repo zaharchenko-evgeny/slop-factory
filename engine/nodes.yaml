@@ -1,5 +1,5 @@
 # The factory as nodes (ADR-0014). One node = triggers + one condition (`when`) + role, tier,
-# environment + outcomes. `uv run factory/nodes.py validate` checks it; `chart` derives the stage chart.
+# environment + outcomes. `uv run factory/nodes.py validate` checks it; `chart` (the chart plugin, factory/factory_plugins/chart/) derives the stage chart.
 # Stage names are keys of `tracker.stages` in factory.descriptor.yaml. `from: [none]` = a PR with no stage label.
 # An outcome with `ci: [..]` applies only when CI is one of them (`ci: none` makes no transition); otherwise `else` names the outcome applied.
 # `ci-independent: true` = the node acts on a PR head without CI; validate requires `ci` in `when` or this flag.
@@ -113,7 +113,7 @@ nodes:
     env: read
     pilot: true
     focuses: [full, behaviour, structure-security, knowledge]
-    # CI labels the PR when it finishes (.github/workflows/quality-gates.yml): reviewers only read green code.
+    # ci-sync labels the PR from the project's checks (#1207): reviewers only read green code.
     triggers: ["pull_request.labeled factory:review-<focus>", "pull_request.labeled factory:rereview-<focus>"]
     when: { stage: in-review, focus: required-by-risk, ci: [green] }
     role: reviewer
