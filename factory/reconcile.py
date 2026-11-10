@@ -348,11 +348,13 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
                     ci = "green" if label == vocab.ci("ci-green") else "red" if label == vocab.ci("ci-red") else None
                     waiting = f"stage={stage} head={head} waiting for ci={ci} at {label}"
                     comments = facts.get("recover_comments", [])
-                    waited = ci and waiting in comments and not any(
-                        f"stage={stage} head={head} re-fired {label} (" in c for c in comments)
+                    waited = ci and any(waiting in c for c in comments)
+                    refired = ci and any(f"stage={stage} head={head} re-fired {label} (" in c for c in comments)
                     if ci and on and facts.get("ci") == "pending" and not waited:
                         if not dry_run:
                             tracker.apply({"kind": "comment", "ticket": n, "value": f"{PREFIX} {waiting}"})
+                        continue
+                    if ci and waited and refired:
                         continue
                     if (on and at and (ago(at) > timedelta(minutes=timeout) or waited)
                             and (not ci or facts.get("ci") == ci)
