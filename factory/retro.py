@@ -172,23 +172,29 @@ def collect(tracker, label):
 
 
 def mark(tracker, label, ids):
-    """Mark the lesson comments `ids` collected, then take `label` off each ticket that has no uncollected lesson
-    comment left; a lesson posted after `collect` keeps its ticket labelled, so the next run takes it. Returns the ids
-    marked. An id that is not an uncollected lesson comment of a labelled ticket is left alone."""
+    """Mark the lesson comments `ids` collected and take `label` off each ticket that has no uncollected lesson
+    comment left. The label comes off first and goes back on when a lesson remains or a write fails, so a lesson
+    posted (and labelled) while `mark` runs is never hidden by a stale read. Returns the ids marked. An id that is
+    not an uncollected lesson comment of a labelled ticket is left alone."""
     wanted, done = {int(i) for i in ids}, []
     for i in tracker._list(f"issues?state=all&labels={label}&per_page=100"):
         n, left = i["number"], False
-        for c in tracker._list(f"issues/{n}/comments"):
-            body = c.get("body") or ""
-            if LESSON not in body:
-                continue
-            if c["id"] in wanted:
-                tracker._api(f"issues/comments/{c['id']}", "-X", "PATCH", "-f", f"body={body.replace(LESSON, COLLECTED)}")
-                done.append(c["id"])
-            else:
-                left = True
-        if not left:
-            tracker._edit(n, remove=[label])
+        tracker._edit(n, remove=[label])
+        try:
+            for c in tracker._list(f"issues/{n}/comments"):
+                body = c.get("body") or ""
+                if LESSON not in body:
+                    continue
+                if c["id"] in wanted:
+                    tracker._api(f"issues/comments/{c['id']}", "-X", "PATCH", "-f", f"body={body.replace(LESSON, COLLECTED)}")
+                    done.append(c["id"])
+                else:
+                    left = True
+        except BaseException:
+            tracker._edit(n, add=[label])
+            raise
+        if left:
+            tracker._edit(n, add=[label])
     return done
 
 
