@@ -55,5 +55,14 @@ class CheckRefsTest(unittest.TestCase):
     def test_ignored_run_directory_is_allowed(self):
         self.assertEqual(self.scan("ignored-path.md"), [])
 
+    def test_v1_role_docs_are_out_of_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            role = root / "engine/template-v1/roles/retro"
+            role.mkdir(parents=True)
+            path = "factory/" + ".".join(("knowledge", "py"))
+            (role / "role.md").write_text(f"`{path}`\n")
+            self.assertEqual(check_refs.check(root), [])
+
 if __name__ == "__main__":
     unittest.main()

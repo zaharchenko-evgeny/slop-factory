@@ -359,7 +359,7 @@ class MemorySystem(DescriptorPort):
 
     def __init__(self, tickets=None, fail_on=None, project=None):
         self.tickets, self.fail_on, self.project = tickets or {}, fail_on, project
-        self.green_main = False  # the latest quality-gates run on the main head passed
+        self.green_main = False  # CI at the main head is green
 
     def main_green(self):
         return self.green_main
@@ -380,6 +380,30 @@ class MemorySystem(DescriptorPort):
     def sweep_tickets(self, stages, open_only=False):
         return sorted(k for k, t in self.tickets.items() if self.get_stage(t) in stages
                       and not (open_only and t.get("issue_state", "open") != "open"))
+
+    def consistency_view(self):
+        """Reconcile's consistency pass over the records: a record's `labels` (else its `attrs` plus its stage's label),
+        its `prs` (else its `pr`, `pr_state` and `branch`) and its `issue_state`."""
+        import vocab
+        tickets, orphans = [], []
+        for k, t in sorted(self.tickets.items(), key=lambda kv: str(kv[0])):
+            prs = t.get("prs") or ([{"pr": t["pr"], "pr_state": t.get("pr_state", "open")}]
+                                   if t.get("pr") else [])
+            prs = [{"number": p["pr"], "state": p["pr_state"], "branch": p.get("branch") or f"ez/{k}-x"} for p in prs]
+            stage = self.get_stage(t)
+            stage_label = [vocab.stage(stage)] if stage in vocab._tracker()["stages"] else []
+            labels = t["labels"] if "labels" in t else list(dict.fromkeys([*t.get("attrs", []), *stage_label]))
+            if t.get("issue_state", "open") == "open":
+                tickets.append({"number": k, "labels": labels, "updated_at": t.get("updated_at"), "prs": prs})
+            else:
+                orphans += [{"number": p["number"], "ticket": k} for p in prs if p["state"] == "open"]
+        return {"tickets": tickets, "orphan_prs": orphans}
+
+    def comment_bodies(self, n, pr=None):
+        return [json.loads(v) for kind, v in self._t(n).get("log", []) if kind == "comment"]
+
+    def close_ticket(self, n):
+        self._t(n)["issue_state"] = "closed"
 
     def blocking(self, ticket):
         return self._t(ticket).get("blocking", [])
@@ -523,7 +547,7 @@ class MemorySystem(DescriptorPort):
         return self._drop(self._t(effect["ticket"]), effect["value"])
 
     def _fx_log(self, effect, ctx):  # label, comment, review, create-issues, merge, join: a set of applied values
-        t, kind, value = self._t(effect["ticket"]), effect["kind"], effect["value"]
+        t, kind, value = self._t(effect["ticket"]), effect["kind"], effect.get("value")
         log = t.setdefault("log", [])
         entry = [kind, json.dumps(value, sort_keys=True)]
         if entry in log:

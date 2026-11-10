@@ -1824,15 +1824,23 @@ class TwoRepositoryFactsTest(unittest.TestCase):
         self.assertEqual((f["pr"], f["round_complete"]), (5, True))
         self.assertNotIn("heads", f)
         self.assertFalse(any(TwoRepositoryGh.OTHER in " ".join(w) for w in gh.writes))
-    def test_main_green_requires_the_current_main_head(self):
-        def gh(sha):
+    def test_main_green_reads_ci_at_the_main_head(self):
+        """Table: check run conclusions at the main head -> main_green (a failure or a running check is not green)."""
+        def gh(conclusions):
             def run(args):
-                if args[0] == "run":
-                    return json.dumps([{"conclusion": "success", "headSha": sha}])
+                if args[:2] == ["api", "--paginate"] and "actions/runs" in args[2]:
+                    return ""
+                if args[:2] == ["api", "--paginate"]:
+                    assert "/commits/new/check-runs" in args[2], args
+                    return "\n".join(json.dumps({"status": "completed" if c else "in_progress", "conclusion": c,
+                                                 "completed_at": "2026-11-10T10:00:00Z"}) for c in conclusions)
+                if args[1].endswith("/status"):
+                    return json.dumps({"statuses": []})
                 return json.dumps({"sha": "new"})
             return run
-        self.assertFalse(GitHubGateTracker(REPO, STAGES, BOT, run=gh("old")).main_green())
-        self.assertTrue(GitHubGateTracker(REPO, STAGES, BOT, run=gh("new")).main_green())
+        for conclusions, want in ((["success", "skipped"], True), (["success", "failure"], False), (["success", None], False), ([], False)):
+            with self.subTest(conclusions=conclusions):
+                self.assertEqual(GitHubGateTracker(REPO, STAGES, BOT, run=gh(conclusions)).main_green(), want)
 
 
 class StoreGh(FakeGh):

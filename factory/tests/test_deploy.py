@@ -840,12 +840,17 @@ class ProjectPlanTest(unittest.TestCase):
 
     def test_every_automation_runs_in_an_environment_of_its_repository(self):
         """#1112: Air rejects an automation whose repository is not its environment's, so a copy in a second ticket
-        repository (`intake slop-eval-factory`, ADR-0027) runs in that repository's variant of its environment."""
-        plan = definition_plan()
-        envs = {e["name"]: e for e in plan["environments"]}
-        for a in plan["automations"]:
-            env = envs[a["environmentConfigId"]]
-            self.assertEqual(definition.full_name(env["repository"]), a["repository"]["fullName"], a["name"])
+        repository (`intake slop-eval-factory`, ADR-0027) runs in that repository's variant of its environment.
+        Slop's intake hears only slop-factory (slop-eval-factory#98), so the copy is made by giving it its tickets back."""
+        def intake_hears_both(f):
+            for r in f["environments"]["intake"]["repositories"]:
+                r.pop("tracker", None)
+        for plan in (definition_plan(), definition_plan(intake_hears_both)):
+            envs = {e["name"]: e for e in plan["environments"]}
+            for a in plan["automations"]:
+                env = envs[a["environmentConfigId"]]
+                self.assertEqual(definition.full_name(env["repository"]), a["repository"]["fullName"], a["name"])
+        self.assertNotIn("[Slop factory] intake slop-eval-factory", {e["name"] for e in definition_plan()["environments"]})
         variant = envs["[Slop factory] intake slop-eval-factory"]
         engine = envs["[Slop factory] intake"]
         own = ("name", "repository", "variables", "secrets")  # #1126: its repository, and no issues token for it

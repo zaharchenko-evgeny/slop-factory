@@ -130,12 +130,6 @@ jobs:
 
           Factory-Run: ${GITHUB_RUN_ID}"
           fi
-      - name: Close the Main is red tickets
-        if: success() && github.event_name == 'push'
-        env:
-          SHA: ${{ github.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: scripts/close-main-red.sh
       # Re-test only approved PRs before merge; other branches are updated on their next push.
       - name: Re-run on approved factory PRs
         if: github.event_name == 'push'

@@ -610,16 +610,49 @@ class GitHubGateTracker(DescriptorPort):
         return normalise_events(self._list(f"issues/{pr}/events", repo=self.pr_repo))
 
     def main_green(self):
-        """The latest completed quality-gates run on main succeeded and tested the current main head."""
-        runs = json.loads(self.run(["run", "list", "-R", self.repo, "--workflow", "quality-gates.yml", "--branch", "main",
-                                    "--event", "push", "--status", "completed", "--limit", "1", "--json", "conclusion,headSha"]))
-        return (bool(runs) and runs[0]["conclusion"] == "success"
-                and runs[0].get("headSha") == self._api("commits/main")["sha"])
+        """CI at the current main head is green (`head_ci` of `head_checks`)."""
+        return head_ci(head_checks(self.run, self.repo, self._api("commits/main")["sha"]))[0] == "green"
 
     def sweep_tickets(self, stages, open_only=False, now=None):
         """Issue numbers whose stage label is one of `stages`: the open ones and, unless `open_only`, those closed in the
         last `gate_port.CLOSED_HOURS`, from one paged GraphQL search each."""
         return self.tickets.tickets_by_stage([self.stages[st] for st in stages if st in self.stages], open_only, now)
+
+    def consistency_view(self):
+        """{tickets, orphan_prs} for reconcile's consistency pass. `tickets`: every open issue as {number, labels,
+        updated_at, prs: [{number, state, branch}]} (the PRs of its `ez/<n>-*` branches in the code host);
+        `orphan_prs`: [{number, ticket}] of open factory PRs whose ticket is closed."""
+        by_ticket = {}
+        for p in self._list("pulls?state=all&per_page=100", repo=self.pr_repo):
+            n = ticket_from_ref(p["head"]["ref"])
+            if n is None or ((p["head"].get("repo") or {}).get("full_name") or "").lower() != self.pr_repo.lower():
+                continue
+            state = "open" if p["state"] == "open" else "merged" if p.get("merged_at") else "closed"
+            by_ticket.setdefault(n, []).append({"number": p["number"], "state": state, "branch": p["head"]["ref"]})
+        issues = [i for i in self._list("issues?state=open&per_page=100") if "pull_request" not in i]
+        tickets = [{"number": i["number"], "labels": [x["name"] for x in i["labels"]], "updated_at": i["updated_at"],
+                    "prs": by_ticket.get(i["number"], [])} for i in issues]
+        open_numbers = {t["number"] for t in tickets}
+        orphans = []
+        for n, prs in sorted(by_ticket.items()):
+            if n in open_numbers or not any(p["state"] == "open" for p in prs):
+                continue
+            try:
+                closed = self.tickets.issue(n)["state"] == "closed"
+            except Exception:  # no such issue (the number came from a branch name): not a ticket
+                continue
+            orphans += [{"number": p["number"], "ticket": n} for p in prs if closed and p["state"] == "open"]
+        return {"tickets": tickets, "orphan_prs": orphans}
+
+    def comment_bodies(self, n, pr=None):
+        """The comment bodies of ticket `n`, or of its PR number `pr`."""
+        if pr is None:
+            return [c["body"] for c in self.tickets.comments(n)]
+        return [c.get("body") or "" for c in self._list(f"issues/{pr}/comments", repo=self.pr_repo)]
+
+    def close_ticket(self, n):
+        self.tickets.close(n)
+
 
     def prefetch(self, numbers):
         """Read tickets `numbers` in batched GraphQL queries into the cache `_api` and `_list` serve. A failed batch
@@ -1154,7 +1187,10 @@ class GitHubGateTracker(DescriptorPort):
 
     def _fx_pr_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
-        pr = self._pr(n)
+        if e.get("pr"):  # an explicit PR (reconcile: one comment per open PR)
+            pr = self._api(f"pulls/{e['pr']}", repo=self.pr_repo)
+        else:
+            pr = self._pr(n)
         if pr is None:
             raise RuntimeError(f"comment: no PR for ticket {n}")
         if any(c["body"] == body for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):

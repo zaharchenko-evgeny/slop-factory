@@ -192,17 +192,21 @@ class ReconcileTest(unittest.TestCase):
 
     def test_closed_approved_ticket_with_open_pr_is_left_alone(self):
         t, results, _ = run({"stage": "approved", "pr": 5, "pr_state": "open", "issue_state": "closed", "since": OLD})
-        self.assertEqual((results, t.tickets[1]["stage"]), ([], "approved"))
+        self.assertEqual(([r["reconcile"] for r in results], t.tickets[1]["stage"]), (["orphan-pr"], "approved"))  # #1052
 
-    def test_open_main_red_with_green_main_reports_stale_red(self):
-        tracker = MemorySystem({1: {"stage": "ready", "since": FRESH, "title": "Main is red: agnix"},
-                                 2: {"stage": "ready", "since": FRESH, "title": "Other ticket"}})
-        tracker.green_main = True
-        results, _ = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
-        self.assertEqual([(r["ticket"], r["reconcile"]) for r in results], [(1, "stale-red")])
-        tracker.green_main = False
-        results, _ = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
-        self.assertEqual(results, [])
+    def test_open_main_red_closes_only_when_main_ci_is_green(self):
+        """Table: CI at the main head -> the Main is red ticket is closed (green) or left open (red, pending); others stay open."""
+        cases = [(stage, ci, ci) for stage in ("ready", "draft", "needs-answers", "blocked", "investigating")
+                 for ci in (True, False)]
+        for stage, ci, closed in cases:
+            with self.subTest(stage=stage, green=ci):
+                tracker = MemorySystem({1: {"stage": stage, "since": FRESH, "title": "Main is red: agnix"},
+                                        2: {"stage": "ready", "since": FRESH, "title": "Other ticket"}})
+                tracker.green_main = ci
+                results, _ = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
+                self.assertEqual([(r["ticket"], r["reconcile"]) for r in results], [(1, "stale-red")] if closed else [])
+                self.assertEqual(logged(tracker, "close") != [], closed)
+                self.assertEqual([k for k, _ in tracker.tickets[2].get("log", [])], [])
 
     def test_fresh_step_waits_for_the_timeout(self):
         _, results, _ = run({"stage": "in-dev", "since": FRESH, "command": "factory:implement-mid"})
@@ -422,6 +426,52 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual({e["ticket"] for e in written}, {"o/b#7"})  # needs-human, the comment and `blocked`: all in o/b
         self.assertEqual([e["value"] for e in written if e["kind"] == "stage"], ["blocked"])
 
+    def test_label_no_copy_hears_is_stuck_at_once(self):
+        factory_repo, team_repo = "zaharchenko-evgeny/slop-factory", "zaharchenko-evgeny/slop-eval-factory"
+        tracker = self.config["tracker"]
+        cases = [
+            ("stage trigger", {"stage": "triage", "attrs": []}, {"stage": "triage"}, True, False),
+            ("issue label trigger", {"label": "factory:custom"}, {"stage": "ready", "attrs": ["factory:custom"]}, True, False),
+            ("PR label trigger", {"label": "factory:custom"}, {"stage": "ready", "pr_labels": ["factory:custom"]}, True, False),
+            ("missing label", {"label": "factory:custom"}, {"stage": "ready", "attrs": [], "pr_labels": []}, False, False),
+            ("other stage", {"stage": "triage"}, {"stage": "ready", "attrs": []}, False, False),
+            ("another copy hears same trigger", {"stage": "triage", "attrs": []}, {"stage": "triage"}, False, True),
+        ]
+        for name, trigger, facts, stuck, another_listener in cases:
+            with self.subTest(name=name):
+                defn = copy.deepcopy(self.defn)
+                defn["factory"]["tracker"]["repositories"] = [factory_repo, team_repo]
+                defn["factory"]["environments"]["intake"]["repositories"] = [{"repo": factory_repo}]
+                defn["workflow"]["nodes"]["intake"]["triggers"] = [trigger]
+                if another_listener:
+                    defn["workflow"]["nodes"]["another-intake"] = {
+                        "agent": "router", "environment": "team", "triggers": [trigger]}
+                ticket = {**facts, "since": None}
+                written = []
+
+                class Tracker:
+                    def sweep_tickets(self, stages, open_only=False):
+                        return [f"{team_repo}#7"]
+
+                    def stale_facts(self, _):
+                        return ticket
+
+                    def apply(self, effect):
+                        written.append(effect)
+
+                results = reconcile.recover_definition(Tracker(), defn, list(tracker["stages"]),
+                                                       tracker.get("stage_kinds", {}), self.config["limits"], now=NOW)
+                if stuck:
+                    self.assertEqual([(r["reconcile"], r["node"]) for r in results], [("stuck", "intake")])
+                    self.assertEqual([e["value"] for e in written if e["kind"] == "label"], ["factory:needs-human"])
+                    self.assertEqual([e["value"] for e in written if e["kind"] == "stage"], ["blocked"])
+                    note = next(e["value"] for e in written if e["kind"] == "comment")
+                    self.assertIn("slop-eval-factory", note)
+                    self.assertIn("Open the ticket in a repository where intake listens", note)
+                else:
+                    self.assertEqual(results, [])
+                    self.assertEqual(written, [])
+
     def test_stuck_label_that_is_young_or_behind_a_blocker_is_left_alone(self):
         labels = {"ci": "green", "attrs": [], "pr_labels": ["factory:review-low"]}
         young = (NOW - timedelta(minutes=45)).isoformat()
@@ -560,6 +610,158 @@ class ReconcileFailureTest(unittest.TestCase):
         reconcile.reconcile_main = lambda argv: 0
         self.assertEqual(reconcile.main([], run=self.gh), 0)
         self.assertEqual([c[:3] for c in self.calls if c[:2] == ["issue", "close"]], [["issue", "close", "7"]])
+
+
+STAGE_LABELS = {f"factory:{s}" for s in STAGES}
+KINDS = ("close", "no-pr", "stage-labels", "orphan-pr")
+
+
+class ConsistencyTest(unittest.TestCase):
+    """The consistency pass: states of tickets and PRs that disagree (#1052)."""
+    STALE = "2026-11-03T08:00:00Z"  # older than limits.stuck_minutes at NOW
+
+    def sweep(self, tracker, **kw):
+        results, failed = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, now=NOW,
+                                              stage_kinds=CONFIG["tracker"].get("stage_kinds", {}), **kw)
+        self.assertFalse(failed)
+        return [r for r in results if r.get("reconcile") in KINDS]
+
+    def pass_(self, tickets):
+        tracker = MemorySystem(tickets)
+        return tracker, self.sweep(tracker)
+
+    def comments(self, tracker, n):
+        return [v for k, v in tracker.tickets[n].get("log", []) if k == "comment"]
+
+    def test_open_done_ticket_is_closed(self):
+        merged, closed = {"pr": 5, "pr_state": "merged"}, {"pr": 6, "pr_state": "closed"}
+        for stage in [s for s in ("done", "merged") if s in STAGES]:  # `merged` only when the team declares it
+            for prs in ([], [merged], [closed, merged]):
+                with self.subTest(stage=stage, prs=prs):
+                    t, found = self.pass_({1: {"stage": stage, "prs": prs}})
+                    self.assertEqual([(r["ticket"], r["reconcile"]) for r in found], [(1, "close")])
+                    self.assertEqual(t.tickets[1]["issue_state"], "closed")
+        for ticket in ({"stage": "done", "prs": [{"pr": 5, "pr_state": "open"}]}, {"stage": "done", "issue_state": "closed"}):
+            with self.subTest(ticket=ticket):
+                self.assertEqual(self.pass_({1: ticket})[1], [])
+
+    def test_review_stage_without_pr_is_blocked_once(self):
+        open_pr = {"pr": 5, "pr_state": "open"}
+        cases = [("in-review", [], True), ("approved", [], True), ("changes-requested", [], True),
+                 ("in-review", [{"pr": 5, "pr_state": "merged"}], True),
+                 ("in-review", [{"pr": 5, "pr_state": "closed"}], True),
+                 ("in-review", [{**open_pr, "branch": "feature/x"}], True),
+                 ("in-review", [open_pr], False), ("in-dev", [], False), ("blocked", [], False)]
+        for stage, prs, blocked in cases:
+            for updated, expect in ((self.STALE, blocked), (FRESH, False), (None, False)):
+                with self.subTest(stage=stage, prs=prs, updated=updated):
+                    t, found = self.pass_({1: {"stage": stage, "prs": prs, "updated_at": updated}})
+                    self.assertEqual([r["reconcile"] for r in found], ["no-pr"] if expect else [])
+                    if expect:
+                        self.assertEqual(t.tickets[1]["stage"], "blocked")
+                        self.assertIn("factory:needs-human", t.tickets[1]["attrs"])
+                        self.assertTrue(self.comments(t, 1)[0].startswith(f'"{reconcile.PREFIX} no-pr:'))
+                        self.assertIn(f"stage {stage}", self.comments(t, 1)[0])
+                        self.assertEqual(self.sweep(t), [])  # blocked now: once
+
+    def test_two_stage_labels_ask_a_person(self):
+        ready, dev = "factory:ready", "factory:in-dev"
+        cases = [([ready, dev], 1), ([ready, dev, "factory:done"], 1), ([], 0), (["bug"], 0),
+                 (["factory:needs-human"], 1), (["factory:lesson"], 1), ([ready], 0), ([ready, "bug"], 0)]
+        for labels, asks in cases:
+            with self.subTest(labels=labels):
+                t, found = self.pass_({1: {"labels": labels}})
+                self.assertEqual([r["reconcile"] for r in found], ["stage-labels"] * asks)
+                if asks:
+                    self.assertIn("factory:needs-human", t.tickets[1]["attrs"])
+                    self.assertEqual(len(self.comments(t, 1)), 1)
+                    for label in set(labels) & STAGE_LABELS:
+                        self.assertIn(label, self.comments(t, 1)[0])
+
+    def test_pr_of_closed_ticket_asks_a_person(self):
+        for pr_state, asks in (("open", True), ("merged", False), ("closed", False)):
+            with self.subTest(pr_state=pr_state):
+                t, found = self.pass_({1: {"stage": "in-review", "issue_state": "closed", "pr": 9, "pr_state": pr_state}})
+                self.assertEqual([(r["reconcile"], r["pr"]) for r in found], [("orphan-pr", 9)] if asks else [])
+                self.assertEqual("factory:needs-human" in t.tickets[1].get("pr_labels", []), asks)
+                self.assertEqual(len(self.comments(t, 1)), int(asks))
+        self.assertEqual(self.pass_({1: {"stage": "in-review", "pr": 9, "pr_state": "open"}})[1], [])  # its ticket is open
+
+    def test_map_ticket_is_skipped(self):
+        for labels in (["factory:map"], ["factory:map", "factory:ready", "factory:in-dev"]):
+            with self.subTest(labels=labels):
+                t, found = self.pass_({1: {"labels": labels, "updated_at": self.STALE}})
+                self.assertEqual(found, [])
+                self.assertEqual(self.comments(t, 1), [])
+
+    def test_second_pass_writes_nothing(self):
+        tracker, first = self.pass_({1: {"stage": "done"}, 2: {"stage": "in-review", "updated_at": self.STALE},
+                                     3: {"labels": ["factory:ready", "factory:in-dev"]},
+                                     4: {"issue_state": "closed", "pr": 9, "pr_state": "open"}})
+        self.assertEqual(sorted(r["reconcile"] for r in first), ["close", "no-pr", "orphan-pr", "stage-labels"])
+        before = json.dumps(tracker.tickets, sort_keys=True)
+        self.assertEqual(self.sweep(tracker), [])
+        self.assertEqual(json.dumps(tracker.tickets, sort_keys=True), before)
+
+    def test_dry_run_lists_without_writing(self):
+        tracker = MemorySystem({1: {"stage": "done"}})
+        self.assertEqual([r["reconcile"] for r in self.sweep(tracker, dry_run=True)], ["close"])
+        self.assertNotIn("issue_state", tracker.tickets[1])
+
+
+class GitHubConsistencyViewTest(unittest.TestCase):
+    """The GitHub tracker's view: PR states from the pull list, forks and non-factory branches ignored."""
+
+    def test_view_groups_prs_by_ticket_and_finds_orphans(self):
+        from factory_plugins.github.gate import GitHubGateTracker
+        pr = lambda number, ref, state, merged=None, fork=False: {  # noqa: E731
+            "number": number, "state": state, "merged_at": merged,
+            "head": {"ref": ref, "repo": {"full_name": "other/fork" if fork else "o/r"}}}
+        pulls = [pr(10, "ez/1-a", "closed", merged="2026-11-01T00:00:00Z"), pr(11, "ez/1-b", "closed"),
+                 pr(12, "ez/2-a", "open"), pr(13, "ez/3-a", "open"), pr(14, "ez/4-a", "open", fork=True),
+                 pr(15, "feature/x", "open"), pr(16, "ez/99-a", "open")]
+        issues = [{"number": 1, "labels": [{"name": "factory:done"}], "updated_at": "t"},
+                  {"number": 2, "labels": [], "updated_at": "t"}, {"number": 20, "pull_request": {}, "labels": []}]
+
+        def gh(args, **kw):
+            path = next(a for a in args if a.startswith("repos/"))
+            if path.startswith("repos/o/r/pulls"):
+                return "\n".join(json.dumps(x) for x in pulls)
+            if path.startswith("repos/o/r/issues?"):
+                return "\n".join(json.dumps(x) for x in issues)
+            if path == "repos/o/r/issues/3":
+                return json.dumps({"number": 3, "state": "closed", "labels": []})
+            raise RuntimeError("HTTP 404: Not Found")  # #99 is no issue
+
+        view = GitHubGateTracker("o/r", {}, "bot", run=gh).consistency_view()
+        self.assertEqual([(t["number"], [p["state"] for p in t["prs"]]) for t in view["tickets"]],
+                         [(1, ["merged", "closed"]), (2, ["open"])])
+        self.assertEqual(view["orphan_prs"], [{"number": 13, "ticket": 3}])
+
+
+class GitHubOrphanCommentTargetTest(unittest.TestCase):
+    """An `orphan-pr` comment lands on the PR it names, not on the ticket's newest open PR."""
+
+    def test_comment_goes_to_the_named_pr_for_each_open_pr(self):
+        from factory_plugins.github.gate import GitHubGateTracker
+        calls = []
+
+        def gh(args, **kw):
+            if args[:2] == ["issue", "comment"]:
+                calls.append(args[2])
+                return ""
+            path = next(a for a in args if a.startswith("repos/"))
+            if path.startswith("repos/o/r/pulls?"):
+                return "\n".join(json.dumps({"number": k, "state": "open", "head": {"ref": "ez/3-a", "repo": {"full_name": "o/r"}}})
+                                 for k in (11, 12))
+            if path.startswith("repos/o/r/pulls/"):
+                return json.dumps({"number": int(path.rsplit("/", 1)[1]), "state": "open", "mergeable": True})
+            return ""
+
+        tracker = GitHubGateTracker("o/r", {}, "bot", run=gh)
+        for number in (11, 12):
+            tracker.apply({"ticket": 3, "kind": "comment", "value": f"[factory] orphan {number}", "on": "pr", "pr": number})
+        self.assertEqual(calls, ["11", "12"])
 
 
 if __name__ == "__main__":
