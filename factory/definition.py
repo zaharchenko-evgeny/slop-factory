@@ -270,6 +270,26 @@ def adopted(defn):
         or "environments" in (w.get("settings") or {})
 
 
+def label_prefix(defn):
+    """The stage label prefix (`tracker.label_prefix`, default `factory:`) of the primary repository of the default
+    environment: the top-level tracker block, then the environment's, then the repository's own (ADR-0027). While
+    `workflow.yaml` still has `stages.label_prefix`, it is the fallback (`warnings` reports the move)."""
+    f = defn["factory"]
+    fallback = (defn["workflow"].get("stages") or {}).get("label_prefix") or "factory:"
+    envs = f.get("environments") or {}
+    env = envs.get(default_environment(defn)) or {}
+    try:
+        primary = full_name(_primary(defn, env))
+    except (IndexError, KeyError, TypeError):
+        primary = None
+    entry = next((r for r in env.get("repositories") or [] if isinstance(r, dict) and r.get("repo")
+                  and full_name(r["repo"]) == primary), None)
+    chosen = None  # `label_prefix` is no system key: it carries over whatever the layers' adapters are
+    for layer in (f.get("tracker"), env.get("tracker"), (entry or {}).get("tracker")):
+        chosen = (_as_block(layer) or {}).get("label_prefix", chosen)
+    return chosen if isinstance(chosen, str) and chosen else fallback  # a bad value is `errors`'s to report
+
+
 def _repository_errors(defn):
     """The ADR-0027 checks: `write` is a boolean, each block's adapter is provided and valid, no two repositories
     share a tracker place, and no node hears one place from two environments."""
@@ -585,6 +605,9 @@ def errors(defn):
         errs += [f"removed-key: environments.{e}: {r.get('repo')}: `{k}` (ADR-0027: a repository's `write` names the "
                  "environment's writable repository)" for r in repos for k in REMOVED_REPOSITORY_KEYS if k in r]
     errs += scopes.errors(f)  # environments with their own trackers (#1069)
+    if "label_prefix" in (f.get("tracker") or {}) and not (
+            isinstance(f["tracker"]["label_prefix"], str) and f["tracker"]["label_prefix"]):
+        errs.append("bad-label-prefix: factory.yaml: `tracker.label_prefix` is a non-empty string")
     listed = (f.get("tracker") or {}).get("repositories")
     if listed is not None and (not isinstance(listed, list) or not all(isinstance(r, str) for r in listed)):
         errs.append("bad-tracker-repositories: factory.yaml: `tracker.repositories` is a list of repositories")
@@ -626,7 +649,7 @@ def errors(defn):
         if (source_env or {}).get("ci"):
             source_repo = _primary(defn, source_env) if source_env.get("repositories") else ""
             for state in ("green", "red"):
-                label = f"{(w.get('stages') or {}).get('label_prefix', 'factory:')}ci-{state}"
+                label = f"{label_prefix(defn)}ci-{state}"
                 pr_labels.setdefault(label, set()).add(full_name(source_repo))
     new_model = adopted(defn)
     for name, n in nodes.items():
@@ -691,7 +714,7 @@ def errors(defn):
                         valid = valid or value == "all"
                     if not valid:
                         errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins" + (" or {field: <name>}" if key == "assign" else ""))
-            prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
+            prefix = label_prefix(defn)
             by_target = {}
             for effect in oc.get("effects") or []:
                 if not isinstance(effect, dict):
@@ -749,13 +772,15 @@ def warnings(defn):
     triggered = {t["label"] for n in nodes for t in n.get("triggers") or [] if isinstance(t, dict) and "label" in t}
     added = {e["label"] for n in nodes for oc in (n.get("outcomes") or {}).values()
              for e in (oc or {}).get("effects") or [] if isinstance(e, dict) and "label" in e}
-    prefix = (defn["workflow"].get("stages") or {}).get("label_prefix", "factory:")
+    prefix = label_prefix(defn)
     # A routing label (the stage prefix) should wake a node; `risk:low` and the like are states, read by guards.
     registry = plugins.registry(defn["factory"])
     off = [plugins.refusal(f"agents.{a}", k, owner) for a, spec in (defn["factory"].get("agents") or {}).items()
            for k in spec or {} if (spec or {})[k] and (owner := plugins.owner(k, "agent")) and not registry.is_on(owner)]
     more = [w for check in registry.hook("definition.warnings") for w in check(defn)]
-    return [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
+    moved = ["deprecated-key: workflow.yaml stages.label_prefix moved to tracker.label_prefix in factory.yaml"] \
+        if "label_prefix" in (defn["workflow"].get("stages") or {}) else []
+    return moved + [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
             if label.startswith(prefix) and label not in triggered] + off + more + _repository_warnings(defn)
 
 
@@ -839,7 +864,7 @@ def to_project(defn):
     defaults = f.get("defaults") or {}
     dset, wset = defaults.get("settings") or {}, w.get("settings") or {}
     stages = w.get("stages") or {}
-    prefix = stages.get("label_prefix", "factory:")
+    prefix = label_prefix(defn)
     default_env = default_environment(defn)
 
     # Repositories: every listed one; the primary is the main repository of the default environment.
@@ -1089,7 +1114,7 @@ def nodes(defn):
     f, w = defn["factory"], defn["workflow"]
     agents, envs, defaults = f.get("agents") or {}, f.get("environments") or {}, f.get("defaults") or {}
     wset = w.get("settings") or {}
-    prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
+    prefix = label_prefix(defn)
     default_env, all_stages = default_environment(defn), sorted(_used_stages(w))
     primary = _primary(defn, envs[default_env])
     on_pr = {f"{prefix}ci-green", f"{prefix}ci-red"}
@@ -1144,7 +1169,7 @@ def config(defn):
     tracker's `stages`, `stage_kinds` and `commands` that the gate reads."""
     descriptor = to_project(defn)[0]
     states = {name: s for name, s in descriptor["states"].items() if "label" in s["store"]}
-    out = {**descriptor, "tracker": {**descriptor["tracker"],
+    out = {**descriptor, "tracker": {**descriptor["tracker"], "label_prefix": label_prefix(defn),
                                      "stages": {name: s["store"]["label"] for name, s in states.items()},
                                      "stage_kinds": {name: s["kind"] for name, s in states.items()},
                                      "commands": {name: c["store"] for name, c in descriptor["commands"].items()}}}

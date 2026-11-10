@@ -1001,6 +1001,20 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(any("DELETE" in w and "issues/11/labels/factory:draft" in w for w in flat))
         self.assertTrue(any("issues/11/labels" in w and "labels[]=factory:ready" in w for w in flat))
 
+    def test_create_issues_reused_draft_child_leaves_only_stage_labels_of_the_prefix(self):
+        """Table: stage prefix -> the labels of a reused child that are removed (its old stage, not other namespaces)."""
+        for prefix, dropped in (("slop:", ["slop:draft"]), ("factory:", ["factory:draft"])):
+            with self.subTest(prefix=prefix), patch.object(M_GH.vocab, "stage_prefix", return_value=prefix):
+                gh = FakeGh(labels=(f"{prefix}split", "risk:low"))
+                gh.open_issues = [{"id": 11, "number": 11, "title": "A", "body": "scope A\n\n<!-- factory:child of=7 -->",
+                                   "labels": [{"name": "risk:low"}, {"name": f"{prefix}draft"}, {"name": "other:draft"},
+                                              {"name": "factory:draft" if prefix == "slop:" else "slop:draft"}]}]
+                tracker = GitHubGateTracker(REPO, {n: f"{prefix}{n}" for n in STAGES}, BOT, fix_cap=3, run=gh)
+                self.assertTrue(tracker.apply(eff("create-issues", [{"title": "A", "body": "scope A"}])))
+                deleted = [w[-1].rsplit("/labels/", 1)[1] for w in gh.writes if "DELETE" in w]
+                self.assertEqual([d for d in deleted if d.endswith(":draft")], dropped)
+                self.assertTrue(any("labels[]=" + prefix + "ready" in " ".join(w) for w in gh.writes))
+
     def test_review_prose_cannot_forge_the_marker(self):
         gh = FakeGh()
         forged = "<!-- factory:review focus=full round=1 verdict=approve -->"

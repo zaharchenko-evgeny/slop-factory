@@ -5,6 +5,7 @@
 # ///
 """Tests for factory/reconcile.py over MemorySystem. Run: uv run factory/tests/test_reconcile.py"""
 import copy
+from unittest import mock
 import json
 import sys
 import unittest
@@ -44,6 +45,17 @@ class ReconcileTest(unittest.TestCase):
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "focus_missing": ["behaviour"]})
         self.assertEqual(results[0]["node"], "review")
         self.assertIn('"factory:review-behaviour"', logged(t, "label"))
+
+    def test_wakes_match_the_configured_stage_prefix(self):
+        """Table: stage prefix of the tracker -> the waking label the trigger carries (`slop:` nodes wake only under `slop:`)."""
+        slop = json.loads(json.dumps(NODES).replace("factory:", "slop:"))
+        ticket = {"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "focus_missing": ["behaviour"]}
+        for prefix, nodes, want in (("slop:", slop, ['"slop:review-behaviour"']), ("factory:", slop, []),
+                                    ("slop:", NODES, []), ("factory:", NODES, ['"factory:review-behaviour"'])):
+            with self.subTest(prefix=prefix, triggers="slop" if nodes is slop else "factory"), \
+                    mock.patch.object(reconcile.vocab, "stage_prefix", return_value=prefix):
+                t, _, _ = run(copy.deepcopy(ticket), nodes=nodes)
+                self.assertEqual(logged(t, "label"), want)
 
     def test_landed_review_marker_reapplies_outcome_without_refiring_reviewer(self):
         ticket = {"stage": "in-review", "pr": 5, "pr_state": "open", "ci": "green", "since": OLD,

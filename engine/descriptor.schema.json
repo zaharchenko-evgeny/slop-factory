@@ -93,6 +93,10 @@
         "token_env": {
           "type": "string"
         },
+        "label_prefix": {
+          "type": "string",
+          "minLength": 1
+        },
         "done_state": {
           "type": "string"
         },

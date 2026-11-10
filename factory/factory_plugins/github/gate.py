@@ -444,7 +444,7 @@ class GitHubTicketStore:
                 wrote = True
             if ready not in have:  # publish `ready` only once the links exist
                 for x in have:  # a reused draft child leaves its old stage
-                    if x.startswith("factory:") and x != ready:
+                    if x.startswith(vocab.stage_prefix()) and x != ready:
                         self.run(["api", "-X", "DELETE", f"repos/{repo}/issues/{new['number']}/labels/{x}"])
                 self.run(["api", "-X", "POST", f"repos/{repo}/issues/{new['number']}/labels", "-f", f"labels[]={ready}"])
                 wrote = True
