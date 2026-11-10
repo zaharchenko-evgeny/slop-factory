@@ -39,7 +39,7 @@ command (`command -v factory`), never `uv run` or a path into the engine.
 | finding fixed or disputed | `--fixed "<id> <sha>"`, `--disputed "<id> <reason>"`, `--disputed-focuses a,b` |
 | new ticket (slice) | `--slice <file.md>`: first line the title, the rest the body; a `repo: <repository>` line under the title creates it in that repository, an `after: <repository or slice number>` line makes it wait for those slices |
 | proposed acceptance check | `--propose-check "<check>"` |
-| note for a later agent | `--note-for <role\|any>` with `--note-hint "…"`, `--note-repro "<cmd>"`, `--note-file <path>` (≤2,000 chars, no secrets) |
+| note for a later agent | `--note-for <fixer\|reviewer\|developer\|any>` with `--note-hint "…"`, `--note-repro "<cmd>"`, `--note-file <path>` (≤2,000 chars, no secrets) |
 | lesson for later runs | `--lesson "<project\|factory\|engine> <about> \| <text> \| evidence: <x>"` (evidence optional) |
 
 Example: `factory end <outcome> --summary "…" --blocking "B1 src/x.py:10 crashes on '' | case: x('') raises"`
