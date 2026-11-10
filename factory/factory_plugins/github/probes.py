@@ -96,8 +96,10 @@ def project_write_probes(settings, env, run, environ=os.environ):
     Each probe creates a label, then deletes it, with that token (github_tracker.ProjectWriteRun). A `token` secret
     that is not set is a `fail` that names it, and nothing is written. The environment's own repository
     ($FACTORY_ENV_REPOSITORY) is not probed: Air's token writes it."""
-    repos = github_tracker.foreign_projects(github_tracker.project_repositories(settings), environ)
     tokens = github_tracker.repository_tokens(settings, {**environ, "FACTORY_ENV": env})
+    declared = github_tracker.project_repositories(settings)
+    declared += [r for r in tokens if r not in {x.lower() for x in declared}]  # a token-declared repository of any role
+    repos = github_tracker.foreign_projects(declared, environ)
     if not github_tracker.token_env(env, settings):
         repos = [r for r in repos if r.lower() in tokens]
     if not repos:

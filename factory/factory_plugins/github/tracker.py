@@ -180,8 +180,9 @@ class ProjectWriteRun:
     def __init__(self, run, repositories, environ=os.environ, tokens=None):
         """`tokens`: {owner/repo: secret name}, as `repository_tokens` reads it."""
         self.run, self.environ = run, environ
-        self.repositories = {r.lower() for r in foreign_projects(repositories, environ)}
         self.tokens = {r.lower(): secret for r, secret in (tokens or {}).items()}
+        # a repository with a declared token is written with it whatever its role (a foreign primary included)
+        self.repositories = {r.lower() for r in foreign_projects([*repositories, *self.tokens], environ)}
 
     def token(self, repo):
         """The token for a write to `repo`: its declared one, else $FACTORY_WRITE_TOKEN; None when neither is set."""

@@ -125,6 +125,14 @@ class ProjectWriteProbeTest(unittest.TestCase):
                                 "detail": "FACTORY_ISSUES_TOKEN is not set (token of o/app)"}])
         self.assertEqual(gh.calls, [])
 
+    def test_a_token_declared_primary_repository_is_probed(self):
+        """#1236 B2: `role: primary` is not a project repository, but its declared `token` is still probed."""
+        settings = {**self.SETTINGS, "environments": {"team": {"secrets": [], "tokens": {"main": "FACTORY_ISSUES_TOKEN"}}}}
+        gh = FakeGh()
+        got = github_probes.project_write_probes(settings, "team", gh, {"FACTORY_ISSUES_TOKEN": "iss"})
+        self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/r", "ok")])
+        self.assertEqual(gh.tokens, ["iss", "iss"])
+
     def test_the_environment_repository_is_not_probed_for_the_issues_token(self):
         """#1126: Air's own token writes the environment's repository, so the issues token is not needed there."""
         settings = {**self.SETTINGS, "environments": {"team": {"secrets": [], "tokens": {"app": "FACTORY_ISSUES_TOKEN"}}}}

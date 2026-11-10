@@ -296,6 +296,20 @@ class ProjectWriteToken(unittest.TestCase):
             run(["label", "create", "x", "-R", repo])
         self.assertEqual(calls, ["T", None])
 
+    def test_token_declared_foreign_primary_repository_runs_with_it(self):
+        """#1236 B2: project_repositories omits the primary repository, but a `token` for it still applies; the own
+        repository stays on Air's token with or without a declaration."""
+        env = {"T": "t", "FACTORY_ENV_REPOSITORY": "o/team"}
+        for repositories, tokens, repo, want in (
+                ([], {"o/engine": "T"}, "o/engine", "t"),
+                ([], {"o/Engine": "T"}, "O/ENGINE", "t"),
+                ([], {"o/team": "T"}, "o/team", None),
+                ([], {}, "o/engine", None)):
+            calls = []
+            run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", repositories, env, tokens)
+            run(["label", "create", "x", "-R", repo])
+            self.assertEqual(calls, [want], (tokens, repo))
+
     def test_each_repository_uses_its_own_token(self):
         """Table: a declared secret wins over $FACTORY_WRITE_TOKEN; unset secrets and unlisted repositories fall back."""
         env = {"A_TOKEN": "a", "B_TOKEN": "b", "FACTORY_WRITE_TOKEN": "w"}
