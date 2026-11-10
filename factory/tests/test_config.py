@@ -139,6 +139,14 @@ class TeamRootTest(unittest.TestCase):
             self.assertEqual(cli.main(["validate"]), 0)
         self.assertIn("factory: ok", out.getvalue())
 
+    def test_validate_reports_a_root_without_a_definition(self):
+        with tempfile.TemporaryDirectory() as tmp:  # #1248: e.g. `--team .` from the engine checkout
+            config.set_team(tmp)
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(cli.validate(), 1)
+            self.assertIn(str(Path(tmp).resolve()), out.getvalue())
+            self.assertIn("factory.yaml", out.getvalue())
+
     def test_team_option_and_env(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = team(tmp)
