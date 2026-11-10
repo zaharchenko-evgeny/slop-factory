@@ -133,5 +133,24 @@ class SetupTest(unittest.TestCase):
         self.assertIn("missing-role-body", str(e.exception))
 
 
+class RolesInEnvironments(unittest.TestCase):
+    def test_roles_follow_node_environments(self):
+        agents = {"dev": {"role": "developer"}, "ops": {"role": "ops"}}
+        cases = [
+            ("no environment, settings.environments lists both", {"environments": ["engine", "team"]}, {}, ["developer"], ["developer"]),
+            ("settings.environment default", {"environment": "team"}, {}, [], ["developer"]),
+            ("node environment wins", {"environments": ["engine", "team"]}, {"environment": "team"}, [], ["developer"]),
+            ("node environments list", {}, {"environments": ["engine"]}, ["developer"], []),
+            ("disabled node", {"environments": ["engine", "team"]}, {"enabled": False}, [], []),
+            ("no environment at all", {}, {}, [], []),
+        ]
+        for label, settings, node, engine, team in cases:
+            with self.subTest(label):
+                defn = {"factory": {"agents": agents},
+                        "workflow": {"settings": settings, "nodes": {"implement": {"agent": "dev", **node}}}}
+                self.assertEqual(team_setup.roles_in(defn, "engine"), engine)
+                self.assertEqual(team_setup.roles_in(defn, "team"), team)
+
+
 if __name__ == "__main__":
     unittest.main()
