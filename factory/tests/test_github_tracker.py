@@ -296,6 +296,32 @@ class ProjectWriteToken(unittest.TestCase):
         run(["api", "-X", "POST", "repos/o/other/issues/7/labels", "-f", "labels[]=x"])
         self.assertEqual(calls, [None, "pat"])
 
+    def test_a_call_to_a_checkout_runs_in_its_directory(self):
+        """#1246: Air's token writes a checkout only from that checkout's directory, so a call to slop-eval-factory
+        made from the slop-factory checkout got 403. A repository that is not checked out runs where it was."""
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / "team").mkdir()
+            env = {"FACTORY_WORKSPACES": root, "FACTORY_ENV_REPOSITORY": "o/engine"}
+            calls = []
+            run = github_tracker.ProjectWriteRun(lambda args, **kw: calls.append(kw) or "", ["o/team", "o/other"], env,
+                                                 checkouts=["o/engine", "o/team"])
+            run(["issue", "edit", "104", "-R", "o/Team", "--add-label", "x"])
+            run(["api", "repos/o/team/issues/104"])  # a read of a checkout runs there too
+            run(["api", "-X", "POST", "repos/o/other/issues/1/labels", "-f", "labels[]=x"])  # not checked out
+            run(["api", "-X", "POST", "repos/o/engine/issues/1/labels", "-f", "labels[]=x"])  # no directory here
+            self.assertEqual(calls, [{"cwd": str(Path(root) / "team")}] * 2 + [{}, {}])
+
+    def test_link_to_a_checked_out_repository_issue_uses_the_issues_token(self):
+        """#1246: a sub-issue link in slop-factory to a slop-eval-factory child: neither checkout's token reads both."""
+        calls = []
+        env = {"FACTORY_ISSUES_TOKEN": "pat", "FACTORY_ENV_REPOSITORY": "o/engine"}
+        run = github_tracker.ProjectWriteRun(lambda args, **kw: calls.append(kw.get("token")) or "", ["o/team"], env,
+                                             "FACTORY_ISSUES_TOKEN", ["o/engine", "o/team"])
+        link = ["api", "-X", "POST", "repos/o/engine/issues/7/sub_issues", "-F", "sub_issue_id=99"]
+        run.for_repository("o/team")(link)
+        run.for_repository("o/engine")(link)
+        self.assertEqual(calls, ["pat", None])
+
     def test_without_the_token_every_call_runs_as_before(self):
         calls = []
         run = github_tracker.ProjectWriteRun(lambda args, **kw: calls.append(kw) or "", ["o/app"], {})

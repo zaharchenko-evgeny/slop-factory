@@ -47,14 +47,14 @@ RESET = re.compile(r"x-ratelimit-reset:\s*(\d+)", re.I)
 MAX_WAIT, DEFAULT_WAIT = 300, 60  # seconds: the longest wait for a reset, and the wait when none is given
 
 
-def gh(args, timeout=None, token=None):
+def gh(args, timeout=None, token=None, cwd=None):
     """Run `gh` (or $FACTORY_GH) with an argument list (no shell); return stdout. On a rate-limit answer
     (HTTP 403 or 429), wait until `x-ratelimit-reset` (at most MAX_WAIT), retry once, then raise RateLimited.
-    `token`: GH_TOKEN of this call only."""
+    `token`: GH_TOKEN of this call only. `cwd`: the directory it runs in (Air's token follows the checkout, #1246)."""
     env = {**os.environ, "GH_TOKEN": token} if token else None
     for attempt in (1, 2):
         p = subprocess.run([os.environ.get("FACTORY_GH", "gh"), *args], capture_output=True, text=True, timeout=timeout,
-                           env=env)
+                           env=env, cwd=cwd)
         if not p.returncode:
             return p.stdout
         text = f"{p.stderr}\n{p.stdout}"
@@ -118,6 +118,7 @@ class CountedRun:
 WRITE_TOKEN = "FACTORY_WRITE_TOKEN"
 WRITE_TOKEN_ENVS = ("write", "ops")
 ENV_REPOSITORY = "FACTORY_ENV_REPOSITORY"  # owner/repo of the environment's Air repository, set by deploy (#1126)
+WORKSPACES = "FACTORY_WORKSPACES"  # where Air checks out a run's repositories (default /workspaces)
 
 
 def token_env(env, config):
@@ -176,15 +177,27 @@ class ProjectWriteRun:
     call, every call without a token and every write to the environment's own repository runs as before."""
 
     def __init__(self, run, repositories, environ=os.environ, issues_token_env=None, checkouts=()):
-        """`checkouts`: the run's other checkouts, which Air's token writes too (AIRF-51): never the issues token."""
+        """`checkouts`: the run's checkouts. Air's token writes a checkout only from that checkout's directory
+        (#1246): a call to one runs there, and never takes the issues token."""
         self.run, self.environ = run, environ
-        self.repositories = {r.lower() for r in foreign_projects(repositories, environ)} - {c.lower() for c in checkouts}
+        self.checkouts = {c.lower(): c for c in checkouts}
+        self.repositories = {r.lower() for r in foreign_projects(repositories, environ)} - set(self.checkouts)
         self.issues_token_env = issues_token_env
+
+    def checkout_dir(self, repo):
+        """The directory of the run's checkout of `repo`, or None when it is not checked out here."""
+        name = self.checkouts.get((repo or "").lower())
+        path = Path(self.environ.get(WORKSPACES) or "/workspaces") / name.rsplit("/", 1)[-1] if name else None
+        return str(path) if path and path.is_dir() else None
 
     def __call__(self, args, touches=None, **kw):
         token = (self.issues_token_env and self.environ.get(self.issues_token_env)) or self.environ.get(WRITE_TOKEN)
-        if token and gh_writes(args) and {(gh_target(args) or "").lower(), (touches or "").lower()} & self.repositories:
-            kw["token"] = token
+        target = (gh_target(args) or "").lower()
+        foreign_link = bool(touches) and touches.lower() != target  # a link to another repository's issue
+        if token and gh_writes(args) and ({target, (touches or "").lower()} & self.repositories or foreign_link):
+            kw["token"] = token  # no checkout's own token reads both issues of a link
+        elif (where := self.checkout_dir(target)):
+            kw["cwd"] = where
         return self.run(args, **kw)
 
     def for_repository(self, repo):
