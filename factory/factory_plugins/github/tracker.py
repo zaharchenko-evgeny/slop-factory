@@ -58,7 +58,8 @@ def gh(args, timeout=None, token=None):
         if not p.returncode:
             return p.stdout
         text = f"{p.stderr}\n{p.stdout}"
-        msg = f"gh {' '.join(args[:3])}: {p.stderr.strip()}"
+        target = next((str(x) for x in args if str(x).startswith("repos/")), None) or gh_target(args) or ""
+        msg = f"gh {' '.join(str(x) for x in args[:3])} {target}".rstrip() + f": {p.stderr.strip()}"  # which call failed
         if not (re.search(r"HTTP (403|429)", text) and RATE_LIMIT.search(text)):
             raise RuntimeError(msg)
         if attempt == 2:
