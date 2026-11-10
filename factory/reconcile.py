@@ -293,7 +293,8 @@ def definition_recovery(defn, tracker_stages, needs_human, default):
         removed = {e["unlabel"] for fx in _outcome_effects(n) for e in fx if "unlabel" in e}
         for t in n.get("triggers") or []:
             label = t.get("label") if isinstance(t, dict) else None
-            if label and label in removed and label not in skip:
+            waiting_on_ci = label in (vocab.ci("ci-green"), vocab.ci("ci-red")) and "waiting" in (n.get("outcomes") or {})
+            if label and (label in removed or waiting_on_ci) and label not in skip:
                 wakes.append((name, label, n.get("timeout_minutes", default)))
                 if (n.get("settings") or {}).get("mode") == "fix" and fix is None:
                     stage = next((e["stage"] for m in nodes.values() for fx in _outcome_effects(m)
@@ -344,7 +345,18 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
                 for node, label, timeout in wakes:
                     on = "issue" if label in facts.get("attrs", []) else "pr" if label in on_pr else None
                     at = (facts.get("label_at") or {}).get(label)
-                    if on and at and ago(at) > timedelta(minutes=timeout) and gate.holds(nodes[node].get("when") or {}, facts, {}):
+                    ci = "green" if label == vocab.ci("ci-green") else "red" if label == vocab.ci("ci-red") else None
+                    waiting = f"stage={stage} head={head} waiting for ci={ci} at {label}"
+                    comments = facts.get("recover_comments", [])
+                    waited = ci and waiting in comments and not any(
+                        f"stage={stage} head={head} re-fired {label} (" in c for c in comments)
+                    if ci and on and facts.get("ci") == "pending" and not waited:
+                        if not dry_run:
+                            tracker.apply({"kind": "comment", "ticket": n, "value": f"{PREFIX} {waiting}"})
+                        continue
+                    if (on and at and (ago(at) > timedelta(minutes=timeout) or waited)
+                            and (not ci or facts.get("ci") == ci)
+                            and gate.holds(nodes[node].get("when") or {}, facts, {})):
                         step = ("refire", node, label, on, f"no {node} outcome")
                         break
                 if step is None and not facts.get("blockers_open"):

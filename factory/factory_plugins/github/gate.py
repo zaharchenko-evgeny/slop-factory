@@ -1039,7 +1039,8 @@ class GitHubGateTracker(DescriptorPort):
         latest_event = max([e["at"] or "" for _, e in events] + [commit_at or ""])
         latest_command = max((e["at"] for e in command_events), default="")
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
-        comments = [c["body"] for c in self.tickets.comments(n) if c["body"].startswith(("[factory] recover:", "[factory] reconcile:", "[factory] end failed:"))
+        comments = [c["body"] for c in self.tickets.comments(n) if c["author_is_factory"]
+                    and c["body"].startswith(("[factory] recover:", "[factory] reconcile:", "[factory] end failed:"))
                     and c["at"] >= stage_at]
         return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
                 "command_pending": bool(latest_command and latest_command == latest_event),

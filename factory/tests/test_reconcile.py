@@ -396,6 +396,22 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(self.recover(self.pr(ci="green", **{**labels, "label_at": {"factory:review-low": FRESH}}))[1], [])
         self.assertEqual([r["reconcile"] for r in self.recover(self.pr(ci="pending", **labels))[1]], ["refire"])  # a review never waits for CI
 
+    def test_waiting_ci_label_retries_when_ci_finishes_once_per_head(self):
+        ticket = self.pr(stage="approved", ci="pending", pr_labels=["factory:ci-red"],
+                         label_at={"factory:ci-red": OLD})
+        t, results = self.recover(ticket)
+        self.assertEqual(results, [])
+        self.assertIn('waiting for ci=red at factory:ci-red', logged(t, "comment")[0])
+
+        ticket.update(ci="red", log=t.tickets[1]["log"])
+        t, results = self.recover(ticket)
+        self.assertEqual([(r["node"], r["reconcile"]) for r in results], [("ci-failed", "refire")])
+        self.assertEqual(logged(t, "label"), ['"factory:ci-red"'])
+
+        ticket.update(log=t.tickets[1]["log"], label_at={"factory:ci-red": FRESH})
+        t, results = self.recover(ticket)
+        self.assertEqual(results, [])
+
     def test_review_label_whose_when_never_holds_is_stuck_once(self):
         ticket = self.pr(ci="green", attrs=[], pr_labels=["factory:review-low"],  # no risk label: `when` never holds
                          label_at={"factory:review-low": "2026-11-03T09:00:00Z"})  # 3 hours: past 2 timeouts

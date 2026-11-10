@@ -1680,13 +1680,32 @@ class StaleFactsTest(unittest.TestCase):
             if a.endswith("issues/5/events"):
                 return ev(("factory:ci-green", "2026-01-02T05:00:00Z"))
             if a.endswith("issues/7/comments"):
-                return "\n".join(json.dumps({"body": c, "created_at": "2026-01-02T04:00:00Z"}) for c in gh.comments)
+                return "\n".join(json.dumps({"body": c, "created_at": "2026-01-02T04:00:00Z",
+                                                "user": {"login": BOT, "type": "Bot"}}) for c in gh.comments)
             return base(args)
 
         f = tr(run).stale_facts(7)
         self.assertEqual((f["since"], f["ci_label"], f["command"]), ("2026-01-02T05:00:00Z", "green", None))
         self.assertEqual(len(f["recover_comments"]), 1)
         self.assertEqual(gate.recovered(f, "in-review"), 1)
+
+    def test_recover_comments_accept_only_factory_authored_recovery_kinds(self):
+        bodies = ("[factory] recover: old retry", "[factory] reconcile: waiting for CI",
+                 "[factory] end failed: old failure", "[factory] other: unrelated")
+        comments = [{"body": body, "created_at": "2026-01-02T04:00:00Z",
+                     "user": {"login": author, "type": kind}}
+                    for author, kind, body in ((BOT, "Bot", bodies[0]), (BOT, "Bot", bodies[1]),
+                                               (BOT, "Bot", bodies[2]), (BOT, "Bot", bodies[3]),
+                                               ("someone", "User", bodies[0]), ("someone[bot]", "Bot", bodies[1]))]
+        base = FakeGh().__call__
+
+        def run(args):
+            path = next((x for x in args if x.startswith("repos/")), "")
+            if path.endswith("issues/7/comments"):
+                return "\n".join(json.dumps(c) for c in comments)
+            return base(args)
+
+        self.assertEqual(tr(run).stale_facts(7)["recover_comments"], list(bodies[:3]))
 
     def test_ci_label_read_from_pr_labels(self):
         recorded = json.loads((ROOT / "factory/tests/fixtures/pull-298.json").read_text())
