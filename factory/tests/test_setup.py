@@ -53,6 +53,23 @@ class SetupTest(unittest.TestCase):
         self.assertNotIn("retro", skills)
         self.assertIn("skill tdd: github:cursor/plugins@4dd1d05818d1", lines)
 
+    def test_roles_in_reads_every_environment_form(self):
+        defn = {"factory": {"agents": {"a": {"role": "dev"}, "b": {"role": "ops"}}},
+                "workflow": {"settings": {}, "nodes": {"n": {"agent": "a"}, "m": {"agent": "b"}}}}
+        w, n = defn["workflow"], defn["workflow"]["nodes"]
+        cases = [  # (settings, node n extra, node m extra, roles in engine)
+            ({"environments": ["engine", "team"]}, {}, {"environment": "team"}, ["dev"]),
+            ({"environment": "engine"}, {}, {}, ["dev", "ops"]),
+            ({"environments": ["team"]}, {"environments": ["engine", "team"]}, {}, ["dev"]),
+            ({"environment": "team"}, {"environment": "engine"}, {"enabled": False, "environment": "engine"}, ["dev"]),
+            ({}, {}, {}, []),
+        ]
+        for settings, extra_n, extra_m, want in cases:
+            with self.subTest(settings=settings, n=extra_n, m=extra_m):
+                w["settings"] = settings
+                n["n"], n["m"] = {"agent": "a", **extra_n}, {"agent": "b", **extra_m}
+                self.assertEqual(team_setup.roles_in(defn, "engine"), want)
+
     def test_refuses_a_skill_whose_hash_differs(self):
         other = self.tmp / "other"
         other.mkdir()
