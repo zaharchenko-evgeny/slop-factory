@@ -21,7 +21,6 @@ settings:                         # every node inherits these; a node overrides 
     stale_hours: 2
     stale_command_minutes: 30
     run_timeout_minutes: 30
-    ci_wait_minutes: 20           # `factory ci --wait`: a reviewer waits this long for CI after its review
     resume_cap: 3
     environment_repair_attempts: 2
     prompt_lines: { role: 160, lessons: 150, agents_md: 150 }   # `factory validate` fails a file above its limit
@@ -104,12 +103,11 @@ nodes:
       done-high:  { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
 
-  # --- Review: one review per ticket, chosen by risk; reviews, then waits for CI (red CI: changes) ---
+  # --- Review: one review per ticket, chosen by risk; CI may still run (red CI: never approved) -----
   review-low:
     agent: reviewer-cheap
     triggers: [{ label: "factory:review-low" }]
-    when: { stage: in-review, label: "risk:low" }   # risk:low picks this review; CI may still run
-    timeout_minutes: 50           # the review, then up to ci_wait_minutes for CI
+    when: { stage: in-review, label: "risk:low" }   # risk:low picks this review
     output: read-only
     settings: { focus: [behaviour] }
     outcomes:
@@ -124,8 +122,7 @@ nodes:
   review-high:
     agent: reviewer
     triggers: [{ label: "factory:review-high" }]
-    when: { stage: in-review, label: "risk:high" }   # risk:high picks this review; CI may still run
-    timeout_minutes: 50           # the review, then up to ci_wait_minutes for CI
+    when: { stage: in-review, label: "risk:high" }   # risk:high picks this review
     output: read-only
     settings: { focus: [full, structure-security] }
     outcomes:
@@ -136,6 +133,16 @@ nodes:
                        effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "risk:high" },
                                 { label: "factory:needs-human" }, { stage: approved }] }   # merge risk medium or high: a person merges
       changes:       { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-high" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
+
+  ci-failed:                      # CI finished red after the approval: the developer fixes it, then a new review
+    agent: clerk
+    triggers: [{ label: "factory:ci-red" }]   # ci-sync labels the PR from its checks
+    when: { stage: approved }       # before the approval, the approve outcomes' CI guard turns red into changes
+    outcomes:
+      fix:     { if: { ci: red }, effects: [{ unlabel: "factory:automerge" }, { unlabel: "factory:merge" },
+                                            { unlabel: "factory:needs-human" }, { label: "factory:fix", on: pr },
+                                            { stage: changes-requested }] }
+      waiting: {}                 # CI is green again or still running: nothing to do
 
   # --- Fix: review findings, red CI included -> a new head, reviewed again ---------------------
   fix:
