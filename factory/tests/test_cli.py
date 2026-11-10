@@ -413,7 +413,7 @@ class PackagingTest(unittest.TestCase):
 class SkillTest(unittest.TestCase):
     def test_note_for_values_match_the_gate(self):
         """#1060: a `--note-for` value the gate refuses fails the whole `factory end`, so the skill lists them exactly."""
-        from gate_github import NOTE_FOR
+        from derive import NOTE_FOR
         skill = (ROOT / "skills/factory-step/SKILL.md").read_text()
         listed = re.search(r"`--note-for <([^>]+)>`", skill)[1].replace("\\|", "|").split("|")
         self.assertEqual(sorted(listed), sorted(NOTE_FOR))
