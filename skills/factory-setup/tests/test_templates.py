@@ -80,9 +80,12 @@ class Templates(unittest.TestCase):
             self.assertIn(f"`{name}`", doc, name)
         self.assertEqual(used, set(ANSWERS))
 
-    def test_workflow_has_ci_red_and_no_walkthrough_node(self):
+    def test_workflow_has_ci_failed_and_no_walkthrough_node(self):
         nodes = yaml.safe_load((render.PROJECT_T / "workflow.yaml").read_text())["nodes"]
-        self.assertIn("ci-red", nodes)
+        self.assertIn("ci-failed", nodes)
+        self.assertNotIn("ci-red", nodes)
+        self.assertEqual(nodes["ci-failed"]["when"], {"stage": "approved"})
+        self.assertNotIn("ci", nodes["review-low"]["when"])  # a review never waits for CI
         self.assertNotIn("walkthrough", nodes)
         self.assertFalse((render.PROJECT_T / "roles" / "walkthrough").exists())
         factory = yaml.safe_load(render.render_project(ANSWERS)["factory.yaml"])
