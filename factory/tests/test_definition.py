@@ -666,6 +666,13 @@ class DefinitionTest(unittest.TestCase):
                          [{"command": "complexity:small"}, {"command": "implement-small"}, {"state": "in-dev"}])
         self.assertEqual(desc["states"]["done"]["kind"], "final")
 
+    def test_node_timeout_reaches_reconcile(self):  # a review that waits for CI is not a missed run
+        self.edit("workflow.yaml", lambda w: w["nodes"]["fix"].update(timeout_minutes=50))
+        defn = definition.load(self.root)
+        self.assertEqual(definition.nodes(defn)["nodes"]["fix"]["timeout_minutes"], 50)
+        self.assertEqual(definition.to_project(defn)[1]["nodes"]["fix"]["timeout_minutes"], 50)
+        self.assertNotIn("timeout_minutes", definition.nodes(defn)["nodes"]["merge"])
+
     def test_nodes_read_the_definition_in_the_gate_shape(self):
         graph = definition.nodes(definition.load(self.root))
         n = graph["nodes"]
