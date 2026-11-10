@@ -2296,6 +2296,21 @@ class TicketReposGh:
         return next((k for k, v in CONFIG["tracker"]["stages"].items() if v == label), label)
 
 
+class RequiredReviewsTest(unittest.TestCase):
+    """A v1 team's partial `reviews.required` keeps the engine default of the other risk."""
+
+    def test_partial_override_keeps_other_risk(self):
+        default = {"low": ["full"], "high": ["behaviour", "structure-security"]}
+        for name, team, want in [("none", {}, default), ("low only", {"low": ["a"]}, {**default, "low": ["a"]}),
+                                 ("high only", {"high": ["b"]}, {**default, "high": ["b"]}),
+                                 ("empty", {"low": [], "high": []}, {"low": [], "high": []}),
+                                 ("both", {"low": ["a"], "high": ["b"]}, {"low": ["a"], "high": ["b"]})]:
+            with self.subTest(name), patch.object(definition, "present", return_value=False), \
+                    patch.object(cfg, "load", return_value={"reviews": {"required": team} if team else {}}):
+                tr = gh_gate.GitHubGateTracker("o/r", CONFIG["tracker"]["stages"], "bot", required=team or None)
+                self.assertEqual(tr.required, want)
+
+
 class TicketRepositoriesTest(unittest.TestCase):
     """ADR-0024: tickets live in several repositories; `owner/repo#n` names one outside the tracker (#982)."""
     TICKETS = ["o/r", "o/b"]

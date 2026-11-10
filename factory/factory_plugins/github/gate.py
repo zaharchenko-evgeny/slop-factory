@@ -510,7 +510,8 @@ class GitHubGateTracker(DescriptorPort):
         if definition.present(config.team_root()):  # ADR-0021: no focuses; workflow.yaml names the reviews
             self.required = {"low": [], "high": []}
         else:  # review focuses by risk: `reviews.required` of the team's factory.yaml over the engine's defaults
-            self.required = {**config.load()["reviews"]["required"], **(required or {})}
+            engine = yaml.safe_load((config.engine_root() / "engine/defaults.yaml").read_text())["reviews"]["required"]
+            self.required = {**engine, **(config.load()["reviews"].get("required") or {}), **(required or {})}  # per risk: a partial override keeps the other risk
         self.project = project  # factory.project.yaml: the stores of states and commands (DescriptorPort)
         self.pr_repo = pr_repo or repo  # the code host: pull requests, CI, commits, merges
         # {name: owner/repo} of the descriptor's repositories, the primary first; the primary is the code host
