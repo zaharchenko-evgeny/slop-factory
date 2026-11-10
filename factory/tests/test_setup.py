@@ -143,6 +143,26 @@ class SetupTest(unittest.TestCase):
                            run=lambda cmd, **kw: None, checkout=self.tmp)
         self.assertFalse((self.tmp / ".mcp.json").exists())
 
+    def test_roles_in_follows_node_environments(self):
+        def defn(settings, node_env):
+            node = {"agent": "dev", **node_env}
+            return {"factory": {"agents": {"dev": {"role": "developer"}}},
+                    "workflow": {"settings": settings, "nodes": {"n": node}}}
+        rows = [
+            ({"environments": ["engine", "team"]}, {}, "engine", ["developer"]),
+            ({"environments": ["engine", "team"]}, {}, "team", ["developer"]),
+            ({"environments": ["engine", "team"]}, {}, "other", []),
+            ({"environment": "engine"}, {}, "engine", ["developer"]),
+            ({"environment": "engine"}, {}, "team", []),
+            ({"environments": ["engine"]}, {"environment": "team"}, "engine", []),
+            ({"environments": ["engine"]}, {"environment": "team"}, "team", ["developer"]),
+            ({"environment": "engine"}, {"environments": ["a", "b"]}, "b", ["developer"]),
+            ({}, {}, "engine", []),
+        ]
+        for settings, node_env, env, want in rows:
+            with self.subTest(settings=settings, node=node_env, env=env):
+                self.assertEqual(team_setup.roles_in(defn(settings, node_env), env), want)
+
     def test_refuses_an_invalid_definition(self):
         (self.root / "roles/router/role.md").unlink()
         with self.assertRaises(SystemExit) as e:
