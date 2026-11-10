@@ -1062,16 +1062,6 @@ def merge_decision(facts, auto_merge):
     return ("updated" if facts.get("behind") else "merged"), {}
 
 
-def retro_payload(facts):
-    """The `finish` retro comment of a merged ticket, from its facts."""
-    agent = [r for r in facts["reviews"] if r["agent"]]
-    pr = f"PR #{facts['pr']} {facts['pr_state']}" if facts["pr"] else "no PR found"
-    text = (f"Retro: {pr}; fix rounds {facts['fix_rounds']}; "
-            f"reviews {len(agent)} ({sum(r['verdict'] == 'approve' for r in agent)} approve, "
-            f"{sum(r['verdict'] == 'changes' for r in agent)} changes)")
-    return {"retro": text, "run_id": "finish:retro"}
-
-
 AFTER_MERGE_CHECK = re.compile(r"(?im)^\s*[-*] \[ \] Operator check after the merge \(not part of the PR\):\s*(.+?)\s*$")
 AFTER_MERGE_MARKER = "<!-- factory:after-merge-checks -->"
 
