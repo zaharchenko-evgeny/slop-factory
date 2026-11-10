@@ -388,7 +388,7 @@ class DefinitionTest(unittest.TestCase):
             factory["environments"]["web"] = {"repositories": [{"repo": "owner/web"}]}
         self.edit("factory.yaml", add_pr_repository)
         self.edit("workflow.yaml", lambda w: w["nodes"]["retro"].update(
-            environment="web", writes=["owner/web"], outcomes={**w["nodes"]["retro"]["outcomes"],
+            environment="web", writes=["owner/web"], triggers=["manual"], outcomes={**w["nodes"]["retro"]["outcomes"],
                                          "proposed": {"effects": [{"label": "factory:knowledge-review", "on": "pr"},
                                                                       {"label": "factory:review-low", "on": "pr"}]}}))
         self.edit("workflow.yaml", lambda w: w["nodes"]["review-low"].update(
@@ -485,7 +485,7 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["implement-small"].update(writes="all", triggers=[{"schedule": "0 * * * *"}]))
         self.assertError("schedule-writes-several: nodes.implement-small")
         self.edit("workflow.yaml", lambda w: w["nodes"]["implement-small"].update(writes=[MAIN]))
-        self.assertEqual(self.errors(), [])
+        self.assertFalse([e for e in self.errors() if e.startswith("schedule-writes")])
 
     def test_writes_all_expands_to_environment_repositories(self):
         node = self._full_nodes()[0]
@@ -901,6 +901,19 @@ class DefinitionTest(unittest.TestCase):
             self.assertEqual(t.facts("7")["stage"], "in-dev")
         finally:
             config.set_team(before)
+
+    def test_routine_with_effects_is_rejected_and_bare_outcomes_pass(self):
+        for effects in ([{"label": "factory:x", "on": "pr"}], [{"comment": "hi"}], [{"label": "factory:x"}]):
+            self.edit("workflow.yaml", lambda w: w["nodes"]["retro"]["outcomes"].update(proposed={"effects": effects}))
+            self.assertError("routine-effects: nodes.retro.proposed")
+        self.edit("workflow.yaml", lambda w: w["nodes"]["retro"]["outcomes"].update(proposed={}, nothing=None))
+        self.assertEqual(self.errors(), [])
+
+    def test_ticket_node_keeps_its_effects(self):
+        self.assertFalse([e for e in self.errors() if e.startswith("routine-effects")])
+        self.edit("workflow.yaml", lambda w: w["nodes"]["retro"]["triggers"].append({"label": "factory:retro-now"}))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["retro"]["outcomes"].update(proposed={"effects": [{"comment": "hi"}]}))
+        self.assertFalse([e for e in self.errors() if e.startswith("routine-effects")])
 
     def test_scheduled_nodes_are_routines(self):
         n = definition.to_project(definition.load(self.root))[1]["nodes"]

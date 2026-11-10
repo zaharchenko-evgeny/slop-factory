@@ -148,32 +148,58 @@ class ChangedLinesTest(unittest.TestCase):
 
 
 class CollectTest(unittest.TestCase):
-    def test_collect_removes_label_then_marks(self):
-        """The label goes before the comments are read; each lesson comment is taken once."""
-        calls, comments = [], {10: [{"id": 1, "html_url": "u1", "body": "[factory] Lessons\n<!-- factory:lesson -->\n- a"},
-                                    {"id": 2, "body": "not a lesson"},
-                                    {"id": 3, "body": "[factory] Lessons\n<!-- factory:lesson collected -->\n- old"}]}
+    def tracker(self):
+        calls = []
+        comments = {10: [{"id": 1, "html_url": "u1", "body": "[factory] Lessons\n<!-- factory:lesson -->\n- a"},
+                         {"id": 2, "body": "not a lesson"},
+                         {"id": 3, "body": "[factory] Lessons\n<!-- factory:lesson collected -->\n- old"},
+                         {"id": 4, "html_url": "u4", "body": "<!-- factory:lesson -->\n- b"}],
+                    11: [{"id": 5, "body": "<!-- factory:lesson -->\n- c"}]}
 
         class Tracker:
             def _list(self, path):
-                calls.append(("list", path))
                 if path.startswith("issues?"):
-                    return [{"number": 10}]
+                    return [{"number": 10}, {"number": 11}]
                 return comments[int(path.split("/")[1])]
 
             def _edit(self, n, add=(), remove=()):
                 calls.append(("unlabel", n, list(remove)))
 
             def _api(self, path, *flags):
-                calls.append(("patch", path, flags[-1]))
-                comments[10][0]["body"] = flags[-1].removeprefix("body=")
+                calls.append(("patch", int(path.rsplit("/", 1)[1])))
+                c = next(c for cs in comments.values() for c in cs if c["id"] == int(path.rsplit("/", 1)[1]))
+                c["body"] = flags[-1].removeprefix("body=")
 
-        got = retro.collect(Tracker(), "factory:lesson")
-        self.assertEqual(got, [{"ticket": 10, "url": "u1", "body": "[factory] Lessons\n\n- a"}])
-        order = [c[0] for c in calls]
-        self.assertLess(order.index("unlabel"), order.index("patch"))
+        return Tracker(), calls, comments
+
+    def test_collect_lists_uncollected_lessons_and_writes_nothing(self):
+        t, calls, _ = self.tracker()
+        self.assertEqual(retro.collect(t, "factory:lesson"), [
+            {"ticket": 10, "url": "u1", "id": 1, "body": "[factory] Lessons\n\n- a"},
+            {"ticket": 10, "url": "u4", "id": 4, "body": "- b"},
+            {"ticket": 11, "url": None, "id": 5, "body": "- c"}])
+        self.assertEqual(calls, [])
+
+    def test_mark_marks_only_given_comments_and_unlabels_when_none_is_left(self):
+        t, calls, comments = self.tracker()
+        self.assertEqual(retro.mark(t, "factory:lesson", ["1", 5]), [1, 5])
+        self.assertEqual(calls, [("patch", 1), ("patch", 5), ("unlabel", 11, ["factory:lesson"])])  # 10 keeps lesson 4
         self.assertIn("<!-- factory:lesson collected -->", comments[10][0]["body"])
-        self.assertEqual(retro.collect(Tracker(), "factory:lesson"), [])   # nothing is read twice
+        self.assertNotIn("collected", comments[10][3]["body"])
+        self.assertEqual([c["id"] for c in retro.collect(t, "factory:lesson")], [4])
+        retro.mark(t, "factory:lesson", [4])
+        self.assertIn(("unlabel", 10, ["factory:lesson"]), calls)
+
+    def test_mark_ignores_unknown_and_already_collected_ids(self):
+        t, calls, _ = self.tracker()
+        self.assertEqual(retro.mark(t, "factory:lesson", [2, 3, 99]), [])
+        self.assertNotIn(("patch", 2), calls)
+        self.assertNotIn(("patch", 3), calls)
+
+    def test_main_mark_needs_comment_ids(self):
+        for argv in (["mark"], ["mark", "x"]):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(retro.main(argv), 2)
 
 
 if __name__ == "__main__":
