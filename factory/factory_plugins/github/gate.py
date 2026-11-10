@@ -609,11 +609,8 @@ class GitHubGateTracker(DescriptorPort):
         return normalise_events(self._list(f"issues/{pr}/events", repo=self.pr_repo))
 
     def main_green(self):
-        """The latest completed quality-gates run on main succeeded and tested the current main head."""
-        runs = json.loads(self.run(["run", "list", "-R", self.repo, "--workflow", "quality-gates.yml", "--branch", "main",
-                                    "--event", "push", "--status", "completed", "--limit", "1", "--json", "conclusion,headSha"]))
-        return (bool(runs) and runs[0]["conclusion"] == "success"
-                and runs[0].get("headSha") == self._api("commits/main")["sha"])
+        """CI at the current main head is green (`head_ci` of `head_checks`)."""
+        return head_ci(head_checks(self.run, self.repo, self._api("commits/main")["sha"]))[0] == "green"
 
     def sweep_tickets(self, stages, open_only=False, now=None):
         """Issue numbers whose stage label is one of `stages`: the open ones and, unless `open_only`, those closed in the
