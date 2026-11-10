@@ -270,10 +270,10 @@ class ProjectWriteToken(unittest.TestCase):
 
     def test_link_to_a_foreign_issue_uses_the_issues_token(self):
         """#1155: linking a slop-eval-factory child to a slop-factory parent writes slop-factory but refers to the
-        other repository's issue, which Air's token cannot read: `for_repository` gives it the issues token."""
+        other repository's issue, which Air's token cannot read: `for_repository` gives it that repository's token."""
         calls = []
         run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", ["o/team"],
-                                             {"FACTORY_ISSUES_TOKEN": "pat"}, "FACTORY_ISSUES_TOKEN")
+                                             {"FACTORY_ISSUES_TOKEN": "pat"}, {"o/team": "FACTORY_ISSUES_TOKEN"})
         link = ["api", "-X", "POST", "repos/o/engine/issues/7/sub_issues", "-F", "sub_issue_id=99"]
         run(link)
         run.for_repository("o/team")(link)
@@ -281,20 +281,57 @@ class ProjectWriteToken(unittest.TestCase):
         github_tracker.CountedRun(run).for_repository("o/team")(link)  # the gate's counter keeps it (#1155)
         self.assertEqual(calls, [None, "pat", None, "pat"])
 
-    def test_checked_out_repositories_use_airs_token(self):
-        """AIRF-51: Air's installation token writes every checkout of a copy (main and additional repositories), so
-        the issues token is kept for repositories outside the run's environment (#1155: it was refused there)."""
+    def test_checked_out_repository_with_a_token_runs_with_it(self):
+        """#1236: a repository's `token` is used also when the run checks it out; the environment's own repository
+        ($FACTORY_ENV_REPOSITORY) keeps Air's token."""
         calls = []
-        env = {"FACTORY_ISSUES_TOKEN": "pat", "FACTORY_ENV": "team", "FACTORY_ENV_REPOSITORY": "o/team"}
+        env = {"FACTORY_ISSUES_TOKEN": "T", "FACTORY_ENV": "team", "FACTORY_ENV_REPOSITORY": "o/team"}
         config = {"repositories": [{"name": "engine", "url": "https://github.com/o/engine"},
                                    {"name": "team", "url": "https://github.com/o/team"}],
-                  "environments": {"team": {"repositories": ["team", "engine"]}}}
-        self.assertEqual(github_tracker.checked_out(config, env), ["o/team", "o/engine"])
-        run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", ["o/engine", "o/other"], env,
-                                             "FACTORY_ISSUES_TOKEN", github_tracker.checked_out(config, env))
-        run(["api", "-X", "POST", "repos/o/engine/issues/7/labels", "-f", "labels[]=x"])
-        run(["api", "-X", "POST", "repos/o/other/issues/7/labels", "-f", "labels[]=x"])
-        self.assertEqual(calls, [None, "pat"])
+                  "environments": {"team": {"repositories": ["team", "engine"], "tokens": {"engine": "FACTORY_ISSUES_TOKEN"}}}}
+        tokens = github_tracker.repository_tokens(config, env)
+        self.assertEqual(tokens, {"o/engine": "FACTORY_ISSUES_TOKEN"})
+        run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", ["o/engine", "o/team"], env, tokens)
+        for repo in ("o/engine", "o/team"):
+            run(["label", "create", "x", "-R", repo])
+        self.assertEqual(calls, ["T", None])
+
+    def test_token_declared_foreign_primary_repository_runs_with_it(self):
+        """#1236 B2: project_repositories omits the primary repository, but a `token` for it still applies; the own
+        repository stays on Air's token with or without a declaration."""
+        env = {"T": "t", "FACTORY_ENV_REPOSITORY": "o/team"}
+        for repositories, tokens, repo, want in (
+                ([], {"o/engine": "T"}, "o/engine", "t"),
+                ([], {"o/Engine": "T"}, "O/ENGINE", "t"),
+                ([], {"o/team": "T"}, "o/team", None),
+                ([], {}, "o/engine", None)):
+            calls = []
+            run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", repositories, env, tokens)
+            run(["label", "create", "x", "-R", repo])
+            self.assertEqual(calls, [want], (tokens, repo))
+
+    def test_each_repository_uses_its_own_token(self):
+        """Table: a declared secret wins over $FACTORY_WRITE_TOKEN; unset secrets and unlisted repositories fall back."""
+        env = {"A_TOKEN": "a", "B_TOKEN": "b", "FACTORY_WRITE_TOKEN": "w"}
+        for tokens, environ, repo, want in (
+                ({"o/a": "A_TOKEN", "o/b": "B_TOKEN"}, env, "o/a", "a"),
+                ({"o/a": "A_TOKEN", "o/b": "B_TOKEN"}, env, "O/B", "b"),
+                ({"o/a": "A_TOKEN"}, env, "o/b", "w"),
+                ({"o/a": "MISSING"}, env, "o/a", "w"),
+                ({"o/a": "MISSING"}, {"B_TOKEN": "b"}, "o/a", None),
+                ({}, {}, "o/a", None)):
+            with self.subTest(tokens=tokens, repo=repo, want=want):
+                calls = []
+                run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", ["o/a", "o/b"], environ, tokens)
+                run(["label", "create", "x", "-R", repo])
+                self.assertEqual(calls, [want])
+
+    def test_tokens_come_from_the_run_environment_or_every_environment(self):
+        config = {"repositories": [{"name": "a", "url": "https://github.com/o/a.git"}],
+                  "environments": {"e1": {"tokens": {"a": "S1"}}, "e2": {"tokens": {"a": "S2"}}, "e3": {}}}
+        for environ, want in (({"FACTORY_ENV": "e2"}, {"o/a": "S2"}), ({"FACTORY_ENV": "e3"}, {}), ({}, {"o/a": "S1"})):
+            with self.subTest(environ=environ):
+                self.assertEqual(github_tracker.repository_tokens(config, environ), want)
 
     def test_a_call_to_a_checkout_runs_in_its_directory(self):
         """#1246: Air's token writes a checkout only from that checkout's directory, so a call to slop-eval-factory
@@ -311,16 +348,30 @@ class ProjectWriteToken(unittest.TestCase):
             run(["api", "-X", "POST", "repos/o/engine/issues/1/labels", "-f", "labels[]=x"])  # no directory here
             self.assertEqual(calls, [{"cwd": str(Path(root) / "team")}] * 2 + [{}, {}])
 
-    def test_link_to_a_checked_out_repository_issue_uses_the_issues_token(self):
-        """#1246: a sub-issue link in slop-factory to a slop-eval-factory child: neither checkout's token reads both."""
+    def test_link_to_a_checked_out_repository_issue_uses_its_token(self):
+        """#1246: a sub-issue link in slop-factory to a slop-eval-factory child: neither checkout's token reads both,
+        so the link takes the child repository's declared `token` (#1236)."""
         calls = []
-        env = {"FACTORY_ISSUES_TOKEN": "pat", "FACTORY_ENV_REPOSITORY": "o/engine"}
+        env = {"TEAM_TOKEN": "pat", "FACTORY_ENV_REPOSITORY": "o/engine"}
         run = github_tracker.ProjectWriteRun(lambda args, **kw: calls.append(kw.get("token")) or "", ["o/team"], env,
-                                             "FACTORY_ISSUES_TOKEN", ["o/engine", "o/team"])
+                                             {"o/team": "TEAM_TOKEN"}, ["o/engine", "o/team"])
         link = ["api", "-X", "POST", "repos/o/engine/issues/7/sub_issues", "-F", "sub_issue_id=99"]
         run.for_repository("o/team")(link)
         run.for_repository("o/engine")(link)
         self.assertEqual(calls, ["pat", None])
+
+    def test_deprecated_issues_token_never_overrides_a_checkout(self):
+        """#1236: `issues_token_env` writes a repository that is not checked out and links; a checkout keeps Air's (#1246)."""
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / "team").mkdir()
+            calls = []
+            env = {"OLD": "pat", "FACTORY_ENV_REPOSITORY": "o/engine", "FACTORY_WORKSPACES": root}
+            run = github_tracker.ProjectWriteRun(lambda args, **kw: calls.append(kw) or "", ["o/team", "o/far"], env,
+                                                 {}, ["o/engine", "o/team"], issues_token_env="OLD")
+            run(["issue", "edit", "3", "-R", "o/team", "--add-label", "x"])
+            run(["issue", "edit", "3", "-R", "o/far", "--add-label", "x"])
+            run.for_repository("o/team")(["api", "-X", "POST", "repos/o/engine/issues/7/sub_issues", "-F", "sub_issue_id=9"])
+            self.assertEqual(calls, [{"cwd": str(Path(root) / "team")}, {"token": "pat"}, {"token": "pat"}])
 
     def test_without_the_token_every_call_runs_as_before(self):
         calls = []

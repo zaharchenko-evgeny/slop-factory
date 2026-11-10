@@ -791,7 +791,8 @@ class ProjectPlanTest(unittest.TestCase):
             f, w = (yaml.safe_load((root / n).read_text()) for n in ("factory.yaml", "workflow.yaml"))
             repos = ["o/api", "o/web"] if web else ["o/api"]
             f["tracker"]["repositories"] = repos
-            f["environments"]["engine"]["repositories"] = [{"repo": r} for r in repos]
+            f["environments"]["engine"]["repositories"] = [{"repo": r, **({"token": "FACTORY_ISSUES_TOKEN"} if i else {})}
+                                                           for i, r in enumerate(repos)]
             w["nodes"]["intake"]["listens"] = "tracker"
             for n in w["nodes"].values():
                 if n.get("writes") and not n.get("environment"):
@@ -804,13 +805,12 @@ class ProjectPlanTest(unittest.TestCase):
             finally:
                 cfg.set_team(before)
 
-    def test_issues_token_is_deployed_only_where_a_project_repository_is_foreign(self):
+    def test_repository_token_is_deployed_only_where_its_repository_is_foreign(self):
         """#1126: Air's GH_TOKEN writes the environment's own repository, so the copy of `engine` on o/web, the only
-        project repository, needs no issues token; every environment names its repository for the gate."""
+        project repository, needs no token; every environment names its repository for the gate."""
         with self.two_repository_team():
             c = cfg.load()
-            c = {**c, "issues_token_env": "FACTORY_ISSUES_TOKEN",
-                 "repositories": [r for r in c["repositories"] if r["url"].startswith("https://github.com/o/")]}
+            c = {**c, "repositories": [r for r in c["repositories"] if r["url"].startswith("https://github.com/o/")]}
             plan = air.plan_air(nodes.load(), c)
         envs = {e["name"]: e for e in plan["environments"]}
         self.assertIn("FACTORY_ISSUES_TOKEN", envs["[Slop factory] engine"]["secrets"])
@@ -1290,12 +1290,15 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(knowledge)
         self.assertTrue(all(a["repository"]["browseUrl"] == "https://github.com/o/team" for a in knowledge))
 
-    def test_issues_token_is_deployed_to_every_environment_and_adds_no_write_token(self):
-        plan = self.three_repositories(issues_token_env="FACTORY_ISSUES_TOKEN")
-        envs = {e["name"]: e["secrets"] for e in plan["environments"]}
-        self.assertIn("FACTORY_ISSUES_TOKEN", envs["[Slop factory] read"])
-        for name, secrets in envs.items():
-            self.assertIn("FACTORY_ISSUES_TOKEN", secrets, name)
+    def test_repository_token_is_deployed_to_its_environment_only_and_adds_no_write_token(self):
+        base = cfg.load()
+        envs = {n: {**e, **({"tokens": {"api": "FACTORY_ISSUES_TOKEN"}} if n == "read" else {})}
+                for n, e in {**{n: {} for n in ("read", "engine")}, **(base.get("environments") or {})}.items()}
+        plan = self.three_repositories(environments=envs)
+        got = {e["name"]: e["secrets"] for e in plan["environments"]}
+        self.assertIn("FACTORY_ISSUES_TOKEN", got["[Slop factory] read"])
+        for name, secrets in got.items():
+            self.assertEqual("FACTORY_ISSUES_TOKEN" in secrets, name == "[Slop factory] read", name)
             self.assertNotIn("FACTORY_WRITE_TOKEN", secrets, name)
 
     def test_deploy_writes_no_file_outside_the_factory_repository(self):

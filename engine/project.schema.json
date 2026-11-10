@@ -7,7 +7,7 @@
   "properties": {
     "engine": {"type": ["integer", "string"]},
     "team_repository": {"type": "string"},
-    "issues_token_env": {"type": "string", "description": "Variable that holds the token for the gate's issue, label and comment writes to project repositories (#652)."},
+    "issues_token_env": {"type": "string", "description": "Deprecated (#1236): the secret for writes to a repository the run does not check out and for links between two repositories; a repository's `token` replaces it."},
     "engine_repository": {"type": "string", "default": "https://github.com/zaharchenko-evgeny/slop-factory.git"},
     "project": {
       "type": "object",
@@ -93,6 +93,8 @@
         "properties": {
           "repositories": {"type": "array", "items": {"type": "string"}},
           "writable": {"type": "array", "items": {"type": "string"}},
+          "tokens": {"type": "object", "additionalProperties": {"type": "string"},
+                     "description": "Repository name -> the secret that holds its write token (ADR-0027): the gate's issue, label and comment writes to it."},
           "domains": {"type": "array", "items": {"type": "string"}},
           "secrets": {"type": "array", "items": {"type": "string"}},
           "secret_help": {"type": "object", "additionalProperties": {"type": "string"}},

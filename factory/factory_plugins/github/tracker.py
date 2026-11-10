@@ -129,9 +129,23 @@ def token_env(env, config):
 WRITE_VERBS = {"create", "edit", "merge", "review", "comment", "close", "reopen", "delete", "ready", "update-branch"}
 
 
+def repository_tokens(config, environ=os.environ):
+    """{owner/repo (lower case): secret name} of the repositories' `token` (ADR-0027) in the run's environment
+    (FACTORY_ENV); every environment's when none is set (deploy, doctor)."""
+    envs = config.get("environments") or {}
+    names = [environ.get("FACTORY_ENV")] if environ.get("FACTORY_ENV") else list(envs)
+    urls = {r.get("name"): r.get("url") for r in config.get("repositories") or [] if isinstance(r, dict)}
+    out = {}
+    for env in names:
+        for name, secret in ((envs.get(env) or {}).get("tokens") or {}).items():
+            repo = "/".join(str(urls.get(name, name)).rstrip("/").removesuffix(".git").split("/")[-2:]).lower()
+            out.setdefault(repo, secret)
+    return out
+
+
 def checked_out(config, environ=os.environ):
     """owner/repo of the repositories of the run's environment (FACTORY_ENV): each copy checks them all out (its main
-    and its additional repositories, ADR-0027), and Air's installation token writes every checkout (AIRF-51)."""
+    and its additional repositories, ADR-0027). Air's token writes a checkout from that checkout's directory (#1246)."""
     env = ((config.get("environments") or {}).get(environ.get("FACTORY_ENV") or "") or {})
     urls = {r.get("name"): r.get("url") for r in config.get("repositories") or [] if isinstance(r, dict)}
     out = []
@@ -172,17 +186,30 @@ def gh_writes(args):
 
 
 class ProjectWriteRun:
-    """Wrap a `gh` runner: a write to one of `repositories` runs with the issues token (the variable named by the
-    `issues_token_env` setting) as its GH_TOKEN, else with $FACTORY_WRITE_TOKEN, when one is set; every other
-    call, every call without a token and every write to the environment's own repository runs as before."""
+    """Wrap a `gh` runner: a write to one of `repositories` runs with that repository's `token` (the secret
+    `tokens` names for it) as its GH_TOKEN, else with $FACTORY_WRITE_TOKEN, when one is set; every other call,
+    every call without a token and every write to the environment's own repository runs as before."""
 
-    def __init__(self, run, repositories, environ=os.environ, issues_token_env=None, checkouts=()):
-        """`checkouts`: the run's checkouts. Air's token writes a checkout only from that checkout's directory
-        (#1246): a call to one runs there, and never takes the issues token."""
-        self.run, self.environ = run, environ
+    def __init__(self, run, repositories, environ=os.environ, tokens=None, checkouts=(), issues_token_env=None):
+        """`tokens`: {owner/repo: secret name}, as `repository_tokens` reads it. `checkouts`: the run's checkouts; a
+        call to one without a declared token runs from its directory, where Air's token writes it (#1246).
+        `issues_token_env`: deprecated (#1236), the token of a repository that is not checked out and of a link."""
+        self.run, self.environ, self.issues_token_env = run, environ, issues_token_env
+        self.tokens = {r.lower(): secret for r, secret in (tokens or {}).items()}
         self.checkouts = {c.lower(): c for c in checkouts}
-        self.repositories = {r.lower() for r in foreign_projects(repositories, environ)} - set(self.checkouts)
-        self.issues_token_env = issues_token_env
+        # a repository with a declared token is written with it whatever its role (a foreign primary included)
+        self.repositories = {r.lower() for r in foreign_projects([*repositories, *self.tokens], environ)}
+
+    def token(self, repo):
+        """The token for a write to `repo`: its declared one; else $FACTORY_WRITE_TOKEN when `repo` is not checked
+        out here; None otherwise."""
+        repo = repo.lower()
+        declared = self.environ.get(self.tokens.get(repo, ""))
+        return declared or (None if repo in self.checkouts else self.fallback()) or None
+
+    def fallback(self):
+        """The deprecated issues token, else $FACTORY_WRITE_TOKEN; None when neither is set."""
+        return (self.issues_token_env and self.environ.get(self.issues_token_env)) or self.environ.get(WRITE_TOKEN) or None
 
     def checkout_dir(self, repo):
         """The directory of the run's checkout of `repo`, or None when it is not checked out here."""
@@ -191,12 +218,16 @@ class ProjectWriteRun:
         return str(path) if path and path.is_dir() else None
 
     def __call__(self, args, touches=None, **kw):
-        token = (self.issues_token_env and self.environ.get(self.issues_token_env)) or self.environ.get(WRITE_TOKEN)
         target = (gh_target(args) or "").lower()
-        foreign_link = bool(touches) and touches.lower() != target  # a link to another repository's issue
-        if token and gh_writes(args) and ({target, (touches or "").lower()} & self.repositories or foreign_link):
-            kw["token"] = token  # no checkout's own token reads both issues of a link
-        elif (where := self.checkout_dir(target)):
+        if gh_writes(args):  # a link to another repository's issue: a token that reads both, from either side
+            token = next((t for repo in (target, (touches or "").lower())
+                          if repo in self.repositories and (t := self.token(repo))), None)
+            if not token and touches and touches.lower() != target:  # no checkout's own token reads both issues
+                token = self.fallback()
+            if token:
+                kw["token"] = token
+                return self.run(args, **kw)
+        if (where := self.checkout_dir(target)):
             kw["cwd"] = where
         return self.run(args, **kw)
 

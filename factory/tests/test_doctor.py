@@ -114,8 +114,7 @@ class ProjectWriteProbeTest(unittest.TestCase):
         self.assertEqual(gh.tokens, ["pat", "pat"])
 
     def test_issues_token_probe_uses_the_issues_token_and_names_a_missing_secret(self):
-        settings = {**self.SETTINGS, "issues_token_env": "FACTORY_ISSUES_TOKEN",
-                    "environments": {"read": {"secrets": []}}}  # deploy adds the issues token itself
+        settings = {**self.SETTINGS, "environments": {"read": {"secrets": [], "tokens": {"app": "FACTORY_ISSUES_TOKEN"}}}}
         gh = FakeGh()
         got = github_probes.project_write_probes(settings, "read", gh, {"FACTORY_ISSUES_TOKEN": "iss"})
         self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/app", "ok")])
@@ -123,12 +122,20 @@ class ProjectWriteProbeTest(unittest.TestCase):
         gh = FakeGh()
         got = github_probes.project_write_probes(settings, "read", gh, {})
         self.assertEqual(got, [{"probe": "write:label:o/app", "result": "fail",
-                                "detail": "FACTORY_ISSUES_TOKEN is not set (issues_token_env)"}])
+                                "detail": "FACTORY_ISSUES_TOKEN is not set (token of o/app)"}])
         self.assertEqual(gh.calls, [])
+
+    def test_a_token_declared_primary_repository_is_probed(self):
+        """#1236 B2: `role: primary` is not a project repository, but its declared `token` is still probed."""
+        settings = {**self.SETTINGS, "environments": {"team": {"secrets": [], "tokens": {"main": "FACTORY_ISSUES_TOKEN"}}}}
+        gh = FakeGh()
+        got = github_probes.project_write_probes(settings, "team", gh, {"FACTORY_ISSUES_TOKEN": "iss"})
+        self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/r", "ok")])
+        self.assertEqual(gh.tokens, ["iss", "iss"])
 
     def test_the_environment_repository_is_not_probed_for_the_issues_token(self):
         """#1126: Air's own token writes the environment's repository, so the issues token is not needed there."""
-        settings = {**self.SETTINGS, "issues_token_env": "FACTORY_ISSUES_TOKEN", "environments": {"team": {"secrets": []}}}
+        settings = {**self.SETTINGS, "environments": {"team": {"secrets": [], "tokens": {"app": "FACTORY_ISSUES_TOKEN"}}}}
         gh = FakeGh()
         self.assertEqual(github_probes.project_write_probes(settings, "team", gh, {"FACTORY_ENV_REPOSITORY": "O/App"}), [])
         self.assertEqual(gh.calls, [])

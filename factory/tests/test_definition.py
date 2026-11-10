@@ -82,7 +82,7 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(main["vcs"]["adapter"], "github")
 
     def test_github_issues_place_defaults_to_the_repository(self):
-        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})]))
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"token": "T"})]))
         defn = definition.load(self.root)
         places = [definition.contract(defn, "tracker", r["tracker"]).place(r["tracker"], r["repo"])
                   for r in definition.repositories(defn, "engine")]
@@ -95,8 +95,8 @@ class DefinitionTest(unittest.TestCase):
 
     def test_copies_per_environment_and_listened_repository(self):
         self.edit("factory.yaml", lambda f: self._envs(
-            f, engine=[(MAIN, {"write": True}), (OTHER, {})], team=[(OTHER, {"write": True}), (MAIN, {"tracker": "none"})],
-            intake=[(MAIN, {}), (OTHER, {})]))
+            f, engine=[(MAIN, {"write": True}), (OTHER, {"token": "T"})], team=[(OTHER, {"write": True}), (MAIN, {"tracker": "none"})],
+            intake=[(MAIN, {}), (OTHER, {"token": "T"})]))
         self.edit("workflow.yaml", lambda w: (self._node_envs(w, "implement-small", "engine", "team"),
                                               self._node_envs(w, "intake", "intake")))
         defn = definition.load(self.root)
@@ -172,6 +172,9 @@ class DefinitionTest(unittest.TestCase):
                         env["tracker"] = {"adapter": "github-issues", "label_prefix": "slop:"}
                     else:
                         entry["tracker"] = {"adapter": "github-issues", "label_prefix": "slop:"}
+                    for spec in f["environments"].values():
+                        for r in spec["repositories"][1:]:
+                            r["token"] = "T"
                 self.edit("factory.yaml", factory)
                 defn = definition.load(self.root)
                 if where != "top":  # only the default environment's primary repository decides
@@ -218,8 +221,8 @@ class DefinitionTest(unittest.TestCase):
     def test_migrated_slop_definition_validates_clean(self):
         """The Slop definition in the ADR-0027 form (slop-eval-factory#92): no errors, no warnings, the copies below."""
         def factory(f):
-            self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})], team=[(OTHER, {"write": True}), (MAIN, {"tracker": "none"})],
-                       intake=[(MAIN, {}), (OTHER, {})])
+            self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"token": "T"})],
+                       team=[(OTHER, {"write": True}), (MAIN, {"tracker": "none"})], intake=[(MAIN, {}), (OTHER, {"token": "T"})])
             f["tracker"].pop("repositories", None)
             for spec in f["agents"].values():
                 spec.pop("access", None)
@@ -603,11 +606,37 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual({name: env["writable"] for name, env in envs.items()},
                          {"engine": ["slop-factory"], "knowledge": ["slop-eval-factory"], "team": []})
 
-    def test_issues_token_env_setting_passes_validation(self):
-        self.edit("factory.yaml", lambda f: f["defaults"].setdefault("settings", {}).update(issues_token_env="FACTORY_ISSUES_TOKEN"))
-        run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"], capture_output=True,
-                             text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
-        self.assertEqual((run.returncode, ok_lines(run.stdout)), (0, "factory: ok"), run.stdout + run.stderr)
+    def test_repository_token_is_a_secret_name_and_optional(self):
+        """#1236: (the second repository's keys, the error). Every listed repository is checked out, where Air's token
+        writes it (#1246), so a ticket-holding one validates without a `token` too."""
+        for extra, error in (({}, None), ({"token": ""}, "bad-token: environments.engine: " + OTHER),
+                             ({"token": 3}, "bad-token: environments.engine: " + OTHER),
+                             ({"token": "FACTORY_ISSUES_TOKEN"}, None), ({"tracker": {"adapter": "github-issues"}}, None)):
+            with self.subTest(extra=extra):
+                self.setUp()
+                self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, extra)]))
+                errs = [e for e in self.errors() if "token" in e]
+                if error:
+                    self.assertTrue(any(e.startswith(error) for e in errs), errs)
+                else:
+                    self.assertEqual(errs, [])
+
+    def test_issues_token_env_is_deprecated_and_still_compiled(self):
+        """#1236: until the team declares `token:`, `issues_token_env` keeps its old meaning, with a warning."""
+        def change(f):
+            self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})])
+            f["defaults"].setdefault("settings", {})["issues_token_env"] = "OLD"
+        self.edit("factory.yaml", change)
+        defn = definition.load(self.root)
+        project = definition.to_project(defn)[0]
+        self.assertEqual(project["issues_token_env"], "OLD")
+        self.assertNotIn("tokens", project["environments"]["engine"])  # never a declared token: checkouts keep Air's
+        self.assertTrue(any(w.startswith("deprecated-key: defaults.settings.issues_token_env") for w in definition.warnings(defn)))
+
+    def test_compile_lists_each_repository_token(self):
+        self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"token": "T"})]))
+        envs = definition.to_project(definition.load(self.root))[0]["environments"]
+        self.assertEqual(envs["engine"]["tokens"], {"slop-eval-factory": "T"})
 
     def test_settings_merge_order(self):
         defn = definition.load(self.root)

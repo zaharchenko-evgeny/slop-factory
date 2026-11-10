@@ -51,7 +51,9 @@ Use one code repository when you can. Use several only when one workflow covers 
 
 - **GitHub Issues**: tickets live in the repository they change. `tracker.repositories` lists them. The first is the
   tracker: parents and work across repositories live there. `tracker.repository` stays the first one. When the
-  repositories need one issues token, name it with `issues_token_env`.
+  repository is not the environment's own repository, give its entry `token: <SECRET_NAME>` in
+  `environments.<env>.repositories[]`: the gate writes its issues, labels and comments with that secret, and
+  links between its issues and another repository's need it. Deploy adds the secret to the environment.
 - **YouTrack**: one linked project per repository, `tracker.projects: {<project>: <owner/repo>}`. `tracker.project` is
   the first project. A copy of a node listens only to its linked project. Each project links one repository.
   `render.py` writes only `tracker` and `code_host`; add the YouTrack state stores after rendering (see above), then run `factory validate`.
