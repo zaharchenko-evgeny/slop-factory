@@ -41,7 +41,7 @@ tracker:
   docs_impact_label: docs-impact
   bot_logins: []
   hold_label: factory:hold
-  # PR facts the GitHub adapter reads from a PR label (CI labels the PR when it finishes).
+  # PR facts the GitHub adapter reads from a PR label (ci-sync labels the PR from its checks).
   pr_fact_labels: { ci-green: factory:ci-green, ci-red: factory:ci-red }
   # Command labels the engine writes (factory/vocab.py); a factory.project.yaml declares its own `commands`.
   commands:
@@ -63,8 +63,6 @@ plugins: []
 defaults: { tier: mid }
 gates:
   auto_merge: { enabled: true, max_risk: high }
-# Workflows (by name) whose runs at a head count as CI.
-ci: { workflows: [quality-gates] }
 limits:
   remind_after_hours: 24
   stuck_minutes: 120   # reconcile: a PR-stage ticket with no open PR waits this long before it is blocked

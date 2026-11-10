@@ -8,6 +8,7 @@ The marker counts only in comments written by the `gh` user (the executor), so
 nobody else who can comment can set the vars.
 
 """
+import copy
 import json
 import os
 import random
@@ -20,6 +21,7 @@ import yaml
 
 import config
 import vocab
+from gate_port import in_ticket_repository, ticket_ref, tracker_repositories
 
 RED = "Main is red"  # title prefix of the owner ticket of a red base branch
 
@@ -56,7 +58,8 @@ def gh(args, timeout=None, token=None):
         if not p.returncode:
             return p.stdout
         text = f"{p.stderr}\n{p.stdout}"
-        msg = f"gh {' '.join(args[:3])}: {p.stderr.strip()}"
+        target = next((str(x) for x in args if str(x).startswith("repos/")), None) or gh_target(args) or ""
+        msg = f"gh {' '.join(str(x) for x in args[:3])} {target}".rstrip() + f": {p.stderr.strip()}"  # which call failed
         if not (re.search(r"HTTP (403|429)", text) and RATE_LIMIT.search(text)):
             raise RuntimeError(msg)
         if attempt == 2:
@@ -77,6 +80,21 @@ class CountedRun:
     def __init__(self, run):
         self.run, self.calls, self.memo, self.cache = run, 0, {}, {}
 
+    def for_repository(self, repo):
+        """The wrapped runner's `for_repository` (ProjectWriteRun: a link to another repository's issue takes the
+        issues token), counted like any call; this runner itself when it has none."""
+        inner = getattr(self.run, "for_repository", None)
+        if inner is None:
+            return self
+        forward = inner(repo)
+
+        def run(args, **kw):
+            self.calls += 1
+            self.memo.clear()
+            self.cache.clear()
+            return forward(args, **kw)
+        return run
+
     def __call__(self, args, **kw):
         read = args[:2] in (["issue", "view"], ["issue", "list"], ["pr", "view"], ["pr", "list"], ["run", "list"]) or (
             args[0] == "api" and not {"-X", "--method", "-f", "-F"} & set(args)) or (
@@ -95,10 +113,11 @@ class CountedRun:
         return out
 
 
-# `write_mode: token`: Air's GitHub token writes only the factory repository, so writes to a `role: project`
-# repository use this secret (deploy.py adds it to WRITE_TOKEN_ENVS). It is read from the environment, never printed.
+# Air's GitHub token writes only the automation's own repository, so writes to a `role: project` repository use this
+# secret when a person sets it (ADR-0024: deploy no longer adds it). It is read from the environment, never printed.
 WRITE_TOKEN = "FACTORY_WRITE_TOKEN"
 WRITE_TOKEN_ENVS = ("write", "ops")
+ENV_REPOSITORY = "FACTORY_ENV_REPOSITORY"  # owner/repo of the environment's Air repository, set by deploy (#1126)
 
 
 def token_env(env, config):
@@ -109,10 +128,28 @@ def token_env(env, config):
 WRITE_VERBS = {"create", "edit", "merge", "review", "comment", "close", "reopen", "delete", "ready", "update-branch"}
 
 
+def checked_out(config, environ=os.environ):
+    """owner/repo of the repositories of the run's environment (FACTORY_ENV): each copy checks them all out (its main
+    and its additional repositories, ADR-0027), and Air's installation token writes every checkout (AIRF-51)."""
+    env = ((config.get("environments") or {}).get(environ.get("FACTORY_ENV") or "") or {})
+    urls = {r.get("name"): r.get("url") for r in config.get("repositories") or [] if isinstance(r, dict)}
+    out = []
+    for r in env.get("repositories") or []:
+        url = urls.get(r, r) if isinstance(r, str) else (r or {}).get("repo", "")
+        out.append("/".join(str(url).rstrip("/").removesuffix(".git").split("/")[-2:]))
+    return [x for x in out if x]
+
+
 def project_repositories(config):
     """owner/repo of each `role: project` repository of the descriptor: the CI label sync's repositories."""
     return ["/".join(r["url"].rstrip("/").split("/")[-2:]) for r in config.get("repositories") or []
             if r.get("role") == "project"]
+
+
+def foreign_projects(repositories, environ=os.environ):
+    """`repositories` without the environment's own repository ($FACTORY_ENV_REPOSITORY): Air's GH_TOKEN writes it."""
+    own = (environ.get(ENV_REPOSITORY) or "").lower()
+    return [r for r in repositories if r.lower() != own]
 
 
 def gh_target(args):
@@ -136,25 +173,45 @@ def gh_writes(args):
 class ProjectWriteRun:
     """Wrap a `gh` runner: a write to one of `repositories` runs with the issues token (the variable named by the
     `issues_token_env` setting) as its GH_TOKEN, else with $FACTORY_WRITE_TOKEN, when one is set; every other
-    call, and every call without a token, runs as before."""
+    call, every call without a token and every write to the environment's own repository runs as before."""
 
-    def __init__(self, run, repositories, environ=os.environ, issues_token_env=None):
-        self.run, self.repositories, self.environ = run, {r.lower() for r in repositories}, environ
+    def __init__(self, run, repositories, environ=os.environ, issues_token_env=None, checkouts=()):
+        """`checkouts`: the run's other checkouts, which Air's token writes too (AIRF-51): never the issues token."""
+        self.run, self.environ = run, environ
+        self.repositories = {r.lower() for r in foreign_projects(repositories, environ)} - {c.lower() for c in checkouts}
         self.issues_token_env = issues_token_env
 
-    def __call__(self, args, **kw):
+    def __call__(self, args, touches=None, **kw):
         token = (self.issues_token_env and self.environ.get(self.issues_token_env)) or self.environ.get(WRITE_TOKEN)
-        if token and gh_writes(args) and (gh_target(args) or "").lower() in self.repositories:
+        if token and gh_writes(args) and {(gh_target(args) or "").lower(), (touches or "").lower()} & self.repositories:
             kw["token"] = token
         return self.run(args, **kw)
 
+    def for_repository(self, repo):
+        """This runner for a write to the own repository that refers to an issue of `repo` (a sub-issue or blocker
+        link): Air's token cannot read another repository's issue, so a foreign `repo` takes the issues token too."""
+        return lambda args, **kw: self(args, touches=repo, **kw)
+
 
 class GitHubTracker:
-    def __init__(self, repo, stages, map_label=None, run=gh, risk_labels=None, docs_label="docs-impact"):
+    def __init__(self, repo, stages, map_label=None, run=gh, risk_labels=None, docs_label="docs-impact",
+                 ticket_repos=None):
         self.repo, self.stages, self.map_label, self.run = repo, stages, map_label or vocab.map_label(), run
+        # ADR-0024: the repositories that hold tickets, the tracker first; a bare ticket number is `repo`'s issue
+        self.primary, self.ticket_repos = repo, list(ticket_repos or [repo])
         self.risk_labels = risk_labels or {"low": "risk:low", "high": "risk:high"}
         self.docs_label = docs_label
         self._login = None
+
+    def at(self, repo):
+        """This tracker on ticket repository `repo`: its bare numbers are that repository's issues."""
+        view = copy.copy(self)
+        view.repo = repo
+        return view
+
+    def ref(self, repo, number):
+        """The id of issue `number` of `repo`: bare in the tracker, `owner/repo#n` elsewhere."""
+        return ticket_ref(repo, number, self.primary)
 
     def login(self):
         """The authenticated gh user: the only author whose vars comments are trusted."""
@@ -167,8 +224,9 @@ class GitHubTracker:
     @classmethod
     def from_config(cls, path=None, run=gh):
         t = (yaml.safe_load(Path(path).read_text()) if path else config.load())["tracker"]
-        return cls(t["repository"], t["stages"], t.get("map_label") or vocab.map_label(), run,
-                   t.get("risk_labels"), t.get("docs_impact_label", "docs-impact"))
+        repos = tracker_repositories(t)
+        return cls(t.get("repository") or repos[0], t["stages"], t.get("map_label") or vocab.map_label(), run,
+                   t.get("risk_labels"), t.get("docs_impact_label", "docs-impact"), repos)
 
     def list_labels(self, repo=None):
         """{name: {"color", "description"}} of the repository's labels (default: the tracker's)."""
@@ -200,11 +258,13 @@ class GitHubTracker:
     def _assignees(self, n):
         return [a["login"] for a in self._issue(n)["assignees"]]
 
+    @in_ticket_repository
     def issue(self, n):
         """The ticket's title, body and label names."""
         i = json.loads(self.run(["issue", "view", str(n), "-R", self.repo, "--json", "title,body,labels"]))
         return {**i, "labels": [lb["name"] for lb in i.get("labels") or []]}
 
+    @in_ticket_repository
     def get_state(self, n):
         labels = {lb["name"] for lb in self._issue(n)["labels"]}
         found = [s for s, label in self.stages.items() if label in labels]
@@ -212,6 +272,7 @@ class GitHubTracker:
             raise ValueError(f"issue {n}: several stage labels {found}")
         return found[0] if found else ""
 
+    @in_ticket_repository
     def set_state(self, n, state):
         issue = self._issue(n)
         if state == "done" and issue["state"] == "OPEN":  # unblocks dependents; first, so a failure leaves the stage to retry
@@ -223,6 +284,7 @@ class GitHubTracker:
                 flags += ["--remove-label", label]
         self._edit(n, *flags)
 
+    @in_ticket_repository
     def set_review_labels(self, n, risk, docs_impact=False):
         """Set the one `tracker.risk_labels` label for `risk`; add the docs-impact label when asked."""
         labels = {lb["name"] for lb in self._issue(n)["labels"]}
@@ -232,9 +294,11 @@ class GitHubTracker:
             flags += ["--add-label", self.docs_label]
         self._edit(n, *flags)
 
+    @in_ticket_repository
     def comment(self, n, body):
         self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
 
+    @in_ticket_repository
     def comments(self, n):
         """The ticket's comments in order: id, author login, body and author_association."""
         return [{"id": c["id"], "author": (c.get("user") or {}).get("login") or "", "body": c["body"],
@@ -258,9 +322,11 @@ class GitHubTracker:
                 return c["id"], vars_
         return None, {}
 
+    @in_ticket_repository
     def read_vars(self, n):
         return self._state_comment(n)[1]
 
+    @in_ticket_repository
     def write_vars(self, n, vars_):
         if not isinstance(vars_, dict):
             raise ValueError(f"issue {n}: vars must be a mapping")
@@ -274,6 +340,7 @@ class GitHubTracker:
         else:
             self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/comments/{cid}", "-f", f"body={body}"])
 
+    @in_ticket_repository
     def claim(self, n, executor):
         """Assign, then re-read. Raise ClaimError, without writing, if another assignee holds it."""
         others = [a for a in self._assignees(n) if a != executor]
@@ -286,15 +353,20 @@ class GitHubTracker:
             self.release(n, executor)
             raise ClaimError(f"issue {n}: claimed by {', '.join(holders) or 'nobody'} after re-read")
 
+    @in_ticket_repository
     def release(self, n, executor):
         if executor in self._assignees(n):
             self._edit(n, "--remove-assignee", executor)
 
     def in_stage(self, stage, closed=False):
-        """Numbers of the open issues (with `closed`: also the closed ones) with the stage label of `stage`."""
-        found = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "all" if closed else "open", "--label",
-                                     self.stages[stage], "--json", "number", "--limit", "1000"]))
-        return sorted(i["number"] for i in found)
+        """Ids of the open issues (with `closed`: also the closed ones) with the stage label of `stage`, in every
+        ticket repository: the tracker's numbers sorted, then each other repository's `owner/repo#n`."""
+        out = []
+        for repo in self.ticket_repos:
+            found = json.loads(self.run(["issue", "list", "-R", repo, "--state", "all" if closed else "open", "--label",
+                                         self.stages[stage], "--json", "number", "--limit", "1000"]))
+            out += [self.ref(repo, n) for n in sorted(i["number"] for i in found)]
+        return out
 
     def _open_titled(self, prefix):
         found = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--search",
@@ -309,6 +381,7 @@ class GitHubTracker:
         """The number of the open issue with exactly this title, or None."""
         return next((i["number"] for i in self._open_titled(title) if i["title"] == title), None)
 
+    @in_ticket_repository
     def add_blocker(self, n, blocker):
         """Native dependency: issue `n` is blocked by `blocker`."""
         bid = self.run(["api", f"repos/{self.repo}/issues/{blocker}", "--jq", ".id"]).strip()
@@ -321,11 +394,16 @@ class GitHubTracker:
         return [n for n in self._frontier() if not red or n in red]
 
     def _frontier(self):
-        ready = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
-                                     self.stages["ready"], "--json", "number,assignees", "--limit", "1000"]))
         maps = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
                                     self.map_label, "--json", "number", "--limit", "100"]))
-        order = [c["number"] for m in sorted(x["number"] for x in maps) for c in self._api_list(f"issues/{m}/sub_issues")]
-        out = [i["number"] for i in ready if not i["assignees"]
-               and all(b["state"] == "closed" for b in self._api_list(f"issues/{i['number']}/dependencies/blocked_by"))]
-        return sorted(out, key=lambda n: (order.index(n) if n in order else len(order), n))
+        order = [self.ref(self.repo, c["number"]) for m in sorted(x["number"] for x in maps)
+                 for c in self._api_list(f"issues/{m}/sub_issues")]
+        out = [n for repo in self.ticket_repos for n in self.at(repo)._ready()]
+        return sorted(out, key=lambda n: order.index(n) if n in order else len(order))
+
+    def _ready(self):
+        """Ids of this repository's open `ready` issues that are unassigned with every blocker closed, by number."""
+        ready = json.loads(self.run(["issue", "list", "-R", self.repo, "--state", "open", "--label",
+                                     self.stages["ready"], "--json", "number,assignees", "--limit", "1000"]))
+        return [self.ref(self.repo, i["number"]) for i in sorted(ready, key=lambda i: i["number"]) if not i["assignees"]
+                and all(b["state"] == "closed" for b in self._api_list(f"issues/{i['number']}/dependencies/blocked_by"))]

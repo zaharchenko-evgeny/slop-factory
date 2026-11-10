@@ -1,5 +1,5 @@
-"""What `factory deploy` sets up on GitHub (ADR-0026 `provision`): the repository labels of the tracker schema, the
-write-token secret of `write_mode: token`, and the `gh` runner that writes project repositories with it."""
+"""What `factory deploy` sets up on GitHub (ADR-0026 `provision`): the repository labels of the tracker schema and the
+`gh` runner that writes project repositories with the issues token."""
 from factory_plugins.github import tracker as github_tracker
 
 
@@ -9,11 +9,12 @@ def label_tracker(repo: str, run=None):
 
 def reconcile(schema, run=None) -> list[tuple]:
     """(action, repository, label, changed fields) per required label to create or update, and per factory-owned
-    label no longer required to remove, in each repository of `schema.repositories` independently."""
+    label no longer required to remove, in each repository of `schema.by_repository()` independently (ADR-0024: a
+    repository that holds no tickets requires none)."""
     out, owned, random_colors = [], tuple(schema.owned_prefixes), {}
-    for repo in schema.repositories:
+    for repo, wanted in schema.by_repository().items():
         have = label_tracker(repo, run).list_labels()
-        for name in schema.labels:
+        for name in wanted:
             spec = schema.specs.get(name, {})
             if name not in have:
                 want = {"color": spec.get("color") or random_colors.setdefault(name, github_tracker.random_color()),
@@ -22,7 +23,7 @@ def reconcile(schema, run=None) -> list[tuple]:
             elif changed := [k for k in ("color", "description") if k in spec and have[name][k] != spec[k]]:
                 want = {"color": have[name]["color"], "description": have[name]["description"], **spec}
                 out.append(("update", repo, name, want, changed))
-        out += [("remove", repo, name, None) for name in sorted(have) if name.startswith(owned) and name not in schema.labels]
+        out += [("remove", repo, name, None) for name in sorted(have) if name.startswith(owned) and name not in wanted]
     return out
 
 
@@ -38,13 +39,6 @@ def provision(schema, changes, apply, run=None) -> list[str]:
             label_tracker(repo, run).delete_label(label, list(schema.owned_prefixes))
             lines.append(f"removed label {label} in {repo}")
     return lines
-
-
-def secrets(env: str, config: dict) -> list[str]:
-    """Hook `deploy.secrets`: WRITE_TOKEN in an environment that writes project repositories with it, under
-    `write_mode: token` and several repositories."""
-    token = config.get("write_mode") == "token" and len(config["repositories"]) > 1
-    return [github_tracker.WRITE_TOKEN] if token and github_tracker.token_env(env, config) else []
 
 
 def write_run(config: dict):

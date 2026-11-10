@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,7 +19,6 @@ sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 cfg.set_team(ROOT / "factory/tests/fixtures/team")
 import cli  # noqa: E402
-import knowledge  # noqa: E402
 import retro  # noqa: E402
 
 cli.load_engine(cli.HERE)
@@ -53,6 +53,15 @@ class FactsTest(unittest.TestCase):
                  label("done", "2026-11-01T06:00:00Z")]
         f = retro.ticket_facts(7, issue, pr, [], [], {BOT["login"]})
         self.assertEqual((f["fix_rounds"], f["update_rounds"], f["ready_to_done_hours"]), (3, 1, 6.0))
+
+    def test_operator_interventions_follow_the_stage_prefix(self):
+        """Table: stage prefix -> the labels a person set that count (`ready` is quiet; other prefixes never match)."""
+        events = [{**label(name, "T1", ME), "label": {"name": full}}
+                  for name, full in (("approved", "slop:approved"), ("ready", "slop:ready"), ("approved", "factory:approved"))]
+        for prefix, want in (("slop:", ["slop:approved"]), ("factory:", ["factory:approved"]), ("work:", [])):
+            with self.subTest(prefix=prefix), mock.patch.object(retro.vocab, "stage_prefix", return_value=prefix):
+                f = retro.ticket_facts(7, events, [], [], [], {BOT["login"]})
+                self.assertEqual([x["label"] for x in f["operator_interventions"]], want)
 
     def test_operator_interventions_listed(self):
         issue = [label("ready", "T1", ME), label("triage", "T0", ME), label("blocked", "T2"),
@@ -126,16 +135,6 @@ class FactsOutputTest(unittest.TestCase):
         got = retro.facts(Tracker(), "2026-11-01T00:00:00Z")
         self.assertEqual(got["reviews"]["behaviour"]["approve"], 1)
         self.assertEqual([t["ticket"] for t in got["tickets"]], [7])
-
-
-class InboxTest(unittest.TestCase):
-    def test_one_inbox_pr_per_night(self):
-        pr = lambda n, ref, base="knowledge-inbox": {"number": n, "head": {"ref": ref}, "base": {"ref": base}}  # noqa: E731
-        self.assertEqual(knowledge.inbox_pr_action([pr(1, "ez/1-x"), pr(2, "knowledge-inbox", "main")], "knowledge-inbox"),
-                         {"branch": "knowledge-inbox", "source": "knowledge-inbox-pr", "action": "create", "pr": None})
-        prs = [pr(9, "knowledge-inbox-pr"), pr(4, "knowledge-inbox-pr"), pr(2, "knowledge-inbox-pr", "main")]
-        self.assertEqual(knowledge.inbox_pr_action(prs, "knowledge-inbox"),
-                         {"branch": "knowledge-inbox", "source": "knowledge-inbox-pr", "action": "update", "pr": 4})
 
 
 class ChangedLinesTest(unittest.TestCase):

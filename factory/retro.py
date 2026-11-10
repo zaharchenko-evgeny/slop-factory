@@ -81,8 +81,8 @@ def ticket_facts(number, issue_events, pr_events, reviews, comments, bots=(), bo
     operator = (
         [{"kind": "label", "label": e["label"]["name"], "by": actor(e)["login"], "at": e["created_at"]}
          for e in issue_events + pr_events
-         if e.get("event") in ("labeled", "unlabeled") and e["label"]["name"].startswith("factory:")
-         and e["label"]["name"][8:] not in QUIET and person(actor(e), bots)]
+         if e.get("event") in ("labeled", "unlabeled") and e["label"]["name"].startswith(vocab.stage_prefix())
+         and e["label"]["name"][len(vocab.stage_prefix()):] not in QUIET and person(actor(e), bots)]
         + [{"kind": "review", "by": r["user"]["login"], "at": r.get("submitted_at")} for r in reviews if person(r.get("user"), bots)]
         + [{"kind": "comment", "by": c["user"]["login"], "at": c.get("created_at")} for c in comments if person(c.get("user"), bots)])
     estimate = SIZE.search(body or "")

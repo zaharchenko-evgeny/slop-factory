@@ -280,7 +280,9 @@ class DeployTest(unittest.TestCase):
             for name in [*SUBSYSTEMS, "web"]:
                 compiled["environments"][name] = {**compiled["environments"]["engine"], "repository": name}
             compiled["nodes"]["implement-medium"]["triggers"] = ["youtrack.tagAdded factory:implement-medium"]
-            return air.plan_air(compiled, conf)
+            # #1069's fan-out is the path of a definition not in the ADR-0027 form; the Slop fixture now is
+            with mock.patch.object(air.core, "team_definition", return_value=None):
+                return air.plan_air(compiled, conf)
         finally:
             cfg.set_team(before)
 
@@ -300,7 +302,7 @@ class DeployTest(unittest.TestCase):
         envs = {e["name"]: e for e in plan["environments"]}
         for env in [*SUBSYSTEMS, "web"]:
             self.assertEqual(envs[f"[Slop factory] {env}"]["variables"]["FACTORY_ENV"], env)
-        self.assertIn("o/web", plan["label_repositories"])
+        self.assertIn("o/web", plan["label_plan"])
 
 
 class ValidationTest(unittest.TestCase):

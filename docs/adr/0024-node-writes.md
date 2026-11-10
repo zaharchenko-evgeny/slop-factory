@@ -1,5 +1,7 @@
 # ADR-0024: Nodes declare the repositories they write
 
+Superseded by ADR-0027: repositories declare their tracker, vcs and write; nodes declare environments.
+
 Status: accepted, requested by #975 (slice 1 of 6, #976). Supersedes in part
 ADR-0017 and ADR-0021. Replaces the open design in #327.
 
@@ -67,3 +69,15 @@ does not give to the run.
   GitHub label places and the gate's suffix and begin check; YouTrack label
   places; the team adopts `writes`; engine cleanup. The Air probes (#459)
   belong to slice 1 and report on the ticket.
+
+## Ticket ids (#982)
+
+With `tracker.repositories` (#975), a ticket id is `<owner>/<repo>#<n>`. A bare
+`n` is the tracker's ticket, so a team with one ticket repository sees no change.
+
+- A PR branch `ez/<n>-<slug>` maps to ticket `n` of the PR's own repository. A PR in a repository that holds no
+  tickets maps to the tracker.
+- The branch keeps the bare number. The gate reads and writes each ticket in its own repository.
+- `frontier`, `in_stage`, `sweep_tickets` and the CI sync read every ticket repository.
+  `children` and `blockers` follow cross-repository sub-issues and dependencies.
+- `factory begin` of a copy (`FACTORY_NODE_REPO`) exits 10 for a ticket of another repository.

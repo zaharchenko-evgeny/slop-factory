@@ -54,17 +54,13 @@ converts the old pair. `repositories[]` marks exactly one repository
 in it since the project's `engine` version, and `factory upgrade --apply PATH`
 takes one file.
 
-`write_mode` says how the factory writes to the `role: project` repositories.
-`per-repo` (the default) deploys the write nodes once per repository. With
-`token`, `factory deploy` keeps one node set and adds the secret
-`FACTORY_WRITE_TOKEN` to the `write` and `ops` environments, never to `read`.
-A person sets it in Air to a fine-grained personal access token with Contents,
-Pull requests and Issues write on every project repository. Air's own token
-can write only the factory repository. While the token is set, each `gh` write
-that names a project repository runs with it as `GH_TOKEN`, for example a CI
-label or a merge. In `write` and `ops`, `factory doctor` runs one
-`write:label:<owner/repo>` probe per project repository and reports `fail`
-when the token is missing in `token` mode.
+A node's `writes` names the repositories its agent pushes to; `listens` names
+the ticket repositories it wakes on (ADR-0024). A node that listens to several
+repositories is deployed once per repository, with that repository as its
+main checkout. No environment repository is `main`, and `factory deploy` adds
+no write token. The engine no longer reads the `write_mode` setting, and
+`factory validate` reports `main`, `write` or `token_env` on a checkout as a
+`removed-key` error.
 
 ### Per-environment trackers
 

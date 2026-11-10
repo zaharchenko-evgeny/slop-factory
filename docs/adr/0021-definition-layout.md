@@ -17,12 +17,12 @@ focuses are hidden expansions of one node into several automations.
 Decision:
 
 1. **`factory.yaml` lists what the factory has**: `name`, `engine` (the pinned
-   engine package), `tracker`, `models` (aliases, the only place a model ID
+   engine package), `tracker` (with `label_prefix`, the stage label prefix), `models` (aliases, the only place a model ID
    appears), `defaults` (`model`, `env`, `mcp`, `skills`, `settings`), `skills`
    (local `path`, or `source` + `path` + `sha256`), `roles` (`description`,
    `skills`, `mcp`), `agents` (a role + a model + `access` + `settings`; the
    `gate` script and `human` have no role), `environments` and `webhooks`.
-2. **`workflow.yaml` says how it works**: `stages` (`label_prefix`, `final`,
+2. **`workflow.yaml` says how it works**: `stages` (`final`,
    `waiting`), `settings` (inherited by every node: limits, the default
    `environment`) and `nodes`.
 3. **`roles/<role>/`** holds `role.md` (instructions, Jinja), an optional

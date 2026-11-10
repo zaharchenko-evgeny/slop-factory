@@ -268,6 +268,34 @@ class ProjectWriteToken(unittest.TestCase):
         run(["pr", "edit", "2", "-R", "o/r", "--add-label", "x"])  # not a project repository
         self.assertEqual(calls, ["pat"] * 4 + [None] * 3)
 
+    def test_link_to_a_foreign_issue_uses_the_issues_token(self):
+        """#1155: linking a slop-eval-factory child to a slop-factory parent writes slop-factory but refers to the
+        other repository's issue, which Air's token cannot read: `for_repository` gives it the issues token."""
+        calls = []
+        run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", ["o/team"],
+                                             {"FACTORY_ISSUES_TOKEN": "pat"}, "FACTORY_ISSUES_TOKEN")
+        link = ["api", "-X", "POST", "repos/o/engine/issues/7/sub_issues", "-F", "sub_issue_id=99"]
+        run(link)
+        run.for_repository("o/team")(link)
+        run.for_repository("o/engine")(link)  # a child of the own repository: Air's token
+        github_tracker.CountedRun(run).for_repository("o/team")(link)  # the gate's counter keeps it (#1155)
+        self.assertEqual(calls, [None, "pat", None, "pat"])
+
+    def test_checked_out_repositories_use_airs_token(self):
+        """AIRF-51: Air's installation token writes every checkout of a copy (main and additional repositories), so
+        the issues token is kept for repositories outside the run's environment (#1155: it was refused there)."""
+        calls = []
+        env = {"FACTORY_ISSUES_TOKEN": "pat", "FACTORY_ENV": "team", "FACTORY_ENV_REPOSITORY": "o/team"}
+        config = {"repositories": [{"name": "engine", "url": "https://github.com/o/engine"},
+                                   {"name": "team", "url": "https://github.com/o/team"}],
+                  "environments": {"team": {"repositories": ["team", "engine"]}}}
+        self.assertEqual(github_tracker.checked_out(config, env), ["o/team", "o/engine"])
+        run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", ["o/engine", "o/other"], env,
+                                             "FACTORY_ISSUES_TOKEN", github_tracker.checked_out(config, env))
+        run(["api", "-X", "POST", "repos/o/engine/issues/7/labels", "-f", "labels[]=x"])
+        run(["api", "-X", "POST", "repos/o/other/issues/7/labels", "-f", "labels[]=x"])
+        self.assertEqual(calls, [None, "pat"])
+
     def test_without_the_token_every_call_runs_as_before(self):
         calls = []
         run = github_tracker.ProjectWriteRun(lambda args, **kw: calls.append(kw) or "", ["o/app"], {})

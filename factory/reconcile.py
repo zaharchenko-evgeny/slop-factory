@@ -71,7 +71,7 @@ def wakes(nodes, facts):
         for t in n.get("triggers") or []:
             event, _, label = str(t).partition(" ")
             on = "issue" if event.startswith("issues.") else "pr"
-            if not label.startswith("factory:"):
+            if not label.startswith(vocab.stage_prefix()):
                 continue
             if "<focus>" in label:
                 for focus in facts.get("focus_missing") or []:
@@ -278,7 +278,8 @@ def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress)
     """GitHub closes a ticket on merge; when the `finish` run was lost the ticket is closed but still in a PR stage.
     A closed ticket there whose PR is merged gets the `finish` outcome, as `gate.py sweep --issue <n>` would."""
     import gate
-    closed = sorted(set(tracker.sweep_tickets(stages)) - set(open_listed))
+    still_open = set(open_listed)
+    closed = [n for n in dict.fromkeys(tracker.sweep_tickets(stages)) if n not in still_open]  # ids mix numbers and refs
     gate.prefetch(tracker, closed)
     for n in closed:
         try:
@@ -391,6 +392,7 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
     stage name here). A conflicting PR in a fix-able stage with no fix label goes to fix; a waking label whose node
     `when` holds and that outlived the node's timeout is re-fired once per head, the second miss blocks the ticket."""
     import gate
+    import gate_port
     now, results = now or datetime.now(timezone.utc), []
     default = limits.get("run_timeout_minutes", 30)
     fix, wakes = definition_recovery(defn, vocab._tracker()["stages"], vocab.needs_human(), default)
@@ -402,7 +404,45 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
         try:
             facts = tracker.stale_facts(n)
             stage, since, head = facts["stage"], facts.get("since"), (facts.get("head") or "")[:12]
-            if facts.get("issue_state", "open") != "open" or not since or vocab.needs_human() in facts.get("attrs", []):
+            if facts.get("issue_state", "open") != "open" or vocab.needs_human() in facts.get("attrs", []):
+                continue
+            ticket_repos = definition.tracker_repositories(defn)
+            repo, _ = gate_port.split_ticket(n, ticket_repos[0] if ticket_repos else None)
+            if repo:
+                triggers = {}
+                for node, trigger in ((name, trigger) for name, spec in nodes.items()
+                                      for trigger in spec.get("triggers") or []):
+                    label = (trigger.get("label") if isinstance(trigger, dict) else None)
+                    stage_trigger = isinstance(trigger, dict) and trigger.get("stage")
+                    if stage_trigger:
+                        label = vocab.stage(trigger["stage"])
+                        on = "issue" if stage == trigger["stage"] else None
+                    else:
+                        on = "issue" if label in facts.get("attrs", []) else \
+                            "pr" if label in facts.get("pr_labels", []) else None
+                    if not on:
+                        continue
+                    triggers.setdefault((label, on), []).append(node)
+                stuck = False
+                for (label, on), waking in triggers.items():
+                    if any(definition.full_name(copy["main"]).lower() == repo.lower()
+                           for node in waking for copy in definition.copies(defn, node)):
+                        continue
+                    node = waking[0]
+                    why = f"{label} wakes no {node} copy in {repo}. Open the ticket in a repository where {node} listens"
+                    r = {"ticket": n, "stage": stage, "node": node, "reconcile": "stuck", "why": why}
+                    results.append(r)
+                    if not dry_run:
+                        send(tracker, n, nodes, stage, head, "stuck", label, on, why)
+                    if progress:
+                        progress(r)
+                    stuck = True
+                    break
+                if stuck:
+                    continue
+                if not since:
+                    continue
+            elif not since:
                 continue
             ago = lambda at: now - datetime.fromisoformat(at.replace("Z", "+00:00"))  # noqa: E731
             step = None

@@ -24,6 +24,7 @@ import config as config_mod
 import definition
 import plugins
 import project as project_mod
+import scopes as scopes_mod
 import vocab
 from ports.system import TrackerSchema
 
@@ -146,13 +147,11 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
         return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
     if event == "workflow_run":  # ADR-0021 `ci: failed`: Air fires only on a failed run (AIRA-725)
         return {"triggerType": "EVENT", "source": "github", "eventType": "workflow_run.failed",
-                "filters": {"workflow_name": arg, **({"repo_label": f"repo:{repo}"} if repo else {})}}
+                "filters": {"workflow_name": arg}}
     labeled = event.startswith("issues.") or event.startswith("pull_request.labeled")
     filters = {"label": arg} if labeled and arg else {}
     if pr_author and event.startswith("pull_request"):
         filters["pr_author"] = pr_author
-    if repo:  # a per-repository automation answers only tickets and PRs tagged `repo:<name>`
-        filters["repo_label"] = f"repo:{repo}"
     return {"triggerType": "EVENT", "source": "github", "eventType": event, "filters": filters}
 
 
@@ -246,25 +245,18 @@ def additional_repositories(main_repository: dict, team: dict, config: dict) -> 
     return projects if team_is_project(team, config) else projects + [{"repository": repository(team), "branch": "main"}]
 
 
-def checkout_instructions(main_repository: dict | None, config: dict, push_other_projects: bool = False) -> str:
+def checkout_instructions(main_repository: dict | None, config: dict) -> str:
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     team = {"url": config.get("team_repository") or primary["url"]}
     if not main_repository:
         return ""
-    push = ""
-    if push_other_projects and config.get("write_mode") == "token" and other_projects(main_repository, team, config):
-        push = ("For each other changed project repository, push this ticket branch and open or update its PR. "
-                "Use `FACTORY_WRITE_TOKEN` without printing it. Push with `git -c credential.helper= push "
-                "https://x-access-token:$FACTORY_WRITE_TOKEN@github.com/<owner>/<repo> HEAD:<branch>`, "
-                "then use `gh pr create` or `gh pr edit` with a `[factory]` body that includes `Refs #<n>`. "
-                "Use the same `ez/<n>-<slug>` branch in each repository.\n\n")
     if main_repository["fullName"] == repository(team)["fullName"]:
         # Air's gh picks its token from the working directory's origin: the tracker's checkout reaches the tracker.
         tracker = (config.get("tracker") or {}).get("repository") or repository(primary)["fullName"]
         if tracker == main_repository["fullName"]:
-            return push
+            return ""
         return (f"## Working directory\n\nRun every command from `/workspaces/{tracker.rsplit('/', 1)[-1]}`: "
-                "GitHub access there reaches the tracker. This automation's own checkout is the team repository.\n\n" + push)
+                "GitHub access there reaches the tracker. This automation's own checkout is the team repository.\n\n")
     project = main_repository["fullName"].rsplit("/", 1)[-1]
     others = ", ".join(f"`/workspaces/{repository(r)['fullName'].rsplit('/', 1)[-1]}`"
                        for r in other_projects(main_repository, team, config))
@@ -276,15 +268,26 @@ def checkout_instructions(main_repository: dict | None, config: dict, push_other
         tail = "The factory repository is checked out beside it and is read-only.\n\n"
     return (f"## Project checkout\n\nBefore running project commands, `cd /workspaces/{project}`. "
             + (f"The other project repositories are checked out beside it: {others}. " if others else "")
-            + tail + push)
+            + tail)
+
+
+def node_repository_prefix(main_repository: dict | None, config: dict) -> str:
+    """Select this ticket repository when a copied automation starts a factory command."""
+    if not main_repository:
+        return ""
+    tracker = (config.get("tracker") or {}).get("repository")
+    tickets = (config.get("tracker") or {}).get("repositories") or ([tracker] if tracker else [])
+    repo = main_repository["fullName"]
+    return f"FACTORY_NODE_REPO={repo} " if repo != tracker and repo in tickets else ""
 
 
 def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None,
                   webhook: bool = False) -> str:
     checkout = checkout_instructions(main_repository, config) if config else ""
+    command_prefix = node_repository_prefix(main_repository, config) if config else ""
     if name.startswith("doctor"):
         engine = name == "doctor-ops"
-        command = "`factory doctor --engine`" if engine else "`factory doctor`"
+        command = f"`{command_prefix}factory doctor --engine`" if engine else f"`{command_prefix}factory doctor`"
         prompt = (f"Run the installed {command} command exactly once in the foreground with "
                   + ("only the `--engine` argument. " if engine else "no arguments. ")
                   + f"Do not use `uv run`, `--help` or add {'other ' if engine else ''}arguments. Report every JSON probe line and the command's exit code. "
@@ -293,10 +296,10 @@ def script_prompt(name: str, main_repository: dict | None = None, config: dict |
                   "`report` probe line. You must not create, edit or close tickets yourself.")
     elif name == "reconcile":
         prompt = ("This step runs one command and judges nothing: it changes no file, label, comment or review itself. "
-                  "Run `factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
+                  f"Run `{command_prefix}factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
     else:
         args = SCRIPT_ARGS.get(name, "")
-        prompt = SCRIPT_PROMPT.format(args=args)
+        prompt = SCRIPT_PROMPT.format(args=args).replace("`factory ", f"`{command_prefix}factory ")
         if "--issue" in args:
             prompt += " Copy only that one number; never write the payload or any JSON."
         if webhook:
@@ -357,30 +360,31 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     role = n["role"]
     servers = mcp_connectors(n, config, focus)
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
-    checkout = checkout_instructions(main_repository, config, name in {"implement", "fix", "update"})
+    checkout = checkout_instructions(main_repository, config)
     import definition
     if definition.present(config_mod.team_root()):  # ADR-0021: the node's role body, rendered with its settings
         defn = definition.load(config_mod.team_root())
         agent = (defn["factory"].get("agents") or {}).get(((defn["workflow"].get("nodes") or {}).get(name) or {}).get("agent")) or {}
         if agent.get("run"):  # ADR-0021: a step with no judgement: the agent only runs the engine command
-            return (f"{who}\n\n{checkout}Run `factory {agent['run']} --node {name} {begin_arg(name, n)}` once, in the "
+            prefix = node_repository_prefix(main_repository, config)
+            return (f"{who}\n\n{checkout}Run `{prefix}factory {agent['run']} --node {name} {begin_arg(name, n)}` once, in the "
                     "foreground, and wait until it exits. Copy only that one number. It applies "
                     "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
                     "Report its JSON output." + INSTALLED_FACTORY)
-        text = definition.render(defn, name).strip()
+        text = definition.render(defn, name, (main_repository or {}).get("fullName")).strip()
         skills = definition.skill_lines(defn, role)
         servers = [f"{k} (Air connector {e['connector']})" if "connector" in e else f"{k} (custom, from .mcp.json)"
                    for k, e in definition.mcp(defn, name).items()]
     else:
         text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
         skills = skill_lines(role)
-    checkout = checkout_instructions(main_repository, config, name in {"implement", "fix", "update"})
     mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
     arg = begin_arg(name, n)
     arg = f" {arg}" if arg else ""
+    command_prefix = node_repository_prefix(main_repository, config)
     return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skills}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
             "## How you start and finish\n\n"
-            f"1. Run `factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
+            f"1. Run `{command_prefix}factory begin {aname}{arg}`.{' Copy only that one number; never write the payload or any JSON.' if arg else ''} "
             "It prints the ticket, the facts and the branch or PR head. "
             "If it exits 10 the node must not act: report the reason and stop.\n"
             "2. Do the role's work. As the last thing you do, report one outcome above with `factory end <outcome>` "
@@ -402,7 +406,7 @@ def default_environment(nodes: dict, defn: dict | None) -> str | None:
     """The environment a node runs in unless it names one: the definition's `settings.environment`, else the one
     most nodes run in."""
     if defn:
-        return (defn["workflow"].get("settings") or {}).get("environment")
+        return definition.default_environment(defn)
     envs = [n["env"] for n in nodes["nodes"].values() if n.get("env")]
     return max(dict.fromkeys(envs), key=envs.count) if envs else None
 
@@ -417,6 +421,11 @@ def scope_filter(trig: dict, block: dict) -> dict:
     return trig
 
 
+def team_definition() -> dict | None:
+    """The team's definition (ADR-0021), else None (a descriptor team)."""
+    return definition.load(config_mod.team_root()) if definition.present(config_mod.team_root()) else None
+
+
 def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
     """The node, gate options and spec of one automation (`review-behaviour`, `fix-mid`) from the node graph."""
     roles, agents = config["roles"], agents_of(nodes, config)
@@ -428,11 +437,6 @@ def compile_automation(automation: str, nodes: dict, config: dict) -> dict:
                 return {"node": name, "focus": focus, "tier": tier_arg or (tier if focus else None),
                         "spec": node_spec(name, n, config, tier_arg or tier, focus, nodes)}
     raise KeyError(f"unknown automation: {automation}")
-
-
-# Nodes planned once per project repository when `write_mode` is `per-repo` (default) and the project has several
-# repositories: Air pushes only to an automation's primary repository. Only triage sees every repository.
-PER_REPO = definition.PER_REPO
 
 
 def tracker_schema(nodes: dict, config: dict, repositories=()) -> TrackerSchema:
@@ -469,7 +473,7 @@ def owned_label_prefixes(config: dict) -> list[str]:
     t = config.get("tracker") or {}
     ready = (t.get("stages") or {}).get("ready") or vocab.stage("ready")
     risks = (t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values()
-    return sorted({ready.partition(":")[0] + ":", "complexity:", *(r.partition(":")[0] + ":" for r in risks)})
+    return sorted({t.get("label_prefix") or ready.partition(":")[0] + ":", "complexity:", *(r.partition(":")[0] + ":" for r in risks)})
 
 
 def label_specs(nodes: dict, config: dict) -> dict:
@@ -502,10 +506,25 @@ def label_specs(nodes: dict, config: dict) -> dict:
     return out
 
 
+def label_plan(nodes: dict, config: dict, tickets=()) -> dict[str, list[str]]:
+    """{repository: [labels]} for a definition with `tracker.repositories` (ADR-0024). Every ticket repository (those,
+    then `tickets`) gets the tracker schema's labels and the hold and review-trigger labels; the tracker (the first one)
+    also gets the map label. A project repository that holds no tickets maps to `[]`, so `reconcile_labels` removes
+    the factory-owned labels it still has."""
+    t = config.get("tracker") or {}
+    tickets = list(dict.fromkeys([*(definition.full_name(r) for r in t.get("repositories") or []), *tickets]))
+    common = sorted({*tracker_schema(nodes, config).labels,
+                     *(x for x in (t.get("hold_label"), t.get("review_trigger")) if x)})
+    out = {r: [*common, *([t["map_label"]] if i == 0 and t.get("map_label") else [])] for i, r in enumerate(tickets)}
+    for r in config.get("repositories") or []:
+        out.setdefault(repository(r)["fullName"], [])
+    return {r: sorted(set(ls)) for r, ls in out.items()}
+
+
 def reconcile_labels(plan: dict, run=None, config=None) -> list[tuple]:
     """(action, repository, label, changed fields) per required label to create or update, and per factory-owned
     label no longer required to remove, from the selected plugins' `deploy.labels` hooks (github: each repository of
-    `plan["label_repositories"]` independently)."""
+    the plan's `label_plan`, independently)."""
     schema = TrackerSchema.from_plan(plan)
     return [c for hook in plugins.registry(config).hook("deploy.labels") for c in hook(schema, run)]
 
@@ -529,7 +548,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     # ADR-0023: scripts/comment-wake-label.sh adds it; the comment node removes it. Kept while the comments module is
     # off (ADR-0025): a wake workflow an earlier deploy installed still adds it, and fails once the label is gone.
     out.add(vocab.comment())
-    out |= {vocab.ci("ci-green"), vocab.ci("ci-red")}  # CI writes them (scripts/ci-state-label.sh); reconcile reads
+    out |= {vocab.ci("ci-green"), vocab.ci("ci-red")}  # ci-sync writes them from the head checks (#1207)
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
@@ -574,17 +593,24 @@ def surface_name(config: dict) -> str | None:
 
 
 def output_errors(nodes: dict, config: dict) -> list[str]:
-    """`unsupported-output` per deployed node whose `output:` its surface cannot serve: the configured `surface:`, else
-    every surface the selection provides once `targets.air` turns on `air`. No surface: nothing is checked."""
+    """The `deploy.errors` of the selected plugins (youtrack: `tracker.projects`), then `unsupported-output` per deployed
+    node whose `output:` its surface cannot serve: the configured `surface:`, else every surface the selection provides
+    once `targets.air` turns on `air`. No surface: no output is checked."""
+    errs = [e for hook in plugins.registry(config).hook("deploy.errors") for e in hook(nodes, config)]
     name = surface_name(config)
-    if not name:
-        return []
+    return errs + (_output_errors(nodes, config, name) if name else [])
+
+
+def _output_errors(nodes: dict, config: dict, name: str) -> list[str]:
     registry = plugins.registry(config, use=(("surface", name),))
     names = [name] if config.get("surface") else registry.impls("surface")
     if not (classes := [cls for n in names if (cls := registry.impl("surface", n))]):
         return [plugins.impl_error(config, "surface", name, "surface")]
     supported = set().union(*(cls().outputs() for cls in classes))
-    return [f"unsupported-output: nodes.{k}: output {n['output']!r} is not supported by surface {', '.join(names)} "
+    defn = team_definition()
+    env_errs = [e for cls in classes if hasattr(cls, "environment_errors") and defn is not None
+                and definition.adopted(defn) for e in cls().environment_errors(defn)]  # ADR-0027
+    return env_errs + [f"unsupported-output: nodes.{k}: output {n['output']!r} is not supported by surface {', '.join(names)} "
             f"(supported: {', '.join(sorted(supported))})"
             for k, n in nodes["nodes"].items() if n.get("output") and n["output"] not in supported
             and n.get("enabled") is not False and n.get("role") != "human" and not n.get("runner")]

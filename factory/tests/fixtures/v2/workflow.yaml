@@ -7,9 +7,8 @@
 # Agents and environments are defined in factory.yaml; nodes name them.
 # Merge order: factory.yaml defaults -> environment -> role -> agent -> settings below -> node.
 
-# Stage names come from the nodes (`when`, triggers, effects). Labels are <label_prefix><stage>.
+# Stage names come from the nodes (`when`, triggers, effects). Labels are <tracker.label_prefix><stage> (factory.yaml).
 stages:
-  label_prefix: "factory:"
   final: [done, not-actionable]
   waiting: [draft, blocked, needs-answers]
 
@@ -70,6 +69,7 @@ nodes:
     triggers: [{ label: "factory:implement-small" }]
     when: { stage: in-dev }
     output: create-pr
+    writes: [zaharchenko-evgeny/slop-factory]   # Air pushes here; the team repository stays read-only (ADR-0024)
     settings: { mode: implement }
     outcomes:
       done-low:   { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
@@ -82,6 +82,7 @@ nodes:
     triggers: [{ label: "factory:implement-medium" }]
     when: { stage: in-dev }
     output: create-pr
+    writes: [zaharchenko-evgeny/slop-factory]   # Air pushes here; the team repository stays read-only (ADR-0024)
     settings: { mode: implement }
     outcomes:
       done-low:   { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
@@ -94,6 +95,7 @@ nodes:
     triggers: [{ label: "factory:implement-large" }]
     when: { stage: in-dev }
     output: create-pr
+    writes: [zaharchenko-evgeny/slop-factory]   # Air pushes here; the team repository stays read-only (ADR-0024)
     settings: { mode: implement }
     outcomes:
       done-low:   { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
@@ -127,6 +129,7 @@ nodes:
     triggers: [{ label: "factory:fix" }]
     when: { stage: [in-review, changes-requested, approved], fix-rounds: below-cap }
     output: push-to-source
+    writes: [zaharchenko-evgeny/slop-factory]   # Air pushes here; the team repository stays read-only (ADR-0024)
     settings: { mode: fix, fix_rounds: 3 }
     outcomes:
       done-low:  { effects: [{ unlabel: "factory:fix" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
@@ -138,6 +141,7 @@ nodes:
     triggers: [{ label: "factory:update" }]
     when: { stage: changes-requested }
     output: push-to-source
+    writes: [zaharchenko-evgeny/slop-factory]   # Air pushes here; the team repository stays read-only (ADR-0024)
     settings: { mode: update }
     outcomes:
       resolved:     { effects: [{ unlabel: "factory:update" }, { label: "factory:automerge", on: pr }, { stage: approved }] }
@@ -190,6 +194,7 @@ nodes:
   retro:
     agent: retro
     environment: knowledge
+    writes: [zaharchenko-evgeny/slop-eval-factory]  # the knowledge base; the project is evidence
     triggers: [{ schedule: "0 2 * * *" }]
     output: push-to-new-branch    # the platform opens one PR to the knowledge base
     outcomes:

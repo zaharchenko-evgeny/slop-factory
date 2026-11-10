@@ -78,6 +78,7 @@ def recorded_pull(path, items):
 
 ACTIONS = json.loads((Path(__file__).resolve().parent / "contracts/github-actions.json").read_text())["responses"]
 ACTION_KEYS = [(r"labels\?per_page=100", "labels?per_page=100"), (r"actions/runs\?head_sha=[^&]+&per_page=100", "actions/runs?head_sha={sha}&per_page=100"),
+               (r"commits/[^/]+/check-runs\?per_page=100", "commits/{sha}/check-runs?per_page=100"), (r"commits/[^/]+/status", "commits/{sha}/status"),
                (r"actions/runs/\d+/jobs\?per_page=100", "actions/runs/{id}/jobs?per_page=100"), (r"actions/jobs/\d+/logs", "actions/jobs/{id}/logs")]
 
 
@@ -91,6 +92,8 @@ def recorded_action(path, items):
     shape = ACTIONS[key]
     if isinstance(shape, str):
         return items
+    if isinstance(shape, dict):  # the combined status: `items` overrides its `statuses`
+        return json.dumps({**shape, "statuses": [{**shape["statuses"][0], **s} for s in items]})
     for item in items:
         assert set(item) <= set(shape[0]), f"{key}: fields not in the recording: {sorted(set(item) - set(shape[0]))}"
     return "\n".join(json.dumps({**shape[0], **i}) for i in items)
@@ -135,6 +138,12 @@ class FakeGh:
                 {"workflow_id": k, "name": "quality-gates", "event": "pull_request", "run_number": 1,
                  "id": 100 + k, "status": "completed" if c else "in_progress", "conclusion": c}
                 for k, c in enumerate(self.checks)])
+        if "/check-runs?" in a:  # one check run per entry of `checks`, in the suite of its workflow run
+            return recorded_action(a, [{"id": 300 + k, "name": f"job-{k}", "status": "completed" if c else "in_progress",
+                                        "conclusion": c, "completed_at": "2026-11-02T10:00:00Z" if c else None,
+                                        "check_suite": {"id": 400 + k}} for k, c in enumerate(self.checks)])
+        if re.search(r"commits/[^/]+/status$", a):
+            return recorded_action(a, getattr(self, "statuses", []))
         if "/actions/runs/100/jobs?" in a:
             self.jobs_timeout = timeout
             if getattr(self, "jobs_error", False):
@@ -225,7 +234,8 @@ class FakeGh:
         if a.endswith("issues/7/sub_issues"):
             reasons, labels = getattr(self, "sub_reason", ["completed"] * 9), getattr(self, "sub_labels", [[]] * 9)
             return recorded(a, [{"number": i + 1, "title": t, "state": st, "state_reason": r if st == "closed" else None,
-                                 "labels": [{"name": x} for x in ls]}
+                                 "labels": [{"name": x} for x in ls],
+                                 "repository_url": getattr(self, "sub_repos", {}).get(t, f"https://api.github.com/repos/{REPO}")}
                                 for i, (t, st, r, ls) in enumerate(zip(self.sub, self.sub_state, reasons, labels))])
         self.writes.append(args)
         if self.fail_blocked_by and "/dependencies/blocked_by" in a:
@@ -368,41 +378,35 @@ class FactsTest(unittest.TestCase):
 
     def test_ci_and_old_head(self):
         self.assertEqual(tr(FakeGh(checks=["success", "failure"])).facts(7)["ci"], "red")
+        self.assertEqual(tr(FakeGh(checks=["success", "success"])).facts(7)["ci"], "green")
         self.assertEqual(tr(FakeGh(checks=["success", None])).facts(7)["ci"], "pending")
         self.assertEqual(tr(FakeGh(checks=[])).facts(7)["ci"], "none")
-
-    def _with_runs(self, *runs):
-        class Runs(FakeGh):
-            def __call__(self, args, timeout=None):
-                if any("actions/runs?head_sha=" in x for x in args):
-                    return "\n".join(json.dumps({"event": "pull_request", "run_number": 1, "status": "completed",
-                                                 **r}) for r in runs)
-                return FakeGh.__call__(self, args, timeout)
-        return Runs()
-
-    def test_cancelled_reconcile_run_is_not_ci(self):
-        gh = self._with_runs({"workflow_id": 1, "name": "quality-gates", "conclusion": "success"},
-                             {"workflow_id": 2, "name": "factory-reconcile", "conclusion": "cancelled"})
-        self.assertEqual(tr(gh).facts(7)["ci"], "green")
-
-    def test_ci_counts_configured_workflows_only(self):
-        gh = self._with_runs({"workflow_id": 1, "name": "quality-gates", "conclusion": "success"},
-                             {"workflow_id": 3, "name": "extra-ci", "conclusion": "failure"})
-        self.assertEqual(tr(gh).facts(7)["ci"], "green")
-        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, ci_workflows=["quality-gates", "extra-ci"])
-        self.assertEqual(t.facts(7)["ci"], "red")
-
-    def test_ci_rerun_replaces_a_failure(self):
-        class Rerun(FakeGh):
-            def __call__(self, args):
-                if any("actions/runs?head_sha=" in x for x in args):
-                    return "\n".join(json.dumps({"workflow_id": 1, "name": "quality-gates", "event": "pull_request", "run_number": 1,
-                                                  "run_attempt": n, "status": "completed", "conclusion": c})
-                                      for n, c in ((1, "failure"), (2, "success")))
-                return FakeGh.__call__(self, args)
-        self.assertEqual(tr(Rerun()).facts(7)["ci"], "green")
         f = tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)
         self.assertEqual((f["focus_missing"], f["round_head"]), (["full"], "old"))
+
+    def test_one_failed_check_is_red_while_another_runs(self):  # #1204: the run had not finished yet
+        self.assertEqual(tr(FakeGh(checks=["failure", None])).facts(7)["ci"], "red")
+
+    def test_failed_commit_status_is_red(self):  # CI outside GitHub Actions (Jenkins, TeamCity) posts statuses
+        gh = FakeGh(checks=[])
+        gh.statuses = [{"state": "failure", "context": "jenkins"}]
+        self.assertEqual(tr(gh).facts(7)["ci"], "red")
+        gh.statuses = [{"state": "success", "context": "jenkins"}]
+        self.assertEqual(tr(gh).facts(7)["ci"], "green")
+
+    def test_check_run_of_a_factory_workflow_is_not_ci(self):
+        class Service(FakeGh):  # the second check run is in the suite of a factory-reconcile run at the head
+            def __call__(self, args, timeout=None):
+                if any("actions/runs?head_sha=" in x for x in args):
+                    return recorded_action("actions/runs?head_sha=h1&per_page=100", [
+                        {"workflow_id": 1, "name": "quality-gates", "status": "completed", "conclusion": "success", "check_suite_id": 400},
+                        {"workflow_id": 2, "name": "factory-reconcile", "status": "completed", "conclusion": "cancelled", "check_suite_id": 401}])
+                return FakeGh.__call__(self, args, timeout)
+        self.assertEqual(tr(Service(checks=["success", "cancelled"])).facts(7)["ci"], "green")
+        self.assertEqual(tr(FakeGh(checks=["success", "cancelled"])).facts(7)["ci"], "red")
+
+    def test_ci_failure_reads_a_run_that_has_not_finished(self):
+        self.assertEqual(tr(FakeGh(checks=[None])).ci_failure("h1")["step"], "Run tests")
 
     def test_log_fetch_forbidden_does_not_raise(self):
         gh = FakeGh(checks=["failure"])
@@ -845,6 +849,92 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(titles, ["title=Api", "title=Web"])  # prerequisite first
         self.assertEqual(len([w for w in gh.writes if "issues/999/dependencies/blocked_by" in " ".join(w)]), 1)
 
+    def split_across_repositories(self, web_issues=(), sub=(), blocked=None):
+        """A tracker with a `web` repository, and a `gh` whose `o/web` calls answer from `web_issues`; returns both."""
+        web_log = []
+
+        class Gh(FakeGh):
+            def __call__(self, args, timeout=None):
+                path = next((x for x in args if x.startswith("repos/o/web/")), None)
+                if path is None:
+                    return super().__call__(args, timeout)
+                web_log.append(args)
+                if "POST" in args and path.endswith("/issues"):
+                    return json.dumps({"id": 555, "number": 41})
+                if path.endswith("issues?state=open&per_page=100"):
+                    return "\n".join(json.dumps(i) for i in web_issues)
+                if path.endswith("/dependencies/blocked_by") and "POST" not in args:
+                    return "\n".join(json.dumps(i) for i in (blocked or []))
+                return ""
+
+        gh = Gh(labels=("factory:split", "risk:low"), sub=sub)
+        return GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh, repositories={"primary": None, "web": "o/web"}), gh, web_log
+
+    def test_create_children_in_the_repository_the_child_names(self):
+        kids = [{"title": "Api", "body": "a"}, {"title": "Web", "body": "w", "repo": "web", "after": [1]}]
+        t, gh, web = self.split_across_repositories()
+        self.assertTrue(t.apply(eff("create-issues", kids)))
+        post = next(w for w in web if "POST" in w and w[-1] != "labels[]=factory:ready" and any(x.startswith("title=Web") for x in w))
+        self.assertIn("repos/o/web/issues", post)
+        self.assertIn("labels[]=repo:web", post)
+        self.assertFalse([w for w in gh.writes if any(x.startswith("title=Web") for x in w)])  # Api only in the parent's repository
+        self.assertEqual([w for w in gh.writes if any(x.startswith("title=") for x in w)][0][3], "repos/o/r/issues")
+        self.assertEqual([w for w in web if "dependencies/blocked_by" in " ".join(w) and "POST" in w],
+                         [["api", "-X", "POST", "repos/o/web/issues/41/dependencies/blocked_by", "-F", "issue_id=999"]])
+        self.assertIn(["api", "-X", "POST", "repos/o/web/issues/41/labels", "-f", "labels[]=factory:ready"], web)
+        self.assertIn(["api", "-X", "POST", "repos/o/r/issues/7/sub_issues", "-F", "sub_issue_id=555"], gh.writes)
+        self.assertEqual(len([w for w in gh.writes if "issues/7/sub_issues" in " ".join(w)]), 2)  # Api and Web
+
+    def test_create_children_retry_reuses_the_child_of_the_other_repository(self):
+        kids = [{"title": "Api", "body": "a"}, {"title": "Web", "body": "w", "repo": "web", "after": [1]}]
+        child = {"id": 555, "number": 41, "title": "Web", "body": "w\n\n<!-- factory:child of=7 -->",
+                 "labels": [{"name": "risk:low"}, {"name": "repo:web"}, {"name": "factory:ready"}]}
+        t, gh, web = self.split_across_repositories([child], sub=["Api", "Web"])
+        gh.sub_repos = {"Web": "https://api.github.com/repos/o/web"}
+        api_id = json.loads(gh("api --paginate repos/o/r/issues/7/sub_issues".split()).splitlines()[0])["id"]
+        t, gh, web = self.split_across_repositories([child], sub=["Api", "Web"], blocked=[{"id": api_id, "state": "open"}])
+        gh.sub_repos = {"Web": "https://api.github.com/repos/o/web"}
+        gh.blocked = [{"state": "open", "id": 555}]
+        self.assertFalse(t.apply(eff("create-issues", kids)))
+        self.assertEqual((gh.writes, [w for w in web if {"POST", "PATCH", "DELETE"} & set(w)]), ([], []))
+
+    def test_create_children_ignores_a_same_titled_child_linked_from_another_repository(self):
+        kids = [{"title": "Web", "body": "w", "repo": "web"}]
+        for url, creates in [("https://api.github.com/repos/o/r", True), ("https://api.github.com/repos/o/web", False)]:
+            with self.subTest(repository_url=url):
+                t, gh, web = self.split_across_repositories(sub=["Web"])
+                gh.sub_repos = {"Web": url}
+                t.apply(eff("create-issues", kids))
+                self.assertEqual(any("repos/o/web/issues" in w and "POST" in w and any(x.startswith("title=Web") for x in w) for w in web), creates)
+
+    def test_blocking_matches_the_body_line_of_a_child_in_another_repository(self):
+        for line, repo, want in [("Blocked by: o/web#41", "o/web", [12]), ("Blocked by: #41", "o/web", []),
+                                 ("Blocked by: o/web#41", None, [12]), ("Blocked by: o/other#41", None, []), ("Blocked by: #41", None, [12]), ("Blocked by: o/web#41", "o/other", [])]:
+            with self.subTest(line=line, repo=repo):
+                t, gh, _ = self.split_across_repositories()
+                gh.open_issues = [{"number": 12, "state": "open", "body": f"{line}\n\nParent"}]
+                self.assertEqual([i["number"] for i in t.tickets.blocking(41, repo)], want)
+
+    def test_blocked_by_line_of_another_repository_is_read_from_that_repository(self):
+        t, gh, _ = self.split_across_repositories()
+        gh.blocked, gh.issue_body = [], "Blocked by: o/web#41\n\nChild"
+        seen = []
+        run = gh.__call__
+        t.tickets.run = lambda args, timeout=None: (seen.append(args), json.dumps({"state": "open"}) if "issues/41" in " ".join(args) else run(args, timeout))[1]
+        self.assertEqual(t.tickets.open_blockers(7), ["o/web#41"])
+        self.assertIn(["api", "repos/o/web/issues/41"], seen)
+        self.assertEqual(t.tickets._blocked_body("b", 41, "o/web", "o/r"), "Blocked by: o/web#41\n\nb")
+        self.assertEqual(t.tickets._blocked_body("b", 41, "o/r", "o/r"), "Blocked by: #41\n\nb")
+
+    def test_split_children_report_the_stage_and_state_their_own_repository_holds(self):
+        for state, labels, want in [("open", ["factory:blocked"], True), ("open", ["factory:ready"], False), ("closed", ["factory:blocked"], False)]:
+            with self.subTest(state=state, labels=labels):
+                t, gh, _ = self.split_across_repositories(sub=["Web"])
+                gh.sub_repos, gh.sub_state, gh.sub_labels = {"Web": "https://api.github.com/repos/o/web"}, [state], [labels]
+                child = t.tickets.children(7)[0]
+                self.assertEqual((child["state"], STAGES["blocked"] in child["attrs"]), (state, STAGES["blocked"] in labels))
+                self.assertEqual(t.facts(7)["children"][0]["blocked"], want)
+
     def test_create_children_falls_back_to_blocked_by_line(self):
         gh = FakeGh(labels=("factory:split", "risk:low"))
         gh.blocked, gh.fail_blocked_by = [], True
@@ -913,6 +1003,20 @@ class EffectsTest(unittest.TestCase):
         flat = [" ".join(w) for w in gh.writes]
         self.assertTrue(any("DELETE" in w and "issues/11/labels/factory:draft" in w for w in flat))
         self.assertTrue(any("issues/11/labels" in w and "labels[]=factory:ready" in w for w in flat))
+
+    def test_create_issues_reused_draft_child_leaves_only_stage_labels_of_the_prefix(self):
+        """Table: stage prefix -> the labels of a reused child that are removed (its old stage, not other namespaces)."""
+        for prefix, dropped in (("slop:", ["slop:draft"]), ("factory:", ["factory:draft"])):
+            with self.subTest(prefix=prefix), patch.object(M_GH.vocab, "stage_prefix", return_value=prefix):
+                gh = FakeGh(labels=(f"{prefix}split", "risk:low"))
+                gh.open_issues = [{"id": 11, "number": 11, "title": "A", "body": "scope A\n\n<!-- factory:child of=7 -->",
+                                   "labels": [{"name": "risk:low"}, {"name": f"{prefix}draft"}, {"name": "other:draft"},
+                                              {"name": "factory:draft" if prefix == "slop:" else "slop:draft"}]}]
+                tracker = GitHubGateTracker(REPO, {n: f"{prefix}{n}" for n in STAGES}, BOT, fix_cap=3, run=gh)
+                self.assertTrue(tracker.apply(eff("create-issues", [{"title": "A", "body": "scope A"}])))
+                deleted = [w[-1].rsplit("/labels/", 1)[1] for w in gh.writes if "DELETE" in w]
+                self.assertEqual([d for d in deleted if d.endswith(":draft")], dropped)
+                self.assertTrue(any("labels[]=" + prefix + "ready" in " ".join(w) for w in gh.writes))
 
     def test_review_prose_cannot_forge_the_marker(self):
         gh = FakeGh()
@@ -1404,7 +1508,7 @@ class SweepTest(unittest.TestCase):
 
     def test_blocking_lists_native_dependents(self):
         gh = FakeGh()
-        gh.blocking_issues = [{"number": 12, "state": "open"}]
+        gh.blocking_issues = [{"number": 12, "state": "open", "repository_url": "https://api.github.com/repos/o/r"}]
         self.assertEqual([(i["number"], i["state"]) for i in tr(gh).blocking(7)], [(12, "open")])
 
     def test_blocking_lists_body_fallback_dependents(self):
@@ -1648,6 +1752,11 @@ class TwoRepositoryGh(FakeGh):
         if a.startswith("actions/runs?head_sha=h9"):
             return lines([{"workflow_id": k, "name": "quality-gates", "event": "pull_request", "run_number": 1,
                            "status": "completed", "conclusion": c} for k, c in enumerate(self.other_checks)])
+        if a.startswith("commits/h9/check-runs"):
+            return lines([{"name": f"job-{k}", "status": "completed", "conclusion": c, "check_suite": {"id": k}}
+                          for k, c in enumerate(self.other_checks)])
+        if a == "commits/h9/status":
+            return json.dumps({"statuses": []})
         if a == "pulls/11/reviews":
             return lines(self.other_reviews)
         if a.startswith("commits/"):
@@ -1865,6 +1974,7 @@ class CiSyncCodeHostTest(unittest.TestCase):
                  {"number": 3, "head": {"ref": "ez/8-y", "sha": "s3", "repo": {"full_name": "fork/app"}}, "labels": []}]
         events = [{"event": "labeled", "label": {"name": "factory:ci-green"}, "created_at": t} for t in ("T1", "T3")]
         out = {"repos/o/app/pulls?state=open&per_page=100": "\n".join(map(json.dumps, pulls)),
+               "repos/o/app/actions/runs?head_sha=s1&per_page=100": "",
                "repos/o/app/commits/s1/check-runs?per_page=100": "\n".join(map(json.dumps, [
                    {"status": "completed", "conclusion": "success", "completed_at": "T2"},
                    {"status": "in_progress", "conclusion": None, "completed_at": None}])),
@@ -1925,6 +2035,16 @@ class CiSyncCodeHostTest(unittest.TestCase):
                 tracker.run(["issue", "comment", "1", "-R", "o/app", "--body", "b"])
         self.assertEqual([t for _, _, t in seen], ["iss", "iss", None, "pat"])
 
+    def test_issues_token_is_not_used_for_the_environment_repository(self):
+        """#1126: in an environment on o/app, Air's GH_TOKEN writes o/app; the issues token is for the other repositories."""
+        seen = []
+        run = lambda args, token=None: seen.append(token) or ""  # noqa: E731
+        environ = {"FACTORY_ISSUES_TOKEN": "iss", "FACTORY_ENV_REPOSITORY": "o/app"}
+        writes = M_GH.ProjectWriteRun(run, ["o/app", "o/web"], environ, "FACTORY_ISSUES_TOKEN")
+        writes(["issue", "edit", "1", "-R", "o/app", "--add-label", "x"])
+        writes(["issue", "edit", "1", "-R", "o/web", "--add-label", "x"])
+        self.assertEqual(seen, [None, "iss"])
+
 
 class GateTrackerChildrenTest(unittest.TestCase):
     def test_children_come_from_the_tickets(self):
@@ -1933,6 +2053,35 @@ class GateTrackerChildrenTest(unittest.TestCase):
         g.tickets = type("T", (), {"children": lambda self, n: [{"number": 2, "state": "closed"}]})()
         self.assertEqual(g.children(1), [{"number": 2, "state": "closed"}])   # the children guard can hold
 
+
+
+class OneRepositoryPerTicketTest(unittest.TestCase):
+    """ADR-0027 (#1135): a ticket changes the one repository it lives in, so its PR is there."""
+
+    def test_pr_of_ticket_is_in_its_repository(self):
+        t = tr(FakeGh())
+        t.repositories = {"primary": REPO, "app": "o/app"}
+        body = "Scope.\n\nrepositories: primary, app\n"
+        self.assertEqual(t.ticket_repositories(7, body), ["primary", "app"])  # ADR-0017, before the definition adopts
+        t._with_one({"one_repository_per_ticket": True})
+        self.assertEqual(t.ticket_repositories(7, body), ["primary"])
+
+    def test_child_in_its_own_repository_has_no_repo_label(self):
+        """#1155: GitHub refused `repo:<owner/repo>` on a child in slop-eval-factory (HTTP 403, the label did not
+        exist there); under ADR-0027 the child's repository is where it lives, so the label goes."""
+        t = tr(FakeGh())
+        child = {"title": "x", "repo": "o/app", "subsystem": "s1"}
+        self.assertEqual(t.tickets.child_labels(child), ["repo:o/app", "subsystem:s1"])
+        t._with_one({"one_repository_per_ticket": True})
+        self.assertEqual(t.tickets.child_labels(child), [])  # its place says the repository: no label repeats it
+
+    def test_create_issues_into_named_repository(self):
+        t = tr(FakeGh())
+        t.tickets.others = {"app": "o/App"}
+        for child, want in (({"repo": "app"}, "o/App"), ({"repo": "o/app"}, "o/App"), ({}, t.tickets.repo),
+                            ({"repo": "unknown"}, t.tickets.repo)):
+            with self.subTest(child=child):
+                self.assertEqual(t.tickets.repo_of(child), want)
 
 if __name__ == "__main__":
     unittest.main()

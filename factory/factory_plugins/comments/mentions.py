@@ -1,12 +1,11 @@
-"""#590: `@factory:<agent>` in a comment or review wakes that agent in reply mode (ADR-0021 layout, ADR-0025 plugin).
+"""#590: `@factory:<agent>` in a comment wakes that agent in reply mode (ADR-0021 layout, ADR-0025 plugin).
 
-`add_nodes(defn)` (hook `definition.load`) adds the generated router and reply nodes when the plugin is on;
-`errors(defn)` (hook `definition.errors`) checks what only the plugin allows; `holds(agent, ...)` is the `mention`
-guard fact; `latest` and `reply_target` (the `comment` effect `on: mention`) tell a reply step who asked it and where.
+`add_nodes(defn)` (hook `definition.load`) adds the generated reply nodes when the plugin is on; the comment node
+(ADR-0023) routes a comment to one with its `reply` effect. `errors(defn)` (hook `definition.errors`) checks what
+only the plugin allows; `holds(agent, ...)` is the `mention` guard fact; `latest` and `reply_target` (the `comment`
+effect `on: mention`) tell a reply step who asked it and where.
 """
 import re
-
-ROUTER = "mentions"  # the generated node that routes @factory:<agent> to that agent's reply step
 
 
 def neighbours(defn):
@@ -29,14 +28,15 @@ def neighbours(defn):
 
 
 def add_nodes(defn):
-    """An agent with `mentionable: true` can be asked with @factory:<agent>. Add, in memory, one router node
-    (a comment or review -> the asked agent's reply label, by the `mention` fact) and a `reply-<agent>` node per
-    mentionable agent (its role in reply mode, read-only, any stage). Both are marked `generated`."""
+    """An agent with `mentionable: true` can be asked with @factory:<agent>. Add, in memory, a `reply-<agent>` node
+    per mentionable agent (its role in reply mode, read-only, any stage, marked `generated`): its answer to an
+    agent's ask wakes the asker (`wake: asker`)."""
     f, w = defn["factory"], defn["workflow"]
     agents, nodes = f.setdefault("agents", {}), w.setdefault("nodes", {})
-    prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
+    import definition
+    prefix = definition.label_prefix(defn)
     askable = [a for a, spec in agents.items() if (spec or {}).get("mentionable")]
-    if not askable or ROUTER in nodes:
+    if not askable:
         return
     pairs = neighbours(defn)
     for n in nodes.values():  # an `ask` outcome (#591): the agents its agent may ask, the deploy-time allowlist
@@ -44,17 +44,16 @@ def add_nodes(defn):
                 and not all(isinstance(t, dict) and "schedule" in t for t in n.get("triggers") or [None]):
             to = sorted(b for b in askable if frozenset((n["agent"], b)) in pairs)
             n.setdefault("outcomes", {}).setdefault("ask", {"to": to, "effects": [{"comment": "text"}]})
-    agents.setdefault("mention-router", {"run": "decide", "model": (f.get("defaults") or {}).get("model"),
-                                         "access": "read-only", "generated": True})
-    nodes[ROUTER] = {"agent": "mention-router", "generated": True,
-                     "triggers": [{"ticket": "commented"}, {"pr": "commented"}, {"pr": "reviewed"}],
-                     "outcomes": {**{f"reply-{a}": {"if": {"mention": a}, "effects": [{"label": f"{prefix}reply-{a}"}]}
-                                     for a in askable}, "none": {}}}
     for a in askable:
+        # ADR-0027: it answers wherever the agent's other nodes run (none listed: the workflow's default environment)
+        envs = list(dict.fromkeys(e for n in nodes.values() if n.get("agent") == a and not n.get("generated")
+                                  for e in (n["environments"] if isinstance(n.get("environments"), list) else [])))
         nodes.setdefault(f"reply-{a}", {
+            **({"environments": envs} if envs else {}),
             "agent": a, "generated": True, "triggers": [{"label": f"{prefix}reply-{a}"}], "output": "read-only",
             "settings": {"mode": "reply"},
-            "outcomes": {"replied": {"effects": [{"unlabel": f"{prefix}reply-{a}"}, {"comment": "reply", "on": "mention"}]}}})
+            "outcomes": {"replied": {"effects": [{"unlabel": f"{prefix}reply-{a}"}, {"comment": "reply", "on": "mention"},
+                                                 {"wake": "asker"}]}}})
 
 
 def errors(defn):
@@ -66,8 +65,8 @@ def errors(defn):
         if spec.get("mentionable") and (spec.get("run") or spec.get("harness") in no_role):
             errs.append(f"mentionable-needs-role: agents.{a}: only an agent with a role can reply")
     for name, n in (defn["workflow"].get("nodes") or {}).items():
-        if n.get("generated") is not True and name == ROUTER or (name.startswith("reply-") and not n.get("generated")):
-            errs.append(f"reserved-node: nodes.{name}: `{ROUTER}` and `reply-<agent>` are generated from `mentionable`")
+        if name.startswith("reply-") and not n.get("generated"):
+            errs.append(f"reserved-node: nodes.{name}: `reply-<agent>` is generated from `mentionable`")
     return errs
 
 
@@ -124,14 +123,16 @@ def holds(agent, facts, tracker=None, ticket=None):
 
 
 def reply_target(e, facts, tracker, ticket):
-    """A reply's `comment` effect with `on: mention`: post it where the question was, to whoever asked."""
+    """A reply's `comment` effect with `on: mention`: post it where the question was, to whoever asked; an answer
+    to an agent's ask carries the answer in its agent notes for the asker."""
     from gate import FROM
-    from factory_plugins.comments.asks import ASK
+    from factory_plugins.comments.asks import ASK, answer_notes
     asked = latest(facts, tracker, ticket)
     e["on"] = "pr" if asked and asked["on"] == "pr" else None
     if not e["on"]:
         del e["on"]
     if (ask := ASK.search((asked or {}).get("body") or "")) and (asker := FROM.search(asked["body"])):
+        e["notes"] = answer_notes(e.get("notes"), ask[1], e["value"])
         e["value"] = f"@factory:{asker[1]} {e['value']}\n<!-- factory:answer id={ask[1]} -->"  # #591: back to the asker
     elif asked and asked.get("by"):
         e["value"] = f"@{asked['by']} {e['value']}"

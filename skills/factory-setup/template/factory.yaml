@@ -4,8 +4,9 @@ name: {{PROJECT_NAME}}
 engine: "{{ENGINE}}"              # what the Air startup script installs (uv tool install)
 owner: {{GITHUB_USER}}            # the GitHub login the notify node tells
 tracker:
-  adapter: github-issues
-  repository: {{TRACKER_REPOSITORY}}
+  label_prefix: "factory:"       # a stage is the label <label_prefix><stage>
+{{TRACKER}}
+{{CODE_HOST}}
 
 # Model aliases: the only place a model ID appears.
 models:
@@ -141,30 +142,27 @@ agents:
   retro:          { role: retro, model: mid, access: full }
   notify:         { role: notify, model: cheap, access: read-only }
 
-# Environments: where agents run. One repository is `main`; the others are additional.
+# Environments: where agents run (ADR-0024). An environment is a set of checkouts; the nodes' `writes` (workflow.yaml)
+# say which of them each node writes. No repository is `main`.
 environments:
   main:                           # tickets and PRs of the project
     repositories:
-      - repo: {{MAIN_REPOSITORY}}
-        main: true                # branches, PRs and the node's output apply here
-      - repo: {{TEAM_REPOSITORY}} # the knowledge base, read-only
+      - repo: {{CODE_REPOSITORIES}}
     ci: { workflow: {{CI_WORKFLOW}} }   # `ci: failed` = Air workflow_run.failed for this workflow
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               "*.blob.core.windows.net", pypi.org, files.pythonhosted.org]
     vm: default
     setup: null                   # optional script path, run after the engine's bootstrap; installs the environment's tools
-  knowledge:                      # retro: the knowledge base is main, the project is evidence
+  knowledge:                      # retro: the knowledge base is written, the project is evidence
     repositories:
       - repo: {{TEAM_REPOSITORY}}
-        main: true
-      - repo: {{MAIN_REPOSITORY}}
+      - repo: {{CODE_REPOSITORIES}}
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               pypi.org, files.pythonhosted.org]
     vm: default
   team:                           # routines on the team repository
     repositories:
       - repo: {{TEAM_REPOSITORY}}
-        main: true
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               pypi.org, files.pythonhosted.org]
     vm: default

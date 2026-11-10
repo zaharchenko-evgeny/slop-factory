@@ -5,6 +5,7 @@
 # ///
 """Tests for factory/reconcile.py over MemorySystem. Run: uv run factory/tests/test_reconcile.py"""
 import copy
+from unittest import mock
 import json
 import sys
 import unittest
@@ -44,6 +45,17 @@ class ReconcileTest(unittest.TestCase):
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "focus_missing": ["behaviour"]})
         self.assertEqual(results[0]["node"], "review")
         self.assertIn('"factory:review-behaviour"', logged(t, "label"))
+
+    def test_wakes_match_the_configured_stage_prefix(self):
+        """Table: stage prefix of the tracker -> the waking label the trigger carries (`slop:` nodes wake only under `slop:`)."""
+        slop = json.loads(json.dumps(NODES).replace("factory:", "slop:"))
+        ticket = {"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "focus_missing": ["behaviour"]}
+        for prefix, nodes, want in (("slop:", slop, ['"slop:review-behaviour"']), ("factory:", slop, []),
+                                    ("slop:", NODES, []), ("factory:", NODES, ['"factory:review-behaviour"'])):
+            with self.subTest(prefix=prefix, triggers="slop" if nodes is slop else "factory"), \
+                    mock.patch.object(reconcile.vocab, "stage_prefix", return_value=prefix):
+                t, _, _ = run(copy.deepcopy(ticket), nodes=nodes)
+                self.assertEqual(logged(t, "label"), want)
 
     def test_landed_review_marker_reapplies_outcome_without_refiring_reviewer(self):
         ticket = {"stage": "in-review", "pr": 5, "pr_state": "open", "ci": "green", "since": OLD,
@@ -237,6 +249,48 @@ class WakeReadyTest(unittest.TestCase):
         self.assertEqual([r["ticket"] for r in got], ["1"])   # 5 never had a blocker: left alone
 
 
+def ticket_repositories_tracker(staged, stages=None):
+    """A GitHub gate tracker over tickets in `o/r` (the tracker) and `o/b`, whose stage search finds `staged` ({repo:
+    numbers}); the caller replaces the facts and the writes."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from factory_plugins.github.gate import GitHubGateTracker
+    from test_gate import TicketReposGh
+    return GitHubGateTracker("o/r", stages or CONFIG["tracker"]["stages"], "bot", run=TicketReposGh(staged=staged), ticket_repos=["o/r", "o/b"])
+
+
+class WakeReadyTicketRepositoriesTest(unittest.TestCase):
+    def test_wake_ready_scans_every_ticket_repository(self):
+        old = "2026-11-06T10:00:00Z"
+        tr = ticket_repositories_tracker({"o/r": [1], "o/b": [2, 3]})
+        tr.stale_facts = lambda n: {"stage": "ready", "stage_at": old, "blockers_open": 1 if n == "o/b#3" else 0}
+        tr.blocked_by = lambda n: [{"number": 9, "state": "closed"}]
+        written = []
+        tr.apply = written.append
+        now = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
+        got = reconcile.wake_ready(tr, 30, now=now)
+        self.assertEqual([r["ticket"] for r in got], [1, "o/b#2"])  # o/b#3 still has an open blocker
+        self.assertEqual([(e["kind"], e["ticket"]) for e in written],
+                         [("unlabel", 1), ("label", 1), ("unlabel", "o/b#2"), ("label", "o/b#2")])
+
+
+class CiSyncTicketRepositoriesTest(unittest.TestCase):
+    def test_ci_sync_covers_every_ticket_repository(self):
+        from unittest.mock import patch
+        from factory_plugins.github import ci_sync
+        for tracker, want in [({"repositories": ["o/r", "o/b", "https://github.com/o/c.git"]}, ["o/r", "o/b", "o/c"]),
+                              ({"repository": "o/r", "repositories": ["o/r", "o/b"]}, ["o/r", "o/b"]),
+                              ({"repository": "o/r"}, ["o/r"])]:
+            with self.subTest(tracker=tracker):
+                config = {**CONFIG, "tracker": {**CONFIG["tracker"], **tracker}, "repositories": [
+                    {"name": "app", "url": "https://github.com/o/app", "role": "project"},
+                    {"name": "r", "url": "https://github.com/o/r", "role": "project"}]}
+                with patch.object(ci_sync.config_mod, "load", return_value=config), \
+                        patch.object(ci_sync.GitHubCodeHost, "from_config", return_value=object()), \
+                        patch.object(ci_sync, "ci_sync", return_value=([], False)) as run:
+                    ci_sync.run_ci_sync()
+                self.assertEqual(run.call_args.args[1], ["o/app", *want])
+
+
 class WakeApprovedTest(unittest.TestCase):
     """`blockers: merge`: an approved ticket whose last blocker closed gets its merge label re-fired."""
     NODES = {"blockers": "merge", "nodes": {"merge": {
@@ -337,25 +391,85 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertIn('"factory:needs-human"', logged(t, "label"))
         self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
 
-    def test_review_label_without_green_ci_or_fresh_is_left_alone(self):
+    def test_fresh_review_label_is_left_alone_and_pending_ci_does_not_hold_a_review(self):
         labels = {"pr_labels": ["factory:review-low"], "attrs": ["risk:low"], "label_at": {"factory:review-low": OLD}}
-        self.assertEqual(self.recover(self.pr(ci="pending", **labels))[1], [])
         self.assertEqual(self.recover(self.pr(ci="green", **{**labels, "label_at": {"factory:review-low": FRESH}}))[1], [])
+        self.assertEqual([r["reconcile"] for r in self.recover(self.pr(ci="pending", **labels))[1]], ["refire"])  # a review never waits for CI
 
     def test_review_label_whose_when_never_holds_is_stuck_once(self):
-        ticket = self.pr(ci="none", attrs=["risk:low"], pr_labels=["factory:review-low"],
+        ticket = self.pr(ci="green", attrs=[], pr_labels=["factory:review-low"],  # no risk label: `when` never holds
                          label_at={"factory:review-low": "2026-11-03T09:00:00Z"})  # 3 hours: past 2 timeouts
         t, results = self.recover(ticket)
         self.assertEqual([(r["node"], r["reconcile"]) for r in results], [("review-low", "stuck")])
         self.assertIn('"factory:needs-human"', logged(t, "label"))
         self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
         note = logged(t, "comment")[0]
-        self.assertIn("review-low when.ci: want green, have none", note)
-        ticket.update(log=[("comment", note)], stage="in-review", attrs=["risk:low"])
+        self.assertIn("review-low when.label: want risk:low", note)
+        ticket.update(log=[("comment", note)], stage="in-review", attrs=[])
         self.assertEqual(self.recover(ticket)[1], [])  # one notice per stage and head
 
+    def test_stuck_label_in_a_second_ticket_repository_is_reported(self):
+        tr = ticket_repositories_tracker({"o/b": [7]}, self.config["tracker"]["stages"])
+        ticket = self.pr(ci="green", attrs=[], pr_labels=["factory:review-low"],  # no risk label: `when` never holds
+                         label_at={"factory:review-low": "2026-11-03T09:00:00Z"})  # 3 hours: past 2 timeouts
+        written = []
+        tr.stale_facts = lambda n: ticket
+        tr.apply = written.append
+        tracker = self.config["tracker"]
+        results = reconcile.recover_definition(tr, self.defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
+                                               self.config["limits"], now=NOW)
+        self.assertEqual([(r["ticket"], r["node"], r["reconcile"]) for r in results], [("o/b#7", "review-low", "stuck")])
+        self.assertEqual({e["ticket"] for e in written}, {"o/b#7"})  # needs-human, the comment and `blocked`: all in o/b
+        self.assertEqual([e["value"] for e in written if e["kind"] == "stage"], ["blocked"])
+
+    def test_label_no_copy_hears_is_stuck_at_once(self):
+        factory_repo, team_repo = "zaharchenko-evgeny/slop-factory", "zaharchenko-evgeny/slop-eval-factory"
+        tracker = self.config["tracker"]
+        cases = [
+            ("stage trigger", {"stage": "triage", "attrs": []}, {"stage": "triage"}, True, False),
+            ("issue label trigger", {"label": "factory:custom"}, {"stage": "ready", "attrs": ["factory:custom"]}, True, False),
+            ("PR label trigger", {"label": "factory:custom"}, {"stage": "ready", "pr_labels": ["factory:custom"]}, True, False),
+            ("missing label", {"label": "factory:custom"}, {"stage": "ready", "attrs": [], "pr_labels": []}, False, False),
+            ("other stage", {"stage": "triage"}, {"stage": "ready", "attrs": []}, False, False),
+            ("another copy hears same trigger", {"stage": "triage", "attrs": []}, {"stage": "triage"}, False, True),
+        ]
+        for name, trigger, facts, stuck, another_listener in cases:
+            with self.subTest(name=name):
+                defn = copy.deepcopy(self.defn)
+                defn["factory"]["tracker"]["repositories"] = [factory_repo, team_repo]
+                defn["factory"]["environments"]["intake"]["repositories"] = [{"repo": factory_repo}]
+                defn["workflow"]["nodes"]["intake"]["triggers"] = [trigger]
+                if another_listener:
+                    defn["workflow"]["nodes"]["another-intake"] = {
+                        "agent": "router", "environment": "team", "triggers": [trigger]}
+                ticket = {**facts, "since": None}
+                written = []
+
+                class Tracker:
+                    def sweep_tickets(self, stages, open_only=False):
+                        return [f"{team_repo}#7"]
+
+                    def stale_facts(self, _):
+                        return ticket
+
+                    def apply(self, effect):
+                        written.append(effect)
+
+                results = reconcile.recover_definition(Tracker(), defn, list(tracker["stages"]),
+                                                       tracker.get("stage_kinds", {}), self.config["limits"], now=NOW)
+                if stuck:
+                    self.assertEqual([(r["reconcile"], r["node"]) for r in results], [("stuck", "intake")])
+                    self.assertEqual([e["value"] for e in written if e["kind"] == "label"], ["factory:needs-human"])
+                    self.assertEqual([e["value"] for e in written if e["kind"] == "stage"], ["blocked"])
+                    note = next(e["value"] for e in written if e["kind"] == "comment")
+                    self.assertIn("slop-eval-factory", note)
+                    self.assertIn("Open the ticket in a repository where intake listens", note)
+                else:
+                    self.assertEqual(results, [])
+                    self.assertEqual(written, [])
+
     def test_stuck_label_that_is_young_or_behind_a_blocker_is_left_alone(self):
-        labels = {"ci": "none", "attrs": ["risk:low"], "pr_labels": ["factory:review-low"]}
+        labels = {"ci": "green", "attrs": [], "pr_labels": ["factory:review-low"]}
         young = (NOW - timedelta(minutes=45)).isoformat()
         self.assertEqual(self.recover(self.pr(**labels, label_at={"factory:review-low": young}))[1], [])
         self.assertEqual(self.recover(self.pr(**labels, blockers_open=1, label_at={"factory:review-low": "2026-11-03T09:00:00Z"}))[1], [])

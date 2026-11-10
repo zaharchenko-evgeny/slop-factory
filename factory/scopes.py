@@ -19,7 +19,7 @@ has none of this: its one top-level tracker, as before.
 import plugins
 
 SYSTEM_KEYS = ("adapter", "repository", "url", "project", "token_env", "done_state", "repository_field", "bot_logins",
-               "scope", "repositories")
+               "scope", "repositories", "projects")
 SCOPE_KEYS = {"github-issues": ({"label"}, set()), "youtrack": ({"field", "value"}, {"type"})}  # (required, optional)
 
 
@@ -64,9 +64,14 @@ def matches(scope, attrs=(), fields=None):
 
 
 def owns_id(block, ticket):
-    """Whether `ticket` can be a ticket of this tracker: `<project>-<n>` on YouTrack, a number on GitHub."""
+    """Whether `ticket` can be a ticket of this tracker: `<project>-<n>` on YouTrack; on GitHub a number, or
+    `owner/repo#n` (ADR-0024) of one of its repositories."""
     if adapter(block) == "youtrack":
         return isinstance(ticket, str) and (not block.get("project") or ticket.startswith(f"{block['project']}-"))
+    if isinstance(ticket, str) and "#" in ticket:
+        repo = ticket.rsplit("#", 1)[0].lower()
+        own = [str(r).lower() for r in (block.get("repositories") or []) + [block.get("repository") or ""] if r]
+        return repo in own
     return isinstance(ticket, int) or str(ticket).isdigit()
 
 
@@ -164,9 +169,12 @@ class ScopedTracker:
     project environment whose tracker can hold the ticket's id and whose scope holds the ticket. A ticket of no
     environment raises OutOfScope. `build(config, env)` returns that environment's (tracker, vcs)."""
 
-    def __init__(self, config, build, env=None):
+    def __init__(self, config, build, env=None, envs=None, repositories=None):
+        """`envs` and `repositories` ({key: tracker block}, {key: [owner/repo, ...]}) replace the project
+        environments: the ADR-0027 ticket places."""
         self.config, self.build = config, build
-        self.envs = project_envs(config)
+        self.envs = envs if envs is not None else project_envs(config)
+        self._repos = repositories
         self.fixed = env if env in self.envs else None
         self.prefer, self.current = None, self.fixed
         self._systems, self._env_of = {}, {}
@@ -228,8 +236,10 @@ class ScopedTracker:
     def env_of_repository(self, repository):
         """The project environment that lists `repository` (owner/repo), its main repository first; else None."""
         name = str(repository or "").lower()
-        return next((e for e in self.candidates() if name in env_repositories(self.config, e)[:1]), None) \
-            or next((e for e in self.candidates() if name in env_repositories(self.config, e)), None)
+        listed = (lambda e: [str(r).lower() for r in self._repos[e]]) if self._repos is not None else \
+            (lambda e: env_repositories(self.config, e))
+        return next((e for e in self.candidates() if name in listed(e)[:1]), None) \
+            or next((e for e in self.candidates() if name in listed(e)), None)
 
     def vcs_for(self, repository=None):
         env = self.env_of_repository(repository) or self.current or self.candidates()[0]

@@ -18,15 +18,12 @@ WORKFLOW = "workflow.yaml"
 ROLES = "roles"
 NO_ROLE = ("script", "human")  # harnesses that run no role
 GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children", "ticket")  # the facts a guard reads (gate.GUARD_KEYS)
-# Nodes planned once per code repository when `write_mode` is `per-repo`: Air pushes only to an automation's own repository.
-PER_REPO = ("implement", "fix", "update", "review", "join", "merge", "finish")
+# ADR-0024: keys a node's `writes` replaced; `factory validate` names them (`removed-key`)
+REMOVED_REPOSITORY_KEYS = ("main", "token_env")  # `write` names the environment's writable repository (ADR-0027)
+DEPRECATED_NODE_KEYS = ("listens", "writes")  # ADR-0027: a node declares `environments`, a repository its `write`
+DEFAULT_ADAPTER = {"tracker": "github-issues", "vcs": "github"}
 TIER_SUFFIXES = ("-small", "-medium", "-large", "-low", "-high")  # a tiered node: `implement-medium`, `review-high`
 STARTUP = ".air/cloud/startup.sh"  # Air runs it from the checkout; it runs `factory setup` (ADR-0021)
-
-
-def per_repo_node(name):
-    """True when a node (or its tiered form, `implement-medium`) is planned once per code repository."""
-    return name.removesuffix(next((t for t in TIER_SUFFIXES if name.endswith(t)), "")) in PER_REPO
 
 
 def present(root):
@@ -48,16 +45,6 @@ def code_repos(defn):
     skip = {full_name(u) for u in (team_url(defn["root"]), knowledge) if u}
     repos = [r["repo"] for e in (f.get("environments") or {}).values() for r in (e or {}).get("repositories") or []]
     return [r for r in dict.fromkeys(repos) if full_name(r) not in skip]
-
-
-def per_repo_envs(defn):
-    """{code repository: the first environment where it is `main`} for the repositories that have one."""
-    out = {}
-    for name, e in (defn["factory"].get("environments") or {}).items():
-        for r in (e or {}).get("repositories") or []:
-            if r.get("main"):
-                out.setdefault(r["repo"], name)
-    return {r: out[r] for r in code_repos(defn) if r in out}
 
 
 def _keys(x):
@@ -91,13 +78,15 @@ def merge(base, over):
     return out
 
 
-def _parts(defn, name):
-    """(node, agent, role, environment) of node `name`; missing parts are `{}`."""
+def _parts(defn, name, env_name=None):
+    """(node, agent, role, environment) of node `name` in environment `env_name` (default: its first); missing parts
+    are `{}`."""
     f, w = defn["factory"], defn["workflow"]
     node = (w.get("nodes") or {}).get(name) or {}
     agent = (f.get("agents") or {}).get(node.get("agent")) or {}
     role = (f.get("roles") or {}).get(agent.get("role")) or {}
-    env_name = node.get("environment") or (w.get("settings") or {}).get("environment")
+    if env_name is None:
+        env_name = _first_env(node, w.get("settings")) or (w.get("settings") or {}).get("environment")
     env = (f.get("environments") or {}).get(env_name) or {}
     return node, agent, role, env
 
@@ -117,10 +106,12 @@ def node_writes(defn, name):
 
 
 def tracker_repositories(defn):
-    """Full names of the ticket repositories, in order; the first is the tracker. `tracker.repositories`, or the
-    single `tracker.repository`."""
+    """Full names of the ticket repositories, in order; the first is the tracker. `tracker.repositories`, the
+    repositories linked by `tracker.projects` (YouTrack, #981), or the single `tracker.repository`."""
     t = defn["factory"].get("tracker") or {}
     listed = t.get("repositories")
+    if listed is None and isinstance(t.get("projects"), dict):
+        listed = list(t["projects"].values())
     if listed is None:
         listed = [t["repository"]] if t.get("repository") else []
     return [full_name(r) for r in listed if isinstance(r, str)] if isinstance(listed, list) else []
@@ -146,11 +137,217 @@ def node_listens(defn, name):
 
 
 def _primary(defn, env):
-    """The repository the node output applies to in environment `env`: its `main`, else the tracker repository
-    (an environment may have no `main`), else its first repository."""
+    """The repository the node output applies to in environment `env` (ADR-0024: an environment has no `main`): the
+    tracker repository, else its first repository."""
     repos = (env or {}).get("repositories") or []
-    return next((r["repo"] for r in repos if r.get("main")),
-                next(iter(tracker_repositories(defn)), None) or repos[0]["repo"])
+    return next(iter(tracker_repositories(defn)), None) or repos[0]["repo"]
+
+
+# --- ADR-0027: each repository of an environment names its tracker, vcs and write ------------------------------
+def _as_block(value):
+    """An adapter block from config value `value`: `"space"` is `{adapter: space}`; anything else not a dict is None."""
+    if isinstance(value, str):
+        return None if value == "none" else {"adapter": value}
+    return dict(value) if isinstance(value, dict) else None
+
+
+def contract(defn, kind, block):
+    """The `tracker-contract` or `vcs-contract` (ports/place.py) a selected plugin provides for `block`; None when none."""
+    name = (block or {}).get("adapter") or DEFAULT_ADAPTER[kind]
+    return plugins.registry(defn["factory"]).impl(f"{kind}-contract", name)
+
+
+def _layered(defn, kind, env, entry):
+    """Repository `entry`'s `tracker` or `vcs` block: the top-level block, then the environment's, then its own. A
+    narrower block with another adapter keeps only the factory's keys (ADR-0026); the contract's `LOCAL_KEYS` (a
+    repository's place: github `repository`, a `scope`) never come from the top level. `tracker: none`: no tickets."""
+    f = defn["factory"]
+    if kind == "tracker" and entry.get("tracker") in ("none", False):
+        return None
+    top = f.get("tracker") if kind == "tracker" else (f.get("vcs") or f.get("code_host"))
+    layers = [_as_block(top), _as_block(env.get(kind)), _as_block(entry.get(kind))]
+    adapter = next((b["adapter"] for b in reversed(layers) if b and b.get("adapter")), DEFAULT_ADAPTER[kind])
+    local = set(getattr(contract(defn, kind, {"adapter": adapter}), "LOCAL_KEYS", ()))
+    out = {}
+    for i, b in enumerate(layers):
+        if not b:
+            continue
+        b = {k: v for k, v in b.items() if not (i == 0 and k in local)}
+        same = (b.get("adapter") or adapter) == (out.get("adapter") or adapter)
+        out = {**{k: v for k, v in out.items() if same or k not in scopes.SYSTEM_KEYS}, **b}
+    return {**out, "adapter": adapter}
+
+
+def repositories(defn, env_name):
+    """The repositories of environment `env_name` in order, each `{repo, write, tracker, vcs}`: its full name, whether
+    runs may push to it, and its layered blocks (`tracker` None: context only, no tickets)."""
+    env = ((defn["factory"].get("environments") or {}).get(env_name)) or {}
+    return [{"repo": full_name(r["repo"]), "write": r.get("write") is True,
+             "tracker": _layered(defn, "tracker", env, r), "vcs": _layered(defn, "vcs", env, r)}
+            for r in env.get("repositories") or [] if isinstance(r, dict) and r.get("repo")]
+
+
+env_repositories = repositories  # the name `to_project` can still reach under its local `repositories` list
+
+
+def node_environments(defn, name):
+    """The environments node `name` runs in: its `environments` list, else its `environment`, else the workflow's
+    `settings.environments` list, else its `settings.environment`."""
+    w = defn["workflow"]
+    node = (w.get("nodes") or {}).get(name) or {}
+    wset = w.get("settings") or {}
+    for listed in (node.get("environments"), None if node.get("environment") else wset.get("environments")):
+        if isinstance(listed, list):
+            return [e for e in listed if isinstance(e, str)]
+    one = node.get("environment") or wset.get("environment")
+    return [one] if one else []
+
+
+def copies(defn, name):
+    """The deploy copies of node `name` (ADR-0027): per environment, one per repository it listens to (the writable
+    ones, else every repository with a tracker); a node with no event trigger has one per environment. Each copy is
+    `{env, repo, main, place, write, tracker, vcs, additional}`: `main` is the checkout whose events it hears (the
+    tracker's `home`, else the repository; for a schedule the writable repository, else the first), `write` whether it
+    may push there, `additional` the environment's other repositories."""
+    node = ((defn["workflow"].get("nodes") or {}).get(name)) or {}
+    event, out = _has_event_trigger(node), []
+    for env in node_environments(defn, name):
+        repos = repositories(defn, env)
+        if not repos:
+            continue
+        writable = [r for r in repos if r["write"]]
+        for r in (writable or [r for r in repos if r["tracker"]]) if event else [None]:
+            c = contract(defn, "tracker", r["tracker"]) if r and r["tracker"] else None
+            main = (writable or repos)[0]["repo"] if r is None else (c and c.home(r["tracker"], r["repo"])) or r["repo"]
+            out.append({"env": env, "repo": r and r["repo"], "main": main,
+                        "place": c.place(r["tracker"], r["repo"]) if c else None,
+                        "write": any(w["repo"] == main for w in writable),
+                        "tracker": r and r["tracker"], "vcs": r and r["vcs"],
+                        "additional": [x["repo"] for x in repos if x["repo"] != main]})
+    return out
+
+
+def event_repositories(defn):
+    """The repositories whose events wake copies (ADR-0027), in order: each tracker's `home` (its GitHub issues) and
+    each writable repository's vcs `home` (its PRs). Their labels are planned; a tracker with no home (YouTrack)
+    plans its own tags."""
+    out = []
+    for env in (defn["factory"].get("environments") or {}):
+        for r in repositories(defn, env):
+            for kind, on in (("tracker", r["tracker"] is not None), ("vcs", r["write"])):
+                c = contract(defn, kind, r[kind]) if on else None
+                if c and (home := c.home(r[kind], r["repo"])):
+                    out.append(home)
+    return list(dict.fromkeys(out))
+
+
+def default_environment(defn):
+    """The workflow's `settings.environment`, else (ADR-0027) the first environment a node names, else the first."""
+    w = defn["workflow"]
+    wset = w.get("settings") or {}
+    listed = wset.get("environments") if isinstance(wset.get("environments"), list) else []
+    named = wset.get("environment") or (listed[0] if listed else None) or next(
+        (e for n in (w.get("nodes") or {}).values() if (e := _first_env(n or {}))), None)
+    return named or next(iter(defn["factory"].get("environments") or {}), None)
+
+
+def _first_env(node, wset=None):
+    """A node's first environment: of its `environments` list (ADR-0027), else its `environment`, else the first of
+    the workflow's `settings.environments`."""
+    listed = node.get("environments")
+    default = (wset or {}).get("environments") if not node.get("environment") else None
+    return (listed[0] if isinstance(listed, list) and listed else None) or node.get("environment") \
+        or (default[0] if isinstance(default, list) and default else None)
+
+
+def adopted(defn):
+    """Whether the definition uses the ADR-0027 model (a repository's `write`, `tracker` or `vcs`, a node's
+    `environments`): only then do the repository checks run, as errors."""
+    f, w = defn["factory"], defn["workflow"]
+    return any(isinstance(r, dict) and ({"write", "tracker", "vcs"} & r.keys())
+               for e in (f.get("environments") or {}).values() for r in (e or {}).get("repositories") or []) \
+        or any("environments" in (n or {}) for n in (w.get("nodes") or {}).values()) \
+        or "environments" in (w.get("settings") or {})
+
+
+def label_prefix(defn):
+    """The stage label prefix (`tracker.label_prefix`, default `factory:`) of the primary repository of the default
+    environment: the top-level tracker block, then the environment's, then the repository's own (ADR-0027). While
+    `workflow.yaml` still has `stages.label_prefix`, it is the fallback (`warnings` reports the move)."""
+    f = defn["factory"]
+    fallback = (defn["workflow"].get("stages") or {}).get("label_prefix") or "factory:"
+    envs = f.get("environments") or {}
+    env = envs.get(default_environment(defn)) or {}
+    try:
+        primary = full_name(_primary(defn, env))
+    except (IndexError, KeyError, TypeError):
+        primary = None
+    entry = next((r for r in env.get("repositories") or [] if isinstance(r, dict) and r.get("repo")
+                  and full_name(r["repo"]) == primary), None)
+    chosen = None  # `label_prefix` is no system key: it carries over whatever the layers' adapters are
+    for layer in (f.get("tracker"), env.get("tracker"), (entry or {}).get("tracker")):
+        chosen = (_as_block(layer) or {}).get("label_prefix", chosen)
+    return chosen if isinstance(chosen, str) and chosen else fallback  # a bad value is `errors`'s to report
+
+
+def _repository_errors(defn):
+    """The ADR-0027 checks: `write` is a boolean, each block's adapter is provided and valid, no two repositories
+    share a tracker place, and no node hears one place from two environments."""
+    f, errs, places = defn["factory"], [], {}
+    # a repository's own tracker block (its issues, or a project and `scope`) says where its tickets are; these
+    # repeat it per repository (YouTrack per-repository stage tags, a project per repository)
+    blocks = [("tracker", f.get("tracker"))] + [(f"environments.{e}.tracker", (s or {}).get("tracker"))
+                                                for e, s in (f.get("environments") or {}).items()]
+    blocks += [(f"environments.{e}: {r.get('repo')}: tracker", r.get("tracker")) for e, s in (f.get("environments") or {}).items()
+               for r in (s or {}).get("repositories") or [] if isinstance(r, dict)]
+    errs += [f"removed-key: {where}.{k} (ADR-0027: each repository's tracker block and `scope` say where its tickets are)"
+             for where, b in blocks if isinstance(b, dict) for k in ("repository_field", "projects", "repositories") if k in b]
+    for e, spec in (f.get("environments") or {}).items():
+        for r in (spec or {}).get("repositories") or []:
+            if isinstance(r, dict) and "write" in r and not isinstance(r["write"], bool):
+                errs.append(f"bad-write: environments.{e}: {r.get('repo')}: `write` is true or false")
+        for r in repositories(defn, e):
+            where = f"environments.{e}: {r['repo']}"
+            for kind in ("tracker", "vcs"):
+                block = r[kind]
+                if block is None:
+                    continue
+                c = contract(defn, kind, block)
+                if c is None:
+                    errs.append(f"unknown-{kind}: {where}: {block['adapter']}: no selected plugin provides this {kind}")
+                    continue
+                errs += c.check(block, where) if kind == "tracker" else c.check(block, r["repo"], where)
+                if kind == "tracker":
+                    places.setdefault(c.place(block, r["repo"]), set()).add(r["repo"])
+    errs += [f"place-in-two-repositories: {p}: holds the tickets of {', '.join(sorted(rs))}; give each repository "
+             f"its own place (its own issues, or a `scope`)" for p, rs in places.items() if len(rs) > 1]
+    for name in (defn["workflow"].get("nodes") or {}):
+        heard = {}
+        for c in copies(defn, name):
+            if c["place"]:
+                heard.setdefault(c["place"], set()).add(c["env"])
+        errs += [f"node-hears-twice: nodes.{name}: environments {', '.join(sorted(es))} both listen to {p}: "
+                 f"one ticket would start two runs" for p, es in heard.items() if len(es) > 1]
+    return list(dict.fromkeys(errs))
+
+
+def _repository_warnings(defn):
+    """Deprecated keys (ADR-0027) and environments with several writable repositories (Air refuses them). The
+    repository checks (`_repository_errors`) run only on a definition that `adopted` the model, so validating an older
+    one imports no plugin code."""
+    f, w = defn["factory"], defn["workflow"]
+    out = [f"deprecated-key: nodes.{n}: `{k}` (ADR-0027: a node declares `environments`, a repository its `write`)"
+           for n, spec in (w.get("nodes") or {}).items() for k in DEPRECATED_NODE_KEYS if k in (spec or {})]
+    out += [f"deprecated-key: agents.{a}: `access` (ADR-0027: a repository's `write` decides what a run may push)"
+            for a, spec in (f.get("agents") or {}).items() if "access" in (spec or {})]
+    out += [f"deprecated-key: tracker.{k} (ADR-0027: each repository names its tracker)"
+            for k in ("repositories", "projects") if k in (f.get("tracker") or {}) and not adopted(defn)]
+    for e, spec in (f.get("environments") or {}).items():  # raw flags: no plugin code is imported here
+        writable = [str(r.get("repo")) for r in (spec or {}).get("repositories") or [] if isinstance(r, dict) and r.get("write") is True]
+        if len(writable) > 1:
+            out.append(f"several-writable: environments.{e}: {', '.join(writable)}: the air surface allows one "
+                       f"writable repository per environment")
+    return out
 
 
 def environment_secrets(defn, env_name):
@@ -160,7 +357,7 @@ def environment_secrets(defn, env_name):
     layers = [(f.get("defaults") or {}), ((f.get("environments") or {}).get(env_name) or {})]
     for name in w.get("nodes") or {}:
         node, agent, role, _ = _parts(defn, name)
-        if (node.get("environment") or (w.get("settings") or {}).get("environment")) == env_name:
+        if env_name in node_environments(defn, name):
             layers += [role, agent, node]
     out = {}
     for layer in layers:
@@ -170,9 +367,9 @@ def environment_secrets(defn, env_name):
     return dict(sorted(out.items()))
 
 
-def settings(defn, name):
+def settings(defn, name, env_name=None):
     """Merged settings of a node: defaults -> environment -> role -> agent -> workflow settings -> node."""
-    node, agent, role, env = _parts(defn, name)
+    node, agent, role, env = _parts(defn, name, env_name)
     out = (defn["factory"].get("defaults") or {}).get("settings") or {}
     for layer in (env.get("settings"), role.get("settings"), agent.get("settings"),
                   defn["workflow"].get("settings"), node.get("settings")):
@@ -193,7 +390,7 @@ def _mcp_layers(defn, name):
     environment -> role -> agent -> node."""
     node, agent, role, env = _parts(defn, name)
     f = defn["factory"]
-    env_name = node.get("environment") or (defn["workflow"].get("settings") or {}).get("environment")
+    env_name = (node_environments(defn, name) or [None])[0]
     raw = [("defaults", f.get("defaults") or {}), (f"environments.{env_name}", env), (f"roles.{agent.get('role')}", role),
            (f"agents.{node.get('agent')}", agent), (f"nodes.{name}", node)]
     declared, out = set(), []
@@ -286,11 +483,13 @@ def _jinja(defn):
                               keep_trailing_newline=True)
 
 
-def render(defn, name):
+def render(defn, name, repo=None, env_name=None):
     """The role body of node `name`, rendered with its merged settings; a node's own instructions come from its
-    settings (`mode`, `focus`), never from a prompt of its own. Raises on an undefined name."""
-    node, agent, role, env = _parts(defn, name)
-    ctx = {"settings": settings(defn, name), "node": {**node, "name": name},
+    settings (`mode`, `focus`), never from a prompt of its own. `node.repo` is the repository of the automation
+    copy (ADR-0024), `""` outside a deployed copy; `env_name` the copy's environment (ADR-0027: a node may run in
+    several). Raises on an undefined name."""
+    node, agent, role, env = _parts(defn, name, env_name)
+    ctx = {"settings": settings(defn, name, env_name), "node": {**node, "name": name, "repo": repo or ""},
            "agent": {**agent, "name": node.get("agent")}, "role": role, "environment": env,
            "factory": {k: v for k, v in defn["factory"].items() if k != "environments"}}
     j = _jinja(defn)
@@ -343,8 +542,8 @@ def _writes_errors(where, node, agent, env):
         errs = [f"bad-writes: {where}: {r} is not in the environment" for r in writes if full_name(r) not in listed]
     if writes and agent.get("access") == "read-only":
         errs.append(f"writes-read-only: {where}: a node with `writes` runs an agent with `access: read-only`")
-    if not writes and agent.get("access") == "full" and not node.get("generated") and not any(r.get("main") for r in repos):
-        errs.append(f"no-writes: {where}: an environment without `main` needs `writes` on a node with `access: full`")
+    if not writes and agent.get("access") == "full" and not node.get("generated"):
+        errs.append(f"no-writes: {where}: a node with `access: full` needs `writes`")
     return errs
 
 
@@ -401,23 +600,20 @@ def errors(defn):
             errs.append(f"no-model: agents.{a}")
     for e, spec in envs.items():
         repos = (spec or {}).get("repositories") or []
-        declared = set(((f.get("defaults") or {}).get("env") or {})) | set((spec or {}).get("env") or {})
         if not repos:  # compiling needs a repository for the node output (`_primary`)
             errs.append(f"empty-environment: environments.{e}: lists no repositories")
-        if sum(1 for r in repos if r.get("main")) > 1:
-            errs.append(f"main-repository: environments.{e}: needs at most one `main: true`")
-        for r in repos:
-            if r.get("write") and not r.get("main") and not r.get("token_env"):
-                errs.append(f"write-token: environments.{e}: {r.get('repo')} is writable without `token_env`")
-            if r.get("token_env") and r["token_env"] not in declared:
-                errs.append(f"undeclared-env: environments.{e}: {r['token_env']}")
+        errs += [f"removed-key: environments.{e}: {r.get('repo')}: `{k}` (ADR-0027: a repository's `write` names the "
+                 "environment's writable repository)" for r in repos for k in REMOVED_REPOSITORY_KEYS if k in r]
     errs += scopes.errors(f)  # environments with their own trackers (#1069)
+    if "label_prefix" in (f.get("tracker") or {}) and not (
+            isinstance(f["tracker"]["label_prefix"], str) and f["tracker"]["label_prefix"]):
+        errs.append("bad-label-prefix: factory.yaml: `tracker.label_prefix` is a non-empty string")
     listed = (f.get("tracker") or {}).get("repositories")
     if listed is not None and (not isinstance(listed, list) or not all(isinstance(r, str) for r in listed)):
         errs.append("bad-tracker-repositories: factory.yaml: `tracker.repositories` is a list of repositories")
     if w.get("blockers", "start") not in ("start", "merge"):
         errs.append(f"bad-blockers: workflow.yaml: `blockers` is `start` or `merge`, not {w['blockers']!r}")
-    default_env = (w.get("settings") or {}).get("environment")
+    default_env = default_environment(defn)
     errs += scopes.vcs_errors(f, nodes={  # each node's PR effects on its environment's vcs (#1070)
         name: (n.get("environment") or default_env,
                [e for o in (n.get("outcomes") or {}).values() for e in (o or {}).get("effects") or []])
@@ -438,7 +634,7 @@ def errors(defn):
             return False
         block = project_envs.get(env)
         if block is None:
-            return main_name != tracker_repo
+            return scopes.adapter(f.get("tracker")) == "github-issues" and main_name != tracker_repo
         return scopes.adapter(block) == "github-issues" and main_name != full_name(block.get("repository") or "")
     pr_labels = {}
     for source in nodes.values():
@@ -453,20 +649,19 @@ def errors(defn):
         if (source_env or {}).get("ci"):
             source_repo = _primary(defn, source_env) if source_env.get("repositories") else ""
             for state in ("green", "red"):
-                label = f"{(w.get('stages') or {}).get('label_prefix', 'factory:')}ci-{state}"
+                label = f"{label_prefix(defn)}ci-{state}"
                 pr_labels.setdefault(label, set()).add(full_name(source_repo))
-    if len(code) > 1 and any(per_repo_node(n) for n in nodes) \
-            and ((f.get("defaults") or {}).get("settings") or {}).get("write_mode", "per-repo") == "per-repo":
-        errs += [f"per-repo-env: {r}: a per-repository node needs an environment where it is `main`"
-                 for r in code if r not in per_repo_envs(defn)]
+    new_model = adopted(defn)
     for name, n in nodes.items():
         where = f"nodes.{name}"
         if n.get("agent") not in agents:
             errs.append(f"unknown-agent: {where}: {n.get('agent')}")
             continue
         human = (agents[n["agent"]] or {}).get("harness") == "human"
-        env = n.get("environment") or default_env
-        if not human and env in envs:
+        node_envs = node_environments(defn, name) if new_model else [n.get("environment") or default_env]
+        env = node_envs[0] if node_envs else None
+        # ADR-0027: a copy's main repository is where its events happen by construction (`copies`); no deaf trigger
+        if not human and env in envs and not new_model:
             env_repos = (envs.get(env) or {}).get("repositories") or []
             main_repo = _primary(defn, envs.get(env)) if env_repos else ""  # no `main`: the tracker (ADR-0024)
             main_name = full_name(main_repo)
@@ -484,10 +679,11 @@ def errors(defn):
                     break
         if (agents[n["agent"]] or {}).get("run") not in (None, "decide"):
             errs.append(f"unknown-command: agents.{n['agent']}: run {agents[n['agent']]['run']}")
-        if not human and env not in envs:
-            errs.append(f"unknown-environment: {where}: {env}")
-        errs += _writes_errors(where, n, agents[n["agent"]] or {}, envs.get(env) or {})
-        errs += _listens_errors(defn, where, n) + _event_errors(defn, name, n)
+        if not human:
+            errs += [f"unknown-environment: {where}: {e}" for e in node_envs or [None] if e not in envs]
+        if not new_model:  # ADR-0024 keys, until the team migrates (ADR-0027)
+            errs += _writes_errors(where, n, agents[n["agent"]] or {}, envs.get(env) or {})
+            errs += _listens_errors(defn, where, n) + _event_errors(defn, name, n)
         if n.get("model") is not None and n["model"] not in models:
             errs.append(f"unknown-model: {where}: {n['model']}")
         if not n.get("triggers"):
@@ -518,7 +714,7 @@ def errors(defn):
                         valid = valid or value == "all"
                     if not valid:
                         errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins" + (" or {field: <name>}" if key == "assign" else ""))
-            prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
+            prefix = label_prefix(defn)
             by_target = {}
             for effect in oc.get("effects") or []:
                 if not isinstance(effect, dict):
@@ -535,16 +731,20 @@ def errors(defn):
                 if kinds == {"label", "unlabel"}:
                     errs.append(f"label-group: {where}.{o}: cannot unlabel and label {group} on {target}; "
                                 "keep only the label")
-        if not human and n.get("enabled") is not False and env in envs:
+        for e in (node_envs if not human and n.get("enabled") is not False else []):
+            if e not in envs:
+                continue
             try:
-                render(defn, name)
-            except __import__("jinja2").TemplateError as e:
-                errs.append(f"render: {where}: {e}")
+                render(defn, name, env_name=e)
+            except __import__("jinja2").TemplateError as err:
+                errs.append(f"render: {where}" + (f" in {e}" if len(node_envs) > 1 else "") + f": {err}")
     for check in registry.hook("definition.errors"):
         errs += check(defn)  # comments: a mentionable agent needs a role; notify: its config and effects
     errs += [plugins.refusal("factory.yaml", k, owner) for k in f  # a block only a plugin reads (`notify:`)
              if (owner := plugins.owner(k, "config")) and not registry.is_on(owner)]
     errs += plugins.errors(f)
+    if adopted(defn):
+        errs += _repository_errors(defn)
     return errs + _mcp_errors(defn)
 
 
@@ -572,14 +772,16 @@ def warnings(defn):
     triggered = {t["label"] for n in nodes for t in n.get("triggers") or [] if isinstance(t, dict) and "label" in t}
     added = {e["label"] for n in nodes for oc in (n.get("outcomes") or {}).values()
              for e in (oc or {}).get("effects") or [] if isinstance(e, dict) and "label" in e}
-    prefix = (defn["workflow"].get("stages") or {}).get("label_prefix", "factory:")
+    prefix = label_prefix(defn)
     # A routing label (the stage prefix) should wake a node; `risk:low` and the like are states, read by guards.
     registry = plugins.registry(defn["factory"])
     off = [plugins.refusal(f"agents.{a}", k, owner) for a, spec in (defn["factory"].get("agents") or {}).items()
            for k in spec or {} if (spec or {})[k] and (owner := plugins.owner(k, "agent")) and not registry.is_on(owner)]
     more = [w for check in registry.hook("definition.warnings") for w in check(defn)]
-    return [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
-            if label.startswith(prefix) and label not in triggered] + off + more
+    moved = ["deprecated-key: workflow.yaml stages.label_prefix moved to tracker.label_prefix in factory.yaml"] \
+        if "label_prefix" in (defn["workflow"].get("stages") or {}) else []
+    return moved + [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
+            if label.startswith(prefix) and label not in triggered] + off + more + _repository_warnings(defn)
 
 
 # --- Compile into the shapes the engine reads (#669, #677) ---------------------------------------
@@ -662,8 +864,8 @@ def to_project(defn):
     defaults = f.get("defaults") or {}
     dset, wset = defaults.get("settings") or {}, w.get("settings") or {}
     stages = w.get("stages") or {}
-    prefix = stages.get("label_prefix", "factory:")
-    default_env = wset.get("environment")
+    prefix = label_prefix(defn)
+    default_env = default_environment(defn)
 
     # Repositories: every listed one; the primary is the main repository of the default environment.
     primary = _primary(defn, envs[default_env])
@@ -677,14 +879,18 @@ def to_project(defn):
                                      "role": "primary" if r["repo"] == primary else "project"})
     environments = {}
     for en, e in envs.items():
-        repos = sorted(e.get("repositories") or [], key=lambda r: not r.get("main"))
+        repos = e.get("repositories") or []
         help_ = environment_secrets(defn, en)
+        new_model = adopted(defn)
+        written = {r["repo"] for r in env_repositories(defn, en) if r["write"]} if new_model else \
+            {r for name in nodes if (nodes[name].get("environment") or default_env) == en for r in node_writes(defn, name)}
         environments[en] = {"repositories": [names[r["repo"]] for r in repos], "secrets": list(help_),
-                            # where the gate may write in this environment: the main repository, or `write: true` (#994)
-                            "writable": [names[r["repo"]] for r in repos if r.get("main") or r.get("write")],
+                            # where the gate may write in this environment (#994): what its nodes write (ADR-0024)
+                            "writable": [names[r["repo"]] for r in repos if full_name(r["repo"]) in written],
                             "secret_help": help_,
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP,
-                            **({"tracker": dict(e["tracker"])} if isinstance(e.get("tracker"), dict) else {}),
+                            # ADR-0027: a repository's own tracker is a ticket place (`ticket_places`), not a #1069 project
+                            **({"tracker": dict(e["tracker"])} if isinstance(e.get("tracker"), dict) and not new_model else {}),
                             **({"vcs": e["vcs"]} if e.get("vcs") else {})}  # its own vcs (#1070)
 
     # Stages: every name the nodes use, plus the engine's PR facts.
@@ -694,7 +900,7 @@ def to_project(defn):
     states["pr-merged"] = {"kind": "final", "store": {"pr": "merged"}}
 
     # Commands: every label a trigger or an effect names; on the PR when an effect puts it there (`on: pr`).
-    # CI puts its result labels on the PR itself (quality-gates `ci-label`), so they are PR labels too (#790).
+    # ci-sync puts the CI result labels on the PR itself (#790, #1207), so they are PR labels too.
     on_pr = {f"{prefix}ci-green", f"{prefix}ci-red"}
     for n in nodes.values():
         for oc in (n.get("outcomes") or {}).values():
@@ -740,7 +946,6 @@ def to_project(defn):
         "workflow": WORKFLOW,
         "states": states,
         "commands": commands,
-        **({"write_mode": dset["write_mode"]} if dset.get("write_mode") else {}),
         **({"issues_token_env": dset["issues_token_env"]} if dset.get("issues_token_env") else {}),
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
@@ -795,7 +1000,7 @@ def _effect(e, prefix):
 
 
 def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_stages, pr_cmds):
-    env_name = n.get("environment") or default_env
+    env_name = _first_env(n) or default_env
     a = agents[n["agent"]]
     role = role_of(n["agent"])
     when = dict(n.get("when") or {})
@@ -820,6 +1025,8 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
         out["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
     if n.get("enabled") is False:
         out["enabled"] = False
+    if n.get("timeout_minutes"):  # reconcile waits this long for its outcome (`limits.run_timeout_minutes` otherwise)
+        out["timeout_minutes"] = n["timeout_minutes"]
     outcomes = {}
     for o, oc in (n.get("outcomes") or {}).items():
         oc = dict(oc or {})
@@ -909,8 +1116,8 @@ def nodes(defn):
     f, w = defn["factory"], defn["workflow"]
     agents, envs, defaults = f.get("agents") or {}, f.get("environments") or {}, f.get("defaults") or {}
     wset = w.get("settings") or {}
-    prefix = (w.get("stages") or {}).get("label_prefix", "factory:")
-    default_env, all_stages = wset.get("environment"), sorted(_used_stages(w))
+    prefix = label_prefix(defn)
+    default_env, all_stages = default_environment(defn), sorted(_used_stages(w))
     primary = _primary(defn, envs[default_env])
     on_pr = {f"{prefix}ci-green", f"{prefix}ci-red"}
     for n in (w.get("nodes") or {}).values():
@@ -929,7 +1136,7 @@ def nodes(defn):
     for name, n in (w.get("nodes") or {}).items():
         a = agents[n["agent"]]
         role = {"script": "script", "human": "human"}.get(a.get("harness")) or a.get("role") or n["agent"]
-        env_name = n.get("environment") or default_env
+        env_name = _first_env(n) or default_env
         when = dict(n.get("when") or {}) or {"always": True}
         triggers = [_trigger(t, name, prefix, on_pr, schedules, envs.get(env_name) or {}) for t in n.get("triggers") or []]
         node = {"env": env_name} if role != "human" else {}
@@ -948,6 +1155,8 @@ def nodes(defn):
             node["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
         if n.get("enabled") is False:
             node["enabled"] = False
+        if n.get("timeout_minutes"):
+            node["timeout_minutes"] = n["timeout_minutes"]
         node["outcomes"] = {o: _outcome(oc, on_pr, all_stages) for o, oc in (n.get("outcomes") or {}).items()}
         connectors = mcp_connectors(mcp(defn, name))
         if connectors:  # Air's `mcpConnectors`; the custom servers go to `.mcp.json` at setup (team_setup)
@@ -964,10 +1173,34 @@ def config(defn):
     tracker's `stages`, `stage_kinds` and `commands` that the gate reads."""
     descriptor = to_project(defn)[0]
     states = {name: s for name, s in descriptor["states"].items() if "label" in s["store"]}
-    return {**descriptor, "tracker": {**descriptor["tracker"],
-                                      "stages": {name: s["store"]["label"] for name, s in states.items()},
-                                      "stage_kinds": {name: s["kind"] for name, s in states.items()},
-                                      "commands": {name: c["store"] for name, c in descriptor["commands"].items()}}}
+    out = {**descriptor, "tracker": {**descriptor["tracker"], "label_prefix": label_prefix(defn),
+                                     "stages": {name: s["store"]["label"] for name, s in states.items()},
+                                     "stage_kinds": {name: s["kind"] for name, s in states.items()},
+                                     "commands": {name: c["store"] for name, c in descriptor["commands"].items()}}}
+    return {**out, **ticket_places(defn, out["tracker"])} if adopted(defn) else out
+
+
+def ticket_places(defn, tracker):
+    """ADR-0027, for the gate: one ticket, one repository, one PR (`one_repository_per_ticket`). The GitHub Issues
+    homes are the tracker's `repositories` (#982: one GitHub tracker reads tickets `owner/repo#n` of each), the top
+    `tracker.repository` first; every repository whose tracker has no home (YouTrack) is a `ticket_places` entry the
+    gate routes to by id and scope, its PRs on its own vcs."""
+    homes, places = [], []
+    for env in (defn["factory"].get("environments") or {}):
+        repos = repositories(defn, env)
+        for r in repos:
+            c = contract(defn, "tracker", r["tracker"]) if r["tracker"] else None
+            if c is None:
+                continue
+            if home := c.home(r["tracker"], r["repo"]):
+                homes.append(next((x["repo"] for x in repos if x["repo"].lower() == home), home))
+            elif r["repo"] not in {p["repository"] for p in places}:
+                places.append({"repository": r["repo"], "tracker": r["tracker"], "vcs": r["vcs"],
+                               "repositories": [r["repo"], *(x["repo"] for x in repos if x["repo"] != r["repo"])]})
+    top = next((h for h in homes if h.lower() == full_name(tracker.get("repository") or "").lower()), None)
+    ordered = list(dict.fromkeys([*([top] if top else []), *homes]))
+    return {"tracker": {**tracker, "repositories": ordered, **({"repository": ordered[0]} if ordered and not top else {})},
+            "ticket_places": places, "one_repository_per_ticket": True}
 
 
 # --- The sweep's decisions, read from the node graph ------------------------------------------------

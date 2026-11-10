@@ -39,7 +39,7 @@ import nodes as nodes_mod  # noqa: E402
 from derive import clean_notes, review_at_head  # noqa: E402
 import effects as effects_mod  # noqa: E402
 from gate_tracker import OnVcs, hosts_prs, overlay  # noqa: E402
-from gate_port import MemorySystem, ticket_from_ref  # noqa: E402
+from gate_port import REF, MemorySystem, number_of, split_ticket, ticket_from_ref  # noqa: E402
 import vocab  # noqa: E402
 import definition  # noqa: E402
 import plugins  # noqa: E402  (ADR-0026: a plugin's code is imported when the core calls it)
@@ -188,7 +188,9 @@ def from_trigger(d, code_host=None):
         if ticket is None:
             raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
     else:
-        ticket = number
+        repository = (d.get("repository") or {}).get("full_name") if isinstance(d.get("repository"), dict) else None
+        ref = getattr(code_host, "ticket_ref", None)  # ADR-0024: an issue of another ticket repository
+        ticket = ref(repository, number) if repository and callable(ref) else number
     action = d.get("action") or "event"
     return {"id": f"{name}:{ticket}:{action}", "ticket": ticket, "event_name": name, "action": action}
 
@@ -255,12 +257,50 @@ def env_systems(config, env, **runners):
     return beside(tracker, vcs_cls.from_config(descriptor=c, **({"run": tracker.run} if hasattr(tracker, "run") else {})))
 
 
+def place_keys(config):
+    """({key: tracker block}, {key: [owner/repo, ...]}) of the ADR-0027 ticket places: `github` for the GitHub
+    tracker's repositories (when it has any), then `place:<owner/repo>` per `ticket_places` entry."""
+    t, envs, repos = config.get("tracker") or {}, {}, {}
+    if t.get("repositories"):
+        envs["github"], repos["github"] = t, list(t["repositories"])
+    for p in config["ticket_places"]:
+        key = f"place:{p['repository']}"
+        envs[key], repos[key] = scopes.merged(config, p["tracker"]), p["repositories"]
+    return envs, repos
+
+
+def place_systems(config, key, **runners):
+    """The (tracker, vcs) of ticket place `key` (`place_keys`): the GitHub tracker of the config, or a place's own
+    tracker on its repository's vcs."""
+    if key == "github":
+        tracker = tracker_of({k: v for k, v in config.items() if k != "ticket_places"}, **runners)
+        vcs_cls = vcs_class(config, config_mod.vcs(config))
+        return beside(tracker, vcs_cls.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {})))
+    place = next(p for p in config["ticket_places"] if f"place:{p['repository']}" == key)
+    by = {"/".join(r["url"].rstrip("/").split("/")[-2:]).lower(): r for r in config.get("repositories") or []}
+    repos = [{**by[n.lower()], "role": "primary" if i == 0 else "project"} for i, n in enumerate(place["repositories"])
+             if n.lower() in by]
+    c = {**{k: v for k, v in config.items() if k not in ("vcs", "ticket_places")},
+         "tracker": scopes.merged(config, place["tracker"]), "repositories": repos,
+         "code_host": {**(place.get("vcs") or {}), "repository": place["repository"]}}
+    block = c["tracker"]
+    tracker_cls = plugins.registry(config).impl("tracker", scopes.adapter(block))
+    if tracker_cls is None:
+        raise ValueError(f"{key}: tracker.adapter {scopes.adapter(block)}: no selected plugin provides this tracker")
+    tracker = tracker_cls.from_config(descriptor=c, **runners)
+    vcs_cls = vcs_class(config, c["code_host"], f"{key}.vcs")
+    return beside(tracker, vcs_cls.from_config(descriptor=c, **({"run": tracker.run} if hasattr(tracker, "run") else {})))
+
+
 def systems(config):
     """The (tracker, vcs) of `config`, from the plugins that provide them; the vcs is the run's environment's
     (FACTORY_ENV: its own `vcs:` over the top-level one, #1070). With environments that have their own trackers
     (#1069), both are one `scopes.ScopedTracker`: each ticket goes to its environment's tracker, the run's environment
     first."""
     env = os.environ.get("FACTORY_ENV")
+    if config.get("ticket_places"):  # ADR-0027: the GitHub tickets on one tracker, each other place on its own
+        scoped = scopes.ScopedTracker(config, place_systems, None, *place_keys(config))
+        return scoped, scoped
     if scopes.project_envs(config):
         scoped = scopes.ScopedTracker(config, env_systems, env)
         return scoped, scoped
@@ -614,7 +654,7 @@ def branch_of(facts, config):
     title = facts.get("title") or ""
     words = [word for word in re.findall(r"[a-z0-9]+", title.lower()) if word not in {"a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "with", "from", "by"}]
     slug = explicit.group(1) if explicit else "-".join(words[:4]) or "ticket"
-    return config["branch_pattern"].format(ticket=facts["ticket"], slug=slug)
+    return config["branch_pattern"].format(ticket=number_of(facts["ticket"]), slug=slug)
 
 
 def matches(node, facts, event, outcome=None):
@@ -630,10 +670,22 @@ def matches(node, facts, event, outcome=None):
     return None if holds(node["when"], facts, event) else "condition does not hold"
 
 
+def outside_node_repository(ticket, tracker_repo):
+    """The reason a run of an automation copy (`FACTORY_NODE_REPO`, ADR-0024) must not act on `ticket`, else None:
+    the ticket is in another repository (a bare number is the tracker's). A run without it acts on any ticket."""
+    node_repo = os.environ.get("FACTORY_NODE_REPO")
+    repo = split_ticket(ticket, tracker_repo)[0]
+    if node_repo and repo and (isinstance(ticket, int) or REF.fullmatch(str(ticket))) and repo.lower() != node_repo.lower():
+        return f"ticket {ticket} is in {repo}, not in {node_repo}"
+    return None
+
+
 def check(name, event, tracker, nodes, config, code_host=None):
     node = load_node(name, nodes)
     if "id" not in event:
         raise Bad("malformed event: needs `id`")
+    if (why := outside_node_repository(event["ticket"], getattr(tracker, "repo", None))):
+        return NO_GO, {"go": False, "reason": why}
     facts = tracker.facts(event["ticket"])
     if isinstance(code_host, scopes.ScopedTracker):  # the vcs of the ticket's environment
         code_host = code_host.vcs_for()[1]
@@ -1342,7 +1394,7 @@ def main(argv):
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stale", action="store_true")
     p.add_argument("--event", nargs="?", const="-")
-    p.add_argument("--issue", type=int)
+    p.add_argument("--issue", type=lambda t: t if REF.fullmatch(t) else int(t))  # N, or owner/repo#N (ADR-0024)
     p.add_argument("--pr", type=int)  # decide: the PR that woke the node; the gate finds its ticket
     p.add_argument("--outcome")
     p.add_argument("--payload")

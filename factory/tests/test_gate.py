@@ -32,6 +32,7 @@ import definition  # noqa: E402
 from factory_plugins.comments import node as comment_node  # noqa: E402
 from factory_plugins.github import ci_sync as gh_ci_sync, gate as gh_gate  # noqa: E402
 from gate_port import MemorySystem, TagTracker  # noqa: E402
+from ports.system import Query  # noqa: E402
 
 CONFIG = cfg.load()
 NODES = nodes.load()
@@ -48,16 +49,20 @@ def make(cls, tid, **kw):
 
 
 class GateTest(unittest.TestCase):
-    def test_slop_ci_red_routes_to_fix_and_pending_ci_blocks_review(self):
+    def test_slop_red_ci_after_approval_goes_to_fix_and_review_does_not_wait_for_ci(self):
         graph = definition.nodes(definition.load(ROOT / "factory/tests/fixtures/slop"))
 
-        red = MemorySystem({"7": {"stage": "in-review", "ci": "red"}})
-        status, outcome = gate.decide("ci-red", "7", red, graph, dry_run=True)
+        red = MemorySystem({"7": {"stage": "approved", "ci": "red"}})
+        status, outcome = gate.decide("ci-failed", "7", red, graph, dry_run=True)
         self.assertEqual((status, outcome["outcome"]), (gate.GO, "fix"))
+        status, outcome = gate.decide("ci-failed", "7", MemorySystem({"7": {"stage": "approved", "ci": "pending"}}), graph, dry_run=True)
+        self.assertEqual((status, outcome["outcome"]), (gate.GO, "waiting"))
+        status, _ = gate.check("ci-failed", {"id": "e1", "ticket": "7"}, MemorySystem({"7": {"stage": "in-review", "ci": "red"}}), graph, CONFIG)
+        self.assertEqual(status, gate.NO_GO)  # before the approval the review's CI guard decides
 
         pending = MemorySystem({"7": {"stage": "in-review", "ci": "pending", "attrs": ["risk:high"]}})
         status, _ = gate.check("review-high", {"id": "e1", "ticket": "7"}, pending, graph, CONFIG)
-        self.assertEqual(status, gate.NO_GO)
+        self.assertEqual(status, gate.GO)
 
     def test_partial_outcome_failure_reports_effects_that_landed(self):
         graph = {"nodes": {"review": {"when": {}, "outcomes": {"changes": {"effects": [
@@ -230,7 +235,7 @@ class GateTest(unittest.TestCase):
         return graph
 
     def ask(self, tracker, to="reviewer", node="intake", hops=3):
-        with patch.object(gate.config_mod, "load", return_value={"limits": {"mention_hops": hops}, "plugins": ["comments"]}):
+        with patch.object(gate.config_mod, "load", return_value={**CONFIG, "limits": {"mention_hops": hops}, "plugins": ["comments"]}):
             return gate.apply(node, "ask", {"ticket": "7", "to": to, "text": "Is X\nin scope?"}, tracker, self.ask_graph())
 
     def test_ask_posts_one_comment_with_the_marker_and_keeps_the_stage(self):
@@ -271,6 +276,52 @@ class GateTest(unittest.TestCase):
         tr = MemorySystem({"7": {"stage": "triage"}})
         with self.assertRaisesRegex(gate.Bad, "a reply cannot ask"):
             self.ask(tr, node="reply-dev")
+
+    def test_ask_adds_comment_label(self):
+        """#893: the ask wakes the comment node in the same apply, after its comment; a refused ask wakes nothing."""
+        tr = MemorySystem({"7": {"stage": "triage"}})
+        self.ask(tr)
+        self.assertEqual([k for k, _ in tr.tickets["7"]["log"]], ["comment", "label"])
+        self.assertIn("factory:comment", tr.facts("7")["attrs"])
+        asks = [{"author_is_bot": True, "author_is_factory": True, "body": f"[factory] q <!-- factory:ask id=7-{i} from=intake to=reply-reviewer hop={i} -->"} for i in (1, 2, 3)]
+        tr = MemorySystem({"7": {"stage": "triage", "comments": asks}})
+        self.ask(tr)
+        self.assertNotIn("factory:comment", tr.facts("7")["attrs"])
+
+    def answer(self, tracker, comments):
+        graph = self.ask_graph()
+        graph["nodes"]["reply-reviewer"] = {**graph["nodes"]["intake"], "agent": "reviewer", "when": {"always": True},
+                                            "triggers": ["issues.labeled factory:reply-reviewer"], "outcomes": {"replied": {"effects": [
+                                                {"unlabel": "factory:reply-reviewer"}, {"comment": "reply", "on": "mention"}, {"wake": "asker"}]}}}
+        tracker.tickets["7"]["comments"] = comments
+        sent, apply = [], tracker.apply
+        tracker.apply = lambda e: sent.append(e) or apply(e)
+        with patch.object(gate.config_mod, "load", return_value={**CONFIG, "plugins": ["comments"]}):
+            gate.apply("reply-reviewer", "replied", {"ticket": "7", "reply": "Yes, X is in scope."}, tracker, graph)
+        return sent
+
+    def test_answer_wakes_asker(self):
+        """#893: an answer to an agent's ask wakes the asking node (`from=` in the marker) with the answer in its
+        agent notes; an answer to a person, or to an asker whose `when` fails, wakes nothing."""
+        ask = {"author": "bot", "author_is_bot": True, "author_is_factory": True, "at": "1",
+               "body": "[factory] **dev (developer):** @factory:reviewer Is X in scope?\n"
+                       "<!-- factory:ask id=7-1 from=intake to=reply-reviewer hop=1 -->\n<!-- factory:from dev -->"}
+        sent = self.answer(MemorySystem({"7": {"stage": "triage"}}), [ask])
+        answer = next(e for e in sent if e["kind"] == "comment")
+        self.assertTrue(answer["value"].startswith("@factory:dev Yes, X is in scope."))
+        self.assertEqual(answer["notes"], {"for": "any", "context": "Answer to ask 7-1: Yes, X is in scope."})
+        self.assertEqual([(e["kind"], e["value"]) for e in sent if e["value"] == "factory:triage"],
+                         [("unlabel", "factory:triage"), ("label", "factory:triage")])   # intake's trigger fires again
+        self.assertLess(sent.index(answer), [e["value"] for e in sent].index("factory:triage"))
+        person = {"author": "alice", "at": "1", "body": "@factory:reviewer Is X in scope?"}
+        sent = self.answer(MemorySystem({"7": {"stage": "triage"}}), [person])
+        self.assertEqual([e["kind"] for e in sent], ["unlabel", "comment"])
+        self.assertNotIn("notes", sent[1])
+        tr = MemorySystem({"7": {"stage": "ready"}})   # the asker's `when` (stage triage) no longer holds
+        sent = self.answer(tr, [ask])
+        self.assertFalse([e for e in sent if e["kind"] in ("label", "unlabel") and e["value"] == "factory:triage"])
+        self.assertIn("did not wake `intake`", sent[-1]["value"])
+        self.assertEqual(tr.facts("7")["stage"], "ready")
 
     def comment_graph(self, when=None):
         graph = copy.deepcopy(NODES)
@@ -508,7 +559,7 @@ class GateTest(unittest.TestCase):
 
     def test_new_labels_created_at_merge(self):
         plan = air.plan_air(NODES, CONFIG)
-        self.assertIn("factory:needs-human", plan["labels"])
+        self.assertIn("factory:needs-human", plan["label_plan"][CONFIG["tracker"]["repository"]])
 
     def test_low_risk_wakes_full_only(self):
         facts = {"stage": "in-review", "ci": "green", "focus_missing": ["full"]}
@@ -2261,6 +2312,154 @@ class ReviewLoopTest(unittest.TestCase):
     def test_persisting_finding_counts_every_round(self):
         import gate_port
         self.assertEqual(gate_port.fix_round_count(self.rounds(["B1"], ["B1", "B2"], ["B2"])), 3)
+
+
+class TicketReposGh:
+    """`gh` over `o/r` (the tracker), `o/b` (a second ticket repository) and `o/code` (a repository with no tickets).
+    `data` maps a REST path to its body; `ready` and `staged` list each repository's issue numbers."""
+
+    def __init__(self, data=None, ready=None, staged=None, assignees=()):
+        self.data, self.ready, self.staged, self.assignees = data or {}, ready or {}, staged or {}, set(assignees)
+        self.calls = []
+
+    def __call__(self, args, **kw):
+        self.calls.append(list(args))
+        path = next((str(x) for x in args if str(x).startswith("repos/")), "")
+        if args[:2] == ["issue", "list"]:
+            repo = args[args.index("-R") + 1]
+            if "--search" in args or self.stages_label(args) != "ready":
+                return "[]"
+            return json.dumps([{"number": n, "assignees": [{"login": "x"}] if (repo, n) in self.assignees else []}
+                               for n in self.ready.get(repo, [])])
+        if args[:2] == ["api", "graphql"]:
+            q = next(x[2:] for x in args if x.startswith("q="))
+            repo = q.split()[0].removeprefix("repo:")
+            nodes = [{"number": n} for n in self.staged.get(repo, [])] if "is:open" in q else []
+            return json.dumps({"data": {"search": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}})
+        body = self.data.get(path.split("?")[0], [] if "--paginate" in args else {})
+        return "\n".join(json.dumps(x) for x in body) if "--paginate" in args else json.dumps(body)
+
+    @staticmethod
+    def stages_label(args):
+        label = args[args.index("--label") + 1] if "--label" in args else ""
+        return next((k for k, v in CONFIG["tracker"]["stages"].items() if v == label), label)
+
+
+class TicketRepositoriesTest(unittest.TestCase):
+    """ADR-0024: tickets live in several repositories; `owner/repo#n` names one outside the tracker (#982)."""
+    TICKETS = ["o/r", "o/b"]
+
+    def tracker(self, gh):
+        return gh_gate.GitHubGateTracker("o/r", CONFIG["tracker"]["stages"], "bot", run=gh, ticket_repos=self.TICKETS)
+
+    def test_pr_branch_maps_to_ticket_in_pr_repository(self):
+        pr = lambda ref: {"head": {"ref": ref}, "title": ""}  # noqa: E731
+        gh = TicketReposGh({"repos/o/b/pulls/3": pr("ez/5-x"), "repos/o/r/pulls/4": pr("ez/5-x"),
+                            "repos/o/code/pulls/9": pr("ez/5-x"), "repos/o/b/pulls/6": pr("main"),
+                            "repos/o/b/pulls/7": {"head": {"ref": "topic"}, "title": "5: fix"},
+                            "repos/o/b/pulls/8": pr("ez/INFRA-12-x")})
+        host = gh_gate.GitHubCodeHost("o/r", gh, self.TICKETS)
+        for repo, number, want in [("o/b", 3, "o/b#5"), ("o/r", 4, 5), ("o/code", 9, 5), ("o/b", 6, None),
+                                   ("o/b", 7, "o/b#5"), ("o/b", 8, "INFRA-12")]:
+            with self.subTest(repo=repo, pr=number):
+                self.assertEqual(host.ticket_for_pr(number, repo), want)
+                if number in (3, 4, 9):  # the trigger payload: a PR, then an issue of that repository
+                    ev = gate.from_trigger({"eventType": "pull_request.labeled", "action": "labeled",
+                                            "pull_request": {"number": number}, "repository": {"full_name": repo}}, host)
+                    self.assertEqual(ev["ticket"], want)
+        issue = lambda repo, n: gate.from_trigger({"eventType": "issues.labeled", "action": "labeled", "issue": {"number": n},  # noqa: E731
+                                                   "repository": {"full_name": repo}}, host)["ticket"]
+        self.assertEqual((issue("o/r", 982), issue("o/b", 5)), (982, "o/b#5"))
+        self.assertEqual(gate.branch_of({"ticket": "o/b#5", "title": "Fix it"}, CONFIG), "ez/5-fix-it")
+
+    def test_frontier_reads_every_ticket_repository(self):
+        from factory_plugins.github.tracker import GitHubTracker
+        gh = TicketReposGh(ready={"o/r": [3, 1], "o/b": [8, 4]}, assignees=[("o/b", 8)],
+                           data={"repos/o/r/issues/3/dependencies/blocked_by": [{"state": "open"}],
+                                 "repos/o/b/issues/4/dependencies/blocked_by": [{"state": "closed"}]})
+        tracker = GitHubTracker("o/r", CONFIG["tracker"]["stages"], run=gh, ticket_repos=self.TICKETS)
+        self.assertEqual(tracker.frontier(), [1, "o/b#4"])  # 3 is blocked, o/b#8 is claimed
+        gh.ready["o/b"] = [4]
+        self.assertEqual(tracker.in_stage("ready"), [1, 3, "o/b#4"])
+        self.assertEqual(GitHubTracker("o/r", CONFIG["tracker"]["stages"], run=gh).in_stage("ready"), [1, 3])
+
+    def test_children_fact_follows_cross_repository_sub_issues(self):
+        kid = lambda repo, n, state="open": {"number": n, "state": state, "labels": [],  # noqa: E731
+                                              "repository_url": f"https://api.github.com/repos/{repo}"}
+        gh = TicketReposGh({"repos/o/r/issues/1": {"labels": [], "body": ""},
+                            "repos/o/r/issues/1/sub_issues": [kid("o/r", 2), kid("o/b", 7, "closed")],
+                            "repos/o/b/issues/7/sub_issues": [kid("o/b", 9)],
+                            "repos/o/r/issues/1/dependencies/blocked_by": [kid("o/b", 7), kid("o/r", 2, "closed")]})
+        tracker = self.tracker(gh)
+        ids = lambda ticket: [(c["number"], c["state"]) for c in tracker.find(Query("children", of=ticket))]  # noqa: E731
+        self.assertEqual(ids(1), [(2, "open"), ("o/b#7", "closed")])
+        self.assertEqual(ids("o/b#7"), [("o/b#9", "open")])  # read from the ticket's own repository
+        self.assertEqual(tracker.tickets.open_blockers(1), ["o/b#7"])
+        gh.data["repos/o/r/issues/1/dependencies/blocking"] = [kid("o/b", 7)]
+        self.assertEqual([d["number"] for d in tracker.tickets.blocking(1)], ["o/b#7"])
+        self.assertEqual(tracker.tickets.blocked_by(1), [{"number": "o/b#7", "state": "open"}, {"number": 2, "state": "closed"}])
+        with self.assertRaises(ValueError):  # a repository with no tickets is never read
+            tracker.tickets.children("o/code#1")
+
+    def test_a_ticket_is_written_in_its_own_repository(self):
+        gh = TicketReposGh()
+        tracker = self.tracker(gh)
+        for ticket, repo, number in [(5, "o/r", "5"), ("o/b#5", "o/b", "5"), ("o/r#5", "o/r", "5")]:
+            with self.subTest(ticket=ticket):
+                gh.calls.clear()
+                tracker.tickets.comment(ticket, "hi")
+                tracker.tickets.add_attr(ticket, "factory:ready")
+                self.assertEqual(gh.calls, [["issue", "comment", number, "-R", repo, "--body", "hi"],
+                                            ["issue", "edit", number, "-R", repo, "--add-label", "factory:ready"]])
+
+    def test_begin_refuses_ticket_of_another_repository(self):
+        class Facts(MemorySystem):
+            repo = "o/r"
+
+            def facts(self, n):
+                self.read.append(n)
+                return super().facts(n)
+
+        for ticket, node_repo, refused in [("o/b#5", "o/r", True), ("o/b#5", "o/b", False), (5, "o/r", False), (5, "o/b", True),
+                                           ("o/r#5", "o/r", False), ("o/B#5", "o/b", False), ("INFRA-1", "o/b", False),
+                                           ("o/b#5", None, False)]:
+            with self.subTest(ticket=ticket, node_repo=node_repo):
+                tracker = Facts({ticket: {"stage": "ready"}})
+                tracker.read = []
+                env = {"FACTORY_NODE_REPO": node_repo} if node_repo else {}
+                with patch.dict(os.environ, env, clear=False):
+                    if not node_repo:
+                        os.environ.pop("FACTORY_NODE_REPO", None)
+                    code, out = gate.check("intake", {"id": "e", "ticket": ticket}, tracker, NODES, CONFIG)
+                self.assertEqual(code == gate.NO_GO and "is in" in (out["reason"] or ""), refused)
+                self.assertEqual(tracker.read, [] if refused else [ticket])  # no read, so no effect, for a refused ticket
+
+
+
+class TicketPlacesTest(unittest.TestCase):
+    """ADR-0027 (#1135): the gate routes a ticket to its place: GitHub tickets (a number or `owner/repo#n`) to the
+    GitHub tracker, a YouTrack ticket to the place of its project and scope; a PR to the place that lists its
+    repository first."""
+
+    class Fake:
+        def in_scope(self, ticket):
+            return True
+
+    def scoped(self):
+        import scopes
+        envs = {"github": {"adapter": "github-issues", "repository": "o/a", "repositories": ["o/a", "o/b"]},
+                "place:o/c": {"adapter": "youtrack", "project": "LME", "scope": {"field": "Subsystem", "value": "S3"}}}
+        repos = {"github": ["o/a", "o/b"], "place:o/c": ["o/c", "o/a"]}
+        return scopes.ScopedTracker({}, lambda config, key: (self.Fake(), self.Fake()), None, envs, repos)
+
+    def test_ticket_resolves_to_repository_by_place(self):
+        t = self.scoped()
+        self.assertEqual([t.env_of(x) for x in (7, "o/b#3", "O/A#4", "LME-5", "OTHER-1", "o/z#2")],
+                         ["github", "github", "github", "place:o/c", None, None])
+
+    def test_pr_repository_picks_its_place(self):
+        t = self.scoped()
+        self.assertEqual([t.env_of_repository(r) for r in ("o/c", "o/b", "o/a")], ["place:o/c", "github", "github"])
 
 if __name__ == "__main__":
     unittest.main()

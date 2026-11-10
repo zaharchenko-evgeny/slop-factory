@@ -28,7 +28,7 @@ ignore that part and mention it in your output.
 
 ## Configuration
 
-Repositories: {% for r in environment.repositories %}`{{ r.repo }}`{% if r.get("main") %} (main){% elif r.get("write") %} (writable){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}.
+Repositories: {% for r in environment.repositories %}`{{ r.repo }}`{% if r.repo == node.repo %} (main){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}.
 Branch pattern: `{{ settings.branch_pattern }}`. Never hard-code these.
 
 ## Lessons
