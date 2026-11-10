@@ -48,11 +48,10 @@ def fetch(spec, tmp):
 def roles_in(defn, environment):
     """The roles of the enabled agent nodes that run in `environment`."""
     f, w = defn["factory"], defn["workflow"]
-    default = (w.get("settings") or {}).get("environment")
     out = []
-    for n in (w.get("nodes") or {}).values():
+    for name, n in (w.get("nodes") or {}).items():
         role = ((f.get("agents") or {}).get(n.get("agent")) or {}).get("role")
-        if role and n.get("enabled") is not False and (n.get("environment") or default) == environment and role not in out:
+        if role and n.get("enabled") is not False and environment in definition.node_environments(defn, name) and role not in out:
             out.append(role)
     return out
 
