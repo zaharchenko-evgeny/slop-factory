@@ -329,16 +329,6 @@
         "type": "boolean"
       }
     },
-    "ci": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "workflows": {
-          "type": "array",
-          "items": { "type": "string" }
-        }
-      }
-    },
     "reviews": {
       "type": "object",
       "additionalProperties": false,
