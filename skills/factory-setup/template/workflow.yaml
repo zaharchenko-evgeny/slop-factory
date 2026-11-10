@@ -106,7 +106,7 @@ nodes:
   # --- Review: one review per ticket, chosen by risk; starts on green CI (red CI goes to ci-red) -----
   review-low:
     agent: reviewer-cheap
-    triggers: [{ label: "factory:review-low" }, { label: "factory:ci-green" }]   # CI labels the PR when it finishes
+    triggers: [{ label: "factory:review-low" }, { label: "factory:ci-green" }]   # ci-sync labels the PR from its checks
     when: { stage: in-review, ci: green, label: "risk:low" }   # never on pending or red CI; risk:low picks this review
     output: read-only
     settings: { focus: [behaviour] }
@@ -119,7 +119,7 @@ nodes:
 
   review-high:
     agent: reviewer
-    triggers: [{ label: "factory:review-high" }, { label: "factory:ci-green" }]   # CI labels the PR when it finishes
+    triggers: [{ label: "factory:review-high" }, { label: "factory:ci-green" }]   # ci-sync labels the PR from its checks
     when: { stage: in-review, ci: green, label: "risk:high" }   # never on pending or red CI; risk:high picks this review
     output: read-only
     settings: { focus: [full, structure-security] }

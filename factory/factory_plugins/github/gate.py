@@ -70,6 +70,40 @@ MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(ap
 FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
 GOOD_CI = {"success", "neutral", "skipped"}
+SERVICE_WORKFLOW = "factory-"  # `factory deploy` names the workflows it renders factory-<node>: they are not CI
+
+
+def _lines(text):
+    return [json.loads(x) for x in text.splitlines() if x.strip()]
+
+
+def head_checks(run, repository, sha):
+    """[{conclusion, at}] of the project's CI at `sha`: GitHub's latest check run per name and commit status per
+    context, conclusion None while one runs. The project's own checks count, whatever their workflow or app (#1207).
+    Check runs of the factory's own workflows are not CI: a workflow_run wake of one runs at the PR head too."""
+    service = {r.get("check_suite_id") for r in _lines(run(["api", "--paginate", f"repos/{repository}/actions/runs?head_sha={sha}&per_page=100",
+                                                            "--jq", ".workflow_runs[]"]))
+               if (r.get("name") or "").startswith(SERVICE_WORKFLOW)}
+    runs = [r for r in _lines(run(["api", "--paginate", f"repos/{repository}/commits/{sha}/check-runs?per_page=100",
+                                   "--jq", ".check_runs[]"]))
+            if (r.get("check_suite") or {}).get("id") not in service]
+    statuses = json.loads(run(["api", f"repos/{repository}/commits/{sha}/status"])).get("statuses") or []
+    return ([{"conclusion": r.get("conclusion") if r.get("status") == "completed" else None, "at": r.get("completed_at")}
+             for r in runs]
+            + [{"conclusion": None if s["state"] == "pending" else "success" if s["state"] == "success" else "failure",
+                "at": s.get("updated_at")} for s in statuses])
+
+
+def head_ci(checks):
+    """(green|red|pending|none, latest result time) of `head_checks`. One finished failure is red, also while other
+    checks still run; green needs every check finished good."""
+    done = [c["conclusion"] for c in checks]
+    at = max((c["at"] for c in checks if c.get("at")), default=None)
+    if not done:
+        return "none", at
+    if any(c in BAD_CI for c in done):
+        return "red", at
+    return ("green" if all(c in GOOD_CI for c in done) else "pending"), at
 WRITE = {"admin", "maintain", "write"}  # repository roles with write access
 
 
@@ -136,14 +170,8 @@ class GitHubCodeHost:
                 and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == repository.lower()]
 
     def head_checks(self, repository, sha):
-        """[{conclusion, at}] of the latest check runs and commit statuses at `sha`; conclusion None while one runs."""
-        runs = [json.loads(x) for x in self.run(["api", "--paginate", f"repos/{repository}/commits/{sha}/check-runs?per_page=100",
-                                                 "--jq", ".check_runs[]"]).splitlines() if x.strip()]
-        statuses = json.loads(self.run(["api", f"repos/{repository}/commits/{sha}/status"])).get("statuses") or []
-        return ([{"conclusion": r.get("conclusion") if r.get("status") == "completed" else None, "at": r.get("completed_at")}
-                 for r in runs]
-                + [{"conclusion": None if s["state"] == "pending" else "success" if s["state"] == "success" else "failure",
-                    "at": s.get("updated_at")} for s in statuses])
+        """[{conclusion, at}] of the CI at `sha` (`head_checks`)."""
+        return head_checks(self.run, repository, sha)
 
     def label_added_at(self, repository, number, label):
         """When `label` was last added to PR `number`, else None."""
@@ -476,9 +504,9 @@ class GitHubTicketStore:
 
 class GitHubGateTracker(DescriptorPort):
     def __init__(self, repo, stages, bot_login, risk_labels=None, fix_cap=3, run=gh, trusted_bots=(), run_cap=8,
-                 ci_workflows=("quality-gates",), pr_repo=None, project=None, repositories=None, tickets=None,
+                 pr_repo=None, project=None, repositories=None, tickets=None,
                  required=None, ticket_repos=None):
-        self.trusted, self.run_cap, self.ci_workflows = set(trusted_bots), run_cap, set(ci_workflows)
+        self.trusted, self.run_cap = set(trusted_bots), run_cap
         self.required = {**FOCUSES, **(required or {})}  # review focuses by risk; `reviews.required` overrides
         import definition
         if definition.present(config.team_root()):  # ADR-0021: no focuses; workflow.yaml names the reviews
@@ -515,7 +543,6 @@ class GitHubGateTracker(DescriptorPort):
         return cls(repo, t["stages"], bot, t.get("risk_labels"), c["limits"]["fix_rounds"],
                    ProjectWriteRun(run, project_repositories(c), issues_token_env=c.get("issues_token_env"), checkouts=checked_out(c)),
                    (c.get("reviews") or {}).get("trusted_bots") or [], c["limits"].get("agent_runs_per_ticket", 8),
-                   (c.get("ci") or {}).get("workflows") or ["quality-gates"],
                    (c.get("code_host") or {}).get("repository"),
                    {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,
                    repository_names(c), tickets, (c.get("reviews") or {}).get("required"),
@@ -704,22 +731,15 @@ class GitHubGateTracker(DescriptorPort):
         return sorted(prs, key=lambda p: p["number"])
 
     def _ci(self, sha):
-        """CI at `sha` from the Actions workflow runs (the Air GitHub App has Actions: read, not Checks: read, so
-        check-runs answers 403 in a run). Per workflow the latest run counts, so a rerun replaces a failure."""
-        latest = self._workflow_runs(sha)
-        if not latest:
-            return "none"
-        done = [r.get("conclusion") if r.get("status") == "completed" else None for r in latest.values()]
-        if any(c in BAD_CI for c in done):
-            return "red"
-        return "green" if all(c in GOOD_CI for c in done) else "pending"
+        """CI at `sha`: the project's check runs and commit statuses, as `ci-sync` reads them (`head_ci`)."""
+        return head_ci(head_checks(self.run, self.pr_repo, sha))[0]
 
     def _workflow_runs(self, sha, timeout=None):
         out = self.run(["api", "--paginate", f"repos/{self.pr_repo}/actions/runs?head_sha={sha}&per_page=100",
                         "--jq", ".workflow_runs[]"], **({"timeout": timeout} if timeout is not None else {}))
         latest = {}
         for r in (json.loads(x) for x in out.splitlines() if x.strip()):
-            if r.get("name") not in self.ci_workflows:  # factory service workflows (reconcile, ci-state) are not CI
+            if (r.get("name") or "").startswith(SERVICE_WORKFLOW):
                 continue
             key = (r.get("workflow_id"), r.get("event"))
             if key not in latest or (r.get("run_number"), r.get("run_attempt", 1)) > (
@@ -728,10 +748,10 @@ class GitHubGateTracker(DescriptorPort):
         return latest
 
     def ci_failure(self, sha):
-        """Best-effort details for the first failed step at the head."""
+        """Best-effort details for the first failed step at the head, also in a run that has not finished."""
         try:
             for run in self._workflow_runs(sha, timeout=10).values():
-                if run.get("conclusion") not in BAD_CI:
+                if run.get("status") == "completed" and run.get("conclusion") not in BAD_CI:
                     continue
                 out = self.run(["api", "--paginate", f"repos/{self.pr_repo}/actions/runs/{run['id']}/jobs?per_page=100",
                                 "--jq", ".jobs[]"], timeout=10)
