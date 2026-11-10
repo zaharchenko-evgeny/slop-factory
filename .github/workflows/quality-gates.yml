@@ -181,8 +181,10 @@ jobs:
       - run: scripts/retry-network.sh npx --yes agnix@0.59.3 .
 
   # Information for the reviewer, not a required check: mutants of the changed lines that the tests do not catch.
+  # continue-on-error: a failed mutation job does not fail the workflow run the gate reads (#1207).
   mutation:
     if: github.event_name == 'pull_request'
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -198,9 +200,10 @@ jobs:
           printf '## Surviving mutants\n```\n%s\n```\n' "$survivors" >> "$GITHUB_STEP_SUMMARY"
 
   # The CI label is the result of every job: it runs last, so the run is about to complete when the label wakes a
-  # reviewer or the join, and they read the same result from the workflow runs instead of `pending`.
+  # reviewer or the join, and they read the same result from the workflow runs instead of `pending`. It waits for
+  # mutation too, but only factory-checks and agnix decide the result (#1207).
   ci-label:
-    needs: [factory-checks, agnix]
+    needs: [factory-checks, agnix, mutation]
     if: always() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'ez/')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -219,5 +222,5 @@ jobs:
         env:
           BRANCH: ${{ github.head_ref }}
           SHA: ${{ github.event.pull_request.head.sha }}
-          CONCLUSION: ${{ contains(needs.*.result, 'failure') && 'failure' || (contains(needs.*.result, 'cancelled') && 'cancelled' || (contains(needs.*.result, 'skipped') && 'skipped' || 'success')) }}
+          CONCLUSION: ${{ (needs.factory-checks.result == 'failure' || needs.agnix.result == 'failure') && 'failure' || ((needs.factory-checks.result == 'cancelled' || needs.agnix.result == 'cancelled') && 'cancelled' || ((needs.factory-checks.result == 'skipped' || needs.agnix.result == 'skipped') && 'skipped' || 'success')) }}
         run: scripts/ci-state-label.sh
