@@ -162,7 +162,7 @@ environments:
   intake:                         # triage of every ticket: both repositories, nothing writable
     repositories:
       - { repo: zaharchenko-evgeny/slop-factory }
-      - { repo: zaharchenko-evgeny/slop-eval-factory }
+      - { repo: zaharchenko-evgeny/slop-eval-factory, tracker: none }
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               pypi.org, files.pythonhosted.org]
     vm: default
