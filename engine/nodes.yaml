@@ -272,14 +272,14 @@ nodes:
     output: read-only
     outcomes:
       probed: {}
-  # Routines (ADR-0015): outside any ticket. `factory/knowledge.py` holds the entry and PR plans the roles follow.
+  # Routines (ADR-0015): outside any ticket.
   retro:
     env: ops
     routine: true  # outside any ticket: the gate matches it without tracker facts
     triggers: ["schedule retro"]
     when: { always: true }
     role: retro
-    output: as-instructed  # the role pushes to the reusable source branch and keeps one open PR into `knowledge.branch` (knowledge.inbox_pr_action)
+    output: as-instructed
     outcomes:
       recorded: {}
   distill:
