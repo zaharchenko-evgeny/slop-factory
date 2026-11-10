@@ -127,6 +127,18 @@ def token_env(env, config):
 WRITE_VERBS = {"create", "edit", "merge", "review", "comment", "close", "reopen", "delete", "ready", "update-branch"}
 
 
+def checked_out(config, environ=os.environ):
+    """owner/repo of the repositories of the run's environment (FACTORY_ENV): each copy checks them all out (its main
+    and its additional repositories, ADR-0027), and Air's installation token writes every checkout (AIRF-51)."""
+    env = ((config.get("environments") or {}).get(environ.get("FACTORY_ENV") or "") or {})
+    urls = {r.get("name"): r.get("url") for r in config.get("repositories") or [] if isinstance(r, dict)}
+    out = []
+    for r in env.get("repositories") or []:
+        url = urls.get(r, r) if isinstance(r, str) else (r or {}).get("repo", "")
+        out.append("/".join(str(url).rstrip("/").removesuffix(".git").split("/")[-2:]))
+    return [x for x in out if x]
+
+
 def project_repositories(config):
     """owner/repo of each `role: project` repository of the descriptor: the CI label sync's repositories."""
     return ["/".join(r["url"].rstrip("/").split("/")[-2:]) for r in config.get("repositories") or []
@@ -162,9 +174,10 @@ class ProjectWriteRun:
     `issues_token_env` setting) as its GH_TOKEN, else with $FACTORY_WRITE_TOKEN, when one is set; every other
     call, every call without a token and every write to the environment's own repository runs as before."""
 
-    def __init__(self, run, repositories, environ=os.environ, issues_token_env=None):
+    def __init__(self, run, repositories, environ=os.environ, issues_token_env=None, checkouts=()):
+        """`checkouts`: the run's other checkouts, which Air's token writes too (AIRF-51): never the issues token."""
         self.run, self.environ = run, environ
-        self.repositories = {r.lower() for r in foreign_projects(repositories, environ)}
+        self.repositories = {r.lower() for r in foreign_projects(repositories, environ)} - {c.lower() for c in checkouts}
         self.issues_token_env = issues_token_env
 
     def __call__(self, args, touches=None, **kw):

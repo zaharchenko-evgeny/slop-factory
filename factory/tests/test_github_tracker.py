@@ -281,6 +281,21 @@ class ProjectWriteToken(unittest.TestCase):
         github_tracker.CountedRun(run).for_repository("o/team")(link)  # the gate's counter keeps it (#1155)
         self.assertEqual(calls, [None, "pat", None, "pat"])
 
+    def test_checked_out_repositories_use_airs_token(self):
+        """AIRF-51: Air's installation token writes every checkout of a copy (main and additional repositories), so
+        the issues token is kept for repositories outside the run's environment (#1155: it was refused there)."""
+        calls = []
+        env = {"FACTORY_ISSUES_TOKEN": "pat", "FACTORY_ENV": "team", "FACTORY_ENV_REPOSITORY": "o/team"}
+        config = {"repositories": [{"name": "engine", "url": "https://github.com/o/engine"},
+                                   {"name": "team", "url": "https://github.com/o/team"}],
+                  "environments": {"team": {"repositories": ["team", "engine"]}}}
+        self.assertEqual(github_tracker.checked_out(config, env), ["o/team", "o/engine"])
+        run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", ["o/engine", "o/other"], env,
+                                             "FACTORY_ISSUES_TOKEN", github_tracker.checked_out(config, env))
+        run(["api", "-X", "POST", "repos/o/engine/issues/7/labels", "-f", "labels[]=x"])
+        run(["api", "-X", "POST", "repos/o/other/issues/7/labels", "-f", "labels[]=x"])
+        self.assertEqual(calls, [None, "pat"])
+
     def test_without_the_token_every_call_runs_as_before(self):
         calls = []
         run = github_tracker.ProjectWriteRun(lambda args, **kw: calls.append(kw) or "", ["o/app"], {})
