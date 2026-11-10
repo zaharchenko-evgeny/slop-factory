@@ -72,7 +72,7 @@ class ReconcileTest(unittest.TestCase):
     def test_stale_review_label_without_review_refired(self):
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": FRESH,
                              "focus_missing": ["behaviour"],
-                             "review_labels": [("factory:rereview-behaviour", OLD)]})
+                             "review_labels": [("factory:review-behaviour", OLD)]})
         self.assertEqual(results[0]["node"], "review")
         self.assertIn('"factory:review-behaviour"', logged(t, "label"))
 

@@ -15,7 +15,7 @@ from factory_plugins.github.tracker import project_repositories
 GO, BAD, FAILED = 0, 2, 1  # the gate's exit codes
 
 
-def ci_sync_pr(code_host, repository, pr, dry_run=False):
+def sync_pr(code_host, repository, pr, dry_run=False):
     """Set `factory:ci-green` or `factory:ci-red` on one factory PR {number, head, labels} from its head checks; a
     head with no result yet (pending, or no checks) keeps its labels. A label added before the head's latest result
     belongs to an earlier head: it is removed and added again, because re-adding a present label fires no event.
@@ -48,7 +48,7 @@ def ci_sync(code_host, repositories, dry_run=False, progress=None):
             continue
         for pr in prs:
             try:
-                r = ci_sync_pr(code_host, repository, pr, dry_run)
+                r = sync_pr(code_host, repository, pr, dry_run)
             except Exception as e:
                 failed, r = True, {"repo": repository, "pr": pr["number"], "error": f"{type(e).__name__}: {e}"}
             results.append(r)

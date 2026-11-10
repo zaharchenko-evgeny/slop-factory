@@ -52,7 +52,7 @@ class TicketRecord:
 @dataclass
 class PrRecord:
     """A ticket's pull request in one of its repositories (`repo`: the descriptor's name for it).
-    `reviews`: {author, state, commit_id, focus, round, rereview, outcome, verdict, agent, assoc, submitted_at, bot,
+    `reviews`: {author, state, commit_id, focus, round, outcome, verdict, agent, assoc, submitted_at, bot,
     findings, body}; `comments`: {id, author, author_type, body, at}; `events` like a ticket's; `ci`
     green|red|pending|none at `head`; `commit_date` the head commit's committer date; `can_write` login -> write
     access to the repository; `clean_advance` sha -> whether `head` only merged the base into it since `sha`."""
