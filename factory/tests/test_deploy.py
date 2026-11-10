@@ -489,7 +489,7 @@ class ApplyTest(unittest.TestCase):
             self.assertIn("Run every command from `/workspaces/slop-factory`", a["prompt"], a["name"])
 
     def test_ci_result_labels_wake_on_the_pull_request(self):
-        """#790: CI adds factory:ci-green/ci-red to the PR, so their wakes are pull_request.labeled."""
+        """#790: ci-sync adds factory:ci-red to the PR, so the ci-failed wake is pull_request.labeled."""
         slop, before = HERE / "fixtures/slop", cfg.team_root()
         try:
             cfg.set_team(slop)
@@ -497,7 +497,7 @@ class ApplyTest(unittest.TestCase):
         finally:
             cfg.set_team(before)
         a = {x["name"]: x for x in plan["automations"]}
-        for name, label in (("review-low", "factory:ci-green"), ("review-high", "factory:ci-green"), ("ci-red", "factory:ci-red")):
+        for name, label in (("ci-failed", "factory:ci-red"),):
             for repo in ("slop-factory", "slop-eval-factory"):  # one copy per ticket repository (ADR-0024)
                 events = [t["eventType"] for t in a[f"[Slop factory] {name} {repo}"]["triggers"]
                           if t["filters"].get("label") == label]
