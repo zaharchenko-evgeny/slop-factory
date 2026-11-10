@@ -123,7 +123,11 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
             red = RED_TITLE.match(facts.get("title") or "")
             if red and facts.get("issue_state", "open") == "open" and tracker.main_green():
                 r = {"ticket": n, "stage": stage, "reconcile": "stale-red", "why": f"{red[1]} is green on the main head"}
-                results.append(r)  # reported only: the quality-gates workflow closes it on the next green push
+                results.append(r)
+                if not dry_run:
+                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "comment",
+                                   "value": f"{PREFIX} CI is green on the main head. Closing this ticket; tickets it blocks resume."})
+                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "close"})
                 if progress:
                     progress(r)
                 continue

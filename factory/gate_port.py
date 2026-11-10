@@ -360,7 +360,7 @@ class MemorySystem(DescriptorPort):
 
     def __init__(self, tickets=None, fail_on=None, project=None):
         self.tickets, self.fail_on, self.project = tickets or {}, fail_on, project
-        self.green_main = False  # the latest quality-gates run on the main head passed
+        self.green_main = False  # CI at the main head is green
 
     def main_green(self):
         return self.green_main
@@ -524,7 +524,7 @@ class MemorySystem(DescriptorPort):
         return self._drop(self._t(effect["ticket"]), effect["value"])
 
     def _fx_log(self, effect, ctx):  # label, comment, review, create-issues, merge, join: a set of applied values
-        t, kind, value = self._t(effect["ticket"]), effect["kind"], effect["value"]
+        t, kind, value = self._t(effect["ticket"]), effect["kind"], effect.get("value")
         log = t.setdefault("log", [])
         entry = [kind, json.dumps(value, sort_keys=True)]
         if entry in log:
