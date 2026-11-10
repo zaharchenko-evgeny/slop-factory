@@ -102,6 +102,19 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
         try:
             facts, stage = tracker.stale_facts(n), None
             stage, since = facts["stage"], facts.get("since")
+            if stage_kinds.get(stage) == "final":
+                continue
+            red = RED_TITLE.match(facts.get("title") or "")
+            if red and facts.get("issue_state", "open") == "open" and tracker.main_green():
+                r = {"ticket": n, "stage": stage, "reconcile": "stale-red", "why": f"{red[1]} is green on the main head"}
+                results.append(r)
+                if not dry_run:
+                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "comment",
+                                   "value": f"{PREFIX} CI is green on the main head. Closing this ticket; tickets it blocks resume."})
+                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "close"})
+                if progress:
+                    progress(r)
+                continue
             if stage_kinds.get(stage) == "waiting":
                 stage_since = facts.get("stage_at") or since
                 if (facts.get("issue_state", "open") != "open" or not stage_since
@@ -119,15 +132,6 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                                        "value": f"{marker}: {people}, this ticket is still waiting for you."})
                     if progress:
                         progress(r)
-                continue
-            if stage_kinds.get(stage) == "final":
-                continue
-            red = RED_TITLE.match(facts.get("title") or "")
-            if red and facts.get("issue_state", "open") == "open" and tracker.main_green():
-                r = {"ticket": n, "stage": stage, "reconcile": "stale-red", "why": f"{red[1]} is green on the main head"}
-                results.append(r)  # reported only: the quality-gates workflow closes it on the next green push
-                if progress:
-                    progress(r)
                 continue
             if (facts.get("issue_state", "open") != "open" or not since
                     or vocab.needs_human() in facts.get("attrs", [])):
@@ -163,10 +167,9 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 step = next((w for w in wakes(nodes, facts)
                              if age > timedelta(minutes=nodes["nodes"][w[0]].get("timeout_minutes", default))), None)
                 stale_reviews = [label for label, at in facts.get("review_labels", [])
-                                 if label.startswith((vocab.prefix("review-<focus>"), vocab.prefix("rereview-<focus>")))
+                                 if label.startswith(vocab.prefix("review-<focus>"))
                                  and now - datetime.fromisoformat(at.replace("Z", "+00:00")) > timedelta(minutes=default)]
-                stale_focuses = {label.removeprefix(vocab.prefix("review-<focus>")).removeprefix(vocab.prefix("rereview-<focus>"))
-                                 for label in stale_reviews}
+                stale_focuses = {label.removeprefix(vocab.prefix("review-<focus>")) for label in stale_reviews}
                 stale_step = next((w for w in wakes(nodes, facts)
                                    if w[0] == "review" and w[1].removeprefix(vocab.prefix("review-<focus>")) in stale_focuses), None)
                 if stale_step:

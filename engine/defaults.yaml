@@ -61,6 +61,9 @@ tracker:
 plugins: []
 # The tier `start` gives a ticket without a `complexity:<size>` label.
 defaults: { tier: mid }
+# The review focuses a v1 team needs per risk; a team overrides one risk under `reviews.required`.
+reviews:
+  required: { low: [full], high: [behaviour, structure-security] }
 gates:
   auto_merge: { enabled: true, max_risk: high }
 limits:

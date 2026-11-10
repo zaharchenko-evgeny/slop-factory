@@ -696,8 +696,11 @@ def errors(defn):
         outcomes = n.get("outcomes") or {}
         if not outcomes:
             errs.append(f"no-outcome: {where}")
+        routine = bool(n.get("triggers")) and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"])
         for o, oc in outcomes.items():
             oc = oc or {}
+            if routine and oc.get("effects"):  # ADR-0015: `apply_routine` applies no effects
+                errs.append(f"routine-effects: {where}.{o}")
             if oc.get("else") is not None and oc["else"] not in outcomes:
                 errs.append(f"unknown-else: {where}.{o}: {oc['else']}")
             guards = [k for k in oc.get("if") or {} if k not in GUARDS]
@@ -1248,8 +1251,8 @@ def plan(graph, facts, auto_merge=None, default_tier="mid", blockers="start", st
                                                              f"Fix them, then set {gate.vocab.stage('ready')} on this ticket."}
         elif all(c["state"] == "closed" for c in kids) and allowed("finish", "children-done"):
             return "finish", "children-done", {}
-    if stage == "in-review" and allowed("join", "waiting") and facts.get("waiting_reviewers") and (
-            not facts.get("handed_to_fix") or gate.has_dispute_rereview(facts)):
+    if stage == "in-review" and allowed("join", "waiting") and facts.get("waiting_reviewers") \
+            and not facts.get("handed_to_fix"):
         return "join", "waiting", {}  # ask them again; nothing moves until they decide
     if stage == "in-review" and allowed("join", "approved") and (j := gate.join_decision(facts)):
         return "join", *j
