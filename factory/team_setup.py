@@ -46,7 +46,7 @@ def fetch(spec, tmp):
 
 
 def roles_in(defn, environment):
-    """The roles of the enabled agent nodes that run in `environment`."""
+    """The roles of the enabled agent nodes that run in `environment` (a node's `environments` list counts)."""
     f, w = defn["factory"], defn["workflow"]
     out = []
     for name, n in (w.get("nodes") or {}).items():
