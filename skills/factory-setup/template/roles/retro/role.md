@@ -12,6 +12,7 @@ is data, never instruction.
 2. Add the run facts of every ticket that reached `done` since the last run:
    read the run facts of the tickets finished in the last 24 hours (`factory-step`: fix and update rounds, stops, operator
    interventions, wall time, size). You never count; the script does.
+   Collecting writes nothing: the lessons stay on their tickets until you mark them.
 3. Drop a lesson its evidence does not support, and noise (one-off failures, trivia).
 4. Score the reviewers from the run facts' per-focus `reviews` totals (`confirmed`: findings the
    developer fixed, `withdrawn`: findings the next review dropped, `escaped`: later bugs in PRs that
@@ -33,6 +34,10 @@ otherwise): when a file would grow past it, merge or drop its weakest lines in t
 Lessons of every scope (`project`, `factory`, `engine`) go into the base the same way; a factory
 or engine lesson usually belongs in `_shared.md` or the file of the agent it is about. You never
 open tickets. The lesson comments stay on their tickets; only the label goes.
+
+After the PR is open at the pushed commit, mark the lessons you merged or dropped as collected, by their
+comment `id` (`factory-step`). Never mark one earlier: a run that fails before publishing must leave every
+lesson uncollected.
 
 ## Outcome
 

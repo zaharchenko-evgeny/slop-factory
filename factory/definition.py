@@ -696,8 +696,11 @@ def errors(defn):
         outcomes = n.get("outcomes") or {}
         if not outcomes:
             errs.append(f"no-outcome: {where}")
+        routine = bool(n.get("triggers")) and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"])
         for o, oc in outcomes.items():
             oc = oc or {}
+            if routine and oc.get("effects"):  # ADR-0015: `apply_routine` applies no effects
+                errs.append(f"routine-effects: {where}.{o}")
             if oc.get("else") is not None and oc["else"] not in outcomes:
                 errs.append(f"unknown-else: {where}.{o}: {oc['else']}")
             guards = [k for k in oc.get("if") or {} if k not in GUARDS]

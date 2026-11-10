@@ -7,7 +7,8 @@
 
 Usage: uv run factory/retro.py facts --since <ISO time>   (JSON: `tickets`, one object per ticket that reached `done` since,
                                                            and `reviews`, the per-focus totals over them)
-       uv run factory/retro.py collect                     (JSON: the uncollected lesson comments; marks them collected)
+       uv run factory/retro.py collect                     (JSON: the uncollected lesson comments; writes nothing)
+       uv run factory/retro.py mark <comment id>...        (marks those comments collected; unlabels tickets with none left)
 `ticket_facts` is pure: it takes the ticket's and PR's events, reviews and comments as the GitHub API returns them.
 """
 import fnmatch
@@ -158,26 +159,52 @@ LESSON, COLLECTED = "<!-- factory:lesson -->", "<!-- factory:lesson collected --
 
 
 def collect(tracker, label):
-    """ADR-0021: the uncollected lesson comments of every ticket labelled `label`, as [{ticket, url, body}]. The
-    label goes first, then each comment taken is marked collected, so a lesson posted meanwhile labels the ticket
-    again and the next run takes it; nothing is read twice."""
+    """ADR-0021: the uncollected lesson comments of every ticket labelled `label`, as [{ticket, url, id, body}].
+    It only reads: `mark` marks them once retro has published them."""
     out = []
     for i in tracker._list(f"issues?state=all&labels={label}&per_page=100"):
         n = i["number"]
-        tracker._edit(n, remove=[label])
         for c in tracker._list(f"issues/{n}/comments"):
             body = c.get("body") or ""
-            if LESSON not in body:
-                continue
-            out.append({"ticket": n, "url": c.get("html_url"), "body": body.replace(LESSON, "").strip()})
-            tracker._api(f"issues/comments/{c['id']}", "-X", "PATCH", "-f", f"body={body.replace(LESSON, COLLECTED)}")
+            if LESSON in body:
+                out.append({"ticket": n, "url": c.get("html_url"), "id": c["id"], "body": body.replace(LESSON, "").strip()})
     return out
+
+
+def mark(tracker, label, ids):
+    """Mark the lesson comments `ids` collected and take `label` off each ticket that has no uncollected lesson
+    comment left. The label comes off first and goes back on when a lesson remains or a write fails, so a lesson
+    posted (and labelled) while `mark` runs is never hidden by a stale read. Returns the ids marked. An id that is
+    not an uncollected lesson comment of a labelled ticket is left alone."""
+    wanted, done = {int(i) for i in ids}, []
+    for i in tracker._list(f"issues?state=all&labels={label}&per_page=100"):
+        n, left = i["number"], False
+        tracker._edit(n, remove=[label])
+        try:
+            for c in tracker._list(f"issues/{n}/comments"):
+                body = c.get("body") or ""
+                if LESSON not in body:
+                    continue
+                if c["id"] in wanted:
+                    tracker._api(f"issues/comments/{c['id']}", "-X", "PATCH", "-f", f"body={body.replace(LESSON, COLLECTED)}")
+                    done.append(c["id"])
+                else:
+                    left = True
+        except BaseException:
+            tracker._edit(n, add=[label])
+            raise
+        if left:
+            tracker._edit(n, add=[label])
+    return done
 
 
 def main(argv):
     import gate
     if argv == ["collect"]:
         print(json.dumps(collect(gate.tracker_of(cfg.load()), vocab.lesson()), indent=2))
+        return 0
+    if argv[:1] == ["mark"] and len(argv) > 1 and all(a.isdigit() for a in argv[1:]):
+        print(json.dumps(mark(gate.tracker_of(cfg.load()), vocab.lesson(), argv[1:])))
         return 0
     if len(argv) != 3 or argv[0] != "facts" or argv[1] != "--since":
         print(__doc__)
