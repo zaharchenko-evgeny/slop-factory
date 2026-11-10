@@ -212,7 +212,7 @@ class LazinessTest(unittest.TestCase):
                     pass
                 """)
         self.assertEqual(mods, ["factory_plugins",
-                                *(f"factory_plugins.{p}" for p in ("air", "chart", "claude", "codex", "comments", "github", "junie",
+                                *(f"factory_plugins.{p}" for p in ("air", "chart", "claude", "codex", "comments", "facts", "github", "junie",
                                                                     "local", "notify", "notify_email", "pi", "space", "youtrack"))])
 
     def test_notify_on_imports_its_code_only_when_called(self):
