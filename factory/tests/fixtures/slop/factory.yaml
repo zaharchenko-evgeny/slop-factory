@@ -6,6 +6,7 @@ owner: zaharchenko-evgeny   # the GitHub login the notify node tells
 tracker:
   adapter: github-issues
   repository: zaharchenko-evgeny/slop-factory   # the tracker: bare ticket numbers are its issues (ADR-0027)
+  label_prefix: "factory:"
 
 # Model aliases: the only place a model ID appears.
 models:

@@ -903,12 +903,11 @@ class ProjectPlanTest(unittest.TestCase):
 
     def test_labels_and_triggers_follow_the_stage_label_prefix(self):
         def edit(w):
-            w["stages"]["label_prefix"] = "work:"
             for n in w["nodes"].values():
                 for t in n.get("triggers") or []:
                     if isinstance(t, dict) and "label" in t:
                         t["label"] = t["label"].replace("factory:", "work:", 1)
-        plan = definition_plan(edit_workflow=edit)
+        plan = definition_plan(edit_factory=lambda f: f["tracker"].update(label_prefix="work:"), edit_workflow=edit)
         for want in ("work:ready", "work:in-dev"):
             self.assertIn(want, plan_labels(plan))
         self.assertNotIn("factory:ready", plan_labels(plan))
