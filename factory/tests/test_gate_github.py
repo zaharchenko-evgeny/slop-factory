@@ -78,6 +78,7 @@ def recorded_pull(path, items):
 
 ACTIONS = json.loads((Path(__file__).resolve().parent / "contracts/github-actions.json").read_text())["responses"]
 ACTION_KEYS = [(r"labels\?per_page=100", "labels?per_page=100"), (r"actions/runs\?head_sha=[^&]+&per_page=100", "actions/runs?head_sha={sha}&per_page=100"),
+               (r"commits/[^/]+/check-runs\?per_page=100", "commits/{sha}/check-runs?per_page=100"), (r"commits/[^/]+/status", "commits/{sha}/status"),
                (r"actions/runs/\d+/jobs\?per_page=100", "actions/runs/{id}/jobs?per_page=100"), (r"actions/jobs/\d+/logs", "actions/jobs/{id}/logs")]
 
 
@@ -91,6 +92,8 @@ def recorded_action(path, items):
     shape = ACTIONS[key]
     if isinstance(shape, str):
         return items
+    if isinstance(shape, dict):  # the combined status: `items` overrides its `statuses`
+        return json.dumps({**shape, "statuses": [{**shape["statuses"][0], **s} for s in items]})
     for item in items:
         assert set(item) <= set(shape[0]), f"{key}: fields not in the recording: {sorted(set(item) - set(shape[0]))}"
     return "\n".join(json.dumps({**shape[0], **i}) for i in items)
@@ -135,6 +138,12 @@ class FakeGh:
                 {"workflow_id": k, "name": "quality-gates", "event": "pull_request", "run_number": 1,
                  "id": 100 + k, "status": "completed" if c else "in_progress", "conclusion": c}
                 for k, c in enumerate(self.checks)])
+        if "/check-runs?" in a:  # one check run per entry of `checks`, in the suite of its workflow run
+            return recorded_action(a, [{"id": 300 + k, "name": f"job-{k}", "status": "completed" if c else "in_progress",
+                                        "conclusion": c, "completed_at": "2026-11-02T10:00:00Z" if c else None,
+                                        "check_suite": {"id": 400 + k}} for k, c in enumerate(self.checks)])
+        if re.search(r"commits/[^/]+/status$", a):
+            return recorded_action(a, getattr(self, "statuses", []))
         if "/actions/runs/100/jobs?" in a:
             self.jobs_timeout = timeout
             if getattr(self, "jobs_error", False):
@@ -369,41 +378,35 @@ class FactsTest(unittest.TestCase):
 
     def test_ci_and_old_head(self):
         self.assertEqual(tr(FakeGh(checks=["success", "failure"])).facts(7)["ci"], "red")
+        self.assertEqual(tr(FakeGh(checks=["success", "success"])).facts(7)["ci"], "green")
         self.assertEqual(tr(FakeGh(checks=["success", None])).facts(7)["ci"], "pending")
         self.assertEqual(tr(FakeGh(checks=[])).facts(7)["ci"], "none")
-
-    def _with_runs(self, *runs):
-        class Runs(FakeGh):
-            def __call__(self, args, timeout=None):
-                if any("actions/runs?head_sha=" in x for x in args):
-                    return "\n".join(json.dumps({"event": "pull_request", "run_number": 1, "status": "completed",
-                                                 **r}) for r in runs)
-                return FakeGh.__call__(self, args, timeout)
-        return Runs()
-
-    def test_cancelled_reconcile_run_is_not_ci(self):
-        gh = self._with_runs({"workflow_id": 1, "name": "quality-gates", "conclusion": "success"},
-                             {"workflow_id": 2, "name": "factory-reconcile", "conclusion": "cancelled"})
-        self.assertEqual(tr(gh).facts(7)["ci"], "green")
-
-    def test_ci_counts_configured_workflows_only(self):
-        gh = self._with_runs({"workflow_id": 1, "name": "quality-gates", "conclusion": "success"},
-                             {"workflow_id": 3, "name": "extra-ci", "conclusion": "failure"})
-        self.assertEqual(tr(gh).facts(7)["ci"], "green")
-        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, ci_workflows=["quality-gates", "extra-ci"])
-        self.assertEqual(t.facts(7)["ci"], "red")
-
-    def test_ci_rerun_replaces_a_failure(self):
-        class Rerun(FakeGh):
-            def __call__(self, args):
-                if any("actions/runs?head_sha=" in x for x in args):
-                    return "\n".join(json.dumps({"workflow_id": 1, "name": "quality-gates", "event": "pull_request", "run_number": 1,
-                                                  "run_attempt": n, "status": "completed", "conclusion": c})
-                                      for n, c in ((1, "failure"), (2, "success")))
-                return FakeGh.__call__(self, args)
-        self.assertEqual(tr(Rerun()).facts(7)["ci"], "green")
         f = tr(FakeGh(reviews=[review(BOT, M, commit="old")])).facts(7)
         self.assertEqual((f["focus_missing"], f["round_head"]), (["full"], "old"))
+
+    def test_one_failed_check_is_red_while_another_runs(self):  # #1204: the run had not finished yet
+        self.assertEqual(tr(FakeGh(checks=["failure", None])).facts(7)["ci"], "red")
+
+    def test_failed_commit_status_is_red(self):  # CI outside GitHub Actions (Jenkins, TeamCity) posts statuses
+        gh = FakeGh(checks=[])
+        gh.statuses = [{"state": "failure", "context": "jenkins"}]
+        self.assertEqual(tr(gh).facts(7)["ci"], "red")
+        gh.statuses = [{"state": "success", "context": "jenkins"}]
+        self.assertEqual(tr(gh).facts(7)["ci"], "green")
+
+    def test_check_run_of_a_factory_workflow_is_not_ci(self):
+        class Service(FakeGh):  # the second check run is in the suite of a factory-reconcile run at the head
+            def __call__(self, args, timeout=None):
+                if any("actions/runs?head_sha=" in x for x in args):
+                    return recorded_action("actions/runs?head_sha=h1&per_page=100", [
+                        {"workflow_id": 1, "name": "quality-gates", "status": "completed", "conclusion": "success", "check_suite_id": 400},
+                        {"workflow_id": 2, "name": "factory-reconcile", "status": "completed", "conclusion": "cancelled", "check_suite_id": 401}])
+                return FakeGh.__call__(self, args, timeout)
+        self.assertEqual(tr(Service(checks=["success", "cancelled"])).facts(7)["ci"], "green")
+        self.assertEqual(tr(FakeGh(checks=["success", "cancelled"])).facts(7)["ci"], "red")
+
+    def test_ci_failure_reads_a_run_that_has_not_finished(self):
+        self.assertEqual(tr(FakeGh(checks=[None])).ci_failure("h1")["step"], "Run tests")
 
     def test_log_fetch_forbidden_does_not_raise(self):
         gh = FakeGh(checks=["failure"])
@@ -1000,6 +1003,20 @@ class EffectsTest(unittest.TestCase):
         flat = [" ".join(w) for w in gh.writes]
         self.assertTrue(any("DELETE" in w and "issues/11/labels/factory:draft" in w for w in flat))
         self.assertTrue(any("issues/11/labels" in w and "labels[]=factory:ready" in w for w in flat))
+
+    def test_create_issues_reused_draft_child_leaves_only_stage_labels_of_the_prefix(self):
+        """Table: stage prefix -> the labels of a reused child that are removed (its old stage, not other namespaces)."""
+        for prefix, dropped in (("slop:", ["slop:draft"]), ("factory:", ["factory:draft"])):
+            with self.subTest(prefix=prefix), patch.object(M_GH.vocab, "stage_prefix", return_value=prefix):
+                gh = FakeGh(labels=(f"{prefix}split", "risk:low"))
+                gh.open_issues = [{"id": 11, "number": 11, "title": "A", "body": "scope A\n\n<!-- factory:child of=7 -->",
+                                   "labels": [{"name": "risk:low"}, {"name": f"{prefix}draft"}, {"name": "other:draft"},
+                                              {"name": "factory:draft" if prefix == "slop:" else "slop:draft"}]}]
+                tracker = GitHubGateTracker(REPO, {n: f"{prefix}{n}" for n in STAGES}, BOT, fix_cap=3, run=gh)
+                self.assertTrue(tracker.apply(eff("create-issues", [{"title": "A", "body": "scope A"}])))
+                deleted = [w[-1].rsplit("/labels/", 1)[1] for w in gh.writes if "DELETE" in w]
+                self.assertEqual([d for d in deleted if d.endswith(":draft")], dropped)
+                self.assertTrue(any("labels[]=" + prefix + "ready" in " ".join(w) for w in gh.writes))
 
     def test_review_prose_cannot_forge_the_marker(self):
         gh = FakeGh()
@@ -1735,6 +1752,11 @@ class TwoRepositoryGh(FakeGh):
         if a.startswith("actions/runs?head_sha=h9"):
             return lines([{"workflow_id": k, "name": "quality-gates", "event": "pull_request", "run_number": 1,
                            "status": "completed", "conclusion": c} for k, c in enumerate(self.other_checks)])
+        if a.startswith("commits/h9/check-runs"):
+            return lines([{"name": f"job-{k}", "status": "completed", "conclusion": c, "check_suite": {"id": k}}
+                          for k, c in enumerate(self.other_checks)])
+        if a == "commits/h9/status":
+            return json.dumps({"statuses": []})
         if a == "pulls/11/reviews":
             return lines(self.other_reviews)
         if a.startswith("commits/"):
@@ -1952,6 +1974,7 @@ class CiSyncCodeHostTest(unittest.TestCase):
                  {"number": 3, "head": {"ref": "ez/8-y", "sha": "s3", "repo": {"full_name": "fork/app"}}, "labels": []}]
         events = [{"event": "labeled", "label": {"name": "factory:ci-green"}, "created_at": t} for t in ("T1", "T3")]
         out = {"repos/o/app/pulls?state=open&per_page=100": "\n".join(map(json.dumps, pulls)),
+               "repos/o/app/actions/runs?head_sha=s1&per_page=100": "",
                "repos/o/app/commits/s1/check-runs?per_page=100": "\n".join(map(json.dumps, [
                    {"status": "completed", "conclusion": "success", "completed_at": "T2"},
                    {"status": "in_progress", "conclusion": None, "completed_at": None}])),

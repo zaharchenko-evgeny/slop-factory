@@ -140,40 +140,45 @@ nodes:
       done-high:  { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
 
-  # --- Review: one review per ticket, chosen by risk; starts on green CI (red CI goes to ci-red) -----
+  # --- Review: one review per ticket, chosen by risk; CI may still run (red CI: never approved) -----
   review-low:
     agent: reviewer-cheap
-    triggers: [{ label: "factory:review-low" }, { label: "factory:ci-green" }]   # CI labels the PR when it finishes
-    when: { stage: in-review, ci: green, label: "risk:low" }   # never on pending or red CI; risk:low picks this review
+    triggers: [{ label: "factory:review-low" }]
+    when: { stage: in-review, label: "risk:low" }   # risk:low picks this review
     output: read-only
     settings: { focus: [behaviour] }
     outcomes:
-      approve-low:   { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "risk:low" },
+      approve-low:   { if: { ci: [green, pending, none] }, else: changes,   # never approve on red CI
+                       effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "risk:low" },
                                 { label: "factory:automerge", on: pr }, { stage: approved }] }
-      approve-risky: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "risk:high" },
+      approve-risky: { if: { ci: [green, pending, none] }, else: changes,
+                       effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "risk:high" },
                                 { label: "factory:needs-human", on: pr }, { stage: approved }] }   # merge risk medium or high: a person merges
       changes:       { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-low" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
 
   review-high:
     agent: reviewer
-    triggers: [{ label: "factory:review-high" }, { label: "factory:ci-green" }]   # CI labels the PR when it finishes
-    when: { stage: in-review, ci: green, label: "risk:high" }   # never on pending or red CI; risk:high picks this review
+    triggers: [{ label: "factory:review-high" }]
+    when: { stage: in-review, label: "risk:high" }   # risk:high picks this review
     output: read-only
     settings: { focus: [full, structure-security] }
     outcomes:
-      approve-low:   { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "risk:low" },
+      approve-low:   { if: { ci: [green, pending, none] }, else: changes,   # never approve on red CI
+                       effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "risk:low" },
                                 { label: "factory:automerge", on: pr }, { stage: approved }] }
-      approve-risky: { effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "risk:high" },
+      approve-risky: { if: { ci: [green, pending, none] }, else: changes,
+                       effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "risk:high" },
                                 { label: "factory:needs-human", on: pr }, { stage: approved }] }   # merge risk medium or high: a person merges
       changes:       { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-high" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
 
-  ci-red:                         # red CI needs no reviewer: the guards send it straight to the developer
+  ci-failed:                      # CI finished red after the approval: the developer fixes it, then a new review
     agent: clerk
-    triggers: [{ label: "factory:ci-red" }]
-    when: { stage: in-review }
+    triggers: [{ label: "factory:ci-red" }]   # ci-sync labels the PR from its checks
+    when: { stage: approved }       # before the approval, the approve outcomes' CI guard turns red into changes
     outcomes:
-      fix:     { if: { ci: red }, effects: [{ unlabel: "factory:review-low" }, { unlabel: "factory:review-high" },
-                                            { label: "factory:fix", on: pr }, { stage: changes-requested }] }
+      fix:     { if: { ci: red }, effects: [{ unlabel: "factory:automerge" }, { unlabel: "factory:merge" },
+                                            { unlabel: "factory:needs-human" }, { label: "factory:fix", on: pr },
+                                            { stage: changes-requested }] }
       waiting: {}                 # CI is green again or still running: nothing to do
 
   # --- Fix: review findings, red CI included -> a new head, reviewed again ---------------------
@@ -230,6 +235,7 @@ nodes:
       updated-high: { if: { pr: behind, label: "risk:high" }, effects: [{ update-branch: match-head }, { unlabel: "factory:merge" },
                                                                { label: "factory:review-high", on: pr }, { stage: in-review }] }
       merged:   { if: { review: approved-at-head, ci: green }, effects: [{ unlabel: "factory:merge" }, { merge: match-head }] }
+      ci-red:   { if: { ci: red }, effects: [{ unlabel: "factory:merge" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }   # CI finished red after the review
       waiting:  {}                # reconcile wakes it again while CI runs
 
   finish:                         # a merged PR or finished split: done; the gate then wakes unblocked dependents

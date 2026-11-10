@@ -80,9 +80,12 @@ class Templates(unittest.TestCase):
             self.assertIn(f"`{name}`", doc, name)
         self.assertEqual(used, set(ANSWERS))
 
-    def test_workflow_has_ci_red_and_no_walkthrough_node(self):
+    def test_workflow_has_ci_failed_and_no_walkthrough_node(self):
         nodes = yaml.safe_load((render.PROJECT_T / "workflow.yaml").read_text())["nodes"]
-        self.assertIn("ci-red", nodes)
+        self.assertIn("ci-failed", nodes)
+        self.assertNotIn("ci-red", nodes)
+        self.assertEqual(nodes["ci-failed"]["when"], {"stage": "approved"})
+        self.assertNotIn("ci", nodes["review-low"]["when"])  # a review never waits for CI
         self.assertNotIn("walkthrough", nodes)
         self.assertFalse((render.PROJECT_T / "roles" / "walkthrough").exists())
         factory = yaml.safe_load(render.render_project(ANSWERS)["factory.yaml"])
@@ -157,7 +160,8 @@ class Templates(unittest.TestCase):
 
     def test_one_repository_answers_render_the_single_tracker(self):
         defn = self.validate(ANSWERS)
-        self.assertEqual(defn["factory"]["tracker"], {"adapter": "github-issues", "repository": "zaharchenko-evgeny/slop-factory"})
+        self.assertEqual(defn["factory"]["tracker"], {"label_prefix": "factory:", "adapter": "github-issues",
+                                                  "repository": "zaharchenko-evgeny/slop-factory"})
         self.assertEqual([r["repo"] for r in defn["factory"]["environments"]["main"]["repositories"]],
                          ["zaharchenko-evgeny/slop-factory"])
 
@@ -166,8 +170,8 @@ class Templates(unittest.TestCase):
         # `factory validate` also wants YouTrack state stores, which the setup interview adds after rendering
         defn = self.validate({**ANSWERS, "CODE_REPOSITORIES": ["o/api", "o/web"], "TRACKER_URL": "https://example.youtrack.cloud",
                               "TRACKER_PROJECTS": projects}, cli=False)
-        self.assertEqual(defn["factory"]["tracker"], {"adapter": "youtrack", "url": "https://example.youtrack.cloud",
-                                                      "project": "API", "projects": projects})
+        self.assertEqual(defn["factory"]["tracker"], {"label_prefix": "factory:", "adapter": "youtrack",
+                                                      "url": "https://example.youtrack.cloud", "project": "API", "projects": projects})
         self.assertEqual(defn["factory"]["code_host"], {"adapter": "github", "repository": "o/api"})
 
     def test_youtrack_project_of_an_unknown_repository_is_refused(self):

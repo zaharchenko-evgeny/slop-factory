@@ -9,22 +9,10 @@ import config as config_mod
 import plugins
 import vocab
 from gate_port import tracker_repositories
-from factory_plugins.github.gate import BAD_CI, GOOD_CI, GitHubCodeHost
+from factory_plugins.github.gate import GitHubCodeHost, head_ci
 from factory_plugins.github.tracker import project_repositories
 
 GO, BAD, FAILED = 0, 2, 1  # the gate's exit codes
-
-
-def head_ci(checks):
-    """(green|red|pending|none, latest result time) of a head's check runs and commit statuses, each
-    {conclusion, at} with conclusion None while it runs. One failure is red, as the gate's `ci` fact reads it."""
-    done = [c["conclusion"] for c in checks]
-    at = max((c["at"] for c in checks if c.get("at")), default=None)
-    if not done:
-        return "none", at
-    if any(c in BAD_CI for c in done):
-        return "red", at
-    return ("green" if all(c in GOOD_CI for c in done) else "pending"), at
 
 
 def ci_sync_pr(code_host, repository, pr, dry_run=False):
@@ -48,8 +36,8 @@ def ci_sync_pr(code_host, repository, pr, dry_run=False):
 
 
 def ci_sync(code_host, repositories, dry_run=False, progress=None):
-    """The CI label of every open factory PR in `repositories` (the `role: project` ones: the factory repository
-    labels its own PRs from quality-gates). Returns (results, failed); one PR failing does not stop the others."""
+    """The CI label of every open factory PR in `repositories` (the project and ticket repositories, the engine's
+    too: no project's CI labels its own PRs, #1207). Returns (results, failed); one PR failing does not stop the others."""
     results, failed = [], False
     for repository in repositories:
         try:

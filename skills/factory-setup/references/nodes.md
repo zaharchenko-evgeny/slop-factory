@@ -28,13 +28,13 @@ writes at most one repository. The generated README lists each repository with t
 | `implement-small` | Developer on the cheap model. | label `factory:implement-small` | `done-low`, `done-high`, `error` (retries as medium), `blocked` |
 | `implement-medium` | Developer on the mid model. | label `factory:implement-medium` | `done-low`, `done-high`, `error` (retries as large), `blocked` |
 | `implement-large` | Developer on the strong model. | label `factory:implement-large` | `done-low`, `done-high`, `blocked` |
-| `review-low` | One light review of a low-risk PR. The body has `## Summary`, `## Walkthrough` and `## Merge danger`. | label `factory:review-low` or `factory:ci-green`, CI green | `approve-low`, `approve-risky`, `changes` |
-| `review-high` | Two focused reviews of a high-risk PR. The body has `## Summary`, `## Walkthrough` and `## Merge danger`, and `## Decision for you` first for `approve-risky`. | label `factory:review-high` or `factory:ci-green`, CI green | `approve-low`, `approve-risky`, `changes` |
-| `ci-red` | Sends a PR with red CI straight to the developer, with no review. | label `factory:ci-red`, stage `in-review` | `fix` (CI is red), `waiting` (CI is green or still running) |
+| `review-low` | One light review of a low-risk PR. The body has `## Summary`, `## Walkthrough` and `## Merge danger`. | label `factory:review-low`; CI may still run | `approve-low`, `approve-risky` (never on red CI: `changes` instead), `changes` |
+| `review-high` | Two focused reviews of a high-risk PR. The body has `## Summary`, `## Walkthrough` and `## Merge danger`, and `## Decision for you` first for `approve-risky`. | label `factory:review-high`; CI may still run | `approve-low`, `approve-risky` (never on red CI: `changes` instead), `changes` |
+| `ci-failed` | Sends an approved PR whose CI finished red to the developer; an approval on red CI is already turned into `changes`. | label `factory:ci-red`, stage `approved` | `fix` (CI is red), `waiting` (CI is green or still running) |
 | `fix` | Developer fixes review findings or red CI and pushes a new head. | label `factory:fix` | `done-low`, `done-high`, `blocked` |
 | `update` | Developer resolves a merge conflict with `main`. | label `factory:update` | `resolved`, `unresolvable` |
 | `automerge` | Decides whether an approved PR merges alone or goes to a person. | label `factory:automerge` | `merge` (risk low), `needs-human` |
-| `merge` | Merges an approved head with green CI, updates a branch that is behind, or flags a conflict. | label `factory:merge` | `conflict`, `updated-low`, `updated-high`, `merged`, `waiting` |
+| `merge` | Merges an approved head with green CI, updates a branch that is behind, or flags a conflict. | label `factory:merge` | `conflict`, `updated-low`, `updated-high`, `merged`, `ci-red` (a fix round), `waiting` |
 | `finish` | Marks a ticket `done` after its PR merges or its children close. | PR merged, ticket closed | `done`, `children-done`, `waiting` |
 | `notify` | Tells the owner about a state that needs them. | stage `blocked` or `needs-answers`, label `factory:needs-human` | `notified`, `skipped` |
 | `retro` | Collects lessons from finished tickets into one knowledge-base PR. | schedule, daily | `proposed`, `nothing` |

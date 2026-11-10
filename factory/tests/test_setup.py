@@ -53,6 +53,23 @@ class SetupTest(unittest.TestCase):
         self.assertNotIn("retro", skills)
         self.assertIn("skill tdd: github:cursor/plugins@4dd1d05818d1", lines)
 
+    def test_roles_in_reads_every_environment_form(self):
+        defn = {"factory": {"agents": {"a": {"role": "dev"}, "b": {"role": "ops"}}},
+                "workflow": {"settings": {}, "nodes": {"n": {"agent": "a"}, "m": {"agent": "b"}}}}
+        w, n = defn["workflow"], defn["workflow"]["nodes"]
+        cases = [  # (settings, node n extra, node m extra, roles in engine)
+            ({"environments": ["engine", "team"]}, {}, {"environment": "team"}, ["dev"]),
+            ({"environment": "engine"}, {}, {}, ["dev", "ops"]),
+            ({"environments": ["team"]}, {"environments": ["engine", "team"]}, {}, ["dev"]),
+            ({"environment": "team"}, {"environment": "engine"}, {"enabled": False, "environment": "engine"}, ["dev"]),
+            ({}, {}, {}, []),
+        ]
+        for settings, extra_n, extra_m, want in cases:
+            with self.subTest(settings=settings, n=extra_n, m=extra_m):
+                w["settings"] = settings
+                n["n"], n["m"] = {"agent": "a", **extra_n}, {"agent": "b", **extra_m}
+                self.assertEqual(team_setup.roles_in(defn, "engine"), want)
+
     def test_refuses_a_skill_whose_hash_differs(self):
         other = self.tmp / "other"
         other.mkdir()
@@ -126,11 +143,50 @@ class SetupTest(unittest.TestCase):
                            run=lambda cmd, **kw: None, checkout=self.tmp)
         self.assertFalse((self.tmp / ".mcp.json").exists())
 
+    def test_roles_in_follows_node_environments(self):
+        def defn(settings, node_env):
+            node = {"agent": "dev", **node_env}
+            return {"factory": {"agents": {"dev": {"role": "developer"}}},
+                    "workflow": {"settings": settings, "nodes": {"n": node}}}
+        rows = [
+            ({"environments": ["engine", "team"]}, {}, "engine", ["developer"]),
+            ({"environments": ["engine", "team"]}, {}, "team", ["developer"]),
+            ({"environments": ["engine", "team"]}, {}, "other", []),
+            ({"environment": "engine"}, {}, "engine", ["developer"]),
+            ({"environment": "engine"}, {}, "team", []),
+            ({"environments": ["engine"]}, {"environment": "team"}, "engine", []),
+            ({"environments": ["engine"]}, {"environment": "team"}, "team", ["developer"]),
+            ({"environment": "engine"}, {"environments": ["a", "b"]}, "b", ["developer"]),
+            ({}, {}, "engine", []),
+        ]
+        for settings, node_env, env, want in rows:
+            with self.subTest(settings=settings, node=node_env, env=env):
+                self.assertEqual(team_setup.roles_in(defn(settings, node_env), env), want)
+
     def test_refuses_an_invalid_definition(self):
         (self.root / "roles/router/role.md").unlink()
         with self.assertRaises(SystemExit) as e:
             self.install()
         self.assertIn("missing-role-body", str(e.exception))
+
+
+class RolesInEnvironments(unittest.TestCase):
+    def test_roles_follow_node_environments(self):
+        agents = {"dev": {"role": "developer"}, "ops": {"role": "ops"}}
+        cases = [
+            ("no environment, settings.environments lists both", {"environments": ["engine", "team"]}, {}, ["developer"], ["developer"]),
+            ("settings.environment default", {"environment": "team"}, {}, [], ["developer"]),
+            ("node environment wins", {"environments": ["engine", "team"]}, {"environment": "team"}, [], ["developer"]),
+            ("node environments list", {}, {"environments": ["engine"]}, ["developer"], []),
+            ("disabled node", {"environments": ["engine", "team"]}, {"enabled": False}, [], []),
+            ("no environment at all", {}, {}, [], []),
+        ]
+        for label, settings, node, engine, team in cases:
+            with self.subTest(label):
+                defn = {"factory": {"agents": agents},
+                        "workflow": {"settings": settings, "nodes": {"implement": {"agent": "dev", **node}}}}
+                self.assertEqual(team_setup.roles_in(defn, "engine"), engine)
+                self.assertEqual(team_setup.roles_in(defn, "team"), team)
 
 
 if __name__ == "__main__":

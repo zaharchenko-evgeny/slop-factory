@@ -473,7 +473,7 @@ def owned_label_prefixes(config: dict) -> list[str]:
     t = config.get("tracker") or {}
     ready = (t.get("stages") or {}).get("ready") or vocab.stage("ready")
     risks = (t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values()
-    return sorted({ready.partition(":")[0] + ":", "complexity:", *(r.partition(":")[0] + ":" for r in risks)})
+    return sorted({t.get("label_prefix") or ready.partition(":")[0] + ":", "complexity:", *(r.partition(":")[0] + ":" for r in risks)})
 
 
 def label_specs(nodes: dict, config: dict) -> dict:
@@ -548,7 +548,7 @@ def labels(nodes: dict, config: dict) -> list[str]:
     # ADR-0023: scripts/comment-wake-label.sh adds it; the comment node removes it. Kept while the comments module is
     # off (ADR-0025): a wake workflow an earlier deploy installed still adds it, and fails once the label is gone.
     out.add(vocab.comment())
-    out |= {vocab.ci("ci-green"), vocab.ci("ci-red")}  # CI writes them (scripts/ci-state-label.sh); reconcile reads
+    out |= {vocab.ci("ci-green"), vocab.ci("ci-red")}  # ci-sync writes them from the head checks (#1207)
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})

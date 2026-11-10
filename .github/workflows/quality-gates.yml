@@ -181,6 +181,7 @@ jobs:
       - run: scripts/retry-network.sh npx --yes agnix@0.59.3 .
 
   # Information for the reviewer, not a required check: mutants of the changed lines that the tests do not catch.
+  # The factory counts every check of a head as CI (#1207), so this job never fails: a script error is a warning.
   mutation:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -194,30 +195,6 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           FACTORY_TEAM: factory/tests/fixtures/team
         run: |
-          survivors=$(uv run --quiet python scripts/mutation-diff.py --base "$BASE_SHA") || exit 1
+          survivors=$(uv run --quiet python scripts/mutation-diff.py --base "$BASE_SHA") ||
+            { echo "::warning title=mutation::scripts/mutation-diff.py failed: no mutation result"; exit 0; }
           printf '## Surviving mutants\n```\n%s\n```\n' "$survivors" >> "$GITHUB_STEP_SUMMARY"
-
-  # The CI label is the result of every job: it runs last, so the run is about to complete when the label wakes a
-  # reviewer or the join, and they read the same result from the workflow runs instead of `pending`.
-  ci-label:
-    needs: [factory-checks, agnix]
-    if: always() && github.event_name == 'pull_request' && startsWith(github.head_ref, 'ez/')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-      statuses: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with: { persist-credentials: false }
-      - name: Label the PR with this run's CI result
-        env:
-          BRANCH: ${{ github.head_ref }}
-          SHA: ${{ github.event.pull_request.head.sha }}
-          CONCLUSION: ${{ contains(needs.*.result, 'failure') && 'failure' || (contains(needs.*.result, 'cancelled') && 'cancelled' || (contains(needs.*.result, 'skipped') && 'skipped' || 'success')) }}
-        run: scripts/ci-state-label.sh

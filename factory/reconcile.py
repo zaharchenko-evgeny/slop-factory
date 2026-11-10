@@ -69,7 +69,7 @@ def wakes(nodes, facts):
         for t in n.get("triggers") or []:
             event, _, label = str(t).partition(" ")
             on = "issue" if event.startswith("issues.") else "pr"
-            if not label.startswith("factory:"):
+            if not label.startswith(vocab.stage_prefix()):
                 continue
             if "<focus>" in label:
                 for focus in facts.get("focus_missing") or []:

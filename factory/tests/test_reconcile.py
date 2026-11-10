@@ -5,6 +5,7 @@
 # ///
 """Tests for factory/reconcile.py over MemorySystem. Run: uv run factory/tests/test_reconcile.py"""
 import copy
+from unittest import mock
 import json
 import sys
 import unittest
@@ -44,6 +45,17 @@ class ReconcileTest(unittest.TestCase):
         t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "focus_missing": ["behaviour"]})
         self.assertEqual(results[0]["node"], "review")
         self.assertIn('"factory:review-behaviour"', logged(t, "label"))
+
+    def test_wakes_match_the_configured_stage_prefix(self):
+        """Table: stage prefix of the tracker -> the waking label the trigger carries (`slop:` nodes wake only under `slop:`)."""
+        slop = json.loads(json.dumps(NODES).replace("factory:", "slop:"))
+        ticket = {"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "focus_missing": ["behaviour"]}
+        for prefix, nodes, want in (("slop:", slop, ['"slop:review-behaviour"']), ("factory:", slop, []),
+                                    ("slop:", NODES, []), ("factory:", NODES, ['"factory:review-behaviour"'])):
+            with self.subTest(prefix=prefix, triggers="slop" if nodes is slop else "factory"), \
+                    mock.patch.object(reconcile.vocab, "stage_prefix", return_value=prefix):
+                t, _, _ = run(copy.deepcopy(ticket), nodes=nodes)
+                self.assertEqual(logged(t, "label"), want)
 
     def test_landed_review_marker_reapplies_outcome_without_refiring_reviewer(self):
         ticket = {"stage": "in-review", "pr": 5, "pr_state": "open", "ci": "green", "since": OLD,
@@ -379,26 +391,26 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertIn('"factory:needs-human"', logged(t, "label"))
         self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
 
-    def test_review_label_without_green_ci_or_fresh_is_left_alone(self):
+    def test_fresh_review_label_is_left_alone_and_pending_ci_does_not_hold_a_review(self):
         labels = {"pr_labels": ["factory:review-low"], "attrs": ["risk:low"], "label_at": {"factory:review-low": OLD}}
-        self.assertEqual(self.recover(self.pr(ci="pending", **labels))[1], [])
         self.assertEqual(self.recover(self.pr(ci="green", **{**labels, "label_at": {"factory:review-low": FRESH}}))[1], [])
+        self.assertEqual([r["reconcile"] for r in self.recover(self.pr(ci="pending", **labels))[1]], ["refire"])  # a review never waits for CI
 
     def test_review_label_whose_when_never_holds_is_stuck_once(self):
-        ticket = self.pr(ci="none", attrs=["risk:low"], pr_labels=["factory:review-low"],
+        ticket = self.pr(ci="green", attrs=[], pr_labels=["factory:review-low"],  # no risk label: `when` never holds
                          label_at={"factory:review-low": "2026-11-03T09:00:00Z"})  # 3 hours: past 2 timeouts
         t, results = self.recover(ticket)
         self.assertEqual([(r["node"], r["reconcile"]) for r in results], [("review-low", "stuck")])
         self.assertIn('"factory:needs-human"', logged(t, "label"))
         self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
         note = logged(t, "comment")[0]
-        self.assertIn("review-low when.ci: want green, have none", note)
-        ticket.update(log=[("comment", note)], stage="in-review", attrs=["risk:low"])
+        self.assertIn("review-low when.label: want risk:low", note)
+        ticket.update(log=[("comment", note)], stage="in-review", attrs=[])
         self.assertEqual(self.recover(ticket)[1], [])  # one notice per stage and head
 
     def test_stuck_label_in_a_second_ticket_repository_is_reported(self):
         tr = ticket_repositories_tracker({"o/b": [7]}, self.config["tracker"]["stages"])
-        ticket = self.pr(ci="none", attrs=["risk:low"], pr_labels=["factory:review-low"],
+        ticket = self.pr(ci="green", attrs=[], pr_labels=["factory:review-low"],  # no risk label: `when` never holds
                          label_at={"factory:review-low": "2026-11-03T09:00:00Z"})  # 3 hours: past 2 timeouts
         written = []
         tr.stale_facts = lambda n: ticket
@@ -457,7 +469,7 @@ class RecoverDefinitionTest(unittest.TestCase):
                     self.assertEqual(written, [])
 
     def test_stuck_label_that_is_young_or_behind_a_blocker_is_left_alone(self):
-        labels = {"ci": "none", "attrs": ["risk:low"], "pr_labels": ["factory:review-low"]}
+        labels = {"ci": "green", "attrs": [], "pr_labels": ["factory:review-low"]}
         young = (NOW - timedelta(minutes=45)).isoformat()
         self.assertEqual(self.recover(self.pr(**labels, label_at={"factory:review-low": young}))[1], [])
         self.assertEqual(self.recover(self.pr(**labels, blockers_open=1, label_at={"factory:review-low": "2026-11-03T09:00:00Z"}))[1], [])

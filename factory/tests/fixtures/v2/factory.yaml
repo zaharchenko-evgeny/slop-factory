@@ -6,6 +6,7 @@ owner: zaharchenko-evgeny   # the GitHub login the notify node tells
 plugins: [comments]         # ADR-0025, ADR-0026: mentions, asks and the comment node
 tracker:
   adapter: github-issues
+  label_prefix: "factory:"       # a stage is the label <label_prefix><stage>
   repository: zaharchenko-evgeny/slop-factory
 
 # Model aliases: the only place a model ID appears.
