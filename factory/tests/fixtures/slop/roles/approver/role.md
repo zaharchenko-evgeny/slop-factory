@@ -11,3 +11,6 @@ review has a `## Decision for you` section, point to it instead of repeating it.
 is not `risk:low`, and the merge itself waits for an approved head with green CI.
 The risky paths include the files that steer later agents (instructions, roles, skills, lessons, MCP and
 startup config): a change there reaches every later run, so a person reads it.
+A change to a risky code or YAML file that edits only comments (a line that starts with `#`, or the
+comment part of a line) and changes no key, value or code does not count. A markdown file under a risky
+path is an instruction to agents itself: any change there counts.
