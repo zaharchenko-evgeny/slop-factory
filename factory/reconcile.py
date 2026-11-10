@@ -11,6 +11,8 @@ No model and no Air quota: the expected next step of each ticket comes from engi
 (a node's `timeout_minutes` overrides it) gets its label once; a second miss sets `blocked` and `factory:needs-human`.
 A closed ticket in a PR stage with a merged PR is finished (its `finish` run was lost).
 A ticket in a waiting stage, closed, or already marked `factory:needs-human` is left alone.
+A consistency pass then reports states that disagree: an open `done` ticket with no open PR is closed, a PR-stage ticket
+with no open PR is blocked, zero or several stage labels and an open PR of a closed ticket ask a person (`consistency`).
 Each pass also runs the CI label sync (`gate.py ci-sync`) over the `role: project` repositories (not with memory:FILE).
 """
 import json
@@ -186,7 +188,90 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
             results.append(ticket_error(tracker, n, e, dry_run))
             if progress:
                 progress(results[-1])
+    try:
+        consistency(tracker, stages, limits, now, dry_run, results, progress)
+    except Exception as e:  # a failed listing is reported; the results above stand
+        failed = True
+        results.append({"reconcile": "consistency", "error": f"{type(e).__name__}: {e}"})
+        if progress:
+            progress(results[-1])
     return results, failed
+
+
+def consistency(tracker, stages, limits, now, dry_run, results, progress):
+    """States that disagree, found from the open tickets and the factory PRs (not from the stage sweep):
+    an open `done`/`merged` ticket whose PRs are all finished is closed (`close`); a PR-stage ticket with no open
+    `ez/<n>-*` PR for `limits.stuck_minutes` is blocked (`no-pr`); a ticket with zero or several stage labels asks a
+    person (`stage-labels`); an open PR of a closed ticket asks a person (`orphan-pr`). A finding whose comment is
+    already on the ticket or PR is not reported again. The map ticket is skipped."""
+    view = getattr(tracker, "consistency_view", None)
+    if view is None:
+        return
+    stage_of = {vocab.stage(s): s for s in stages}
+    namespace = vocab.stage("ready").partition(":")[0] + ":"
+    stuck = timedelta(minutes=limits.get("stuck_minutes", 120))
+    found = view()
+
+    def report(r, comment=None, on="issue", pr=None, effects=()):
+        n = r["ticket"]
+        if comment:
+            if any(c.startswith(comment) for c in tracker.comment_bodies(n, pr)):
+                return
+            effects = [*effects, {"kind": "comment", "value": comment, "on": on, **({"pr": pr} if pr else {})}]
+        results.append(r)
+        if not dry_run:
+            for e in effects:
+                tracker.apply({"ticket": n, "run_id": RUN, **e})
+        if progress:
+            progress(r)
+
+    for t in found["tickets"]:
+        n, labels = t["number"], t["labels"]
+        try:
+            if vocab.map_label() in labels:
+                continue
+            have = sorted(label for label in labels if label in stage_of)
+            prs = t["prs"]
+            if len(have) != 1:
+                if any(label.startswith(namespace) for label in labels):
+                    r = {"ticket": n, "reconcile": "stage-labels", "why": f"{len(have)} stage labels"}
+                    report(r, f"{PREFIX} stage-labels: this ticket has {len(have)} stage labels: "
+                              f"{', '.join(f'`{x}`' for x in have) or 'none'}. A person keeps one and removes the rest.",
+                           effects=[{"kind": "label", "value": vocab.needs_human()}])
+                continue
+            stage = stage_of[have[0]]
+            if stage in ("done", "merged"):
+                if all(p["state"] != "open" for p in prs):
+                    r = {"ticket": n, "stage": stage, "reconcile": "close", "why": f"open in stage {stage}; no PR is open"}
+                    results.append(r)
+                    if not dry_run:
+                        tracker.close_ticket(n)
+                    if progress:
+                        progress(r)
+                continue
+            if stage in LOST_FINISH and not any(p["state"] == "open" and p["branch"].startswith(f"ez/{n}-") for p in prs):
+                at = t.get("updated_at")
+                if not at or now - datetime.fromisoformat(at.replace("Z", "+00:00")) <= stuck:
+                    continue
+                r = {"ticket": n, "stage": stage, "reconcile": "no-pr", "why": f"stage {stage} with no open PR"}
+                report(r, f"{PREFIX} no-pr: this ticket is in stage {stage}, but no PR from a branch `ez/{n}-*` is open. "
+                          f"A person opens the PR again and sets {vocab.stage('ready')}, or closes the ticket.",
+                       effects=[{"kind": "label", "value": vocab.needs_human()}, {"kind": "stage", "value": "blocked"}])
+        except Exception as e:  # one ticket failing does not stop the others
+            results.append(ticket_error(tracker, n, e, dry_run))
+            if progress:
+                progress(results[-1])
+    for p in found["orphan_prs"]:
+        n = p["ticket"]
+        try:
+            r = {"ticket": n, "pr": p["number"], "reconcile": "orphan-pr", "why": "open PR of a closed ticket"}
+            report(r, f"[factory] reconcile: orphan-pr: this PR is open, but ticket #{n} is closed. "
+                      "A person merges or closes the PR, or reopens the ticket.", on="pr", pr=p["number"],
+                   effects=[{"kind": "label", "value": vocab.needs_human(), "on": "pr"}])
+        except Exception as e:
+            results.append(ticket_error(tracker, n, e, dry_run))
+            if progress:
+                progress(results[-1])
 
 
 def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress):
