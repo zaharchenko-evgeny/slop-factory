@@ -335,6 +335,10 @@ def validate():
                     deploy.output_errors(nodes.load(), config.load())]
         print("\n".join([*errs, *(f"warning: {w}" for w in definition.warnings(defn)), *([] if errs else ["factory: ok"])]))
         return 1 if errs else 0
+    root = config.team_root()
+    if not any((root / f).is_file() for f in (config.DESCRIPTOR, config.PROJECT_DESCRIPTOR)):  # #1248: a report, not a crash
+        print(f"factory: no factory definition at {root} (factory.yaml and workflow.yaml)")
+        return 1
     errs = config.validate()
     if not errs:
         errs = nodes.validate(nodes.load(), config.load()) or deploy.output_errors(nodes.load(), config.load())
