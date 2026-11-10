@@ -268,8 +268,8 @@ nodes:
     agent: retro
     environment: team
     triggers: [{ schedule: "0 2 * * *" }]
-    output: push-to-new-branch    # the platform opens one PR to the knowledge base
-    outcomes:
+    output: as-instructed         # retro pushes and opens or updates the one retro PR itself; Air only pushes a branch
+    outcomes:                     # a routine: the gate applies no effects, so retro labels its PR for knowledge-review
       proposed: {}
       nothing:  {}
 
