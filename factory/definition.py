@@ -1025,6 +1025,8 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
         out["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
     if n.get("enabled") is False:
         out["enabled"] = False
+    if n.get("timeout_minutes"):  # reconcile waits this long for its outcome (`limits.run_timeout_minutes` otherwise)
+        out["timeout_minutes"] = n["timeout_minutes"]
     outcomes = {}
     for o, oc in (n.get("outcomes") or {}).items():
         oc = dict(oc or {})
@@ -1153,6 +1155,8 @@ def nodes(defn):
             node["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
         if n.get("enabled") is False:
             node["enabled"] = False
+        if n.get("timeout_minutes"):
+            node["timeout_minutes"] = n["timeout_minutes"]
         node["outcomes"] = {o: _outcome(oc, on_pr, all_stages) for o, oc in (n.get("outcomes") or {}).items()}
         connectors = mcp_connectors(mcp(defn, name))
         if connectors:  # Air's `mcpConnectors`; the custom servers go to `.mcp.json` at setup (team_setup)
