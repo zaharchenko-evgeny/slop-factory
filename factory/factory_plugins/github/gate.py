@@ -66,8 +66,7 @@ def deploy_plan_at(revision):
             subprocess.run(["git", "worktree", "remove", "--force", path], check=True,
                            capture_output=True, text=True)
 
-MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))?(?: rereview=(1))?(?: outcome=([\w-]+))? -->")
-FOCUSES = {"low": ["full"], "high": ["behaviour", "structure-security"]}
+MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))?(?: rereview=1)?(?: outcome=([\w-]+))? -->")
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
 GOOD_CI = {"success", "neutral", "skipped"}
 SERVICE_WORKFLOW = "factory-"  # `factory deploy` names the workflows it renders factory-<node>: they are not CI
@@ -507,10 +506,11 @@ class GitHubGateTracker(DescriptorPort):
                  pr_repo=None, project=None, repositories=None, tickets=None,
                  required=None, ticket_repos=None):
         self.trusted, self.run_cap = set(trusted_bots), run_cap
-        self.required = {**FOCUSES, **(required or {})}  # review focuses by risk; `reviews.required` overrides
         import definition
         if definition.present(config.team_root()):  # ADR-0021: no focuses; workflow.yaml names the reviews
-            self.required = {risk: [] for risk in self.required}
+            self.required = {"low": [], "high": []}
+        else:  # review focuses by risk: `reviews.required` of the team's factory.yaml over the engine's defaults
+            self.required = {**config.load()["reviews"]["required"], **(required or {})}
         self.project = project  # factory.project.yaml: the stores of states and commands (DescriptorPort)
         self.pr_repo = pr_repo or repo  # the code host: pull requests, CI, commits, merges
         # {name: owner/repo} of the descriptor's repositories, the primary first; the primary is the code host
@@ -785,7 +785,7 @@ class GitHubGateTracker(DescriptorPort):
             verdict = (m[3] if agent else {"APPROVED": "approve", "CHANGES_REQUESTED": "changes"}.get(r["state"]))
             out.append({"author": r["user"]["login"], "state": r["state"], "commit_id": r["commit_id"],
                         "focus": m[1] if m else None, "round": int(m[2]) if m else None,
-                        "rereview": bool(m and m[4]), "outcome": m[5] if m else None,
+                        "outcome": m[4] if m else None,
                         "verdict": verdict, "agent": agent, "assoc": r.get("author_association"), "submitted_at": r.get("submitted_at"),
                         "bot": r["user"].get("type") == "Bot" or r["user"]["login"].endswith("[bot]")})
             out[-1]["findings"] = re.findall(r"^\*\*([A-Z]\d+)\*\*", r.get("body") or "", re.M)
@@ -1027,7 +1027,7 @@ class GitHubGateTracker(DescriptorPort):
                     labeled[(t, e["value"])] = max(e["at"], labeled.get((t, e["value"]), ""))
         pr_labels = f.get("pr_labels", [])
         review_labels = [(x, labeled.get((pr, x), "")) for x in pr_labels
-                         if x.startswith((vocab.prefix("review-<focus>"), vocab.prefix("rereview-<focus>"))) and labeled.get((pr, x))]
+                         if x.startswith(vocab.prefix("review-<focus>")) and labeled.get((pr, x))]
         have = [(n, x) for x in self._labels(n)] + [(pr, x) for x in pr_labels]
         cmd = next(((t, x) for t, x in have if x.startswith((vocab.prefix("implement-<tier>"), vocab.prefix("fix-<tier>"), vocab.prefix("update-<tier>"), vocab.prefix("review-<focus>")))), None)
         command_labels = (vocab.stage("ready"), vocab.stage("triage"), vocab.prefix("implement-<tier>"), vocab.prefix("fix-<tier>"),
@@ -1308,11 +1308,8 @@ class GitHubGateTracker(DescriptorPort):
         f = self.facts(n)
         for who in f["ignored_reviews"]:
             print(f"join: ignored unmarked bot review by {who}", file=sys.stderr)
-        rereviewed = any(r["agent"] and r["rereview"] and r["commit_id"] == f["head"] for r in f["reviews"])
-        if f["handed_to_fix"] and not rereviewed:
+        if f["handed_to_fix"]:
             return False  # this head already went to a fix; its push starts the next round
-        if f["pending_rereviews"]:
-            return False  # every disputed focus gets its same-head review before the round can move
         if f["stage"] == "in-review" and f["waiting_reviewers"]:
             return self._rerequest(n, f["waiting_reviewers"])  # nothing moves until they decide again
         if not f["round_complete"] or f["stage"] != "in-review":
@@ -1325,8 +1322,6 @@ class GitHubGateTracker(DescriptorPort):
             for e in gate_clear(n):
                 self.apply(e)
             return self.apply({"ticket": n, "kind": "stage", "value": "blocked"})
-        if rereviewed:
-            self.apply({"ticket": n, "kind": "unlabel", "value": vocab.cmd("fix-<tier>", "*"), "on": "pr"})
         wrote = self.apply({"ticket": n, "kind": "label", "value": vocab.cmd("fix-<tier>", tier), "on": "pr"})
         return self.apply({"ticket": n, "kind": "stage", "value": "changes-requested"}) or wrote
 
@@ -1355,28 +1350,23 @@ class GitHubGateTracker(DescriptorPort):
         return f"\n\n{notes_block(e['notes'])}" if e.get("notes") else ""
 
     def _review(self, n, e):
-        """The reviewer's verdict as a COMMENT review on each PR of the ticket, pinned to that PR's own head. The
-        rereview command label lives on the primary PR, which wakes the reviewer."""
+        """The reviewer's verdict as a COMMENT review on each PR of the ticket, pinned to that PR's own head."""
         # only open PRs in repositories this environment may write: a merged PR is done, a read-only one is not ours
         views = [(name, view, pr) for name, view, pr in self._views(n)
                  if pr and not pr.get("merged") and pr.get("state", "open") == "open" and self._may_write(name)]
         focus = e.get("focus")
         if not views or not focus:
             raise RuntimeError("review: needs a PR and a payload `focus`")
-        _, first, primary = views[0]
-        rereview = vocab.cmd("rereview-<focus>", focus) in first._labels(primary["number"], repo=first.pr_repo)
         facts, wrote = self.facts(n), False
         for name, view, pr in views:
-            wrote |= view._post_review(pr, e, focus, rereview, [r for r in facts["reviews"] if r.get("repo", name) == name],
+            wrote |= view._post_review(pr, e, focus, [r for r in facts["reviews"] if r.get("repo", name) == name],
                                        self._since)
-        if wrote and rereview:
-            first._edit(primary["number"], remove=[vocab.cmd("rereview-<focus>", focus)], on="pr")
         return wrote
 
-    def _post_review(self, pr, e, focus, rereview, reviews, since):
+    def _post_review(self, pr, e, focus, reviews, since):
         head = pr["head"]["sha"]
         existing = [r for r in self._reviews(pr) if r["agent"] and r["focus"] == focus and r["commit_id"] == head]
-        if existing and (not rereview or any(r["rereview"] for r in existing)):
+        if existing:
             return False
         earlier_change_heads = {r["commit_id"] for r in reviews
                                 if r["agent"] and r["verdict"] == "changes"
@@ -1385,7 +1375,7 @@ class GitHubGateTracker(DescriptorPort):
         rnd = e.get("round") or len(earlier_change_heads) + 1
         verdict = "approve" if e["value"].startswith("approve") else "changes"
         outcome = f" outcome={e['outcome']}" if e.get("outcome") else ""
-        marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict}{' rereview=1' if rereview else ''}{outcome} -->"
+        marker = f"<!-- factory:review focus={focus} round={rnd} verdict={verdict}{outcome} -->"
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
         defang = lambda t: str(t).replace("<!--", "<!\u200b--")  # noqa: E731  # prose never carries a marker
         lines = [defang(f"**{x['id']}** {x['file']} — {x['finding']}") for x in found]

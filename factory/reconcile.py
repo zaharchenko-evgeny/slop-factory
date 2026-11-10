@@ -161,10 +161,9 @@ def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=
                 step = next((w for w in wakes(nodes, facts)
                              if age > timedelta(minutes=nodes["nodes"][w[0]].get("timeout_minutes", default))), None)
                 stale_reviews = [label for label, at in facts.get("review_labels", [])
-                                 if label.startswith((vocab.prefix("review-<focus>"), vocab.prefix("rereview-<focus>")))
+                                 if label.startswith(vocab.prefix("review-<focus>"))
                                  and now - datetime.fromisoformat(at.replace("Z", "+00:00")) > timedelta(minutes=default)]
-                stale_focuses = {label.removeprefix(vocab.prefix("review-<focus>")).removeprefix(vocab.prefix("rereview-<focus>"))
-                                 for label in stale_reviews}
+                stale_focuses = {label.removeprefix(vocab.prefix("review-<focus>")) for label in stale_reviews}
                 stale_step = next((w for w in wakes(nodes, facts)
                                    if w[0] == "review" and w[1].removeprefix(vocab.prefix("review-<focus>")) in stale_focuses), None)
                 if stale_step:
