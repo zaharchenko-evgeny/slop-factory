@@ -128,7 +128,7 @@ for line in sys.stdin:
         elif tool == "list_environments":
             assert list(a) == ["repositoryUrl"] and a["repositoryUrl"].startswith("https://github.com/"), a
             out = [{"id": i["id"], "name": i["name"]} for i in db["items"]
-                   if i.get("repository", a["repositoryUrl"]) == a["repositoryUrl"]]
+                   if i.get("repository", a["repositoryUrl"]).lower() == a["repositoryUrl"].lower()]  # as Air: case-insensitive
         elif tool == "get_automation":
             i = next(i for i in db["items"] if i["id"] == a["automationId"])
             out = {**{k: v for k, v in i.items() if k != "id"}, "automationId": i["id"],
@@ -491,6 +491,22 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.calls("automation"), [["update_automation", {"environmentConfigId": "environment-1",
                                                                          "automationId": "a1"}]])
         self.assertEqual(self.run_deploy("--dry-run"), 0)
+
+    def test_environment_repository_compares_case_insensitively(self):  # #1304: Air lowercases the organization
+        self.plan["environments"][0].update({"repository": "https://github.com/JetBrains/r", "variables": {"FACTORY_ENV": "read"}})
+        live = [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/jetbrains/r",
+                 "variables": {"FACTORY_ENV": "read"}}]
+        self.assertFalse([c for c in air.diff(self.plan, [], live) if c[0] == "replace"])
+        self.assertTrue(air.same_repository("https://github.com/jetbrains/r.git/", "https://github.com/JetBrains/r"))
+        self.assertFalse(air.same_repository("https://github.com/o/r", "https://github.com/o/team"))
+
+    def test_apply_finds_a_new_environment_air_lists_in_lower_case(self):  # #1304
+        self.plan["environments"][0].update({"repository": "https://github.com/JetBrains/r", "variables": {"FACTORY_ENV": "read"}})
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/jetbrains/r",
+                        "variables": {"FACTORY_ENV": "read"}}])
+        self.assertEqual(self.run_deploy("--apply"), 0)
+        made = [c for c in self.calls("automation") if c[0] == "create_automation"]
+        self.assertTrue(made and all(c[1]["environmentConfigId"] == "e1" for c in made), made)
 
     def test_environment_update_preserves_unplanned_live_domains(self):
         self.plan["environments"][0]["vm"] = "new"

@@ -389,7 +389,7 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
     env_ids = {e["name"]: e.get("id") for e in envs}
     # Air cannot move an environment to another repository: it is replaced, and its automations follow the new one.
     replaced = {e["name"] for e in plan["environments"] for x in envs
-                if x["name"] == e["name"] and "repository" in x and x["repository"] != e["repository"]}
+                if x["name"] == e["name"] and "repository" in x and same_repository(x["repository"], e["repository"]) is False}
     env_ids.update({name: f"(replaced) {name}" for name in replaced})
     out = []
     for kind, planned, have in (("environment", plan["environments"], envs), ("automation", plan["automations"], automations)):
@@ -420,6 +420,13 @@ def automation_detail(x: dict) -> dict:
     if isinstance(x.get("repository"), str):  # "owner/repo" stands for the planned repository object
         x["repository"] = {"fullName": x["repository"]}
     return x
+
+
+def same_repository(a: str | None, b: str | None) -> bool:
+    """Whether two repository URLs name the same repository: Air lowercases the organization (`jetbrains/jbeval`),
+    so names compare case-insensitively, and a trailing `.git` or `/` does not count."""
+    norm = lambda u: (u or "").strip().rstrip("/").removesuffix(".git").lower()  # noqa: E731
+    return norm(a) == norm(b)
 
 
 def env_url(x: dict) -> str | None:
@@ -478,7 +485,7 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
         if p and kind == "automation":  # the environment id exists only after its create
             env_ids = env_ids or {e["name"]: e["id"] for e in list_envs(cloud, repo_url)
                                   if e["id"] not in retired and (env_url(e) is None or e["name"] not in env_repositories
-                                                                 or env_url(e) == env_repositories[e["name"]])}
+                                                                 or same_repository(env_url(e), env_repositories[e["name"]]))}
             p = {**p, "environmentConfigId": env_ids[p["environmentConfigId"]]}
         p = {k: v for k, v in (p or {}).items() if k not in ("spec", "additionalRepositories")}
         if action == "update":
