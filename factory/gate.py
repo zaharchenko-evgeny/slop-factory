@@ -207,6 +207,8 @@ def tracker_of(config, **runners):
     """The gate tracker of `config`, from the plugin that provides `tracker.adapter` (ADR-0026): github-issues from
     the github plugin, youtrack from the youtrack plugin (its tickets in YouTrack, its pull requests on the vcs).
     `runners` are passed to `from_config` (the local poll's `gh`, tests)."""
+    if config.get("ticket_places") and not runners:  # ADR-0027: each place's tickets on its own tracker (#1259)
+        return systems(config)[0]
     t = config.get("tracker")
     name = (t.get("adapter") if isinstance(t, dict) else None) or "github-issues"
     tracker_cls = plugins.registry(config).impl("tracker", name)
@@ -280,8 +282,13 @@ def place_systems(config, key, **runners):
     by = {"/".join(r["url"].rstrip("/").split("/")[-2:]).lower(): r for r in config.get("repositories") or []}
     repos = [{**by[n.lower()], "role": "primary" if i == 0 else "project"} for i, n in enumerate(place["repositories"])
              if n.lower() in by]
+    tracker_block = scopes.merged(config, place["tracker"])
+    where = lambda b: (scopes.adapter(b), b.get("url"), b.get("project"))  # noqa: E731  (one tracker, another scope)
+    if same := {p["repository"]: p["tracker"]["scope"] for p in config["ticket_places"]
+                if p["tracker"].get("scope") and where(scopes.merged(config, p["tracker"])) == where(tracker_block)}:
+        tracker_block = {**tracker_block, "repository_scopes": same}  # #1259: a child takes its repository's scope
     c = {**{k: v for k, v in config.items() if k not in ("vcs", "ticket_places")},
-         "tracker": scopes.merged(config, place["tracker"]), "repositories": repos,
+         "tracker": tracker_block, "repositories": repos,
          "code_host": {**(place.get("vcs") or {}), "repository": place["repository"]}}
     block = c["tracker"]
     tracker_cls = plugins.registry(config).impl("tracker", scopes.adapter(block))

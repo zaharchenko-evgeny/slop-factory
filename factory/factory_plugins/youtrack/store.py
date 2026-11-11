@@ -98,7 +98,7 @@ class YouTrackTicketStore:
 
     def __init__(self, run, state_field=None, done_state="Done", project=None, bots=(), writers=(), assignee_field="Assignee",
                  repository_field=None, repo_stages=(), repositories=(), scope=None, projects=None, full_names=None,
-                 state_mirror=None, state_mirror_field="State"):
+                 state_mirror=None, state_mirror_field="State", repository_scopes=None):
         self.run, self.state_field, self.done_state, self.project = run, state_field, done_state, project
         self.scope = scope
         self.bots, self.writers, self.assignee_field = set(bots), set(writers), assignee_field
@@ -108,6 +108,8 @@ class YouTrackTicketStore:
         self.full_names = {k.lower(): v for k, v in (full_names or {}).items()}
         # #1260: {stage: value} the gate also writes to `state_mirror_field` (State) beside the stage tag
         self.state_mirror, self.state_mirror_field = dict(state_mirror or {}), state_mirror_field
+        # owner/repo -> its scope on this tracker (#1259): a child named for that repository is created in it
+        self.repository_scopes = dict(repository_scopes or {})
 
     @classmethod
     def from_config(cls, tracker, run=None, **kw):
@@ -115,7 +117,8 @@ class YouTrackTicketStore:
         run = run or urllib_runner(tracker["url"], os.environ[tracker.get("token_env", "YOUTRACK_TOKEN")])
         return cls(run, done_state=tracker.get("done_state", "Done"), project=tracker.get("project"),
                    repository_field=tracker.get("repository_field"), scope=tracker.get("scope"), projects=tracker.get("projects"),
-                   state_mirror=tracker.get("state_mirror"), state_mirror_field=tracker.get("state_mirror_field", "State"), **kw)
+                   state_mirror=tracker.get("state_mirror"), state_mirror_field=tracker.get("state_mirror_field", "State"),
+                   repository_scopes=tracker.get("repository_scopes"), **kw)
 
     # --- reads
     def _issue(self, n):
@@ -386,13 +389,20 @@ class YouTrackTicketStore:
     def _command(self, n, query):
         self.run("POST", f"/api/issues/{n}/execute", {"query": query})
 
-    def _create(self, title, body, tags=(), repo=None):
+    def scope_of(self, repo):
+        """The scope a ticket for repository `repo` (a name or owner/repo) gets: that repository's
+        (`repository_scopes`), else this store's own."""
+        want = str(repo or "").lower()
+        return next((s for full, s in self.repository_scopes.items()
+                     if want and want in (full.lower(), full.lower().rsplit("/", 1)[-1])), self.scope)
+
+    def _create(self, title, body, tags=(), repo=None, scope=None):
         issue = self.run("POST", "/api/issues?fields=idReadable", {
             "summary": title, "description": body, **({"project": {"shortName": self.project}} if self.project else {})})
         self.edit_attrs(issue["idReadable"], tags)
-        if self.scope:  # a ticket the factory creates stays in its environment
-            self.set_field(issue["idReadable"], self.scope["field"], self.scope["value"],
-                           self.scope.get("type", "SingleEnumIssueCustomField"))
+        scope = scope or self.scope
+        if scope:  # a ticket the factory creates stays in its environment, or goes to its repository's
+            self.set_field(issue["idReadable"], scope["field"], scope["value"], scope.get("type", "SingleEnumIssueCustomField"))
         if repo:
             self.set_field(issue["idReadable"], self.repository_field, repo)
         return issue["idReadable"]
@@ -409,8 +419,10 @@ class YouTrackTicketStore:
             c = c if isinstance(c, dict) else {"title": str(c), "body": ""}
             repo = c.get("repo") if self.repository_field else None
             child = subs.get(c["title"])
+            scope = self.scope_of(c.get("repo")) if c.get("repo") else None
             if child is None:
-                child = self._create(c["title"], f"{c.get('body', '')}\n\n{CHILD_MARK.format(n=n)}", **({"repo": repo} if repo else {}))
+                child = self._create(c["title"], f"{c.get('body', '')}\n\n{CHILD_MARK.format(n=n)}",
+                                     **({"repo": repo} if repo else {}), **({"scope": scope} if scope else {}))
                 self._command(child, f"subtask of {n}")
                 wrote = True
             elif repo:
