@@ -1521,7 +1521,7 @@ class SweepTest(unittest.TestCase):
         gh = FakeGh(reviews=[review(BOT, M)])
         res, _ = self.run_sweep(gh)
         self.assertEqual([(r["node"], r["outcome"]) for r in res], [("join", "approved")])
-        self.assertEqual(sorted(gh.labels), ["factory:approved", "risk:low"])
+        self.assertEqual(sorted(gh.labels), ["factory:approved", "factory:project-review", "risk:low"])
         with self.assertRaises(gate.Bad):
             gate.apply("sweep", "conflict", {"ticket": 7}, tr(gh), nodes.load())
 
