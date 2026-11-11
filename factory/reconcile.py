@@ -631,9 +631,8 @@ def main(argv, run=None):
     if "--dry-run" in argv or any(a.startswith("memory:") for a in argv):
         return reconcile_main(argv)
     import doctor
-    from factory_plugins.github import tracker as github_tracker
-    run = run or github_tracker.gh
     settings = config_mod.load()
+    run = run or doctor.issue_run(settings)
     repo = settings["tracker"].get("repository") or config_mod.vcs(settings)["repository"]
     try:
         code = reconcile_main(argv)
@@ -648,8 +647,7 @@ def main(argv, run=None):
 def report_systemic(config, systemic, run=None):
     """Open `Doctor: runs end without an outcome` (no new comment while it is open), or close it when no run missed."""
     import doctor
-    from factory_plugins.github import tracker as github_tracker
-    run = run or github_tracker.gh
+    run = run or doctor.issue_run(config)
     repo = config["tracker"].get("repository") or config_mod.vcs(config)["repository"]
     probe = "runs-without-outcome"
     if not systemic:
@@ -662,6 +660,17 @@ def report_systemic(config, systemic, run=None):
         doctor.file_tickets(repo, [{"probe": probe, "result": "fail", "detail": f"{len(systemic)} runs ended twice "
                                     f"without an outcome in one reconcile: {listed}. Reconcile re-fired them instead of "
                                     f"blocking each; check the install or the environment first (#973)."}], run, run_id=RUN)
+
+
+def ticket_passes(config, dry_run, progress, out):
+    """The plugins' passes over the tickets (youtrack: the State rules, #1260), for every team: their results go in
+    `out`; True when one failed."""
+    import plugins
+    failed = False
+    for passes in plugins.registry(config).hook("reconcile.ticket_passes"):
+        for name, (got, pass_failed) in passes(config, dry_run, progress).items():
+            out[name], failed = got, failed or pass_failed
+    return failed
 
 
 def reconcile_main(argv):
@@ -684,13 +693,18 @@ def reconcile_main(argv):
                                       dry_run=dry_run, progress=progress)
         if not dry_run and not spec:
             report_systemic(config, [r for r in results if r.get("systemic")])
-        print(json.dumps({"dry_run": dry_run, "reconcile": results}))
-        return 1 if any("error" in r for r in results) else 0
+        out, failed = {"dry_run": dry_run, "reconcile": results}, any("error" in r for r in results)
+        if not spec:
+            failed = ticket_passes(config, dry_run, progress, out) or failed
+        print(json.dumps(out))
+        return 1 if failed else 0
     progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
     results, failed = reconcile(tracker, nodes_mod.load(), list(config["tracker"]["stages"]), config["limits"],
                                 stage_kinds=config["tracker"].get("stage_kinds", {}),
                                 dry_run=dry_run, progress=progress)
     out = {"dry_run": dry_run, "reconcile": results}
+    if not spec:
+        failed = ticket_passes(config, dry_run, progress, out) or failed
     if not spec:  # the plugins' scheduled passes (github: the CI label sync); each reports its own errors
         import plugins
         for passes in plugins.registry(config).hook("reconcile.passes"):

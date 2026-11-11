@@ -112,8 +112,15 @@ def repository_names(c):
     return {r["name"]: "/".join(r["url"].rstrip("/").split("/")[-2:]) for r in repos} or None
 
 
+def default_place():
+    """Hook `gate.default_place`: the key of the place of the config's own GitHub tracker."""
+    return "github"
+
+
 class GitHubCodeHost:
     """The GitHub repository that hosts the pull requests; `code_host.repository`, else the tracker's."""
+
+    live_pr_ticket = True  # a PR's ticket comes from a live lookup, never from its branch name or title
 
     def __init__(self, repo, run=gh, ticket_repos=None):
         self.repo, self.run = repo, run
@@ -611,7 +618,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def main_green(self):
         """CI at the current main head is green (`head_ci` of `head_checks`)."""
-        return head_ci(head_checks(self.run, self.repo, self._api("commits/main")["sha"]))[0] == "green"
+        return head_ci(head_checks(self.run, self.repo, self._api("commits/HEAD")["sha"]))[0] == "green"  # the default branch
 
     def sweep_tickets(self, stages, open_only=False, now=None):
         """Issue numbers whose stage label is one of `stages`: the open ones and, unless `open_only`, those closed in the
@@ -1231,6 +1238,13 @@ class GitHubGateTracker(DescriptorPort):
     def _fx_review(self, e, ctx):
         return self._review(e["ticket"], e)
 
+    def _fx_ready_for_review(self, e, ctx):  # #1261: a draft PR becomes ready, which starts the project's review
+        pr = self._pr(e["ticket"])
+        if pr is None or pr.get("state") != "open" or not pr.get("draft"):
+            return False
+        self.run(["pr", "ready", str(pr["number"]), "-R", self.pr_repo])
+        return True
+
     def _fx_request_reviewers(self, e, ctx):
         """`request-reviewers: changes` asks again who requested changes; logins (static, or the outcome's
         `{field: <name>}`) are asked once each."""
@@ -1311,9 +1325,17 @@ class GitHubGateTracker(DescriptorPort):
         Effect("pr-notes", "pr", _fx_pr_notes), Effect("pr-notes-sync", "pr", _fx_pr_notes),
         Effect("react", "ticket", _fx_react), Effect("react", "pr", _fx_react),
         Effect("review", "pr", _fx_review, remote=True), Effect("request-reviewers", "pr", _fx_request_reviewers),
+        Effect("ready-for-review", "pr", _fx_ready_for_review, remote=True),
         Effect("create-issues", "ticket", _fx_create_issues), Effect("park-behind-main-red", "ticket", _fx_park),
         Effect("merge", "pr", _fx_merge, remote=True), Effect("update-branch", "pr", _fx_update_branch, remote=True),
     )
+
+    def close_prs(self, n, comment):
+        """Close every open PR of ticket `n` with `comment` (a person stopped the work, #1260); True when one closed."""
+        prs = [pr for pr in self._prs(n, open_only=True) if pr.get("state", "open") == "open"]
+        for pr in prs:
+            self.run(["pr", "close", str(pr["number"]), "-R", self.pr_repo, "--comment", comment])
+        return bool(prs)
 
     def _may_write(self, name):
         return self.writable is None or name in self.writable

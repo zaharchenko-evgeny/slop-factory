@@ -7,6 +7,7 @@ names the per-repository stage tags a trigger listens to, `deploy.trigger_filter
 YouTrack project linked to it (#981), `deploy.errors` checks `tracker.projects`, and `deploy.tracker` returns the
 `Provisioner` that the Air deploy (`factory_plugins.air.deploy.deploy`) drives between its label steps.
 """
+import config as config_mod
 import definition
 import deploy as core
 import scopes
@@ -15,6 +16,43 @@ from factory_plugins.youtrack.store import MissingField, YouTrackTicketStore, re
 
 def youtrack(config):
     return (config.get("tracker") or {}).get("adapter") == "youtrack"
+
+
+def identity(block):
+    """Hook `tracker.identity`: (adapter, url, project) of a YouTrack block; None for another adapter."""
+    if scopes.adapter(block) == "youtrack":
+        return "youtrack", str(block.get("url") or "").rstrip("/"), block.get("project")
+
+
+def owns_id(block, ticket):
+    """Hook `tracker.owns_id`: whether `ticket` is `<project>-<n>` of a YouTrack block; None for another adapter."""
+    if scopes.adapter(block) == "youtrack":
+        return isinstance(ticket, str) and (not block.get("project") or ticket.startswith(f"{block['project']}-"))
+
+
+def block_errors(block):
+    """Hook `tracker.block_errors`: the errors of an environment's merged YouTrack block; None for another adapter."""
+    if scopes.adapter(block) == "youtrack":
+        return [] if block.get("url") and block.get("project") else \
+            ["youtrack needs `url` and `project` (here or in the top-level tracker)"]
+
+
+def tracker_errors(descriptor, t, where):
+    """Hook `config.tracker_errors`: a youtrack tracker names its url and project and needs `vcs.repository` (alias
+    `code_host.repository`) for the pull requests; None for another adapter."""
+    if t.get("adapter") == "youtrack":
+        need = [f"{where}.tracker.{k}: required with adapter youtrack" for k in ("url", "project") if k not in t]
+        if not config_mod.vcs(descriptor).get("repository"):
+            need.append(f"{where}.code_host.repository: required with tracker.adapter youtrack")
+        return need
+
+
+def scope_filter(trig, block):
+    """Hook `deploy.scope_filter`: a YouTrack event trigger also matches the scope field's value."""
+    scope = block.get("scope") or {}
+    if trig.get("source") == "youtrack" and scope.get("field"):
+        return {**trig, "filters": {**trig.get("filters", {}), scope["field"]: scope["value"]}}
+    return trig
 
 
 def repo_tags(config: dict) -> list[str]:

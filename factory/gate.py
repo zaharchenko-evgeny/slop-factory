@@ -116,7 +116,7 @@ def spec_nodes(path):
         spec = json.loads(Path(path).read_text())
         out = {}
         for s in [spec, *(spec.get("runs") or {}).values()]:
-            node = {k: s[k] for k in ("role", "when", "outcomes", "else_tier", "tiers", "routine", *AGENT_KEYS) if k in s}
+            node = {k: s[k] for k in ("role", "when", "outcomes", "else_tier", "tiers", "routine", "output", *AGENT_KEYS) if k in s}
             node.update({"tier": s["tier"]} if s.get("tier") else {}, **({"focuses": [s["focus"]]} if s.get("focus") else {}))
             out[s["node"]] = node
     except (OSError, ValueError, KeyError, AttributeError, TypeError) as e:
@@ -183,7 +183,7 @@ def from_trigger(d, code_host=None):
         else "pull_request" if is_pr else "issues"  # a comment on a PR arrives as an issue event of its number
     if is_pr:
         ticket = pr_ticket(code_host, number, d.get("repository")) if code_host else None
-        if ticket is None and not is_github(code_host):  # a live lookup is the only source for GitHub
+        if ticket is None and not live_pr_ticket(code_host):  # a live lookup is the only source for GitHub
             ticket = ticket_from_ref(((pr or {}).get("head") or {}).get("ref")) or ticket_from_ref((pr or {}).get("title"))
         if ticket is None:
             raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
@@ -195,18 +195,20 @@ def from_trigger(d, code_host=None):
     return {"id": f"{name}:{ticket}:{action}", "ticket": ticket, "event_name": name, "action": action}
 
 
-def is_github(code_host):
-    """Whether `code_host` is the github plugin's vcs; a plugin module never imported built none."""
+def live_pr_ticket(code_host):
+    """Whether the vcs of `code_host` only looks a PR's ticket up live (its `live_pr_ticket` flag, set by the github
+    plugin's vcs)."""
     if isinstance(code_host, scopes.ScopedTracker):  # environments with their own trackers: the vcs a PR is looked up on
         code_host = code_host.vcs_for()[1]
-    module = sys.modules.get("factory_plugins.github.gate")
-    return module is not None and isinstance(code_host, module.GitHubCodeHost)
+    return bool(getattr(code_host, "live_pr_ticket", False))
 
 
 def tracker_of(config, **runners):
     """The gate tracker of `config`, from the plugin that provides `tracker.adapter` (ADR-0026): github-issues from
     the github plugin, youtrack from the youtrack plugin (its tickets in YouTrack, its pull requests on the vcs).
     `runners` are passed to `from_config` (the local poll's `gh`, tests)."""
+    if config.get("ticket_places") and not runners:  # ADR-0027: each place's tickets on its own tracker (#1259)
+        return systems(config)[0]
     t = config.get("tracker")
     name = (t.get("adapter") if isinstance(t, dict) else None) or "github-issues"
     tracker_cls = plugins.registry(config).impl("tracker", name)
@@ -257,12 +259,17 @@ def env_systems(config, env, **runners):
     return beside(tracker, vcs_cls.from_config(descriptor=c, **({"run": tracker.run} if hasattr(tracker, "run") else {})))
 
 
+def default_place(config):
+    """The key of the place of the config's own tracker (hook `gate.default_place`), else None."""
+    return next((key for hook in plugins.registry(config).hook("gate.default_place") if (key := hook())), None)
+
+
 def place_keys(config):
-    """({key: tracker block}, {key: [owner/repo, ...]}) of the ADR-0027 ticket places: `github` for the GitHub
-    tracker's repositories (when it has any), then `place:<owner/repo>` per `ticket_places` entry."""
+    """({key: tracker block}, {key: [owner/repo, ...]}) of the ADR-0027 ticket places: the default place for the
+    config's tracker's repositories (when it has any), then `place:<owner/repo>` per `ticket_places` entry."""
     t, envs, repos = config.get("tracker") or {}, {}, {}
-    if t.get("repositories"):
-        envs["github"], repos["github"] = t, list(t["repositories"])
+    if t.get("repositories") and (key := default_place(config)):
+        envs[key], repos[key] = t, list(t["repositories"])
     for p in config["ticket_places"]:
         key = f"place:{p['repository']}"
         envs[key], repos[key] = scopes.merged(config, p["tracker"]), p["repositories"]
@@ -272,7 +279,7 @@ def place_keys(config):
 def place_systems(config, key, **runners):
     """The (tracker, vcs) of ticket place `key` (`place_keys`): the GitHub tracker of the config, or a place's own
     tracker on its repository's vcs."""
-    if key == "github":
+    if key == default_place(config):
         tracker = tracker_of({k: v for k, v in config.items() if k != "ticket_places"}, **runners)
         vcs_cls = vcs_class(config, config_mod.vcs(config))
         return beside(tracker, vcs_cls.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {})))
@@ -280,8 +287,13 @@ def place_systems(config, key, **runners):
     by = {"/".join(r["url"].rstrip("/").split("/")[-2:]).lower(): r for r in config.get("repositories") or []}
     repos = [{**by[n.lower()], "role": "primary" if i == 0 else "project"} for i, n in enumerate(place["repositories"])
              if n.lower() in by]
+    tracker_block = scopes.merged(config, place["tracker"])
+    where = lambda b: (scopes.adapter(b), b.get("url"), b.get("project"))  # noqa: E731  (one tracker, another scope)
+    if same := {p["repository"]: p["tracker"]["scope"] for p in config["ticket_places"]
+                if p["tracker"].get("scope") and where(scopes.merged(config, p["tracker"])) == where(tracker_block)}:
+        tracker_block = {**tracker_block, "repository_scopes": same}  # #1259: a child takes its repository's scope
     c = {**{k: v for k, v in config.items() if k not in ("vcs", "ticket_places")},
-         "tracker": scopes.merged(config, place["tracker"]), "repositories": repos,
+         "tracker": tracker_block, "repositories": repos,
          "code_host": {**(place.get("vcs") or {}), "repository": place["repository"]}}
     block = c["tracker"]
     tracker_cls = plugins.registry(config).impl("tracker", scopes.adapter(block))
@@ -672,6 +684,21 @@ def outside_node_repository(ticket, tracker_repo):
     return None
 
 
+def draft_pr_commands(node, ticket, branch):
+    """{outcome: command} for an `as-instructed` node, which opens its PR itself (#1261): per outcome that labels
+    the PR, the `gh pr create --draft` that opens the branch's PR with those labels, so the factory review starts
+    first and the project's own review waits for `ready-for-review`."""
+    if node.get("output") != "as-instructed" or not branch:
+        return {}
+    out = {}
+    for o, spec in (node.get("outcomes") or {}).items():
+        labels = [e["label"] for e in (spec or {}).get("effects") or [] if "label" in e and e.get("on") == "pr"]
+        if labels:
+            out[o] = (f"gh pr create --draft --head {branch} " + " ".join(f"--label {x}" for x in labels)
+                      + f' --title "#{ticket} <subject>" --body-file .factory/pr-body.md')
+    return out
+
+
 def check(name, event, tracker, nodes, config, code_host=None):
     node = load_node(name, nodes)
     if "id" not in event:
@@ -713,6 +740,8 @@ def check(name, event, tracker, nodes, config, code_host=None):
         **extra,
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and fixing),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
+        # an `as-instructed` node with no PR yet opens it as a draft (#1261), the body written with the `pr` skill
+        **({"pr_create": cmds} if not facts.get("pr") and (cmds := draft_pr_commands(node, event["ticket"], branch)) else {}),
         # one entry per repository of a ticket that changes several (ADR-0017), all on the ticket's one branch
         "checkouts": [{"repo": p["repo"], "branch": p["branch"] or branch} for p in facts.get("prs") or []],
         **{k: node[k] for k in AGENT_KEYS if k in node},  # who the role is and whom it may address (ADR-0020)
@@ -815,8 +844,15 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         out = node["outcomes"][out["else"]]  # ADR-0021: e.g. automatic merge refused for a high-risk ticket
     if out.get("ci") and tracker.facts(ticket)["ci"] not in out["ci"] and out.get("else") in node["outcomes"]:
         out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
-        if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
-            payload = {**payload, "tier": node.get("else_tier") or nodes["nodes"]["fix"]["tiers"][0]}
+        fix_tiers = ((nodes.get("nodes") or {}).get("fix") or {}).get("tiers") or []
+        tier = node.get("else_tier") or (fix_tiers[0] if fix_tiers else None)
+        if "tier" not in payload and tier:  # the fix label needs the cheapest fix tier; a run loads only its own
+            payload = {**payload, "tier": tier}  # node (#1288), and a definition team's fix label names no tier
+    if node.get("output") == "as-instructed" and not tracker.facts(ticket).get("pr") and \
+            any("label" in e and e.get("on") == "pr" for e in out.get("effects") or []):
+        cmd = draft_pr_commands({**node, "outcomes": {outcome: out}}, ticket, branch_of({**tracker.facts(ticket), "ticket": ticket},
+                                                                                      config_mod.load())).get(outcome)
+        raise Bad(f"outcome {outcome}: no PR for the ticket's branch: open it as a draft first" + (f": `{cmd}`" if cmd else ""))
     if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
         payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
@@ -1353,8 +1389,9 @@ def main(argv):
     path = ""
     code_host = None
     try:
-        kind, _, path = (a.tracker or "github").partition(":")
-        if kind == "github" and not path:
+        live = default_place(config_mod.load())  # the CLI word of the config's own tracker
+        kind, _, path = (a.tracker or live or "").partition(":")
+        if kind == live and live and not path:
             tracker, code_host = systems(config_mod.load())
         elif kind == "memory" and path:
             try:
@@ -1363,7 +1400,7 @@ def main(argv):
             except (OSError, ValueError, TypeError) as e:
                 raise Bad(f"malformed --tracker file: {e}")
         else:
-            raise Bad("--tracker is github or memory:FILE")
+            raise Bad(f"--tracker is {live or 'a tracker'} or memory:FILE")
         nodes = spec_nodes(a.spec) if a.spec else nodes_mod.load(a.nodes)
         config = config_mod.load()
         if a.cmd == "ci":

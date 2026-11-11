@@ -23,7 +23,7 @@ import gate  # noqa: E402
 import nodes  # noqa: E402
 
 # step -> gh calls that reached the runner (after CountedRun's memo), measured at 5b8d9a3 + #1065 + #1066;
-# #1207: CI also reads the head's commit statuses, one more call per facts read
+# #1207: CI also reads the head's commit statuses, one more call per facts read; #1261: the join approval adds ready-for-review and the project-review label (sweep in-review 48 -> 51)
 BASELINE = {
     "facts in-review": 15,
     "facts approved (behind)": 14,
@@ -46,7 +46,7 @@ BASELINE = {
     "apply merge two repositories": 17,
     "outcome reviewer approve": 28,
     "outcome fix done": 21,
-    "sweep in-review": 48,
+    "sweep in-review": 51,
     "sweep approved dry": 17,
 }
 

@@ -64,6 +64,15 @@ class GateTest(unittest.TestCase):
         status, _ = gate.check("review-high", {"id": "e1", "ticket": "7"}, pending, graph, CONFIG)
         self.assertEqual(status, gate.GO)
 
+    def test_approval_on_red_ci_takes_else_without_a_fix_node(self):
+        """#1288: `factory end` loads only its own node, so there is no `fix` node to take a tier from."""
+        graph = {"nodes": {"review-high": {"when": {}, "outcomes": {
+            "approve": {"ci": ["green"], "else": "changes", "effects": [{"stage": "approved"}]},
+            "changes": {"effects": [{"label": "factory:fix", "on": "pr"}, {"stage": "changes-requested"}]}}}}}
+        tr = MemorySystem({"7": {"stage": "in-review", "ci": "red", "pr": 5, "head": "abc"}})
+        gate.apply("review-high", "approve", {"ticket": "7"}, tr, graph)
+        self.assertEqual(tr.get_stage(tr.tickets["7"]), "changes-requested")
+
     def test_partial_outcome_failure_reports_effects_that_landed(self):
         graph = {"nodes": {"review": {"when": {}, "outcomes": {"changes": {"effects": [
             {"review": "request-changes-at-head"}, {"unlabel": "factory:review-x", "on": "pr"}]}}}}}

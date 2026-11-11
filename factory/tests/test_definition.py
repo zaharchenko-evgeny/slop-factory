@@ -17,6 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+import config  # noqa: E402
 import definition  # noqa: E402
 
 FIXTURE = ROOT / "tests/fixtures/v2"
@@ -313,6 +314,17 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(self.errors(), [])
         self.edit("workflow.yaml", lambda w: w["nodes"]["automerge"]["settings"].pop("external_review_label"))
         self.assertError("external-review: nodes.automerge")
+
+    def test_state_mirror_and_rules_compile_against_the_schema(self):  # #1287: #1260's keys in the compiled tracker
+        keys = {"state_mirror": {"ready": "Open", "in-dev": "In progress"}, "state_mirror_field": "State",
+                "state_rules": {"Obsolete": "stop", "To be discussed": "blocked"}}
+        self.edit("factory.yaml", lambda f: f["tracker"].update(keys))
+        compiled, _ = definition.to_project(definition.load(self.root))
+        self.assertEqual({k: compiled["tracker"].get(k) for k in keys}, keys)
+        schema = json.loads((Path(__file__).resolve().parents[2] / "engine/project.schema.json").read_text())
+        errs = []
+        config._check(schema, compiled, "factory.project.yaml", errs)
+        self.assertEqual([e for e in errs if "state_" in e], [])
 
     def test_assignment_field_form_validates(self):
         effects = [{"assign": {"field": "assignee"}, "on": "pr"}]
@@ -1048,6 +1060,83 @@ class SlopBugPathTest(unittest.TestCase):
     def test_cannot_reproduce_asks_the_reporter(self):
         t = self.run_flow("cannot-reproduce", "[factory] Not reproduced. 1. Which version?")
         self.assertEqual(t.facts("7")["stage"], "needs-answers")
+
+
+class YouTrackRepositoryScopesTest(unittest.TestCase):
+    """#1259: one YouTrack project, one environment per repository, each repository narrowed by its Subsystem."""
+    TEAM = "zaharchenko-evgeny/slop-eval-factory"
+    SCOPES = {"JetBrains/jbeval": "JBeval", "JetBrains/harbor-infra": "Harbor"}
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.root = self.tmp / "team"
+        shutil.copytree(FIXTURE, self.root)
+        f = yaml.safe_load((self.root / "factory.yaml").read_text())
+        w = yaml.safe_load((self.root / "workflow.yaml").read_text())
+        f["tracker"] = {"adapter": "youtrack", "url": "https://yt.example", "project": "LME", "label_prefix": "factory:"}
+        base = {k: v for k, v in f["environments"]["engine"].items() if k != "repositories"}
+        scoped = lambda v: {"tracker": {"scope": {"field": "Subsystem", "value": v}}}  # noqa: E731
+        f["environments"] = {
+            "jbeval": {**base, "ci": {"workflow": "ci"},
+                       "repositories": [{"repo": "JetBrains/jbeval", "write": True, **scoped("JBeval")}]},
+            "harbor": {**base, "ci": {"workflow": "teamcity"}, "repositories": [
+                {"repo": "JetBrains/harbor-infra", "write": True, "default_branch": "master", **scoped("Harbor")}]},
+            "knowledge": {**base, "repositories": [{"repo": self.TEAM, "write": True, "tracker": "none"}]},
+            "team": {**base, "repositories": [{"repo": self.TEAM, "write": True, "tracker": "none"}]}}
+        w["settings"]["environment"] = "jbeval"
+        for name, n in w["nodes"].items():
+            if n.pop("environment", "engine") == "engine" and name not in ("human", "accept-knowledge"):
+                n["environments"] = ["jbeval", "harbor"]
+            elif name not in ("human", "accept-knowledge"):
+                n["environment"] = "knowledge" if name in ("retro", "knowledge-review") else "team"
+        w["nodes"]["fix"]["triggers"].append({"ci": "failed"})
+        (self.root / "factory.yaml").write_text(yaml.safe_dump(f, sort_keys=False))
+        (self.root / "workflow.yaml").write_text(yaml.safe_dump(w, sort_keys=False))
+        import config
+        self.previous = config._team
+        config.set_team(self.root)
+        self.config = config.load()
+
+    def tearDown(self):
+        import config
+        config.set_team(self.previous)
+        shutil.rmtree(self.tmp)
+
+    def plan(self):
+        import nodes
+        from factory_plugins.air import deploy as air
+        return {a["name"]: a for a in air.plan_air(nodes.load(), self.config)["automations"]}
+
+    def test_validates_without_a_code_host_repository(self):
+        self.assertEqual(definition.errors(definition.load(self.root)), [])
+        self.assertNotIn("code_host", self.config)
+        self.assertEqual([(p["repository"], p["tracker"]["scope"]["value"]) for p in self.config["ticket_places"]],
+                         list(self.SCOPES.items()))
+
+    def test_deploy_plans_one_copy_per_repository_with_its_scope_filter(self):
+        plan = self.plan()
+        for full, value in self.SCOPES.items():
+            intake = plan[f"[Slop factory] intake {full.split('/')[1]}"]
+            self.assertEqual(intake["repository"]["fullName"], full)
+            self.assertEqual(intake["triggers"][0]["filters"],
+                             {"tagAdded": "factory:triage", "projectShortName": "LME", "Subsystem": value})
+
+    def test_the_harbor_copies_merge_and_update_on_master_with_their_own_ci(self):
+        plan = self.plan()
+        for node in ("merge", "update"):
+            self.assertEqual(plan[f"[Slop factory] {node} harbor-infra"]["branch"], "master")
+            self.assertNotIn("branch", plan[f"[Slop factory] {node} jbeval"])  # Air's default: main
+        ci = {repo: [t["filters"] for t in plan[f"[Slop factory] fix {repo}"]["triggers"] if t["eventType"] == "workflow_run.failed"]
+              for repo in ("jbeval", "harbor-infra")}
+        self.assertEqual(ci, {"jbeval": [{"workflow_name": "ci"}], "harbor-infra": [{"workflow_name": "teamcity"}]})
+
+    def test_each_place_tracker_knows_the_other_repositories_scopes(self):
+        import gate
+        tracker, _ = gate.place_systems(self.config, "place:JetBrains/jbeval", yt_run=lambda *a, **k: [], run=lambda *a, **k: "")
+        store = tracker.tickets
+        self.assertEqual(store.scope, {"field": "Subsystem", "value": "JBeval"})
+        self.assertEqual(store.scope_of("harbor-infra"), {"field": "Subsystem", "value": "Harbor"})
+        self.assertEqual(type(gate.tracker_of(self.config)).__name__, "ScopedTracker")  # no code_host.repository needed
 
 
 class PlanTest(unittest.TestCase):

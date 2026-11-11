@@ -71,7 +71,8 @@ def definition_copies(defn: dict, name: str, n: dict, config: dict) -> list[dict
         shared = sum(1 for x in found if x["main"] == c["main"]) > 1
         suffix = (f" {c['main'].split('/')[-1]}" if len(found) > 1 else "") + (f" {c['env']}" if shared else "")
         contract = definition.contract(defn, "tracker", c["tracker"]) if c["tracker"] else None
-        out.append({"env": c["env"], "repo": repo_of(c["main"]), "suffix": suffix,
+        ci = ((defn["factory"].get("environments") or {}).get(c["env"]) or {}).get("ci") or {}
+        out.append({"env": c["env"], "repo": repo_of(c["main"]), "suffix": suffix, "ci": ci.get("workflow"),
                     "additional": [{"repository": core.repository(repo_of(o)), "branch": repo_of(o)["default_branch"]}
                                    for o in c["additional"]],
                     "output": n.get("output", "read-only") if c["write"] else "read-only",
@@ -138,6 +139,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     trig.append({"triggerType": "WEBHOOK"})
                 elif str(t) != "manual":
                     t = (copy_ or {}).get("event")(t) if (copy_ or {}).get("event") else t  # ADR-0027: the copy's tracker
+                    if str(t).startswith("workflow_run ") and (copy_ or {}).get("ci"):
+                        t = f"workflow_run {copy_['ci']}"  # #1259: the CI of the copy's own environment
                     trig.append(core.trigger(t, tier_arg, bot if aname.startswith(core.BOT_FILTERED) else None, focus,
                                              scope["name"] if scope else None, repo_tags))
                     if project:
@@ -175,6 +178,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     name, n, config, aname, focus, automation_repository, tier_arg or tier),
             }
             if copy_:
+                if copy_["repo"].get("default_branch", "main") != "main":  # Air checks out `main` unless told (#1259)
+                    automation["branch"] = copy_["repo"]["default_branch"]
                 if copy_["additional"]:
                     automation["additionalRepositories"] = copy_["additional"]
             elif automation_repository["fullName"] != core.repository(team)["fullName"]:
@@ -195,18 +200,21 @@ def plan_air(nodes: dict, config: dict) -> dict:
         d = envs_def[env]
         repo = variant or repos.get(d["repository"]) or primary
         own = definition.full_name(repo["url"])  # Air's GH_TOKEN writes it: a repository's `token` is for the others
+        variables = {**(d.get("variables") or {}), "FACTORY_ENV": env, "FACTORY_ENV_REPOSITORY": own,
+                     **({"FACTORY_NODE": node_name} if node_name else {})}
+        declared = [x for x in d.get("declared", []) if x["name"] not in variables]
         envs.append({
             "name": f"{prefix}{env}" + (f" {node_name}" if node_name else "") + (f" {variant['name']}" if variant else ""),
             "repository": repo["url"],
             "startup": d["startup"],
-            "variables": {**(d.get("variables") or {}), "FACTORY_ENV": env, "FACTORY_ENV_REPOSITORY": own,
-                          **({"FACTORY_NODE": node_name} if node_name else {})},
+            "variables": variables,
             "secrets": list(dict.fromkeys([*d.get("secrets", []),
                                            *(s for hook in registry.hook("deploy.secrets") for s in hook(env, config)),
                                            *([issues_token] if issues_token and project_names - {own.lower()} else []),
                                            *(t for r, t in ((config.get("environments") or {}).get(env) or {}).get("tokens", {}).items() if urls.get(r, r).lower() != own.lower())])),
             "domains": d.get("domains", []),
             "vm": d.get("vm", "default"),
+            **({"declared": declared} if declared else {}),
         })
     label_repos = list(dict.fromkeys(x for x in ((config.get("tracker") or {}).get("repository"),
                                                  core.repository(primary)["fullName"]) if x))
@@ -375,6 +383,7 @@ def environment_detail(x: dict) -> dict:
     if "instanceTypeKey" in x:
         x["vm"] = x.pop("instanceTypeKey") or "default"
     if isinstance(x.get("variables"), list):
+        x["variable_keys"] = [v["key"] for v in x["variables"]]  # secret ones too: deploy never overwrites one
         x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
     if "personalSecrets" in x:
         x["secrets"] = [s.get("key") or s["name"] for s in x.pop("personalSecrets")]  # Air lists them by `key`
@@ -521,11 +530,40 @@ def missing_secrets(plan: dict, envs: list[dict]) -> list[str]:
             for s in e.get("secrets") or [] if s not in have.get(e["name"], set())]
 
 
+def missing_variables(plan: dict, envs: list[dict]) -> list[tuple[dict, dict]]:
+    """(planned environment, declared variable) for each declared variable that the environment in Air lacks, by name
+    (secret ones too); every one when the environment does not exist yet. One that exists keeps its value."""
+    have = {x["name"]: x for x in envs}
+    out = []
+    for e in plan["environments"]:
+        live = have.get(e["name"]) or {}
+        keys = set(live.get("variable_keys") or live.get("variables") or {})
+        out += [(e, v) for v in e.get("declared") or [] if v["name"] not in keys]
+    return out
+
+
+def create_missing_variables(plan: dict, envs: list[dict], cloud: Mcp, dry_run: bool = False) -> None:
+    """List (`--dry-run`) or create each declared variable that its environment lacks, with an empty value
+    (`isSecret` for a secret one). A variable that exists is never listed, so a value a person set stays."""
+    ids = {x["name"]: x["id"] for x in envs}
+    by_env = {}
+    for e, v in missing_variables(plan, envs):
+        by_env.setdefault(e["name"], []).append(v)
+    for name, declared in by_env.items():
+        for v in declared:
+            print(f"create variable {v['name']} (empty{', secret' if v['secret'] else ''}) in {name[len(plan['prefix']):]}")
+        if not dry_run and name in ids:
+            cloud.call("edit_environment", {"id": ids[name], "variables": [
+                {"key": v["name"], "value": "", **({"isSecret": True} if v["secret"] else {}),
+                 **({"description": v["description"]} if v.get("description") else {})} for v in declared]})
+
+
 def extra_variables(plan: dict, envs: list[dict]) -> list[str]:
     """`remove by hand in Air: <env> variable <NAME>` for each variable in Air that the plan does not have."""
     have = {x["name"]: x.get("variables") or {} for x in envs}
     return [f"remove by hand in Air: {e['name']} variable {k}" for e in plan["environments"]
-            for k in have.get(e["name"], {}) if k not in (e.get("variables") or {})]
+            for k in have.get(e["name"], {})
+            if k not in (e.get("variables") or {}) and k not in {x["name"] for x in e.get("declared") or []}]
 
 
 def repository_urls(plan: dict) -> list[str]:
@@ -556,6 +594,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print(line)
     for line in extra_variables(plan, state[1]):
         print(line)
+    if mode == "--dry-run":
+        create_missing_variables(plan, state[1], cloud, dry_run=True)
     label_changes = core.reconcile_labels(plan, run, config)
     # the tracker's own setup beside the labels (youtrack: tags and field values), from the `deploy.tracker` hooks;
     # without a config, every plugin's hook sets up what the plan names
@@ -597,6 +637,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:
             return 1
+    create_missing_variables(plan, state[1], cloud)  # after the environments exist: their ids are in `state`
     for x in state[0]:  # a person registers each webhook with its sender; also on an unchanged plan
         for w in x["webhooks"]:
             print(f"webhook {x['name']}: trigger {w['id']}" + (f" {w['url']}" if w["url"] else ""))

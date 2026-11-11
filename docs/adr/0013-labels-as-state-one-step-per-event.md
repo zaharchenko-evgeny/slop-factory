@@ -1,5 +1,7 @@
 # ADR-0013: Tracker labels as state, one step per event
 
+Amended by [ADR-0028](0028-state-stores-are-systems.md): ticket attributes, not only labels, are the state.
+
 Status: accepted when #100 merges. Superseded in mechanism by [ADR-0014](0014-node-model.md); the states and outcomes stay. Supersedes ADR-0003 and the enforcement part of ADR-0011.
 
 Context: the Air spike (#4) and the prototypes on #100 showed four things.

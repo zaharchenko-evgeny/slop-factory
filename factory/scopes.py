@@ -31,6 +31,16 @@ def adapter(block):
     return (block or {}).get("adapter") or "github-issues"
 
 
+def first(block, hook, *args):
+    """The first answer other than None of the plugins' hook `hook` for tracker `block` (the plugin of its adapter
+    answers; the others return None); None when no selected plugin answers."""
+    for fn in plugins.registry({"tracker": block}).hook(hook):
+        found = fn(block, *args)
+        if found is not None:
+            return found
+    return None
+
+
 def merged(config, block):
     """Environment tracker `block` over the top-level tracker: every unset key when the adapters match, else only the
     factory's own keys."""
@@ -48,9 +58,8 @@ def project_envs(config):
 
 def identity(block):
     """The system a tracker block names: (adapter, repository) or (adapter, url, project)."""
-    if adapter(block) == "youtrack":
-        return "youtrack", str(block.get("url") or "").rstrip("/"), block.get("project")
-    return adapter(block), str(block.get("repository") or "").lower()
+    found = first(block, "tracker.identity")
+    return found if found is not None else (adapter(block), str(block.get("repository") or "").lower())
 
 
 def matches(scope, attrs=(), fields=None):
@@ -66,8 +75,9 @@ def matches(scope, attrs=(), fields=None):
 def owns_id(block, ticket):
     """Whether `ticket` can be a ticket of this tracker: `<project>-<n>` on YouTrack; on GitHub a number, or
     `owner/repo#n` (ADR-0024) of one of its repositories."""
-    if adapter(block) == "youtrack":
-        return isinstance(ticket, str) and (not block.get("project") or ticket.startswith(f"{block['project']}-"))
+    found = first(block, "tracker.owns_id", ticket)
+    if found is not None:
+        return found
     if isinstance(ticket, str) and "#" in ticket:
         repo = ticket.rsplit("#", 1)[0].lower()
         own = [str(r).lower() for r in (block.get("repositories") or []) + [block.get("repository") or ""] if r]
@@ -87,8 +97,7 @@ def errors(config, where="factory.yaml"):
         w, a, scope = f"{where}: environments.{name}.tracker", adapter(block), block.get("scope")
         if a not in provided:
             out.append(f"env-tracker: {w}: adapter {a}: no selected plugin provides this tracker")
-        if a == "youtrack" and not (block.get("url") and block.get("project")):
-            out.append(f"env-tracker: {w}: youtrack needs `url` and `project` (here or in the top-level tracker)")
+        out += [f"env-tracker: {w}: {e}" for e in first(block, "tracker.block_errors") or []]
         if a == "github-issues" and not block.get("repository"):
             out.append(f"env-tracker: {w}: github-issues needs `repository` (here or in the top-level tracker)")
         if scope is not None:
