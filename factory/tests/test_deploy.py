@@ -1593,6 +1593,20 @@ class MainlessEnvironmentPlanTest(unittest.TestCase):
         self.assertEqual({a["repository"]["fullName"]: a["environmentConfigId"] for a in copies},
                          {"o/api": "[Slop factory] engine", "o/web": "[Slop factory] engine web"})
 
+    def test_project_copy_bootstraps_the_factory_first_and_the_team_copy_does_not(self):
+        """The main repository of a project copy runs its own startup script, not the team's (#1295)."""
+        team = "zaharchenko-evgeny/slop-eval-factory"
+        step = "FACTORY_SKIP_IF_INSTALLED=1 sh /workspaces/slop-eval-factory/.air/cloud/startup.sh"
+        with mock.patch.object(definition, "team_url", return_value=f"https://github.com/{team}"):
+            automations = definition_plan(source="fixtures/v2")["automations"]
+        projects = [a for a in automations if a["repository"]["fullName"] != team]
+        self.assertTrue(projects)
+        self.assertTrue(any(a["repository"]["fullName"] == team for a in automations))
+        for a in automations:
+            self.assertEqual(step in a["prompt"], a in projects, a["name"])
+            if a in projects:
+                self.assertLess(a["prompt"].index(step), a["prompt"].index("factory "), a["name"])
+                
     def test_read_only_copy_has_read_only_output(self):
         copies = self.copies("review-low")
         self.assertEqual(sorted(a["repository"]["fullName"] for a in copies), ["o/api", "o/web"])

@@ -72,7 +72,8 @@ def probe(results, name, fn):
         results.append({"probe": name, "result": "denied", "detail": str(e)[:200]})
 
 
-def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=None, run_id="doctor", environ=os.environ):
+def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=None, run_id="doctor", environ=os.environ,
+               team_link=None):
     """Every probe's result: the selected systems' `doctor.probes` hooks (github: every write the gate makes and every
     read it needs, the wake files and the project write token), then the tools, skills and declared variables."""
     try:
@@ -84,6 +85,11 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
                              nodes=nodes)]
     results += unread
     tools, skills = env_needs(env, nodes)
+    import definition
+    if definition.present(config.team_root()):  # ADR-0021: the startup script installs the engine and links the team
+        link = Path(team_link or Path.home() / "factory-team")
+        results.append({"probe": "engine:factory", "result": "ok" if which("factory") else "missing", "detail": env})
+        results.append({"probe": "team:~/factory-team", "result": "ok" if link.exists() else "missing", "detail": env})
     for t in tools:
         results.append({"probe": f"tool:{t}", "result": "ok" if which(t) else "missing", "detail": env})
     for s in skills:

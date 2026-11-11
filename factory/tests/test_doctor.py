@@ -74,6 +74,25 @@ def run(gh, env="read", **kw):
     return {r["probe"]: r for r in doctor.run_probes(REPO, env, nodes.load(), gh, "risk:low", **kw)}
 
 
+class BootstrapProbeTest(unittest.TestCase):
+    """#1295: in an environment whose main repository is a project, the startup script may not have run."""
+    def probes(self, which, team_link):
+        return {r["probe"]: r["result"] for r in doctor.run_probes(
+            REPO, "read", nodes.load(), FakeGh(), "risk:low", which=which, has_skill=lambda s: True, team_link=team_link)}
+
+    def test_missing_engine_and_team_link_are_named(self):
+        before = cfg.team_root()
+        cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
+        self.addCleanup(cfg.set_team, before)
+        with tempfile.TemporaryDirectory() as tmp:
+            link = Path(tmp) / "factory-team"
+            got = self.probes(lambda t: None, link)
+            self.assertEqual((got["engine:factory"], got["team:~/factory-team"]), ("missing", "missing"))
+            link.mkdir()
+            got = self.probes(lambda t: "/bin/" + t, link)
+            self.assertEqual((got["engine:factory"], got["team:~/factory-team"]), ("ok", "ok"))
+
+
 class YouTrackDoctorTest(unittest.TestCase):
     def test_missing_tag_is_reported_and_nothing_is_written(self):
         calls = []
