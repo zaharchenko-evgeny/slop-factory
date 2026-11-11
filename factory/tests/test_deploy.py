@@ -262,7 +262,7 @@ class ApplyTest(unittest.TestCase):
                 sent = [v for e in edits for v in e["variables"]]
                 self.assertEqual([v["key"] for v in sent], created)
                 for v in sent:
-                    self.assertEqual(v["value"], "")
+                    self.assertEqual(v["value"], "unset")  # Air refuses an empty value (#1310)
                     self.assertEqual(v.get("isSecret", False), v["key"] == "TEAMCITY_TOKEN")
                 live = json.loads(self.state["environment"].read_text())["items"][0]["variables"]
                 self.assertEqual({v["key"]: v["value"] for v in live if v["key"] in {x["key"] for x in have}},
@@ -282,8 +282,8 @@ class ApplyTest(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(self.run_deploy("--dry-run"), 0)
-        self.assertIn("create variable TEAMCITY_TOKEN (empty, secret)", out.getvalue())
-        self.assertIn("create variable TEAMCITY_URL (empty)", out.getvalue())
+        self.assertIn("create variable TEAMCITY_TOKEN (unset, secret)", out.getvalue())
+        self.assertIn("create variable TEAMCITY_URL (unset)", out.getvalue())
         self.assertEqual(self.calls("environment"), [])
 
     def test_extra_personal_secret_plans_no_environment_update(self):

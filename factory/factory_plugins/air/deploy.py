@@ -543,8 +543,11 @@ def missing_variables(plan: dict, envs: list[dict]) -> list[tuple[dict, dict]]:
     return out
 
 
+UNSET = "unset"  # Air refuses an empty value; doctor reports this placeholder as missing
+
+
 def create_missing_variables(plan: dict, envs: list[dict], cloud: Mcp, dry_run: bool = False) -> None:
-    """List (`--dry-run`) or create each declared variable that its environment lacks, with an empty value
+    """List (`--dry-run`) or create each declared variable that its environment lacks, with the value `unset`
     (`isSecret` for a secret one). A variable that exists is never listed, so a value a person set stays."""
     ids = {x["name"]: x["id"] for x in envs}
     by_env = {}
@@ -552,10 +555,10 @@ def create_missing_variables(plan: dict, envs: list[dict], cloud: Mcp, dry_run: 
         by_env.setdefault(e["name"], []).append(v)
     for name, declared in by_env.items():
         for v in declared:
-            print(f"create variable {v['name']} (empty{', secret' if v['secret'] else ''}) in {name[len(plan['prefix']):]}")
+            print(f"create variable {v['name']} ({UNSET}{', secret' if v['secret'] else ''}) in {name[len(plan['prefix']):]}")
         if not dry_run and name in ids:
             cloud.call("edit_environment", {"id": ids[name], "variables": [
-                {"key": v["name"], "value": "", **({"isSecret": True} if v["secret"] else {}),
+                {"key": v["name"], "value": UNSET, **({"isSecret": True} if v["secret"] else {}),
                  **({"description": v["description"]} if v.get("description") else {})} for v in declared]})
 
 
