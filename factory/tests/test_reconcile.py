@@ -381,6 +381,25 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(self.recover(self.pr(conflict=True, fix_rounds=3))[1], [])
         self.assertEqual(self.recover(self.pr(conflict=True, since=FRESH))[1], [])
 
+    def test_ready_ticket_without_a_dispatch_outcome_refired_once_then_blocked(self):
+        """#1257: a never-blocked ready ticket whose dispatch run left no outcome (Air failed it) starts again."""
+        ticket = {"stage": "ready", "since": OLD, "stage_at": OLD, "label_at": {"factory:ready": OLD}}
+        t, results = self.recover(ticket)
+        self.assertEqual([(r["node"], r["reconcile"]) for r in results], [("dispatch", "refire")])
+        self.assertEqual(logged(t, "label"), ['"factory:ready"'])  # removed, then added again
+        miss = logged(t, "comment")[0]
+        self.assertIn("stage=ready head= re-fired factory:ready (", miss)
+        ticket["log"] = [("comment", miss)]
+        t, results = self.recover(ticket)
+        self.assertEqual(results[0]["reconcile"], "blocked")
+        self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
+
+    def test_fresh_or_blocked_ready_ticket_is_left_alone(self):
+        fresh = {"stage": "ready", "since": FRESH, "stage_at": FRESH, "label_at": {"factory:ready": FRESH}}
+        self.assertEqual(self.recover(fresh)[1], [])
+        waiting = {"stage": "ready", "since": OLD, "stage_at": OLD, "label_at": {"factory:ready": OLD}, "blockers_open": 1}
+        self.assertEqual(self.recover(waiting)[1], [])
+
     def test_review_label_without_review_refired_once_then_blocked(self):
         ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low", "factory:ci-green"],
                          label_at={"factory:review-low": OLD, "factory:ci-green": OLD})
