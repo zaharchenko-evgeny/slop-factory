@@ -114,6 +114,7 @@ class FakeGh:
         self.fail_blocked_by = False
         self.open_issues, self.state, self.sub_state = [], "open", ["open"] * 9
         self.extra_pulls, self.pr_labels, self.pr_assignees = [], {}, {}
+        self.pr_details = {}
 
     def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
@@ -164,21 +165,21 @@ class FakeGh:
                                                 [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)]))
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
-            return "" if getattr(self, "no_pr", False) else recorded_pull(a, [*(
+            return "" if getattr(self, "no_pr", False) else recorded_pull(a, [*([] if getattr(self, "no_default_pull", False) else (
                 {"number": 5, "state": "closed" if self.merged else "open", "head": head("ez/7-x", REPO)},
                 {"number": 6, "state": "open", "head": head("ez/70-other", REPO)},
                 {"number": 8, "state": "open", "head": head("ez/7-fork", "evil/r")},
-                {"number": 9, "state": "open", "head": head("ez/7-gone", None)}), *self.extra_pulls])
+                {"number": 9, "state": "open", "head": head("ez/7-gone", None)})), *self.extra_pulls])
         if "issues?state=" in a and "labels=" in a:
             want = a.split("labels=")[1].split("&")[0]
             on = want in self.labels and (self.state == "open" or "state=all" in a)
             return json.dumps({"number": 7}) if on else ""
         if "/pulls/" in a and a.rsplit("/", 1)[-1].isdigit():
             number = int(a.rsplit("/", 1)[-1])
-            return recorded_pull(a, {"number": number, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "merge_commit_sha": None, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
+            return recorded_pull(a, {"number": number, "merged": self.merged, "state": "closed" if self.merged else "open", "merged_at": None, "mergeable": True, "merge_commit_sha": None, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
                                      "requested_reviewers": [{"login": u} for u in self.requested],
                                      "user": {"login": getattr(self, "pr_author", "jetbrains-air[bot]")},
-                                     "labels": [{"name": x} for x in self.labels]})
+                                     "labels": [{"name": x} for x in self.labels], **self.pr_details.get(number, {})})
         if a.endswith("/git/ref/heads/main"):
             return recorded_pull(a, {"object": {"sha": "m1"}})
         if "pulls?state=closed" in a:
@@ -295,6 +296,21 @@ def eff(kind, value, **kw):
 
 
 class FactsTest(unittest.TestCase):
+    def test_prefers_open_then_merged_then_newest_pr(self):
+        gh = FakeGh()
+        gh.no_default_pull = True
+        head = lambda number, state, merged_at=None: {"number": number, "state": state, "merged_at": merged_at,
+                                                       "head": {"ref": "ez/7-x", "repo": {"full_name": REPO}}}
+        gh.extra_pulls = [head(10, "closed", "2026-11-10T00:00:00Z"), head(11, "closed")]
+        gh.pr_details = {10: {"merged": True, "state": "closed", "merged_at": "2026-11-10T00:00:00Z"},
+                         11: {"merged": False, "state": "closed"}}
+        facts = tr(gh).facts(7)
+        self.assertEqual((facts["pr"], facts["pr_state"]), (10, "merged"))
+
+        gh.extra_pulls.append(head(12, "open"))
+        gh.pr_details[12] = {"merged": False, "state": "open"}
+        self.assertEqual(tr(gh).facts(7)["pr"], 12)
+
     def test_sweep_tickets_searches_open_and_recently_closed_tickets_once_each(self):
         gh, calls = FakeGh(labels=["factory:changes-requested"]), []
         t = tr(lambda args, timeout=None: (calls.append(args), gh(args, timeout))[1])
