@@ -433,7 +433,8 @@ class MemorySystem(DescriptorPort):
                        for k, v in t.get("log", []) if k == "comment"]
             return TicketRecord(subject.id, t.get("title", ""), t.get("body", ""), t.get("issue_state", "open"),
                                 t.get("state_reason"), t.get("author"), t.get("updated_at"), list(t.get("attrs", [])),
-                                list(t.get("assignees", [])), comments=list(t.get("comments", [])) + written,
+                                list(t.get("assignees", [])), events=list(t.get("events", [])),
+                                comments=list(t.get("comments", [])) + written,
                                 blockers_open=list(t.get("blocked_by", [])),
                                 children=list(t.get("children", [])) if "children" in want else None)
         if subject.kind == "pr":
@@ -452,6 +453,8 @@ class MemorySystem(DescriptorPort):
             return list(self._t(query.of).get("children", []))
         if query.kind == "stage":
             return self.sweep_tickets(query.values, query.open_only)
+        if query.kind == "blocking":
+            return list(self.blocking(query.of))
         raise ValueError(f"find: unknown query {query.kind}")
 
     def facts(self, ticket):
@@ -482,9 +485,15 @@ class MemorySystem(DescriptorPort):
         return effects.apply(self, effect)
 
     # --- the effect handlers: (system, effect, ctx) -> wrote
+    @staticmethod
+    def _event(t, kind, value):
+        t.setdefault("events", []).append({"kind": kind, "value": value, "actor": "factory", "at": None})
+
     def _fx_stage(self, effect, ctx):  # `stage` and `seen`: the stage field and the event ids seen
         t, kind, value = self._t(effect["ticket"]), effect["kind"], effect["value"]
         seen, wrote = t.setdefault("seen", []), False
+        if kind == "stage" and effect.get("expect") not in (None, self.get_stage(t)):  # compare-and-set: it moved
+            return False
         if kind == "stage" and self.get_stage(t) != value:
             self.set_stage(t, value)
             wrote = True
@@ -553,6 +562,10 @@ class MemorySystem(DescriptorPort):
         if entry in log:
             return False
         log.append(entry)
+        if kind == "close":
+            t["issue_state"] = "closed"
+        if kind == "label" and effect.get("on") != "pr":
+            self._event(t, "labeled", value)
         if kind == "label" and value not in t.setdefault("attrs", []):
             t["attrs"].append(value)
         if kind == "label" and effect.get("on") == "pr" and value not in t.setdefault("pr_labels", []):
@@ -580,7 +593,10 @@ class MemorySystem(DescriptorPort):
         t["attrs"] = [x for x in attrs if x != value]
         if "pr_labels" in t:
             t["pr_labels"] = [x for x in t["pr_labels"] if x != value]
-        return present or len(t["attrs"]) != len(attrs)
+        if present or len(t["attrs"]) != len(attrs):
+            self._event(t, "unlabeled", value)
+            return True
+        return False
 
     effects = (
         Effect("stage", "ticket", _fx_stage), Effect("seen", "ticket", _fx_stage),
