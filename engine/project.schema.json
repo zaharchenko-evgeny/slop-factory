@@ -65,7 +65,12 @@
         "pr_fact_labels": {"type": "object", "additionalProperties": {"type": "string"}},
         "needs_human_label": {"type": "string"},
         "lesson_label": {"type": "string"},
-        "comment_label": {"type": "string"}
+        "comment_label": {"type": "string"},
+        "state_mirror": {"type": "object", "additionalProperties": {"type": "string"},
+                         "description": "YouTrack (#1260): {stage: State value} the gate also writes on each stage change."},
+        "state_mirror_field": {"type": "string"},
+        "state_rules": {"type": "object", "additionalProperties": {"type": "string"},
+                        "description": "YouTrack (#1260): {State value: stop | blocked}, read by each reconcile pass."}
       }
     },
     "repositories": {
