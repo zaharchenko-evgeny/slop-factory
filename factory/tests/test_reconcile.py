@@ -344,6 +344,38 @@ class RecoverDefinitionTest(unittest.TestCase):
         return {"stage": "in-review", "pr": 5, "pr_state": "open", "head": "abc123def4567", "since": OLD,
                 "pr_labels": [], **kw}
 
+    def late_review(self, **kw):  # #1263: the project's own review automation gives the second verdict
+        import copy
+        defn = copy.deepcopy(self.defn)
+        defn["workflow"]["nodes"]["automerge"]["settings"] = {
+            "external_review_hours": 2, "external_review_bot": "jetbrains-air[bot]",
+            "external_review_label": "factory:project-review"}
+        ticket = self.pr(**{"stage": "approved", "ci": "green", "attrs": ["risk:low"],
+                            "pr_labels": ["factory:automerge", "factory:project-review"],
+                            "label_at": {"factory:project-review": "2026-11-03T09:00:00Z"}, **kw})  # 3 hours ago
+        tr = MemorySystem({1: ticket})
+        tracker = self.config["tracker"]
+        return ticket, tr, reconcile.recover_definition(tr, defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
+                                                        self.config["limits"], now=NOW)
+
+    def test_late_external_review_wakes_the_approver_once_per_head(self):
+        ticket, t, results = self.late_review()
+        self.assertEqual([(r["node"], r["reconcile"]) for r in results], [("automerge", "external-review")])
+        self.assertEqual(logged(t, "label"), ['"factory:automerge"'])  # removed, then added again
+        note = logged(t, "comment")[0]
+        self.assertIn("head=abc123def456 external review late, re-woke factory:automerge", note)
+        self.assertEqual(t.get_stage(t.tickets[1]), "approved")
+        _, t, results = self.late_review(log=[("comment", note)])
+        self.assertNotIn("external-review", [r["reconcile"] for r in results])  # once per head
+
+    def test_bot_review_at_the_head_or_a_fresh_label_is_left_alone(self):
+        bot = {"author": "jetbrains-air[bot]", "commit_id": "abc123def4567", "agent": False, "bot": True}
+        self.assertEqual(self.late_review(reviews=[bot])[2], [])
+        _, _, results = self.late_review(label_at={"factory:project-review": "2026-11-03T10:30:00Z"})  # 1.5 hours
+        self.assertEqual(results, [])
+        old_head = {**bot, "commit_id": "0ld"}  # a bot review of an earlier head does not count
+        self.assertEqual([r["reconcile"] for r in self.late_review(reviews=[old_head])[2]], ["external-review"])
+
     def test_conflicting_in_review_pr_goes_to_fix(self):
         t, results = self.recover(self.pr(conflict=True))
         self.assertEqual([r["reconcile"] for r in results], ["conflict"])

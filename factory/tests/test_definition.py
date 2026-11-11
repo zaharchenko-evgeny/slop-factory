@@ -306,6 +306,14 @@ class DefinitionTest(unittest.TestCase):
         _, workflow = definition.to_project(definition.load(self.root))
         self.assertEqual(workflow["nodes"]["intake"]["outcomes"]["ready"]["effects"], effects)
 
+    def test_external_review_settings_go_together(self):  # #1263
+        full = {"external_review_bot": "jetbrains-air[bot]", "external_review_label": "factory:project-review"}
+        self.edit("workflow.yaml", lambda w: (w.setdefault("settings", {}).update(external_review_hours=2),
+                                              w["nodes"]["automerge"].setdefault("settings", {}).update(full)))
+        self.assertEqual(self.errors(), [])
+        self.edit("workflow.yaml", lambda w: w["nodes"]["automerge"]["settings"].pop("external_review_label"))
+        self.assertError("external-review: nodes.automerge")
+
     def test_assignment_field_form_validates(self):
         effects = [{"assign": {"field": "assignee"}, "on": "pr"}]
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(effects=effects))
