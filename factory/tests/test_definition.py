@@ -319,6 +319,20 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(effects=effects))
         self.assertEqual(self.errors(), [])
 
+    def test_request_reviewers_forms_validate(self):  # #1262
+        for value in ("changes", ["alice"], {"field": "reviewers"}):
+            with self.subTest(value=value):
+                self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(
+                    effects=[{"request-reviewers": value, "on": "pr"}]))
+                self.assertEqual(self.errors(), [])
+
+    def test_request_reviewers_rejects_a_field_it_does_not_name(self):
+        for value in ({"fieldd": "x"}, {"field": ""}, {"field": 3}, 3, []):
+            with self.subTest(value=value):
+                self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(
+                    effects=[{"request-reviewers": value, "on": "pr"}]))
+                self.assertError("bad-effect: nodes.intake.ready: request-reviewers")
+
     def test_assignment_effect_rejects_other_dicts(self):
         for value in ({"fieldd": "x"}, {"field": "x", "extra": 1}, {"field": 3}):
             with self.subTest(value=value):

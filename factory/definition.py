@@ -724,6 +724,16 @@ def errors(defn):
                         valid = valid or value == "all"
                     if not valid:
                         errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins" + (" or {field: <name>}" if key == "assign" else ""))
+                if isinstance(effect, dict) and "request-reviewers" in effect:
+                    value = effect["request-reviewers"]
+                    if not (value is None or (isinstance(value, str) and value.strip())
+                            or (isinstance(value, list) and value and all(isinstance(v, str) and v.strip() for v in value))
+                            or (isinstance(value, dict) and set(value) == {"field"} and isinstance(value["field"], str)
+                                and value["field"].strip())):
+                        errs.append(f"bad-effect: {where}.{o}: request-reviewers must be `changes`, a login, a list of "
+                                    "logins or {field: <name>}")
+                    elif isinstance(value, dict) and effect.get("on", "pr") != "pr":
+                        errs.append(f"bad-effect: {where}.{o}: request-reviewers asks on the PR (`on: pr`)")
             prefix = label_prefix(defn)
             by_target = {}
             for effect in oc.get("effects") or []:
