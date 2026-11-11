@@ -901,7 +901,9 @@ def to_project(defn):
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP,
                             # ADR-0027: a repository's own tracker is a ticket place (`ticket_places`), not a #1069 project
                             **({"tracker": dict(e["tracker"])} if isinstance(e.get("tracker"), dict) and not new_model else {}),
-                            **({"vcs": e["vcs"]} if e.get("vcs") else {})}  # its own vcs (#1070)
+                            **({"vcs": e["vcs"]} if e.get("vcs") else {}),  # its own vcs (#1070)
+                            # the checks that count as CI (#1211); the gate reads them as `ci_checks_of`
+                            **({"ci": {"checks": list(e["ci"]["checks"])}} if (e.get("ci") or {}).get("checks") else {})}
 
     # Stages: every name the nodes use, plus the engine's PR facts.
     used = _used_stages(w)
