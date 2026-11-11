@@ -22,7 +22,7 @@ import importlib
 import derive
 
 # The target of an effect without `on:`: the kinds that write a pull request act on the ticket's PR.
-PR_KINDS = ("review", "request-reviewers", "merge", "update-branch", "pr-notes", "pr-notes-sync")
+PR_KINDS = ("review", "request-reviewers", "merge", "update-branch", "pr-notes", "pr-notes-sync", "ready-for-review")
 ANY = "*"  # a system's catch-all kind (the in-memory system logs any effect)
 # The remote kinds of a system that declares no `effects` (a test double, a tracker not yet on the registry).
 REMOTE = ("review", "merge", "update-branch")

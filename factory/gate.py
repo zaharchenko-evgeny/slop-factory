@@ -116,7 +116,7 @@ def spec_nodes(path):
         spec = json.loads(Path(path).read_text())
         out = {}
         for s in [spec, *(spec.get("runs") or {}).values()]:
-            node = {k: s[k] for k in ("role", "when", "outcomes", "else_tier", "tiers", "routine", *AGENT_KEYS) if k in s}
+            node = {k: s[k] for k in ("role", "when", "outcomes", "else_tier", "tiers", "routine", "output", *AGENT_KEYS) if k in s}
             node.update({"tier": s["tier"]} if s.get("tier") else {}, **({"focuses": [s["focus"]]} if s.get("focus") else {}))
             out[s["node"]] = node
     except (OSError, ValueError, KeyError, AttributeError, TypeError) as e:
@@ -672,6 +672,21 @@ def outside_node_repository(ticket, tracker_repo):
     return None
 
 
+def draft_pr_commands(node, ticket, branch):
+    """{outcome: command} for an `as-instructed` node, which opens its PR itself (#1261): per outcome that labels
+    the PR, the `gh pr create --draft` that opens the branch's PR with those labels, so the factory review starts
+    first and the project's own review waits for `ready-for-review`."""
+    if node.get("output") != "as-instructed" or not branch:
+        return {}
+    out = {}
+    for o, spec in (node.get("outcomes") or {}).items():
+        labels = [e["label"] for e in (spec or {}).get("effects") or [] if "label" in e and e.get("on") == "pr"]
+        if labels:
+            out[o] = (f"gh pr create --draft --head {branch} " + " ".join(f"--label {x}" for x in labels)
+                      + f' --title "#{ticket} <subject>" --body-file .factory/pr-body.md')
+    return out
+
+
 def check(name, event, tracker, nodes, config, code_host=None):
     node = load_node(name, nodes)
     if "id" not in event:
@@ -713,6 +728,8 @@ def check(name, event, tracker, nodes, config, code_host=None):
         **extra,
         "merge_main": bool(node["role"] == "developer" and facts.get("conflict") and fixing),
         "branch": branch, "handoff_path": f".factory/handoff/{name}.json",
+        # an `as-instructed` node with no PR yet opens it as a draft (#1261), the body written with the `pr` skill
+        **({"pr_create": cmds} if not facts.get("pr") and (cmds := draft_pr_commands(node, event["ticket"], branch)) else {}),
         # one entry per repository of a ticket that changes several (ADR-0017), all on the ticket's one branch
         "checkouts": [{"repo": p["repo"], "branch": p["branch"] or branch} for p in facts.get("prs") or []],
         **{k: node[k] for k in AGENT_KEYS if k in node},  # who the role is and whom it may address (ADR-0020)
@@ -809,6 +826,11 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
         if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
             payload = {**payload, "tier": node.get("else_tier") or nodes["nodes"]["fix"]["tiers"][0]}
+    if node.get("output") == "as-instructed" and not tracker.facts(ticket).get("pr") and \
+            any("label" in e and e.get("on") == "pr" for e in out.get("effects") or []):
+        cmd = draft_pr_commands({**node, "outcomes": {outcome: out}}, ticket, branch_of({**tracker.facts(ticket), "ticket": ticket},
+                                                                                      config_mod.load())).get(outcome)
+        raise Bad(f"outcome {outcome}: no PR for the ticket's branch: open it as a draft first" + (f": `{cmd}`" if cmd else ""))
     if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
         payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first

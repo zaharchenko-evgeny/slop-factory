@@ -25,6 +25,11 @@ command (`command -v factory`), never `uv run` or a path into the engine.
 1. `factory begin` (the prompt gives its arguments) prints the facts, the
    branch and `outcomes`, the outcomes this step may report. Exit 10: do not
    act; report its `reason` and stop.
+   When it prints `pr_create`, you open the pull request yourself: push the
+   branch, write its body with the `pr` skill to `.factory/pr-body.md`, and
+   run the `pr_create` command of the outcome you will report (with the
+   subject in place of `<subject>`). `factory end` refuses that outcome
+   while the branch has no PR.
 2. As the last thing you do, run `factory end <outcome>` once, with the data
    the role file asks for. Quote each value; repeat a list option per item.
    Each lesson for later runs goes in its own `--lesson`:
