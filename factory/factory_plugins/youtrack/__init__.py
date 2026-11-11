@@ -21,5 +21,10 @@ PLUGIN = Plugin(
            "deploy.errors": "factory_plugins.youtrack.provision:errors",
            "deploy.tracker": "factory_plugins.youtrack.provision:provisioner",
            "deploy.files": "factory_plugins.youtrack.wake:sync_wake_files",
+           "tracker.identity": "factory_plugins.youtrack.provision:identity",
+           "tracker.owns_id": "factory_plugins.youtrack.provision:owns_id",
+           "tracker.block_errors": "factory_plugins.youtrack.provision:block_errors",
+           "config.tracker_errors": "factory_plugins.youtrack.provision:tracker_errors",
+           "deploy.scope_filter": "factory_plugins.youtrack.provision:scope_filter",
            "doctor.probes": "factory_plugins.youtrack.probes:probes"},
 )

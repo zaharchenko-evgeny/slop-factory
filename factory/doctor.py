@@ -237,6 +237,11 @@ def report_engine(repo, results, run, run_id="doctor"):
             close_ticket(repo, r["probe"], run, run_id)
 
 
+def issue_run(settings):
+    """The runner of the `gh`-style calls that file the doctor's tickets (hook `doctor.run`, from the tracker's plugin)."""
+    return next(iter(plugins.registry(settings).hook("doctor.run")))
+
+
 def engine_probes(settings, tracker=None, dry_run=deploy_run, now=None):
     """The `factory:stuck`, `factory:facts` and `deploy:drift` results; a probe that cannot run is a `fail`."""
     import definition
@@ -252,22 +257,20 @@ def engine_probes(settings, tracker=None, dry_run=deploy_run, now=None):
         tracker = gate.tracker_of(config.load())
     if definition.present(config.team_root()):
         attempt(STUCK, lambda: stuck_probe(tracker, definition.load(config.team_root()), settings, now))
-    from factory_plugins.github import tracker as github_tracker
-    attempt(FACTS, lambda: facts_probe(tracker, settings["tracker"]["stages"],
-                                                 github_tracker.GitHubTracker.from_config()._frontier))
+    frontier = next(iter(plugins.registry(settings).hook("doctor.frontier")), None)
+    if frontier:
+        attempt(FACTS, lambda: facts_probe(tracker, settings["tracker"]["stages"], frontier()))
     attempt("deploy:drift", lambda: drift_probe(dry_run))
     return out
 
 
 def main(argv=None, run=None):
-    if run is None:  # the doctor files its tickets on GitHub
-        from factory_plugins.github import tracker as github_tracker
-        run = github_tracker.gh
     env = os.environ.get("FACTORY_ENV")
     if env not in (nodes_mod.load().get("environments") or {}):
         print(json.dumps({"error": "FACTORY_ENV must name an environment of nodes.yaml"}))
         return 2
     settings = config.load()
+    run = run or issue_run(settings)  # the doctor files its tickets where the tracker's plugin says
     repo = settings["tracker"].get("repository") or config.vcs(settings)["repository"]
     run_id = f"doctor:{env}"
     results = run_probes(repo, env, nodes_mod.load(), run, (settings["tracker"].get("risk_labels") or {"low": "risk:low"})["low"], run_id=run_id)
