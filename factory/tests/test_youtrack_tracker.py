@@ -520,3 +520,17 @@ class FieldInventoryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ListTagsPagingTest(unittest.TestCase):  # list_tags pages past the first 1000
+    def test_finds_a_tag_past_the_first_page(self):
+        import re as _re
+        names = [f"t{i}" for i in range(2500)] + ["risk:low"]
+
+        def run(method, path, body=None):
+            skip = int((_re.search(r"\$skip=(\d+)", path) or [0, 0])[1])
+            return [{"id": f"id-{n}", "name": n} for n in names[skip:skip + 1000]]
+        store = yt.YouTrackTicketStore(run)
+        self.assertEqual(store.list_tags()["risk:low"], "id-risk:low")
+        self.assertEqual(len(store.list_tags()), 2501)
+
