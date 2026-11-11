@@ -839,8 +839,10 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         out = node["outcomes"][out["else"]]  # ADR-0021: e.g. automatic merge refused for a high-risk ticket
     if out.get("ci") and tracker.facts(ticket)["ci"] not in out["ci"] and out.get("else") in node["outcomes"]:
         out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
-        if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
-            payload = {**payload, "tier": node.get("else_tier") or nodes["nodes"]["fix"]["tiers"][0]}
+        fix_tiers = ((nodes.get("nodes") or {}).get("fix") or {}).get("tiers") or []
+        tier = node.get("else_tier") or (fix_tiers[0] if fix_tiers else None)
+        if "tier" not in payload and tier:  # the fix label needs the cheapest fix tier; a run loads only its own
+            payload = {**payload, "tier": tier}  # node (#1288), and a definition team's fix label names no tier
     if node.get("output") == "as-instructed" and not tracker.facts(ticket).get("pr") and \
             any("label" in e and e.get("on") == "pr" for e in out.get("effects") or []):
         cmd = draft_pr_commands({**node, "outcomes": {outcome: out}}, ticket, branch_of({**tracker.facts(ticket), "ticket": ticket},
