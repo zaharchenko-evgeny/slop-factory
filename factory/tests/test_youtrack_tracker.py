@@ -199,6 +199,96 @@ class StoreTest(unittest.TestCase):
                                                               "value": {"name": "factory:ready"}}]})])
 
 
+class StateFieldTest(unittest.TestCase):
+    """#1260: the stage is mirrored into State, a person's State can stop the work, an outcome fills Effort."""
+    MIRROR = {"in-dev": "In progress", "in-review": "Reviewing", "blocked": "Wait for reply"}
+    STAGES = {"in-dev": "factory:in-dev", "in-review": "factory:in-review", "blocked": "factory:blocked"}
+
+    def store(self, activities=()):
+        fake = FakeYouTrack(activities=activities, tags=("factory:in-dev", "factory:in-review", "factory:blocked", "risk:low"))
+        return fake, yt.YouTrackTicketStore(fake, state_mirror=self.MIRROR, bots=["factory-bot"])
+
+    def writes(self, fake):
+        return [(m, urlsplit(p).path, b) for m, p, b in fake.calls if m != "GET"]
+
+    def test_a_stage_change_writes_the_tag_and_the_state_and_a_repeat_writes_nothing(self):
+        from types import SimpleNamespace
+        from factory_plugins.youtrack import effects as yt_effects
+        fake, store = self.store()
+        system = SimpleNamespace(stages=self.STAGES, tickets=store)
+        e = {"ticket": "LME-1701", "kind": "stage", "value": "in-review"}
+        self.assertTrue(yt_effects.stage(system, dict(e), {}))
+        self.assertIn(("POST", "/api/issues/LME-1701/tags", {"id": "id:factory:in-review"}), self.writes(fake))
+        self.assertIn(("POST", "/api/issues/LME-1701", {"customFields": [
+            {"name": "State", "$type": "StateIssueCustomField", "value": {"name": "Reviewing"}}]}), self.writes(fake))
+        before = len(self.writes(fake))
+        self.assertFalse(yt_effects.stage(system, dict(e), {}))
+        self.assertEqual(len(self.writes(fake)), before)
+        self.assertTrue(yt_effects.stage(system, {**e, "value": "blocked", "mirror": False}, {}))
+        self.assertEqual(store.field_value("LME-1701", "State"), "Reviewing")  # a rule's `blocked` keeps the State
+
+    def rules(self, author):
+        acts = [{"timestamp": 5, "author": {"login": author}, "category": {"id": "CustomFieldCategory"},
+                 "field": {"name": "State"}, "added": [{"name": "Won't fix"}], "removed": [{"name": "Open"}]}]
+        fake, store = self.store(acts)
+        store.tickets_by_stage = lambda attrs, open_only=False: ["LME-1701"]
+        closed, applied = [], []
+        tracker = __import__("types").SimpleNamespace(tickets=store, apply=applied.append,
+                                                      close_prs=lambda n, note: closed.append((n, note)) or True)
+        from factory_plugins.youtrack import state
+        results = state.apply_rules(tracker, {"Won't fix": "stop", "To be discussed": "blocked"}, self.STAGES)
+        return fake, results, closed
+
+    def test_wont_fix_by_a_person_removes_the_stage_tag_and_closes_the_pr(self):
+        fake, results, closed = self.rules("alice")
+        self.assertEqual([(r["rule"], r["stage"]) for r in results], [("stop", "in-dev")])
+        self.assertEqual([m for m, p, _ in self.writes(fake) if "/tags/" in p], ["DELETE"])  # the stage tag (fixture id)
+        self.assertNotIn("factory:in-dev", [t["name"] for t in fake.issue["tags"]])
+        self.assertEqual([n for n, _ in closed], ["LME-1701"])
+        self.assertIn("State is Won't fix", closed[0][1])
+
+    def test_a_gate_write_does_not_wake_the_rule(self):
+        fake, results, closed = self.rules("factory-bot")
+        self.assertEqual((results, closed, self.writes(fake)), ([], [], []))
+
+    def test_a_rule_on_a_mirrored_value_is_rejected(self):
+        from factory_plugins.youtrack import state
+        defn = {"factory": {"tracker": {"state_mirror": {"ready": "Open"}, "state_rules": {"Open": "stop", "Obsolete": "drop"}}},
+                "workflow": {"nodes": {"intake": {"outcomes": {"ready": {"effects": [{"field": {"name": "Effort"}}]}}}}}}
+        errs = state.definition_errors(defn)
+        self.assertEqual(len(errs), 3, errs)  # Open is mirrored, `drop` is no action, the field effect has no `from`
+
+    def test_effort_is_written_from_the_size_estimate_and_never_overwritten(self):
+        from types import SimpleNamespace
+        from factory_plugins.youtrack import effects as yt_effects
+        spec = {"name": "Effort", "from": "size_estimate", "sizes": {"XS": 50, "S": 150, "M": 400, "L": 1000, "XL": None}}
+        e = {"kind": "field", "ticket": "LME-1701", "value": spec}
+        for estimate, size in (("~40", "XS"), ("~120", "S"), ("399", "M"), ("~1000", "XL")):
+            moved, _ = yt_effects.resolve_field([dict(e)], "intake", {"size_estimate": estimate}, {}, None, {}, "LME-1701")
+            self.assertEqual(moved[0]["value"], {"name": "Effort", "value": size})
+        fake, store = self.store()
+        system = SimpleNamespace(stages=self.STAGES, tickets=store)
+        effort = {"kind": "field", "ticket": "LME-1701", "value": {"name": "Effort", "value": "S"}}
+        self.assertTrue(yt_effects.field(system, effort, {}))
+        self.assertEqual(store.field_value("LME-1701", "Effort"), "S")
+        self.assertFalse(yt_effects.field(system, {**effort, "value": {"name": "Effort", "value": "L"}}, {}))  # set: kept
+        self.assertEqual(store.field_value("LME-1701", "Effort"), "S")
+
+    def test_doctor_reports_a_mapped_state_value_the_project_lacks(self):
+        from factory_plugins.youtrack import probes
+
+        def run(method, path, body=None):
+            if "/api/admin/projects?" in path:
+                return [{"id": "p1", "shortName": "LME"}]
+            if path.startswith("/api/tags"):
+                return []
+            return [{"field": {"name": "State"}, "bundle": {"values": [{"name": "Open"}, {"name": "In progress"}]}}]
+        settings = {"tracker": {"adapter": "youtrack", "url": "https://yt", "project": "LME",
+                                "state_mirror": {"ready": "Open", "in-review": "Reviewing"}}}
+        got = {r["probe"]: r["result"] for r in probes.youtrack_probes(settings, [], {"YOUTRACK_TOKEN": "t"}, yt_run=run)}
+        self.assertEqual((got["youtrack:field:State=Open"], got["youtrack:field:State=Reviewing"]), ("ok", "missing"))
+
+
 class TrackerFromConfigTest(unittest.TestCase):
     """#1069: the youtrack plugin's tracker is the vcs's gate tracker over the YouTrack store, built from a tracker
     config block."""

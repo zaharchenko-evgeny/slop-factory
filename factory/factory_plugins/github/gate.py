@@ -611,7 +611,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def main_green(self):
         """CI at the current main head is green (`head_ci` of `head_checks`)."""
-        return head_ci(head_checks(self.run, self.repo, self._api("commits/main")["sha"]))[0] == "green"
+        return head_ci(head_checks(self.run, self.repo, self._api("commits/HEAD")["sha"]))[0] == "green"  # the default branch
 
     def sweep_tickets(self, stages, open_only=False, now=None):
         """Issue numbers whose stage label is one of `stages`: the open ones and, unless `open_only`, those closed in the
@@ -1093,7 +1093,11 @@ class GitHubGateTracker(DescriptorPort):
     def apply(self, e):
         view, number = ticket_view(self, e["ticket"]) if e.get("ticket") is not None else (self, None)
         if view is not self:
-            return view.apply({**e, "ticket": number})
+            sub = {**e, "ticket": number}
+            wrote = view.apply(sub)
+            if sub.get("skipped"):  # what the effect left out (request-reviewers), for the gate's result
+                e["skipped"] = sub["skipped"]
+            return wrote
         return GateTracker.single(self).apply(e)
 
     # --- the effect handlers (ADR-0026): (system, effect, ctx) -> wrote, declared in `effects` below
@@ -1228,7 +1232,38 @@ class GitHubGateTracker(DescriptorPort):
         return self._review(e["ticket"], e)
 
     def _fx_request_reviewers(self, e, ctx):
-        return self._rerequest(e["ticket"])
+        """`request-reviewers: changes` asks again who requested changes; logins (static, or the outcome's
+        `{field: <name>}`) are asked once each."""
+        if e["value"] in (None, "changes"):
+            return self._rerequest(e["ticket"])
+        return self._request(e, e["value"] if isinstance(e["value"], list) else [e["value"]])
+
+    def _request(self, e, logins):
+        """Ask each login for a review unless it is asked already or reviewed the head. The PR author and a login
+        without write access are skipped; `e["skipped"]` names them for the gate's result."""
+        pr = self._pr(e["ticket"])
+        if pr is None:
+            return False
+        author = (pr.get("user") or {}).get("login")
+        done = {u["login"] for u in pr.get("requested_reviewers") or []}
+        done |= {r["author"] for r in self._reviews(pr) if r["commit_id"] == pr["head"]["sha"]}
+        who, skipped = [], []
+        for a in dict.fromkeys(logins):
+            if a == author:
+                skipped.append(f"{a} (the PR author)")
+            elif a in done:
+                continue
+            elif not self._can_write(a):
+                skipped.append(f"{a} (no write access)")
+            else:
+                who.append(a)
+        if skipped:
+            e["skipped"] = skipped
+        if not who:
+            return False
+        self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/pulls/{pr['number']}/requested_reviewers",
+                  *[x for a in who for x in ("-f", f"reviewers[]={a}")]])
+        return True
 
     def _fx_create_issues(self, e, ctx):
         return self.tickets.create_children(e["ticket"], e["value"], self.stages["ready"])
@@ -1279,6 +1314,13 @@ class GitHubGateTracker(DescriptorPort):
         Effect("create-issues", "ticket", _fx_create_issues), Effect("park-behind-main-red", "ticket", _fx_park),
         Effect("merge", "pr", _fx_merge, remote=True), Effect("update-branch", "pr", _fx_update_branch, remote=True),
     )
+
+    def close_prs(self, n, comment):
+        """Close every open PR of ticket `n` with `comment` (a person stopped the work, #1260); True when one closed."""
+        prs = [pr for pr in self._prs(n, open_only=True) if pr.get("state", "open") == "open"]
+        for pr in prs:
+            self.run(["pr", "close", str(pr["number"]), "-R", self.pr_repo, "--comment", comment])
+        return bool(prs)
 
     def _may_write(self, name):
         return self.writable is None or name in self.writable

@@ -252,6 +252,19 @@ class CreatedTicketsTest(unittest.TestCase):
                        {"customFields": [{"name": "Subsystem", "$type": "SingleEnumIssueCustomField",
                                           "value": {"name": "Backend"}}]}), yt.calls)
 
+    def test_a_youtrack_child_named_for_another_repository_gets_its_scope(self):  # #1259
+        yt = FakeYouTrack()
+        store = YouTrackTicketStore(yt, project="LME", scope={"field": "Subsystem", "value": "JBeval"},
+                                    repository_scopes={"JetBrains/harbor-infra": {"field": "Subsystem", "value": "Harbor"}})
+        store._command = lambda *a: None
+        store.open_blockers_all = lambda n: []
+        store.set_stage = lambda *a: True
+        store.create_children("LME-1", [{"title": "harbor part", "body": "b", "repo": "harbor-infra"},
+                                        {"title": "jbeval part", "body": "b"}], "factory:ready")
+        scopes_written = [f["value"]["name"] for m, p, b in yt.calls if m == "POST" and b and "customFields" in b
+                          for f in b["customFields"] if f["name"] == "Subsystem"]
+        self.assertEqual(scopes_written, ["Harbor", "JBeval"])
+
     def test_a_github_sub_issue_gets_the_scope_label(self):
         gh = FakeGh({1: ["risk:low"]})
         store = GitHubTicketStore("o/web", gh, scope={"label": "area:web"})
