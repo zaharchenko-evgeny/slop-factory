@@ -136,6 +136,8 @@ def implied(config):
              for r in e.get("repositories") or [] if isinstance(r, dict)]
     names += [(kind, _named(r.get(kind))) for r in repos for kind in ("tracker", "vcs")
               if r.get(kind) not in (None, "none", False)]  # a repository's own tracker or vcs (ADR-0027)
+    names += [("tracker", _named(p.get("tracker")) or "github-issues") for p in config.get("ticket_places") or []
+              if isinstance(p, dict) and isinstance(p.get("tracker"), dict)]  # a compiled definition's YouTrack places (ADR-0027)
     models = config.get("models")
     names += [("agent", m.get("harness")) for m in (models.values() if isinstance(models, dict) else [])
               if isinstance(m, dict)]

@@ -18,6 +18,15 @@ def youtrack(config):
     return (config.get("tracker") or {}).get("adapter") == "youtrack"
 
 
+def tracker_block(config):
+    """The YouTrack tracker block the definition keeps tickets in: the top-level one, else the first `ticket_places`
+    entry on YouTrack; None when no ticket lives in YouTrack."""
+    if youtrack(config):
+        return config["tracker"]
+    place = next((p for p in config.get("ticket_places") or [] if scopes.adapter(scopes.merged(config, p.get("tracker") or {})) == "youtrack"), None)
+    return scopes.merged(config, place["tracker"]) if place else None
+
+
 def identity(block):
     """Hook `tracker.identity`: (adapter, url, project) of a YouTrack block; None for another adapter."""
     if scopes.adapter(block) == "youtrack":
@@ -105,9 +114,19 @@ def errors(nodes: dict, config: dict) -> list[str]:
                    for p in linked.values() if p not in listened]
 
 
+def _store_kinds(config):
+    return {k for x in [*(config.get("states") or {}).values(), *(config.get("commands") or {}).values()] for k in x["store"]}
+
+
 def youtrack_tags(nodes: dict, config: dict) -> list[str]:
+    """The tags a YouTrack definition needs: those of its stores and, when it stores in tags, the ticket attributes."""
+    stored = store_tags(nodes, config)
+    return sorted({*stored, *(core.attribute_labels(config) if stored and "tag" in _store_kinds(config) else ())})
+
+
+def store_tags(nodes: dict, config: dict) -> list[str]:
     """The tags a YouTrack definition stores its stages and commands in, `<tier>` and `<focus>` expanded; none for other adapters."""
-    if not youtrack(config):
+    if not tracker_block(config):
         return []
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
@@ -125,7 +144,7 @@ def youtrack_tags(nodes: dict, config: dict) -> list[str]:
 def youtrack_fields(config: dict) -> dict:
     """{field: {value: resolved}} the state and command stores of a YouTrack definition keep in custom fields;
     a `final` state is resolved. Empty for other adapters."""
-    if not youtrack(config):
+    if not tracker_block(config):
         return {}
     out = {}
     for x in [*(config.get("states") or {}).values(), *(config.get("commands") or {}).values()]:
@@ -138,10 +157,11 @@ def youtrack_fields(config: dict) -> dict:
 def plan(nodes: dict, config: dict) -> dict:
     """Hook `deploy.plan`: the tag and field plan; empty (the plan unchanged) without tags or fields."""
     tags, fields = youtrack_tags(nodes, config), youtrack_fields(config)
-    tag_plan = {"tags": tags, "owned_tag_prefixes": sorted({t.partition(":")[0] + ":" for t in tags if ":" in t})} if tags else {}
+    owned = {t.partition(":")[0] + ":" for t in store_tags(nodes, config) if ":" in t}  # not the attribute tags
+    tag_plan = {"tags": tags, "owned_tag_prefixes": sorted(owned)} if tags else {}
     field_plan = {"fields": fields, "owned_field_prefixes": sorted(
         {v.partition(":")[0] + ":" for f in fields.values() for v in f if ":" in v})} if fields else {}
-    return {**tag_plan, **field_plan, "tag_tracker": config["tracker"]} if tags or fields else {}
+    return {**tag_plan, **field_plan, "tag_tracker": tracker_block(config)} if tags or fields else {}
 
 
 def tag_store(plan: dict, run=None):

@@ -36,6 +36,7 @@ from factory_plugins.github import wake as github_wake  # noqa: E402
 from factory_plugins.youtrack import provision as youtrack_provision  # noqa: E402
 from factory_plugins.youtrack import wake as youtrack_wake  # noqa: E402
 import definition  # noqa: E402
+import gate_port  # noqa: E402
 import workflow  # noqa: E402
 
 FIX = HERE / "fixtures/deploy"
@@ -2173,6 +2174,55 @@ class RepositoryCopiesTest(unittest.TestCase):
         self.assertTrue(ticket, dev["triggers"])
         self.assertEqual({k: ticket[0]["filters"][k] for k in ("projectShortName", "Subsystem")},
                          {"projectShortName": "LME", "Subsystem": "S3"})
+
+    YT = {"adapter": "youtrack", "url": "https://yt.example", "project": "LME", "scope": {"field": "Subsystem", "value": "S3"}}
+    YT_ENVS = {"engine": [(SLOP, {"write": True})], "b": [(TEAM, {"write": True, "tracker": YT})], "intake": [(SLOP, {})]}
+
+    def test_youtrack_repository_plans_tags_and_only_pr_labels_beside_a_github_issues_repository(self):
+        plan = self.plan(envs=self.YT_ENVS, node_envs={"implement-small": ["b"]})
+        self.assertLessEqual({"factory:triage", "factory:ready", "factory:implement-medium", "risk:low", "risk:high",
+                              "complexity:medium", "factory:lesson"}, set(plan["tags"]))
+        self.assertIn("factory:", plan["owned_tag_prefixes"])
+        self.assertEqual(plan["tag_tracker"]["project"], "LME")
+        pr_side = {"factory:ci-green", "factory:ci-red"}
+        self.assertLessEqual(pr_side, set(plan["label_plan"][TEAM]))
+        self.assertFalse({"factory:triage", "factory:ready", "risk:low", "complexity:medium", "factory:lesson"}
+                         & set(plan["label_plan"][TEAM]))
+        self.assertFalse(set(plan["label_plan"][TEAM]) & set(plan["tags"]))
+        self.assertLessEqual(set(plan["tags"]), set(plan["label_plan"][SLOP]))  # the github-issues repository keeps all
+        self.assertLessEqual(pr_side, set(plan["label_plan"][SLOP]))
+
+    def test_top_level_youtrack_tracker_keeps_only_pr_labels_on_github(self):
+        def edit(f):
+            f["tracker"] = {"adapter": "youtrack", "url": "https://yt.example", "project": "LME", "label_prefix": "factory:"}
+        plan = definition_plan(edit_factory=edit)
+        self.assertLessEqual({"factory:triage", "factory:ready", "risk:low"}, set(plan["tags"]))
+        self.assertFalse(set(plan_labels(plan)) & set(plan["tags"]))
+        self.assertIn("factory:ci-green", plan_labels(plan))
+
+    def test_github_issues_team_plans_no_tags(self):
+        plan = self.plan()
+        self.assertNotIn("tags", plan)
+        self.assertIn("factory:ready", plan["label_plan"][SLOP])
+
+    def test_youtrack_stage_store_is_a_tag_the_gate_writes(self):
+        f, w = adr27(self.YT_ENVS, {"intake": ["intake"], "implement-small": ["b"]})
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(HERE / "fixtures/slop", tmp, dirs_exist_ok=True)
+            for name, edit in ((definition.FACTORY, f), (definition.WORKFLOW, w)):
+                data = yaml.safe_load((Path(tmp) / name).read_text())
+                edit(data)
+                (Path(tmp) / name).write_text(yaml.safe_dump(data, sort_keys=False))
+            conf = definition.config(definition.load(Path(tmp)))
+        self.assertEqual(conf["states"]["ready"]["store"], {"tag": "factory:ready"})
+        self.assertEqual(conf["tracker"]["stages"]["ready"], "factory:ready")
+        self.assertFalse([n for n, c in conf["commands"].items() if "label" in c["store"]])
+        edits = []
+        port = type("P", (gate_port.DescriptorPort,), {"state_kinds": ("field", "tag"),
+                                                      "apply": lambda self, e: edits.append(e)})()
+        port.project = conf
+        port.set_state(1, "ready")
+        self.assertEqual(edits, [{"ticket": 1, "kind": "stage", "value": "ready"}])
 
     def test_labels_only_where_copies_hear_events(self):
         plan = self.plan(envs={**SLOP_ENVS, "intake": [(SLOP, {}), (TEAM, {}), ("o/context", {"tracker": "none"})]})

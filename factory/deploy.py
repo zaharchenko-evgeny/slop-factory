@@ -507,6 +507,33 @@ def label_specs(nodes: dict, config: dict) -> dict:
     return out
 
 
+def youtrack_repositories(config: dict) -> set[str]:
+    """The lowercase full names of the repositories whose tickets live in YouTrack: every repository with a YouTrack
+    top-level tracker except the GitHub homes (`tracker.repositories`), and each `ticket_places` entry with a YouTrack tracker."""
+    t = config.get("tracker") or {}
+    homes = {definition.full_name(r).lower() for r in t.get("repositories") or []}
+    out = {definition.full_name(p["repository"]).lower() for p in config.get("ticket_places") or []
+           if scopes_mod.adapter(scopes_mod.merged(config, p.get("tracker") or {})) == "youtrack"}
+    if t.get("adapter") == "youtrack":
+        out |= {core_name for r in config.get("repositories") or [] if (core_name := repository(r)["fullName"].lower()) not in homes}
+    return out
+
+
+def pr_side_labels(config: dict) -> set[str]:
+    """The labels that stay on the pull request: `pr_label` command stores, the PR fact labels and the review trigger."""
+    t = config.get("tracker") or {}
+    out = {c["store"]["pr_label"] for c in (config.get("commands") or {}).values() if "pr_label" in c.get("store", {})}
+    out |= set((t.get("pr_fact_labels") or {}).values()) | {vocab.ci("ci-green"), vocab.ci("ci-red")}
+    return {x for x in (*out, t.get("review_trigger")) if x}
+
+
+def attribute_labels(config: dict) -> list[str]:
+    """The labels the gate writes on a ticket besides its stage and commands: risk, complexity, lesson."""
+    t = config.get("tracker") or {}
+    risks = (t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values()
+    return sorted({*risks, vocab.lesson(), *(f"complexity:{c}" for c in ("small", "medium", "large"))})
+
+
 def label_plan(nodes: dict, config: dict, tickets=()) -> dict[str, list[str]]:
     """{repository: [labels]} for a definition with `tracker.repositories` (ADR-0024). Every ticket repository (those,
     then `tickets`) gets the tracker schema's labels and the hold and review-trigger labels; the tracker (the first one)
@@ -516,7 +543,9 @@ def label_plan(nodes: dict, config: dict, tickets=()) -> dict[str, list[str]]:
     tickets = list(dict.fromkeys([*(definition.full_name(r) for r in t.get("repositories") or []), *tickets]))
     common = sorted({*tracker_schema(nodes, config).labels,
                      *(x for x in (t.get("hold_label"), t.get("review_trigger")) if x)})
-    out = {r: [*common, *([t["map_label"]] if i == 0 and t.get("map_label") else [])] for i, r in enumerate(tickets)}
+    yt, pr_side = youtrack_repositories(config), pr_side_labels(config)
+    out = {r: [x for x in common if x in pr_side] if r.lower() in yt else
+           [*common, *([t["map_label"]] if i == 0 and t.get("map_label") else [])] for i, r in enumerate(tickets)}
     for r in config.get("repositories") or []:
         out.setdefault(repository(r)["fullName"], [])
     return {r: sorted(set(ls)) for r, ls in out.items()}
@@ -556,8 +585,9 @@ def labels(nodes: dict, config: dict) -> list[str]:
     found, namespace = [], ((t.get("stages") or {}).get("ready") or vocab.stage("ready")).partition(":")[0] + ":"
     if "states" in config:  # factory.project.yaml: the labels its state and command stores name (ADR-0016)
         facts = t.get("pr_fact_labels") or {}
-        found += [s["store"].get("label") or facts.get(s["store"].get("pr")) for s in config["states"].values()]
-        found += [c["store"].get("label") or c["store"].get("pr_label") for c in (config.get("commands") or {}).values()]
+        found += [s["store"].get("label") or s["store"].get("tag") or facts.get(s["store"].get("pr"))
+                  for s in config["states"].values()]
+        found += [c["store"].get("label") or c["store"].get("tag") or c["store"].get("pr_label") for c in (config.get("commands") or {}).values()]
         found = [x for x in found if x]
     for n in nodes["nodes"].values() if "states" not in config else []:
         found += [t.split(" ", 1)[1] for t in n.get("triggers") or [] if t.endswith(">") or t.count(" ") == 1
