@@ -60,6 +60,7 @@ def repo_probes(repo, run, risk_label, run_id="doctor"):
         probe(results, "write:update-branch", lambda: api("-X", "PUT", f"repos/{repo}/pulls/{pr}/update-branch"))
         probe(results, "read:actions-run-logs", lambda: run_log(api, run, repo))
         probe(results, "read:check-runs", lambda: api(f"repos/{repo}/commits/{sha}/check-runs"))
+        probe(results, "read:branch-rules", lambda: api(f"repos/{repo}/rules/branches/main"))
         probe(results, "read:commit-statuses", lambda: api(f"repos/{repo}/commits/{sha}/status"))
         probe(results, "read:timeline", lambda: api(f"repos/{repo}/issues/{issue}/timeline"))
     except Exception as e:

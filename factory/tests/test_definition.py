@@ -56,6 +56,22 @@ class DefinitionTest(unittest.TestCase):
         errs = self.errors()
         self.assertTrue(any(e.startswith(prefix) for e in errs), errs)
 
+    def test_environment_ci_checks_reach_the_compiled_config(self):
+        """#1211: `environments.<env>.ci.checks` of factory.yaml survives `config`, so the gate's `ci_checks_of` sees it."""
+        for label, ci, want in [("names", {"checks": ["a", "b"]}, ["a", "b"]), ("one name", {"checks": ["a"]}, ["a"]),
+                                ("empty list", {"checks": []}, []), ("no checks key", {}, []), ("ci null", None, [])]:
+            with self.subTest(label):
+                def change(f, ci=ci):
+                    for e in f["environments"].values():
+                        e.pop("ci", None)
+                    if ci is not None:
+                        f["environments"]["engine"]["ci"] = ci
+                self.edit("factory.yaml", change)
+                conf = definition.config(definition.load(self.root))
+                got = list(((conf["environments"]["engine"].get("ci")) or {}).get("checks") or [])
+                self.assertEqual(got, want)
+                self.assertEqual(list((conf["environments"].get("other") or {}).get("ci", {}).get("checks") or []), [])
+
     def test_fixture_is_valid(self):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
