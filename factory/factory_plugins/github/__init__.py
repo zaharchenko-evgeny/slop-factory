@@ -23,5 +23,8 @@ PLUGIN = Plugin(
            "deploy.provision": "factory_plugins.github.provision:provision",
            "deploy.run": "factory_plugins.github.provision:write_run",
            "deploy.files": "factory_plugins.github.wake:sync_wake_files",
-           "doctor.probes": "factory_plugins.github.probes:probes"},
+           "doctor.probes": "factory_plugins.github.probes:probes",
+           "gate.default_place": "factory_plugins.github.gate:default_place",
+           "doctor.run": "factory_plugins.github.tracker:gh",
+           "doctor.frontier": "factory_plugins.github.probes:frontier"},
 )

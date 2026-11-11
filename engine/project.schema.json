@@ -65,7 +65,12 @@
         "pr_fact_labels": {"type": "object", "additionalProperties": {"type": "string"}},
         "needs_human_label": {"type": "string"},
         "lesson_label": {"type": "string"},
-        "comment_label": {"type": "string"}
+        "comment_label": {"type": "string"},
+        "state_mirror": {"type": "object", "additionalProperties": {"type": "string"},
+                         "description": "YouTrack (#1260): {stage: State value} the gate also writes on each stage change."},
+        "state_mirror_field": {"type": "string"},
+        "state_rules": {"type": "object", "additionalProperties": {"type": "string"},
+                        "description": "YouTrack (#1260): {State value: stop | blocked}, read by each reconcile pass."}
       }
     },
     "repositories": {
@@ -93,6 +98,9 @@
         "properties": {
           "repositories": {"type": "array", "items": {"type": "string"}},
           "writable": {"type": "array", "items": {"type": "string"}},
+          "ci": {"type": "object", "additionalProperties": false,
+                 "properties": {"checks": {"type": "array", "items": {"type": "string"},
+                                           "description": "Names of the check runs and commit statuses that count as CI; overrides the base branch's required status checks."}}},
           "tokens": {"type": "object", "additionalProperties": {"type": "string"},
                      "description": "Repository name -> the secret that holds its write token (ADR-0027): the gate's issue, label and comment writes to it."},
           "domains": {"type": "array", "items": {"type": "string"}},
