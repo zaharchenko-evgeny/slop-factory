@@ -156,6 +156,33 @@ class WakeApprovedTest(unittest.TestCase):
         self.assertEqual(self.wake({**self.NODES, "blockers": "start"})[1], [])
 
 
+class ApprovalGraphTest(unittest.TestCase):
+    """`wake_approved` reads the team definition, not engine/nodes.yaml."""
+    SLOP = Path(__file__).resolve().parent / "fixtures/slop"
+
+    def graph(self, blockers, held):
+        defn = copy.deepcopy(definition.load(self.SLOP))
+        if blockers:
+            defn["workflow"]["blockers"] = blockers
+        if held:
+            defn["workflow"]["nodes"]["merge"]["when"] = {"stage": "approved", "blockers": "closed"}
+        return reconcile.approval_graph(defn)
+
+    def test_blockers_mode_and_merge_node_come_from_the_definition(self):
+        for blockers, held, want in (("merge", True, [("merge", "factory:merge")]), ("merge", False, []),
+                                     ("start", True, []), (None, True, [])):
+            with self.subTest(blockers=blockers, held=held):
+                graph = self.graph(blockers, held)
+                self.assertEqual(graph["blockers"], blockers or "start")
+                self.assertEqual([(n, label) for n, label, _ in reconcile.merge_labels(graph)],
+                                 [("merge", "factory:merge")] if held else [])
+                tr = MemorySystem({1: {"stage": "approved", "blockers_open": 0, "pr": 5, "pr_state": "open",
+                                        "label_at": {"factory:merge": "2026-11-06T10:00:00Z"}}})
+                tr.blocked_by = lambda n: [{"number": 9, "state": "closed"}]
+                got = reconcile.wake_approved(tr, graph, 30, now=WakeApprovedTest.NOW)
+                self.assertEqual([(r["node"], r["label"]) for r in got], want)
+
+
 class RecoverDefinitionTest(unittest.TestCase):
     """ADR-0021 team (fixtures/slop): the lost wakes come from workflow.yaml."""
     SLOP = Path(__file__).resolve().parent / "fixtures/slop"

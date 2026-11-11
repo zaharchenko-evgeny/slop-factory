@@ -20,7 +20,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
 import definition
-import nodes as nodes_mod
 import vocab
 
 PREFIX = "[factory] reconcile:"
@@ -329,6 +328,11 @@ def wake_approved(tracker, nodes, minutes, now=None, dry_run=False):
     return out
 
 
+def approval_graph(defn):
+    """The definition's node graph with its workflow `blockers` mode, as `wake_approved` reads it."""
+    return {**definition.nodes(defn), "blockers": defn["workflow"].get("blockers", "start")}
+
+
 def gate_blockers(nodes):
     import gate
     return gate.blockers_mode(nodes)
@@ -411,7 +415,7 @@ def reconcile_main(argv):
     minutes = config["limits"].get("run_timeout_minutes", 30)
     defn = definition.load(config_mod.team_root())
     results = wake_ready(tracker, minutes, dry_run=dry_run)
-    results += wake_approved(tracker, nodes_mod.load(), minutes, dry_run=dry_run)
+    results += wake_approved(tracker, approval_graph(defn), minutes, dry_run=dry_run)
     results += recover_definition(tracker, defn, stages, kinds, config["limits"],
                                   dry_run=dry_run, progress=progress)
     results += finish_lost(tracker, defn, [s for s in LOST_FINISH if s in stages],
