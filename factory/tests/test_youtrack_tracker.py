@@ -533,4 +533,3 @@ class ListTagsPagingTest(unittest.TestCase):  # list_tags pages past the first 1
         store = yt.YouTrackTicketStore(run)
         self.assertEqual(store.list_tags()["risk:low"], "id-risk:low")
         self.assertEqual(len(store.list_tags()), 2501)
-
