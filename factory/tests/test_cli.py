@@ -587,7 +587,7 @@ class EndFieldsTest(unittest.TestCase):
                     if isinstance(e, dict):
                         found.update(v for k, v in e.items() if k in self.READS and isinstance(v, str))
                         found.update(v["field"] for k, v in e.items()
-                                     if k in ("assign", "unassign") and isinstance(v, dict) and "field" in v)
+                                     if k in ("assign", "unassign", "request-reviewers") and isinstance(v, dict) and "field" in v)
                         found.update(re.findall(r"<([^>]+)>", " ".join(str(e.get(k, "")) for k in ("label", "unlabel"))))
                 for v in x.values():
                     walk(v)
@@ -601,7 +601,7 @@ class EndFieldsTest(unittest.TestCase):
         import yaml
         import gate
         root = Path(__file__).resolve().parents[2]
-        args = ["x", "--size-estimate", "1"]
+        args = ["x", "--size-estimate", "1", "--reviewer", "x"]
         for action in cli.end_parser()._actions:
             opt = next((o for o in action.option_strings if o.startswith("--")), None)
             if opt and isinstance(action, argparse._StoreAction) and action.dest not in ("findings", "slices", "checks", "addressed", "notes"):
@@ -612,6 +612,10 @@ class EndFieldsTest(unittest.TestCase):
             with self.subTest(name):
                 missing = self.effect_fields(yaml.safe_load((root / name).read_text())) - written
                 self.assertEqual(missing, set(), f"no `factory end` option writes {sorted(missing)}")
+
+    def test_end_reviewer_writes_the_reviewers_list(self):  # #1262
+        args = cli.end_parser().parse_args(["ask-human", "--reviewer", "alice", "--reviewer", "bob"])
+        self.assertEqual(cli.handoff_of(args)["reviewers"], ["alice", "bob"])
 
     def test_end_notified_message(self):
         self.assertEqual(cli.handoff_of(cli.end_parser().parse_args(["notified", "--message", "@o hi"]))["message"], "@o hi")

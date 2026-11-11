@@ -306,10 +306,32 @@ class DefinitionTest(unittest.TestCase):
         _, workflow = definition.to_project(definition.load(self.root))
         self.assertEqual(workflow["nodes"]["intake"]["outcomes"]["ready"]["effects"], effects)
 
+    def test_external_review_settings_go_together(self):  # #1263
+        full = {"external_review_bot": "jetbrains-air[bot]", "external_review_label": "factory:project-review"}
+        self.edit("workflow.yaml", lambda w: (w.setdefault("settings", {}).update(external_review_hours=2),
+                                              w["nodes"]["automerge"].setdefault("settings", {}).update(full)))
+        self.assertEqual(self.errors(), [])
+        self.edit("workflow.yaml", lambda w: w["nodes"]["automerge"]["settings"].pop("external_review_label"))
+        self.assertError("external-review: nodes.automerge")
+
     def test_assignment_field_form_validates(self):
         effects = [{"assign": {"field": "assignee"}, "on": "pr"}]
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(effects=effects))
         self.assertEqual(self.errors(), [])
+
+    def test_request_reviewers_forms_validate(self):  # #1262
+        for value in ("changes", ["alice"], {"field": "reviewers"}):
+            with self.subTest(value=value):
+                self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(
+                    effects=[{"request-reviewers": value, "on": "pr"}]))
+                self.assertEqual(self.errors(), [])
+
+    def test_request_reviewers_rejects_a_field_it_does_not_name(self):
+        for value in ({"fieldd": "x"}, {"field": ""}, {"field": 3}, 3, []):
+            with self.subTest(value=value):
+                self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(
+                    effects=[{"request-reviewers": value, "on": "pr"}]))
+                self.assertError("bad-effect: nodes.intake.ready: request-reviewers")
 
     def test_assignment_effect_rejects_other_dicts(self):
         for value in ({"fieldd": "x"}, {"field": "x", "extra": 1}, {"field": 3}):
