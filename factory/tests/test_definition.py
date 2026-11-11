@@ -59,6 +59,40 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    def test_air_output_matches_each_event_trigger(self):
+        import config
+        import deploy
+        from unittest.mock import patch
+
+        cases = [
+            ("YouTrack tag", "as-instructed", [{"stage": "triage"}], "bad-output: nodes.intake: as-instructed on a YouTrack-tag trigger (Air allows: read-only, create-pr)"),
+            ("YouTrack tag", "create-pr", [{"stage": "triage"}], None),
+            ("GitHub issue", "as-instructed", [{"stage": "triage"}], "bad-output: nodes.intake: as-instructed on a GitHub event trigger (Air allows: read-only, create-pr)"),
+            ("GitHub issue", "create-pr", [{"stage": "triage"}], None),
+            ("PR label", "push-to-source", [{"label": "factory:automerge"}], None),
+            ("PR event", "push-to-new-branch", [{"pr": "opened"}], "bad-output: nodes.intake: push-to-new-branch on a pull_request.* trigger (Air allows: read-only, push-to-source)"),
+            ("PR event", "read-only", [{"pr": "opened"}], None),
+            ("schedule", "as-instructed", [{"schedule": "0 1 * * *"}], None),
+            ("webhook", "as-instructed", [{"webhook": "hook"}], None),
+        ]
+        for kind, output, triggers, want in cases:
+            with self.subTest(kind=kind, output=output):
+                shutil.rmtree(self.root)
+                shutil.copytree(FIXTURE, self.root)
+                def factory(f):
+                    repo = f["environments"]["engine"]["repositories"][0]
+                    repo["write"] = True
+                    if kind == "YouTrack tag":
+                        f["tracker"] = {"adapter": "youtrack", "url": "https://yt.example", "project": "LME"}
+                self.edit("factory.yaml", factory)
+                def workflow(w):
+                    w["nodes"]["intake"].update(triggers=triggers, output=output)
+                self.edit("workflow.yaml", workflow)
+                defn = definition.load(self.root)
+                with patch("deploy.team_definition", return_value=defn):
+                    errs = deploy.output_errors(definition.nodes(defn), config.load())
+                self.assertEqual([e for e in errs if e.startswith("bad-output:")], [want] if want else [])
+
     # --- ADR-0027: repository tracker, vcs and write; node environments ----------------------------------------
     def _envs(self, f, **envs):
         """Replace the environments with `envs`: {name: [(repo, {keys})]}, keeping the engine's other settings."""

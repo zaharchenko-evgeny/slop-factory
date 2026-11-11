@@ -612,7 +612,9 @@ def _output_errors(nodes: dict, config: dict, name: str) -> list[str]:
     defn = team_definition()
     env_errs = [e for cls in classes if hasattr(cls, "environment_errors") and defn is not None
                 and definition.adopted(defn) for e in cls().environment_errors(defn)]  # ADR-0027
-    return env_errs + [f"unsupported-output: nodes.{k}: output {n['output']!r} is not supported by surface {', '.join(names)} "
+    trigger_errs = [e for cls in classes if hasattr(cls, "trigger_output_errors") and defn is not None
+                    and definition.adopted(defn) for e in cls().trigger_output_errors(defn, nodes)]
+    return env_errs + trigger_errs + [f"unsupported-output: nodes.{k}: output {n['output']!r} is not supported by surface {', '.join(names)} "
             f"(supported: {', '.join(sorted(supported))})"
             for k, n in nodes["nodes"].items() if n.get("output") and n["output"] not in supported
             and n.get("enabled") is not False and n.get("role") != "human" and not n.get("runner")]

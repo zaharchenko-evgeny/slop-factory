@@ -29,6 +29,8 @@ Selected by `tracker.adapter` in `factory.yaml`.
 - Event triggers for Air: ticket events render as `source: youtrack`, `eventType: issueUpdated`, with filter
   `tagAdded: <tag>` for a tag store, or `<field name>: <value>` for a field store (exact, case-sensitive). PR triggers
   stay `source: github`.
+- Air allows `create-pr` or `read-only` output on YouTrack event triggers. The #1261 draft-PR flow uses
+  `as-instructed`, so its tickets must come from GitHub Issues.
 - `factory doctor` checks the token variable, the project and every mapped tag and field value (read-only; it reports
   a missing one and never creates it). `uv run scripts/youtrack_probe.py <ISSUE>` loads one issue read-only.
 - Shared `State` field, when stages are tags: `tracker.state_mirror: {<stage>: <State value>}` makes every stage

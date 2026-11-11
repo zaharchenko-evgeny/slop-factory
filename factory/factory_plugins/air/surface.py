@@ -1,11 +1,14 @@
-"""The `air` surface (ports/surface.py): the Air plan, the live automations and environments, their diff and apply.
+"""The `air` surface (ports/surface.py): validation hooks plus the Air plan, live automations and environments.
 
-Only `outputs()` is answered here; the rest imports factory_plugins/air/deploy.py when called, so `factory validate`
-checks a node's `output:` without loading the Air deploy code.
+Air deploy code is imported only when a plan or live state is needed, so `factory validate` does not load it.
 """
 
 # The `outputBehaviour` values of Air's create_automation (factory/tests/contracts/air-mcp.json)
 OUTPUTS = ("read-only", "push-to-source", "push-to-new-branch", "create-pr", "as-instructed")
+EVENT_OUTPUTS = {
+    "GitHub event": ("read-only", "create-pr"),
+    "pull_request.*": ("read-only", "push-to-source"),
+}
 
 
 class AirSurface:
@@ -52,3 +55,29 @@ class AirSurface:
                 f"repository per environment"
                 for e in (defn["factory"].get("environments") or {})
                 if len(writable := [r["repo"] for r in definition.repositories(defn, e) if r["write"]]) > 1]
+
+    def trigger_output_errors(self, defn, nodes):
+        """Reject output behaviours that Air does not allow for an event trigger."""
+        import definition
+        errs = []
+        for name, node in (defn["workflow"].get("nodes") or {}).items():
+            if node.get("enabled") is False:
+                continue
+            output = node.get("output", "read-only")
+            if output not in OUTPUTS:
+                continue  # the normal output check reports invalid values
+            for copy in definition.copies(defn, name):
+                copy_output = output if copy["write"] else "read-only"
+                for trigger in (nodes.get("nodes", {}).get(name) or {}).get("triggers") or []:
+                    if trigger.startswith(("schedule ", "webhook ", "manual")):
+                        continue
+                    kind = "pull_request.*" if trigger.startswith("pull_request.") else "GitHub event"
+                    allowed = EVENT_OUTPUTS[kind]
+                    if copy.get("tracker") and copy["tracker"].get("adapter") == "youtrack" \
+                            and trigger.startswith("issues.labeled"):
+                        kind = "YouTrack-tag"
+                        allowed = EVENT_OUTPUTS["GitHub event"]
+                    if copy_output not in allowed:
+                        errs.append(f"bad-output: nodes.{name}: {copy_output} on a {kind} trigger "
+                                    f"(Air allows: {', '.join(allowed)})")
+        return errs
