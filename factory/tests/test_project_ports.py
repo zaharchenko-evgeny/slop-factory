@@ -59,10 +59,19 @@ class ProjectPortsTest(unittest.TestCase):
         t = tracker()
         with self.assertRaisesRegex(UnsupportedStore, "needs-review: this tracker has no field store"):
             t.set_state(7, "needs-review")
-        with self.assertRaisesRegex(UnsupportedStore, "close: this tracker has no tag store"):
-            t.add_command(7, "close")
+        self.assertTrue(t.add_command(7, "close"))  # #1298: a tag store is a label on a tracker without tags
         with self.assertRaises(KeyError):
             t.add_command(7, "deploy")
+
+    def test_tag_stores_are_labels_on_a_label_tracker(self):  # #1298: GitHub issues beside YouTrack tickets
+        descriptor = project.load(FIXTURE)
+        descriptor["states"]["ready"] = {"kind": "active", "store": {"tag": "factory:ready"}}
+        descriptor["commands"]["implement-<tier>"] = {"store": {"tag": "factory:implement-<tier>"}}
+        t = MemorySystem({7: {"stage": "draft"}}, project=descriptor)
+        self.assertTrue(t.set_state(7, "ready"))
+        self.assertEqual(t.state(7), "ready")
+        self.assertTrue(t.add_command(7, "implement-mid"))
+        self.assertEqual(t.commands(7), ["implement-mid"])
 
     def youtrack(self):
         """A tracker over the fixture project-youtrack, its tickets in a stubbed YouTrack."""

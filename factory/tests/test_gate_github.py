@@ -572,8 +572,8 @@ class EffectsTest(unittest.TestCase):
         self.assertIn(["pr", "edit", "5", "-R", REPO, "--add-label", "factory:pr-review"], gh.writes)
         self.assertTrue(t.remove_command(7, "pr-review"))
         self.assertIn(["pr", "edit", "5", "-R", REPO, "--remove-label", "factory:pr-review"], gh.writes)
-        with self.assertRaisesRegex(ValueError, "no tag store"):
-            t.add_command(7, "close")
+        self.assertTrue(t.add_command(7, "close"))  # #1298: a tag store is the issue's label on GitHub
+        self.assertIn(["issue", "edit", "7", "-R", REPO, "--add-label", "close"], gh.writes)
         with self.assertRaisesRegex(ValueError, "no field store"):
             t.set_state(7, "needs-review")
 
