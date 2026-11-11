@@ -273,23 +273,6 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
             + tail)
 
 
-def bootstrap_instructions(main_repository: dict | None, config: dict) -> str:
-    """The first prompt step of an automation whose main repository is a project: Air runs that repository's own
-    startup script, so the team's script (engine, ~/factory-team, `factory setup`) runs from the team checkout."""
-    if not main_repository:
-        return ""
-    primary = next(r for r in config["repositories"] if r.get("role") == "primary")
-    team = {"url": config.get("team_repository") or primary["url"]}
-    if main_repository["fullName"] == repository(team)["fullName"]:
-        return ""
-    name = repository(team)["fullName"].rsplit("/", 1)[-1]
-    return ("## Bootstrap\n\nBefore every other command, run `FACTORY_SKIP_IF_INSTALLED=1 sh "
-            f"/workspaces/{name}/.air/cloud/startup.sh` once, in the foreground. "
-            "This repository's own startup script does not install the factory. "
-            "The script skips itself when `factory` is installed at the pinned version and `~/factory-team` exists. "
-            "If it fails, report `blocked` and stop.\n\n")
-
-
 def node_repository_prefix(main_repository: dict | None, config: dict) -> str:
     """Select this ticket repository when a copied automation starts a factory command."""
     if not main_repository:
@@ -302,7 +285,7 @@ def node_repository_prefix(main_repository: dict | None, config: dict) -> str:
 
 def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None,
                   webhook: bool = False) -> str:
-    checkout = (bootstrap_instructions(main_repository, config) + checkout_instructions(main_repository, config)) if config else ""
+    checkout = checkout_instructions(main_repository, config) if config else ""
     command_prefix = node_repository_prefix(main_repository, config) if config else ""
     if name.startswith("doctor"):
         engine = name == "doctor-ops"
@@ -379,7 +362,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
     role = n["role"]
     servers = mcp_connectors(n, config, focus)
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
-    checkout = bootstrap_instructions(main_repository, config) + checkout_instructions(main_repository, config)
+    checkout = checkout_instructions(main_repository, config)
     import definition
     if definition.present(config_mod.team_root()):  # ADR-0021: the node's role body, rendered with its settings
         defn = definition.load(config_mod.team_root())
