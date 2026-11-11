@@ -746,6 +746,16 @@ def apply_routine(name, outcome, nodes):
     return GO, {"applied": True, "written": []}
 
 
+def payload_logins(value, name):
+    """The logins an agent wrote in payload field `name`: a list, or one string of logins split at commas or spaces
+    (`factory end --field reviewers=a,b`). Bad when there is none."""
+    if isinstance(value, str):
+        value = re.split(r"[,\s]+", value.strip())
+    if not (isinstance(value, list) and value and all(isinstance(v, str) and v.strip() for v in value)):
+        raise Bad(f"payload: field `{name}` must be a non-empty login or list of logins")
+    return [v.strip() for v in value]
+
+
 def resolve(effect, payload, ticket):
     """(kind, value) of one effect; a missing payload field raises Bad naming it."""
     (kind, arg), = [(k, v) for k, v in effect.items() if k != "on"]
@@ -760,14 +770,12 @@ def resolve(effect, payload, ticket):
     if kind in ("label", "unlabel"):
         out = {"kind": kind, "ticket": ticket, "value": re.sub(r"<([^>]+)>", lambda m: str(field(m[1])), arg)}
         return {**out, "on": on} if on else out
-    if kind in ("assign", "unassign"):
+    if kind in ("assign", "unassign", "request-reviewers"):
         if kind == "assign" and arg == "owner":
             arg = config_mod.owner()
-        elif kind == "assign" and isinstance(arg, dict):  # `assign: {field: assignee}`: the login(s) the agent wrote
-            arg = field(arg["field"])
-            if not (isinstance(arg, str) and arg.strip()) and not (
-                    isinstance(arg, list) and arg and all(isinstance(v, str) and v.strip() for v in arg)):
-                raise Bad(f"payload: field `{effect['assign']['field']}` must be a non-empty login or list of logins")
+        elif kind in ("assign", "request-reviewers") and isinstance(arg, dict):  # `{field: assignee}`: the agent's logins
+            arg = payload_logins(field(arg["field"]), arg["field"])
+            arg = arg[0] if kind == "assign" and len(arg) == 1 else arg  # one assignee stays a login
         out = {"kind": kind, "ticket": ticket, "value": arg}
         return {**out, "on": on} if on else out
     if kind in ("comment", "create-issues"):
@@ -914,13 +922,14 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         for e in posted:
             tracker.apply(e)
         raise RuntimeError("notify failed: " + "; ".join(failures))
-    written = []
+    written, skipped = [], []  # skipped: what an effect left out and why (request-reviewers: the PR author)
     for e in effects + after:
         if payload.get("review_replay") and e["kind"] == "review":
             continue  # the marker proves this review already landed
         try:
             if tracker.apply(e):
                 written.append(e["kind"])
+            skipped += [f"{e['kind']}: {x}" for x in e.get("skipped") or []]
         except Exception as error:
             if written:
                 report = {"kind": "comment", "ticket": ticket, "on": "pr",
@@ -932,7 +941,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
                     raise RuntimeError(f"{error}; partial outcome report also failed: {report_error}") from error
             raise
     parent = parent_decision(name, ticket, effects, tracker, nodes)
-    return GO, {"applied": True, "written": written, **({"parent": parent} if parent else {})}
+    return GO, {"applied": True, "written": written, **({"skipped": skipped} if skipped else {}),
+                **({"parent": parent} if parent else {})}
 
 
 def review_outcome(node, review):
