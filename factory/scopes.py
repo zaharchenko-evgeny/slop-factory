@@ -19,7 +19,7 @@ has none of this: its one top-level tracker, as before.
 import plugins
 
 SYSTEM_KEYS = ("adapter", "repository", "url", "project", "token_env", "done_state", "repository_field", "bot_logins",
-               "scope", "repositories", "projects")
+               "scope", "repositories", "projects", "state_mirror", "state_mirror_field", "state_rules")
 SCOPE_KEYS = {"github-issues": ({"label"}, set()), "youtrack": ({"field", "value"}, {"type"})}  # (required, optional)
 
 

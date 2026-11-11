@@ -73,6 +73,8 @@ class DefinitionTest(unittest.TestCase):
         self.edit("factory.yaml", lambda f: (
             self._envs(f, engine=[(MAIN, {"write": True}),
                                   (OTHER, {"tracker": {"adapter": "youtrack", "scope": {"field": "Subsystem", "value": "S3"}}})]),
+            f["tracker"].update(state_mirror={"ready": "Open"}, state_mirror_field="State",
+                                state_rules={"Closed": "stop"}),
             f["environments"]["engine"].update(tracker={"adapter": "youtrack", "url": "https://yt", "project": "LME"})))
         defn = definition.load(self.root)
         main, other = definition.repositories(defn, "engine")
@@ -80,6 +82,8 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual((main["tracker"]["adapter"], main["tracker"]["project"], main["tracker"].get("scope")), ("youtrack", "LME", None))
         self.assertEqual(other["tracker"]["scope"], {"field": "Subsystem", "value": "S3"})
         self.assertNotIn("repository", other["tracker"])  # the github system key does not cross to youtrack
+        for key in ("state_mirror", "state_mirror_field", "state_rules"):
+            self.assertNotIn(key, other["tracker"])
         self.assertEqual(main["vcs"]["adapter"], "github")
 
     def test_github_issues_place_defaults_to_the_repository(self):
@@ -325,6 +329,11 @@ class DefinitionTest(unittest.TestCase):
         errs = []
         config._check(schema, compiled, "factory.project.yaml", errs)
         self.assertEqual([e for e in errs if "state_" in e], [])
+        self.edit("factory.yaml", lambda f: f["tracker"].update(state_rules={"Open": "drop"}))
+        compiled, _ = definition.to_project(definition.load(self.root))
+        errs = []
+        config._check(schema, compiled, "factory.project.yaml", errs)
+        self.assertTrue(any("factory.project.yaml.tracker.state_rules.Open" in e for e in errs), errs)
 
     def test_assignment_field_form_validates(self):
         effects = [{"assign": {"field": "assignee"}, "on": "pr"}]
