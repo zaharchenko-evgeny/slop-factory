@@ -133,6 +133,27 @@ class ProjectWriteProbeTest(unittest.TestCase):
         self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/r", "ok")])
         self.assertEqual(gh.tokens, ["iss", "iss"])
 
+    def test_push_probe_creates_and_deletes_a_branch_for_a_writable_repository_with_a_token(self):
+        """#1237: only `write: true` plus `token` is push-probed; the branch is deleted at once, with the same token."""
+        for name, env, pushed in (("writable", {"secrets": [], "tokens": {"app": "APP_TOKEN"}, "writable": ["app"]}, True),
+                                  ("read-only", {"secrets": [], "tokens": {"app": "APP_TOKEN"}, "writable": ["main"]}, False)):
+            with self.subTest(name):
+                settings = {**self.SETTINGS, "environments": {"team": env}}
+                class Gh(FakeGh):
+                    def __call__(self, args, token=None):
+                        out = super().__call__(args, token)
+                        return json.dumps({"sha": "abc"}) if args[:2] == ["api", "repos/o/app/commits/HEAD"] else out
+                gh = Gh()
+                got = github_probes.project_write_probes(settings, "team", gh, {"APP_TOKEN": "tok"})
+                self.assertEqual([(r["probe"], r["result"]) for r in got],
+                                 [("write:label:o/app", "ok")] + ([("push:branch:o/app", "ok")] if pushed else []))
+                refs = [c for c in gh.calls if c[:1] == ["api"] and "git/refs" in " ".join(c)]
+                self.assertEqual([c[2] for c in refs], ["POST", "DELETE"] if pushed else [])
+                if pushed:
+                    self.assertEqual(refs[0][3], "repos/o/app/git/refs")
+                    self.assertTrue(refs[1][-1].endswith(refs[0][5].removeprefix("ref=refs/heads/")))
+                    self.assertEqual(set(gh.tokens), {"tok"})
+
     def test_the_environment_repository_is_not_probed_for_the_issues_token(self):
         """#1126: Air's own token writes the environment's repository, so the issues token is not needed there."""
         settings = {**self.SETTINGS, "environments": {"team": {"secrets": [], "tokens": {"app": "FACTORY_ISSUES_TOKEN"}}}}

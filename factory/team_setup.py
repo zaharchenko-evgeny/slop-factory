@@ -9,6 +9,7 @@ automation's main one: scripts get it as `FACTORY_NODE_REPO` (ADR-0024).
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -105,9 +106,38 @@ def install(defn, environment, home, fetcher=fetch, run=subprocess.run, checkout
         lines.append(f"ran {script.relative_to(root)}")
     if node is not None and node not in (defn["workflow"].get("nodes") or {}):
         raise SystemExit(f"factory setup: unknown node {node}")
+    lines += set_credentials(defn, environment, checkout or Path.cwd(), run=run)
     written = write_mcp_json(defn, checkout or Path.cwd(), node)
     if written:
         lines.append(f".mcp.json: {', '.join(written)}")
+    return lines
+
+
+SECRET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def set_credentials(defn, environment, checkout, run=subprocess.run, environ=os.environ):
+    """Make `git push` work in each additional checkout of `environment` that is `write: true` with a `token`
+    (ADR-0027): its git credential helper answers with the secret the `token` names. The helper reads the secret
+    from the environment when git asks, so the value is never written to disk or printed. The main checkout and a
+    checkout without a `token` keep Air's credential. Returns the lines it printed."""
+    root = Path(os.environ.get("FACTORY_WORKSPACES") or Path(checkout).resolve().parent)
+    lines = []
+    for r in definition.repositories(defn, environment)[1:]:
+        if not (r["write"] and r["token"]):
+            continue
+        where = root / r["repo"].rsplit("/", 1)[-1]
+        if not SECRET_NAME.fullmatch(r["token"]):
+            raise SystemExit(f"factory setup: {r['repo']}: `token` is not a secret name")
+        if not (where / ".git").exists():
+            lines.append(f"credential {r['repo']}: no checkout at {where}")
+        elif not environ.get(r["token"]):
+            lines.append(f"credential {r['repo']}: {r['token']} is not set")
+        else:
+            helper = f'!f() {{ echo username=x-access-token; echo "password=${r["token"]}"; }}; f'
+            run(["git", "-C", str(where), "config", "--local", "credential.helper", ""], check=True)  # drop Air's helper
+            run(["git", "-C", str(where), "config", "--local", "--add", "credential.helper", helper], check=True)
+            lines.append(f"credential {r['repo']}: {r['token']}")
     return lines
 
 

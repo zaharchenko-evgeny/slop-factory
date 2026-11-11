@@ -345,11 +345,20 @@ def _repository_warnings(defn):
     out += [f"deprecated-key: tracker.{k} (ADR-0027: each repository names its tracker)"
             for k in ("repositories", "projects") if k in (f.get("tracker") or {}) and not adopted(defn)]
     for e, spec in (f.get("environments") or {}).items():  # raw flags: no plugin code is imported here
-        writable = [str(r.get("repo")) for r in (spec or {}).get("repositories") or [] if isinstance(r, dict) and r.get("write") is True]
-        if len(writable) > 1:
+        if writable := several_writable(spec):
             out.append(f"several-writable: environments.{e}: {', '.join(writable)}: the air surface allows one "
                        f"writable repository per environment")
     return out
+
+
+def several_writable(spec):
+    """The `write: true` repositories of environment spec `spec` when it has more than one and one besides its main
+    repository (the first) has no `token` (ADR-0027: Air pushes only the main one; a `token` pushes the others);
+    else []. Raw flags: no plugin code."""
+    repos = [r for r in (spec or {}).get("repositories") or [] if isinstance(r, dict)]
+    writable = [r for r in repos if r.get("write") is True]
+    return [str(r.get("repo")) for r in writable] \
+        if len(writable) > 1 and any(not r.get("token") for r in writable if r is not repos[0]) else []
 
 
 def environment_secrets(defn, env_name):
