@@ -417,9 +417,8 @@ def scope_filter(trig: dict, block: dict) -> dict:
     """An EVENT trigger of a project environment (#1069), narrowed to its scope where Air can filter on it: a YouTrack
     event also matches the scope field's value. A GitHub event has no filter on a label the issue already carries
     (`label` is the label the event adds), so the gate's scope check leaves another project's ticket alone."""
-    scope = block.get("scope") or {}
-    if trig.get("source") == "youtrack" and scope.get("field"):
-        return {**trig, "filters": {**trig.get("filters", {}), scope["field"]: scope["value"]}}
+    for fn in plugins.registry({"tracker": block}).hook("deploy.scope_filter"):
+        trig = fn(trig, block)
     return trig
 
 

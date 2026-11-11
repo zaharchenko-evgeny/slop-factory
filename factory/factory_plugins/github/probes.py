@@ -142,3 +142,8 @@ def comment_wake_probes(settings, run):
                     raise RuntimeError("file content differs from factory source")
             probe(results, name, check)
     return results
+
+
+def frontier():
+    """Hook `doctor.frontier`: the function that returns the issue numbers of the GitHub tracker's frontier."""
+    return github_tracker.GitHubTracker.from_config()._frontier

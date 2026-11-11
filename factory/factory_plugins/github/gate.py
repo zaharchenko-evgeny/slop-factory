@@ -140,8 +140,15 @@ def repository_names(c):
     return {r["name"]: "/".join(r["url"].rstrip("/").split("/")[-2:]) for r in repos} or None
 
 
+def default_place():
+    """Hook `gate.default_place`: the key of the place of the config's own GitHub tracker."""
+    return "github"
+
+
 class GitHubCodeHost:
     """The GitHub repository that hosts the pull requests; `code_host.repository`, else the tracker's."""
+
+    live_pr_ticket = True  # a PR's ticket comes from a live lookup, never from its branch name or title
 
     def __init__(self, repo, run=gh, ticket_repos=None, ci_checks=()):
         self.repo, self.run, self.ci_checks = repo, run, list(ci_checks)

@@ -631,9 +631,8 @@ def main(argv, run=None):
     if "--dry-run" in argv or any(a.startswith("memory:") for a in argv):
         return reconcile_main(argv)
     import doctor
-    from factory_plugins.github import tracker as github_tracker
-    run = run or github_tracker.gh
     settings = config_mod.load()
+    run = run or doctor.issue_run(settings)
     repo = settings["tracker"].get("repository") or config_mod.vcs(settings)["repository"]
     try:
         code = reconcile_main(argv)
@@ -648,8 +647,7 @@ def main(argv, run=None):
 def report_systemic(config, systemic, run=None):
     """Open `Doctor: runs end without an outcome` (no new comment while it is open), or close it when no run missed."""
     import doctor
-    from factory_plugins.github import tracker as github_tracker
-    run = run or github_tracker.gh
+    run = run or doctor.issue_run(config)
     repo = config["tracker"].get("repository") or config_mod.vcs(config)["repository"]
     probe = "runs-without-outcome"
     if not systemic:

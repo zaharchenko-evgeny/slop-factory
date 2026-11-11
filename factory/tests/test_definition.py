@@ -17,6 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+import config  # noqa: E402
 import definition  # noqa: E402
 
 FIXTURE = ROOT / "tests/fixtures/v2"
@@ -329,6 +330,17 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(self.errors(), [])
         self.edit("workflow.yaml", lambda w: w["nodes"]["automerge"]["settings"].pop("external_review_label"))
         self.assertError("external-review: nodes.automerge")
+
+    def test_state_mirror_and_rules_compile_against_the_schema(self):  # #1287: #1260's keys in the compiled tracker
+        keys = {"state_mirror": {"ready": "Open", "in-dev": "In progress"}, "state_mirror_field": "State",
+                "state_rules": {"Obsolete": "stop", "To be discussed": "blocked"}}
+        self.edit("factory.yaml", lambda f: f["tracker"].update(keys))
+        compiled, _ = definition.to_project(definition.load(self.root))
+        self.assertEqual({k: compiled["tracker"].get(k) for k in keys}, keys)
+        schema = json.loads((Path(__file__).resolve().parents[2] / "engine/project.schema.json").read_text())
+        errs = []
+        config._check(schema, compiled, "factory.project.yaml", errs)
+        self.assertEqual([e for e in errs if "state_" in e], [])
 
     def test_assignment_field_form_validates(self):
         effects = [{"assign": {"field": "assignee"}, "on": "pr"}]

@@ -183,7 +183,7 @@ def from_trigger(d, code_host=None):
         else "pull_request" if is_pr else "issues"  # a comment on a PR arrives as an issue event of its number
     if is_pr:
         ticket = pr_ticket(code_host, number, d.get("repository")) if code_host else None
-        if ticket is None and not is_github(code_host):  # a live lookup is the only source for GitHub
+        if ticket is None and not live_pr_ticket(code_host):  # a live lookup is the only source for GitHub
             ticket = ticket_from_ref(((pr or {}).get("head") or {}).get("ref")) or ticket_from_ref((pr or {}).get("title"))
         if ticket is None:
             raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
@@ -195,12 +195,12 @@ def from_trigger(d, code_host=None):
     return {"id": f"{name}:{ticket}:{action}", "ticket": ticket, "event_name": name, "action": action}
 
 
-def is_github(code_host):
-    """Whether `code_host` is the github plugin's vcs; a plugin module never imported built none."""
+def live_pr_ticket(code_host):
+    """Whether the vcs of `code_host` only looks a PR's ticket up live (its `live_pr_ticket` flag, set by the github
+    plugin's vcs)."""
     if isinstance(code_host, scopes.ScopedTracker):  # environments with their own trackers: the vcs a PR is looked up on
         code_host = code_host.vcs_for()[1]
-    module = sys.modules.get("factory_plugins.github.gate")
-    return module is not None and isinstance(code_host, module.GitHubCodeHost)
+    return bool(getattr(code_host, "live_pr_ticket", False))
 
 
 def tracker_of(config, **runners):
@@ -259,12 +259,17 @@ def env_systems(config, env, **runners):
     return beside(tracker, vcs_cls.from_config(descriptor=c, **({"run": tracker.run} if hasattr(tracker, "run") else {})))
 
 
+def default_place(config):
+    """The key of the place of the config's own tracker (hook `gate.default_place`), else None."""
+    return next((key for hook in plugins.registry(config).hook("gate.default_place") if (key := hook())), None)
+
+
 def place_keys(config):
-    """({key: tracker block}, {key: [owner/repo, ...]}) of the ADR-0027 ticket places: `github` for the GitHub
-    tracker's repositories (when it has any), then `place:<owner/repo>` per `ticket_places` entry."""
+    """({key: tracker block}, {key: [owner/repo, ...]}) of the ADR-0027 ticket places: the default place for the
+    config's tracker's repositories (when it has any), then `place:<owner/repo>` per `ticket_places` entry."""
     t, envs, repos = config.get("tracker") or {}, {}, {}
-    if t.get("repositories"):
-        envs["github"], repos["github"] = t, list(t["repositories"])
+    if t.get("repositories") and (key := default_place(config)):
+        envs[key], repos[key] = t, list(t["repositories"])
     for p in config["ticket_places"]:
         key = f"place:{p['repository']}"
         envs[key], repos[key] = scopes.merged(config, p["tracker"]), p["repositories"]
@@ -274,7 +279,7 @@ def place_keys(config):
 def place_systems(config, key, **runners):
     """The (tracker, vcs) of ticket place `key` (`place_keys`): the GitHub tracker of the config, or a place's own
     tracker on its repository's vcs."""
-    if key == "github":
+    if key == default_place(config):
         tracker = tracker_of({k: v for k, v in config.items() if k != "ticket_places"}, **runners)
         vcs_cls = vcs_class(config, config_mod.vcs(config))
         return beside(tracker, vcs_cls.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {})))
@@ -839,8 +844,10 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         out = node["outcomes"][out["else"]]  # ADR-0021: e.g. automatic merge refused for a high-risk ticket
     if out.get("ci") and tracker.facts(ticket)["ci"] not in out["ci"] and out.get("else") in node["outcomes"]:
         out = node["outcomes"][out["else"]]  # e.g. all reviews approve but CI is red: a fix round
-        if "tier" not in payload:  # the agent saw `approved`; the fix label needs the cheapest fix tier
-            payload = {**payload, "tier": node.get("else_tier") or nodes["nodes"]["fix"]["tiers"][0]}
+        fix_tiers = ((nodes.get("nodes") or {}).get("fix") or {}).get("tiers") or []
+        tier = node.get("else_tier") or (fix_tiers[0] if fix_tiers else None)
+        if "tier" not in payload and tier:  # the fix label needs the cheapest fix tier; a run loads only its own
+            payload = {**payload, "tier": tier}  # node (#1288), and a definition team's fix label names no tier
     if node.get("output") == "as-instructed" and not tracker.facts(ticket).get("pr") and \
             any("label" in e and e.get("on") == "pr" for e in out.get("effects") or []):
         cmd = draft_pr_commands({**node, "outcomes": {outcome: out}}, ticket, branch_of({**tracker.facts(ticket), "ticket": ticket},
@@ -1382,8 +1389,9 @@ def main(argv):
     path = ""
     code_host = None
     try:
-        kind, _, path = (a.tracker or "github").partition(":")
-        if kind == "github" and not path:
+        live = default_place(config_mod.load())  # the CLI word of the config's own tracker
+        kind, _, path = (a.tracker or live or "").partition(":")
+        if kind == live and live and not path:
             tracker, code_host = systems(config_mod.load())
         elif kind == "memory" and path:
             try:
@@ -1392,7 +1400,7 @@ def main(argv):
             except (OSError, ValueError, TypeError) as e:
                 raise Bad(f"malformed --tracker file: {e}")
         else:
-            raise Bad("--tracker is github or memory:FILE")
+            raise Bad(f"--tracker is {live or 'a tracker'} or memory:FILE")
         nodes = spec_nodes(a.spec) if a.spec else nodes_mod.load(a.nodes)
         config = config_mod.load()
         if a.cmd == "ci":
