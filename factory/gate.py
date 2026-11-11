@@ -773,6 +773,11 @@ def resolve(effect, payload, ticket):
     if kind in ("comment", "create-issues"):
         out = {"kind": kind, "ticket": ticket, "value": field(arg)}
         return {**out, "on": on} if on else out
+    if kind == "create-follow-up":  # #1264: one ticket {title, body, repo} that waits for this one
+        value = field(arg)
+        if not (isinstance(value, dict) and isinstance(value.get("title"), str) and value["title"].strip()):
+            raise Bad(f"payload: field `{arg}` must be a ticket with a title")
+        return {"kind": kind, "ticket": ticket, "value": value}
     if kind in ("park-behind-main-red", "route", "reply"):
         return {"kind": kind, "ticket": ticket, "value": field(arg)}
     if plugins.owner(kind, "effect"):  # a plugin's effect (notify): its handler reads the payload (ADR-0026)

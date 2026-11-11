@@ -23,7 +23,7 @@ import yaml
 import config
 from gate_tracker import GateTracker
 from gate_port import (DescriptorPort, child_attrs, child_links, child_order, in_ticket_repository, number_of, ticket_view,
-                       ticket_from_ref, ticket_ref, ticket_repositories, tracker_repositories)
+                       split_ticket, ticket_from_ref, ticket_ref, ticket_repositories, tracker_repositories)
 from scopes import matches
 from factory_plugins.github import graphql
 from factory_plugins.github.tracker import CountedRun, ProjectWriteRun, checked_out, gh, project_repositories, repository_tokens, random_color
@@ -477,6 +477,38 @@ class GitHubTicketStore:
                 wrote = True
             wrote = wrote or not linked or new["id"] not in blockers
             made[k] = (new["id"], new["number"], repo)
+        return wrote
+
+    def create_follow_up(self, n, f, ready):
+        """One ticket `f` ({title, body, repo}) that depends on ticket `n` and relates to `n`'s parent (a `Relates to:`
+        line); an open issue of that title this ticket created is reused, each missing link is added and `ready` is
+        set last, so a retry converges (#1264)."""
+        repo, mark = self.repo_of(f), f"<!-- factory:follow-up of={n} -->"
+        ref = lambda number, where: f"{where}#{number}" if where != repo else f"#{number}"  # noqa: E731
+        parent = self.parent(n)
+        p_repo, p_number = split_ticket(parent, self.repo) if parent else (None, None)
+        body = "\n\n".join(x for x in (f.get("body") or "", parent and f"Relates to: {ref(p_number, p_repo)}", mark) if x)
+        new = next((i for i in reversed(self.read_list("issues?state=open&per_page=100", repo=repo))
+                    if "pull_request" not in i and i["title"] == f["title"] and mark in (i.get("body") or "")), None)
+        wrote = new is None
+        if new is None:
+            new = json.loads(self.run(["api", "-X", "POST", f"repos/{repo}/issues", "-f", f"title={f['title']}",
+                                       "-f", f"body={body}", *[x for r in self.scope_labels() for x in ("-f", f"labels[]={r}")]]))
+        number, have, text = new["number"], {x["name"] for x in new.get("labels") or []}, new.get("body") or body
+        mine = self.api(f"issues/{n}")["id"]
+        if mine not in {b["id"] for b in self.read_list(f"issues/{number}/dependencies/blocked_by", repo=repo)} \
+                and f"Blocked by: {ref(n, self.repo)}" not in text:
+            try:
+                self.run(["api", "-X", "POST", f"repos/{repo}/issues/{number}/dependencies/blocked_by", "-F", f"issue_id={mine}"])
+            except RuntimeError as e:
+                if "403" not in str(e) and "Resource not accessible" not in str(e):
+                    raise
+                self.run(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f",
+                          f"body={self._blocked_body(text, n, self.repo, repo)}"])
+            wrote = True
+        if ready not in have:  # publish `ready` only once the link exists
+            self.run(["api", "-X", "POST", f"repos/{repo}/issues/{number}/labels", "-f", f"labels[]={ready}"])
+            wrote = True
         return wrote
 
     def park(self, n, check, triage):
@@ -1233,6 +1265,9 @@ class GitHubGateTracker(DescriptorPort):
     def _fx_create_issues(self, e, ctx):
         return self.tickets.create_children(e["ticket"], e["value"], self.stages["ready"])
 
+    def _fx_create_follow_up(self, e, ctx):
+        return self.tickets.create_follow_up(e["ticket"], e["value"], self.stages["ready"])
+
     def _fx_park(self, e, ctx):
         return self.tickets.park(e["ticket"], e["value"], self.stages["triage"])
 
@@ -1277,6 +1312,7 @@ class GitHubGateTracker(DescriptorPort):
         Effect("react", "ticket", _fx_react), Effect("react", "pr", _fx_react),
         Effect("review", "pr", _fx_review, remote=True), Effect("request-reviewers", "pr", _fx_request_reviewers),
         Effect("create-issues", "ticket", _fx_create_issues), Effect("park-behind-main-red", "ticket", _fx_park),
+        Effect("create-follow-up", "ticket", _fx_create_follow_up),
         Effect("merge", "pr", _fx_merge, remote=True), Effect("update-branch", "pr", _fx_update_branch, remote=True),
     )
 

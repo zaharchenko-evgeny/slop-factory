@@ -25,6 +25,7 @@ ACTIVITY_CATEGORIES = "TagsCategory,CustomFieldCategory,IssueResolvedCategory"
 COMMENT_FIELDS = "text,created,author(login)"
 TOP = "$top=1000"
 CHILD_MARK = "<!-- factory:child of={n} -->"
+FOLLOW_UP_MARK = "<!-- factory:follow-up of={n} -->"
 
 
 class MissingTag(RuntimeError):
@@ -401,6 +402,24 @@ class YouTrackTicketStore:
                 wrote = True
             wrote = self.set_stage(child, ready, []) or wrote
         return wrote
+
+    def create_follow_up(self, n, f, ready):
+        """One ticket `f` ({title, body, repo}) that depends on `n` and relates to `n`'s parent: a ticket of that title
+        that already depends on `n` is reused, each missing link is added, `ready` is set last (#1264)."""
+        found = self.run("GET", f"/api/issues?query={urllib.parse.quote(f'depends on: {n}')}&fields=idReadable,summary&{TOP}")
+        new = next((i["idReadable"] for i in found if i["summary"] == f["title"]), None)
+        wrote, repo = new is None, f.get("repo") if self.repository_field else None
+        if new is None:
+            new = self._create(f["title"], f"{f.get('body', '')}\n\n{FOLLOW_UP_MARK.format(n=n)}",
+                               **({"repo": repo} if repo else {}))
+        if str(n) not in map(str, self.open_blockers_all(new)):
+            self._command(new, f"depends on {n}")
+            wrote = True
+        parent = self.parent(n)
+        if parent and parent not in [i["idReadable"] for i in self._links(new, "Relates", "BOTH")]:
+            self._command(new, f"relates to {parent}")
+            wrote = True
+        return self.set_stage(new, ready, []) or wrote
 
     def open_blockers_all(self, n):
         """Ids of every ticket `n` depends on, resolved or not."""

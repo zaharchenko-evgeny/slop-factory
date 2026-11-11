@@ -276,6 +276,7 @@ class TicketStore(Protocol):
     def children(self, n) -> list: ...  # [{number, state, not_planned, attrs}]
     def tickets_by_stage(self, attrs, open_only=False, now=None) -> list: ...  # ids of tickets holding one of `attrs`
     def create_children(self, n, children, ready) -> bool: ...  # sub-tickets {title, body}, chained, each given `ready`
+    def create_follow_up(self, n, f, ready) -> bool: ...  # one ticket {title, body, repo} that depends on `n`, given `ready`
     def park(self, n, check, triage) -> bool: ...  # block `n` by the open `Main is red in Air: <check>` ticket
     def can_answer(self, login) -> bool: ...  # whether `login` may answer a question the factory asked
 
@@ -706,6 +707,15 @@ class MemoryTicketStore:
                     self.tickets[i]["blocked_by"].append(ids[j])
                     wrote = True
         return wrote
+
+    def create_follow_up(self, n, f, ready):
+        new = next((i for i, t in self.tickets.items() if n in t["blocked_by"] and t["title"] == f["title"]), None)
+        if new is not None:
+            return False
+        new = self.add(f["title"], f.get("body", ""), [ready, *child_attrs(f)])
+        self.tickets[new]["blocked_by"].append(n)
+        self.tickets[new]["related"] = [self.tickets[n]["parent"]] if self.tickets[n]["parent"] else []
+        return True
 
     def park(self, n, check, triage):
         title = f"Main is red in Air: {check}"

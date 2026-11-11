@@ -546,7 +546,7 @@ class CrashReportTest(unittest.TestCase):
 class EndFieldsTest(unittest.TestCase):
     """#1035: every handoff field an effect reads can be written by a `factory end` option (or the gate derives it)."""
     FILES = ("factory/tests/fixtures/slop/workflow.yaml", "skills/factory-setup/template/workflow.yaml")
-    READS = ("comment", "create-issues", "set-field", "route", "reply", "park-behind-main-red")
+    READS = ("comment", "create-issues", "set-field", "route", "reply", "park-behind-main-red", "create-follow-up")
 
     def effect_fields(self, doc):
         found = set()
@@ -573,7 +573,7 @@ class EndFieldsTest(unittest.TestCase):
         args = ["x", "--size-estimate", "1"]
         for action in cli.end_parser()._actions:
             opt = next((o for o in action.option_strings if o.startswith("--")), None)
-            if opt and isinstance(action, argparse._StoreAction) and action.dest not in ("findings", "slices", "checks", "addressed", "notes"):
+            if opt and isinstance(action, argparse._StoreAction) and action.dest not in ("findings", "slices", "checks", "addressed", "notes", "follow_up"):
                 args += [opt, "1" if action.type is int else "x"]
         handoff = cli.handoff_of(cli.end_parser().parse_args(args))
         written = set(handoff) | set(gate.intake_fields(handoff))

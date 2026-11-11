@@ -201,6 +201,8 @@ def handoff_of(a):
         raise ValueError("env-broken requires --failing-check")
     if a.failing_check:
         data["failing_check"] = a.failing_check
+    if a.follow_up:
+        data["follow_up"] = {k: v for k, v in slice_of(a.follow_up).items() if k != "after"}
     for key, path in (("findings", a.findings), ("slices", a.slices), ("checks", a.checks)):
         if path:
             data[key] = json.loads(Path(path).read_text())
@@ -247,6 +249,7 @@ def end_parser():
                 "note-for", "note-hint", "note-repro", "to", "text", "message", "assignee", "problem"):
         p.add_argument(f"--{opt}")
     p.add_argument("--recommended", type=int)
+    p.add_argument("--follow-up", help="a ticket file like --slice: it waits for this ticket (#1264)")
     p.add_argument("--failing-check")
     for opt, dest in (("pass", "passed"), ("fail", "failed"), ("not-run", "not_run"), ("blocking", None), ("minor", None),
                       ("fixed", None), ("disputed", None), ("slice", None), ("propose-check", None), ("note-file", None),

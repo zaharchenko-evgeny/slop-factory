@@ -40,6 +40,7 @@ CASES = {
     ("review", "pr"): ([], eff("review", "approve-at-head", focus="full", summary="ok", run_id="r")),
     ("request-reviewers", "pr"): ([], eff("request-reviewers", None)),
     ("create-issues", "ticket"): ([], eff("create-issues", [{"title": "A", "body": "scope A"}])),
+    ("create-follow-up", "ticket"): ([], eff("create-follow-up", {"title": "Docs", "body": "docs"})),
     ("park-behind-main-red", "ticket"): ([], eff("park-behind-main-red", "quality-gates")),
     ("merge", "pr"): ([], eff("merge", "match-head", head="h1")),
     ("update-branch", "pr"): ([], eff("update-branch", None, head="h1")),

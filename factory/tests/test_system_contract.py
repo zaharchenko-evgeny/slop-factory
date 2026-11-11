@@ -59,7 +59,7 @@ class ContractGh(FakeGh):
 
     def __init__(self, **kw):
         super().__init__(labels=LABELS, **kw)
-        self.pr_comments, self.pr_body = [], ""
+        self.pr_comments, self.pr_body, self.created_blockers = [], "", {}
 
     def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), "")
@@ -103,6 +103,13 @@ class ContractGh(FakeGh):
             self.writes.append(args)
             self.blocked.append({"state": "open", "id": int(flag(args, "issue_id"))})
             return ""
+        if "/issues/9" in a and a.endswith("/dependencies/blocked_by"):  # a created issue's blockers (follow-up)
+            links = self.created_blockers.setdefault(a, [])
+            if post:
+                self.writes.append(args)
+                links.append({"state": "open", "id": int(flag(args, "issue_id"))})
+                return ""
+            return "\n".join(json.dumps(x) for x in links)
         if post and a.endswith("/labels") and "/issues/9" in a:
             self.writes.append(args)
             n = int(a.split("/issues/")[1].split("/")[0])
@@ -181,6 +188,9 @@ class ContractYouTrack:
         if query.startswith("subtask of: "):
             return [{"idReadable": m, "summary": x["summary"]} for m, x in self.issues.items()
                     if x["parent"] == query.split(": ", 1)[1]]
+        if query.startswith("depends on: "):
+            return [{"idReadable": m, "summary": x["summary"]} for m, x in self.issues.items()
+                    if query.split(": ", 1)[1] in x["depends"]]
         if query.startswith("#Unresolved summary: {"):
             title = query[len("#Unresolved summary: {"):-1]
             return [{"idReadable": m, "summary": x["summary"]} for m, x in self.issues.items()

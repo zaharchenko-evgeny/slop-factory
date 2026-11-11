@@ -199,6 +199,79 @@ class StoreTest(unittest.TestCase):
                                                               "value": {"name": "factory:ready"}}]})])
 
 
+class LinkingYouTrack:
+    """Issues with tags and Depend/Subtask/Relates links that `execute` commands change; records the writes (#1264)."""
+
+    def __init__(self):
+        self.issues, self.writes, self.next = {}, [], 10
+        self.add("T-1", "the ticket")
+        self.add("T-0", "the parent")
+        self.link("T-1", "subtask of", "T-0")
+
+    def add(self, n, summary, description=""):
+        self.issues[n] = {"idReadable": n, "summary": summary, "description": description, "resolved": None,
+                          "tags": [], "customFields": [], "links": {}}
+
+    def link(self, n, command, other):
+        kind, mine, theirs = {"depends on": ("Depend", "INWARD", "OUTWARD"), "subtask of": ("Subtask", "INWARD", "OUTWARD"),
+                              "relates to": ("Relates", "BOTH", "BOTH")}[command]
+        self.issues[n]["links"].setdefault((kind, mine), []).append(other)
+        self.issues[other]["links"].setdefault((kind, theirs), []).append(n)
+
+    def raw(self, n):
+        i = self.issues[n]
+        return {**i, "links": [{"direction": d, "linkType": {"name": k},
+                                "issues": [{"idReadable": x, "resolved": None, "tags": []} for x in xs]}
+                               for (k, d), xs in i["links"].items()]}
+
+    def __call__(self, method, path, body=None):
+        url, q = urlsplit(path), parse_qs(urlsplit(path).query)
+        parts = url.path.split("/")[2:]
+        if method != "GET":
+            self.writes.append((method, url.path, body))
+        if parts == ["tags"]:
+            return [{"id": f"id:{q['query'][0]}", "name": q["query"][0]}]
+        if parts == ["issues"] and method == "GET":  # `depends on: T-1`: the issues that depend on T-1
+            other = q["query"][0].removeprefix("depends on: ")
+            return [{"idReadable": n, "summary": i["summary"]} for n, i in self.issues.items()
+                    if other in i["links"].get(("Depend", "INWARD"), [])]
+        if parts == ["issues"]:
+            n, self.next = f"T-{self.next}", self.next + 1
+            self.add(n, body["summary"], body["description"])
+            return {"idReadable": n}
+        n = parts[1]
+        if len(parts) == 2:
+            return self.raw(n)
+        if parts[2] == "execute":
+            command, _, other = body["query"].rpartition(" ")
+            self.link(n, command, other)
+            return None
+        if parts[2] == "tags":
+            self.issues[n]["tags"].append({"id": body["id"], "name": body["id"].removeprefix("id:")})
+            return {}
+        raise AssertionError(path)
+
+
+class FollowUpTest(unittest.TestCase):
+    """#1264: a developer outcome's follow-up waits for the ticket and relates to its parent."""
+
+    def test_follow_up_depends_on_the_ticket_and_a_retry_reuses_it(self):
+        fake = LinkingYouTrack()
+        store = yt.YouTrackTicketStore(fake)
+        f = {"title": "Docs: the new flag", "body": "Describe --flag."}
+        self.assertTrue(store.create_follow_up("T-1", f, "factory:ready"))
+        new = [n for n, i in fake.issues.items() if i["summary"] == f["title"]]
+        self.assertEqual(new, ["T-10"])
+        self.assertEqual(store.open_blockers("T-10"), ["T-1"])
+        self.assertEqual(fake.issues["T-10"]["links"][("Relates", "BOTH")], ["T-0"])
+        self.assertEqual([t["name"] for t in fake.issues["T-10"]["tags"]], ["factory:ready"])
+        self.assertIn("<!-- factory:follow-up of=T-1 -->", fake.issues["T-10"]["description"])
+        self.assertEqual(fake.issues["T-1"]["tags"], [])  # the ticket's own stage does not change
+        writes = len(fake.writes)
+        self.assertFalse(store.create_follow_up("T-1", f, "factory:ready"))  # same title: reused, nothing to write
+        self.assertEqual((len(fake.writes), len(fake.issues)), (writes, 3))
+
+
 class TrackerFromConfigTest(unittest.TestCase):
     """#1069: the youtrack plugin's tracker is the vcs's gate tracker over the YouTrack store, built from a tracker
     config block."""

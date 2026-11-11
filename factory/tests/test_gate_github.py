@@ -901,6 +901,36 @@ class EffectsTest(unittest.TestCase):
         self.assertFalse(t.apply(eff("create-issues", kids)))
         self.assertEqual((gh.writes, [w for w in web if {"POST", "PATCH", "DELETE"} & set(w)]), ([], []))
 
+    def test_follow_up_depends_on_the_ticket_relates_to_its_parent_and_a_retry_reuses_it(self):  # #1264
+        f = {"title": "Docs: the new flag", "body": "Describe --flag.", "repo": "web"}
+        t, gh, web = self.split_across_repositories()
+        gh.parent_of = 3
+        mine = json.loads(gh(["api", "repos/o/r/issues/7"]))["id"]
+        self.assertTrue(t.apply(eff("create-follow-up", f)))
+        post = next(w for w in web if any(x.startswith("title=") for x in w))
+        self.assertIn("repos/o/web/issues", post)
+        body = next(x for x in post if x.startswith("body="))  # the parent's repository: the recording's own
+        self.assertRegex(body, r"^body=Describe --flag\.\n\nRelates to: [\w./-]+#3\n\n<!-- factory:follow-up of=7 -->$")
+        self.assertIn(["api", "-X", "POST", "repos/o/web/issues/41/dependencies/blocked_by", "-F", f"issue_id={mine}"], web)
+        self.assertEqual([w for w in web if "labels[]=factory:ready" in w][0][3], "repos/o/web/issues/41/labels")
+        self.assertFalse([w for w in gh.writes if w[:3] == ["issue", "edit", "7"]])  # the ticket's stage stays
+        made = {"id": 555, "number": 41, "title": f["title"], "body": body[5:],
+                "labels": [{"name": "factory:ready"}]}
+        t, gh, web = self.split_across_repositories([made], blocked=[{"id": mine, "state": "open"}])
+        gh.parent_of = 3
+        self.assertFalse(t.apply(eff("create-follow-up", f)))
+        self.assertEqual((gh.writes, [w for w in web if {"POST", "PATCH", "DELETE"} & set(w)]), ([], []))
+
+    def test_follow_up_outcome_leaves_the_stage_alone(self):
+        gh = FakeGh(labels=("factory:in-dev", "risk:low"))
+        flow = {"nodes": {"dev": {"role": "developer", "when": {"always": True}, "triggers": ["manual"], "outcomes": {
+            "done": {"effects": [{"create-follow-up": "follow_up"}]}}}}}
+        code, out = gate.apply("dev", "done", {"ticket": 7, "follow_up": {"title": "Docs", "body": "b"}}, tr(gh), flow)
+        self.assertEqual((code, out["written"]), (gate.GO, ["create-follow-up"]))
+        self.assertIn("factory:in-dev", gh.labels)
+        with self.assertRaisesRegex(gate.Bad, "must be a ticket with a title"):
+            gate.apply("dev", "done", {"ticket": 7, "follow_up": "Docs"}, tr(gh), flow)
+
     def test_create_children_ignores_a_same_titled_child_linked_from_another_repository(self):
         kids = [{"title": "Web", "body": "w", "repo": "web"}]
         for url, creates in [("https://api.github.com/repos/o/r", True), ("https://api.github.com/repos/o/web", False)]:
