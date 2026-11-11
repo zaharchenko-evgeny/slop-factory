@@ -114,6 +114,7 @@ class FakeGh:
         self.fail_blocked_by = False
         self.open_issues, self.state, self.sub_state = [], "open", ["open"] * 9
         self.extra_pulls, self.pr_labels, self.pr_assignees = [], {}, {}
+        self.pr_details = {}
 
     def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), " ".join(args))  # the API path
@@ -130,6 +131,8 @@ class FakeGh:
         if args[0] == "api" and "-X" not in args and "-f" not in args and "-F" not in args and re.search(r"/issues(/|\?|$)", a) \
                 and "comments/" not in a and "/labels" not in a:
             recorded(a.split("/", 3)[-1], [] if a.endswith(("/events", "/comments", "/sub_issues", "blocked_by", "blocking")) else {})
+        if "/rules/branches/" in a:
+            return json.dumps(getattr(self, "rules", []))
         if "actions/runs?head_sha=" in a:  # one workflow per entry of `checks`; None = still running
             self.workflow_timeout = timeout
             if getattr(self, "workflow_error", False):
@@ -164,22 +167,22 @@ class FakeGh:
                                                 [f"2026-11-02T10:00:00.2000000Z line {i}" for i in range(65)]))
         if a.endswith("pulls?state=all&per_page=100"):
             head = lambda ref, repo: {"ref": ref, "repo": {"full_name": repo} if repo else None}  # noqa: E731
-            return "" if getattr(self, "no_pr", False) else recorded_pull(a, [*(
+            return "" if getattr(self, "no_pr", False) else recorded_pull(a, [*([] if getattr(self, "no_default_pull", False) else (
                 {"number": 5, "state": "closed" if self.merged else "open", "head": head("ez/7-x", REPO)},
                 {"number": 6, "state": "open", "head": head("ez/70-other", REPO)},
                 {"number": 8, "state": "open", "head": head("ez/7-fork", "evil/r")},
-                {"number": 9, "state": "open", "head": head("ez/7-gone", None)}), *self.extra_pulls])
+                {"number": 9, "state": "open", "head": head("ez/7-gone", None)})), *self.extra_pulls])
         if "issues?state=" in a and "labels=" in a:
             want = a.split("labels=")[1].split("&")[0]
             on = want in self.labels and (self.state == "open" or "state=all" in a)
             return json.dumps({"number": 7}) if on else ""
         if "/pulls/" in a and a.rsplit("/", 1)[-1].isdigit():
             number = int(a.rsplit("/", 1)[-1])
-            return recorded_pull(a, {"number": number, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "merge_commit_sha": None, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
+            return recorded_pull(a, {"number": number, "merged": self.merged, "state": "closed" if self.merged else "open", "merged_at": None, "mergeable": True, "merge_commit_sha": None, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
                                      "requested_reviewers": [{"login": u} for u in self.requested],
                                      "draft": getattr(self, "draft", False),
                                      "user": {"login": getattr(self, "pr_author", "jetbrains-air[bot]")},
-                                     "labels": [{"name": x} for x in self.labels]})
+                                     "labels": [{"name": x} for x in self.labels], **self.pr_details.get(number, {})})
         if a.endswith("/git/ref/heads/main"):
             return recorded_pull(a, {"object": {"sha": "m1"}})
         if "pulls?state=closed" in a:
@@ -296,6 +299,21 @@ def eff(kind, value, **kw):
 
 
 class FactsTest(unittest.TestCase):
+    def test_prefers_open_then_merged_then_newest_pr(self):
+        gh = FakeGh()
+        gh.no_default_pull = True
+        head = lambda number, state, merged_at=None: {"number": number, "state": state, "merged_at": merged_at,
+                                                       "head": {"ref": "ez/7-x", "repo": {"full_name": REPO}}}
+        gh.extra_pulls = [head(10, "closed", "2026-11-10T00:00:00Z"), head(11, "closed")]
+        gh.pr_details = {10: {"merged": True, "state": "closed", "merged_at": "2026-11-10T00:00:00Z"},
+                         11: {"merged": False, "state": "closed"}}
+        facts = tr(gh).facts(7)
+        self.assertEqual((facts["pr"], facts["pr_state"]), (10, "merged"))
+
+        gh.extra_pulls.append(head(12, "open"))
+        gh.pr_details[12] = {"merged": False, "state": "open"}
+        self.assertEqual(tr(gh).facts(7)["pr"], 12)
+
     def test_sweep_tickets_searches_open_and_recently_closed_tickets_once_each(self):
         gh, calls = FakeGh(labels=["factory:changes-requested"]), []
         t = tr(lambda args, timeout=None: (calls.append(args), gh(args, timeout))[1])
@@ -1879,6 +1897,8 @@ class TwoRepositoryFactsTest(unittest.TestCase):
                                                  "completed_at": "2026-11-10T10:00:00Z"}) for c in conclusions)
                 if args[1].endswith("/status"):
                     return json.dumps({"statuses": []})
+                if "/rules/branches/" in args[1]:
+                    return "[]"
                 return json.dumps({"sha": "new"})
             return run
         for conclusions, want in ((["success", "skipped"], True), (["success", "failure"], False), (["success", None], False), ([], False)):
@@ -1963,6 +1983,61 @@ class TicketStoreContractTest(unittest.TestCase):
         self.assertFalse(store.park(n, "tests", "factory:triage"))
 
 
+class RequiredChecksTest(unittest.TestCase):
+    """Only the base branch's required status checks (or `ci.checks`) count as CI (#1211)."""
+
+    @staticmethod
+    def ci(rules, runs, statuses={}, names=None):
+        """(state, rules calls) of `head_ci` over check runs {name: (status, conclusion)} and commit statuses {context: state}."""
+        calls = []
+
+        def run(args):
+            path = next(x for x in args if x.startswith("repos/"))
+            calls.append(path)
+            if "/rules/branches/" in path:
+                return json.dumps(rules)
+            if "/actions/runs" in path:
+                return ""
+            if "/check-runs" in path:
+                return "\n".join(json.dumps({"name": n, "status": s, "conclusion": c, "completed_at": "T" if c else None, "check_suite": {"id": 1}})
+                                 for n, (s, c) in runs.items())
+            return json.dumps({"statuses": [{"context": k, "state": v, "updated_at": "T"} for k, v in statuses.items()]})
+        return M_GH.head_ci(M_GH.head_checks(run, "o/r", "s", names))[0], calls
+
+    RULE = [{"type": "pull_request", "parameters": {}},
+            {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "tests"}, {"context": "lint"}]}}]
+    DONE, FAIL, RUN = ("completed", "success"), ("completed", "failure"), ("in_progress", None)
+
+    def test_table(self):
+        for label, rules, runs, statuses, names, want in [
+                ("a failed check no rule requires is not CI", self.RULE, {"tests": self.DONE, "lint": self.DONE, "docs": self.FAIL}, {}, None, "green"),
+                ("a failed required check is red", self.RULE, {"tests": self.FAIL, "lint": self.DONE}, {}, None, "red"),
+                ("a required check still running is pending", self.RULE, {"tests": self.RUN, "lint": self.DONE}, {}, None, "pending"),
+                ("a required check with no result yet is pending", self.RULE, {"tests": self.DONE}, {}, None, "pending"),
+                ("a required commit status counts", self.RULE, {"tests": self.DONE}, {"lint": "failure"}, None, "red"),
+                ("a rule of another type adds nothing", [{"type": "pull_request"}], {"x": self.FAIL}, {}, None, "red"),
+                ("no rules: every check counts", [], {"x": self.FAIL, "y": self.DONE}, {}, None, "red"),
+                ("a rule with no contexts: every check counts", [{"type": "required_status_checks", "parameters": {}}], {"x": self.FAIL}, {}, None, "red"),
+                ("ci.checks overrides the rules", self.RULE, {"tests": self.FAIL, "lint": self.DONE, "docs": self.DONE}, {}, ["docs"], "green"),
+                ("ci.checks overrides the rules: a named failure is red", self.RULE, {"tests": self.DONE, "docs": self.FAIL}, {}, ["docs"], "red"),
+                ("ci.checks names a check with no result yet", [], {"x": self.DONE}, {}, ["docs"], "pending"),
+                ("no checks at all: none", [], {}, {}, None, "none")]:
+            with self.subTest(label):
+                self.assertEqual(self.ci(rules, runs, statuses, names)[0], want)
+
+    def test_ci_checks_skip_the_rules_read_and_come_from_the_environment(self):
+        self.assertFalse(any("/rules/" in c for c in self.ci(self.RULE, {"docs": self.DONE}, names=["docs"])[1]))
+        c = {"environments": {"dev": {"ci": {"checks": ["a"]}}, "other": {}}}
+        for env, want in [("dev", ["a"]), ("other", []), ("", []), ("none", [])]:
+            self.assertEqual(M_GH.ci_checks_of(c, {"FACTORY_ENV": env}), want)
+
+    def test_a_failed_rules_read_raises(self):
+        def run(args):
+            raise RuntimeError("HTTP 403")
+        with self.assertRaises(RuntimeError):
+            M_GH.head_checks(run, "o/r", "s")
+
+
 class CiSyncCodeHostTest(unittest.TestCase):
     """GitHubCodeHost's reads and writes for gate.ci_sync, on a recorded `gh`."""
 
@@ -1972,7 +2047,7 @@ class CiSyncCodeHostTest(unittest.TestCase):
                  {"number": 2, "head": {"ref": "feature", "sha": "s2", "repo": own}, "labels": []},
                  {"number": 3, "head": {"ref": "ez/8-y", "sha": "s3", "repo": {"full_name": "fork/app"}}, "labels": []}]
         events = [{"event": "labeled", "label": {"name": "factory:ci-green"}, "created_at": t} for t in ("T1", "T3")]
-        out = {"repos/o/app/pulls?state=open&per_page=100": "\n".join(map(json.dumps, pulls)),
+        out = {"repos/o/app/rules/branches/main": "[]", "repos/o/app/pulls?state=open&per_page=100": "\n".join(map(json.dumps, pulls)),
                "repos/o/app/actions/runs?head_sha=s1&per_page=100": "",
                "repos/o/app/commits/s1/check-runs?per_page=100": "\n".join(map(json.dumps, [
                    {"status": "completed", "conclusion": "success", "completed_at": "T2"},

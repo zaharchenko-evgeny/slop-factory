@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -69,6 +69,7 @@ def deploy_plan_at(revision):
 MARKER = re.compile(r"<!-- factory:review focus=(\S+) round=(\d+)(?: verdict=(approve|changes))?(?: rereview=1)?(?: outcome=([\w-]+))? -->")
 BAD_CI = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
 GOOD_CI = {"success", "neutral", "skipped"}
+BASE_BRANCH = "main"  # the branch whose rules name the required checks
 SERVICE_WORKFLOW = "factory-"  # `factory deploy` names the workflows it renders factory-<node>: they are not CI
 
 
@@ -76,10 +77,30 @@ def _lines(text):
     return [json.loads(x) for x in text.splitlines() if x.strip()]
 
 
-def head_checks(run, repository, sha):
+def ci_names(run, repository, names=None, branch=BASE_BRANCH):
+    """The check names that count as CI: `names` (`environments.<env>.ci.checks`) when given, else the contexts of the
+    `required_status_checks` rules of `branch`; None when neither names any, so every check counts. A failed rules
+    read raises: CI is never guessed."""
+    if names:
+        return set(names)
+    contexts = {c["context"] for rule in json.loads(run(["api", f"repos/{repository}/rules/branches/{branch}"]) or "[]")
+                if rule.get("type") == "required_status_checks"
+                for c in (rule.get("parameters") or {}).get("required_status_checks") or []}
+    return contexts or None
+
+
+def ci_checks_of(config, environ=os.environ):
+    """`environments.<env>.ci.checks` of the run's environment (FACTORY_ENV), else []."""
+    env = ((config.get("environments") or {}).get(environ.get("FACTORY_ENV") or "") or {})
+    return list((env.get("ci") or {}).get("checks") or [])
+
+
+def head_checks(run, repository, sha, names=None, branch=BASE_BRANCH):
     """[{conclusion, at}] of the project's CI at `sha`: GitHub's latest check run per name and commit status per
     context, conclusion None while one runs. The project's own checks count, whatever their workflow or app (#1207).
-    Check runs of the factory's own workflows are not CI: a workflow_run wake of one runs at the PR head too."""
+    Check runs of the factory's own workflows are not CI: a workflow_run wake of one runs at the PR head too.
+    Only the names of `ci_names` count when there are any; a counted name with no result yet is pending."""
+    counted = ci_names(run, repository, names, branch)
     service = {r.get("check_suite_id") for r in _lines(run(["api", "--paginate", f"repos/{repository}/actions/runs?head_sha={sha}&per_page=100",
                                                             "--jq", ".workflow_runs[]"]))
                if (r.get("name") or "").startswith(SERVICE_WORKFLOW)}
@@ -87,10 +108,17 @@ def head_checks(run, repository, sha):
                                    "--jq", ".check_runs[]"]))
             if (r.get("check_suite") or {}).get("id") not in service]
     statuses = json.loads(run(["api", f"repos/{repository}/commits/{sha}/status"])).get("statuses") or []
-    return ([{"conclusion": r.get("conclusion") if r.get("status") == "completed" else None, "at": r.get("completed_at")}
-             for r in runs]
-            + [{"conclusion": None if s["state"] == "pending" else "success" if s["state"] == "success" else "failure",
-                "at": s.get("updated_at")} for s in statuses])
+    if counted is not None:
+        runs = [r for r in runs if r.get("name") in counted]
+        statuses = [s for s in statuses if s.get("context") in counted]
+    out = ([{"conclusion": r.get("conclusion") if r.get("status") == "completed" else None, "at": r.get("completed_at")}
+            for r in runs]
+           + [{"conclusion": None if s["state"] == "pending" else "success" if s["state"] == "success" else "failure",
+               "at": s.get("updated_at")} for s in statuses])
+    if counted is not None:
+        seen = {r.get("name") for r in runs} | {s.get("context") for s in statuses}
+        out += [{"conclusion": None, "at": None} for _ in counted - seen]
+    return out
 
 
 def head_ci(checks):
@@ -122,8 +150,8 @@ class GitHubCodeHost:
 
     live_pr_ticket = True  # a PR's ticket comes from a live lookup, never from its branch name or title
 
-    def __init__(self, repo, run=gh, ticket_repos=None):
-        self.repo, self.run = repo, run
+    def __init__(self, repo, run=gh, ticket_repos=None, ci_checks=()):
+        self.repo, self.run, self.ci_checks = repo, run, list(ci_checks)
         self.ticket_repos = list(ticket_repos or [])  # ADR-0024: the repositories that hold tickets, the tracker first
 
     @classmethod
@@ -131,7 +159,8 @@ class GitHubCodeHost:
         c = yaml.safe_load(Path(path).read_text()) if path else descriptor if descriptor is not None else config.load()
         tickets = tracker_repositories(c["tracker"])
         return cls((c.get("code_host") or {}).get("repository") or c["tracker"].get("repository") or tickets[0],
-                   ProjectWriteRun(run, project_repositories(c), tokens=repository_tokens(c), checkouts=checked_out(c), issues_token_env=c.get("issues_token_env")), tickets)
+                   ProjectWriteRun(run, project_repositories(c), tokens=repository_tokens(c), checkouts=checked_out(c), issues_token_env=c.get("issues_token_env")), tickets,
+                   ci_checks_of(c))
 
     @staticmethod
     def gate_tracker(c, tickets, run=gh):
@@ -177,7 +206,7 @@ class GitHubCodeHost:
 
     def head_checks(self, repository, sha):
         """[{conclusion, at}] of the CI at `sha` (`head_checks`)."""
-        return head_checks(self.run, repository, sha)
+        return head_checks(self.run, repository, sha, self.ci_checks)
 
     def label_added_at(self, repository, number, label):
         """When `label` was last added to PR `number`, else None."""
@@ -535,6 +564,7 @@ class GitHubGateTracker(DescriptorPort):
             self.state_kinds = tuple(getattr(tickets, "state_kinds", self.state_kinds))
             self.command_kinds = (*getattr(tickets, "command_kinds", ("label",)), "pr_label")
             self.effects = (*type(self).effects, *getattr(tickets, "effects", ()))  # a later (kind, target) wins
+        self.ci_checks = []
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
     @classmethod
@@ -554,7 +584,7 @@ class GitHubGateTracker(DescriptorPort):
                    (c.get("code_host") or {}).get("repository"),
                    {k: c[k] for k in ("states", "commands") if k in c} if "states" in c else None,
                    repository_names(c), tickets, (c.get("reviews") or {}).get("required"),
-                   tracker_repositories(t) if tickets is None else None)._with_scope(t)._with_writable(c)._with_one(c)
+                   tracker_repositories(t) if tickets is None else None)._with_scope(t)._with_writable(c)._with_one(c)._with_ci(c)
 
     @classmethod
     def for_repository(cls, repo, run=gh):
@@ -580,6 +610,11 @@ class GitHubGateTracker(DescriptorPort):
         """ADR-0027: a ticket changes the one repository it lives in, so its body's `repositories:` line is ignored."""
         self.one_repository = bool(c.get("one_repository_per_ticket"))
         self.tickets.one_repository = self.one_repository  # its created children carry no `repo:` label
+        return self
+
+    def _with_ci(self, c):
+        """`environments.<env>.ci.checks` of the run's environment: the names that count as CI."""
+        self.ci_checks = ci_checks_of(c)
         return self
 
     def _with_writable(self, c):
@@ -618,44 +653,12 @@ class GitHubGateTracker(DescriptorPort):
 
     def main_green(self):
         """CI at the current main head is green (`head_ci` of `head_checks`)."""
-        return head_ci(head_checks(self.run, self.repo, self._api("commits/HEAD")["sha"]))[0] == "green"  # the default branch
+        return head_ci(head_checks(self.run, self.repo, self._api("commits/HEAD")["sha"], self.ci_checks))[0] == "green"  # the default branch
 
     def sweep_tickets(self, stages, open_only=False, now=None):
         """Issue numbers whose stage label is one of `stages`: the open ones and, unless `open_only`, those closed in the
         last `gate_port.CLOSED_HOURS`, from one paged GraphQL search each."""
         return self.tickets.tickets_by_stage([self.stages[st] for st in stages if st in self.stages], open_only, now)
-
-    def consistency_view(self):
-        """{tickets, orphan_prs} for reconcile's consistency pass. `tickets`: every open issue as {number, labels,
-        updated_at, prs: [{number, state, branch}]} (the PRs of its `ez/<n>-*` branches in the code host);
-        `orphan_prs`: [{number, ticket}] of open factory PRs whose ticket is closed."""
-        by_ticket = {}
-        for p in self._list("pulls?state=all&per_page=100", repo=self.pr_repo):
-            n = ticket_from_ref(p["head"]["ref"])
-            if n is None or ((p["head"].get("repo") or {}).get("full_name") or "").lower() != self.pr_repo.lower():
-                continue
-            state = "open" if p["state"] == "open" else "merged" if p.get("merged_at") else "closed"
-            by_ticket.setdefault(n, []).append({"number": p["number"], "state": state, "branch": p["head"]["ref"]})
-        issues = [i for i in self._list("issues?state=open&per_page=100") if "pull_request" not in i]
-        tickets = [{"number": i["number"], "labels": [x["name"] for x in i["labels"]], "updated_at": i["updated_at"],
-                    "prs": by_ticket.get(i["number"], [])} for i in issues]
-        open_numbers = {t["number"] for t in tickets}
-        orphans = []
-        for n, prs in sorted(by_ticket.items()):
-            if n in open_numbers or not any(p["state"] == "open" for p in prs):
-                continue
-            try:
-                closed = self.tickets.issue(n)["state"] == "closed"
-            except Exception:  # no such issue (the number came from a branch name): not a ticket
-                continue
-            orphans += [{"number": p["number"], "ticket": n} for p in prs if closed and p["state"] == "open"]
-        return {"tickets": tickets, "orphan_prs": orphans}
-
-    def comment_bodies(self, n, pr=None):
-        """The comment bodies of ticket `n`, or of its PR number `pr`."""
-        if pr is None:
-            return [c["body"] for c in self.tickets.comments(n)]
-        return [c.get("body") or "" for c in self._list(f"issues/{pr}/comments", repo=self.pr_repo)]
 
     def close_ticket(self, n):
         self.tickets.close(n)
@@ -752,7 +755,7 @@ class GitHubGateTracker(DescriptorPort):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""
         prs = [p for p in self._list("pulls?state=all&per_page=100", repo=self.pr_repo) if p["head"]["ref"].startswith(f"ez/{n}-")
                and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.pr_repo.lower()]  # never a fork's PR
-        prs.sort(key=lambda p: (p["state"] == "open", p["number"]))
+        prs.sort(key=lambda p: (p["state"] == "open", p.get("merged_at") is not None, p["number"]))
         if not prs:
             return None
         pr = self._api(f"pulls/{prs[-1]['number']}", repo=self.pr_repo)
@@ -773,7 +776,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def _ci(self, sha):
         """CI at `sha`: the project's check runs and commit statuses, as `ci-sync` reads them (`head_ci`)."""
-        return head_ci(head_checks(self.run, self.pr_repo, sha))[0]
+        return head_ci(head_checks(self.run, self.pr_repo, sha, self.ci_checks))[0]
 
     def _workflow_runs(self, sha, timeout=None):
         out = self.run(["api", "--paginate", f"repos/{self.pr_repo}/actions/runs?head_sha={sha}&per_page=100",

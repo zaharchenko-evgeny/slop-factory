@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/gate.py on both fakes. Run: uv run factory/tests/test_gate.py"""
 import copy
@@ -575,8 +575,14 @@ class GateTest(unittest.TestCase):
         self.assertIsNone(tr.deploy_ticket)
 
     def test_new_labels_created_at_merge(self):
-        plan = air.plan_air(NODES, CONFIG)
-        self.assertIn("factory:needs-human", plan["label_plan"][CONFIG["tracker"]["repository"]])
+        before = cfg.team_root()
+        cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
+        try:
+            config = cfg.load()
+            plan = air.plan_air(nodes.load(), config)
+        finally:
+            cfg.set_team(before)
+        self.assertIn("factory:needs-human", plan["label_plan"][config["tracker"]["repository"]])
 
     def test_review_check_reads_the_focus_from_the_event(self):
         tracker = MemorySystem({"7": {
