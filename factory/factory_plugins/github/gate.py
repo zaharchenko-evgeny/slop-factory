@@ -752,7 +752,7 @@ class GitHubGateTracker(DescriptorPort):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""
         prs = [p for p in self._list("pulls?state=all&per_page=100", repo=self.pr_repo) if p["head"]["ref"].startswith(f"ez/{n}-")
                and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.pr_repo.lower()]  # never a fork's PR
-        prs.sort(key=lambda p: (p["state"] == "open", p["number"]))
+        prs.sort(key=lambda p: (p["state"] == "open", p.get("merged_at") is not None, p["number"]))
         if not prs:
             return None
         pr = self._api(f"pulls/{prs[-1]['number']}", repo=self.pr_repo)
