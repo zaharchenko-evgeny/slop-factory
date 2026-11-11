@@ -237,6 +237,21 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual([got[f"env:{n}"]["result"] for n in ("YOUTRACK_URL", "YOUTRACK_TOKEN", "OTHER")],
                          ["ok", "missing", "missing"])
 
+    def test_declared_empty_required_variable_is_reported_by_name_not_value(self):
+        data = nodes.load()
+        data["environments"]["write"] = {**data["environments"]["write"], "declared": [
+            {"name": "TEAMCITY_URL", "secret": False, "required": True, "description": "TeamCity"},
+            {"name": "TEAMCITY_TOKEN", "secret": True, "required": True, "description": ""},
+            {"name": "FILLED", "secret": True, "required": True, "description": ""},
+            {"name": "OPTIONAL", "secret": False, "required": False, "description": ""}]}
+        environ = {"TEAMCITY_URL": "", "FILLED": "s3cret-value", "OPTIONAL": ""}
+        results = doctor.run_probes(REPO, "write", data, FakeGh(), "risk:low", environ=environ)
+        got = {r["probe"]: r for r in results}
+        self.assertEqual([got[f"env:{n}"]["result"] for n in ("TEAMCITY_URL", "TEAMCITY_TOKEN", "FILLED")],
+                         ["missing", "missing", "ok"])
+        self.assertNotIn("env:OPTIONAL", got)
+        self.assertNotIn("s3cret-value", json.dumps(results))
+
     def test_main_exits_1_for_unset_declared_secret(self):
         data = nodes.load()
         data["environments"]["write"] = {**data["environments"]["write"], "secrets": ["YOUTRACK_TOKEN"]}

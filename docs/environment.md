@@ -35,7 +35,11 @@ environments:
   `deploy --dry-run` lists one that is missing as `set by a person: <env> secret <NAME>` and does not fail.
   Air's API cannot delete a variable: `deploy` prints `remove by hand in Air: <env> variable <NAME>` for one the plan lacks,
   does not fail on it, and a person removes it in the environment's settings.
-- `factory doctor` probes `env:<NAME>` for every declared variable and secret of `FACTORY_ENV`: `ok` when set and non-empty,
+- The plan of an Air environment also lists every variable that the merged `env` of its nodes declares (defaults, environment,
+  role, agent, node), with `secret`, `required` and `description`. `deploy --apply` creates each one the environment lacks with an
+  empty value (`isSecret` for a secret one) and never changes or deletes one that exists. `--dry-run` lists
+  `create variable <NAME> (empty, secret) in <env>`.
+- `factory doctor` probes `env:<NAME>` for every declared variable and secret of `FACTORY_ENV` (an `env` entry with `required: false` is skipped): `ok` when set and non-empty,
   `missing` otherwise. A missing probe fails the doctor.
 
 # What the Air image provides

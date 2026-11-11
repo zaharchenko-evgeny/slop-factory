@@ -90,7 +90,9 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
         found = has_skill(s) if has_skill else skill_installed(s)
         results.append({"probe": f"skill:{s}", "result": "ok" if found else "missing", "detail": env})
     declared = (nodes.get("environments") or {}).get(env) or {}
-    for name in [*(declared.get("variables") or {}), *(declared.get("secrets") or [])]:
+    names = [*(declared.get("variables") or {}), *(declared.get("secrets") or []),
+             *(v["name"] for v in declared.get("declared") or [] if v.get("required", True))]
+    for name in dict.fromkeys(names):
         results.append({"probe": f"env:{name}", "result": "ok" if environ.get(name) else "missing", "detail": env,
                         "help": (declared.get("secret_help") or {}).get(name, "")})
     return results
