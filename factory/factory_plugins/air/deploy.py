@@ -341,6 +341,8 @@ def same(key: str, have, want) -> bool:
             return sorted((item.get("repository", {}).get("fullName") if isinstance(item.get("repository"), dict)
                            else item.get("repository"), item.get("branch")) for item in (items or []))
         return identities(have) == identities(want)
+    if key == "repository" and isinstance(have, str) and isinstance(want, str):  # #1304: Air lowercases the organization
+        return same_repository(have, want)
     if key == "mcpConnectors":
         return sorted(have or []) == sorted(want or [])
     if key == "domains":
