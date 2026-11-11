@@ -88,4 +88,3 @@ def reconcile_pass(config, dry_run, progress):
         return {"state_rules": (results, any(r.get("rule") == "error" for r in results))}
     except Exception as e:
         return {"state_rules": ([{"error": f"{type(e).__name__}: {e}"}], True)}
-
