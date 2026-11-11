@@ -114,6 +114,7 @@ def install(defn, environment, home, fetcher=fetch, run=subprocess.run, checkout
 
 
 SECRET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+REPO_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 def set_credentials(defn, environment, checkout, run=subprocess.run, environ=os.environ):
@@ -134,8 +135,15 @@ def set_credentials(defn, environment, checkout, run=subprocess.run, environ=os.
         elif not environ.get(r["token"]):
             lines.append(f"credential {r['repo']}: {r['token']} is not set")
         else:
-            helper = f'!f() {{ echo username=x-access-token; echo "password=${r["token"]}"; }}; f'
+            if not REPO_NAME.fullmatch(r["repo"]):
+                raise SystemExit(f"factory setup: {r['repo']}: not an owner/repo name")
+            # answer only `get` for https://github.com/<repo>, with or without `.git`; stay silent for any other remote
+            helper = ('!f() { test "$1" = get || return 0; i=$(cat); '
+                      'for l in protocol=https host=github.com; do printf "%s\\n" "$i" | grep -qxF "$l" || return 0; done; '
+                      f'printf "%s\\n" "$i" | grep -qxF -e "path={r["repo"]}" -e "path={r["repo"]}.git" || return 0; '
+                      f'echo username=x-access-token; echo "password=${r["token"]}"; }}; f')
             run(["git", "-C", str(where), "config", "--local", "credential.helper", ""], check=True)  # drop Air's helper
+            run(["git", "-C", str(where), "config", "--local", "credential.useHttpPath", "true"], check=True)
             run(["git", "-C", str(where), "config", "--local", "--add", "credential.helper", helper], check=True)
             lines.append(f"credential {r['repo']}: {r['token']}")
     return lines
