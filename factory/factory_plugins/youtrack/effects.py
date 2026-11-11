@@ -5,6 +5,8 @@ stage names as `stages`; `ctx["issue"]` is the ticket as read once per `effects.
 `close`, so `stage: done` reads the attrs from before the close). Every handler reads the ticket first and writes
 only what differs.
 """
+import re
+
 from factory_plugins.youtrack.store import MissingRepository
 
 
@@ -20,10 +22,18 @@ def stage(system, e, ctx):
     n, value = e["ticket"], e["value"]
     want, have = system.stages[value], [x for x in _issue_once(system, n, ctx)["attrs"] if x in system.stages.values()]
     try:
-        return have != [want] and system.tickets.set_stage(n, want, have)
+        wrote = have != [want] and system.tickets.set_stage(n, want, have)
     except MissingRepository as err:
         system.tickets.comment(n, f"[factory] Blocked: {err}")
-        return system.tickets.set_stage(n, system.stages["blocked"], have) or True
+        system.tickets.set_stage(n, system.stages["blocked"], have)
+        return _mirror(system, n, "blocked", e) or True
+    return _mirror(system, n, value, e) or wrote
+
+
+def _mirror(system, n, stage, e):
+    """#1260: the shared State field follows the stage (`tracker.state_mirror`), unless a person's State chose it."""
+    mirror = getattr(system.tickets, "mirror_state", None)
+    return bool(mirror) and e.get("mirror", True) and mirror(n, stage)
 
 
 def _gone(tags, value):
@@ -51,3 +61,36 @@ def set_field(system, e, ctx):
     want = f"{k}:{v}"
     return have != [want] and system.tickets.edit_attrs(n, [want] if want not in have else [],
                                                         [x for x in have if x != want])
+
+
+def field(system, e, ctx):
+    """A YouTrack custom field the outcome sets (`{name, value, type}`), written only while the field is empty: a
+    value a person set stays (#1260, the router's Effort)."""
+    n, v = e["ticket"], e["value"]
+    if system.tickets.field_value(n, v["name"]) is not None:
+        return False
+    return system.tickets.set_field(n, v["name"], v["value"], v.get("type") or "SingleEnumIssueCustomField")
+
+
+def resolve_field(mine, name, payload, facts, tracker, nodes, ticket):
+    """Each `field` effect (`{name, from, sizes}`) with the value from the payload field `from`: the value itself,
+    or with `sizes` ({value: upper limit or null}) the first value whose limit is above the number in it."""
+    import gate
+    out = []
+    for e in mine:
+        spec = e["value"]
+        if spec["from"] not in payload:
+            raise gate.Bad(f"payload: missing field `{spec['from']}`")
+        value = payload[spec["from"]]
+        if spec.get("sizes"):
+            found = re.search(r"\d+", str(value))
+            if not found:
+                raise gate.Bad(f"payload: field `{spec['from']}` holds no number: {value!r}")
+            lines = int(found[0])
+            value = next((k for k, limit in sorted(spec["sizes"].items(), key=lambda x: (x[1] is None, x[1] or 0))
+                          if limit is None or lines < limit), None)
+            if value is None:
+                raise gate.Bad(f"field {spec['name']}: no size holds {lines}")
+        out.append({"kind": "field", "ticket": ticket, "value": {"name": spec["name"], "value": str(value),
+                                                                 **({"type": spec["type"]} if spec.get("type") else {})}})
+    return out, []

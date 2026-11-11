@@ -93,11 +93,12 @@ class YouTrackTicketStore:
         Effect("label", "ticket", "factory_plugins.youtrack.effects:tag"),
         Effect("unlabel", "ticket", "factory_plugins.youtrack.effects:tag"),
         Effect("set-field", "ticket", "factory_plugins.youtrack.effects:set_field"),
+        Effect("field", "ticket", "factory_plugins.youtrack.effects:field"),
     )
 
     def __init__(self, run, state_field=None, done_state="Done", project=None, bots=(), writers=(), assignee_field="Assignee",
                  repository_field=None, repo_stages=(), repositories=(), scope=None, projects=None, full_names=None,
-                 repository_scopes=None):
+                 state_mirror=None, state_mirror_field="State", repository_scopes=None):
         self.run, self.state_field, self.done_state, self.project = run, state_field, done_state, project
         self.scope = scope
         self.bots, self.writers, self.assignee_field = set(bots), set(writers), assignee_field
@@ -105,6 +106,8 @@ class YouTrackTicketStore:
         self.projects = dict(projects or {})  # linked YouTrack project -> owner/repo (short names are case-sensitive)
         # owner/repo (lower case) -> repository name; without it a repository's name is its repo part
         self.full_names = {k.lower(): v for k, v in (full_names or {}).items()}
+        # #1260: {stage: value} the gate also writes to `state_mirror_field` (State) beside the stage tag
+        self.state_mirror, self.state_mirror_field = dict(state_mirror or {}), state_mirror_field
         # owner/repo -> its scope on this tracker (#1259): a child named for that repository is created in it
         self.repository_scopes = dict(repository_scopes or {})
 
@@ -114,6 +117,7 @@ class YouTrackTicketStore:
         run = run or urllib_runner(tracker["url"], os.environ[tracker.get("token_env", "YOUTRACK_TOKEN")])
         return cls(run, done_state=tracker.get("done_state", "Done"), project=tracker.get("project"),
                    repository_field=tracker.get("repository_field"), scope=tracker.get("scope"), projects=tracker.get("projects"),
+                   state_mirror=tracker.get("state_mirror"), state_mirror_field=tracker.get("state_mirror_field", "State"),
                    repository_scopes=tracker.get("repository_scopes"), **kw)
 
     # --- reads
@@ -203,6 +207,20 @@ class YouTrackTicketStore:
                 for kind, key in (("unlabeled", "removed"), ("labeled", "added")):
                     out += [{"kind": kind, "value": x["name"], **base} for x in a.get(key) or []]
         return out
+
+    def last_field_change(self, n, name):
+        """(value, login) of the latest change of custom field `name` on ticket `n`, else (None, None)."""
+        found = [a for a in self.run("GET", f"/api/issues/{n}/activities?categories=CustomFieldCategory&fields={ACTIVITY_FIELDS}&{TOP}")
+                 if (a.get("field") or {}).get("name") == name]
+        if not found:
+            return None, None
+        a = max(found, key=lambda x: x.get("timestamp") or 0)
+        added = a.get("added") or []
+        return (added[0].get("name") if added else None), (a.get("author") or {}).get("login")
+
+    def field_value(self, n, name):
+        """The value (name or login) of single-value custom field `name` of ticket `n`, else None."""
+        return next((v.get("name") or v.get("login") for v in self._field(self._issue(n), name)), None)
 
     def comments(self, n):
         return [{"author": (login := (c.get("author") or {}).get("login", "")),
@@ -339,6 +357,12 @@ class YouTrackTicketStore:
         value = None if value is None else {"login": value} if "User" in kind else {"name": value}
         self.run("POST", f"/api/issues/{n}?fields=idReadable", {"customFields": [{"name": name, "$type": kind, "value": value}]})
         return True
+
+    def mirror_state(self, n, stage):
+        """The mirrored State of `stage` (`state_mirror`), written only when the field holds another value; nothing
+        when stages are the state field itself or the stage is not mapped."""
+        value = self.state_mirror.get(stage)
+        return bool(value) and not self.state_field and self.set_field(n, self.state_mirror_field, value)
 
     def set_stage(self, n, stage, have):
         """Stage `stage` replaces the stage attrs `have`: tags, or the one value of the state field."""

@@ -74,7 +74,7 @@ class ContractGh(FakeGh):
 
     def __init__(self, **kw):
         super().__init__(labels=LABELS, **kw)
-        self.pr_comments, self.pr_body = [], ""
+        self.pr_comments, self.pr_body, self.draft = [], "", True  # the PR opens as a draft (#1261)
 
     def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), "")
@@ -98,6 +98,10 @@ class ContractGh(FakeGh):
         if args[:2] == ["pr", "edit"] and "--body" in args:
             self.writes.append(args)
             self.pr_body = flag(args, "body")
+            return ""
+        if args[:2] == ["pr", "ready"]:
+            self.writes.append(args)
+            self.draft = False
             return ""
         if args[:2] == ["pr", "merge"]:
             self.writes.append(args)
@@ -298,7 +302,8 @@ class YouTrackContractTest(SystemContract, unittest.TestCase):
     def test_ticket_effects_are_the_stores_and_write_youtrack(self):
         s = self.make()
         mine = {k for k, x in effects.registry(s).items() if str(x.apply).startswith("factory_plugins.youtrack.")}
-        self.assertEqual(mine, {("stage", "ticket"), ("label", "ticket"), ("unlabel", "ticket"), ("set-field", "ticket")})
+        self.assertEqual(mine, {("stage", "ticket"), ("label", "ticket"), ("unlabel", "ticket"), ("set-field", "ticket"),
+                                ("field", "ticket")})
         self.assertTrue(s.apply({"ticket": 7, "kind": "set-field", "value": {"risk": "high"}}))
         self.assertEqual(s.yt.issues["7"]["tags"], [STAGES["in-review"], "factory:fix-mid", "risk:high"])
         self.assertEqual([w for w in s.gh.writes if "labels" in str(w)], [])
