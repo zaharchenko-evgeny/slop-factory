@@ -502,6 +502,15 @@ class ReconcileMainBlockersTest(unittest.TestCase):
     """`reconcile_main` hands `wake_approved` the definition's graph, whatever engine/nodes.yaml says."""
     SLOP = Path(__file__).resolve().parent / "fixtures/slop"
 
+    @classmethod
+    def setUpClass(cls):
+        cls.previous = cfg.team_root()
+        cfg.set_team(cls.SLOP)
+
+    @classmethod
+    def tearDownClass(cls):
+        cfg.set_team(cls.previous)
+
     def run_main(self, blockers, engine_blockers):
         import io
         import tempfile
