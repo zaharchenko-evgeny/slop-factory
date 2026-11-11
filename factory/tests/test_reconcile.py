@@ -21,6 +21,7 @@ import nodes as nodes_mod  # noqa: E402
 import reconcile  # noqa: E402
 import gate  # noqa: E402
 from gate_port import MemorySystem  # noqa: E402
+from factory_plugins.github import heartbeat  # noqa: E402
 
 NODES, CONFIG = nodes_mod.load(), cfg.load()
 STAGES, LIMITS = list(CONFIG["tracker"]["stages"]), CONFIG["limits"]
@@ -179,6 +180,83 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(asked[0], (sorted(s for s in STAGES if s not in finals), True))
         self.assertEqual(read, [1])  # no facts reads for a done or closed ticket
 
+
+class ReconcileHeartbeatTest(unittest.TestCase):
+    CONFIG = {"tracker": {"repository": "o/map", "map_label": "factory:map"},
+              "targets": {"air": {"bot_login": "factory[bot]"}},
+              "repositories": [{"name": "map", "url": "https://github.com/o/map", "role": "primary"}],
+              "environments": {"write": {"repositories": [], "tokens": {"map": "MAP_TOKEN"}}}}
+
+    def test_pass_creates_once_then_edits_and_dry_run_writes_nothing(self):
+        class Gh:
+            def __init__(self):
+                self.comments, self.calls = [], []
+
+            def __call__(self, args, **kw):
+                self.calls.append((args, kw))
+                if args[:2] == ["issue", "list"]:
+                    return json.dumps([{"number": 404}])
+                if args[0] == "api" and "repos/o/map/issues/404/comments" in " ".join(args):
+                    if "-f" not in args:
+                        return "\n".join(json.dumps(c) for c in self.comments)
+                    body = next(a[5:] for a in args if a.startswith("body="))
+                    self.comments.append({"id": 7, "body": body, "user": {"login": "factory[bot]"},
+                                          "updated_at": "2026-11-03T12:00:00Z"})
+                    return ""
+                if args[0] == "api" and "issues/comments/7" in args[3]:
+                    self.comments[0]["body"] = next(a[5:] for a in args if a.startswith("body="))
+                    return ""
+                return ""
+
+        gh = Gh()
+        env = {"FACTORY_ENV": "write", "MAP_TOKEN": "test-token"}
+        now = NOW
+        first, failed = heartbeat.reconcile_pass(self.CONFIG, False, None, run=gh, environ=env, now=now)
+        second, _ = heartbeat.reconcile_pass(self.CONFIG, False, None, run=gh, environ=env, now=now + timedelta(minutes=1))
+        self.assertFalse(failed)
+        self.assertEqual([first[0]["action"], second[0]["action"]], ["create", "edit"])
+        writes = [(args, kw) for args, kw in gh.calls if args[0] == "api" and ("-X" in args or "-f" in args)]
+        self.assertEqual(len(writes), 2)
+        self.assertTrue(all(kw.get("token") == "test-token" for _, kw in writes))
+
+        dry = Gh()
+        result, _ = heartbeat.reconcile_pass(self.CONFIG, True, None, run=dry, environ=env, now=now)
+        self.assertEqual(result[0]["action"], "create")
+        self.assertFalse(any(args[0] == "api" and ("-X" in args or "-f" in args) for args, _ in dry.calls))
+
+    def test_only_the_configured_identity_and_heartbeat_marker_match(self):
+        body = heartbeat.comment_body("2026-11-03T12:00:00Z")
+        cases = (("configured bot", {"login": "factory[bot]", "type": "Bot"}, body, True),
+                 ("configured identity user type", {"login": "factory[bot]", "type": "User"}, body, True),
+                 ("other bot", {"login": "other[bot]", "type": "Bot"}, body, False),
+                 ("human", {"login": "person", "type": "User"}, body, False),
+                 ("missing author", None, body, False),
+                 ("marker missing", {"login": "factory[bot]", "type": "Bot"}, body.replace(heartbeat.MARKER, ""), False),
+                 ("prefix missing", {"login": "factory[bot]", "type": "Bot"}, body.removeprefix("[factory] "), False),
+                 ("body missing", {"login": "factory[bot]", "type": "Bot"}, "", False))
+        for name, user, comment, want in cases:
+            with self.subTest(name=name):
+                got = heartbeat.heartbeat_comment([{"id": 1, "user": user, "body": comment}], "factory[bot]")
+                self.assertEqual(bool(got), want)
+
+    def test_definition_reconcile_runs_only_the_heartbeat_hook(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        with mock.patch.object(reconcile.definition, "present", return_value=True), \
+                mock.patch.object(reconcile.config_mod, "load", return_value=CONFIG), \
+                mock.patch.object(gate, "tracker_of", return_value=MemorySystem({})), \
+                mock.patch.object(reconcile.definition, "load", return_value={}), \
+                mock.patch.object(reconcile.nodes_mod, "load", return_value=NODES), \
+                mock.patch.object(reconcile, "wake_ready", return_value=[]), \
+                mock.patch.object(reconcile, "wake_approved", return_value=[]), \
+                mock.patch.object(reconcile, "recover_definition", return_value=[]), \
+                mock.patch.object(reconcile, "reconcile_passes", return_value=({}, False)) as passes, \
+                redirect_stdout(StringIO()):
+            self.assertEqual(reconcile.reconcile_main(["--dry-run"]), 0)
+        self.assertEqual(passes.call_args.args[3], "reconcile.heartbeat")
+
+
+class ReconcileMoreTest(unittest.TestCase):
     def test_closed_approved_ticket_with_merged_pr_is_finished(self):
         t, results, failed = run({"stage": "approved", "pr": 5, "pr_state": "merged", "issue_state": "closed",
                                   "since": OLD})
@@ -232,10 +310,14 @@ class ReconcileTest(unittest.TestCase):
         out, synced = io.StringIO(), {"repo": "o/app", "pr": 1, "ci": "green"}
         with patch("factory_plugins.github.gate.GitHubGateTracker.from_config", return_value=MemorySystem({})), \
                 patch("factory_plugins.github.ci_sync.run_ci_sync", return_value=([synced], False)) as sync, \
+                patch("factory_plugins.github.heartbeat.reconcile_pass", return_value=([{"action": "create"}], False)) as heartbeat_pass, \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(reconcile.main(["--dry-run"]), 0)
         self.assertTrue(sync.call_args.args[0])  # the pass's --dry-run
-        self.assertEqual(json.loads(out.getvalue())["ci_sync"], [synced])
+        self.assertTrue(heartbeat_pass.call_args.args[1])
+        output = json.loads(out.getvalue())
+        self.assertEqual(output["ci_sync"], [synced])
+        self.assertEqual(output["reconcile_heartbeat"], [{"action": "create"}])
 
 
 

@@ -19,6 +19,7 @@ PLUGIN = Plugin(
               "vcs-contract": {"github": "factory_plugins.github.contract:VCS"}},
     commands={"ci-sync": "factory_plugins.github.ci_sync:command"},
     hooks={"reconcile.passes": "factory_plugins.github.ci_sync:reconcile_pass",
+           "reconcile.heartbeat": "factory_plugins.github.ci_sync:reconcile_heartbeat",
            "deploy.labels": "factory_plugins.github.provision:reconcile",
            "deploy.provision": "factory_plugins.github.provision:provision",
            "deploy.run": "factory_plugins.github.provision:write_run",

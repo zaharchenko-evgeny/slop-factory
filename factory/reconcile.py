@@ -618,22 +618,36 @@ def reconcile_main(argv):
         results += recover_definition(tracker, definition.load(config_mod.team_root()), config["tracker"]["stages"],
                                       config["tracker"].get("stage_kinds", {}), config["limits"],
                                       dry_run=dry_run, progress=progress)
+        if not spec:
+            passes, failed = reconcile_passes(config, dry_run, progress, "reconcile.heartbeat")
+        else:
+            passes = {}
+            failed = any("error" in r for r in results)
         if not dry_run and not spec:
             report_systemic(config, [r for r in results if r.get("systemic")])
-        print(json.dumps({"dry_run": dry_run, "reconcile": results}))
-        return 1 if any("error" in r for r in results) else 0
+        print(json.dumps({"dry_run": dry_run, "reconcile": results, **passes}))
+        return 1 if failed or any("error" in r for r in results) else 0
     progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
     results, failed = reconcile(tracker, nodes_mod.load(), list(config["tracker"]["stages"]), config["limits"],
                                 stage_kinds=config["tracker"].get("stage_kinds", {}),
                                 dry_run=dry_run, progress=progress)
     out = {"dry_run": dry_run, "reconcile": results}
-    if not spec:  # the plugins' scheduled passes (github: the CI label sync); each reports its own errors
-        import plugins
-        for passes in plugins.registry(config).hook("reconcile.passes"):
-            for name, (got, pass_failed) in passes(config, dry_run, progress).items():
-                out[name], failed = got, failed or pass_failed
+    if not spec:  # the plugins' scheduled passes; each reports its own errors
+        passes, failed = reconcile_passes(config, dry_run, progress)
+        out.update(passes)
     print(json.dumps(out))
     return 1 if failed else 0
+
+
+def reconcile_passes(config, dry_run, progress, hook="reconcile.passes"):
+    """Run each plugin's scheduled passes and return their results."""
+    import plugins
+    out, failed = {}, False
+    for passes in plugins.registry(config).hook(hook):
+        for name, (got, pass_failed) in passes(config, dry_run, progress).items():
+            out[name] = got
+            failed = failed or pass_failed
+    return out, failed
 
 
 if __name__ == "__main__":
