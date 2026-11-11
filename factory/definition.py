@@ -885,6 +885,22 @@ def _used_stages(w):
     return used
 
 
+def youtrack_tickets(defn):
+    """Whether a ticket repository of the definition keeps its tickets in YouTrack: the adapter of its own tracker
+    block, else its environment's, else the top-level one (`tracker: none` holds no tickets)."""
+    f = defn["factory"]
+    top = _as_block(f.get("tracker")) or {}
+    for env in (f.get("environments") or {}).values():
+        env = env or {}
+        for r in env.get("repositories") or []:
+            if not isinstance(r, dict) or r.get("tracker") in ("none", False):
+                continue
+            layers = (_as_block(r.get("tracker")), _as_block(env.get("tracker")), top)
+            if next((b["adapter"] for b in layers if b and b.get("adapter")), None) == "youtrack":
+                return True
+    return False
+
+
 def to_project(defn):
     """(project descriptor, format-2 workflow) of the definition, for the project loaders (`project.load`,
     `workflow.load`) and `config`. The definition must have no `errors`."""
@@ -930,7 +946,8 @@ def to_project(defn):
     # Stages: every name the nodes use, plus the engine's PR facts.
     used = _used_stages(w)
     kind = {s: k for k in ("final", "waiting") for s in stages.get(k) or []}
-    states = {s: {"kind": kind.get(s, "active"), "store": {"label": f"{prefix}{s}"}} for s in sorted(used)}
+    ticket_store = "tag" if youtrack_tickets(defn) else "label"  # a ticket-side label is a tag where tickets live in YouTrack
+    states = {s: {"kind": kind.get(s, "active"), "store": {ticket_store: f"{prefix}{s}"}} for s in sorted(used)}
     states["pr-merged"] = {"kind": "final", "store": {"pr": "merged"}}
 
     # Commands: every label a trigger or an effect names; on the PR when an effect puts it there (`on: pr`).
@@ -942,7 +959,7 @@ def to_project(defn):
                       if ("label" in e or "unlabel" in e) and e.get("on") == "pr"}
     commands = {}
     for label in sorted({x for n in nodes.values() for x in _labels_of(n)}):
-        commands[_name(label, prefix)] = {"store": {("pr_label" if label in on_pr else "label"): label}}
+        commands[_name(label, prefix)] = {"store": {("pr_label" if label in on_pr else ticket_store): label}}
 
     def role_of(agent_name):
         a = agents[agent_name]
@@ -1207,9 +1224,9 @@ def config(defn):
     """The engine config of the definition, to merge over engine/defaults.yaml: its project descriptor, with the
     tracker's `stages`, `stage_kinds` and `commands` that the gate reads."""
     descriptor = to_project(defn)[0]
-    states = {name: s for name, s in descriptor["states"].items() if "label" in s["store"]}
+    states = {name: s for name, s in descriptor["states"].items() if {"label", "tag"} & s["store"].keys()}
     out = {**descriptor, "tracker": {**descriptor["tracker"], "label_prefix": label_prefix(defn),
-                                     "stages": {name: s["store"]["label"] for name, s in states.items()},
+                                     "stages": {name: s["store"].get("label") or s["store"]["tag"] for name, s in states.items()},
                                      "stage_kinds": {name: s["kind"] for name, s in states.items()},
                                      "commands": {name: c["store"] for name, c in descriptor["commands"].items()}}}
     return {**out, **ticket_places(defn, out["tracker"])} if adopted(defn) else out

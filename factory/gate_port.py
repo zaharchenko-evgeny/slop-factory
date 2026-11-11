@@ -183,17 +183,24 @@ class DescriptorPort:
             raise ValueError("no project descriptor: the tracker reads states and commands from factory.project.yaml")
         return self.project.get(section) or {}
 
+    def _as_label(self, kind, kinds):
+        """#1298: a ticket-side `tag` store (YouTrack tickets in the definition) is a label on a tracker without tags,
+        so a github-issues repository beside a YouTrack one keeps its stages and commands as labels."""
+        return "label" if kind == "tag" and "tag" not in kinds and "label" in kinds else kind
+
     def _state_store(self, name):
         import project as project_mod
         states = self._entries("states")
         if name not in states:
             raise KeyError(f"unknown state: {name}")
         store = states[name]["store"]
-        return project_mod.store_kind(store), store
+        kind = self._as_label(project_mod.store_kind(store), self.state_kinds)
+        return kind, ({"label": store["tag"]} if kind == "label" and "tag" in store and "label" not in store else store)
 
     def _command(self, name):
         import workflow
         _, kind, value = workflow.resolve(self._entries("commands"), name)
+        kind = self._as_label(kind, self.command_kinds)
         if kind not in self.command_kinds:
             raise UnsupportedStore(f"command {name}: this tracker has no {kind} store")
         return kind, value
@@ -202,7 +209,8 @@ class DescriptorPort:
         """The ticket's state held in a ticket store (label, field or tag), else `none`."""
         stage = self.facts(ticket)["stage"]
         states = self._entries("states")
-        return stage if stage in states and any(k in (states[stage].get("store") or {}) for k in self.state_kinds) else "none"
+        kinds = (*self.state_kinds, *(("tag",) if "label" in self.state_kinds else ()))  # #1298: a tag is a label here
+        return stage if stage in states and any(k in (states[stage].get("store") or {}) for k in kinds) else "none"
 
     def pr_states(self, ticket):
         """The PR-fact states (`store: {pr: ...}`) that hold for the ticket's PR."""
@@ -226,7 +234,7 @@ class DescriptorPort:
         facts, found = self.facts(ticket), []
         attrs = facts.get("attrs") or []
         held = {"label": attrs, "tag": attrs, "pr_label": facts.get("pr_labels") or []}
-        held = {k: v for k, v in held.items() if k in self.command_kinds}
+        held = {k: v for k, v in held.items() if k in self.command_kinds or self._as_label(k, self.command_kinds) == "label"}
         for name, entry in self._entries("commands").items():
             store = entry.get("store") or {}
             kind = next(iter(store), None)
