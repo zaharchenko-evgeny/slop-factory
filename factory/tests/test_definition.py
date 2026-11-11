@@ -1050,6 +1050,83 @@ class SlopBugPathTest(unittest.TestCase):
         self.assertEqual(t.facts("7")["stage"], "needs-answers")
 
 
+class YouTrackRepositoryScopesTest(unittest.TestCase):
+    """#1259: one YouTrack project, one environment per repository, each repository narrowed by its Subsystem."""
+    TEAM = "zaharchenko-evgeny/slop-eval-factory"
+    SCOPES = {"JetBrains/jbeval": "JBeval", "JetBrains/harbor-infra": "Harbor"}
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.root = self.tmp / "team"
+        shutil.copytree(FIXTURE, self.root)
+        f = yaml.safe_load((self.root / "factory.yaml").read_text())
+        w = yaml.safe_load((self.root / "workflow.yaml").read_text())
+        f["tracker"] = {"adapter": "youtrack", "url": "https://yt.example", "project": "LME", "label_prefix": "factory:"}
+        base = {k: v for k, v in f["environments"]["engine"].items() if k != "repositories"}
+        scoped = lambda v: {"tracker": {"scope": {"field": "Subsystem", "value": v}}}  # noqa: E731
+        f["environments"] = {
+            "jbeval": {**base, "ci": {"workflow": "ci"},
+                       "repositories": [{"repo": "JetBrains/jbeval", "write": True, **scoped("JBeval")}]},
+            "harbor": {**base, "ci": {"workflow": "teamcity"}, "repositories": [
+                {"repo": "JetBrains/harbor-infra", "write": True, "default_branch": "master", **scoped("Harbor")}]},
+            "knowledge": {**base, "repositories": [{"repo": self.TEAM, "write": True, "tracker": "none"}]},
+            "team": {**base, "repositories": [{"repo": self.TEAM, "write": True, "tracker": "none"}]}}
+        w["settings"]["environment"] = "jbeval"
+        for name, n in w["nodes"].items():
+            if n.pop("environment", "engine") == "engine" and name not in ("human", "accept-knowledge"):
+                n["environments"] = ["jbeval", "harbor"]
+            elif name not in ("human", "accept-knowledge"):
+                n["environment"] = "knowledge" if name in ("retro", "knowledge-review") else "team"
+        w["nodes"]["fix"]["triggers"].append({"ci": "failed"})
+        (self.root / "factory.yaml").write_text(yaml.safe_dump(f, sort_keys=False))
+        (self.root / "workflow.yaml").write_text(yaml.safe_dump(w, sort_keys=False))
+        import config
+        self.previous = config._team
+        config.set_team(self.root)
+        self.config = config.load()
+
+    def tearDown(self):
+        import config
+        config.set_team(self.previous)
+        shutil.rmtree(self.tmp)
+
+    def plan(self):
+        import nodes
+        from factory_plugins.air import deploy as air
+        return {a["name"]: a for a in air.plan_air(nodes.load(), self.config)["automations"]}
+
+    def test_validates_without_a_code_host_repository(self):
+        self.assertEqual(definition.errors(definition.load(self.root)), [])
+        self.assertNotIn("code_host", self.config)
+        self.assertEqual([(p["repository"], p["tracker"]["scope"]["value"]) for p in self.config["ticket_places"]],
+                         list(self.SCOPES.items()))
+
+    def test_deploy_plans_one_copy_per_repository_with_its_scope_filter(self):
+        plan = self.plan()
+        for full, value in self.SCOPES.items():
+            intake = plan[f"[Slop factory] intake {full.split('/')[1]}"]
+            self.assertEqual(intake["repository"]["fullName"], full)
+            self.assertEqual(intake["triggers"][0]["filters"],
+                             {"tagAdded": "factory:triage", "projectShortName": "LME", "Subsystem": value})
+
+    def test_the_harbor_copies_merge_and_update_on_master_with_their_own_ci(self):
+        plan = self.plan()
+        for node in ("merge", "update"):
+            self.assertEqual(plan[f"[Slop factory] {node} harbor-infra"]["branch"], "master")
+            self.assertNotIn("branch", plan[f"[Slop factory] {node} jbeval"])  # Air's default: main
+        ci = {repo: [t["filters"] for t in plan[f"[Slop factory] fix {repo}"]["triggers"] if t["eventType"] == "workflow_run.failed"]
+              for repo in ("jbeval", "harbor-infra")}
+        self.assertEqual(ci, {"jbeval": [{"workflow_name": "ci"}], "harbor-infra": [{"workflow_name": "teamcity"}]})
+
+    def test_each_place_tracker_knows_the_other_repositories_scopes(self):
+        import gate
+        tracker, _ = gate.place_systems(self.config, "place:JetBrains/jbeval", yt_run=lambda *a, **k: [], run=lambda *a, **k: "")
+        store = tracker.tickets
+        self.assertEqual(store.scope, {"field": "Subsystem", "value": "JBeval"})
+        self.assertEqual(store.scope_of("harbor-infra"), {"field": "Subsystem", "value": "Harbor"})
+        self.assertEqual(type(gate.tracker_of(self.config)).__name__, "ScopedTracker")  # no code_host.repository needed
+
+
 class PlanTest(unittest.TestCase):
     """`definition.plan`: the sweep's start, merge, finish, reopen and join decisions from the node graph."""
     ON = {"enabled": True, "max_risk": "high"}

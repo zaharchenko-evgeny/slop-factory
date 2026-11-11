@@ -611,7 +611,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def main_green(self):
         """CI at the current main head is green (`head_ci` of `head_checks`)."""
-        return head_ci(head_checks(self.run, self.repo, self._api("commits/main")["sha"]))[0] == "green"
+        return head_ci(head_checks(self.run, self.repo, self._api("commits/HEAD")["sha"]))[0] == "green"  # the default branch
 
     def sweep_tickets(self, stages, open_only=False, now=None):
         """Issue numbers whose stage label is one of `stages`: the open ones and, unless `open_only`, those closed in the
@@ -1322,6 +1322,13 @@ class GitHubGateTracker(DescriptorPort):
         Effect("create-issues", "ticket", _fx_create_issues), Effect("park-behind-main-red", "ticket", _fx_park),
         Effect("merge", "pr", _fx_merge, remote=True), Effect("update-branch", "pr", _fx_update_branch, remote=True),
     )
+
+    def close_prs(self, n, comment):
+        """Close every open PR of ticket `n` with `comment` (a person stopped the work, #1260); True when one closed."""
+        prs = [pr for pr in self._prs(n, open_only=True) if pr.get("state", "open") == "open"]
+        for pr in prs:
+            self.run(["pr", "close", str(pr["number"]), "-R", self.pr_repo, "--comment", comment])
+        return bool(prs)
 
     def _may_write(self, name):
         return self.writable is None or name in self.writable

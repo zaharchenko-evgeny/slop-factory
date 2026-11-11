@@ -27,6 +27,7 @@ CASES = {
     ("label", "pr"): ([], eff("label", "factory:needs-human", on="pr")),
     ("unlabel", "pr"): ([], eff("unlabel", "factory:fix-*", on="pr")),
     ("set-field", "ticket"): ([], eff("set-field", {"risk": "high"})),
+    ("field", "ticket"): ([], eff("field", {"name": "Effort", "value": "S"})),
     ("assign", "ticket"): ([], eff("assign", "alice")),
     ("unassign", "ticket"): ([eff("assign", "alice")], eff("unassign")),
     ("assign", "pr"): ([], eff("assign", "alice", on="pr")),
