@@ -113,6 +113,14 @@ class GateTest(unittest.TestCase):
         self.assertEqual(gate.resolve({"assign": {"field": "assignee"}, "on": "pr"}, {"assignee": ["a", "b"]}, "7"),
                          {"kind": "assign", "ticket": "7", "value": ["a", "b"], "on": "pr"})
 
+    def test_request_reviewers_resolves_the_payload_field(self):  # #1262
+        self.assertEqual(gate.resolve({"request-reviewers": {"field": "reviewers"}, "on": "pr"}, {"reviewers": "a, b"}, "7"),
+                         {"kind": "request-reviewers", "ticket": "7", "value": ["a", "b"], "on": "pr"})
+        self.assertEqual(gate.resolve({"request-reviewers": "changes"}, {}, "7"),
+                         {"kind": "request-reviewers", "ticket": "7", "value": "changes"})
+        with self.assertRaisesRegex(gate.Bad, "missing field `reviewers`"):
+            gate.resolve({"request-reviewers": {"field": "reviewers"}, "on": "pr"}, {}, "7")
+
     def test_assignment_field_missing_or_empty_fails(self):
         for payload in ({}, {"assignee": ""}, {"assignee": "  "}, {"assignee": []}, {"assignee": [""]}, {"assignee": 3}):
             with self.subTest(payload=payload), self.assertRaises(gate.Bad):
