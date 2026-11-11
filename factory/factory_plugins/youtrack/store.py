@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-from gate_port import CLOSED_HOURS, child_links, child_order
+from gate_port import CLOSED_HOURS, COLLECTED, LESSON, child_links, child_order
 from ports.system import Effect
 from scopes import matches
 
@@ -98,7 +98,8 @@ class YouTrackTicketStore:
 
     def __init__(self, run, state_field=None, done_state="Done", project=None, bots=(), writers=(), assignee_field="Assignee",
                  repository_field=None, repo_stages=(), repositories=(), scope=None, projects=None, full_names=None,
-                 state_mirror=None, state_mirror_field="State", repository_scopes=None):
+                 state_mirror=None, state_mirror_field="State", repository_scopes=None, base_url=None):
+        self.base_url = (base_url or "").rstrip("/")
         self.run, self.state_field, self.done_state, self.project = run, state_field, done_state, project
         self.scope = scope
         self.bots, self.writers, self.assignee_field = set(bots), set(writers), assignee_field
@@ -118,7 +119,7 @@ class YouTrackTicketStore:
         return cls(run, done_state=tracker.get("done_state", "Done"), project=tracker.get("project"),
                    repository_field=tracker.get("repository_field"), scope=tracker.get("scope"), projects=tracker.get("projects"),
                    state_mirror=tracker.get("state_mirror"), state_mirror_field=tracker.get("state_mirror_field", "State"),
-                   repository_scopes=tracker.get("repository_scopes"), **kw)
+                   repository_scopes=tracker.get("repository_scopes"), base_url=tracker.get("url"), **kw)
 
     # --- reads
     def _issue(self, n):
@@ -228,6 +229,25 @@ class YouTrackTicketStore:
                  "author_is_factory": login in self.bots, "body": c.get("text") or "",
                  "at": iso(c.get("created")) or ""}
                 for c in self.run("GET", f"/api/issues/{n}/comments?fields={COMMENT_FIELDS}&{TOP}")]
+
+    def lesson_comments(self, label, ticket=None):
+        """The lesson comments of the issues tagged `label` in the scope, or of `ticket` alone (`TicketStore`)."""
+        found = [{"idReadable": ticket}] if ticket is not None else self.run(
+            "GET", f"/api/issues?query={urllib.parse.quote(self._scoped(f'tag: {{{label}}}'))}&fields=idReadable&{TOP}")
+        out = []
+        for i in found:
+            n = i["idReadable"]
+            for c in self.run("GET", f"/api/issues/{n}/comments?fields=id,{COMMENT_FIELDS}&{TOP}"):
+                text = c.get("text") or ""
+                if LESSON in text or COLLECTED in text:
+                    out.append({"ticket": n, "id": c["id"], "body": text, "collected": COLLECTED in text,
+                                "url": f"{self.base_url}/issue/{n}#focus=Comments-{c['id']}.0-0" if self.base_url else None})
+        return out
+
+    def mark_lesson(self, n, comment, collected=True):
+        old, new = (LESSON, COLLECTED) if collected else (COLLECTED, LESSON)
+        text = self.run("GET", f"/api/issues/{n}/comments/{comment}?fields=text")["text"]
+        self.run("POST", f"/api/issues/{n}/comments/{comment}?fields=id", {"text": text.replace(old, new)})
 
     def _links(self, n, link, direction):
         return [i for l in self._issue(n).get("links") or []

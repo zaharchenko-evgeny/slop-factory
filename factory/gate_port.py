@@ -14,6 +14,7 @@ from typing import Protocol
 
 from ports.system import Effect
 
+LESSON, COLLECTED = "<!-- factory:lesson -->", "<!-- factory:lesson collected -->"  # a lesson comment, once retro took it
 CLOSED_HOURS = 48  # a ticket closed on merge while its finish run was lost (#567) is found for this long
 
 
@@ -278,6 +279,10 @@ class TicketStore(Protocol):
     def create_children(self, n, children, ready) -> bool: ...  # sub-tickets {title, body}, chained, each given `ready`
     def park(self, n, check, triage) -> bool: ...  # block `n` by the open `Main is red in Air: <check>` ticket
     def can_answer(self, login) -> bool: ...  # whether `login` may answer a question the factory asked
+    def lesson_comments(self, label, ticket=None) -> list: ...
+    """[{ticket, url, id, body, collected}] of every lesson comment (`LESSON` or `COLLECTED` marker) of the tickets
+    holding `label` in the store's scope; of `ticket` alone when given, whatever its labels"""
+    def mark_lesson(self, ticket, comment, collected=True): ...  # swap the marker of lesson comment `comment`
 
 
 class Vcs(Protocol):

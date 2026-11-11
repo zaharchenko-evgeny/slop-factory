@@ -22,7 +22,7 @@ import yaml
 
 import config
 from gate_tracker import GateTracker
-from gate_port import (DescriptorPort, child_attrs, child_links, child_order, in_ticket_repository, number_of, ticket_view,
+from gate_port import (COLLECTED, LESSON, DescriptorPort, child_attrs, child_links, child_order, in_ticket_repository, number_of, ticket_view,
                        ticket_from_ref, ticket_ref, ticket_repositories, tracker_repositories)
 from scopes import matches
 from factory_plugins.github import graphql
@@ -396,6 +396,28 @@ class GitHubTicketStore:
     @in_ticket_repository
     def close(self, n):
         self.run(["issue", "close", str(n), "-R", self.repo])
+
+    def lesson_comments(self, label, ticket=None):
+        """The lesson comments of the issues labelled `label` (and the scope's label) in every ticket repository, or
+        of `ticket` alone (`TicketStore`)."""
+        out = []
+        for repo in [ticket_view(self, ticket)[0].repo] if ticket is not None else self.ticket_repos:
+            view = self.at(repo)
+            numbers = [number_of(ticket)] if ticket is not None else [i["number"] for i in view.read_list(
+                f"issues?state=all&labels={','.join([label, *view.scope_labels()])}&per_page=100")]
+            for n in numbers:
+                for c in view.read_list(f"issues/{n}/comments"):
+                    body = c.get("body") or ""
+                    if LESSON in body or COLLECTED in body:
+                        out.append({"ticket": self.ref(repo, n), "url": c.get("html_url"), "id": c["id"], "body": body,
+                                    "collected": COLLECTED in body})
+        return out
+
+    @in_ticket_repository
+    def mark_lesson(self, n, comment, collected=True):
+        old, new = (LESSON, COLLECTED) if collected else (COLLECTED, LESSON)
+        body = self.api(f"issues/comments/{comment}")["body"]
+        self.api(f"issues/comments/{comment}", "-X", "PATCH", "-f", f"body={body.replace(old, new)}")
 
     def create_children(self, n, children, ready):
         """Per child: reuse an open issue of that title, then add each link that is missing (a retry converges)."""
