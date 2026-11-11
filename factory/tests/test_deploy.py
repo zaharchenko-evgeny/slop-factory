@@ -496,7 +496,7 @@ class ApplyTest(unittest.TestCase):
         self.plan["environments"][0].update({"repository": "https://github.com/JetBrains/r", "variables": {"FACTORY_ENV": "read"}})
         live = [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/jetbrains/r",
                  "variables": {"FACTORY_ENV": "read"}}]
-        self.assertFalse([c for c in air.diff(self.plan, [], live) if c[0] == "replace"])
+        self.assertFalse([c for c in air.diff(self.plan, [], live) if c[0] == "replace" or "repository" in (c[5] or [])])
         self.assertTrue(air.same_repository("https://github.com/jetbrains/r.git/", "https://github.com/JetBrains/r"))
         self.assertFalse(air.same_repository("https://github.com/o/r", "https://github.com/o/team"))
 
