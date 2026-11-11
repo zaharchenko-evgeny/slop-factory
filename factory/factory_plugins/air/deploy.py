@@ -562,7 +562,8 @@ def extra_variables(plan: dict, envs: list[dict]) -> list[str]:
     """`remove by hand in Air: <env> variable <NAME>` for each variable in Air that the plan does not have."""
     have = {x["name"]: x.get("variables") or {} for x in envs}
     return [f"remove by hand in Air: {e['name']} variable {k}" for e in plan["environments"]
-            for k in have.get(e["name"], {}) if k not in (e.get("variables") or {})]
+            for k in have.get(e["name"], {})
+            if k not in (e.get("variables") or {}) and k not in {x["name"] for x in e.get("declared") or []}]
 
 
 def repository_urls(plan: dict) -> list[str]:

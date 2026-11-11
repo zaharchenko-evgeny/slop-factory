@@ -309,6 +309,19 @@ class ApplyTest(unittest.TestCase):
         self.assertIn("remove by hand in Air: [F] read variable FACTORY_TEAM_REPOSITORY", out.getvalue())
         self.assertEqual(self.calls("environment"), [])
 
+    def test_declared_variables_in_air_are_not_reported_for_removal(self):
+        self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
+        for declared, existing, reported in [
+                ([{"name": "TEAMCITY_URL", "secret": False, "required": True}], "TEAMCITY_URL", False),
+                ([{"name": "TEAMCITY_URL", "secret": False, "required": False}], "TEAMCITY_URL", False),
+                ([{"name": "TEAMCITY_TOKEN", "secret": True, "required": True}], "TEAMCITY_URL", True),
+                ([], "TEAMCITY_URL", True)]:
+            with self.subTest(declared=declared, existing=existing):
+                self.plan["environments"][0]["declared"] = declared
+                have = [{"id": "e1", "name": "[F] read", "variables": {existing: "x"}}]
+                lines = air.extra_variables(self.plan, have)
+                self.assertEqual(bool(lines), reported)
+
     def backend(self):
         path, backend = self.state["automation"], mock.Mock()
         backend.calls = []
