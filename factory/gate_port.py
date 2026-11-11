@@ -12,6 +12,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
+import lease
 from ports.system import Effect
 
 CLOSED_HOURS = 48  # a ticket closed on merge while its finish run was lost (#567) is found for this long
@@ -268,6 +269,8 @@ class TicketStore(Protocol):
     def remove_attr(self, n, *attrs): ...
     def set_stage(self, n, stage, have): ...  # `stage` replaces the stage attrs `have`
     def assign(self, n, people): ...  # the assignees become exactly `people`; [] unassigns
+    def claim(self, n, executor) -> bool: ...  # the lease (factory/lease.py): ClaimError when another executor holds it
+    def release(self, n, executor) -> bool: ...  # drop the executor's own lease
     def comment(self, n, body): ...
     def close(self, n): ...
     def open_blockers(self, n) -> list: ...  # ids of the open tickets blocking `n`
@@ -540,6 +543,21 @@ class MemorySystem(DescriptorPort):
         t.setdefault("log", []).append([kind, json.dumps(people, sort_keys=True)])
         return True
 
+    def _fx_claim(self, effect, ctx):  # the lease: the assignee, compare-and-set
+        t, executor = self._t(effect["ticket"]), effect["value"]
+        holders = t.setdefault("assignees", [])
+        if effect["kind"] == "release":
+            if executor not in holders:
+                return False
+            t["assignees"] = [a for a in holders if a != executor]
+            return True
+        if [a for a in holders if a != executor]:
+            raise lease.ClaimError(f"issue {effect['ticket']}: claimed by {', '.join(a for a in holders if a != executor)}")
+        if holders:
+            return False
+        holders.append(executor)
+        return True
+
     def _fx_merge(self, effect, ctx):  # the other repositories first, the primary last
         import effects
         t = self._t(effect["ticket"])
@@ -602,6 +620,7 @@ class MemorySystem(DescriptorPort):
         Effect("stage", "ticket", _fx_stage), Effect("seen", "ticket", _fx_stage),
         Effect("park-behind-main-red", "ticket", _fx_park), Effect("set-field", "ticket", _fx_set_field),
         Effect("assign", "ticket", _fx_assign), Effect("unassign", "ticket", _fx_assign),
+        Effect("claim", "ticket", _fx_claim), Effect("release", "ticket", _fx_claim),
         Effect("unlabel", "ticket", _fx_unlabel), Effect("unlabel", "pr", _fx_unlabel),
         Effect("review", "pr", _fx_log, remote=True), Effect("update-branch", "pr", _fx_log, remote=True),
         Effect("merge", "pr", _fx_merge, remote=True),

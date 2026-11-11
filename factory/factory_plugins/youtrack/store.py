@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
+import lease
 from gate_port import CLOSED_HOURS, child_links, child_order
 from ports.system import Effect
 from scopes import matches
@@ -379,6 +380,13 @@ class YouTrackTicketStore:
     def assign(self, n, people):
         """The Assignee field holds the first of `people` (it holds one user); [] clears it."""
         return self.set_field(n, self.assignee_field, people[0] if people else None, "SingleUserIssueCustomField")
+
+    def claim(self, n, executor):
+        """The lease is the Assignee field (factory/lease.py): True when it wrote; ClaimError when another holds it."""
+        return lease.claim(self, n, executor)
+
+    def release(self, n, executor):
+        return lease.release(self, n, executor)
 
     def comment(self, n, body):
         self.run("POST", f"/api/issues/{n}/comments?fields=id", {"text": body})

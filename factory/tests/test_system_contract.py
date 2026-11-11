@@ -22,6 +22,7 @@ from test_gate_github import BOT, M, REPO, STAGES, FakeGh, GitHubGateTracker, re
 from system_contract import SystemContract  # noqa: E402
 import derive  # noqa: E402
 import effects  # noqa: E402
+import lease  # noqa: E402
 from factory_plugins.github import gate as gate_github  # noqa: E402
 from factory_plugins.youtrack.store import YouTrackTicketStore  # noqa: E402
 from factory_plugins.space.gate import SpaceCodeHost  # noqa: E402
@@ -326,6 +327,21 @@ class YouTrackContractTest(SystemContract, unittest.TestCase):
         self.assertTrue(s.apply({"ticket": 7, "kind": "set-field", "value": {"risk": "high"}}))
         self.assertEqual(s.yt.issues["7"]["tags"], [STAGES["in-review"], "factory:fix-mid", "risk:high"])
         self.assertEqual([w for w in s.gh.writes if "labels" in str(w)], [])
+
+
+class GitHubLeaseRaceTest(unittest.TestCase):
+    def test_two_executors_claiming_at_once_both_back_off(self):
+        gh = ContractGh()
+        t = GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=lambda args, timeout=None: race(gh, args))
+
+        def race(fake, args):  # another executor assigns itself right after our add
+            out = fake(args)
+            if "--add-assignee" in args and "exec-b" not in fake.assignees:
+                fake.assignees.append("exec-b")
+            return out
+        with self.assertRaisesRegex(lease.ClaimError, "after re-read"):
+            t.apply({"ticket": 7, "kind": "claim", "value": "exec-a"})
+        self.assertEqual(gh.assignees, ["exec-b"])
 
 
 class ContractSpace:
