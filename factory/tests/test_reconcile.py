@@ -255,6 +255,24 @@ class ReconcileHeartbeatTest(unittest.TestCase):
             self.assertEqual(reconcile.reconcile_main(["--dry-run"]), 0)
         self.assertEqual(passes.call_args.args[3], "reconcile.heartbeat")
 
+    def test_plugin_passes_do_not_hide_a_failed_reconcile(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        cases = (("recovery failed, passes ok", True, False, 1),
+                 ("recovery ok, passes failed", False, True, 1),
+                 ("both failed", True, True, 1),
+                 ("both ok", False, False, 0))
+        for name, recovery_failed, passes_failed, want in cases:
+            with self.subTest(name=name), \
+                    mock.patch.object(reconcile.definition, "present", return_value=False), \
+                    mock.patch.object(reconcile.config_mod, "load", return_value=CONFIG), \
+                    mock.patch.object(gate, "tracker_of", return_value=MemorySystem({})), \
+                    mock.patch.object(reconcile.nodes_mod, "load", return_value=NODES), \
+                    mock.patch.object(reconcile, "reconcile", return_value=([], recovery_failed)), \
+                    mock.patch.object(reconcile, "reconcile_passes", return_value=({}, passes_failed)), \
+                    redirect_stdout(StringIO()):
+                self.assertEqual(reconcile.reconcile_main([]), want)
+
 
 class ReconcileMoreTest(unittest.TestCase):
     def test_closed_approved_ticket_with_merged_pr_is_finished(self):

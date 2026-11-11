@@ -633,7 +633,8 @@ def reconcile_main(argv):
                                 dry_run=dry_run, progress=progress)
     out = {"dry_run": dry_run, "reconcile": results}
     if not spec:  # the plugins' scheduled passes; each reports its own errors
-        passes, failed = reconcile_passes(config, dry_run, progress)
+        passes, passes_failed = reconcile_passes(config, dry_run, progress)
+        failed = failed or passes_failed
         out.update(passes)
     print(json.dumps(out))
     return 1 if failed else 0
