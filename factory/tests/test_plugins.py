@@ -66,6 +66,16 @@ class SelectionTest(FakePlugins):
         self.assertEqual(plugins.selected(config), ("claude", "codex", "github", "local", "space", "youtrack"))
         self.assertEqual(plugins.selected({"vcs": "space", "tracker": {"adapter": "github-issues"}}), ("github", "space"))
 
+    def test_live_hooks_exist_for_every_tracker_and_vcs_combination(self):
+        """A YouTrack team on Space selects no github plugin; the live commands and the doctor still find their hooks."""
+        for config in ({}, {"tracker": {"adapter": "youtrack"}, "vcs": "space"},
+                       {"tracker": {"adapter": "youtrack"}}, {"vcs": "space", "tracker": {"adapter": "github-issues"}}):
+            with self.subTest(config=config):
+                registry = plugins.registry(config)
+                self.assertEqual([h() for h in registry.hook("gate.default_place")][:1], ["github"])
+                self.assertTrue(list(registry.hook("doctor.run")))
+                self.assertTrue(list(registry.hook("doctor.frontier")))
+
     def test_unknown_names_are_errors_and_select_nothing(self):
         config = {"plugins": ["comments", "chat"]}
         self.assertNotIn("chat", plugins.selected(config))

@@ -26,5 +26,9 @@ PLUGIN = Plugin(
            "tracker.block_errors": "factory_plugins.youtrack.provision:block_errors",
            "config.tracker_errors": "factory_plugins.youtrack.provision:tracker_errors",
            "deploy.scope_filter": "factory_plugins.youtrack.provision:scope_filter",
-           "doctor.probes": "factory_plugins.youtrack.probes:probes"},
+           "doctor.probes": "factory_plugins.youtrack.probes:probes",
+           # the live commands, the doctor's tickets and its frontier probe stay on GitHub, where the pull requests are
+           "gate.default_place": "factory_plugins.github.gate:default_place",
+           "doctor.run": "factory_plugins.github.tracker:gh",
+           "doctor.frontier": "factory_plugins.github.probes:frontier"},
 )
