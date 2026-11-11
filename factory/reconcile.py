@@ -56,7 +56,8 @@ def finish_lost(tracker, defn, stages, open_listed, dry_run, progress):
     import gate
     nodes = (defn["workflow"].get("nodes") or {})
     finish = [name for name, n in nodes.items()
-              if any(isinstance(t, dict) and t.get("pr") == "merged" for t in n.get("triggers") or [])]
+              if n.get("enabled") is not False
+              and any(isinstance(t, dict) and t.get("pr") == "merged" for t in n.get("triggers") or [])]
     results, still_open = [], set(open_listed)
     closed = [n for n in dict.fromkeys(tracker.sweep_tickets(stages)) if n not in still_open] if finish else []
     gate.prefetch(tracker, closed)

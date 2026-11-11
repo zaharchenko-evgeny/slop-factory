@@ -46,6 +46,27 @@ class FinishLostTest(unittest.TestCase):
         self.assertEqual([(r["ticket"], r["reconcile"]) for r in results], [(1, "finish")])
         self.assertEqual(t.tickets[1]["stage"], "done")
 
+    def test_disabled_merged_listeners_are_skipped(self):
+        ticket = {"stage": "approved", "pr": 5, "pr_state": "merged", "issue_state": "closed", "since": OLD}
+        base = definition.load(RecoverDefinitionTest.SLOP)
+        nodes = base["workflow"]["nodes"]
+        name, node = next((k, v) for k, v in nodes.items()
+                          if any(isinstance(t, dict) and t.get("pr") == "merged" for t in v.get("triggers") or []))
+        for label, active_too, stage in (("disabled listener first", True, "done"),
+                                         ("only a disabled listener", False, "approved")):
+            with self.subTest(label):
+                defn = copy.deepcopy(base)
+                new = {"disabled-" + name: {**copy.deepcopy(node), "enabled": False}}
+                if active_too:
+                    new[name] = defn["workflow"]["nodes"][name]
+                rest = {k: v for k, v in defn["workflow"]["nodes"].items() if k != name}
+                defn["workflow"]["nodes"] = {**new, **rest}
+                tracker = MemorySystem({1: dict(ticket)})
+                results = reconcile.finish_lost(tracker, defn, [s for s in reconcile.LOST_FINISH if s in STAGES],
+                                                tracker.sweep_tickets(STAGES, open_only=True), False, None)
+                self.assertEqual(tracker.tickets[1]["stage"], stage, results)
+                self.assertFalse([r for r in results if "error" in r], results)
+
     def test_other_closed_tickets_are_left_alone(self):
         for ticket in ({"stage": "done", "pr": 5, "pr_state": "merged", "issue_state": "closed"},
                        {"stage": "approved", "pr": 5, "pr_state": "open", "issue_state": "closed"},

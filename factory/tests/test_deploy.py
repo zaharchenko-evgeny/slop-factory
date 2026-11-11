@@ -32,6 +32,19 @@ import deploy
 from factory_plugins.air import deploy as air  # noqa: E402
 import nodes
 from factory_plugins.github import tracker as github_tracker  # noqa: E402
+
+_TEAM_BEFORE = None
+
+
+def setUpModule():
+    """Under pytest, other test modules set the team at import; these tests read the slop fixture."""
+    global _TEAM_BEFORE
+    _TEAM_BEFORE = cfg.team_root()
+    cfg.set_team(HERE / "fixtures/slop")
+
+
+def tearDownModule():
+    cfg.set_team(_TEAM_BEFORE)
 from factory_plugins.github import wake as github_wake  # noqa: E402
 from factory_plugins.youtrack import provision as youtrack_provision  # noqa: E402
 from factory_plugins.youtrack import wake as youtrack_wake  # noqa: E402
