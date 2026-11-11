@@ -158,6 +158,19 @@ class SystemContract:
                 self.assertIsInstance(c.get(flag), bool, f"comment without {flag}: {c}")
         self.assertEqual((mine[0]["author_is_bot"], mine[0]["author_is_factory"]), (True, True))
 
+    def foreign_comments(self, s):
+        """Put on ticket 7 a comment by a human (`alice`) and one by a bot that is not the factory (`ci[bot]`)."""
+        raise NotImplementedError
+
+    def test_a_comment_by_another_author_is_not_the_factorys(self):
+        s = self.make()
+        self.foreign_comments(s)
+        self.assertTrue(s.apply(eff("comment", "hello there", run_id="r")))
+        flags = {c["author"]: (c["author_is_bot"], c["author_is_factory"]) for c in s.read(Subject("ticket", 7)).comments}
+        self.assertEqual(flags["alice"], (False, False))
+        self.assertEqual(flags["ci[bot]"], (True, False))
+        self.assertEqual([f for a, f in flags.items() if a not in ("alice", "ci[bot]")], [(True, True)])
+
     def test_find_stage_lists_the_tickets_in_a_stage(self):
         s = self.make()
         for values, want in ((("in-review",), [7]), (("in-review", "done"), [7]), (("done",), []), ((), [])):

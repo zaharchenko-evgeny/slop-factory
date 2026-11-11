@@ -31,6 +31,12 @@ from gate_tracker import OnVcs  # noqa: E402
 LABELS = ["factory:in-review", "risk:low", "factory:fix-mid"]
 
 
+def foreign_in_memory(tracker):
+    tracker.tickets[7].setdefault("comments", []).extend(
+        {"author": a, "author_is_bot": bot, "author_is_factory": False, "body": "hi", "at": None}
+        for a, bot in (("alice", False), ("ci[bot]", True)))
+
+
 def relate_in_memory(tracker):
     """Ticket 7 has sub-tickets 21 and 22 and blocks 22; ticket 30 has its own sub-ticket 31."""
     kid = lambda n: {"number": n, "state": "open", "not_planned": False, "attrs": []}  # noqa: E731
@@ -48,6 +54,9 @@ class MemorySystemContractTest(SystemContract, unittest.TestCase):
     def relate(self, s):
         return relate_in_memory(s)
 
+    def foreign_comments(self, s):
+        foreign_in_memory(s)
+
 
 class TagTrackerContractTest(SystemContract, unittest.TestCase):
     def make(self):
@@ -56,6 +65,9 @@ class TagTrackerContractTest(SystemContract, unittest.TestCase):
 
     def relate(self, s):
         return relate_in_memory(s)
+
+    def foreign_comments(self, s):
+        foreign_in_memory(s)
 
 
 def flag(args, name):
@@ -161,6 +173,10 @@ class GitHubContractTest(SystemContract, unittest.TestCase):
         for p in (patch.object(G.M_GH.time, "sleep"), patch.object(GitHubGateTracker, "RECENT_MERGE_SECONDS", 0)):
             p.start()
             self.addCleanup(p.stop)
+
+    def foreign_comments(self, s):
+        s.gh.comments.extend({"body": "hi", "user": {"login": a, "type": t}, "created_at": "2026-01-01T00:00:00Z"}
+                             for a, t in (("alice", "User"), ("ci[bot]", "Bot")))
 
     NUMBERS = (1, 2)  # what the stub numbers the two sub-tickets that `relate` creates
 
@@ -293,6 +309,9 @@ class YouTrackContractTest(SystemContract, unittest.TestCase):
     setUp = GitHubContractTest.setUp
     relate = GitHubContractTest.relate
 
+    def foreign_comments(self, s):
+        s.yt.issues["7"]["comments"].extend({"text": "hi", "created": 1, "author": {"login": a}} for a in ("alice", "ci[bot]"))
+
     def make(self):
         gh, yt = ContractGh(), ContractYouTrack([STAGES["in-review"], "risk:low", "factory:fix-mid"])
         t = GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh, tickets=YouTrackTicketStore(yt, bots=[BOT]))
@@ -356,6 +375,9 @@ class SpaceContractTest(SystemContract, unittest.TestCase):
 
     def relate(self, s):
         return relate_in_memory(s.tracker)
+
+    def foreign_comments(self, s):
+        foreign_in_memory(s.tracker)
 
     def test_pr_effects_are_spaces_and_write_space(self):
         s = self.make()
