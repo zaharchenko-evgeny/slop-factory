@@ -24,6 +24,7 @@ import config as config_mod
 import definition
 import plugins
 import project as project_mod
+import scopes as scopes_mod
 import vocab
 from ports.system import TrackerSchema
 
