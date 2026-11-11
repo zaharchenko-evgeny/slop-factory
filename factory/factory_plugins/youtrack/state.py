@@ -76,10 +76,15 @@ def reconcile_pass(config, dry_run, progress):
         return {}
     try:
         import gate
-        tracker = gate.tracker_of(config)
+        if config.get("ticket_places"):  # ADR-0027: each repository's tickets on the place tracker of its scope
+            keys = [k for k in gate.place_keys(config)[0] if k != "github"]
+            trackers = [gate.place_systems(config, k)[0] for k in keys]
+        else:
+            trackers = [gate.tracker_of(config)]
         stages = {s: vocab.stage(s) for s in t.get("stages") or {}}
         final = [s for s, k in (t.get("stage_kinds") or {}).items() if k == "final"]
-        results = apply_rules(tracker, t["state_rules"], stages, final, dry_run, progress)
+        results = [r for tracker in trackers if hasattr(tracker, "tickets")
+                   for r in apply_rules(tracker, t["state_rules"], stages, final, dry_run, progress)]
         return {"state_rules": (results, any(r.get("rule") == "error" for r in results))}
     except Exception as e:
         return {"state_rules": ([{"error": f"{type(e).__name__}: {e}"}], True)}
