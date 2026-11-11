@@ -20,6 +20,7 @@ NO_ROLE = ("script", "human")  # harnesses that run no role
 GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children", "ticket")  # the facts a guard reads (gate.GUARD_KEYS)
 # ADR-0024: keys a node's `writes` replaced; `factory validate` names them (`removed-key`)
 REMOVED_REPOSITORY_KEYS = ("main", "token_env")  # `write` names the environment's writable repository; `token` the secret (ADR-0027)
+EXTERNAL_REVIEW = ("external_review_hours", "external_review_bot", "external_review_label")  # reconcile (#1263)
 DEPRECATED_NODE_KEYS = ("listens", "writes")  # ADR-0027: a node declares `environments`, a repository its `write`
 DEFAULT_ADAPTER = {"tracker": "github-issues", "vcs": "github"}
 TIER_SUFFIXES = ("-small", "-medium", "-large", "-low", "-high")  # a tiered node: `implement-medium`, `review-high`
@@ -361,9 +362,10 @@ def several_writable(spec):
         if len(writable) > 1 and any(not r.get("token") for r in writable if r is not repos[0]) else []
 
 
-def environment_secrets(defn, env_name):
-    """{name: description} of the secrets `env_name` needs: those of the defaults and the environment, and those of
-    the role, agent and node of every node that runs in it. GH_TOKEN is Air's own and is left out."""
+def environment_variables(defn, env_name):
+    """{name: {"secret", "required": bool, "description": str}} of the variables `env_name` declares: those of the defaults and the
+    environment, and those of the role, agent and node of every node that runs in it. GH_TOKEN is Air's own and is
+    left out. A later layer overrides `secret`; the description falls back to an earlier one."""
     f, w = defn["factory"], defn["workflow"]
     layers = [(f.get("defaults") or {}), ((f.get("environments") or {}).get(env_name) or {})]
     for name in w.get("nodes") or {}:
@@ -373,9 +375,15 @@ def environment_secrets(defn, env_name):
     out = {}
     for layer in layers:
         for k, v in (layer.get("env") or {}).items():
-            if (v or {}).get("secret") and k != "GH_TOKEN":
-                out[k] = (v or {}).get("description") or out.get(k) or ""
+            if k != "GH_TOKEN":
+                out[k] = {"secret": bool((v or {}).get("secret")), "required": (v or {}).get("required", True) is not False,
+                          "description": (v or {}).get("description") or (out.get(k) or {}).get("description") or ""}
     return dict(sorted(out.items()))
+
+
+def environment_secrets(defn, env_name):
+    """{name: description} of the secrets `env_name` needs (its `environment_variables` marked `secret`)."""
+    return {k: v["description"] for k, v in environment_variables(defn, env_name).items() if v["secret"]}
 
 
 def settings(defn, name, env_name=None):
@@ -701,6 +709,10 @@ def errors(defn):
             errs.append(f"no-trigger: {where}")
         if "prompt" in n:
             errs.append(f"node-prompt: {where}: instructions belong in roles/<role>/role.md; pass what differs as settings")
+        merged = {**(defn["workflow"].get("settings") or {}), **(n.get("settings") or {})}
+        late = [k for k in EXTERNAL_REVIEW[1:] if merged.get(k)]  # the hours may be a workflow setting
+        if late and not all(merged.get(k) for k in EXTERNAL_REVIEW):  # #1263: reconcile needs all three
+            errs.append(f"external-review: {where}: set {', '.join(EXTERNAL_REVIEW)} together")
         for t in n.get("triggers") or []:
             if isinstance(t, dict) and "webhook" in t and t["webhook"] not in hooks:
                 errs.append(f"unknown-webhook: {where}: {t['webhook']}")
@@ -728,6 +740,16 @@ def errors(defn):
                         valid = valid or value == "all"
                     if not valid:
                         errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins" + (" or {field: <name>}" if key == "assign" else ""))
+                if isinstance(effect, dict) and "request-reviewers" in effect:
+                    value = effect["request-reviewers"]
+                    if not (value is None or (isinstance(value, str) and value.strip())
+                            or (isinstance(value, list) and value and all(isinstance(v, str) and v.strip() for v in value))
+                            or (isinstance(value, dict) and set(value) == {"field"} and isinstance(value["field"], str)
+                                and value["field"].strip())):
+                        errs.append(f"bad-effect: {where}.{o}: request-reviewers must be `changes`, a login, a list of "
+                                    "logins or {field: <name>}")
+                    elif isinstance(value, dict) and effect.get("on", "pr") != "pr":
+                        errs.append(f"bad-effect: {where}.{o}: request-reviewers asks on the PR (`on: pr`)")
             prefix = label_prefix(defn)
             by_target = {}
             for effect in oc.get("effects") or []:
@@ -809,7 +831,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed", ("pr", "commented"): "pr commented",
                  ("ticket", "commented"): "ticket commented"}
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red", "assign", "unassign")  # and the plugins' effects
+           "request-reviewers", "park-behind-main-red", "assign", "unassign", "ready-for-review")  # and the plugins' effects
 
 
 def _name(label, prefix):
@@ -1150,7 +1172,8 @@ def nodes(defn):
                          if (v or {}).get("secret") and k != "GH_TOKEN")
         environments[en] = {"repository": "primary" if repos and repos[0]["repo"] == primary else repos[0]["repo"].split("/")[-1],
                             "secrets": secrets, "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"),
-                            "startup": STARTUP}
+                            "startup": STARTUP,
+                            "declared": [{"name": k, **v} for k, v in environment_variables(defn, en).items()]}
     schedules, out = {}, {}
     for name, n in (w.get("nodes") or {}).items():
         a = agents[n["agent"]]

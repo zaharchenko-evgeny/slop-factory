@@ -172,6 +172,37 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual([n["hint"] for n in got["agent_notes"]], ["see a.py", "all"])
         self.assertNotIn("agent_notes", got["context"])
 
+    def as_instructed(self):
+        """The engine's implement node opening its own PR (#1261): `done` labels the draft PR for the factory review."""
+        import nodes
+        load = nodes.load
+
+        def patched(path=None):
+            graph = load(path)
+            node = graph["nodes"]["implement"]
+            node["output"] = "as-instructed"
+            node["outcomes"]["done"]["effects"].insert(0, {"label": "factory:review-low", "on": "pr"})
+            return graph
+        return mock.patch.object(nodes, "load", patched)
+
+    def test_check_prints_the_draft_pr_command_of_an_as_instructed_implement_node(self):
+        tracker = self.tracker()
+        with self.as_instructed():
+            code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        got = json.loads(out)
+        self.assertEqual(got["pr_create"]["done"], f"gh pr create --draft --head {got['branch']} --label factory:review-low "
+                                                   '--title "#7 <subject>" --body-file .factory/pr-body.md')
+
+    def test_end_done_without_a_pr_is_refused_for_an_as_instructed_node(self):
+        tracker = self.tracker()
+        with self.as_instructed():
+            self.run_cli("begin", "implement-mid", "event.json", *tracker)
+            code, out = self.run_cli("end", "done")
+        self.assertEqual(code, 2, out)
+        self.assertIn("no PR for the ticket's branch: open it as a draft first", out)
+        self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-dev")
+
     def test_end_without_begin_is_an_error(self):
         self.assertEqual(self.run_cli("end", "done")[0], 2)
 
@@ -556,7 +587,7 @@ class EndFieldsTest(unittest.TestCase):
                     if isinstance(e, dict):
                         found.update(v for k, v in e.items() if k in self.READS and isinstance(v, str))
                         found.update(v["field"] for k, v in e.items()
-                                     if k in ("assign", "unassign") and isinstance(v, dict) and "field" in v)
+                                     if k in ("assign", "unassign", "request-reviewers") and isinstance(v, dict) and "field" in v)
                         found.update(re.findall(r"<([^>]+)>", " ".join(str(e.get(k, "")) for k in ("label", "unlabel"))))
                 for v in x.values():
                     walk(v)
@@ -570,7 +601,7 @@ class EndFieldsTest(unittest.TestCase):
         import yaml
         import gate
         root = Path(__file__).resolve().parents[2]
-        args = ["x", "--size-estimate", "1"]
+        args = ["x", "--size-estimate", "1", "--reviewer", "x"]
         for action in cli.end_parser()._actions:
             opt = next((o for o in action.option_strings if o.startswith("--")), None)
             if opt and isinstance(action, argparse._StoreAction) and action.dest not in ("findings", "slices", "checks", "addressed", "notes"):
@@ -581,6 +612,10 @@ class EndFieldsTest(unittest.TestCase):
             with self.subTest(name):
                 missing = self.effect_fields(yaml.safe_load((root / name).read_text())) - written
                 self.assertEqual(missing, set(), f"no `factory end` option writes {sorted(missing)}")
+
+    def test_end_reviewer_writes_the_reviewers_list(self):  # #1262
+        args = cli.end_parser().parse_args(["ask-human", "--reviewer", "alice", "--reviewer", "bob"])
+        self.assertEqual(cli.handoff_of(args)["reviewers"], ["alice", "bob"])
 
     def test_end_notified_message(self):
         self.assertEqual(cli.handoff_of(cli.end_parser().parse_args(["notified", "--message", "@o hi"]))["message"], "@o hi")

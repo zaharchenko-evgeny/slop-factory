@@ -106,7 +106,7 @@ for line in sys.stdin:
         if tool not in TOOLS[kind]:
             raise ValueError(f"unexpected {kind} tool: {tool}")
         if kind == "environment" and tool in ("create_environment", "edit_environment") and "variables" in a:
-            assert isinstance(a["variables"], list) and all(v.get("value") for v in a["variables"]), a
+            assert isinstance(a["variables"], list) and all(isinstance(v.get("value"), str) for v in a["variables"]), a
         if tool == "list_automations":
             assert a == {"privacy": "private"}, a
             out = {"personal": [{"automationId": i["id"], "name": i["name"]} for i in db["items"]],
@@ -130,6 +130,10 @@ for line in sys.stdin:
             out = {"automationId": created["id"]} if kind == "automation" else {"id": created["id"]}
         elif tool in ("update_automation", "edit_environment"):
             key = "automationId" if kind == "automation" else "id"
+            if "variables" in a and kind == "environment" and isinstance(
+                    next(i for i in db["items"] if i["id"] == a["id"]).get("variables"), list):  # Air adds or updates the listed ones, keeps the rest
+                old = next(i for i in db["items"] if i["id"] == a["id"]).get("variables") or []
+                a = {**a, "variables": [v for v in old if v["key"] not in {x["key"] for x in a["variables"]}] + a["variables"]}
             db["items"] = [{**i, **{k: v for k, v in a.items() if k != key}} if i["id"] == a[key] else i for i in db["items"]]
             out = {}
         else:
@@ -241,6 +245,49 @@ class ApplyTest(unittest.TestCase):
         self.assertIn("set by a person: read secret YOUTRACK_TOKEN", out.getvalue())
         self.assertNotIn("secret HAVE", out.getvalue())
 
+    DECLARED = [{"name": "TEAMCITY_TOKEN", "secret": True, "required": True, "description": "TeamCity token"},
+                {"name": "TEAMCITY_URL", "secret": False, "required": True, "description": ""}]
+
+    def test_apply_creates_missing_declared_variables_empty_and_keeps_existing_values(self):
+        for have, created in (([], ["TEAMCITY_TOKEN", "TEAMCITY_URL"]),
+                              ([{"key": "TEAMCITY_URL", "value": "https://tc"}], ["TEAMCITY_TOKEN"]),
+                              ([{"key": "TEAMCITY_TOKEN", "value": "***", "isSecret": True}], ["TEAMCITY_URL"]),
+                              ([{"key": "TEAMCITY_TOKEN", "value": "***", "isSecret": True},
+                                {"key": "TEAMCITY_URL", "value": "x"}], [])):
+            with self.subTest(have=[v["key"] for v in have]):
+                self.plan["environments"][0]["declared"] = self.DECLARED
+                self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
+                                "variables": have}])
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(self.run_deploy("--apply", allow_delete=True), 0)
+                edits = [c[1] for c in self.calls("environment") if c[0] == "edit_environment"]
+                sent = [v for e in edits for v in e["variables"]]
+                self.assertEqual([v["key"] for v in sent], created)
+                for v in sent:
+                    self.assertEqual(v["value"], "")
+                    self.assertEqual(v.get("isSecret", False), v["key"] == "TEAMCITY_TOKEN")
+                live = json.loads(self.state["environment"].read_text())["items"][0]["variables"]
+                self.assertEqual({v["key"]: v["value"] for v in live if v["key"] in {x["key"] for x in have}},
+                                 {v["key"]: v["value"] for v in have})
+
+    def test_apply_creates_declared_variables_of_a_new_environment_after_it(self):
+        self.plan["environments"][0]["declared"] = self.DECLARED
+        self.seed([], [])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.run_deploy("--apply"), 0)
+        names = [c[0] for c in self.calls("environment")]
+        self.assertEqual(names, ["create_environment", "edit_environment"])
+
+    def test_dry_run_lists_declared_variables_to_create_and_writes_nothing(self):
+        self.plan["environments"][0]["declared"] = self.DECLARED
+        self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.run_deploy("--dry-run"), 0)
+        self.assertIn("create variable TEAMCITY_TOKEN (empty, secret)", out.getvalue())
+        self.assertIn("create variable TEAMCITY_URL (empty)", out.getvalue())
+        self.assertEqual(self.calls("environment"), [])
+
     def test_extra_personal_secret_plans_no_environment_update(self):
         self.plan["environments"][0]["secrets"] = ["HAVE", "MISSING"]
         self.seed([], [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r",
@@ -261,6 +308,19 @@ class ApplyTest(unittest.TestCase):
             self.assertEqual(self.run_deploy("--apply"), 0)
         self.assertIn("remove by hand in Air: [F] read variable FACTORY_TEAM_REPOSITORY", out.getvalue())
         self.assertEqual(self.calls("environment"), [])
+
+    def test_declared_variables_in_air_are_not_reported_for_removal(self):
+        self.plan["environments"][0]["variables"] = {"FACTORY_ENV": "read"}
+        for declared, existing, reported in [
+                ([{"name": "TEAMCITY_URL", "secret": False, "required": True}], "TEAMCITY_URL", False),
+                ([{"name": "TEAMCITY_URL", "secret": False, "required": False}], "TEAMCITY_URL", False),
+                ([{"name": "TEAMCITY_TOKEN", "secret": True, "required": True}], "TEAMCITY_URL", True),
+                ([], "TEAMCITY_URL", True)]:
+            with self.subTest(declared=declared, existing=existing):
+                self.plan["environments"][0]["declared"] = declared
+                have = [{"id": "e1", "name": "[F] read", "variables": {existing: "x"}}]
+                lines = air.extra_variables(self.plan, have)
+                self.assertEqual(bool(lines), reported)
 
     def backend(self):
         path, backend = self.state["automation"], mock.Mock()
@@ -1428,6 +1488,30 @@ class PlanTest(unittest.TestCase):
                          {"intake", "start", "implement", "review", "join", "fix", "update", "finish", "reopen", "merge"})
         self.assertEqual(air.plan_air(n, config), plan)
 
+
+
+class DeclaredVariablesPlanTest(unittest.TestCase):
+    """The plan lists the variables that the merged `env` of an environment's nodes declares (defaults, environment,
+    role, agent, node), not only the environment block's."""
+
+    def test_role_and_agent_variables_reach_the_environments_of_their_nodes(self):
+        def edit(f):
+            f["roles"]["developer"]["env"] = {"TEAMCITY_TOKEN": {"secret": True, "description": "TeamCity token"},
+                                              "TEAMCITY_URL": {}, "OPTIONAL": {"required": False}, "GH_TOKEN": {}}
+        plan = definition_plan(edit)
+        by_env = {e["name"]: {v["name"]: v for v in e.get("declared", [])} for e in plan["environments"]}
+        self.assertTrue(by_env)
+        developer_envs = {a["environmentConfigId"] for a in plan["automations"] if "implement" in a["name"]}
+        self.assertTrue(developer_envs)
+        for name in developer_envs:
+            got = by_env[name]
+            self.assertEqual(got["TEAMCITY_TOKEN"], {"name": "TEAMCITY_TOKEN", "secret": True, "required": True,
+                                                    "description": "TeamCity token"})
+            self.assertEqual(got["TEAMCITY_URL"]["secret"], False)
+            self.assertEqual(got["OPTIONAL"]["required"], False)
+            self.assertNotIn("GH_TOKEN", got)
+        self.assertFalse(any("TEAMCITY_URL" in v for n, v in by_env.items() if n not in developer_envs and
+                             not any(a["environmentConfigId"] == n for a in plan["automations"] if "implement" in a["name"])))
 
 
 class DefinitionPlanTest(unittest.TestCase):

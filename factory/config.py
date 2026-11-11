@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+import plugins
+
 DESCRIPTOR = "factory.descriptor.yaml"
 PROJECT_DESCRIPTOR = "factory.project.yaml"
 NODES = "engine/nodes.yaml"
@@ -194,11 +196,9 @@ def tracker_errors(descriptor, where):
     t = descriptor.get("tracker") if isinstance(descriptor, dict) else None
     if not isinstance(t, dict):
         return []
-    if t.get("adapter") == "youtrack":
-        need = [f"{where}.tracker.{k}: required with adapter youtrack" for k in ("url", "project") if k not in t]
-        if not vcs(descriptor).get("repository"):
-            need.append(f"{where}.code_host.repository: required with tracker.adapter youtrack")
-        return need
+    for fn in plugins.registry(descriptor).hook("config.tracker_errors"):
+        if (found := fn(descriptor, t, where)) is not None:
+            return found
     if t.get("adapter") == "github-issues" and "repository" not in t:
         return [f"{where}.tracker.repository: required with adapter github-issues"]
     return []

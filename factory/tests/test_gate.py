@@ -64,6 +64,15 @@ class GateTest(unittest.TestCase):
         status, _ = gate.check("review-high", {"id": "e1", "ticket": "7"}, pending, graph, CONFIG)
         self.assertEqual(status, gate.GO)
 
+    def test_approval_on_red_ci_takes_else_without_a_fix_node(self):
+        """#1288: `factory end` loads only its own node, so there is no `fix` node to take a tier from."""
+        graph = {"nodes": {"review-high": {"when": {}, "outcomes": {
+            "approve": {"ci": ["green"], "else": "changes", "effects": [{"stage": "approved"}]},
+            "changes": {"effects": [{"label": "factory:fix", "on": "pr"}, {"stage": "changes-requested"}]}}}}}
+        tr = MemorySystem({"7": {"stage": "in-review", "ci": "red", "pr": 5, "head": "abc"}})
+        gate.apply("review-high", "approve", {"ticket": "7"}, tr, graph)
+        self.assertEqual(tr.get_stage(tr.tickets["7"]), "changes-requested")
+
     def test_partial_outcome_failure_reports_effects_that_landed(self):
         graph = {"nodes": {"review": {"when": {}, "outcomes": {"changes": {"effects": [
             {"review": "request-changes-at-head"}, {"unlabel": "factory:review-x", "on": "pr"}]}}}}}
@@ -112,6 +121,14 @@ class GateTest(unittest.TestCase):
                          {"kind": "assign", "ticket": "7", "value": "bob"})
         self.assertEqual(gate.resolve({"assign": {"field": "assignee"}, "on": "pr"}, {"assignee": ["a", "b"]}, "7"),
                          {"kind": "assign", "ticket": "7", "value": ["a", "b"], "on": "pr"})
+
+    def test_request_reviewers_resolves_the_payload_field(self):  # #1262
+        self.assertEqual(gate.resolve({"request-reviewers": {"field": "reviewers"}, "on": "pr"}, {"reviewers": "a, b"}, "7"),
+                         {"kind": "request-reviewers", "ticket": "7", "value": ["a", "b"], "on": "pr"})
+        self.assertEqual(gate.resolve({"request-reviewers": "changes"}, {}, "7"),
+                         {"kind": "request-reviewers", "ticket": "7", "value": "changes"})
+        with self.assertRaisesRegex(gate.Bad, "missing field `reviewers`"):
+            gate.resolve({"request-reviewers": {"field": "reviewers"}, "on": "pr"}, {}, "7")
 
     def test_assignment_field_missing_or_empty_fails(self):
         for payload in ({}, {"assignee": ""}, {"assignee": "  "}, {"assignee": []}, {"assignee": [""]}, {"assignee": 3}):

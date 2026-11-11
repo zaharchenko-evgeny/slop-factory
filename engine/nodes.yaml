@@ -132,8 +132,10 @@ nodes:
     role: script
     output: read-only
     outcomes:
-      changes: { effects: [{ label: "factory:fix-<tier>", "on": pr }, { stage: changes-requested }] }
-      approved: { ci: [green], else: changes, effects: [{ stage: approved }] }
+      # A fix round takes the project-review label off; the next approval adds it again (a new `labeled` event, #1261).
+      changes: { effects: [{ label: "factory:fix-<tier>", "on": pr }, { unlabel: "factory:project-review", "on": pr }, { stage: changes-requested }] }
+      # Green CI only (else: changes): a draft PR becomes ready and the project's own review is started.
+      approved: { ci: [green], else: changes, effects: [{ stage: approved }, { ready-for-review: pr }, { label: "factory:project-review", "on": pr }] }
       # A handled change request whose author has not decided again: ask them again, move nothing.
       waiting: { from: [in-review], effects: [{ join: all-approve }] }
   fix:

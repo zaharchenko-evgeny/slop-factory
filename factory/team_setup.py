@@ -29,21 +29,30 @@ def tree_hash(d):
     return h.hexdigest()
 
 
+def _npm(name, version, spec, tmp):
+    subprocess.run(["npm", "pack", f"{name}@{version}", "--pack-destination", tmp], check=True, capture_output=True)
+    subprocess.run(["tar", "-xzf", str(next(Path(tmp).glob("*.tgz"))), "-C", tmp], check=True)
+    return Path(tmp) / "package" / spec["path"]
+
+
+def _git(name, version, spec, tmp):
+    src = f"{tmp}/src"
+    subprocess.run(["git", "clone", "--quiet", f"https://github.com/{name}.git", src], check=True)
+    subprocess.run(["git", "-C", src, "checkout", "--quiet", version], check=True)
+    return Path(src) / spec["path"]
+
+
+SOURCES = {"npm": _npm, "github": _git}  # a skill source is a fetch scheme, not a tracker
+
+
 def fetch(spec, tmp):
     """The directory of a sourced skill (`github:owner/repo@commit` or `npm:package@version`), fetched into `tmp`."""
     kind, _, ref = spec["source"].partition(":")
     name, _, version = ref.rpartition("@")
     Path(tmp).mkdir(parents=True, exist_ok=True)
-    if kind == "npm":
-        subprocess.run(["npm", "pack", f"{name}@{version}", "--pack-destination", tmp], check=True, capture_output=True)
-        subprocess.run(["tar", "-xzf", str(next(Path(tmp).glob("*.tgz"))), "-C", tmp], check=True)
-        return Path(tmp) / "package" / spec["path"]
-    if kind == "github":
-        src = f"{tmp}/src"
-        subprocess.run(["git", "clone", "--quiet", f"https://github.com/{name}.git", src], check=True)
-        subprocess.run(["git", "-C", src, "checkout", "--quiet", version], check=True)
-        return Path(src) / spec["path"]
-    raise ValueError(f"unknown skill source: {spec['source']}")
+    if kind not in SOURCES:
+        raise ValueError(f"unknown skill source: {spec['source']}")
+    return SOURCES[kind](name, version, spec, tmp)
 
 
 def roles_in(defn, environment):
