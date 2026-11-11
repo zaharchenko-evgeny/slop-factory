@@ -267,7 +267,13 @@ class YouTrackTicketStore:
     # --- tag inventory (deploy)
     def list_tags(self):
         """{name: id} of the tags the token can see."""
-        return {t["name"]: t["id"] for t in self.run("GET", f"/api/tags?fields=id,name&{TOP}")}
+        out, skip = {}, 0
+        while True:  # a large instance has many more tags than one page (youtrack.jetbrains.com: ~14,000)
+            page = self.run("GET", f"/api/tags?fields=id,name&{TOP}&$skip={skip}") or []
+            out.update({t["name"]: t["id"] for t in page})
+            if len(page) < 1000:
+                return out
+            skip += len(page)
 
     def used_outside_project(self, name):
         """Whether an issue outside the configured project carries the tag; True when no project is configured, as
