@@ -58,6 +58,8 @@ def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | N
             "when": n.get("when"), "outcomes": n["outcomes"]}
     if n.get("routine"):
         spec["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
+    if n.get("output") == "as-instructed":
+        spec["output"] = n["output"]  # the run opens its PR itself: the gate prints and checks it (#1261)
     if n.get("tiers"):
         spec["tiers"] = n["tiers"]  # the ordered tiers the gate escalates through
     if any((o or {}).get("else") for o in n["outcomes"].values()):

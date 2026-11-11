@@ -31,6 +31,14 @@ Selected by `tracker.adapter` in `factory.yaml`.
   stay `source: github`.
 - `factory doctor` checks the token variable, the project and every mapped tag and field value (read-only; it reports
   a missing one and never creates it). `uv run scripts/youtrack_probe.py <ISSUE>` loads one issue read-only.
+- Shared `State` field, when stages are tags: `tracker.state_mirror: {<stage>: <State value>}` makes every stage
+  change also set `State` (`tracker.state_mirror_field`, default `State`; no write when it holds the value already).
+  `tracker.state_rules: {<State value>: stop | blocked}`: each `factory reconcile` pass reads the State of the tickets
+  with a stage tag; when a person set a ruled value, `stop` removes the stage tag and closes the open PR with a
+  comment, `blocked` moves the ticket to `blocked` and keeps that State. A mirrored value cannot have a rule.
+- Custom field from an outcome: the effect `{field: {name: Effort, from: size_estimate, sizes: {XS: 50, S: 150,
+  M: 400, L: 1000, XL: null}}}` writes the first size whose limit is above the number in `size_estimate`, only while
+  the field is empty (without `sizes` it writes the value as is).
 - While the comments plugin is on, `factory deploy` uploads `factory/factory_plugins/youtrack/comment-wake/` with the supported
   `@jetbrains/youtrack-scripting` CLI. Attach the workflow to the project once in Project settings → Workflows.
 

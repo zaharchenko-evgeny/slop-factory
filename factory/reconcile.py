@@ -461,6 +461,17 @@ def report_systemic(config, systemic, run=None):
                                     f"blocking each; check the install or the environment first (#973)."}], run, run_id=RUN)
 
 
+def ticket_passes(config, dry_run, progress, out):
+    """The plugins' passes over the tickets (youtrack: the State rules, #1260), for every team: their results go in
+    `out`; True when one failed."""
+    import plugins
+    failed = False
+    for passes in plugins.registry(config).hook("reconcile.ticket_passes"):
+        for name, (got, pass_failed) in passes(config, dry_run, progress).items():
+            out[name], failed = got, failed or pass_failed
+    return failed
+
+
 def reconcile_main(argv):
     if not definition.present(config_mod.team_root()):
         print("factory reconcile: the team root has no factory.yaml and workflow.yaml (ADR-0021)", file=sys.stderr)
@@ -487,8 +498,11 @@ def reconcile_main(argv):
                            dry_run, progress)
     if not dry_run and not spec:
         report_systemic(config, [r for r in results if r.get("systemic")])
-    print(json.dumps({"dry_run": dry_run, "reconcile": results}))
-    return 1 if any("error" in r for r in results) else 0
+    out, failed = {"dry_run": dry_run, "reconcile": results}, any("error" in r for r in results)
+    if not spec:
+        failed = ticket_passes(config, dry_run, progress, out) or failed
+    print(json.dumps(out))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

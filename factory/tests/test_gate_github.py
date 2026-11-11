@@ -177,6 +177,7 @@ class FakeGh:
             number = int(a.rsplit("/", 1)[-1])
             return recorded_pull(a, {"number": number, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "merge_commit_sha": None, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
                                      "requested_reviewers": [{"login": u} for u in self.requested],
+                                     "draft": getattr(self, "draft", False),
                                      "user": {"login": getattr(self, "pr_author", "jetbrains-air[bot]")},
                                      "labels": [{"name": x} for x in self.labels]})
         if a.endswith("/git/ref/heads/main"):
@@ -1223,6 +1224,20 @@ class JoinTest(unittest.TestCase):
         self.assertEqual((code, out["applied"]), (gate.GO, True))
         self.assertTrue(any("--remove-label" in w and "factory:update-cheap" in w for w in gh.writes))
 
+    def test_ready_for_review_marks_a_draft_pr_ready_once(self):  # #1261
+        gh = FakeGh()
+        gh.draft = True
+        self.assertTrue(tr(gh).apply({"ticket": 7, "kind": "ready-for-review", "value": None}))
+        self.assertEqual([w for w in gh.writes if w[:2] == ["pr", "ready"]], [["pr", "ready", "5", "-R", REPO]])
+        gh.draft = False  # GitHub now reports it ready
+        self.assertFalse(tr(gh).apply({"ticket": 7, "kind": "ready-for-review", "value": None}))
+        self.assertEqual(len([w for w in gh.writes if w[:2] == ["pr", "ready"]]), 1)
+
+    def test_ready_for_review_is_a_no_op_on_a_ready_pr(self):
+        gh = FakeGh()
+        self.assertFalse(tr(gh).apply({"ticket": 7, "kind": "ready-for-review", "value": None, "on": "pr"}))
+        self.assertEqual(gh.writes, [])
+
     def test_fix_done_asks_again_who_requested_changes(self):
         # review 3 of #183: without this, a request counted by round 1 is dropped and nobody asks alice again
         gh = FakeGh(reviews=[review(BOT, M), review("alice", "", commit="h0", state="CHANGES_REQUESTED"),
@@ -1506,7 +1521,7 @@ class SweepTest(unittest.TestCase):
         gh = FakeGh(reviews=[review(BOT, M)])
         res, _ = self.run_sweep(gh)
         self.assertEqual([(r["node"], r["outcome"]) for r in res], [("join", "approved")])
-        self.assertEqual(sorted(gh.labels), ["factory:approved", "risk:low"])
+        self.assertEqual(sorted(gh.labels), ["factory:approved", "factory:project-review", "risk:low"])
         with self.assertRaises(gate.Bad):
             gate.apply("sweep", "conflict", {"ticket": 7}, tr(gh), nodes.load())
 
