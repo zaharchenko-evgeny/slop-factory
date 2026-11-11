@@ -4,7 +4,7 @@
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """The target-neutral deploy plan of the nodes of engine/nodes.yaml (ADR-0014): each node's spec, prompts and
-triggers, its tier and focus variants, and the labels the trackers must carry. A surface plugin (ADR-0026) turns it
+triggers, its model tier, and the labels the trackers must carry. A surface plugin (ADR-0026) turns it
 into its own shape: `air` (factory_plugins/air/deploy.py: the Air automations and environments, their diff and
 apply), `local` (factory_plugins/local/surface.py).
 
@@ -24,7 +24,6 @@ import config as config_mod
 import definition
 import plugins
 import project as project_mod
-import scopes as scopes_mod
 import vocab
 from ports.system import TrackerSchema
 
@@ -51,6 +50,8 @@ OUTCOME_WORDS = {
 }
 
 
+# --- `factory begin` (cli.py) compiles one automation from the node graph, tiers and focuses included; the old
+# layout's graphs (engine/nodes.yaml) need them until #682 deletes that layout. The plan below never reads them.
 def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | None, nodes: dict, top: bool = True) -> dict:
     """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
     spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
@@ -156,24 +157,14 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
 
 
 def repository(r: dict) -> dict:
-    """The `repository` input of create_automation from a factory.descriptor.yaml repository."""
+    """The `repository` input of create_automation from a repository of the compiled config."""
     url = r["url"].rstrip("/")
     return {"fullName": "/".join(url.split("/")[-2:]), "cloneUrl": url + ".git", "browseUrl": url,
             "provider": "github" if "github.com" in url else "other"}
 
 
-# A script node runs one command and judges nothing: the gate's sweep decides every scripted step (join, waiting
-# reviewers, merged to done) from facts. `--main` runs it from main's graph (a PR-triggered node never trusts the PR).
-SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no file, label, comment or review "
-                 "itself. Run `factory sweep{args}` in the foreground with no time limit; "
-                 "wait until it exits, "
-                 "and report its JSON output.")
 INSTALLED_FACTORY = (" Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path "
                      "into the engine checkout.")
-PR_NUMBER = " --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>"
-SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>", "finish": PR_NUMBER,
-               "reopen": PR_NUMBER, "merge": PR_NUMBER,
-               "doctor": " doctor", "doctor-write": " doctor", "doctor-ops": " doctor"}
 
 
 def team_is_project(team: dict, config: dict) -> bool:
@@ -182,48 +173,19 @@ def team_is_project(team: dict, config: dict) -> bool:
         repository(r)["fullName"] == repository(team)["fullName"] for r in config["repositories"])
 
 
-def workflow_drift(fixture: Path, team: Path) -> list[str]:
-    """Describe differences between the migrated Slop fixture and the live team files."""
-    project_file, workflow_file = "factory.project.yaml", "workflows/delivery.yaml"
-    fixture_project = yaml.safe_load((fixture / project_file).read_text())
-    team_project = yaml.safe_load((team / project_file).read_text())
-    drift = [project_file] if fixture_project != team_project else []
-    fixture_workflow = yaml.safe_load((fixture / workflow_file).read_text())
-    team_workflow = yaml.safe_load((team / workflow_file).read_text())
-    if fixture_workflow != team_workflow:
-        fixture_nodes, team_nodes = fixture_workflow.get("nodes", {}), team_workflow.get("nodes", {})
-        outcomes = [f"{name}.{outcome}" for name in sorted(fixture_nodes.keys() | team_nodes.keys())
-                    for outcome in sorted((fixture_nodes.get(name) or {}).get("outcomes", {}).keys() |
-                                          (team_nodes.get(name) or {}).get("outcomes", {}).keys())
-                    if (fixture_nodes.get(name) or {}).get("outcomes", {}).get(outcome) !=
-                       (team_nodes.get(name) or {}).get("outcomes", {}).get(outcome)]
-        drift.extend(f"{workflow_file}: {item}" for item in outcomes)
-        if not outcomes:
-            drift.append(workflow_file)
-    return drift
-
-
 def check_fixture_drift(config: dict, team: Path | None = None) -> int:
     """Fail before contacting Air when this engine's Slop fixture differs from its deployed team."""
     if not SLOP_FIXTURE.is_dir():
         return 0
-    if (SLOP_FIXTURE / "factory.yaml").is_file():  # ADR-0021: the fixture is a copy of the team's files
-        team = Path(team or config_mod.team_root())
-        fixture = yaml.safe_load((SLOP_FIXTURE / "factory.yaml").read_text()) or {}
-        if not (team / "factory.yaml").is_file() or \
-                (yaml.safe_load((team / "factory.yaml").read_text()) or {}).get("name") != fixture.get("name"):
-            return 0
-        drift = [p.relative_to(SLOP_FIXTURE).as_posix() for p in sorted(SLOP_FIXTURE.rglob("*"))
-                 if p.is_file() and p.name != "SOURCE" and
-                 (not (team / p.relative_to(SLOP_FIXTURE)).is_file() or
-                  (team / p.relative_to(SLOP_FIXTURE)).read_bytes() != p.read_bytes())]
-        for item in drift:
-            print(f"fixture drift: {item}", file=sys.stderr)
-        return 1 if drift else 0
-    fixture_project = yaml.safe_load((SLOP_FIXTURE / "factory.project.yaml").read_text())
-    if config.get("team_repository", "").rstrip("/") != fixture_project.get("team_repository", "").rstrip("/"):
+    team = Path(team or config_mod.team_root())  # ADR-0021: the fixture is a copy of the team's files
+    fixture = yaml.safe_load((SLOP_FIXTURE / "factory.yaml").read_text()) or {}
+    if not (team / "factory.yaml").is_file() or \
+            (yaml.safe_load((team / "factory.yaml").read_text()) or {}).get("name") != fixture.get("name"):
         return 0
-    drift = workflow_drift(SLOP_FIXTURE, team or config_mod.team_root())
+    drift = [p.relative_to(SLOP_FIXTURE).as_posix() for p in sorted(SLOP_FIXTURE.rglob("*"))
+             if p.is_file() and p.name != "SOURCE" and
+             (not (team / p.relative_to(SLOP_FIXTURE)).is_file() or
+              (team / p.relative_to(SLOP_FIXTURE)).read_bytes() != p.read_bytes())]
     for item in drift:
         print(f"fixture drift: {item}", file=sys.stderr)
     return 1 if drift else 0
@@ -279,32 +241,6 @@ def node_repository_prefix(main_repository: dict | None, config: dict) -> str:
     tickets = (config.get("tracker") or {}).get("repositories") or ([tracker] if tracker else [])
     repo = main_repository["fullName"]
     return f"FACTORY_NODE_REPO={repo} " if repo != tracker and repo in tickets else ""
-
-
-def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None,
-                  webhook: bool = False) -> str:
-    checkout = checkout_instructions(main_repository, config) if config else ""
-    command_prefix = node_repository_prefix(main_repository, config) if config else ""
-    if name.startswith("doctor"):
-        engine = name == "doctor-ops"
-        command = f"`{command_prefix}factory doctor --engine`" if engine else f"`{command_prefix}factory doctor`"
-        prompt = (f"Run the installed {command} command exactly once in the foreground with "
-                  + ("only the `--engine` argument. " if engine else "no arguments. ")
-                  + f"Do not use `uv run`, `--help` or add {'other ' if engine else ''}arguments. Report every JSON probe line and the command's exit code. "
-                  "It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. "
-                  "A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a "
-                  "`report` probe line. You must not create, edit or close tickets yourself.")
-    elif name == "reconcile":
-        prompt = ("This step runs one command and judges nothing: it changes no file, label, comment or review itself. "
-                  f"Run `{command_prefix}factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
-    else:
-        args = SCRIPT_ARGS.get(name, "")
-        prompt = SCRIPT_PROMPT.format(args=args).replace("`factory ", f"`{command_prefix}factory ")
-        if "--issue" in args:
-            prompt += " Copy only that one number; never write the payload or any JSON."
-        if webhook:
-            prompt = prompt.replace("<the issue number>", "<the `issue` field of the trigger payload>")
-    return checkout + prompt + INSTALLED_FACTORY
 
 
 def skill_lines(role: str) -> str:
@@ -402,15 +338,6 @@ def variants(name: str, n: dict, roles: dict, agent: dict | None = None) -> list
     return [(name, None, n.get("tier") or role.get("tier") or "cheap", None)]
 
 
-def default_environment(nodes: dict, defn: dict | None) -> str | None:
-    """The environment a node runs in unless it names one: the definition's `settings.environment`, else the one
-    most nodes run in."""
-    if defn:
-        return definition.default_environment(defn)
-    envs = [n["env"] for n in nodes["nodes"].values() if n.get("env")]
-    return max(dict.fromkeys(envs), key=envs.count) if envs else None
-
-
 def scope_filter(trig: dict, block: dict) -> dict:
     """An EVENT trigger of a project environment (#1069), narrowed to its scope where Air can filter on it: a YouTrack
     event also matches the scope field's value. A GitHub event has no filter on a label the issue already carries
@@ -422,7 +349,7 @@ def scope_filter(trig: dict, block: dict) -> dict:
 
 
 def team_definition() -> dict | None:
-    """The team's definition (ADR-0021), else None (a descriptor team)."""
+    """The team's definition (ADR-0021), else None (a team with no factory.yaml and workflow.yaml)."""
     return definition.load(config_mod.team_root()) if definition.present(config_mod.team_root()) else None
 
 
@@ -448,12 +375,6 @@ def tracker_schema(nodes: dict, config: dict, repositories=()) -> TrackerSchema:
         names = sorted({*names, *extra})
         specs = {**{k: v for k, v in extra.items() if v}, **specs}
     return TrackerSchema(tuple(names), tuple(repositories), specs, tuple(owned_label_prefixes(config)))
-
-
-def actions_files(nodes: dict, config: dict) -> dict:
-    """{path: text} of the workflows the graph's `runner: actions` nodes render in the factory repository (hook
-    `deploy.plan_files`: the github plugin renders GitHub Actions workflows)."""
-    return {k: v for hook in plugins.registry(config).hook("deploy.plan_files") for k, v in hook(nodes, config).items()}
 
 
 def sync_wake_files(config: dict, run, apply: bool) -> int:
@@ -539,7 +460,7 @@ def provision_labels(plan: dict, changes: list, apply: str, run=None, config=Non
 
 def labels(nodes: dict, config: dict) -> list[str]:
     """Every label the gate may write or a trigger filters on: stage labels, risk and complexity labels, and
-    the command labels of the nodes with `<tier>` expanded over each node's tiers (a missing label makes
+    the command labels of the config with `<tier>` expanded over every tier (a missing label makes
     `gh issue edit --add-label` fail, so the deploy creates them first)."""
     t = config.get("tracker") or {}
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
@@ -550,41 +471,16 @@ def labels(nodes: dict, config: dict) -> list[str]:
     out.add(vocab.comment())
     out |= {vocab.ci("ci-green"), vocab.ci("ci-red")}  # ci-sync writes them from the head checks (#1207)
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
-    tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
-    focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
-    found, namespace = [], ((t.get("stages") or {}).get("ready") or vocab.stage("ready")).partition(":")[0] + ":"
-    if "states" in config:  # factory.project.yaml: the labels its state and command stores name (ADR-0016)
-        facts = t.get("pr_fact_labels") or {}
-        found += [s["store"].get("label") or facts.get(s["store"].get("pr")) for s in config["states"].values()]
-        found += [c["store"].get("label") or c["store"].get("pr_label") for c in (config.get("commands") or {}).values()]
-        found = [x for x in found if x]
-    for n in nodes["nodes"].values() if "states" not in config else []:
-        found += [t.split(" ", 1)[1] for t in n.get("triggers") or [] if t.endswith(">") or t.count(" ") == 1
-                  and t.split(" ", 1)[1].startswith(namespace)]
-        found += [v for o in (n.get("outcomes") or {}).values() for e in (o or {}).get("effects") or []
-                  for k, v in e.items() if k == "label"]
+    facts = t.get("pr_fact_labels") or {}  # the labels the config's state and command stores name (ADR-0016)
+    found = [s["store"].get("label") or facts.get(s["store"].get("pr")) for s in config["states"].values()]
+    found += [c["store"].get("label") or c["store"].get("pr_label") for c in (config.get("commands") or {}).values()]
+    found = [x for x in found if x]
     for x in found:
         if "<tier>" in x:
-            out |= {x.replace("<tier>", t) for t in tiers}
-        elif "<focus>" in x:
-            out |= {x.replace("<focus>", f) for f in focuses}
-        elif "<" not in x:
+            out |= {x.replace("<tier>", tier) for tier in ("cheap", "mid", "strong")}
+        elif "<" not in x:  # a `<focus>` label has no focus to expand over
             out.add(x)
     return sorted(out)
-
-
-def write_files(files: dict, apply: bool) -> int:
-    """Create or update the rendered workflow files under the factory repository's root (never a target repository)."""
-    root = config_mod.team_root()
-    for path, text in files.items():
-        target = root / path
-        if target.exists() and target.read_text() == text:
-            continue
-        print(f"{'update' if target.exists() else 'create'} file {path}")
-        if apply:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text)
-    return 0
 
 
 def surface_name(config: dict) -> str | None:
@@ -613,7 +509,7 @@ def _output_errors(nodes: dict, config: dict, name: str) -> list[str]:
     return env_errs + [f"unsupported-output: nodes.{k}: output {n['output']!r} is not supported by surface {', '.join(names)} "
             f"(supported: {', '.join(sorted(supported))})"
             for k, n in nodes["nodes"].items() if n.get("output") and n["output"] not in supported
-            and n.get("enabled") is not False and n.get("role") != "human" and not n.get("runner")]
+            and n.get("enabled") is not False and n.get("role") != "human"]
 
 
 def main(argv: list[str]) -> int:

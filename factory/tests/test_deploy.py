@@ -27,7 +27,7 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "factory"))
 sys.path.insert(0, str(HERE))
 import config as cfg  # noqa: E402
-cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
+cfg.set_team(HERE / "fixtures/slop")
 import deploy
 from factory_plugins.air import deploy as air  # noqa: E402
 import nodes
@@ -177,22 +177,6 @@ class RecordedTest(unittest.TestCase):
     def test_read_state_ignores_wrapped_structured_content(self):
         with mock.patch.dict(os.environ, {"WRAP_STRUCTURED": "1"}):
             self.read_recorded()
-
-    def test_settings_environments_remove_team_repository_variable_and_replace_moved_ops(self):
-        contract = json.loads((HERE / "contracts/air-mcp.json").read_text())
-        responses = contract["servers"]["air-cloud"]["responses"]
-        plan = air.plan_air(nodes.load(), {**cfg.load(), "team_repository":
-                                              "https://github.com/zaharchenko-evgeny/slop-eval-factory"})
-        plan = {"prefix": plan["prefix"], "environments": plan["environments"], "automations": []}
-        envs = [air.environment_detail(json.loads(responses[f"get_environment:{name}"]["content"][0]["text"]))
-                for name in ("read", "write", "ops")]
-        changes = air.diff(plan, [], envs)
-        by_name = {change[2]: change for change in changes}
-        self.assertEqual(by_name["[Slop factory] ops"][5], ["repository"])
-        for name in ("read", "write"):
-            change = by_name[f"[Slop factory] {name}"]
-            self.assertEqual((change[0], change[5]), ("update", ["variables", "domains"]))  # + FACTORY_ENV_REPOSITORY
-            self.assertIn("FACTORY_TEAM_REPOSITORY", change[4]["variables"])
 
     def read_recorded(self):
         tmp = Path(tempfile.mkdtemp())
@@ -394,12 +378,12 @@ class ApplyTest(unittest.TestCase):
 
     def test_declared_variable_is_planned_beside_factory_env(self):
         data = nodes.load()
-        data["environments"]["read"] = {**data["environments"]["read"], "variables": {"YOUTRACK_URL": "https://y.example"},
-                                        "secrets": ["YOUTRACK_TOKEN"]}
-        env = next(e for e in air.plan_air(data, cfg.load())["environments"] if e["name"].endswith(" read"))
-        self.assertEqual(env["variables"], {"YOUTRACK_URL": "https://y.example", "FACTORY_ENV": "read",
+        data["environments"]["engine"] = {**data["environments"]["engine"], "variables": {"YOUTRACK_URL": "https://y.example"},
+                                          "secrets": ["YOUTRACK_TOKEN"]}
+        env = next(e for e in air.plan_air(data, cfg.load())["environments"] if e["name"].endswith(" engine"))
+        self.assertEqual(env["variables"], {"YOUTRACK_URL": "https://y.example", "FACTORY_ENV": "engine",
                                             "FACTORY_ENV_REPOSITORY": "zaharchenko-evgeny/slop-factory"})
-        self.assertEqual(env["secrets"], ["YOUTRACK_TOKEN"])
+        self.assertEqual(env["secrets"][0], "YOUTRACK_TOKEN")  # the declared secret first, then the project tokens
 
     def test_apply_sends_trigger_destinations_with_changed_triggers(self):
         manual = {"triggerType": "WEBHOOK"}
@@ -537,7 +521,7 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.run_deploy("--apply"), 1)
 
     def test_main_apply_writes_no_tickets(self):
-        plan = {"prefix": "[F] ", "environments": [], "automations": [], "files": {}}
+        plan = {"prefix": "[F] ", "environments": [], "automations": []}
         servers = [mock.Mock(), mock.Mock()]
         changed = [("update", "automation", "a", None, None, [])]
         with (mock.patch.dict(os.environ, {"FACTORY_MCP_AIR_AUTOMATIONS": "automation",
@@ -548,7 +532,6 @@ class ApplyTest(unittest.TestCase):
               mock.patch.object(air, "read_state", return_value=([], [])),
               mock.patch.object(air, "diff", side_effect=[changed, []]),
               mock.patch.object(air, "apply_diff") as apply,
-              mock.patch.object(deploy, "write_files", return_value=0),
               mock.patch.object(deploy, "sync_wake_files", return_value=0),
               mock.patch("factory_plugins.github.tracker.GitHubTracker.from_config") as issues,
               mock.patch("factory_plugins.github.gate.GitHubGateTracker.from_config") as gate_issues):
@@ -1015,7 +998,7 @@ class ProjectPlanTest(unittest.TestCase):
     def test_linked_project_with_environment_trackers_is_unlinked(self):
         """#1069: with environment trackers a default-environment node runs once per project, not per repository."""
         with self.linked_team(self.linked_projects, self.youtrack_ready) as (conf, compiled, _):
-            env = deploy.default_environment(compiled, deploy.team_definition())
+            env = definition.default_environment(deploy.team_definition())
             conf["environments"] = {env: {"tracker": {"scope": {"field": "Team", "value": "Engine"}}}}
             self.assertEqual(self.project_filters(air.plan_air(compiled, conf)), {})
             self.assertEqual([e.split(":")[0] for e in deploy.output_errors(compiled, conf)], ["unlinked-project"] * 2)
@@ -1029,6 +1012,13 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual(air.diff(plan, [{"id": "a1", "name": "[F] a"}], []), [])  # a record without the field has none
 
 class PlanTest(unittest.TestCase):
+    """The Air plan of fixtures/slop's definition (ADR-0021), read through `plan_air`."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.plan = air.plan_air(nodes.load(), cfg.load())
+        cls.by = {a["name"]: a for a in cls.plan["automations"]}
+
     def test_copy_prompt_names_its_repository(self):
         plan = definition_plan()
         copies = [a for a in plan["automations"] if a["name"].endswith(" slop-eval-factory")]
@@ -1037,8 +1027,8 @@ class PlanTest(unittest.TestCase):
         commands = []
         for automation in copies:
             prompt = automation["prompt"]
-            if "factory begin " in prompt or "factory sweep" in prompt:
-                command = next(line for line in prompt.splitlines() if "factory begin " in line or "factory sweep" in line)
+            if "factory begin " in prompt or "factory decide" in prompt:
+                command = next(line for line in prompt.splitlines() if "factory begin " in line or "factory decide" in line)
                 commands.append((automation["name"], command))
         self.assertTrue(commands)
         for name, command in commands:
@@ -1046,388 +1036,122 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(tracker)
         self.assertTrue(all("FACTORY_NODE_REPO" not in a["prompt"] for a in tracker))
 
-    def test_routines_target_team_repository(self):
-        url = "https://github.com/o/team"
-        plan = air.plan_air(nodes.load(), {**cfg.load(), "team_repository": url})
-        automations = {a["name"]: a for a in plan["automations"]}
-        environments = {e["name"]: e for e in plan["environments"]}
-        for name in ("retro", "distill"):
-            self.assertEqual(automations[f"[Slop factory] {name}"]["repository"]["browseUrl"], url)
-        self.assertEqual(environments["[Slop factory] ops"]["repository"], url)
-        self.assertEqual(automations["[Slop factory] review-knowledge"]["repository"]["browseUrl"], url)
-
-    def test_air_matches_fixture(self):
-        plan = air.plan_air(yaml.safe_load((FIX / "nodes.yaml").read_text()),
-                               yaml.safe_load((FIX / "factory.yaml").read_text()))
-        got = json.dumps(plan, indent=2, sort_keys=True) + "\n"
-        if os.environ.get("UPDATE_FIXTURE"):
-            (FIX / "air-plan.json").write_text(got)
-        self.assertEqual(got, (FIX / "air-plan.json").read_text())
-
-    def test_plan_unchanged_without_agents(self):
-        """Without `agents:` and `agent:` keys the plan is the committed one: no spec names an agent (ADR-0020)."""
-        config = yaml.safe_load((FIX / "factory.yaml").read_text())
-        self.assertNotIn("agents", config)
-        plan = air.plan_air(yaml.safe_load((FIX / "nodes.yaml").read_text()), config)
-        self.assertEqual(json.dumps(plan, indent=2, sort_keys=True) + "\n", (FIX / "air-plan.json").read_text())
-        self.assertFalse([a["name"] for a in plan["automations"] if {"agent", "persona", "mentions"} & set(a["spec"])])
-
     def test_environments_only_export_the_environment_name_and_repository(self):
-        url = "https://github.com/o/team"
-        plan = air.plan_air(nodes.load(), {**cfg.load(), "team_repository": url})
-        self.assertTrue(plan["environments"])
-        for e in plan["environments"]:
+        self.assertTrue(self.plan["environments"])
+        for e in self.plan["environments"]:
             self.assertEqual(e["variables"], {"FACTORY_ENV": e["variables"]["FACTORY_ENV"],
                                               "FACTORY_ENV_REPOSITORY": definition.full_name(e["repository"])})
-        plain = air.plan_air(nodes.load(), {**cfg.load(), "team_repository": ""})
-        self.assertTrue(all("FACTORY_TEAM_REPOSITORY" not in e["variables"] for e in plain["environments"]))
 
     def test_every_automation_runs_in_an_environment_of_its_repository(self):
-        plan = air.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
-        env_repos = {e["name"]: e["repository"] for e in plan["environments"]}
-        mismatched = [a["name"] for a in plan["automations"]
-                      if env_repos[a["environmentConfigId"]] != a["repository"]["browseUrl"]]
-        self.assertEqual(mismatched, [])
-        self.assertTrue(any(a["repository"]["fullName"] == "o/team" for a in plan["automations"]))
+        env_repos = {e["name"]: e["repository"] for e in self.plan["environments"]}
+        self.assertEqual([a["name"] for a in self.plan["automations"]
+                          if env_repos[a["environmentConfigId"]] != a["repository"]["browseUrl"]], [])
 
-    def test_team_and_project_automations_get_the_other_repositories(self):
-        config = {**cfg.load(), "team_repository": "https://github.com/o/team"}
-        team = {"repository": deploy.repository({"url": config["team_repository"]}), "branch": "main"}
-        project = config["repositories"][0]
-        project_repository = {"repository": deploy.repository(project), "branch": project["default_branch"]}
-        plan = air.plan_air(nodes.load(), config)
-        team_automations = [a for a in plan["automations"] if a["repository"]["fullName"] == "o/team"]
-        project_automations = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
-        self.assertTrue(team_automations and all(a.get("additionalRepositories") == [project_repository]
-                                                for a in team_automations))
-        self.assertTrue(project_automations and all(a.get("additionalRepositories") == [team] for a in project_automations))
-        planned = [{"repository": {"fullName": "o/team"}, "branch": "main"}]
-        live = [{"repository": {"fullName": "o/team", "id": "server-field"}, "branch": "main",
-                 "snapshotId": "server-field"}]
-        self.assertTrue(air.same("additionalRepositories", live, planned))
-        self.assertTrue(air.same("additionalRepositories", None, []))
-        self.assertFalse(air.same("additionalRepositories", live, [{"repository": {"fullName": "o/team"},
-                                                                        "branch": "develop"}]))
-
-    def test_three_repositories_check_out_the_other_projects_and_the_read_only_team(self):
-        base = cfg.load()
-        other = {"name": "other", "url": "https://github.com/o/other", "default_branch": "develop", "role": "project"}
-        plan = air.plan_air(nodes.load(), {**base, "team_repository": "https://github.com/o/team",
-                                              "repositories": [*base["repositories"], other]})
-        want = [{"repository": deploy.repository(other), "branch": "develop"},
-                {"repository": deploy.repository({"url": "https://github.com/o/team"}), "branch": "main"}]
-        project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
-        team = [a for a in plan["automations"] if a["repository"]["fullName"] == "o/team"]
-        self.assertTrue(project and all(a["repository"]["fullName"] == "zaharchenko-evgeny/slop-factory"
-                                        and a["additionalRepositories"] == want for a in project))
-        self.assertTrue(all("checked out beside it: `/workspaces/other`" in a["prompt"] for a in project))
-        names = {a["name"] for a in team}
-        for name in ("retro", "distill", "review-knowledge"):
-            self.assertIn(f"[Slop factory] {name}", names)
-        team_projects = [{"repository": deploy.repository(r), "branch": r["default_branch"]}
-                         for r in [*base["repositories"], other]]
-        self.assertTrue(all(a.get("additionalRepositories") == team_projects
-                            and a["environmentConfigId"] == "[Slop factory] ops" for a in team))
-
-    def test_team_repository_listed_as_a_project_is_one_writable_checkout(self):
-        base = cfg.load()
-        teamrepo = {"name": "team", "url": "https://github.com/o/team", "default_branch": "trunk", "role": "project"}
-        plan = air.plan_air(nodes.load(), {**base, "team_repository": teamrepo["url"],
-                                              "repositories": [*base["repositories"], teamrepo]})
-        want = [{"repository": deploy.repository(teamrepo), "branch": "trunk"}]
-        project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
-        self.assertTrue(project and all(a["additionalRepositories"] == want for a in project))
-        for a in project:
-            self.assertIn("`/workspaces/team` is the team repository and a project repository", a["prompt"])
-            self.assertIn("`$HOME/factory-team`", a["prompt"])
-            self.assertNotIn("is read-only", a["prompt"])
-
-    def test_prompts_enter_the_main_project_checkout_only_when_it_is_not_the_team(self):
-        plan = air.plan_air(nodes.load(), {**cfg.load(), "team_repository": "https://github.com/o/team"})
-        project = [a for a in plan["automations"] if a["repository"]["fullName"] != "o/team"]
-        team = [a for a in plan["automations"] if a["repository"]["fullName"] == "o/team"]
-        self.assertTrue(project and all("cd /workspaces/slop-factory" in a["prompt"] for a in project))
-        self.assertTrue(team and all("cd /workspaces/" not in a["prompt"] for a in team))
-        self.assertIn("(file: `skills/tdd/SKILL.md`)", next(a["prompt"] for a in project
-                                                             if a["name"] == "[Slop factory] implement-mid"))
-
-    def test_nodes_get_environment_by_env(self):
-        plan = air.plan_air(nodes.load(), cfg.load())
-        env = {x["name"]: x["environmentConfigId"] for x in plan["automations"]}
-        for name, want in (("intake", "read"), ("join", "read"), ("finish", "read"), ("review-full", "read"),
-                           ("implement-mid", "write"), ("fix-cheap", "write"), ("update-strong", "write")):
-            self.assertEqual(env[f"[Slop factory] {name}"], f"[Slop factory] {want}")
-        self.assertEqual({e["name"]: e["variables"]["FACTORY_ENV"] for e in plan["environments"]},
-                         {"[Slop factory] read": "read", "[Slop factory] write": "write",
-                          "[Slop factory] ops": "ops"})  # ops: only a disabled node, still planned
+    def test_a_team_without_a_definition_has_no_plan(self):
+        for argv in (["plan", "--target", "air"], ["--dry-run"]):
+            with self.subTest(argv=argv), tempfile.TemporaryDirectory() as tmp, \
+                    mock.patch.object(deploy.config_mod, "team_root", return_value=Path(tmp)), \
+                    mock.patch.object(deploy.config_mod, "pop_team", side_effect=lambda argv: argv), \
+                    contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(air.main(argv), 2)
+                self.assertIn("factory.yaml and workflow.yaml", err.getvalue())
 
     def test_local_target_is_rejected(self):
         self.assertEqual(deploy.main(["plan", "--target", "local"]), 2)
 
     def test_plan_lists_every_label_the_gate_writes(self):
-        plan = air.plan_air(nodes.load(), cfg.load())
-        for want in ("factory:ready", "factory:implement-cheap", "factory:fix-strong",
-                     "complexity:small", "risk:high"):
-            self.assertIn(want, plan_labels(plan))
-        self.assertFalse([x for x in plan_labels(plan) if "<" in x])
+        for want in ("factory:ready", "factory:implement-medium", "factory:fix", "complexity:small", "risk:high"):
+            self.assertIn(want, plan_labels(self.plan))
+        self.assertFalse([x for x in plan_labels(self.plan) if "<" in x])
 
-    def test_script_nodes_only_run_the_sweep(self):
-        plan = json.loads((FIX / "air-plan.json").read_text())
-        a = {x["name"]: x for x in plan["automations"]}
-        self.assertIn("Run `factory sweep` in the foreground", a["[Slop factory] sweep"]["prompt"])
-        self.assertIn("`factory begin intake --issue <the issue number>`", a["[Slop factory] intake"]["prompt"])
+    def test_a_plan_is_prefixed_and_repeatable(self):
+        self.assertEqual(self.plan["prefix"], "[Slop factory] ")
+        self.assertTrue(all(a["name"].startswith(self.plan["prefix"]) for a in self.plan["automations"]))
+        self.assertTrue(all(e["name"].startswith(self.plan["prefix"]) for e in self.plan["environments"]))
+        self.assertEqual(air.plan_air(nodes.load(), cfg.load()), self.plan)
 
-    def test_doctor_prompts_use_the_installed_command_and_explain_ticket_effects(self):
-        plan = air.plan_air(nodes.load(), cfg.load())
-        automations = {a["name"]: a for a in plan["automations"]}
-        for name in ("doctor", "doctor-write", "doctor-ops"):
-            prompt = automations[f"[Slop factory] {name}"]["prompt"]
-            if name == "doctor-ops":
-                self.assertIn("Run the installed `factory doctor --engine` command exactly once", prompt)
-                self.assertIn("in the foreground with only the `--engine` argument", prompt)
-                self.assertIn("Do not use `uv run`, `--help` or add other arguments", prompt)
-            else:
-                self.assertIn("Run the installed `factory doctor` command exactly once", prompt)
-                self.assertIn("in the foreground with no arguments", prompt)
-                self.assertIn("Do not use `uv run`, `--help` or add arguments", prompt)
-            self.assertIn("every JSON probe line", prompt)
-            self.assertIn("exit code", prompt)
-            self.assertIn("temporary probe issue", prompt)
-            self.assertIn("`Doctor: <probe> fails`", prompt)
-            self.assertIn("must not create, edit or close tickets yourself", prompt)
+    def test_clerk_nodes_run_the_engine_command_and_nothing_else(self):
+        prompt = self.by["[Slop factory] finish slop-factory"]["prompt"]
+        self.assertIn("`factory decide --node finish --pr <the pull request number>`", prompt)
+        self.assertIn("do not run `factory begin` or `factory end`", prompt)
+        self.assertIn("wait until it exits", prompt)
+        self.assertIn("never `uv run`", prompt)
+        self.assertNotIn("## Your skills", prompt)
 
-    def test_every_script_prompt_waits_for_command_exit(self):
-        plans = (air.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
-        for plan in plans:
-            for automation in plan["automations"]:
-                if automation["name"].startswith(("[Slop factory] sweep", "[Slop factory] join",
-                                                   "[Slop factory] finish", "[Slop factory] merge",
-                                                   "[Slop factory] reopen",
-                                                   "[Slop factory] notify")):
-                    self.assertIn("wait until it exits", automation["prompt"])
+    def test_agent_prompt_sections(self):
+        prompt = self.by["[Slop factory] implement-medium slop-factory"]["prompt"]
+        marks = [prompt.index(m) for m in ("# Role: developer", "## Your skills", "## This step", "## How you start and finish")]
+        self.assertEqual(marks, sorted(marks))
+        self.assertTrue(prompt.startswith("You are the developer of Slop factory"))
+        self.assertIn("`factory begin implement-medium --issue <the issue number>`", prompt)
+        self.assertIn("`factory end <outcome>`", prompt)
+        self.assertIn("`factory-step` skill", prompt)
+        self.assertIn("- `error`: the work needs the next tier", prompt)
+        self.assertIn("- tdd: ", prompt)
+        self.assertNotIn("handoff_path", prompt)
 
-    def test_every_script_prompt_forbids_uv_run(self):
-        plans = (air.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
-        for plan in plans:
-            for automation in plan["automations"]:
-                if automation["name"].startswith(("[Slop factory] sweep", "[Slop factory] join",
-                                                   "[Slop factory] finish", "[Slop factory] merge",
-                                                   "[Slop factory] reopen", "[Slop factory] start",
-                                                   "[Slop factory] notify", "[Slop factory] reconcile",
-                                                   "[Slop factory] doctor")):
-                    self.assertIn("never `uv run`", automation["prompt"], automation["name"])
+    def test_a_node_begins_with_what_wakes_it(self):
+        self.assertIn("`factory begin fix --pr <the pull request number>`", self.by["[Slop factory] fix slop-factory"]["prompt"])
+        retro = self.by["[Slop factory] retro"]["prompt"]
+        self.assertIn("factory begin retro`", retro)  # a schedule has no ticket or PR
+        self.assertNotIn("<the issue number>", retro)
 
     def test_no_prompt_asks_for_json(self):
-        plans = (air.plan_air(nodes.load(), cfg.load()), json.loads((FIX / "air-plan.json").read_text()))
-        for plan in plans:
-            for x in plan["automations"]:
-                prompt = x["prompt"].replace("never write the payload or any JSON", "")
-                for word in ("--event", "stdin", "heredoc", "payload"):
-                    self.assertNotIn(word, prompt, x["name"])
-            prompts = {x["name"]: x["prompt"] for x in plan["automations"]}
-            self.assertIn("`factory begin implement-mid --issue <the issue number>`", prompts["[Slop factory] implement-mid"])
+        for a in self.plan["automations"]:
+            prompt = a["prompt"].replace("never write the payload or any JSON", "")
+            for word in ("--event", "stdin", "heredoc"):
+                self.assertNotIn(word, prompt, a["name"])
+            self.assertNotIn("```json", prompt, a["name"])
 
-    def test_pull_request_nodes_begin_with_the_pr_number(self):
-        a = {x["name"]: x["prompt"] for x in air.plan_air(nodes.load(), cfg.load())["automations"]}
-        self.assertIn("`factory begin fix-mid --pr <the pull request number>`", a["[Slop factory] fix-mid"])
-
-    def test_review_automations_trigger_on_focus_rerequest_labels(self):
-        for a in json.loads((FIX / "air-plan.json").read_text())["automations"]:
-            if a["name"].startswith("[Slop factory] review-"):
-                self.assertIn({"triggerType": "EVENT", "source": "github", "eventType": "pull_request.labeled",
-                               "filters": {"label": f"factory:rereview-{a['name'].rsplit('-', 1)[1]}",
-                                           "pr_author": "jetbrains-air[bot]"}}, a["triggers"])
-
-    def test_reconcile_is_an_hourly_air_schedule_only(self):
-        plan = air.plan_air(nodes.load(), cfg.load())
-        self.assertNotIn("[Slop factory] recover", {x["name"] for x in plan["automations"]})
-        a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] reconcile")
+    def test_reconcile_is_a_schedule_only(self):
+        a = self.by["[Slop factory] reconcile"]
         # no event wake: one pass reads every active ticket, so label bursts must not start it
-        self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "17 * * * *", "timezone": "UTC"}])
+        self.assertEqual(a["triggers"], [{"triggerType": "SCHEDULED", "cronExpression": "*/15 * * * *", "timezone": "UTC"}])
         self.assertEqual(a["triggerVcs"], [{"outputBehaviour": "read-only"}])
-        self.assertEqual(a["environmentConfigId"], "[Slop factory] ops")
-        self.assertIn("Run `factory reconcile` in the foreground", a["prompt"])
-        self.assertIn("wait until it exits", a["prompt"])
-        self.assertEqual(plan["files"], {})
-        self.assertFalse((ROOT / ".github/workflows/factory-reconcile.yml").exists())
-
-    def test_ci_label_sync_runs_in_the_factory_repository_with_no_project_workflow(self):
-        base = cfg.load()
-        other = {"name": "other", "url": "https://github.com/o/other", "default_branch": "main", "role": "project"}
-        plan = air.plan_air(nodes.load(), {**base, "repositories": [*base["repositories"], other]})
-        a = next(x for x in plan["automations"] if x["name"] == "[Slop factory] reconcile")  # each pass runs gate.ci_sync
-        self.assertEqual(a["repository"]["fullName"], "zaharchenko-evgeny/slop-factory")
-        self.assertEqual(plan["files"], {})  # no workflow or check file under any repository's .github/
-
-    def three_repositories(self, **extra):
-        base = cfg.load()
-        repos = [*base["repositories"], *({"name": n, "url": f"https://github.com/o/{n}", "default_branch": "main",
-                                           "role": "project"} for n in ("api", "client"))]
-        return air.plan_air(nodes.load(), {**base, "team_repository": "", "repositories": repos, **extra})
-
-    def test_three_repositories_deploy_one_node_set_without_a_write_token(self):
-        """ADR-0024 (#983): a descriptor team plans one automation per node, with the other repositories checked out
-        beside it; no copy per repository, no `repo:` filter and no write token."""
-        plan = self.three_repositories(team_repository="https://github.com/o/team")
-        by_name = {a["name"]: a for a in plan["automations"]}
-        self.assertEqual({r["repository"]["fullName"] for r in by_name["[Slop factory] intake"]["additionalRepositories"]},
-                         {"o/api", "o/client", "o/team"})
-        self.assertIn("[Slop factory] implement-mid", by_name)
-        self.assertFalse([n for n in by_name if n.endswith((" api", " client"))])
-        self.assertFalse([a["name"] for a in plan["automations"] for t in a["triggers"] if "repo_label" in t.get("filters", {})])
-        self.assertFalse([e["name"] for e in plan["environments"] if "FACTORY_WRITE_TOKEN" in e["secrets"]])
-        for node in ("implement-mid", "fix-mid", "update-mid"):
-            self.assertNotIn("FACTORY_WRITE_TOKEN", by_name[f"[Slop factory] {node}"]["prompt"])
-        self.assertEqual(plan["files"], {})  # no .github/ file in any project repository
-
-    def test_scoped_knowledge_review_uses_team_environment(self):
-        plan = self.three_repositories(team_repository="https://github.com/o/team")
-        envs = {e["name"]: e["repository"] for e in plan["environments"]}
-        for a in plan["automations"]:  # Air: the automation repository must be its environment's repository
-            self.assertEqual(a["repository"]["browseUrl"], envs[a["environmentConfigId"]], a["name"])
-        knowledge = [a for a in plan["automations"] if "review-knowledge" in a["name"]]
-        self.assertTrue(knowledge)
-        self.assertTrue(all(a["repository"]["browseUrl"] == "https://github.com/o/team" for a in knowledge))
-
-    def test_repository_token_is_deployed_to_its_environment_only_and_adds_no_write_token(self):
-        base = cfg.load()
-        envs = {n: {**e, **({"tokens": {"api": "FACTORY_ISSUES_TOKEN"}} if n == "read" else {})}
-                for n, e in {**{n: {} for n in ("read", "engine")}, **(base.get("environments") or {})}.items()}
-        plan = self.three_repositories(environments=envs)
-        got = {e["name"]: e["secrets"] for e in plan["environments"]}
-        self.assertIn("FACTORY_ISSUES_TOKEN", got["[Slop factory] read"])
-        for name, secrets in got.items():
-            self.assertEqual("FACTORY_ISSUES_TOKEN" in secrets, name == "[Slop factory] read", name)
-            self.assertNotIn("FACTORY_WRITE_TOKEN", secrets, name)
-
-    def test_deploy_writes_no_file_outside_the_factory_repository(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(deploy.config_mod, "team_root", return_value=Path(d)):
-            with contextlib.redirect_stdout(io.StringIO()):
-                deploy.write_files({".github/workflows/factory-reconcile.yml": "x"}, True)
-            self.assertEqual([str(p.relative_to(d)) for p in Path(d).rglob("*") if p.is_file()],
-                             [".github/workflows/factory-reconcile.yml"])
+        self.assertIn("factory begin reconcile`", a["prompt"])
 
     def test_air_shape_and_no_github_token(self):
-        plan = json.loads((FIX / "air-plan.json").read_text())
-        a = {x["name"]: x for x in plan["automations"]}
-        self.assertEqual(a["[Slop factory] sweep"]["triggers"],
-                         [{"triggerType": "SCHEDULED", "cronExpression": "*/10 * * * *", "timezone": "UTC"}])
-        t = a["[Slop factory] intake"]["triggers"][0]
-        self.assertEqual((t["triggerType"], t["source"]), ("EVENT", "github"))
-        self.assertEqual(set(a["[Slop factory] intake"]["agentAndModel"]), {"id", "name", "isDefault", "agentId"})
-        self.assertEqual(set(a["[Slop factory] intake"]["repository"]), {"fullName", "cloneUrl", "browseUrl", "provider"})
-        self.assertEqual(a["[Slop factory] intake"]["triggerVcs"], [{"outputBehaviour": "read-only"}])
-        for e in air.plan_air(nodes.load(), cfg.load())["environments"]:
+        a = self.by["[Slop factory] intake"]
+        t = a["triggers"][0]
+        self.assertEqual((t["triggerType"], t["source"], t["filters"]), ("EVENT", "github", {"label": "factory:triage"}))
+        self.assertEqual(set(a["agentAndModel"]), {"id", "name", "isDefault", "agentId"})
+        self.assertEqual(set(a["repository"]), {"fullName", "cloneUrl", "browseUrl", "provider"})
+        self.assertEqual(a["triggerVcs"], [{"outputBehaviour": "read-only"}])
+        for e in self.plan["environments"]:
             self.assertNotIn("GITHUB_TOKEN", e["secrets"])
-            if e["name"] in ("[Slop factory] read", "[Slop factory] write"):
-                self.assertIn("*.blob.core.windows.net", e["domains"])
-        join = next(x for x in air.plan_air(nodes.load(), cfg.load())
-                    ["automations"] if x["name"] == "[Slop factory] join")
-        self.assertEqual([(x["eventType"], x["filters"].get("label")) for x in join["triggers"]],
-                         [("pull_request_review.submitted", None), ("pull_request.labeled", "factory:ci-red")])
-        reopen = next(x for x in air.plan_air(nodes.load(), cfg.load())
-                       ["automations"] if x["name"] == "[Slop factory] reopen")
-        self.assertEqual([(x["eventType"], x["filters"].get("label"), x["filters"].get("pr_author"))
-                          for x in reopen["triggers"]],
-                         [("pull_request.synchronize", None, "jetbrains-air[bot]"),
-                          ("pull_request.labeled", "factory:ci-red", "jetbrains-air[bot]")])
-        assert not any(x["triggerType"] == "SCHEDULED" for a in air.plan_air(nodes.load(), cfg.load())["automations"] if a["name"] not in ("[Slop factory] retro", "[Slop factory] distill", "[Slop factory] doctor", "[Slop factory] doctor-write", "[Slop factory] doctor-ops", "[Slop factory] reconcile") for x in a["triggers"]), "no polling"
 
     def test_one_triggervcs_entry_per_trigger_and_a_spec_per_automation(self):
-        for a in air.plan_air(nodes.load(), cfg.load())["automations"]:
+        for a in self.plan["automations"]:
             self.assertEqual(len(a["triggerVcs"]), len(a["triggers"]), a["name"])
-            self.assertNotIn("```json", a["prompt"])  # no JSON in a prompt: the run compiles its spec
-        a = {x["name"]: x for x in air.plan_air(nodes.load(), cfg.load())["automations"]}
-        spec = a["[Slop factory] implement-mid"]["spec"]
-        self.assertEqual((spec["node"], spec["tier"], spec["engine"]), ("implement", "mid", cfg.load()["engine"]))
-        self.assertEqual(set(spec["outcomes"]), {"done", "error", "blocked", "failed", "env-broken"})
-        self.assertIn("- `error`: the work needs the next tier", a["[Slop factory] implement-mid"]["prompt"])
-        self.assertEqual(set(a["[Slop factory] join"]["spec"]["runs"]), {"finish", "reopen", "merge", "start"})
+        spec = self.by["[Slop factory] implement-medium slop-factory"]["spec"]
+        self.assertEqual((spec["node"], spec["tier"], spec["engine"]), ("implement-medium", "sonnet", cfg.load()["engine"]))
+        self.assertEqual(set(spec["outcomes"]), {"done-low", "done-high", "error", "blocked"})
+        for a in self.plan["automations"]:  # a spec names no other node's: no sweep spec, tiers or focuses
+            self.assertFalse({"runs", "tiers", "else_tier", "agent", "persona", "mentions"} & set(a["spec"]), a["name"])
+
+    def test_review_automations_are_not_woken_by_ci_green(self):
+        reviews = [a for a in self.plan["automations"] if a["name"].startswith("[Slop factory] review-")]
+        self.assertTrue(reviews)
+        self.assertTrue(all("factory:ci-green" not in json.dumps(a["triggers"]) for a in reviews))
+        self.assertTrue(all(any(t["filters"].get("label", "").startswith("factory:review-") for t in a["triggers"])
+                            for a in reviews))
 
     def test_compile_automation_gives_the_gate_options(self):
         config, graph = cfg.load(), nodes.load()
-        got = deploy.compile_automation("review-behaviour", graph, config)
-        self.assertEqual((got["node"], got["focus"], got["tier"]), ("review", "behaviour", "review"))
-        self.assertEqual(deploy.compile_automation("fix-mid", graph, config)["tier"], "mid")
-        self.assertIsNone(deploy.compile_automation("intake", graph, config)["tier"])
-        self.assertRaises(KeyError, deploy.compile_automation, "nope", graph, config)
+        got = deploy.compile_automation("implement-medium", graph, config)
+        self.assertEqual((got["node"], got["focus"], got["tier"]), ("implement-medium", None, None))
+        self.assertEqual((got["spec"]["node"], got["spec"]["tier"]), ("implement-medium", "sonnet"))
+        for name in ("nope", "human"):  # no such node; a person's node is not an automation
+            self.assertRaises(KeyError, deploy.compile_automation, name, graph, config)
 
-    def test_agent_prompt_sections(self):
-        a = {x["name"]: x["prompt"] for x in air.plan_air(nodes.load(), cfg.load())["automations"]}
-        for name, role, intro in (("review-behaviour", "reviewer", "You review one branch independently"),
-                                  ("implement-mid", "developer", "You implement one ticket in its worktree")):
-            prompt = a[f"[Slop factory] {name}"]
-            marks = [prompt.index(m) for m in (intro, "## Your skills", "## This step", "## How you start and finish")]
-            self.assertEqual(marks, sorted(marks), name)
-            self.assertTrue(prompt.startswith(f"You are the {role} of Slop factory"))
-            self.assertIn((ROOT / f"engine/template-v1/roles/{role}/role.md").read_text().strip(), prompt)
-            self.assertIn(f"`factory begin {name} --", prompt)
-            self.assertIn("`factory end <outcome>`", prompt)
-            self.assertIn("`factory-step` skill", prompt)
-            self.assertNotIn("handoff_path", prompt)
-            for word in ("gate.py", "--node", "--tier", "--focus", "read `role_file`"):
-                self.assertNotIn(word, prompt)
-        self.assertIn("(behaviour focus)", a["[Slop factory] review-behaviour"])
-        self.assertIn("- ponytail: Lazy senior dev mode", a["[Slop factory] implement-mid"])
-        intake = a["[Slop factory] intake"]
-        self.assertIn("- `grill`:", intake)
-        self.assertIn("- `bug`:", intake)
 
-    def test_webhook_node_plans_a_webhook_trigger_with_the_node_output(self):
-        graph = nodes.load()
-        graph["nodes"]["hook"] = {**graph["nodes"]["intake"], "triggers": ["webhook dry-run-finished"], "output": "create-pr"}
-        a = next(x for x in air.plan_air(graph, cfg.load())["automations"] if x["name"] == "[Slop factory] hook")
-        self.assertEqual(a["triggers"], [{"triggerType": "WEBHOOK"}])
-        self.assertEqual(a["triggerVcs"], [{"outputBehaviour": "create-pr"}])
-        self.assertIn("`factory begin hook --issue <the `issue` field of the trigger payload>`", a["prompt"])
-
-    def test_scheduled_routine_prompts_take_no_number(self):
-        a = {x["name"]: x["prompt"] for x in air.plan_air(nodes.load(), cfg.load())["automations"]}
-        for name in ("retro", "distill"):
-            prompt = a[f"[Slop factory] {name}"]
-            self.assertIn(f"`factory begin {name}`", prompt)
-            self.assertNotIn("<the issue number>", prompt)
-
-    def test_pull_request_scripts_run_from_main(self):
-        a = {x["name"]: x["prompt"] for x in air.plan_air(nodes.load(), cfg.load())["automations"]}
-        self.assertIn("`factory sweep --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>`", a["[Slop factory] join"])
-        self.assertIn("`factory sweep --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>`", a["[Slop factory] finish"])
-        self.assertIn("`factory sweep --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>`", a["[Slop factory] reopen"])
-
-    def test_no_review_automation_triggers_on_ci_green(self):
-        automations = air.plan_air(nodes.load(), cfg.load())["automations"]
-        reviews = [a for a in automations if a["name"].startswith("[Slop factory] review-")]
-        self.assertTrue(reviews)
-        self.assertTrue(all("factory:ci-green" not in json.dumps(a["triggers"]) for a in reviews))
-        self.assertTrue(all(any(t["filters"].get("label", "").startswith("factory:review-")
-                               for t in a["triggers"]) for a in reviews))
-
-    def test_event_script_nodes_scope_to_one_ticket(self):
-        scripts = {"join", "start", "finish", "reopen", "merge"}
-        for automation in air.plan_air(nodes.load(), cfg.load())["automations"]:
-            name = automation["name"].removeprefix("[Slop factory] ")
-            if name in scripts:
-                self.assertIn("factory sweep --main --issue", automation["prompt"], name)
-            elif "factory sweep" in automation["prompt"]:
-                self.assertTrue("--issue" in automation["prompt"] or "--event" in automation["prompt"], name)
-
-    def test_real_plan_is_prefixed_and_covers_pilot(self):
-        config = cfg.load()
-        n = nodes.load()
-        plan = air.plan_air(n, config)
-        names = {a["name"] for a in plan["automations"]}
-        self.assertEqual(plan["prefix"], "[Slop factory] ")
-        self.assertTrue(all(x.startswith(plan["prefix"]) for x in names))
-        pilot = {f"[Slop factory] {x}" for x in (
-            "intake", "start", "investigate", "join", "finish", "reopen", "merge", "retro", "distill", "doctor", "doctor-write", "doctor-ops",
-            "reconcile",
-            *(f"{b}-{t}" for b in ("implement", "fix", "update") for t in ("cheap", "mid", "strong")),
-            *(f"review-{f}" for f in ("full", "behaviour", "structure-security", "knowledge")))}
-        self.assertEqual(names, pilot)
-        self.assertEqual({n for n, v in n["nodes"].items() if v.get("pilot")},
-                         {"intake", "start", "implement", "review", "join", "fix", "update", "finish", "reopen", "merge"})
-        self.assertEqual(air.plan_air(n, config), plan)
-
+class AdditionalRepositoriesTest(unittest.TestCase):
+    def test_additional_repositories_compare_by_name_and_branch(self):
+        planned = [{"repository": {"fullName": "o/team"}, "branch": "main"}]
+        live = [{"repository": {"fullName": "o/team", "id": "server-field"}, "branch": "main", "snapshotId": "server-field"}]
+        self.assertTrue(air.same("additionalRepositories", live, planned))
+        self.assertTrue(air.same("additionalRepositories", None, []))
+        self.assertFalse(air.same("additionalRepositories", live, [{"repository": {"fullName": "o/team"}, "branch": "develop"}]))
 
 
 class DefinitionPlanTest(unittest.TestCase):

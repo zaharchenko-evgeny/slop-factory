@@ -54,9 +54,9 @@ def errors(nodes: dict, config: dict) -> list[str]:
             linked[str(repo).lower()] = project
     listened, defn = set(), core.team_definition() if linked else None
     trackers = scopes.project_envs(config)  # #1069: a default-environment node runs once per project, not per repository
-    default_env = core.default_environment(nodes, defn) if trackers else None
+    default_env = definition.default_environment(defn) if trackers and defn else None
     for name, n in (nodes["nodes"] if defn else {}).items():
-        if n.get("enabled") is False or n["role"] == "human" or n.get("runner") or trackers and n["env"] == default_env:
+        if n.get("enabled") is False or n["role"] == "human" or trackers and n["env"] == default_env:
             continue
         sources = {core.trigger(t, None).get("source") for t in n.get("triggers") or []
                    if not str(t).startswith(("schedule ", "webhook ")) and str(t) != "manual"}
