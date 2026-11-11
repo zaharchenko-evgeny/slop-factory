@@ -20,6 +20,7 @@ NO_ROLE = ("script", "human")  # harnesses that run no role
 GUARDS = ("stage", "label", "pr", "ci", "review", "blockers", "children", "ticket")  # the facts a guard reads (gate.GUARD_KEYS)
 # ADR-0024: keys a node's `writes` replaced; `factory validate` names them (`removed-key`)
 REMOVED_REPOSITORY_KEYS = ("main", "token_env")  # `write` names the environment's writable repository; `token` the secret (ADR-0027)
+EXTERNAL_REVIEW = ("external_review_hours", "external_review_bot", "external_review_label")  # reconcile (#1263)
 DEPRECATED_NODE_KEYS = ("listens", "writes")  # ADR-0027: a node declares `environments`, a repository its `write`
 DEFAULT_ADAPTER = {"tracker": "github-issues", "vcs": "github"}
 TIER_SUFFIXES = ("-small", "-medium", "-large", "-low", "-high")  # a tiered node: `implement-medium`, `review-high`
@@ -692,6 +693,10 @@ def errors(defn):
             errs.append(f"no-trigger: {where}")
         if "prompt" in n:
             errs.append(f"node-prompt: {where}: instructions belong in roles/<role>/role.md; pass what differs as settings")
+        merged = {**(defn["workflow"].get("settings") or {}), **(n.get("settings") or {})}
+        late = [k for k in EXTERNAL_REVIEW[1:] if merged.get(k)]  # the hours may be a workflow setting
+        if late and not all(merged.get(k) for k in EXTERNAL_REVIEW):  # #1263: reconcile needs all three
+            errs.append(f"external-review: {where}: set {', '.join(EXTERNAL_REVIEW)} together")
         for t in n.get("triggers") or []:
             if isinstance(t, dict) and "webhook" in t and t["webhook"] not in hooks:
                 errs.append(f"unknown-webhook: {where}: {t['webhook']}")
@@ -719,6 +724,16 @@ def errors(defn):
                         valid = valid or value == "all"
                     if not valid:
                         errs.append(f"bad-effect: {where}.{o}: {key} must be a login or a list of logins" + (" or {field: <name>}" if key == "assign" else ""))
+                if isinstance(effect, dict) and "request-reviewers" in effect:
+                    value = effect["request-reviewers"]
+                    if not (value is None or (isinstance(value, str) and value.strip())
+                            or (isinstance(value, list) and value and all(isinstance(v, str) and v.strip() for v in value))
+                            or (isinstance(value, dict) and set(value) == {"field"} and isinstance(value["field"], str)
+                                and value["field"].strip())):
+                        errs.append(f"bad-effect: {where}.{o}: request-reviewers must be `changes`, a login, a list of "
+                                    "logins or {field: <name>}")
+                    elif isinstance(value, dict) and effect.get("on", "pr") != "pr":
+                        errs.append(f"bad-effect: {where}.{o}: request-reviewers asks on the PR (`on: pr`)")
             prefix = label_prefix(defn)
             by_target = {}
             for effect in oc.get("effects") or []:

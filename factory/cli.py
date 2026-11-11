@@ -222,7 +222,7 @@ def handoff_of(a):
             raise ValueError(f"expected --field KEY=VALUE: {item!r}")
         data[key.strip().replace("-", "_")] = value
     for key, items in (("links", [dict(zip(("title", "url"), parted(t, " | ", "--link 'TITLE | URL'"))) for t in a.link]),
-                       ("options", a.option)):
+                       ("options", a.option), ("reviewers", a.reviewer)):  # --reviewer LOGIN: `request-reviewers: {field: reviewers}`
         if items:
             data[key] = items
     addressed = json.loads(Path(a.addressed).read_text()) if a.addressed else []
@@ -250,7 +250,7 @@ def end_parser():
     p.add_argument("--failing-check")
     for opt, dest in (("pass", "passed"), ("fail", "failed"), ("not-run", "not_run"), ("blocking", None), ("minor", None),
                       ("fixed", None), ("disputed", None), ("slice", None), ("propose-check", None), ("note-file", None),
-                      ("lesson", None), ("link", None), ("option", None), ("field", None)):
+                      ("lesson", None), ("link", None), ("option", None), ("field", None), ("reviewer", None)):
         p.add_argument(f"--{opt}", action="append", default=[], **({"dest": dest} if dest else {}))
     return p
 
@@ -499,7 +499,11 @@ def _main(argv):
     if cmd == "chart":
         return tool_command("chart")(rest)
     if cmd == "facts":
-        return tool_command("facts")(rest)
+        command = tool_command("facts")
+        if command is None:
+            print("factory: command 'facts' is not available: no selected plugin provides it", file=sys.stderr)
+            return 2
+        return command(rest)
     if cmd == "migrate" and rest[:1] == ["workflow"]:
         from workflow import main as workflow_main
         return workflow_main(["migrate", *rest[1:]])

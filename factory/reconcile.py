@@ -33,6 +33,7 @@ RUN = "reconcile"
 LOST_FINISH = ("approved", "in-review", "changes-requested")
 RED_TITLE = re.compile(r"Main is red(?: in Air)?: (.+)")
 FACTS_ERROR = f"{PREFIX} ticket facts failed:"
+EXTERNAL_LATE = "external review late, re-woke"  # the once-per-head marker of `late_external_review`
 
 
 def ticket_error(tracker, number, error, dry_run=False):
@@ -390,6 +391,50 @@ def definition_recovery(defn, tracker_stages, needs_human, default):
     return fix, wakes
 
 
+def late_external_review(defn, facts, ago, head):
+    """(node, label, on, why) of the node to wake again because an external review is late, else None (#1263).
+    A node whose settings set `external_review_hours` waits for a review by `external_review_bot` on a PR that
+    carries `external_review_label`; past that many hours since the label with no bot review at the head, its
+    waking label on the ticket or PR is re-added, once per head, so it can pick its fallback outcome."""
+    import gate
+    on_pr, attrs = facts.get("pr_labels") or [], facts.get("attrs") or []
+    for name, n in (defn["workflow"].get("nodes") or {}).items():
+        s = definition.settings(defn, name)
+        hours, bot, label = s.get("external_review_hours"), s.get("external_review_bot"), s.get("external_review_label")
+        if not hours or not bot or not label or label not in on_pr or not gate.holds(n.get("when") or {}, facts, {}):
+            continue
+        at = (facts.get("label_at") or {}).get(label)
+        if not at or ago(at) <= timedelta(hours=hours):
+            continue
+        if any(r.get("author") == bot and r.get("commit_id") == facts.get("head") for r in facts.get("reviews") or []):
+            continue
+        if any(f"head={head} {EXTERNAL_LATE} " in c for c in facts.get("recover_comments", [])):
+            continue
+        for t in n.get("triggers") or []:
+            wake = t.get("label") if isinstance(t, dict) else None
+            on = "pr" if wake in on_pr else "issue" if wake in attrs else None
+            if on:
+                return name, wake, on, f"no review by {bot} at the head {hours}h after {label}"
+    return None
+
+
+def stage_wakes(defn, tracker_stages, default):
+    """(node, stage, label, timeout) per stage trigger of an agent node that one of its outcomes moves out of that
+    stage (#1257): a ticket still in the stage after the timeout got no outcome. Kept out of `wakes`: a ready ticket
+    whose blockers are open is waiting, not stuck."""
+    nodes, agents = defn["workflow"].get("nodes") or {}, defn["factory"].get("agents") or {}
+    out = []
+    for name, n in nodes.items():
+        if (agents.get(n.get("agent")) or {}).get("harness") in definition.NO_ROLE:
+            continue
+        moves = {e["stage"] for fx in _outcome_effects(n) for e in fx if "stage" in e}
+        for t in n.get("triggers") or []:
+            stage = t.get("stage") if isinstance(t, dict) else None
+            if stage in tracker_stages and moves - {stage}:
+                out.append((name, stage, tracker_stages[stage], n.get("timeout_minutes", default)))
+    return out
+
+
 def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry_run=False, progress=None):
     """ADR-0021 teams: the lost wakes `wake_ready` does not cover, read from the definition (no node, label or
     stage name here). A conflicting PR in a fix-able stage with no fix label goes to fix; a waking label whose node
@@ -399,6 +444,7 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
     now, results = now or datetime.now(timezone.utc), []
     default = limits.get("run_timeout_minutes", 30)
     fix, wakes = definition_recovery(defn, vocab._tracker()["stages"], vocab.needs_human(), default)
+    by_stage = stage_wakes(defn, vocab._tracker()["stages"], default)
     nodes = defn["workflow"]["nodes"]
     listed = tracker.sweep_tickets([s for s in stages if stage_kinds.get(s) not in ("waiting", "final")], open_only=True)
     pending = []
@@ -448,6 +494,18 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
             elif not since:
                 continue
             ago = lambda at: now - datetime.fromisoformat(at.replace("Z", "+00:00"))  # noqa: E731
+            if late := late_external_review(defn, facts, ago, head):
+                node, label, on, why = late
+                r = {"ticket": n, "stage": stage, "node": node, "reconcile": "external-review", "why": why}
+                results.append(r)
+                if not dry_run:
+                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "unlabel", "value": label, "on": on})
+                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "label", "value": label, "on": on})
+                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "comment",  # the comment last: once per head
+                                   "value": f"{PREFIX} stage={stage} head={head} {EXTERNAL_LATE} {label} ({why})"})
+                if progress:
+                    progress(r)
+                continue
             step = None
             on_pr = facts.get("pr_labels") or []
             replay = gate.stale_review_plan(facts, defn["workflow"]) if stage == "in-review" else None
@@ -473,6 +531,12 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
                     at = (facts.get("label_at") or {}).get(label)
                     if on and at and ago(at) > timedelta(minutes=timeout) and gate.holds(nodes[node].get("when") or {}, facts, {}):
                         step = ("refire", node, label, on, f"no {node} outcome")
+                        break
+                for node, woken_in, label, timeout in by_stage if step is None else ():
+                    at = (facts.get("label_at") or {}).get(label) or facts.get("stage_at")
+                    if stage == woken_in and at and ago(at) > timedelta(minutes=timeout) \
+                            and gate.holds(nodes[node].get("when") or {}, facts, {}):
+                        step = ("refire", node, label, "issue", f"no {node} outcome in stage {stage}")
                         break
                 if step is None and not facts.get("blockers_open"):
                     step = stuck_label(wakes, nodes, facts, on_pr, ago)

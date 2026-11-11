@@ -179,6 +179,7 @@ class FakeGh:
             number = int(a.rsplit("/", 1)[-1])
             return recorded_pull(a, {"number": number, "merged": self.merged, "state": "closed" if self.merged else "open", "mergeable": True, "merge_commit_sha": None, "base": {"ref": "main"}, "head": {"sha": self.head_sha, "ref": "ez/7-x"},
                                      "requested_reviewers": [{"login": u} for u in self.requested],
+                                     "user": {"login": getattr(self, "pr_author", "jetbrains-air[bot]")},
                                      "labels": [{"name": x} for x in self.labels]})
         if a.endswith("/git/ref/heads/main"):
             return recorded_pull(a, {"object": {"sha": "m1"}})
@@ -1237,6 +1238,33 @@ class JoinTest(unittest.TestCase):
         gh.requested = ["alice"]
         self.assertFalse(tr(gh).apply({"ticket": 7, "kind": "request-reviewers", "value": "changes"}))  # already asked
         self.assertFalse(tr(gh).facts(7)["round_complete"])  # round 2 waits for her
+
+    def test_request_reviewers_asks_the_payload_logins_once(self):  # #1262: the approver names whom to ask
+        gh = FakeGh(reviews=[review(BOT, M)])
+        gh.pr_author, gh.requested = "carol", []
+        e = {"ticket": 7, "kind": "request-reviewers", "value": ["alice", "carol", "eve", "bob"], "on": "pr"}
+        self.assertTrue(tr(gh).apply(e))
+        post = [w for w in gh.writes if "requested_reviewers" in " ".join(w)]
+        self.assertEqual(len(post), 1)
+        self.assertEqual([x for x in post[0] if x.startswith("reviewers[]=")], ["reviewers[]=alice", "reviewers[]=bob"])
+        self.assertEqual(e["skipped"], ["carol (the PR author)", "eve (no write access)"])
+        gh.requested = ["alice", "bob"]
+        self.assertFalse(tr(gh).apply({**e}))  # asked already: no second request
+        self.assertEqual(len([w for w in gh.writes if "requested_reviewers" in " ".join(w)]), 1)
+
+    def test_request_reviewers_skips_who_reviewed_the_head(self):
+        gh = FakeGh(reviews=[review("alice", "", state="APPROVED")])
+        gh.requested = []
+        self.assertFalse(tr(gh).apply({"ticket": 7, "kind": "request-reviewers", "value": ["alice"], "on": "pr"}))
+
+    def test_outcome_requests_reviewers_from_its_payload_and_names_the_skipped(self):
+        gh = FakeGh(labels=["factory:approved", "risk:low"], reviews=[review(BOT, M)])
+        gh.pr_author, gh.requested = "carol", []
+        flow = {"nodes": {"ask": {"role": "approver", "when": {"always": True}, "triggers": ["manual"], "outcomes": {"ask-human": {"effects": [
+            {"request-reviewers": {"field": "reviewers"}, "on": "pr"}]}}}}}
+        code, out = gate.apply("ask", "ask-human", {"ticket": 7, "reviewers": "alice,carol"}, tr(gh), flow)
+        self.assertEqual((code, out["written"]), (gate.GO, ["request-reviewers"]))
+        self.assertEqual(out["skipped"], ["request-reviewers: carol (the PR author)"])
 
     def test_sweep_asks_waiting_reviewers_again_after_a_comment(self):
         # final review of #183, B1: a comment after the re-request drops her from requested_reviewers
