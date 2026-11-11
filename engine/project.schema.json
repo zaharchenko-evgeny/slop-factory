@@ -98,6 +98,9 @@
         "properties": {
           "repositories": {"type": "array", "items": {"type": "string"}},
           "writable": {"type": "array", "items": {"type": "string"}},
+          "ci": {"type": "object", "additionalProperties": false,
+                 "properties": {"checks": {"type": "array", "items": {"type": "string"},
+                                           "description": "Names of the check runs and commit statuses that count as CI; overrides the base branch's required status checks."}}},
           "tokens": {"type": "object", "additionalProperties": {"type": "string"},
                      "description": "Repository name -> the secret that holds its write token (ADR-0027): the gate's issue, label and comment writes to it."},
           "domains": {"type": "array", "items": {"type": "string"}},

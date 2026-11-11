@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
-"""Render the nodes of engine/nodes.yaml as deployable specs (ADR-0014). Output is JSON.
+"""Render the nodes of the team's definition as deployable specs (ADR-0021). Output is JSON.
 
 Usage: deploy.py plan --target air
        deploy.py (--dry-run | --apply [--allow-delete]) [--rename 'OLD NAME=NEW NAME']...
@@ -11,8 +11,8 @@ Usage: deploy.py plan --target air
 verify. The two Air MCP servers are started over stdio from the commands in FACTORY_MCP_AIR_AUTOMATIONS and
 FACTORY_MCP_AIR_CLOUD (they use the operator's local OAuth). Each --rename updates the existing item named OLD in
 place (same id) to NEW instead of creating NEW and deleting OLD.
-air: {"automations": [...], "environments": [...]}: one automation per enabled node (per tier or focus
-     where the node has them) and one environment per environment in use, for the factory-deploy skill.
+air: {"automations": [...], "environments": [...]}: one automation per enabled node and one environment per environment in use,
+     for the factory-deploy skill.
 """
 import json
 import os
@@ -82,9 +82,7 @@ def definition_copies(defn: dict, name: str, n: dict, config: dict) -> list[dict
 
 
 def plan_air(nodes: dict, config: dict) -> dict:
-    air, roles, agents = config["targets"]["air"]["models"], config["roles"], core.agents_of(nodes, config)
-    for aid in sorted({a["id"] for a in agents.values() if a.get("effort")}):
-        print(f"deploy: agent {aid}: effort ignored, Air automations take no reasoning setting", file=sys.stderr)
+    air = config["targets"]["air"]["models"]
     repos = {r["name"]: r for r in config["repositories"]}
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     team = {"name": "team", "url": config.get("team_repository") or primary["url"]}
@@ -95,7 +93,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     prefix = f"[{core.project_name(config)}] "
     automations = []
     repo_tags = tuple(t for hook in plugins.registry(config).hook("deploy.repo_tags") for t in hook(config))
-    used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
+    used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human"))
     unscoped = set()  # environments some automation shares across the project
     scoped = []  # (env, node, repository) of the per-node automations and of the copies in another repository
     defn = core.team_definition()
@@ -104,20 +102,18 @@ def plan_air(nodes: dict, config: dict) -> dict:
     # once per project, in its environment (FACTORY_ENV), and the gate takes only that environment's tickets
     adopted = bool(defn) and definition.adopted(defn)  # ADR-0027: copies come from the definition, no #1069 fan-out
     trackers = {} if adopted else scopes_mod.project_envs(config)
-    default_env = core.default_environment(nodes, defn) if trackers else None
+    default_env = definition.default_environment(defn) if trackers else None
     for name, n in nodes["nodes"].items():
-        if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
+        if n.get("enabled") is False or n["role"] == "human":
             continue
         fan = list(trackers) if trackers and n["env"] == default_env else [None]
         if adopted:
             own = definition_copies(defn, name, n, config) or [None]
         else:
-            own = node_copies(defn, name, n, config) if defn and fan == [None] else [None]  # #1069: per project instead
-        for project, copy_, (aname, tier_arg, tier, focus) in [
-                (p, c, v) for p in fan for c in own for v in core.variants(name, n, roles, agents.get(name))]:
-            if project and focus == "knowledge" and project != fan[0]:
-                continue  # the knowledge review runs once, in the team's environment
-            project = None if focus == "knowledge" else project
+            own = node_copies(defn, name, n, config) if fan == [None] else [None]  # #1069: per project instead
+        aname = name
+        tier = n.get("tier") or (config["roles"].get(n["role"]) or {}).get("tier") or "cheap"  # the model alias
+        for project, copy_ in [(p, c) for p in fan for c in own]:
             if project and project not in used:
                 used.append(project)
             env = (copy_ or {}).get("env") or project or n["env"]
@@ -128,8 +124,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             scope = copy_["repo"] if copy_ and copy_["suffix"] and not adopted else None
             agent, _, model = air[tier].partition("/")
             trig = []
-            webhook = any(str(t).startswith("webhook ") for t in n["triggers"])
-            spec = core.node_spec(name, n, config, tier_arg or tier, focus, nodes)
+            spec = core.node_spec(name, n, config, tier, None, nodes)
             narrow = {k: v for hook in filter_hooks for k, v in hook(config, scope).items()} if scope else {}
             for t in n["triggers"]:
                 if str(t).startswith("schedule "):
@@ -141,7 +136,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     t = (copy_ or {}).get("event")(t) if (copy_ or {}).get("event") else t  # ADR-0027: the copy's tracker
                     if str(t).startswith("workflow_run ") and (copy_ or {}).get("ci"):
                         t = f"workflow_run {copy_['ci']}"  # #1259: the CI of the copy's own environment
-                    trig.append(core.trigger(t, tier_arg, bot if aname.startswith(core.BOT_FILTERED) else None, focus,
+                    trig.append(core.trigger(t, None, bot if aname.startswith(core.BOT_FILTERED) else None, None,
                                              scope["name"] if scope else None, repo_tags))
                     if project:
                         trig[-1] = core.scope_filter(trig[-1], trackers[project])
@@ -149,15 +144,13 @@ def plan_air(nodes: dict, config: dict) -> dict:
                             **(((copy_ or {}).get("filters") or {}).get(trig[-1].get("source")) or {})}
                     if more:
                         trig[-1] = {**trig[-1], "filters": {**trig[-1].get("filters", {}), **more}}
-            automation_repository = core.repository(team if focus == "knowledge" else (copy_ or {}).get("repo")
+            automation_repository = core.repository((copy_ or {}).get("repo")
                                                     or repos.get(envs_def[env]["repository"]) or primary)
-            if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
-                env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
             # A node with custom MCP servers runs in an environment of its own: setup writes `.mcp.json` per environment
-            env_node = name if defn and focus != "knowledge" and definition.mcp_custom(definition.mcp(defn, name)) else None
+            env_node = name if definition.mcp_custom(definition.mcp(defn, name)) else None
             env_repo = repos.get(envs_def[env]["repository"]) or primary
             # #1112: a copy in another repository runs in that repository's variant of its environment
-            variant = copy_["repo"] if copy_ and focus != "knowledge" and \
+            variant = copy_["repo"] if copy_ and \
                 definition.full_name(copy_["repo"]["url"]) != definition.full_name(env_repo["url"]) else None
             env_suffix = (f" {env_node}" if env_node else "") + (f" {variant['name']}" if variant else "")
             if env_node or variant:
@@ -173,9 +166,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
                 "environmentConfigId": f"{prefix}{env}{env_suffix}",
-                "mcpConnectors": core.mcp_connectors(n, config, focus),
-                "prompt": core.script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else core.agent_prompt(
-                    name, n, config, aname, focus, automation_repository, tier_arg or tier),
+                "mcpConnectors": core.mcp_connectors(n, config, None),
+                "prompt": core.agent_prompt(name, n, config, aname, None, automation_repository, tier),
             }
             if copy_:
                 if copy_["repo"].get("default_branch", "main") != "main":  # Air checks out `main` unless told (#1259)
@@ -230,7 +222,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     return {"prefix": prefix, "automations": automations, "environments": envs,
             "label_plan": core.label_plan(nodes, config, label_repos),  # ADR-0024: labels per repository
             "label_specs": schema.specs, "owned_label_prefixes": list(schema.owned_prefixes),
-            **tag_plan, "files": core.actions_files(nodes, config)}
+            **tag_plan}
 
 
 class Mcp:
@@ -646,6 +638,9 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
 
 def main(argv: list[str]) -> int:
     argv = config_mod.pop_team(argv)
+    if not definition.present(config_mod.team_root()):
+        print("deploy: the team root has no factory.yaml and workflow.yaml (ADR-0021)", file=sys.stderr)
+        return 2
     rest, renames = argv[1:], {}
     while "--rename" in rest:
         i = rest.index("--rename")
@@ -670,8 +665,7 @@ def main(argv: list[str]) -> int:
             code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run, config=config)
             if code:
                 return code
-            code = core.write_files(plan["files"], argv[0] == "--apply")
-            return code or core.sync_wake_files(config, run, argv[0] == "--apply")
+            return core.sync_wake_files(config, run, argv[0] == "--apply")
         finally:
             for server in servers:
                 server.close()
