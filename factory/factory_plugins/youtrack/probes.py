@@ -24,6 +24,9 @@ def wanted(settings, tiers):
             tags |= {store["tag"].replace("<tier>", t) for t in tiers} if "<tier>" in store["tag"] else {store["tag"]}
         if isinstance(store.get("field"), dict):
             fields.setdefault(store["field"]["name"], set()).add(store["field"]["value"])
+    t = settings.get("tracker") or {}
+    if t.get("state_mirror"):  # #1260: every State value a stage is mirrored to
+        fields.setdefault(t.get("state_mirror_field", "State"), set()).update(v for v in t["state_mirror"].values() if v)
     return sorted(tags), {k: sorted(v) for k, v in fields.items()}
 
 

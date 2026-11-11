@@ -1315,6 +1315,13 @@ class GitHubGateTracker(DescriptorPort):
         Effect("merge", "pr", _fx_merge, remote=True), Effect("update-branch", "pr", _fx_update_branch, remote=True),
     )
 
+    def close_prs(self, n, comment):
+        """Close every open PR of ticket `n` with `comment` (a person stopped the work, #1260); True when one closed."""
+        prs = [pr for pr in self._prs(n, open_only=True) if pr.get("state", "open") == "open"]
+        for pr in prs:
+            self.run(["pr", "close", str(pr["number"]), "-R", self.pr_repo, "--comment", comment])
+        return bool(prs)
+
     def _may_write(self, name):
         return self.writable is None or name in self.writable
 
