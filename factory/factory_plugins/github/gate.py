@@ -1238,6 +1238,13 @@ class GitHubGateTracker(DescriptorPort):
     def _fx_review(self, e, ctx):
         return self._review(e["ticket"], e)
 
+    def _fx_ready_for_review(self, e, ctx):  # #1261: a draft PR becomes ready, which starts the project's review
+        pr = self._pr(e["ticket"])
+        if pr is None or pr.get("state") != "open" or not pr.get("draft"):
+            return False
+        self.run(["pr", "ready", str(pr["number"]), "-R", self.pr_repo])
+        return True
+
     def _fx_request_reviewers(self, e, ctx):
         """`request-reviewers: changes` asks again who requested changes; logins (static, or the outcome's
         `{field: <name>}`) are asked once each."""
@@ -1318,9 +1325,17 @@ class GitHubGateTracker(DescriptorPort):
         Effect("pr-notes", "pr", _fx_pr_notes), Effect("pr-notes-sync", "pr", _fx_pr_notes),
         Effect("react", "ticket", _fx_react), Effect("react", "pr", _fx_react),
         Effect("review", "pr", _fx_review, remote=True), Effect("request-reviewers", "pr", _fx_request_reviewers),
+        Effect("ready-for-review", "pr", _fx_ready_for_review, remote=True),
         Effect("create-issues", "ticket", _fx_create_issues), Effect("park-behind-main-red", "ticket", _fx_park),
         Effect("merge", "pr", _fx_merge, remote=True), Effect("update-branch", "pr", _fx_update_branch, remote=True),
     )
+
+    def close_prs(self, n, comment):
+        """Close every open PR of ticket `n` with `comment` (a person stopped the work, #1260); True when one closed."""
+        prs = [pr for pr in self._prs(n, open_only=True) if pr.get("state", "open") == "open"]
+        for pr in prs:
+            self.run(["pr", "close", str(pr["number"]), "-R", self.pr_repo, "--comment", comment])
+        return bool(prs)
 
     def _may_write(self, name):
         return self.writable is None or name in self.writable
