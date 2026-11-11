@@ -71,7 +71,8 @@ def definition_copies(defn: dict, name: str, n: dict, config: dict) -> list[dict
         shared = sum(1 for x in found if x["main"] == c["main"]) > 1
         suffix = (f" {c['main'].split('/')[-1]}" if len(found) > 1 else "") + (f" {c['env']}" if shared else "")
         contract = definition.contract(defn, "tracker", c["tracker"]) if c["tracker"] else None
-        out.append({"env": c["env"], "repo": repo_of(c["main"]), "suffix": suffix,
+        ci = ((defn["factory"].get("environments") or {}).get(c["env"]) or {}).get("ci") or {}
+        out.append({"env": c["env"], "repo": repo_of(c["main"]), "suffix": suffix, "ci": ci.get("workflow"),
                     "additional": [{"repository": core.repository(repo_of(o)), "branch": repo_of(o)["default_branch"]}
                                    for o in c["additional"]],
                     "output": n.get("output", "read-only") if c["write"] else "read-only",
@@ -138,6 +139,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     trig.append({"triggerType": "WEBHOOK"})
                 elif str(t) != "manual":
                     t = (copy_ or {}).get("event")(t) if (copy_ or {}).get("event") else t  # ADR-0027: the copy's tracker
+                    if str(t).startswith("workflow_run ") and (copy_ or {}).get("ci"):
+                        t = f"workflow_run {copy_['ci']}"  # #1259: the CI of the copy's own environment
                     trig.append(core.trigger(t, tier_arg, bot if aname.startswith(core.BOT_FILTERED) else None, focus,
                                              scope["name"] if scope else None, repo_tags))
                     if project:
@@ -175,6 +178,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     name, n, config, aname, focus, automation_repository, tier_arg or tier),
             }
             if copy_:
+                if copy_["repo"].get("default_branch", "main") != "main":  # Air checks out `main` unless told (#1259)
+                    automation["branch"] = copy_["repo"]["default_branch"]
                 if copy_["additional"]:
                     automation["additionalRepositories"] = copy_["additional"]
             elif automation_repository["fullName"] != core.repository(team)["fullName"]:

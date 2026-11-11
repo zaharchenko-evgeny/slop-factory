@@ -611,7 +611,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def main_green(self):
         """CI at the current main head is green (`head_ci` of `head_checks`)."""
-        return head_ci(head_checks(self.run, self.repo, self._api("commits/main")["sha"]))[0] == "green"
+        return head_ci(head_checks(self.run, self.repo, self._api("commits/HEAD")["sha"]))[0] == "green"  # the default branch
 
     def sweep_tickets(self, stages, open_only=False, now=None):
         """Issue numbers whose stage label is one of `stages`: the open ones and, unless `open_only`, those closed in the
