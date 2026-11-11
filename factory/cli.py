@@ -499,7 +499,11 @@ def _main(argv):
     if cmd == "chart":
         return tool_command("chart")(rest)
     if cmd == "facts":
-        return tool_command("facts")(rest)
+        command = tool_command("facts")
+        if command is None:
+            print("factory: command 'facts' is not available: no selected plugin provides it", file=sys.stderr)
+            return 2
+        return command(rest)
     if cmd == "migrate" and rest[:1] == ["workflow"]:
         from workflow import main as workflow_main
         return workflow_main(["migrate", *rest[1:]])
