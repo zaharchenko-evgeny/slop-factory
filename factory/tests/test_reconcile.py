@@ -447,6 +447,39 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(tracker.tickets[1].get("log", []), [])
 
 
+class ReconcileMainBlockersTest(unittest.TestCase):
+    """`reconcile_main` hands `wake_approved` the definition's graph, whatever engine/nodes.yaml says."""
+    SLOP = Path(__file__).resolve().parent / "fixtures/slop"
+
+    def run_main(self, blockers, engine_blockers):
+        import io
+        import tempfile
+        defn = copy.deepcopy(definition.load(self.SLOP))
+        defn["workflow"]["blockers"] = blockers
+        defn["workflow"]["nodes"]["merge"]["when"] = {"stage": "approved", "blockers": "closed"}
+        ticket = {"stage": "approved", "blockers_open": 0, "pr": 5, "pr_state": "open",
+                  "label_at": {"factory:merge": "2026-11-06T10:00:00Z"}}
+        engine = {"blockers": engine_blockers, "nodes": {}}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(definition, "load", return_value=defn), \
+                mock.patch.object(nodes_mod, "load", return_value=engine), \
+                mock.patch.object(MemorySystem, "blocked_by", lambda self, n: [{"number": 9, "state": "closed"}],
+                                  create=True), \
+                mock.patch.object(reconcile, "recover_definition", return_value=[]), \
+                mock.patch.object(reconcile, "finish_lost", return_value=[]), \
+                mock.patch("sys.stdout", io.StringIO()) as out:
+            spec = Path(tmp) / "tickets.json"
+            spec.write_text(json.dumps({"1": ticket}))
+            self.assertEqual(reconcile.reconcile_main(["--dry-run", f"memory:{spec}"]), 0)
+        return [(r["node"], r["label"]) for r in json.loads(out.getvalue())["reconcile"]
+                if r.get("outcome") == "refire" and r.get("node") == "merge"]
+
+    def test_the_blockers_mode_comes_from_the_definition_not_the_engine(self):
+        for blockers, engine, want in (("merge", "start", [("merge", "factory:merge")]),
+                                       ("start", "merge", [])):
+            with self.subTest(definition=blockers, engine=engine):
+                self.assertEqual(self.run_main(blockers, engine), want)
+
+
 class NoDefinitionTest(unittest.TestCase):
     def test_a_team_without_a_definition_reports_instead_of_reconciling(self):
         import io
