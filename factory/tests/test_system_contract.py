@@ -31,16 +31,31 @@ from gate_tracker import OnVcs  # noqa: E402
 LABELS = ["factory:in-review", "risk:low", "factory:fix-mid"]
 
 
+def relate_in_memory(tracker):
+    """Ticket 7 has sub-tickets 21 and 22 and blocks 22; ticket 30 has its own sub-ticket 31."""
+    kid = lambda n: {"number": n, "state": "open", "not_planned": False, "attrs": []}  # noqa: E731
+    tracker.tickets[7].update(children=[kid(21), kid(22)], blocking=[{"number": 22, "state": "open"}])
+    tracker.tickets.update({n: {"stage": "in-dev", "attrs": [], "assignees": []} for n in (21, 22, 31)})
+    tracker.tickets[30] = {"stage": "in-dev", "children": [kid(31)], "attrs": [], "assignees": []}
+    return {"children": (7, [21, 22]), "blocking": (7, [22]), "other": (30, [31])}
+
+
 class MemorySystemContractTest(SystemContract, unittest.TestCase):
     def make(self):
         return MemorySystem({7: {"stage": "in-review", "attrs": ["risk:low", "factory:fix-mid"], "pr": 5, "head": "h1",
                                  "pr_labels": ["factory:fix-mid"], "assignees": []}})
+
+    def relate(self, s):
+        return relate_in_memory(s)
 
 
 class TagTrackerContractTest(SystemContract, unittest.TestCase):
     def make(self):
         return TagTracker({7: {"tags": ["stage:in-review"], "attrs": ["risk:low", "factory:fix-mid"], "pr": 5, "head": "h1",
                                "pr_labels": ["factory:fix-mid"], "assignees": []}})
+
+    def relate(self, s):
+        return relate_in_memory(s)
 
 
 def flag(args, name):
@@ -142,6 +157,15 @@ class GitHubContractTest(SystemContract, unittest.TestCase):
         for p in (patch.object(G.M_GH.time, "sleep"), patch.object(GitHubGateTracker, "RECENT_MERGE_SECONDS", 0)):
             p.start()
             self.addCleanup(p.stop)
+
+    NUMBERS = (1, 2)  # what the stub numbers the two sub-tickets that `relate` creates
+
+    def relate(self, s):
+        """Two sub-tickets of 7, created through the effect: the second waits for the first."""
+        self.assertTrue(s.apply({"ticket": 7, "kind": "create-issues",
+                                 "value": [{"title": "A", "body": "a"}, {"title": "B", "body": "b"}]}))
+        first, second = self.NUMBERS
+        return {"children": (7, [first, second]), "blocking": (first, [second]), "other": (second, [])}
 
     def make(self):
         gh = ContractGh()
@@ -252,6 +276,7 @@ class YouTrackContractTest(SystemContract, unittest.TestCase):
     }
     NO_WRITE = GitHubContractTest.NO_WRITE
     EXEMPT = GitHubContractTest.EXEMPT
+    NUMBERS = ("T-901", "T-902")
     XFAIL = {
         "test_a_stage_effect_that_expects_another_stage_writes_nothing": "#1281: the stage effect ignores `expect`",
         "test_a_ticket_event_names_its_actor": "#1281: the store keeps no events of what it writes",
@@ -262,6 +287,7 @@ class YouTrackContractTest(SystemContract, unittest.TestCase):
         "test_event_without_a_ticket_is_none": "#1281: event reads raw webhook payloads",
     }
     setUp = GitHubContractTest.setUp
+    relate = GitHubContractTest.relate
 
     def make(self):
         gh, yt = ContractGh(), ContractYouTrack([STAGES["in-review"], "risk:low", "factory:fix-mid"])
@@ -322,6 +348,9 @@ class SpaceContractTest(SystemContract, unittest.TestCase):
         s = OnVcs.of(MemorySystemContractTest.make(self), vcs)
         s.space = space
         return s
+
+    def relate(self, s):
+        return relate_in_memory(s.tracker)
 
     def test_pr_effects_are_spaces_and_write_space(self):
         s = self.make()

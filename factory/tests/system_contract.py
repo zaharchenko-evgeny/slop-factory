@@ -167,11 +167,31 @@ class SystemContract:
         self.assertTrue(s.apply(eff("close")))
         self.assertEqual(s.find(Query("stage", values=("in-review",), open_only=True)), [])
 
+    def relate(self, s):
+        """Give the system `{"children": (parent, [its sub-tickets]), "blocking": (blocker, [the tickets it blocks]),
+        "other": (ticket, [its sub-tickets])}`: one ticket with sub-tickets and one it blocks, and an unrelated ticket
+        (with sub-tickets of its own where the system can hold them), so `find` has to filter."""
+        raise NotImplementedError
+
+    @staticmethod
+    def numbers(found):
+        return sorted((x["number"] if isinstance(x, dict) else x) for x in found)
+
     def test_find_children_lists_the_sub_tickets(self):
-        self.assertEqual(list(self.make().find(Query("children", of=7))), [])
+        s = self.make()
+        rel = self.relate(s)
+        (parent, kids), (other, other_kids) = rel["children"], rel["other"]
+        self.assertTrue(kids and set(kids).isdisjoint(other_kids))
+        self.assertEqual(self.numbers(s.find(Query("children", of=parent))), sorted(kids))
+        self.assertEqual(self.numbers(s.find(Query("children", of=other))), sorted(other_kids))
+        self.assertEqual(self.numbers(s.find(Query("children", of=kids[0]))), [])
 
     def test_find_blocking_lists_the_tickets_a_ticket_blocks(self):
-        self.assertEqual(list(self.make().find(Query("blocking", of=7))), [])
+        s = self.make()
+        blocker, blocked = self.relate(s)["blocking"]
+        self.assertTrue(blocked)
+        self.assertEqual(self.numbers(s.find(Query("blocking", of=blocker))), sorted(blocked))
+        self.assertEqual(self.numbers(s.find(Query("blocking", of=blocked[0]))), [])
 
     def test_an_unknown_query_is_refused(self):
         with self.assertRaises(ValueError):
