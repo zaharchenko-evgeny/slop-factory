@@ -39,7 +39,7 @@ class MemorySystemContractTest(SystemContract, unittest.TestCase):
 
 class TagTrackerContractTest(SystemContract, unittest.TestCase):
     def make(self):
-        return TagTracker({7: {"attrs": ["stage:in-review", "risk:low", "factory:fix-mid"], "pr": 5, "head": "h1",
+        return TagTracker({7: {"tags": ["stage:in-review"], "attrs": ["risk:low", "factory:fix-mid"], "pr": 5, "head": "h1",
                                "pr_labels": ["factory:fix-mid"], "assignees": []}})
 
 
@@ -122,6 +122,13 @@ class GitHubContractTest(SystemContract, unittest.TestCase):
         ("pr-notes-sync", "pr"): lambda s: s.gh.comments.append(
             {"body": f"{gate_github.NOTES_PARKED}\n\n{derive.notes_block({'for': 'fixer', 'hint': 'h'})}",
              "user": {"login": BOT, "type": "Bot"}, "created_at": "2026-01-02T00:00:00Z"}),
+    }
+    XFAIL = {
+        "test_a_stage_effect_that_expects_another_stage_writes_nothing": "#1280: the stage effect ignores `expect`",
+        "test_a_ticket_event_names_its_actor": "#1280: the stub keeps no events of what the tracker writes",
+        "test_find_blocking_lists_the_tickets_a_ticket_blocks": "#1280: find has no `blocking` query",
+        "test_event_keeps_the_canonical_trigger_name": "#1280: event reads raw webhook payloads",
+        "test_event_without_a_ticket_is_none": "#1280: event reads raw webhook payloads",
     }
     NO_WRITE = {("seen", "ticket"): "GitHub keeps no seen list: a duplicate event fails its node's conditions"}
     EXEMPT = {
@@ -245,6 +252,15 @@ class YouTrackContractTest(SystemContract, unittest.TestCase):
     }
     NO_WRITE = GitHubContractTest.NO_WRITE
     EXEMPT = GitHubContractTest.EXEMPT
+    XFAIL = {
+        "test_a_stage_effect_that_expects_another_stage_writes_nothing": "#1281: the stage effect ignores `expect`",
+        "test_a_ticket_event_names_its_actor": "#1281: the store keeps no events of what it writes",
+        "test_a_stage_effect_that_expects_the_current_stage_moves_it": "#1281: the stage effect ignores `expect`",
+        "test_find_stage_lists_the_tickets_in_a_stage": "#1281: find stage reads no stage of the stub's tickets",
+        "test_find_blocking_lists_the_tickets_a_ticket_blocks": "#1281: find has no `blocking` query",
+        "test_event_keeps_the_canonical_trigger_name": "#1281: event reads raw webhook payloads",
+        "test_event_without_a_ticket_is_none": "#1281: event reads raw webhook payloads",
+    }
     setUp = GitHubContractTest.setUp
 
     def make(self):

@@ -1,5 +1,7 @@
 # ADR-0026: Engine plugins: events in, records out, effects
 
+Amended by [ADR-0028](0028-state-stores-are-systems.md): the guarantees a state store gives.
+
 Status: accepted, requested by #1064 (slices: #1065, #1066, #1067, #1068, #1069, #1070, #1071, #1072, #1073). Amends
 ADR-0025 and ADR-0004.
 
