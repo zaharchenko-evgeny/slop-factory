@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import config  # noqa: E402
 import definition  # noqa: E402
+import gate  # noqa: E402
+import scopes  # noqa: E402
 
 FIXTURE = ROOT / "tests/fixtures/v2"
 MAIN, OTHER = "zaharchenko-evgeny/slop-factory", "zaharchenko-evgeny/slop-eval-factory"
@@ -274,6 +276,24 @@ class DefinitionTest(unittest.TestCase):
                          [("o/c", "LME", ["o/c", MAIN])])
         self.assertEqual(c["environments"]["b"]["writable"], ["c"])
         self.assertNotIn("tracker", c["environments"]["b"])  # a place, not a #1069 project environment
+
+    def test_github_issues_home_under_a_youtrack_top_tracker_is_its_own_place(self):
+        """#1325: offline-eval-factory has LME (YouTrack) on top and one repository on its own GitHub issues. That home
+        is a GitHub Issues place; on the top tracker it took YouTrack's adapter, and no number was in any scope."""
+        yt = {"adapter": "youtrack", "url": "https://yt", "project": "LME"}
+
+        def factory(f):
+            f["tracker"] = {**{k: v for k, v in f["tracker"].items() if k != "repositories"}, **yt}
+            self._envs(f, engine=[("o/c", {"write": True, "tracker": {"scope": {"field": "Subsystem", "value": "S3"}}})],
+                       team=[(MAIN, {"write": True, "tracker": {"adapter": "github-issues"}}), ("o/c", {"tracker": "none"})])
+        self.edit("factory.yaml", factory)
+        c = definition.config(definition.load(self.root))
+        self.assertEqual(c["tracker"]["repositories"], [])  # no GitHub home shares the YouTrack tracker
+        places = {p["repository"]: p for p in c["ticket_places"]}
+        self.assertEqual((places[MAIN]["tracker"]["adapter"], places[MAIN]["tracker"]["repository"]), ("github-issues", MAIN))
+        envs, _ = gate.place_keys(c)
+        owners = lambda ticket: [k for k, block in envs.items() if scopes.owns_id(block, ticket)]  # noqa: E731
+        self.assertEqual((owners(76), owners("LME-1")), ([f"place:{MAIN}"], ["place:o/c"]))
 
     def test_workflow_environments_list_is_the_default(self):
         self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True})], team=[(OTHER, {"write": True})]))
