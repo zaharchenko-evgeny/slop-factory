@@ -26,7 +26,7 @@ from gate_port import (DescriptorPort, child_attrs, child_links, child_order, in
                        ticket_from_ref, ticket_ref, ticket_repositories, tracker_repositories)
 from scopes import matches
 from factory_plugins.github import graphql
-from factory_plugins.github.tracker import CountedRun, ProjectWriteRun, checked_out, gh, project_repositories, repository_tokens, random_color
+from factory_plugins.github.tracker import CountedRun, ProjectWriteRun, RateLimited, checked_out, gh, project_repositories, repository_tokens, random_color
 import derive
 import effects as effects_mod
 from derive import clean_notes, notes_block, parse_notes, redact  # noqa: F401  (the agent notes, ADR-0026)
@@ -99,14 +99,21 @@ def head_checks(run, repository, sha, names=None, branch=BASE_BRANCH):
     """[{conclusion, at}] of the project's CI at `sha`: GitHub's latest check run per name and commit status per
     context, conclusion None while one runs. The project's own checks count, whatever their workflow or app (#1207).
     Check runs of the factory's own workflows are not CI: a workflow_run wake of one runs at the PR head too.
-    Only the names of `ci_names` count when there are any; a counted name with no result yet is pending."""
+    Only the names of `ci_names` count when there are any; a counted name with no result yet is pending.
+    A token that may not read check runs (HTTP 403, #1332) counts none when `names` are given: the commit statuses
+    answer for them, and a named check with no status stays pending. Without `names` the 403 raises."""
     counted = ci_names(run, repository, names, branch)
+    try:
+        raw = _lines(run(["api", "--paginate", f"repos/{repository}/commits/{sha}/check-runs?per_page=100",
+                          "--jq", ".check_runs[]"]))
+    except RuntimeError as e:
+        if not names or isinstance(e, RateLimited) or ("403" not in str(e) and "Resource not accessible" not in str(e)):
+            raise
+        raw = []
     service = {r.get("check_suite_id") for r in _lines(run(["api", "--paginate", f"repos/{repository}/actions/runs?head_sha={sha}&per_page=100",
                                                             "--jq", ".workflow_runs[]"]))
-               if (r.get("name") or "").startswith(SERVICE_WORKFLOW)}
-    runs = [r for r in _lines(run(["api", "--paginate", f"repos/{repository}/commits/{sha}/check-runs?per_page=100",
-                                   "--jq", ".check_runs[]"]))
-            if (r.get("check_suite") or {}).get("id") not in service]
+               if (r.get("name") or "").startswith(SERVICE_WORKFLOW)} if raw else set()
+    runs = [r for r in raw if (r.get("check_suite") or {}).get("id") not in service]
     statuses = json.loads(run(["api", f"repos/{repository}/commits/{sha}/status"])).get("statuses") or []
     if counted is not None:
         runs = [r for r in runs if r.get("name") in counted]
