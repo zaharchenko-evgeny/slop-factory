@@ -100,21 +100,25 @@ def head_checks(run, repository, sha, names=None, branch=BASE_BRANCH):
     context, conclusion None while one runs. The project's own checks count, whatever their workflow or app (#1207).
     Check runs of the factory's own workflows are not CI: a workflow_run wake of one runs at the PR head too.
     Only the names of `ci_names` count when there are any; a counted name with no result yet is pending.
-    A token that may not read check runs (HTTP 403, #1332) counts none when `names` are given: the commit statuses
-    answer for them, and a named check with no status stays pending. Without `names` the 403 raises."""
+    A token that may not read check runs or commit statuses (HTTP 403, #1332, #1334) counts none of them when `names`
+    are given: a named check with no readable result stays pending, so it never reads green. Without `names` the
+    403 raises."""
     counted = ci_names(run, repository, names, branch)
-    try:
-        raw = _lines(run(["api", "--paginate", f"repos/{repository}/commits/{sha}/check-runs?per_page=100",
-                          "--jq", ".check_runs[]"]))
-    except RuntimeError as e:
-        if not names or isinstance(e, RateLimited) or ("403" not in str(e) and "Resource not accessible" not in str(e)):
-            raise
-        raw = []
+
+    def readable(read, empty):
+        try:
+            return read()
+        except RuntimeError as e:
+            if not names or isinstance(e, RateLimited) or ("403" not in str(e) and "Resource not accessible" not in str(e)):
+                raise
+            return empty
+    raw = readable(lambda: _lines(run(["api", "--paginate", f"repos/{repository}/commits/{sha}/check-runs?per_page=100",
+                                       "--jq", ".check_runs[]"])), [])
     service = {r.get("check_suite_id") for r in _lines(run(["api", "--paginate", f"repos/{repository}/actions/runs?head_sha={sha}&per_page=100",
                                                             "--jq", ".workflow_runs[]"]))
                if (r.get("name") or "").startswith(SERVICE_WORKFLOW)} if raw else set()
     runs = [r for r in raw if (r.get("check_suite") or {}).get("id") not in service]
-    statuses = json.loads(run(["api", f"repos/{repository}/commits/{sha}/status"])).get("statuses") or []
+    statuses = readable(lambda: json.loads(run(["api", f"repos/{repository}/commits/{sha}/status"])).get("statuses") or [], [])
     if counted is not None:
         runs = [r for r in runs if r.get("name") in counted]
         statuses = [s for s in statuses if s.get("context") in counted]

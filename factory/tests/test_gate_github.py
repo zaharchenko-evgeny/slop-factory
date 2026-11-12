@@ -2051,6 +2051,11 @@ class RequiredChecksTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):  # unnamed CI is never guessed
             M_GH.head_checks(lambda a: "[]" if "/rules/" in a[1] else run(a), "o/r", "s")
 
+    def test_a_status_403_too_leaves_the_named_checks_pending(self):  # #1334
+        def run(args):
+            raise RuntimeError("HTTP 403: Resource not accessible by integration")
+        self.assertEqual(M_GH.head_ci(M_GH.head_checks(run, "o/r", "s", ["tc"]))[0], "pending")
+
 
 class CiSyncCodeHostTest(unittest.TestCase):
     """GitHubCodeHost's reads and writes for gate.ci_sync, on a recorded `gh`."""
