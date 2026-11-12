@@ -1597,6 +1597,152 @@ class LabelsTest(unittest.TestCase):
         self.assertEqual(creates, {("o/tracker", None), ("o/code", "t")})
 
 
+class OnlyTest(unittest.TestCase):
+    """`--only` selectors: a partial deploy of the matched items (a fake MCP server records the calls)."""
+    REPO = "https://github.com/o/r"
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / "server.py").write_text(FAKE_SERVER)
+        self.state = {k: self.tmp / f"{k}.json" for k in ("automation", "environment")}
+        self.plan = {
+            "prefix": "[F] ", "label_plan": {}, "labels": ["factory:ready"], "label_repositories": ["o/t"],
+            "owned_label_prefixes": ["factory:"], "label_specs": {"factory:ready": {"color": "c2e0c6"}},
+            "environments": [{"name": "[F] read", "startup": "new", "repository": self.REPO,
+                              "declared": [{"name": "TOK", "secret": False}]},
+                             {"name": "[F] write", "startup": "new", "repository": self.REPO,
+                              "declared": [{"name": "TOK", "secret": False}]}],
+            "automations": [{"name": "[F] notify", "prompt": "new", "environmentConfigId": "[F] read", "spec": {"node": "notify"}},
+                            {"name": "[F] notify repo-b", "prompt": "new", "environmentConfigId": "[F] write", "spec": {"node": "notify"}},
+                            {"name": "[F] intake", "prompt": "new", "environmentConfigId": "[F] write", "spec": {"node": "intake"}}]}
+        envs = [{"id": "e1", "name": "[F] read", "startup": "old", "repository": self.REPO},
+                {"id": "e2", "name": "[F] write", "startup": "old", "repository": self.REPO}]
+        autos = [{"id": "a1", "name": "[F] notify", "prompt": "old", "environmentConfigId": "e1"},
+                 {"id": "a2", "name": "[F] notify repo-b", "prompt": "old", "environmentConfigId": "e2"},
+                 {"id": "a3", "name": "[F] intake", "prompt": "old", "environmentConfigId": "e2"},
+                 {"id": "a4", "name": "[F] gone", "prompt": "x", "environmentConfigId": "e2"}]
+        self.seed(autos, envs)
+
+    def seed(self, automations, envs):
+        for k, items in (("automation", automations), ("environment", envs)):
+            self.state[k].write_text(json.dumps({"items": items, "calls": []}))
+
+    def calls(self, kind):
+        return [c for c in json.loads(self.state[kind].read_text())["calls"]
+                if c[0].startswith(("create_", "update_", "edit_", "delete_"))]
+
+    def run_deploy(self, mode, only, allow_delete=False, have=None):
+        servers = [air.Mcp(f"{sys.executable} {self.tmp / 'server.py'} {self.state[k]} {k}") for k in self.state]
+        run = fake_labels({"o/t": have or {"factory:ready": ("c2e0c6", ""), "factory:old": ("ededed", "")}})
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                    mock.patch("factory_plugins.github.tracker.gh", run):
+                code = air.deploy(mode, allow_delete, self.plan, *servers, only=only)
+        finally:
+            for s in servers:
+                s.close()
+        return code, out.getvalue(), err.getvalue(), run.writes
+
+    def updated(self):
+        return sorted(c[1]["automationId"] for c in self.calls("automation") if c[0] == "update_automation")
+
+    def test_node_selector_applies_only_that_nodes_automations(self):
+        code, _, _, _ = self.run_deploy("--apply", ["node:notify"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.updated(), ["a1", "a2"])  # intake stays unapplied
+        self.assertEqual(self.calls("environment"), [])
+
+    def test_env_selector_limits_environments_and_variables(self):
+        code, _, _, _ = self.run_deploy("--apply", ["env:read"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.updated(), ["a1"])
+        self.assertEqual([(c[0], c[1]["id"]) for c in self.calls("environment")],
+                         [("edit_environment", "e1"), ("edit_environment", "e1")])  # startup, then the variable
+        self.assertEqual([c[1]["variables"][0]["key"] for c in self.calls("environment") if "variables" in c[1]], ["TOK"])
+
+    def test_glob_selects_by_name_with_literal_brackets(self):
+        for pattern in ("[F] notify *", "notify *", "[F] notify repo-?", "*repo-b"):
+            with self.subTest(pattern=pattern):
+                self.setUp()
+                self.assertEqual(self.run_deploy("--apply", [pattern])[0], 0)
+                self.assertEqual(self.updated(), ["a2"])
+        self.setUp()
+        self.assertEqual(self.run_deploy("--apply", ["[F] notify*"])[0], 0)
+        self.assertEqual(self.updated(), ["a1", "a2"])
+
+    def test_selectors_repeat_and_combine(self):
+        self.assertEqual(self.run_deploy("--apply", ["node:intake", "[F] notify"])[0], 0)
+        self.assertEqual(self.updated(), ["a1", "a3"])
+
+    def test_unmatched_selector_exits_2_naming_it_and_writes_nothing(self):
+        for sel in ("node:nope", "env:nope", "nothing *", "node:notif"):
+            with self.subTest(sel=sel):
+                code, _, err, writes = self.run_deploy("--apply", ["node:notify", sel])
+                self.assertEqual(code, 2)
+                self.assertIn(f"--only {sel} matches nothing", err)
+                self.assertEqual((self.calls("automation"), self.calls("environment"), writes), ([], [], []))
+
+    def test_selector_matching_an_unchanged_item_is_not_unmatched(self):
+        self.plan["automations"][2]["prompt"] = "old"
+        code, out, _, _ = self.run_deploy("--dry-run", ["node:intake"])
+        self.assertEqual(code, 0)
+        self.assertIn("unchanged", out)
+
+    def test_matched_delete_needs_allow_delete_and_unmatched_is_ignored(self):
+        code, _, err, _ = self.run_deploy("--apply", ["[F] gone"])
+        self.assertEqual((code, self.calls("automation")), (1, []))
+        self.assertIn("--allow-delete", err)
+        self.assertEqual(self.run_deploy("--apply", ["[F] gone"], allow_delete=True)[0], 0)
+        self.assertEqual([c[0] for c in self.calls("automation")], ["delete_automation"])
+        self.setUp()
+        self.assertEqual(self.run_deploy("--apply", ["node:intake"])[0], 0)  # [F] gone is not matched
+        self.assertEqual(self.updated(), ["a3"])
+
+    def test_label_removals_are_skipped_but_updates_are_made(self):
+        have = {"factory:ready": ("ff0000", ""), "factory:old": ("ededed", "")}
+        code, _, err, writes = self.run_deploy("--apply", ["node:intake"], have=have)
+        self.assertEqual(code, 0)
+        self.assertEqual(writes, [("edit", "o/t", "factory:ready")])
+        self.assertNotIn("refused", err)
+        code, out, _, _ = self.run_deploy("--dry-run", ["node:intake"], have=have)
+        self.assertNotIn("remove label", out)
+
+    def test_verify_reports_only_the_matched_items(self):
+        real = air.read_state
+
+        def stale(*a, **kw):  # after the first read, Air keeps showing the old intake prompt
+            auto, envs = real(*a, **kw)
+            return Listed([{**x, "prompt": "old"} if x["name"] == "[F] intake" else x for x in auto]), envs
+        Listed = air.Listed
+        with mock.patch.object(air, "read_state", side_effect=stale):
+            code, _, err, _ = self.run_deploy("--apply", ["node:notify"])
+        self.assertEqual((code, err.count("verify failed")), (0, 0))
+        with mock.patch.object(air, "read_state", side_effect=stale):
+            self.setUp()
+            code, _, err, _ = self.run_deploy("--apply", ["node:intake"])
+        self.assertEqual(code, 1)
+        self.assertIn("verify failed: update automation [F] intake", err)
+
+    def test_dry_run_prints_partial_and_counts_the_rest(self):
+        code, out, _, _ = self.run_deploy("--dry-run", ["node:notify", "env:read"])
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "partial: node:notify, env:read")
+        self.assertIn("update automation [F] notify (prompt)", lines)
+        self.assertNotIn("update automation [F] intake (prompt)", lines)
+        self.assertIn("not deployed: 3 other changes", lines)  # write env, intake, gone
+        self.assertEqual(self.calls("automation"), [])
+        _, full, _, _ = self.run_deploy("--dry-run", [])
+        self.assertNotIn("partial:", full)
+        self.assertNotIn("not deployed", full)
+
+    def test_main_parses_only_and_rejects_a_missing_value(self):
+        for argv in (["--dry-run", "--only"], ["--dry-run", "--only", "--apply"], ["--dry-run", "--only", "node:"]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(air.main(argv), 2)
+                self.assertIn("--only needs a selector", err.getvalue())
+
+
 def slop_specs(edit=None):
     """(labels, label_specs) of the slop fixture's config, after `edit` changed a copy of it."""
     before = cfg.team_root()
