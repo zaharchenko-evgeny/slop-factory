@@ -564,3 +564,10 @@ class HttpErrorDetailTest(unittest.TestCase):  # #1323: the error names the fail
         self.assertIn("POST /api/issues/LME-7/comments", text)
         self.assertIn("no Create Comment", text)
         self.assertNotIn("perm-secret", text)
+
+
+class TriggerFiltersTest(unittest.TestCase):  # #1327: Air's YouTrack triggers take no custom field filter
+    def test_a_scoped_block_filters_by_project_only(self):
+        from factory_plugins.youtrack import contract
+        block = {"project": "LME", "scope": {"field": "Subsystem", "value": "Harbor"}}
+        self.assertEqual(contract.TRACKER.filters(block), {"youtrack": {"projectShortName": "LME"}})
