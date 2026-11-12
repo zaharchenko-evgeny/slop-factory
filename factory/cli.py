@@ -81,11 +81,20 @@ def gate_args(state, *more):
     return [*sel, "--spec", state["spec"], *state["tracker"], *more]
 
 
+def ticket_ref(text):
+    """`--issue`: an issue number, `owner/repo#N` (ADR-0024) or a YouTrack id `PROJECT-N` (#1319)."""
+    if text.isdigit():
+        return int(text)
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*-\d+|[\w.-]+/[\w.-]+#\d+", text):
+        return text
+    raise argparse.ArgumentTypeError(f"not an issue number, owner/repo#N or PROJECT-N: {text!r}")
+
+
 def begin(argv, team=None):
     p = argparse.ArgumentParser(prog="factory begin")
     p.add_argument("automation")
     p.add_argument("payload", nargs="?")
-    p.add_argument("--issue", type=int)
+    p.add_argument("--issue", type=ticket_ref)  # N, owner/repo#N, or a YouTrack id PROJECT-N (#1319)
     p.add_argument("--pr", type=int)
     p.add_argument("--main", action="store_true")
     p.add_argument("--tracker")  # tests: a memory tracker
