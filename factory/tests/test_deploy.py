@@ -1925,8 +1925,8 @@ class RepositoryCopiesTest(unittest.TestCase):
         self.assertEqual(dev["repository"]["fullName"], TEAM)
         ticket = [t for t in dev["triggers"] if t.get("source") == "youtrack"]
         self.assertTrue(ticket, dev["triggers"])
-        self.assertEqual({k: ticket[0]["filters"][k] for k in ("projectShortName", "Subsystem")},
-                         {"projectShortName": "LME", "Subsystem": "S3"})
+        self.assertEqual({k: v for k, v in ticket[0]["filters"].items() if k != "tagAdded"},
+                         {"projectShortName": "LME"})  # no field filter: Air never fires on one (#1327)
 
     YT = {"adapter": "youtrack", "url": "https://yt.example", "project": "LME", "scope": {"field": "Subsystem", "value": "S3"}}
     YT_ENVS = {"engine": [(SLOP, {"write": True})], "b": [(TEAM, {"write": True, "tracker": YT})], "intake": [(SLOP, {})]}

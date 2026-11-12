@@ -1135,7 +1135,7 @@ class YouTrackRepositoryScopesTest(unittest.TestCase):
             intake = plan[f"[Slop factory] intake {full.split('/')[1]}"]
             self.assertEqual(intake["repository"]["fullName"], full)
             self.assertEqual(intake["triggers"][0]["filters"],
-                             {"tagAdded": "factory:triage", "projectShortName": "LME", "Subsystem": value})
+                             {"tagAdded": "factory:triage", "projectShortName": "LME"})  # no field filter: Air ignores it (#1327)
 
     def test_the_harbor_copies_merge_and_update_on_master_with_their_own_ci(self):
         plan = self.plan()
