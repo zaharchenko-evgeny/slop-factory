@@ -9,6 +9,7 @@ and the descriptor store kinds it holds states and commands in.
 """
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -67,8 +68,16 @@ def urllib_runner(base_url, token):
         req = urllib.request.Request(base_url.rstrip("/") + path, method=method, headers={
             "Authorization": f"Bearer {token}", "Accept": "application/json", "Content-Type": "application/json"},
             data=None if body is None else json.dumps(body).encode())
-        with _OPENER.open(req, timeout=60) as r:
-            raw = r.read()
+        try:
+            with _OPENER.open(req, timeout=60) as r:
+                raw = r.read()
+        except urllib.error.HTTPError as e:  # say which request failed (#1323); still an HTTPError for the callers
+            try:
+                detail = e.read().decode("utf-8", "replace")[:300]
+            except Exception:
+                detail = ""
+            e.msg = f"{e.msg} ({method} {path.split('?')[0]}: {detail})"
+            raise
         return json.loads(raw) if raw.strip() else None
     return run
 

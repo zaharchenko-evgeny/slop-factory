@@ -546,3 +546,21 @@ class BeginEventTest(unittest.TestCase):  # #1321: `factory begin --issue LME-7`
         import gate
         with self.assertRaises(gate.MissingNumber):
             gate.from_trigger({"eventType": "issue.event", "issue": {"number": "seven"}})
+
+
+class HttpErrorDetailTest(unittest.TestCase):  # #1323: the error names the failing request, never the token
+    def test_a_403_names_the_method_path_and_body(self):
+        import io
+        import urllib.error
+        from unittest import mock
+        from factory_plugins.youtrack import store as yt_store
+        err = urllib.error.HTTPError("https://yt/api/issues/LME-7/comments?fields=id", 403, "Forbidden", {},
+                                     io.BytesIO(b'{"error":"Forbidden","error_description":"no Create Comment"}'))
+        with mock.patch.object(yt_store._OPENER, "open", side_effect=err):
+            run = yt_store.urllib_runner("https://yt", "perm-secret")
+            with self.assertRaises(urllib.error.HTTPError) as got:
+                run("POST", "/api/issues/LME-7/comments?fields=id", {"text": "x"})
+        text = str(got.exception)
+        self.assertIn("POST /api/issues/LME-7/comments", text)
+        self.assertIn("no Create Comment", text)
+        self.assertNotIn("perm-secret", text)
