@@ -2002,3 +2002,17 @@ class RepositoryCopiesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectCheckoutBootstrapTest(unittest.TestCase):  # #1315: Air runs only the main checkout's startup script
+    CONFIG = {"repositories": [{"role": "primary", "url": "https://github.com/o/team"},
+                               {"role": "project", "url": "https://github.com/o/app"}],
+              "team_repository": "https://github.com/o/team"}
+
+    def test_a_project_automation_installs_the_engine_from_the_team_checkout(self):
+        text = deploy.checkout_instructions({"fullName": "o/app"}, self.CONFIG)
+        self.assertIn("`cd /workspaces/team && sh .air/cloud/startup.sh`", text)
+        self.assertLess(text.index("startup.sh"), text.index("cd /workspaces/app"))
+
+    def test_the_team_automation_needs_no_bootstrap(self):
+        self.assertNotIn("startup.sh", deploy.checkout_instructions({"fullName": "o/team"}, self.CONFIG))

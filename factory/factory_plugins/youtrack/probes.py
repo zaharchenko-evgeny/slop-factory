@@ -45,7 +45,13 @@ def youtrack_probes(settings, tiers, environ=os.environ, yt_run=None):
         project = next((p for p in projects if p["shortName"] == t["project"]), None)
         results.append({"probe": f"youtrack:project:{t['project']}", "result": "ok" if project else "missing", "detail": ""})
         tags, fields = wanted(settings, tiers)
-        have = {x["name"] for x in yt_run("GET", f"/api/tags?fields=name&{TOP}")}
+        have, skip = set(), 0
+        while True:  # a large instance has many more tags than one page (as list_tags, #1307)
+            page = yt_run("GET", f"/api/tags?fields=name&{TOP}&$skip={skip}") or []
+            have |= {x["name"] for x in page}
+            if len(page) < 1000:
+                break
+            skip += len(page)
         results += [{"probe": f"youtrack:tag:{x}", "result": "ok" if x in have else "missing", "detail": ""} for x in tags]
         values = {}
         if project and fields:
