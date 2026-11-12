@@ -223,6 +223,11 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
         return (f"## Working directory\n\nRun every command from `/workspaces/{tracker.rsplit('/', 1)[-1]}`: "
                 "GitHub access there reaches the tracker. This automation's own checkout is the team repository.\n\n")
     project = main_repository["fullName"].rsplit("/", 1)[-1]
+    home = repository(team)["fullName"].rsplit("/", 1)[-1]
+    # Air runs only the main checkout's .air/cloud/startup.sh: the team's (engine, `factory setup`) runs here (#1315)
+    boot = (f"First, when `factory` is not on PATH, run `cd /workspaces/{home} && sh .air/cloud/startup.sh` once: "
+            "Air ran only this project's startup script. Put `$HOME/.local/bin` on PATH in every command "
+            "(`export PATH=\"$HOME/.local/bin:$PATH\"`).\n\n")
     others = ", ".join(f"`/workspaces/{repository(r)['fullName'].rsplit('/', 1)[-1]}`"
                        for r in other_projects(main_repository, team, config))
     if team_is_project(team, config):
@@ -231,7 +236,7 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
                 "The factory reads its roles and skills from `$HOME/factory-team`, never from that checkout.\n\n")
     else:
         tail = "The factory repository is checked out beside it and is read-only.\n\n"
-    return (f"## Project checkout\n\nBefore running project commands, `cd /workspaces/{project}`. "
+    return (f"## Project checkout\n\n{boot}Before running project commands, `cd /workspaces/{project}`. "
             + (f"The other project repositories are checked out beside it: {others}. " if others else "")
             + tail)
 
