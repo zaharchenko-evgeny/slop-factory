@@ -2038,6 +2038,20 @@ class RequiredChecksTest(unittest.TestCase):
             M_GH.head_checks(run, "o/r", "s")
 
 
+    def test_a_check_runs_403_counts_no_runs_when_checks_are_named(self):  # #1332
+        def run(args, statuses={"tc": "success"}):
+            path = next(x for x in args if x.startswith("repos/"))
+            if "/check-runs" in path:
+                raise RuntimeError("gh api repos/o/r/commits/s/check-runs: HTTP 403: Resource not accessible by integration")
+            if "/actions/runs" in path:
+                raise AssertionError("no service-workflow read without check runs")
+            return json.dumps({"statuses": [{"context": k, "state": v, "updated_at": "T"} for k, v in statuses.items()]})
+        self.assertEqual(M_GH.head_ci(M_GH.head_checks(run, "o/r", "s", ["tc"]))[0], "green")
+        self.assertEqual(M_GH.head_ci(M_GH.head_checks(lambda a: run(a, {}), "o/r", "s", ["tc"]))[0], "pending")
+        with self.assertRaises(RuntimeError):  # unnamed CI is never guessed
+            M_GH.head_checks(lambda a: "[]" if "/rules/" in a[1] else run(a), "o/r", "s")
+
+
 class CiSyncCodeHostTest(unittest.TestCase):
     """GitHubCodeHost's reads and writes for gate.ci_sync, on a recorded `gh`."""
 
