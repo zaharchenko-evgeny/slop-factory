@@ -1238,16 +1238,20 @@ def ticket_places(defn, tracker):
     `tracker.repository` first; every repository whose tracker has no home (YouTrack) is a `ticket_places` entry the
     gate routes to by id and scope, its PRs on its own vcs."""
     homes, places = [], []
+    # #1325: the GitHub Issues homes share the top tracker only when it is GitHub Issues too; under another top tracker
+    # (YouTrack) each home is a place of its own, or its issues get the top tracker's adapter and fall out of scope
+    shared = scopes.adapter(tracker) == "github-issues"
     for env in (defn["factory"].get("environments") or {}):
         repos = repositories(defn, env)
         for r in repos:
             c = contract(defn, "tracker", r["tracker"]) if r["tracker"] else None
             if c is None:
                 continue
-            if home := c.home(r["tracker"], r["repo"]):
+            if (home := c.home(r["tracker"], r["repo"])) and shared:
                 homes.append(next((x["repo"] for x in repos if x["repo"].lower() == home), home))
             elif r["repo"] not in {p["repository"] for p in places}:
-                places.append({"repository": r["repo"], "tracker": r["tracker"], "vcs": r["vcs"],
+                block = {**r["tracker"], "repository": r["repo"]} if home else r["tracker"]  # #1325: its own issues
+                places.append({"repository": r["repo"], "tracker": block, "vcs": r["vcs"],
                                "repositories": [r["repo"], *(x["repo"] for x in repos if x["repo"] != r["repo"])]})
     top = next((h for h in homes if h.lower() == full_name(tracker.get("repository") or "").lower()), None)
     ordered = list(dict.fromkeys([*([top] if top else []), *homes]))
