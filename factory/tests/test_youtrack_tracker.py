@@ -533,3 +533,16 @@ class ListTagsPagingTest(unittest.TestCase):  # list_tags pages past the first 1
         store = yt.YouTrackTicketStore(run)
         self.assertEqual(store.list_tags()["risk:low"], "id-risk:low")
         self.assertEqual(len(store.list_tags()), 2501)
+
+
+class BeginEventTest(unittest.TestCase):  # #1321: `factory begin --issue LME-7` writes the id as the number
+    def test_a_youtrack_ticket_id_is_the_ticket(self):
+        import gate
+        for extra in ({}, {"repository": {"full_name": "o/app"}}):
+            got = gate.from_trigger({"eventType": "issue.event", "issue": {"number": "LME-7"}, **extra})
+            self.assertEqual(got["ticket"], "LME-7")
+
+    def test_other_text_is_still_refused(self):
+        import gate
+        with self.assertRaises(gate.MissingNumber):
+            gate.from_trigger({"eventType": "issue.event", "issue": {"number": "seven"}})
