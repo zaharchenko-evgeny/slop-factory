@@ -655,6 +655,97 @@ class ApplyTest(unittest.TestCase):
         (self.tmp / "server.py").write_text(FAKE_SERVER.replace('{**i, **{k: v for k, v in a.items() if k != key}}', '{**i}'))
         self.assertEqual(self.run_deploy("--apply"), 1)
 
+    ONLY_ENVS = [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"},
+                 {"id": "e2", "name": "[F] write", "startup": "x", "repository": "https://github.com/o/r"}]
+
+    def seed_only(self, extra=()):
+        """Two nodes in two environments, every automation out of date, plus `extra` existing items."""
+        declared = [{"name": "TOKEN", "secret": False, "required": True, "description": ""}]
+        self.plan = {"prefix": "[F] ", "automation_nodes": {"[F] notify a": "notify", "[F] notify b": "notify", "[F] other": "other"},
+                     "environments": [{"name": "[F] read", "startup": "x", "repository": "https://github.com/o/r", "declared": declared},
+                                      {"name": "[F] write", "startup": "x", "repository": "https://github.com/o/r", "declared": declared}],
+                     "automations": [{"name": "[F] notify a", "prompt": "new", "environmentConfigId": "[F] read"},
+                                     {"name": "[F] notify b", "prompt": "new", "environmentConfigId": "[F] write"},
+                                     {"name": "[F] other", "prompt": "new", "environmentConfigId": "[F] read"}]}
+        old = [{"id": f"a{i}", "name": n, "prompt": "old", "environmentConfigId": e}
+               for i, (n, e) in enumerate([("[F] notify a", "e1"), ("[F] notify b", "e2"), ("[F] other", "e1")])]
+        self.seed(old + list(extra), self.ONLY_ENVS)
+
+    def run_only(self, only, mode="--apply", allow_delete=False):
+        servers = [air.Mcp(f"{sys.executable} {self.tmp / 'server.py'} {self.state[k]} {k}") for k in self.state]
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = air.deploy(mode, allow_delete, self.plan, *servers, only=only)
+        finally:
+            for s in servers:
+                s.close()
+        return code, out.getvalue(), err.getvalue()
+
+    def updated(self):
+        return sorted(a["automationId"] for t, a in self.calls("automation") if t == "update_automation")
+
+    def test_only_node_applies_that_nodes_automations_and_leaves_the_rest(self):
+        self.seed_only()
+        code, out, _ = self.run_only(["node:notify"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.updated(), ["a0", "a1"])  # `other` stays unapplied
+        self.assertIn("partial: node:notify", out)
+        self.assertIn("not deployed: 1 other changes", out)
+
+    def test_only_selectors_table(self):
+        for only, want in ((["node:other"], ["a2"]), (["env:read"], ["a0", "a2"]), (["env:write"], ["a1"]),
+                           (["[[]F] notify *"], ["a0", "a1"]), (["notify a"], ["a0"]), (["node:other", "notify b"], ["a1", "a2"])):
+            with self.subTest(only=only):
+                self.seed_only()
+                code, _, _ = self.run_only(only)
+                self.assertEqual(code, 0)
+                self.assertEqual(self.updated(), want)
+
+    def test_only_env_limits_environments_and_variables_to_that_environment(self):
+        self.seed_only()
+        code, out, _ = self.run_only(["env:read"])
+        self.assertEqual(code, 0)
+        self.assertIn("create variable TOKEN (unset) in read", out)
+        self.assertNotIn("in write", out)
+        edits = [a for t, a in self.calls("environment") if t == "edit_environment"]
+        self.assertEqual([a["id"] for a in edits], ["e1"])
+
+    def test_only_unmatched_selector_exits_2_and_writes_nothing(self):
+        for only in (["node:nope"], ["env:nope"], ["nope *"], ["node:notify", "nope *"]):
+            with self.subTest(only=only):
+                self.seed_only()
+                code, _, err = self.run_only(only)
+                self.assertEqual(code, 2)
+                self.assertIn(f"--only {only[-1]} matches nothing", err)
+                self.assertEqual(self.calls("automation") + self.calls("environment"), [])
+
+    def test_only_delete_needs_allow_delete_and_unmatched_delete_is_ignored(self):
+        gone = [{"id": "x1", "name": "[F] gone", "prompt": "p", "environmentConfigId": "e1"}]
+        self.seed_only(gone)
+        _, out, _ = self.run_only(["gone"], mode="--dry-run")
+        self.assertIn("delete automation [F] gone", out)
+        code, _, err = self.run_only(["gone"])
+        self.assertEqual((code, self.calls("automation")), (1, []))
+        self.assertIn("rerun with --allow-delete", err)
+        code, _, _ = self.run_only(["gone"], allow_delete=True)
+        self.assertEqual(code, 0)
+        self.assertEqual([t for t, _ in self.calls("automation")], ["delete_automation"])
+        self.seed_only(gone)  # a delete no selector names is neither refused nor applied
+        code, out, _ = self.run_only(["node:notify"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("delete", out)
+        self.assertNotIn("delete_automation", [t for t, _ in self.calls("automation")])
+
+    def test_only_verify_reports_only_matched_items(self):
+        self.seed_only()
+        # the server drops every update: the matched item still differs, the unmatched ones are not reported
+        (self.tmp / "server.py").write_text(FAKE_SERVER.replace('{**i, **{k: v for k, v in a.items() if k != key}}', '{**i}'))
+        code, _, err = self.run_only(["node:other"])
+        self.assertEqual(code, 1)
+        self.assertIn("verify failed: update automation [F] other still differs", err)
+        self.assertNotIn("notify", err)
+
     def test_main_apply_writes_no_tickets(self):
         plan = {"prefix": "[F] ", "environments": [], "automations": []}
         servers = [mock.Mock(), mock.Mock()]
@@ -1577,6 +1668,20 @@ class LabelsTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("refused: would remove label factory:old in o/tracker", err)
         self.assertEqual(writes, [("edit", r, n) for r in ("o/tracker", "o/code") for n in ("complexity:medium", "risk:low")])
+
+    def test_apply_with_only_creates_and_updates_labels_but_never_removes(self):
+        have = {**self.HAVE, "risk:low": ("ff0000", "")}
+        run = fake_labels({"o/tracker": have, "o/code": have})
+        plan = {**self.PLAN, "prefix": "p ", "environments": [], "automations": [{"name": "p a"}]}
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(air, "read_state", return_value=([{"name": "p a", "webhooks": []}], [])), \
+                mock.patch("factory_plugins.github.tracker.gh", run):
+            for mode in ("--dry-run", "--apply"):
+                self.assertEqual(air.deploy(mode, False, plan, None, None, only=["a"]), 0)
+        self.assertNotIn("remove label", out.getvalue())
+        self.assertNotIn("refused", err.getvalue())
+        self.assertEqual({w[0] for w in run.writes}, {"edit"})  # updated, none deleted
 
     def test_apply_with_allow_delete_removes_owned_labels_only(self):
         code, _, _, writes = self.run_deploy("--apply", True, self.HAVE)

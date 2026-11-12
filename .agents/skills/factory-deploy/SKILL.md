@@ -33,6 +33,8 @@ applies the plan and changes no code.
 3. Apply after the user approves the dry run: `factory --team <team-repo> deploy --apply` (add `--allow-delete` only when the dry run lists deletes the user approved). It writes environments before automations on create and update, updates in place with `name`, then re-lists and fails if anything still differs. Deploy writes only to Air and the rendered workflow files: it never creates, edits, labels or closes a tracker ticket. After a verified apply, close the open `Deploy needed` issue yourself. To rename an automation or environment, pass `--rename 'OLD NAME=NEW NAME'` (repeatable) to both the dry run and the apply: the item keeps its id instead of becoming a create plus a delete.
 4. Create missing labels from the plan's `labels[]` (`gh label create <name>`); a missing label fails every handoff that adds it.
 5. Run `factory --team <team-repo> deploy --dry-run` again: it must print `unchanged`.
+
+Partial deploy: for a change limited to one node or environment, pass `--only <selector>` (repeatable) to both the dry run and the apply. A selector is `node:<node>`, `env:<environment>` or a name glob such as `'[Proj] notify *'`. Only matching create, update and delete entries are written and verified; labels and tracker tags are never removed; a selector that matches nothing exits 2. Afterwards run a full `--dry-run` to see what is still undeployed.
 6. Run each `[Slop factory] doctor*` automation once (air-automations MCP) and report its probe lines. A failed probe has opened or updated its `Doctor: <probe> fails` ticket.
 
 For a YouTrack tracker with the comments plugin on, the dry run also lists the comment-wake workflow upload. Apply runs the supported
