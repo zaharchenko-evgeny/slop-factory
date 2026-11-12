@@ -2016,3 +2016,18 @@ class ProjectCheckoutBootstrapTest(unittest.TestCase):  # #1315: Air runs only t
 
     def test_the_team_automation_needs_no_bootstrap(self):
         self.assertNotIn("startup.sh", deploy.checkout_instructions({"fullName": "o/team"}, self.CONFIG))
+
+
+class TicketArgTest(unittest.TestCase):  # #1317: a YouTrack gate owns only <project>-<n> ids
+    CONFIG = {"tracker": {"adapter": "youtrack", "project": "LME"},
+              "repositories": [{"role": "primary", "url": "https://github.com/o/app"}]}
+
+    def test_a_youtrack_repository_asks_for_the_ticket_id(self):
+        got = deploy.ticket_arg("--issue <the issue number>", {"fullName": "o/app"}, self.CONFIG)
+        self.assertEqual(got, "--issue <the YouTrack ticket id, such as LME-123, never the number alone>")
+
+    def test_a_github_repository_keeps_the_number(self):
+        self.assertEqual(deploy.ticket_arg("--issue <the issue number>", {"fullName": "o/other"}, self.CONFIG),
+                         "--issue <the issue number>")
+        self.assertEqual(deploy.ticket_arg("--pr <the pull request number>", {"fullName": "o/app"}, self.CONFIG),
+                         "--pr <the pull request number>")

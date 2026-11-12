@@ -289,6 +289,15 @@ def begin_arg(node: str, n: dict) -> str:
     return "--issue <the issue number>"
 
 
+def ticket_arg(arg: str, main_repository: dict | None, config: dict) -> str:
+    """`arg` with the YouTrack ticket id instead of the issue number when the main repository's tickets live in
+    YouTrack: its gate owns only `<project>-<n>` ids (#1317)."""
+    if not main_repository or main_repository["fullName"].lower() not in youtrack_repositories(config):
+        return arg
+    project = (config.get("tracker") or {}).get("project") or "ABC"
+    return arg.replace("--issue <the issue number>", f"--issue <the YouTrack ticket id, such as {project}-123, never the number alone>")
+
+
 def mcp_connectors(n: dict, config: dict, focus: str | None) -> list[str]:
     """The Air MCP connectors of an automation: its node's list, else its mode's, else its role's, else none."""
     role = (config["roles"].get(n["role"]) or {}) if isinstance(config["roles"], dict) else {}
@@ -311,7 +320,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
         agent = (defn["factory"].get("agents") or {}).get(((defn["workflow"].get("nodes") or {}).get(name) or {}).get("agent")) or {}
         if agent.get("run"):  # ADR-0021: a step with no judgement: the agent only runs the engine command
             prefix = node_repository_prefix(main_repository, config)
-            return (f"{who}\n\n{checkout}Run `{prefix}factory {agent['run']} --node {name} {begin_arg(name, n)}` once, in the "
+            return (f"{who}\n\n{checkout}Run `{prefix}factory {agent['run']} --node {name} {ticket_arg(begin_arg(name, n), main_repository, config)}` once, in the "
                     "foreground, and wait until it exits. Copy only that one number. It applies "
                     "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
                     "Report its JSON output." + INSTALLED_FACTORY)
@@ -323,7 +332,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
         text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
         skills = skill_lines(role)
     mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
-    arg = begin_arg(name, n)
+    arg = ticket_arg(begin_arg(name, n), main_repository, config)
     arg = f" {arg}" if arg else ""
     command_prefix = node_repository_prefix(main_repository, config)
     return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skills}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
