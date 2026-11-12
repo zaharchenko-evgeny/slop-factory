@@ -244,7 +244,7 @@ class DoctorTest(unittest.TestCase):
             {"name": "TEAMCITY_TOKEN", "secret": True, "required": True, "description": ""},
             {"name": "FILLED", "secret": True, "required": True, "description": ""},
             {"name": "OPTIONAL", "secret": False, "required": False, "description": ""}]}
-        environ = {"TEAMCITY_URL": "", "FILLED": "s3cret-value", "OPTIONAL": ""}
+        environ = {"TEAMCITY_URL": "unset", "FILLED": "s3cret-value", "OPTIONAL": ""}  # `unset`: deploy's placeholder (#1310)
         results = doctor.run_probes(REPO, "write", data, FakeGh(), "risk:low", environ=environ)
         got = {r["probe"]: r for r in results}
         self.assertEqual([got[f"env:{n}"]["result"] for n in ("TEAMCITY_URL", "TEAMCITY_TOKEN", "FILLED")],
