@@ -1990,6 +1990,18 @@ class RepositoryCopiesTest(unittest.TestCase):
         self.assertLessEqual(set(plan["tags"]), set(plan["label_plan"][SLOP]))  # the github-issues repository keeps all
         self.assertLessEqual(pr_side, set(plan["label_plan"][SLOP]))
 
+    def test_github_issues_home_under_a_youtrack_top_tracker_keeps_its_labels(self):
+        """#1325: offline-eval-factory (LME on top, its own GitHub issues) is a ticket place of its own; deploy must still
+        give it the stage labels, or the reconcile removes every `factory:` label from it."""
+        def edit(f):
+            f["tracker"] = {"adapter": "youtrack", "url": "https://yt.example", "project": "LME", "label_prefix": "factory:"}
+            for spec in f["environments"].values():
+                for r in spec["repositories"]:
+                    if r["repo"] == TEAM:  # its issues are the team environment's; elsewhere context only
+                        r["tracker"] = {"adapter": "github-issues"} if r.get("write") else "none"
+        plan = definition_plan(edit_factory=edit)
+        self.assertLessEqual({"factory:triage", "factory:ready", "risk:low"}, set(plan["label_plan"][TEAM]))
+
     def test_top_level_youtrack_tracker_keeps_only_pr_labels_on_github(self):
         def edit(f):
             f["tracker"] = {"adapter": "youtrack", "url": "https://yt.example", "project": "LME", "label_prefix": "factory:"}
