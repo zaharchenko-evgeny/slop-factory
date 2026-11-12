@@ -444,11 +444,20 @@ def label_specs(nodes: dict, config: dict) -> dict:
     return out
 
 
+def github_homes(config: dict) -> list[str]:
+    """The repositories that hold tickets on their own GitHub issues: the top tracker's `repositories`, then each
+    GitHub Issues `ticket_places` entry (#1325: a home under a YouTrack top tracker is a place of its own)."""
+    t = config.get("tracker") or {}
+    places = [p["repository"] for p in config.get("ticket_places") or []
+              if scopes_mod.adapter(p.get("tracker") or {}) == "github-issues"]
+    return list(dict.fromkeys([*(definition.full_name(r) for r in t.get("repositories") or []), *places]))
+
+
 def youtrack_repositories(config: dict) -> set[str]:
     """The lowercase full names of the repositories whose tickets live in YouTrack: every repository with a YouTrack
     top-level tracker except the GitHub homes (`tracker.repositories`), and each `ticket_places` entry with a YouTrack tracker."""
     t = config.get("tracker") or {}
-    homes = {definition.full_name(r).lower() for r in t.get("repositories") or []}
+    homes = {r.lower() for r in github_homes(config)}
     out = {definition.full_name(p["repository"]).lower() for p in config.get("ticket_places") or []
            if scopes_mod.adapter(scopes_mod.merged(config, p.get("tracker") or {})) == "youtrack"}
     if t.get("adapter") == "youtrack":
@@ -477,7 +486,7 @@ def label_plan(nodes: dict, config: dict, tickets=()) -> dict[str, list[str]]:
     also gets the map label. A project repository that holds no tickets maps to `[]`, so `reconcile_labels` removes
     the factory-owned labels it still has."""
     t = config.get("tracker") or {}
-    tickets = list(dict.fromkeys([*(definition.full_name(r) for r in t.get("repositories") or []), *tickets]))
+    tickets = list(dict.fromkeys([*github_homes(config), *tickets]))
     common = sorted({*tracker_schema(nodes, config).labels,
                      *(x for x in (t.get("hold_label"), t.get("review_trigger")) if x)})
     yt, pr_side = youtrack_repositories(config), pr_side_labels(config)
