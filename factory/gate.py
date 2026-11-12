@@ -177,7 +177,9 @@ def from_trigger(d, code_host=None):
     is_pr = isinstance(pr, dict) or pr_comment or str(event_name or "").startswith("pull_request")
     src = pr or issue or d
     number = src.get("number") if isinstance(src, dict) else None
-    if not isinstance(number, int) or number < 1:
+    # a YouTrack ticket id (PROJECT-N) is the ticket itself: `factory begin --issue LME-7` (#1321)
+    tracker_id = not is_pr and isinstance(number, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*-\d+", number)
+    if not tracker_id and (not isinstance(number, int) or number < 1):
         raise MissingNumber("payload has no issue or PR number")
     name = "pull_request_review" if review and is_pr else "issue_comment" if pr_comment \
         else "pull_request" if is_pr else "issues"  # a comment on a PR arrives as an issue event of its number
@@ -190,7 +192,7 @@ def from_trigger(d, code_host=None):
     else:
         repository = (d.get("repository") or {}).get("full_name") if isinstance(d.get("repository"), dict) else None
         ref = getattr(code_host, "ticket_ref", None)  # ADR-0024: an issue of another ticket repository
-        ticket = ref(repository, number) if repository and callable(ref) else number
+        ticket = number if tracker_id else ref(repository, number) if repository and callable(ref) else number
     action = d.get("action") or "event"
     return {"id": f"{name}:{ticket}:{action}", "ticket": ticket, "event_name": name, "action": action}
 
