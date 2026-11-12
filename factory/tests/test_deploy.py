@@ -586,6 +586,51 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("webhook [F] hook: trigger t1 https://air/hook/t1", out.getvalue())
 
+    def capped_servers(self, listed: int):
+        """Fake air-automations whose list_automations stops at `listed` entries, and a cloud with no environments."""
+        class Automations:
+            def __init__(self):
+                self.calls = []
+
+            def call(self, tool, args):
+                self.calls.append(tool)
+                if tool == "list_automations":
+                    return {"personal": [{"automationId": f"id{i}", "name": f"[F] other {i}"} for i in range(listed)],
+                            "project": []}
+                return {"automationId": args["automationId"], "name": "[F] " + args["automationId"], "triggers": []}
+
+        class Cloud:
+            def call(self, tool, args):
+                return []
+
+        return Automations(), Cloud()
+
+    def test_capped_list_plans_unknown_not_create_or_delete(self):
+        """#1338: the 100th entry means the list may be cut; a planned automation past it is not `create`."""
+        plan = {"prefix": "[F] ", "environments": [], "automations": [{"name": "[F] past the cap"}]}
+        automations, cloud = self.capped_servers(air.LIST_CAP)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(air.deploy("--dry-run", True, plan, automations, cloud), 0)
+        self.assertIn("unknown automation [F] past the cap (list capped at 100)", out.getvalue())
+        self.assertNotIn("create automation", out.getvalue())
+        self.assertNotIn("delete ", out.getvalue())  # the 100 listed, unplanned automations are not deleted
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            self.assertEqual(air.deploy("--apply", True, plan, automations, cloud), 1)
+        self.assertIn("at most 100", err.getvalue())
+        self.assertIn("[F] past the cap", err.getvalue())
+        self.assertNotIn("create_automation", automations.calls)
+        self.assertNotIn("delete_automation", automations.calls)
+
+    def test_uncapped_list_still_plans_create_and_delete(self):
+        plan = {"prefix": "[F] ", "environments": [], "automations": [{"name": "[F] new"}]}
+        automations, cloud = self.capped_servers(air.LIST_CAP - 1)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            air.deploy("--dry-run", True, plan, automations, cloud)
+        self.assertIn("create automation [F] new", out.getvalue())
+        self.assertIn("delete automation [F] id0", out.getvalue())
+
     def test_apply_creates_environment_with_air_arguments(self):
         self.plan["environments"][0].update({"repository": "https://github.com/o/r", "variables": {"FACTORY_ENV": "read"},
                                             "domains": ["pypi.org"]})

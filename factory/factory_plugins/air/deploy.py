@@ -384,9 +384,19 @@ def environment_detail(x: dict) -> dict:
     return x
 
 
-def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
+LIST_CAP = 100  # list_automations returns at most this many personal automations, with no paging (#1338)
+
+
+class Listed(list):
+    """The personal automations read from Air; `capped` when the list has `LIST_CAP` entries, so it may miss some."""
+    capped = False
+
+
+def diff(plan: dict, automations: list[dict], envs: list[dict], capped: bool = False) -> list[tuple]:
     """(action, kind, name, planned item, existing item, changed fields) per create, update, delete; by name, prefix only.
-    `plan["renames"]` ({old name: new name}) matches an existing item under its old name, so the update keeps its id."""
+    `plan["renames"]` ({old name: new name}) matches an existing item under its old name, so the update keeps its id.
+    `capped` (the automation list may be incomplete, #1338): a planned automation not found is `unknown`, not `create`,
+    and nothing is deleted."""
     new_to_old = {new: old for old, new in (plan.get("renames") or {}).items()}
     env_ids = {e["name"]: e.get("id") for e in envs}
     # Air cannot move an environment to another repository: it is replaced, and its automations follow the new one.
@@ -404,9 +414,12 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
                        and not same(k, x.get(k), want[k])]
             if kind == "environment" and p["name"] in replaced:
                 out.append(("replace", kind, p["name"], p, x, ["repository"]))
+            elif x is None and capped and kind == "automation":
+                out.append(("unknown", kind, p["name"], p, x, []))
             elif x is None or changed:
                 out.append(("create" if x is None else "update", kind, p["name"], p, x, changed))
-        out += [("delete", kind, n, None, x, []) for n, x in have.items()]
+        if not capped:
+            out += [("delete", kind, n, None, x, []) for n, x in have.items()]
     return out
 
 
@@ -452,8 +465,10 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, bac
                additional_names=()) -> tuple[list[dict], list[dict]]:
     listed = automations.call("list_automations", {"privacy": "private"})
     automation_items = listed if isinstance(listed, list) else listed["personal"]
-    automation_items = [automation_detail(automations.call("get_automation", {"automationId": x["automationId"]}))
-                        for x in automation_items if x["name"].startswith(prefix)]
+    capped = len(automation_items) >= LIST_CAP
+    automation_items = Listed(automation_detail(automations.call("get_automation", {"automationId": x["automationId"]}))
+                              for x in automation_items if x["name"].startswith(prefix))
+    automation_items.capped = capped
     if backend:
         for item in automation_items:
             if item["name"] in additional_names:
@@ -589,11 +604,24 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     backend = backend or (Backend() if additional_names else None)
     state = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                        additional_names=additional_names)
-    changes = diff(plan, *state)
+    capped = getattr(state[0], "capped", False)
+    changes = diff(plan, *state, capped)
     for action, kind, name, _, _, changed in changes:
-        print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
+        if action == "unknown":
+            print(f"unknown {kind} {name} (list capped at {LIST_CAP})")
+        else:
+            print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
     if not changes:
         print("unchanged")
+    if capped and not any(c[0] == "unknown" for c in changes):
+        print(f"warning: Air listed {LIST_CAP} personal automations (its cap): none is deleted from an incomplete list",
+              file=sys.stderr)
+    unknown = [c[2] for c in changes if c[0] == "unknown"]
+    if unknown and mode == "--apply":
+        print(f"refused: Air lists at most {LIST_CAP} personal automations and listed {LIST_CAP}, so these planned "
+              f"automations could not be told from missing ones: {', '.join(unknown)}. Delete or move other personal "
+              f"automations in Air to get the list under {LIST_CAP}, then rerun.", file=sys.stderr)
+        return 1
     for line in missing_secrets(plan, state[1]):
         print(line)
     for line in extra_variables(plan, state[1]):
@@ -636,7 +664,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                            additional_names=additional_names)
         state = after
-        left = [c for c in diff(plan, *after) if not (c[0] == "delete" and c[1] == "environment")]
+        left = [c for c in diff(plan, *after, getattr(after[0], "capped", False)) if not (c[0] == "delete" and c[1] == "environment")]
         for action, kind, name, *_ in left:
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:
