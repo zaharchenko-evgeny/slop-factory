@@ -225,7 +225,8 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
     project = main_repository["fullName"].rsplit("/", 1)[-1]
     home = repository(team)["fullName"].rsplit("/", 1)[-1]
     # Air runs only the main checkout's .air/cloud/startup.sh: the team's (engine, `factory setup`) runs here (#1315)
-    boot = (f"First, when `factory` is not on PATH, run `cd /workspaces/{home} && sh .air/cloud/startup.sh` once: "
+    boot = (f"First, when `factory` is not on PATH or `$HOME/factory-team` is missing, run "
+            f"`cd /workspaces/{home} && sh .air/cloud/startup.sh` once: "
             "Air ran only this project's startup script. Put `$HOME/.local/bin` on PATH in every command "
             "(`export PATH=\"$HOME/.local/bin:$PATH\"`).\n\n")
     others = ", ".join(f"`/workspaces/{repository(r)['fullName'].rsplit('/', 1)[-1]}`"

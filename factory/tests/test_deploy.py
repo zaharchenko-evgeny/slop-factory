@@ -2012,6 +2012,7 @@ class ProjectCheckoutBootstrapTest(unittest.TestCase):  # #1315: Air runs only t
     def test_a_project_automation_installs_the_engine_from_the_team_checkout(self):
         text = deploy.checkout_instructions({"fullName": "o/app"}, self.CONFIG)
         self.assertIn("`cd /workspaces/team && sh .air/cloud/startup.sh`", text)
+        self.assertIn("when `factory` is not on PATH or `$HOME/factory-team` is missing", text)
         self.assertLess(text.index("startup.sh"), text.index("cd /workspaces/app"))
 
     def test_the_team_automation_needs_no_bootstrap(self):
