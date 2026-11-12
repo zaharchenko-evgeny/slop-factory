@@ -306,6 +306,18 @@ def place_systems(config, key, **runners):
     return beside(tracker, vcs_cls.from_config(descriptor=c, **({"run": tracker.run} if hasattr(tracker, "run") else {})))
 
 
+def run_place(config, env, keys):
+    """The ticket place the run's environment `env` owns: its writable repository's, when that is one of `keys`
+    (#1330). An environment that writes nothing (intake) owns no place and sees every place's tickets."""
+    writable = ((config.get("environments") or {}).get(env) or {}).get("writable") or []
+    full = {r.get("name"): "/".join(r["url"].rstrip("/").split("/")[-2:]) for r in config.get("repositories") or []}
+    for name in writable:
+        key = f"place:{full.get(name, name)}"
+        if key in keys:
+            return key
+    return None
+
+
 def systems(config):
     """The (tracker, vcs) of `config`, from the plugins that provide them; the vcs is the run's environment's
     (FACTORY_ENV: its own `vcs:` over the top-level one, #1070). With environments that have their own trackers
@@ -313,7 +325,8 @@ def systems(config):
     first."""
     env = os.environ.get("FACTORY_ENV")
     if config.get("ticket_places"):  # ADR-0027: the GitHub tickets on one tracker, each other place on its own
-        scoped = scopes.ScopedTracker(config, place_systems, None, *place_keys(config))
+        envs, repos = place_keys(config)
+        scoped = scopes.ScopedTracker(config, place_systems, run_place(config, env, envs), envs, repos)
         return scoped, scoped
     if scopes.project_envs(config):
         scoped = scopes.ScopedTracker(config, env_systems, env)

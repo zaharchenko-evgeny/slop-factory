@@ -367,3 +367,16 @@ class ValidationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunPlaceTest(unittest.TestCase):  # #1330: a copy acts only on its own place's tickets
+    CONFIG = {"repositories": [{"name": "a", "url": "https://github.com/o/a"}, {"name": "b", "url": "https://github.com/o/b"}],
+              "environments": {"b-env": {"writable": ["b"]}, "intake": {"writable": []}}}
+    KEYS = {"place:o/a": {}, "place:o/b": {}}
+
+    def test_an_environment_owns_its_writable_repositorys_place(self):
+        self.assertEqual(gate.run_place(self.CONFIG, "b-env", self.KEYS), "place:o/b")
+
+    def test_an_environment_that_writes_nothing_sees_every_place(self):
+        self.assertIsNone(gate.run_place(self.CONFIG, "intake", self.KEYS))
+        self.assertIsNone(gate.run_place(self.CONFIG, None, self.KEYS))
