@@ -225,10 +225,10 @@ class ApplyTest(unittest.TestCase):
         for k, items in (("automation", automations), ("environment", envs)):
             self.state[k].write_text(json.dumps({"items": items, "calls": []}))
 
-    def run_deploy(self, mode, allow_delete=False, backend=None):
+    def run_deploy(self, mode, allow_delete=False, backend=None, **kw):
         servers = [air.Mcp(f"{sys.executable} {self.tmp / 'server.py'} {self.state[k]} {k}") for k in self.state]
         try:
-            return air.deploy(mode, allow_delete, self.plan, *servers, backend=backend)
+            return air.deploy(mode, allow_delete, self.plan, *servers, backend=backend, **kw)
         finally:
             for s in servers:
                 s.close()
@@ -631,6 +631,88 @@ class ApplyTest(unittest.TestCase):
         self.assertIn("create automation [F] new", out.getvalue())
         self.assertIn("delete automation [F] id0", out.getvalue())
 
+    def recorded_servers(self, listed: int, by_id: dict):
+        """Capped_servers, where get_automation also answers `by_id` ({id: automation}) and fails for any other unknown id."""
+        automations, cloud = self.capped_servers(listed)
+        plain = automations.call
+
+        def call(tool, args):
+            if tool == "get_automation" and not args["automationId"].startswith("id"):
+                automations.calls.append(tool)
+                if args["automationId"] not in by_id:
+                    raise RuntimeError("get_automation: automation not found")
+                return {"automationId": args["automationId"], "triggers": [], **by_id[args["automationId"]]}
+            return plain(tool, args)
+
+        automations.call = call
+        return automations, cloud
+
+    PAST = {"prefix": "[F] ", "environments": [], "automations": [{"name": "[F] past the cap", "prompt": "new"}]}
+
+    def test_recorded_id_finds_automation_past_the_cap(self):
+        """#1338: a capped list plus a recorded id is `update`, not `unknown`; nothing is deleted from the capped list."""
+        automations, cloud = self.recorded_servers(air.LIST_CAP, {"p1": {"name": "[F] past the cap", "prompt": "old"}})
+        ids = self.tmp / "air-ids.json"
+        ids.write_text(json.dumps({"automations": {"[F] past the cap": "p1"}}))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(air.deploy("--dry-run", True, self.PAST, automations, cloud, ids_path=ids), 0)
+        self.assertIn("update automation [F] past the cap (prompt)", out.getvalue())
+        self.assertNotIn("unknown", out.getvalue())
+        self.assertNotIn("delete_automation", automations.calls)
+
+    def test_recorded_id_that_is_gone_is_dropped(self):
+        automations, cloud = self.recorded_servers(air.LIST_CAP, {})
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(air.deploy("--dry-run", False, self.PAST, automations, cloud, record_ids=None,
+                                        ids_path=self.write_ids({"[F] past the cap": "gone"})), 0)
+        self.assertIn("recorded id gone of [F] past the cap is gone from Air, dropped", err.getvalue())
+        self.assertIn("unknown automation [F] past the cap", out.getvalue())  # the list is still capped
+        automations, cloud = self.recorded_servers(air.LIST_CAP - 1, {})  # uncapped: really missing, so `create`
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            air.deploy("--dry-run", False, self.PAST, automations, cloud, ids_path=self.write_ids({"[F] past the cap": "gone"}))
+        self.assertIn("create automation [F] past the cap", out.getvalue())
+
+    def write_ids(self, ids):
+        path = self.tmp / "air-ids.json"
+        path.write_text(json.dumps({"automations": ids}))
+        return path
+
+    def test_record_id_checks_the_name_and_dry_run_does_not_write(self):
+        automations, cloud = self.recorded_servers(air.LIST_CAP, {"p1": {"name": "[F] other", "prompt": "x"}})
+        ids = self.tmp / "air-ids.json"
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(air.deploy("--apply", False, self.PAST, automations, cloud, ids_path=ids,
+                                        record_ids={"[F] past the cap": "p1"}), 2)
+        self.assertIn("Air names it [F] other", err.getvalue())
+        self.assertFalse(ids.exists())
+        automations, cloud = self.recorded_servers(air.LIST_CAP, {"p1": {"name": "[F] past the cap", "prompt": "new"}})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(air.deploy("--dry-run", False, self.PAST, automations, cloud, ids_path=ids,
+                                        record_ids={"[F] past the cap": "p1"}), 0)
+        self.assertIn("record id [F] past the cap p1", out.getvalue())
+        self.assertFalse(ids.exists())
+
+    def test_apply_writes_ids_of_listed_and_created_automations(self):
+        self.plan["automations"].append({"name": "[F] b", "prompt": "new", "environmentConfigId": "[F] read"})
+        self.seed([{"id": "a1", "name": "[F] a", "prompt": "new", "environmentConfigId": "e1"}],
+                  [{"id": "e1", "name": "[F] read", "startup": "x", "repository": "https://github.com/o/r"}])
+        ids = self.tmp / "air-ids.json"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.run_deploy("--apply", ids_path=ids), 0)
+        created = next(c for c in self.calls("automation") if c[0] == "create_automation")
+        self.assertEqual(created[1]["name"], "[F] b")
+        written = json.loads(ids.read_text())["automations"]
+        self.assertEqual(list(written), ["[F] a", "[F] b"])  # sorted
+        self.assertEqual(written["[F] a"], "a1")
+        self.assertTrue(written["[F] b"].startswith("automation-"))
+        self.assertTrue(ids.read_text().endswith("}\n"))
+        self.assertIn("recorded 2 automation ids in air-ids.json", out.getvalue())
+
     def test_apply_creates_environment_with_air_arguments(self):
         self.plan["environments"][0].update({"repository": "https://github.com/o/r", "variables": {"FACTORY_ENV": "read"},
                                             "domains": ["pypi.org"]})
@@ -662,6 +744,7 @@ class ApplyTest(unittest.TestCase):
         with (mock.patch.dict(os.environ, {"FACTORY_MCP_AIR_AUTOMATIONS": "automation",
                                           "FACTORY_MCP_AIR_CLOUD": "cloud"}),
               mock.patch.object(deploy.config_mod, "pop_team", side_effect=lambda argv: argv),
+              mock.patch.object(air, "IDS_FILE", str(self.tmp / "air-ids.json")),  # not into the team checkout
               mock.patch.object(air, "plan_air", return_value=plan),
               mock.patch.object(air, "Mcp", side_effect=servers),
               mock.patch.object(air, "read_state", return_value=([], [])),

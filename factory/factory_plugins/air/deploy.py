@@ -6,11 +6,15 @@
 """Render the nodes of the team's definition as deployable specs (ADR-0021). Output is JSON.
 
 Usage: deploy.py plan --target air
-       deploy.py (--dry-run | --apply [--allow-delete]) [--rename 'OLD NAME=NEW NAME']...
+       deploy.py (--dry-run | --apply [--allow-delete]) [--rename 'OLD NAME=NEW NAME']... [--record-id 'NAME=ID']...
 --dry-run prints the diff against the existing automations and environments; --apply also writes it and re-lists to
 verify. The two Air MCP servers are started over stdio from the commands in FACTORY_MCP_AIR_AUTOMATIONS and
 FACTORY_MCP_AIR_CLOUD (they use the operator's local OAuth). Each --rename updates the existing item named OLD in
 place (same id) to NEW instead of creating NEW and deleting OLD.
+Air lists at most 100 personal automations, so deploy also finds them by id: air-ids.json in the team repository maps
+each automation name to its id. --apply rewrites it after a verified run (commit it in the team repository). Each
+--record-id 'NAME=ID' adds an automation past the cap, with its id from the Air web UI: deploy checks that ID is named
+NAME and has the plan's prefix; --apply records it, --dry-run prints `record id NAME ID`.
 air: {"automations": [...], "environments": [...]}: one automation per enabled node and one environment per environment in use,
      for the factory-deploy skill.
 """
@@ -461,14 +465,39 @@ def list_envs(cloud: Mcp, repository_urls) -> list[dict]:
     return out
 
 
+IDS_FILE = "air-ids.json"  # {"automations": {name: automationId}} in the team repository: finds automations past the cap
+
+
+def read_ids(path: Path | None) -> dict:
+    return json.loads(path.read_text())["automations"] if path and path.is_file() else {}
+
+
+def write_ids(path: Path, ids: dict) -> None:
+    path.write_text(json.dumps({"automations": ids}, indent=2, sort_keys=True) + "\n")
+
+
 def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, backend=None,
-               additional_names=()) -> tuple[list[dict], list[dict]]:
+               additional_names=(), recorded: dict | None = None) -> tuple[list[dict], list[dict]]:
     listed = automations.call("list_automations", {"privacy": "private"})
     automation_items = listed if isinstance(listed, list) else listed["personal"]
     capped = len(automation_items) >= LIST_CAP
     automation_items = Listed(automation_detail(automations.call("get_automation", {"automationId": x["automationId"]}))
                               for x in automation_items if x["name"].startswith(prefix))
     automation_items.capped = capped
+    for name, automation_id in sorted((recorded or {}).items()):  # past the list cap: by recorded id (#1338)
+        if not name.startswith(prefix) or any(x["name"] == name for x in automation_items):
+            continue
+        try:
+            x = automation_detail(automations.call("get_automation", {"automationId": automation_id}))
+        except RuntimeError as e:
+            print(f"recorded id {automation_id} of {name} is gone from Air, dropped ({e})", file=sys.stderr)
+            recorded.pop(name)
+            continue
+        if x["name"] != name:
+            print(f"warning: recorded id {automation_id} is named {x['name']}, not {name}: using {x['name']}", file=sys.stderr)
+            recorded[x["name"]] = recorded.pop(name)
+        if x["name"].startswith(prefix) and not any(y["name"] == x["name"] for y in automation_items):
+            automation_items.append(x)
     if backend:
         for item in automation_items:
             if item["name"] in additional_names:
@@ -594,7 +623,7 @@ def repository_urls(plan: dict) -> list[str]:
 
 
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None, yt_run=None,
-           config=None) -> int:
+           config=None, ids_path: Path | None = None, record_ids: dict | None = None) -> int:
     """Write only to Air, to repository labels (through `run`, a `gh` runner) and to the tracker's own setup (through
     `yt_run` for YouTrack): deploy never creates, edits or closes a tracker ticket. `config` selects the plugins that
     provision the labels (github when None) and the tracker setup (every plugin's, for what the plan names, when None)."""
@@ -602,8 +631,22 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     env_repositories = {e["name"]: e["repository"] for e in plan["environments"]}
     additional_names = {a["name"] for a in plan["automations"] if "additionalRepositories" in a}
     backend = backend or (Backend() if additional_names else None)
+    recorded = {**read_ids(ids_path), **(record_ids or {})}
+    for name, automation_id in (record_ids or {}).items():  # --record-id: checked, then used for this run
+        try:
+            found = automations.call("get_automation", {"automationId": automation_id}).get("name")
+        except RuntimeError as e:
+            found = f"(not readable: {e})"
+        if found != name or not name.startswith(plan["prefix"]):
+            print(f"refused: --record-id {name}={automation_id}: Air names it {found}, and the plan's prefix is "
+                  f"{plan['prefix']!r}", file=sys.stderr)
+            return 2
+        if mode == "--dry-run":
+            print(f"record id {name} {automation_id}")
+    if record_ids and mode == "--apply" and ids_path:
+        write_ids(ids_path, dict(sorted({**read_ids(ids_path), **record_ids}.items())))  # kept even if a later check refuses
     state = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
-                       additional_names=additional_names)
+                       additional_names=additional_names, recorded=recorded)
     capped = getattr(state[0], "capped", False)
     changes = diff(plan, *state, capped)
     for action, kind, name, _, _, changed in changes:
@@ -662,13 +705,17 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     if changes:
         apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories)
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
-                           additional_names=additional_names)
+                           additional_names=additional_names, recorded=recorded)
         state = after
         left = [c for c in diff(plan, *after, getattr(after[0], "capped", False)) if not (c[0] == "delete" and c[1] == "environment")]
         for action, kind, name, *_ in left:
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:
             return 1
+    if ids_path:  # every planned automation deploy now knows, so later deploys do not depend on the list
+        planned = {a["name"] for a in plan["automations"]}
+        write_ids(ids_path, {x["name"]: x["id"] for x in state[0] if x["name"] in planned})
+        print(f"recorded {sum(x['name'] in planned for x in state[0])} automation ids in {IDS_FILE}")
     create_missing_variables(plan, state[1], cloud)  # after the environments exist: their ids are in `state`
     for x in state[0]:  # a person registers each webhook with its sender; also on an unchanged plan
         for w in x["webhooks"]:
@@ -681,15 +728,17 @@ def main(argv: list[str]) -> int:
     if not definition.present(config_mod.team_root()):
         print("deploy: the team root has no factory.yaml and workflow.yaml (ADR-0021)", file=sys.stderr)
         return 2
-    rest, renames = argv[1:], {}
-    while "--rename" in rest:
-        i = rest.index("--rename")
-        old, sep, new = (rest[i + 1] if i + 1 < len(rest) else "").partition("=")
-        if not (old and sep and new):
-            print("--rename needs 'OLD NAME=NEW NAME'", file=sys.stderr)
-            return 2
-        renames[old] = new
-        del rest[i:i + 2]
+    rest, pairs = argv[1:], {"--rename": {}, "--record-id": {}}
+    for flag, found in pairs.items():
+        while flag in rest:
+            i = rest.index(flag)
+            old, sep, new = (rest[i + 1] if i + 1 < len(rest) else "").partition("=")
+            if not (old and sep and new):
+                print(f"{flag} needs " + ("'OLD NAME=NEW NAME'" if flag == "--rename" else "'NAME=ID'"), file=sys.stderr)
+                return 2
+            found[old] = new
+            del rest[i:i + 2]
+    renames, record_ids = pairs["--rename"], pairs["--record-id"]
     if argv and argv[0] in ("--dry-run", "--apply") and set(rest) <= {"--allow-delete"}:
         config = config_mod.load()
         if core.check_fixture_drift(config):
@@ -702,7 +751,8 @@ def main(argv: list[str]) -> int:
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
             run = next((hook(config) for hook in plugins.registry(config).hook("deploy.run")), None)
-            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run, config=config)
+            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run, config=config,
+                          ids_path=config_mod.team_root() / IDS_FILE, record_ids=record_ids)
             if code:
                 return code
             return core.sync_wake_files(config, run, argv[0] == "--apply")
