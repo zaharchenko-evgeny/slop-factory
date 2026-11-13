@@ -1335,10 +1335,11 @@ class JoinTest(unittest.TestCase):
         class Racing(FakeGh):
             def __init__(self, *a, **k):
                 super().__init__(*a, **k)
-                self.posted, self.lock, self.reads = [], threading.Lock(), threading.local()
+                self.posted, self.lock = [], threading.Lock()
 
             def __call__(self, args, timeout=None):
                 if args[:3] == ["issue", "comment", "5"]:
+                    barrier.wait(timeout=5)  # both runs have read the comments before either one writes
                     with self.lock:
                         self.posted.append({"id": len(self.posted) + 1, "body": args[args.index("--body") + 1]})
                     return ""
@@ -1349,9 +1350,6 @@ class JoinTest(unittest.TestCase):
                 if args[:2] == ["api", "--paginate"] and args[2].endswith("issues/5/comments"):
                     with self.lock:
                         out = "\n".join(json.dumps(c) for c in self.posted)
-                    if not getattr(self.reads, "first", False):  # both runs read before either writes
-                        self.reads.first = True
-                        barrier.wait(timeout=5)
                     return out
                 return FakeGh.__call__(self, args, timeout)
         gh = Racing(labels=["factory:approved", "risk:low"], reviews=[review(BOT, M)])
