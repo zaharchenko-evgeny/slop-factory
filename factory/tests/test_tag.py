@@ -25,7 +25,10 @@ class TagTest(unittest.TestCase):
     def test_frame_uses_the_helper_and_leaves_both_forms_alone(self):
         self.assertEqual(effects.frame("hi"), "[factory]\nhi")
         self.assertEqual(effects.frame("[factory]\nhi"), "[factory]\nhi")
-        self.assertEqual(effects.frame("[factory] hi"), "[factory] hi")
+        for old in ("[factory] hi", "[factory]  hi", "[factory]\r\nhi", "[factory]\n\nhi"):
+            self.assertEqual(effects.frame(old).splitlines()[0], "[factory]", old)
+            self.assertEqual(effects.frame(old).split("\n", 1)[1].strip(), "hi", old)
+        self.assertEqual(effects.frame("[factory] ## Summary"), "[factory]\n## Summary")
 
     def test_has_tag_table(self):
         for body, rest, want in [

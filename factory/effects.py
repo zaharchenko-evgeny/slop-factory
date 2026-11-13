@@ -136,7 +136,7 @@ def mark(e, marker):
 def frame(body, run_id=None, once=True):
     """The text a factory role writes to a tracker or code host: the tag line first (unless it starts so) and the
     `Factory-Run: <run id>` trailer last (unless `once` and it has one)."""
-    body = body if has_tag(body) else tagged(body)
+    body = tagged((body or "")[len(TAG):].lstrip()) if has_tag(body) else tagged(body)
     if run_id and (not once or "Factory-Run:" not in body):
         body += f"\n\nFactory-Run: {run_id}"
     return body
