@@ -40,14 +40,17 @@ def rest_event(typename):
     return REST_NAMES.get(typename) or re.sub(r"(?<!^)(?=[A-Z])", "_", typename.removesuffix("Event")).lower()
 
 
-def search_query(repo, labels, now=None, closed_hours=CLOSED_HOURS, scope_label=None):
-    """The two search strings (open, recently closed) for issues of `repo` with any of `labels` (and, for an
-    environment's scope, `scope_label` too)."""
+def search_query(repo, labels, now=None, closed_hours=CLOSED_HOURS, scope_label=None, updated_hours=None):
+    """The open and closed search strings for issues of `repo` with any `labels` and optional scope. `updated_hours`
+    filters closed issues by recent updates instead of recent closure."""
     any_label = ",".join(f'"{x}"' for x in labels)
     scoped = f' label:"{scope_label}"' if scope_label else ""
-    since = ((now or datetime.now(timezone.utc)) - timedelta(hours=closed_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = ((now or datetime.now(timezone.utc)) - timedelta(hours=closed_hours)).strftime("%Y-%m-%dT%H:%M:%SZ") if closed_hours is not None else None
+    cutoff = ((now or datetime.now(timezone.utc)) - timedelta(hours=updated_hours)).strftime("%Y-%m-%dT%H:%M:%SZ") \
+        if updated_hours is not None else since
+    recent = f" updated:>={cutoff}" if updated_hours is not None else f" closed:>={cutoff}" if cutoff else ""
     return [f"repo:{repo} is:issue is:open label:{any_label}{scoped}",
-            f"repo:{repo} is:issue is:closed closed:>={since} label:{any_label}{scoped}"]
+            f"repo:{repo} is:issue is:closed{recent} label:{any_label}{scoped}"]
 
 
 SEARCH = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){"

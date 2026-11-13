@@ -1,0 +1,4 @@
+recursive-include ui *
+prune ui/node_modules
+recursive-include factory/factory_ui/static *
+include docs/progress-ui.md

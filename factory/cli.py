@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
-"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, contracts (operator-only), chart, validate, setup, doctor.
+"""The `factory` command: begin, end (an agent node's run), check, apply, sweep (the gate), deploy, contracts (operator-only), chart, ui, validate, setup, doctor.
 
 Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` works as before.
        factory begin <automation> --issue N | --pr N | [payload file]   (payload on stdin by default; exit 10: the node must not act)
@@ -501,6 +501,9 @@ def _main(argv):
     load_engine(HERE)
     if team:
         config.set_team(team)
+    if cmd == "ui":
+        from factory_ui.server import main as ui_main
+        return ui_main(rest)
     if cmd in ("check", "apply", "sweep", "decide", "ci"):
         return gate.main([cmd, *rest])
     if cmd == "deploy" and rest[:2] == ["--target", "local"]:

@@ -14,6 +14,7 @@ References (contract plus one section per adapter):
 - [`references/checks.md`](references/checks.md)
 - [`references/run-log.md`](references/run-log.md)
 - [`references/nodes.md`](references/nodes.md): each node's purpose, trigger and outcomes
+- [`../../docs/progress-ui.md`](../../docs/progress-ui.md): build, install and start the optional local progress browser
 
 You build a software factory inside the team's own repository. The factory
 belongs to the team. Generate its definition, then apply it to a target after
@@ -135,7 +136,9 @@ For each selected target, show a plan first:
   MCPs) and lists creates, updates and prunes. Apply only after the user
   approves. Never touch an automation without the `[factory]` prefix.
 - **local** — `factory setup --environment <name>` installs each role's skills
-  and runs the setup scripts (`references/harnesses.md`).
+  and runs the setup scripts (`references/harnesses.md`). The optional progress
+  browser starts only when a user runs `factory ui --team <team-path>`; do not
+  add it to local setup or Air startup. See [Progress UI](../../docs/progress-ui.md).
 
 ## 4. Verify
 
@@ -143,7 +146,9 @@ Run `factory validate`, `factory chart` (show the chart to the user) and
 `factory deploy --dry-run`, then deploy, then `factory doctor` (webhook
 automations, connectors, variables and secret names exist). Then run one
 representative input within the limits. Report the actual outcome, the run
-links and the remaining gaps. An accepted configuration is not a working one.
+links and the remaining gaps. If you describe the progress browser, give its
+explicit launch command: `factory ui --team <team-path>`. It is read-only and
+does not start during setup. An accepted configuration is not a working one.
 
 ## Rules
 

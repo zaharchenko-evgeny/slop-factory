@@ -14,3 +14,10 @@ Check a change with `factory validate --team .`.
 
 The engine pin in `factory.yaml` also pins the `factory-deploy` skill. Use it to
 check the definition and preview the Air plan. Review the plan before applying it.
+
+## Progress browser
+
+When you want a local read-only view of this factory, run
+`factory ui --team .`. The command opens a browser on localhost. It does not
+start during local setup or Air startup. See the engine's
+`docs/progress-ui.md` for install and refresh details.

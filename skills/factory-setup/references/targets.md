@@ -41,3 +41,8 @@ Selected by the target the team deploys to; the Air models come from `models` in
 - Apply: `--apply` writes `.factory/local.json` (git-ignored) for
   `factory run --local`, which runs the same nodes and gate as Air.
 - Each ticket runs in its own worktree per repository and the ticket's branch.
+
+The optional progress browser is separate from target setup. Start it only on a
+user's request with `factory ui --team <team-path>`. It binds to localhost and
+reads the team's state. Do not start it from local setup or an Air startup
+script. See [`docs/progress-ui.md`](../../../docs/progress-ui.md).

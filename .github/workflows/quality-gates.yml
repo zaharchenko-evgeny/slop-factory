@@ -77,6 +77,14 @@ jobs:
         with: { path: ~/.npm, key: agnix-npm-cache }
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with: { node-version: 22 }
+      - name: Build progress UI assets
+        run: npm ci --prefix ui && npm --prefix ui test && npm --prefix ui run build
+      - name: Check committed progress UI assets
+        run: |
+          if [ -n "$(git status --porcelain -- factory/factory_ui/static)" ]; then
+            git status --short -- factory/factory_ui/static
+            exit 1
+          fi
       - name: Check YouTrack workflow syntax
         run: node --check factory/factory_plugins/youtrack/comment-wake/comment-wake.js && node factory/tests/test_youtrack_comment_wake.js
       - name: Check the workflow state machine

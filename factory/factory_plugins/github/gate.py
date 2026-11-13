@@ -374,14 +374,15 @@ class GitHubTicketStore:
                 known.add(issue["number"])
         return dependents
 
-    def tickets_by_stage(self, attrs, open_only=False, now=None):
+    def tickets_by_stage(self, attrs, open_only=False, now=None, closed_hours=48, updated_hours=None):
         """Issue numbers carrying one of the stage `attrs`: the open ones and, unless `open_only`, those closed in the
         last `gate_port.CLOSED_HOURS`, from one paged GraphQL search each."""
         found = []  # the tracker's tickets, then each other ticket repository's: bare numbers, then `owner/repo#n`
         scoped = {"scope_label": self.scope["label"]} if self.scope else {}
         for repo in self.ticket_repos:
             numbers = set()
-            for q in graphql.search_query(repo, attrs, now, **scoped)[:1 if open_only else 2] if attrs else []:
+            for q in graphql.search_query(repo, attrs, now, closed_hours=closed_hours, updated_hours=updated_hours,
+                                          **scoped)[:1 if open_only else 2] if attrs else []:
                 after = None
                 while True:
                     args = ["api", "graphql", "-f", f"query={graphql.SEARCH}", "-f", f"q={q}"]
@@ -932,7 +933,10 @@ class GitHubGateTracker(DescriptorPort):
         if query.kind == "children":
             return self.tickets.children(query.of)
         if query.kind == "stage":
-            return self.sweep_tickets(query.values, query.open_only)
+            return self.sweep_tickets(query.values, query.open_only) if query.closed_hours == 48 and query.updated_hours is None else \
+                self.tickets.tickets_by_stage([self.stages[st] for st in query.values if st in self.stages],
+                                             query.open_only, closed_hours=query.closed_hours,
+                                             updated_hours=query.updated_hours)
         if query.kind == "labeled":
             return self._labeled(query.values)
         if query.kind == "prs":
@@ -950,9 +954,12 @@ class GitHubGateTracker(DescriptorPort):
         All labels are read by one paged search (10 nodes a page); the id comes from the node id, or from `/events`
         when it does not decode or the timeline was paged past."""
         watched = set(watched)
+        ticket_events = self.tickets.labeled(watched) if hasattr(self.tickets, "labeled") else []
+        if hasattr(self.tickets, "labeled"):
+            watched = {(kind, label) for kind, label in watched if kind == "pr"}
         labels = sorted({label for _, label in watched})
         if not labels:
-            return []
+            return ticket_events
         items, after = [], None
         while True:
             page = json.loads(self.run(["api", "graphql", "-f", f"query={graphql.POLL}", "-f",
@@ -963,6 +970,7 @@ class GitHubGateTracker(DescriptorPort):
                 break
             after = page["pageInfo"]["endCursor"]
         out = []
+        out += ticket_events
         for item in items:
             n, pr = item["number"], item["__typename"] == "PullRequest"
             ids = graphql.labeled_events(item)
@@ -1007,22 +1015,46 @@ class GitHubGateTracker(DescriptorPort):
     def _pr_record(self, pr, name, want=frozenset()):
         """The record of PR `pr` (the REST body) in this view's repository, descriptor name `name`."""
         head, user = pr["head"]["sha"], pr.get("user") or {}
-        comments = [{"id": c.get("id"), "author": (c.get("user") or {}).get("login", ""),
+        partial = "partial" in want
+        unavailable = []
+
+        def read_field(field, read, default):
+            if not partial:
+                return read()
+            try:
+                return read()
+            except Exception:
+                unavailable.append(field)
+                return default
+
+        def read_comments():
+            return [{"id": c.get("id"), "author": (c.get("user") or {}).get("login", ""),
                      "author_type": (c.get("user") or {}).get("type", ""), "body": c.get("body"), "at": c.get("created_at")}
                     for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)]
+
+        comments = read_field("comments", read_comments, [])
         behind = None
-        if "behind" in want and pr.get("state") == "open":
-            behind = self._api(f"compare/{pr['base']['ref']}...{head}", repo=self.pr_repo)["behind_by"] > 0
+        if ("behind" in want or partial) and pr.get("state") == "open":
+            behind = read_field("behind", lambda: self._api(
+                f"compare/{pr['base']['ref']}...{head}", repo=self.pr_repo)["behind_by"] > 0, None)
+        reviews = read_field("reviews", lambda: self._reviews(pr), [])
+        events = read_field("events", lambda: self._pr_events(pr["number"]), [])
+        ci = read_field("ci", lambda: self._ci(head), "unknown")
+        commit_date = read_field("commit_date", lambda: self._api(
+            f"commits/{head}", repo=self.pr_repo)["commit"]["committer"]["date"], "")
+        requested_reviewers = [u["login"] for u in pr.get("requested_reviewers") or []]
+        requested_reviewers.extend(f"team:{team['slug']}" for team in pr.get("requested_teams") or []
+                                   if team.get("slug"))
         return PrRecord(name, pr["number"], head, base=pr["base"]["ref"], branch=pr["head"]["ref"], state=pr.get("state"),
                         merged=bool(pr.get("merged")), mergeable=pr.get("mergeable"),
                         labels=[x["name"] for x in pr.get("labels", [])],
-                        requested_reviewers=[u["login"] for u in pr.get("requested_reviewers") or []],
+                        requested_reviewers=requested_reviewers,
                         body=pr.get("body"), author=user.get("login", ""), author_type=user.get("type", ""),
-                        updated_at=pr.get("updated_at"), reviews=self._reviews(pr), comments=comments,
-                        events=self._pr_events(pr["number"]), ci=self._ci(head),
-                        commit_date=self._api(f"commits/{head}", repo=self.pr_repo)["commit"]["committer"]["date"],
+                        updated_at=pr.get("updated_at"), reviews=reviews, comments=comments,
+                        events=events, ci=ci, commit_date=commit_date,
                         can_write=Lazy(self._can_write),
-                        clean_advance=Lazy(lambda old: self._clean_base_advance(old, head, pr)), behind=behind)
+                        clean_advance=Lazy(lambda old: self._clean_base_advance(old, head, pr)), behind=behind,
+                        unavailable=tuple(unavailable))
 
     def parent(self, n):
         """The parent issue number of sub-issue `n`, else None."""

@@ -13,3 +13,6 @@ build/
 /checks.json
 /findings.json
 /notes.json
+# Progress UI development dependencies and incremental compiler state
+/ui/node_modules/
+/ui/*.tsbuildinfo
