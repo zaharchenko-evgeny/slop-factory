@@ -622,6 +622,32 @@ class ApplyTest(unittest.TestCase):
         self.assertNotIn("create_automation", automations.calls)
         self.assertNotIn("delete_automation", automations.calls)
 
+    def test_a_capped_list_pages_through_the_backend(self):  # #1347
+        class Pages(air.Backend):
+            def __init__(self):
+                super().__init__(token="t")
+                self.paths = []
+
+            def request(self, method, path, body=None):
+                self.paths.append(path)
+                if "cursor=c1" in path:
+                    return {"automations": [{"automationId": "past", "name": "[F] past the cap"},
+                                            {"automationId": "proj", "name": "[F] project", "projectId": "p"}],
+                            "hasMore": False, "nextCursor": None}
+                return {"automations": [{"automationId": f"id{i}", "name": f"[F] other {i}"} for i in range(100)],
+                        "hasMore": True, "nextCursor": "c1"}
+        plan = {"prefix": "[F] ", "environments": [], "automations": [{"name": "[F] id0"}, {"name": "[F] past"}]}
+        automations, cloud = self.capped_servers(air.LIST_CAP)
+        backend = Pages()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(air.deploy("--dry-run", True, plan, automations, cloud, backend=backend), 0)
+        self.assertEqual(backend.paths, ["/automations?limit=100", "/automations?limit=100&cursor=c1"])
+        self.assertNotIn("unknown", out.getvalue())
+        self.assertNotIn("create automation [F] past", out.getvalue())  # found on the second page
+        self.assertIn("delete automation [F] id1", out.getvalue())   # a complete list deletes again
+        self.assertNotIn("[F] proj", out.getvalue())                # a project automation is not personal
+
     def test_uncapped_list_still_plans_create_and_delete(self):
         plan = {"prefix": "[F] ", "environments": [], "automations": [{"name": "[F] new"}]}
         automations, cloud = self.capped_servers(air.LIST_CAP - 1)
