@@ -1297,6 +1297,37 @@ class JoinTest(unittest.TestCase):
         self.assertEqual((code, out["written"]), (gate.GO, ["request-reviewers"]))
         self.assertEqual(out["skipped"], ["request-reviewers: carol (the PR author)"])
 
+    def test_two_runs_of_one_node_at_one_head_write_one_comment_and_one_request(self):  # #1373
+        class PrComments(FakeGh):  # PR 5 keeps the comments written to it
+            posted = []
+
+            def __call__(self, args, timeout=None):
+                if args[:3] == ["issue", "comment", "5"]:
+                    self.posted.append({"body": args[args.index("--body") + 1]})
+                if args[:2] == ["api", "--paginate"] and args[2].endswith("issues/5/comments"):
+                    return "\n".join(json.dumps(c) for c in self.posted)
+                return FakeGh.__call__(self, args, timeout)
+        gh = PrComments(labels=["factory:approved", "risk:low"], reviews=[review(BOT, M)])
+        gh.pr_author, gh.requested = "carol", []
+        flow = {"nodes": {"ask": {"role": "approver", "when": {"always": True}, "triggers": ["manual"], "outcomes": {"ask-human": {"effects": [
+            {"comment": "text", "on": "pr"}, {"request-reviewers": {"field": "reviewers"}, "on": "pr"},
+            {"label": "factory:needs-human", "on": "pr"}]}}}}}
+
+        def run(text, run_id, **more):
+            gh.requested = [x for w in gh.writes if "requested_reviewers" in " ".join(w) for x in w if x.startswith("reviewers[]=")]
+            gh.requested = [x.split("=")[1] for x in gh.requested]
+            return gate.apply("ask", "ask-human", {"ticket": 7, "text": text, "reviewers": "alice", "run_id": run_id, **more},
+                              tr(gh), flow)
+        for text, run_id in [("please review A", "r1"), ("please review B", "r2"), ("please review C", "r3")]:
+            run(text, run_id)
+        comments = [w for w in gh.writes if w[:2] == ["issue", "comment"]]
+        self.assertEqual(len(comments), 1)
+        self.assertEqual(len([w for w in gh.writes if "requested_reviewers" in " ".join(w)]), 1)
+        self.assertIn("<!-- factory:once node=ask outcome=ask-human head=h1 -->", comments[0][-1])
+        gh.head_sha = "h2"  # a new head asks again
+        run("please review D", "r4")
+        self.assertEqual(len([w for w in gh.writes if w[:2] == ["issue", "comment"]]), 2)
+
     def test_sweep_asks_waiting_reviewers_again_after_a_comment(self):
         # final review of #183, B1: a comment after the re-request drops her from requested_reviewers
         gh = FakeGh(reviews=[review(BOT, M, commit="h0", at="2026-01-02T01:00:00Z"),

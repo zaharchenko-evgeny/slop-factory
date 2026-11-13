@@ -1216,10 +1216,18 @@ class GitHubGateTracker(DescriptorPort):
 
     def _fx_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
-        if any(effects_mod.same_text(c["body"], body) for c in self.tickets.comments(n)):
+        if any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"]) for c in self.tickets.comments(n)):
             return False
-        self.tickets.comment(n, body + self._block(e))
+        self.tickets.comment(n, body + self._block(e) + self._once_line(e))
         return True
+
+    @staticmethod
+    def _once(e, text):
+        return bool(e.get("once")) and e["once"] in (text or "")
+
+    @staticmethod
+    def _once_line(e):
+        return f"\n\n{e['once']}" if e.get("once") else ""
 
     def _fx_pr_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
@@ -1229,9 +1237,10 @@ class GitHubGateTracker(DescriptorPort):
             pr = self._pr(n)
         if pr is None:
             raise RuntimeError(f"comment: no PR for ticket {n}")
-        if any(effects_mod.same_text(c["body"], body) for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
+        if any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"])
+               for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
             return False
-        self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body", body + self._block(e)])
+        self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body", body + self._block(e) + self._once_line(e)])
         return True
 
     def _fx_pr_notes(self, e, ctx):  # a developer's `done` notes for the PR description
