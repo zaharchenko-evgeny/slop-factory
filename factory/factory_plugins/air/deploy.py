@@ -561,11 +561,12 @@ def project_error(message: str, project_id: str | None) -> str | None:
 
 
 def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", *, backend=None,
-               env_repositories=None) -> None:
+               env_repositories=None, owned_env_ids=None) -> None:
     """Environments before automations on create, update and replace, after them on delete. A replaced environment
     is created under its new repository; the old one is renamed `retired <name>` first (Air names are unique) and left
     for a person to delete in the Air UI, since the Air MCP has no environment delete.
-    `env_repositories` ({environment name: planned repository URL}) picks the right one of two same-named environments."""
+    `env_repositories` ({environment name: planned repository URL}) picks the right one of two same-named environments.
+    `owned_env_ids` (#1387, a project target): only these environment ids can be picked for an automation."""
     order = {"create": 0, "update": 0, "replace": 0, "delete": 1}
     env_repositories = env_repositories or {}
     env_ids, retired = None, []
@@ -581,7 +582,8 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
             continue
         if p and kind == "automation":  # the environment id exists only after its create
             env_ids = env_ids or {e["name"]: e["id"] for e in list_envs(cloud, repo_url)
-                                  if e["id"] not in retired and (env_url(e) is None or e["name"] not in env_repositories
+                                  if e["id"] not in retired and (owned_env_ids is None or e["id"] in owned_env_ids)
+                                  and (env_url(e) is None or e["name"] not in env_repositories
                                                                  or same_repository(env_url(e), env_repositories[e["name"]]))}
             p = {**p, "environmentConfigId": env_ids[p["environmentConfigId"]]}
         p = {k: v for k, v in (p or {}).items() if k not in ("spec", "additionalRepositories")}
@@ -773,7 +775,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
             print(line)
     if changes:
         try:
-            apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories)
+            apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories,
+                       owned_env_ids={x["id"] for x in state[1]} if project_id else None)
         except RuntimeError as e:
             if reason := project_error(str(e), project_id):
                 print(f"error: {reason}", file=sys.stderr)

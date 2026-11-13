@@ -2461,6 +2461,21 @@ class ProjectTargetTest(unittest.TestCase):  # #1387: automations owned by an Ai
         updated = [args for t, args in a.calls if t == "update_automation"]
         self.assertEqual(updated, [{"projectId": PROJECT, "automationId": "a1"}])
 
+    def test_create_picks_only_an_environment_the_project_owns(self):
+        plan = self.plan()
+        plan = {**plan, "automations": plan["automations"][:1]}
+        env_name = plan["automations"][0]["environmentConfigId"]
+        owned = self.owned_envs(plan)
+        wrong = {**next(e for e in owned if e["name"] == env_name), "id": "wrong-owner", "projectId": "other"}
+        mine = next(e for e in owned if e["name"] == env_name)
+        for envs in ([wrong, *owned], [*owned, wrong]):
+            with self.subTest(order=[e["id"] for e in envs][:1]):
+                a, c = self.Automations({}), self.Cloud(envs)
+                changes = [("create", "automation", "x", plan["automations"][0], None, [])]
+                air.apply_diff(changes, a, c, "https://github.com/o/r", backend=mock.Mock(), owned_env_ids={e["id"] for e in owned})
+                created = [args for t, args in a.calls if t == "create_automation"]
+                self.assertEqual([x["environmentConfigId"] for x in created], [mine["id"]])
+
     def test_apply_refuses_and_names_each_missing_environment(self):
         plan = self.plan()
         owned = self.owned_envs(plan)
