@@ -29,10 +29,12 @@ from factory_plugins.air import deploy as air  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
 import definition  # noqa: E402
+import plugins  # noqa: E402
 from factory_plugins.comments import node as comment_node  # noqa: E402
 from factory_plugins.github import ci_sync as gh_ci_sync, gate as gh_gate  # noqa: E402
 from gate_port import MemorySystem, TagTracker  # noqa: E402
-from ports.system import Query  # noqa: E402
+from gate_tracker import OnVcs  # noqa: E402
+from ports.system import Effect, Query  # noqa: E402
 
 CONFIG = cfg.load()
 NODES = nodes.load()
@@ -93,6 +95,24 @@ class GateTest(unittest.TestCase):
         self.assertEqual(len(comments), 1)
         self.assertIn("review", comments[0])
         self.assertEqual((tr.report["on"], tr.report["run_id"]), ("pr", "run-1"))
+
+    def test_unsupported_effect_refuses_before_writing_any_outcome_effect(self):
+        graph = {"nodes": {"intake": {"when": {}, "outcomes": {"ready": {"effects": [
+            {"label": "risk:high"}, {"field": {"name": "Effort", "from": "size_estimate"}}]}}}}}
+
+        class NoField(MemorySystem):
+            effects = (Effect("label", "ticket", MemorySystem._fx_log),)
+
+        class PullRequests(MemorySystem):
+            effects = (Effect("review", "pr", MemorySystem._fx_log),)
+
+        tr = OnVcs.of(NoField({"7": {"stage": "triage"}}), PullRequests({"7": {"stage": "triage"}}))
+        with patch("gate.plugin_registry", return_value=plugins.registry({"plugins": ["youtrack"]})):
+            status, result = gate.apply("intake", "ready", {"ticket": "7", "size_estimate": "Small"}, tr, graph)
+        self.assertEqual(status, gate.NO_GO)
+        self.assertEqual(result["reason"], "unknown effect: field")
+        self.assertEqual(tr.tickets["7"].get("attrs", []), [])
+        self.assertEqual(tr.tickets["7"].get("log", []), [])
 
     def test_stale_review_plan_replays_stale_review_marker_instead_of_refiring(self):
         facts = {"stage": "in-review", "head": "abc", "pr_labels": ["factory:review-x"],

@@ -973,8 +973,10 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
               and stale_review_plan(facts, nodes) == (name, outcome, {"focus": payload.get("focus"),
                                                                "round": payload.get("round"),
                                                                "review_replay": True}))
+    supports = getattr(tracker, "supports", lambda e: effects_mod.spec(tracker, e) is not None)
+    unsupported = next((e["kind"] for e in effects + after if not supports(e)), None)
     why = (None if replay else matches(node, facts, {**payload, "id": payload.get("event")}, out)) \
-        or merge_refused(effects, facts, tracker)
+        or (f"unknown effect: {unsupported}" if unsupported else None) or merge_refused(effects, facts, tracker)
     if why:
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text

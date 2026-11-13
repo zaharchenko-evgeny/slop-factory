@@ -97,6 +97,23 @@ class DefinitionTest(unittest.TestCase):
         self.assertNotIn("unknown-key", out.stdout + out.stderr)
         self.assertIn("factory: ok", out.stdout, out.stdout + out.stderr)
 
+    def test_field_effect_requires_a_youtrack_ticket_environment(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"].update(
+            field={"effects": [{"field": {"name": "Effort", "from": "size_estimate"}}]}))
+        for adapter, rejected in [("github-issues", True), ("youtrack", False)]:
+            with self.subTest(adapter=adapter):
+                tracker = {"adapter": adapter, **({"url": "https://yt.example", "project": "PRJ"}
+                                                   if adapter == "youtrack" else {})}
+                self.edit("factory.yaml", lambda f, tracker=tracker: f["environments"]["engine"].update(
+                    tracker=tracker))
+                errors = self.errors()
+                message = "unsupported-effect: nodes.intake.field: field requires YouTrack tickets in environment engine"
+                self.assertEqual(any(e == message for e in errors), rejected, errors)
+                run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"],
+                                     capture_output=True, text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
+                self.assertEqual(run.returncode, 1 if rejected else 0, run.stdout + run.stderr)
+                self.assertIn(message if rejected else "factory: ok", run.stdout)
+
     # --- ADR-0027: repository tracker, vcs and write; node environments ----------------------------------------
     def _envs(self, f, **envs):
         """Replace the environments with `envs`: {name: [(repo, {keys})]}, keeping the engine's other settings."""
