@@ -973,8 +973,12 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
               and stale_review_plan(facts, nodes) == (name, outcome, {"focus": payload.get("focus"),
                                                                "round": payload.get("round"),
                                                                "review_replay": True}))
+    supports = getattr(tracker, "supports", lambda e: effects_mod.spec(tracker, e) is not None)
+    # `notify` effects are not written as such: gate.send replaces each with a comment, so check that comment
+    unsupported = next((e["kind"] for e in effects + after
+                        if not supports({**e, "kind": "comment"} if e["kind"] == "notify" else e)), None)
     why = (None if replay else matches(node, facts, {**payload, "id": payload.get("event")}, out)) \
-        or merge_refused(effects, facts, tracker)
+        or (f"unknown effect: {unsupported}" if unsupported else None) or merge_refused(effects, facts, tracker)
     if why:
         return NO_GO, {"applied": False, "reason": why}
     after = [*after, *lesson_effects(ticket, name, payload)]  # after the outcome's effects: never its notification text
@@ -1073,7 +1077,8 @@ def clear_commands(ticket):
     if "implement-<tier>" not in declared:  # a definition team (ADR-0021): its routing labels on ticket and PR
         return [{"kind": "unlabel", "ticket": ticket, "value": next(iter(store.values())),
                  **({"on": "pr"} if "pr_label" in store else {})}
-                for name, store in declared.items() if ":" not in name]
+                for name, store in declared.items()
+                if ":" not in name and next(iter(store.values())) != vocab.needs_human()]
     return [{"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("implement-<tier>", "*")},
             {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("fix-<tier>", "*"), "on": "pr"},
             {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("update-<tier>", "*"), "on": "pr"}]

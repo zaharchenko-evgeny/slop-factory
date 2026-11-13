@@ -2192,13 +2192,13 @@ if __name__ == "__main__":
 
 
 class DeployPlanAssigneeTest(unittest.TestCase):
-    def assignees(self, author, owner, existing=False, old=(), flag=None):
+    def assignees(self, author, owner, existing=False, old=(), flag=None, kind="User"):
         calls = []
         def run(args):
             calls.append(args)
             path = next((x for x in args if x.startswith("repos/")), "")
             if path.endswith("pulls/300"):
-                return json.dumps({"merge_commit_sha": "m1", "user": {"login": author} if author else {}})
+                return json.dumps({"merge_commit_sha": "m1", "user": ({"login": author, **({"type": "Bot"} if kind == "Bot" else {})} if author else {})})
             if path.endswith("commits/m1"):
                 return json.dumps({"parents": [{"sha": "p1"}]})
             if path.endswith("labels?per_page=100"):
@@ -2235,3 +2235,14 @@ class DeployPlanAssigneeTest(unittest.TestCase):
             with self.subTest(author=author, owner=owner, old=old):
                 self.assertEqual(self.assignees(author, owner, True, old), keep)
                 self.assertEqual(self.assignees(author, owner, True, old, "--remove-assignee"), drop)
+
+    def test_bot_author_is_skipped(self):
+        for author, kind in [("jetbrains-air[bot]", "Bot"), ("jetbrains-air[bot]", "User"), ("some-app", "Bot")]:
+            for existing in (False, True):
+                for owner, old, keep, drop in [("boss", ["bob"], ["boss"], ["bob"]),
+                                               (None, ["bob"], [], ["bob"]),
+                                               (None, [], [], [])]:
+                    with self.subTest(author=author, kind=kind, existing=existing, owner=owner, old=old):
+                        self.assertEqual(self.assignees(author, owner, existing, old, kind=kind), keep)
+                        if existing:
+                            self.assertEqual(self.assignees(author, owner, True, old, "--remove-assignee", kind), drop)

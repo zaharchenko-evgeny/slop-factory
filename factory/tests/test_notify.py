@@ -31,6 +31,7 @@ import gate  # noqa: E402
 import plugins  # noqa: E402
 from factory_plugins.notify_email.smtp import EmailAdapter  # noqa: E402
 from gate_port import MemorySystem  # noqa: E402
+from ports.system import Effect  # noqa: E402
 
 FIXTURE = ROOT / "tests/fixtures/v2"
 CONFIG = {"adapters": {"email": {"smtp_env": "TEST_NOTIFY_SMTP"}},
@@ -123,6 +124,16 @@ class NotifyTest(unittest.TestCase):
         self.apply("pr-only", tr)
         self.assertEqual([r for r, _ in self.smtp.mails], [["bob@example.com"]])
         self.assertEqual(self.comments(tr)[0].count("factory:notify"), 1)
+
+    def test_notify_passes_the_preflight_on_a_system_with_only_comments(self):
+        class CommentsOnly(MemorySystem):
+            effects = (Effect("comment", "ticket", MemorySystem._fx_log), Effect("comment", "pr", MemorySystem._fx_log))
+
+        for outcome in ("notified", "pr-only"):
+            with self.subTest(outcome=outcome):
+                tr = CommentsOnly({"7": {"stage": "blocked", "pr": 9}})
+                self.assertEqual(self.apply(outcome, tr)[0], gate.GO)
+                self.assertEqual(len(self.comments(tr)), 1)
 
     def test_empty_people_limit_sends_to_nobody(self):
         tr = MemorySystem({"7": {"stage": "blocked"}})

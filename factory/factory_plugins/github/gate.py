@@ -743,7 +743,10 @@ class GitHubGateTracker(DescriptorPort):
         body = effects_mod.tagged("The merged commit changes the Air deploy plan. Run `factory deploy --apply` locally.\n\n"
                 + "\n".join(items) + f"\n\nFactory-Run: finish:{pr}")
         # The person who caused the change, else the `owner` fallback, else nobody.
-        who = (pull.get("user") or {}).get("login") or config.owner()
+        # A bot author (the Air app opens factory PRs) cannot be assigned: skip it.
+        user = pull.get("user") or {}
+        login = user.get("login") or ""
+        who = (None if user.get("type") == "Bot" or login.endswith("[bot]") else login) or config.owner()
         assignee = ["--assignee", who] if who else []
         if existing:
             self.run(["issue", "edit", str(existing["number"]), "-R", self.repo, "--body", body,
@@ -1504,7 +1507,7 @@ class GitHubGateTracker(DescriptorPort):
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
         defang = lambda t: str(t).replace("<!--", "<!\u200b--")  # noqa: E731  # prose never carries a marker
         lines = [defang(f"**{x['id']}** {x['file']} — {x['finding']}") for x in found]
-        summary = effects_mod.tagged(defang(e["summary"])) if e.get("summary") else effects_mod.TAG
+        summary = effects_mod.tagged(defang(e["summary"])) if e.get("summary") else effects_mod.tag_text()
         body = "\n\n".join(x for x in (summary, "\n".join(lines), marker) if x)
         if e.get("run_id"):
             body += f"\n\nFactory-Run: {e['run_id']}"

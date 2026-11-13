@@ -620,6 +620,8 @@ def errors(defn):
     registry = plugins.registry(f)
     if not f.get("owner"):  # `owner` is the optional fallback person; refuse the places that need it
         errs += _owner_uses(defn)
+    if f.get("comment_tag") is not None and (not isinstance(f["comment_tag"], str) or "\n" in f["comment_tag"]):
+        errs.append("bad-comment-tag: factory.yaml: `comment_tag` is one line of text; blank adds no tag")
     errs += [e for n, s in skills.items() for e in _skill_spec_errors(f"skills.{n}", s)]
     for s in (f.get("defaults") or {}).get("skills") or []:
         errs += _skill_errors("defaults.skills", s, skills)
@@ -754,6 +756,14 @@ def errors(defn):
             guards = [k for k in oc.get("if") or {} if k not in GUARDS]
             kinds = [next((k for k in e if k != "on"), None) for e in oc.get("effects") or []]
             errs += _plugin_key_errors(registry, f"{where}.{o}", o, guards, kinds, oc.get("effects") or [])
+            if any(isinstance(effect, dict) and "field" in effect and effect.get("on") != "pr"
+                   for effect in oc.get("effects") or []):
+                for node_env in node_envs or [default_env]:
+                    if node_env in envs and any(
+                            repo["tracker"] is not None and repo["tracker"].get("adapter") != "youtrack"
+                            for repo in repositories(defn, node_env)):
+                        errs.append(f"unsupported-effect: {where}.{o}: field requires YouTrack tickets in environment {node_env}")
+                        break
             for effect in oc.get("effects") or []:
                 if isinstance(effect, dict) and ("assign" in effect or "unassign" in effect):
                     key = "assign" if "assign" in effect else "unassign"
@@ -1045,6 +1055,7 @@ def to_project(defn):
                   "confirm_external_writes_scope": dset.get("confirm_external_writes_scope") or []},
         "reviews": {"trusted_bots": []},
         **({"owner": f["owner"]} if f.get("owner") else {}),
+        **({"comment_tag": f["comment_tag"]} if isinstance(f.get("comment_tag"), str) else {}),  # "" is no tag (#1366)
         **({"plugins": plugins.listed(f)} if plugins.listed(f) else {}),
         **({"surface": f["surface"]} if f.get("surface") else {}),  # where the nodes run (ADR-0026: air, local)
     }
