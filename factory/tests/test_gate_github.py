@@ -1303,7 +1303,7 @@ class JoinTest(unittest.TestCase):
 
             def __call__(self, args, timeout=None):
                 if args[:3] == ["issue", "comment", "5"]:
-                    self.posted.append({"body": args[args.index("--body") + 1]})
+                    self.posted.append({"id": len(self.posted) + 1, "body": args[args.index("--body") + 1]})
                 if args[:2] == ["api", "--paginate"] and args[2].endswith("issues/5/comments"):
                     return "\n".join(json.dumps(c) for c in self.posted)
                 return FakeGh.__call__(self, args, timeout)
@@ -1327,6 +1327,47 @@ class JoinTest(unittest.TestCase):
         gh.head_sha = "h2"  # a new head asks again
         run("please review D", "r4")
         self.assertEqual(len([w for w in gh.writes if w[:2] == ["issue", "comment"]]), 2)
+
+    def test_overlapping_runs_of_one_node_keep_the_first_comment_only(self):  # #1373 review B1
+        import threading
+        barrier = threading.Barrier(2)
+
+        class Racing(FakeGh):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self.posted, self.lock, self.reads = [], threading.Lock(), threading.local()
+
+            def __call__(self, args, timeout=None):
+                if args[:3] == ["issue", "comment", "5"]:
+                    with self.lock:
+                        self.posted.append({"id": len(self.posted) + 1, "body": args[args.index("--body") + 1]})
+                    return ""
+                if args[:3] == ["api", "-X", "DELETE"] and "issues/comments/" in args[3]:
+                    with self.lock:
+                        self.posted = [c for c in self.posted if c["id"] != int(args[3].rsplit("/", 1)[1])]
+                    return ""
+                if args[:2] == ["api", "--paginate"] and args[2].endswith("issues/5/comments"):
+                    with self.lock:
+                        out = "\n".join(json.dumps(c) for c in self.posted)
+                    if not getattr(self.reads, "first", False):  # both runs read before either writes
+                        self.reads.first = True
+                        barrier.wait(timeout=5)
+                    return out
+                return FakeGh.__call__(self, args, timeout)
+        gh = Racing(labels=["factory:approved", "risk:low"], reviews=[review(BOT, M)])
+        gh.pr_author = "carol"
+        flow = {"nodes": {"ask": {"role": "approver", "when": {"always": True}, "triggers": ["manual"], "outcomes": {"ask-human": {"effects": [
+            {"comment": "text", "on": "pr"}]}}}}}
+        results = []
+
+        def run(text, run_id):
+            results.append(gate.apply("ask", "ask-human", {"ticket": 7, "text": text, "run_id": run_id}, tr(gh), flow))
+        threads = [threading.Thread(target=run, args=(f"please review {i}", f"r{i}")) for i in (1, 2)]
+        [t.start() for t in threads]
+        [t.join(10) for t in threads]
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(gh.posted), 1)
+        self.assertIn("<!-- factory:once node=ask outcome=ask-human head=h1 -->", gh.posted[0]["body"])
 
     def test_sweep_asks_waiting_reviewers_again_after_a_comment(self):
         # final review of #183, B1: a comment after the re-request drops her from requested_reviewers

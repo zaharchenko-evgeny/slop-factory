@@ -449,6 +449,10 @@ class GitHubTicketStore:
         self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
 
     @in_ticket_repository
+    def delete_comment(self, n, comment_id):
+        self.run(["api", "-X", "DELETE", f"repos/{self.repo}/issues/comments/{comment_id}"])
+
+    @in_ticket_repository
     def close(self, n):
         self.run(["issue", "close", str(n), "-R", self.repo])
 
@@ -1218,8 +1222,11 @@ class GitHubGateTracker(DescriptorPort):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
         if any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"]) for c in self.tickets.comments(n)):
             return False
-        self.tickets.comment(n, body + self._block(e) + self._once_line(e))
-        return True
+        text = body + self._block(e) + self._once_line(e)
+        self.tickets.comment(n, text)
+        if not e.get("once") or not hasattr(self.tickets, "delete_comment"):
+            return True
+        return self._keep_first(e, text, self.tickets.comments(n), lambda cid: self.tickets.delete_comment(n, cid))
 
     @staticmethod
     def _once(e, text):
@@ -1228,6 +1235,18 @@ class GitHubGateTracker(DescriptorPort):
     @staticmethod
     def _once_line(e):
         return f"\n\n{e['once']}" if e.get("once") else ""
+
+    @classmethod
+    def _keep_first(cls, e, text, comments, delete):
+        """#1373: the read and the write are two calls, so runs that overlap can both pass the check. After the write,
+        the comment with the lowest id that holds the once marker stays; a run whose own comment is a later one removes it.
+        True when this run's comment stays."""
+        marked = sorted((c for c in comments if cls._once(e, c["body"])), key=lambda c: int(c["id"]))
+        mine = next((c for c in marked if c["body"].strip() == text.strip()), None)
+        if mine is None or marked[0] is mine:
+            return True
+        delete(mine["id"])
+        return False
 
     def _fx_pr_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
@@ -1240,8 +1259,12 @@ class GitHubGateTracker(DescriptorPort):
         if any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"])
                for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
             return False
-        self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body", body + self._block(e) + self._once_line(e)])
-        return True
+        text = body + self._block(e) + self._once_line(e)
+        self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body", text])
+        if not e.get("once"):
+            return True
+        return self._keep_first(e, text, self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo),
+                                lambda cid: self.run(["api", "-X", "DELETE", f"repos/{self.pr_repo}/issues/comments/{cid}"]))
 
     def _fx_pr_notes(self, e, ctx):  # a developer's `done` notes for the PR description
         n, kind, value = e["ticket"], e["kind"], e["value"]
