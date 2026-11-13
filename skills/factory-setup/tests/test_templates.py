@@ -104,8 +104,18 @@ class Templates(unittest.TestCase):
             self.assertIn(f"`{name}`", doc, name)
 
     def test_setup_scripts_parse(self):
-        for script in render.PROJECT_T.glob("roles/*/setup.sh"):
+        for script in [*render.PROJECT_T.glob("roles/*/setup.sh"), render.PROJECT_T / "environments/setup.sh"]:
             subprocess.run(["bash", "-n", str(script)], check=True)
+
+    def test_team_environments_install_the_workflow_check_runtimes(self):
+        files = render.render_project(ANSWERS)
+        envs = yaml.safe_load(files["factory.yaml"])["environments"]
+        for name, env in envs.items():
+            if any(r["repo"] == ANSWERS["TEAM_REPOSITORY"] for r in env["repositories"]):
+                self.assertEqual(env.get("setup"), "environments/setup.sh", name)
+        script = files["environments/setup.sh"]
+        self.assertIn("nodejs-wheel==22.", script)  # the statechart skill needs Node 22.18+
+        self.assertIn("temurin", script.lower())  # and Java 11+ for TLC
 
     def test_rendered_factory_has_the_workflow_check(self):
         self.assertIn(".github/workflows/factory-workflow-check.yml", render.render_project(ANSWERS))
