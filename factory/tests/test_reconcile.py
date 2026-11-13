@@ -5,22 +5,23 @@
 # ///
 """Tests for factory/reconcile.py over MemorySystem. Run: uv run factory/tests/test_reconcile.py"""
 import copy
-from unittest import mock
 import json
 import sys
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-import project_mode  # noqa: E402
-cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"))
+cfg.set_team(Path(__file__).resolve().parent / "fixtures/slop")
 import nodes as nodes_mod  # noqa: E402
+import definition  # noqa: E402
 import reconcile  # noqa: E402
 import gate  # noqa: E402
 from gate_port import MemorySystem  # noqa: E402
+from tag import tagged  # noqa: E402
 
 NODES, CONFIG = nodes_mod.load(), cfg.load()
 STAGES, LIMITS = list(CONFIG["tracker"]["stages"]), CONFIG["limits"]
@@ -28,215 +29,52 @@ NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
 OLD, FRESH = "2026-11-03T11:00:00Z", "2026-11-03T11:50:00Z"
 
 
-def run(ticket, nodes=NODES, **kw):
-    tracker = MemorySystem({1: ticket})
-    stage_kinds = kw.pop("stage_kinds", CONFIG["tracker"].get("stage_kinds", {}))
-    results, failed = reconcile.reconcile(tracker, nodes, STAGES, LIMITS,
-                                          stage_kinds=stage_kinds, now=NOW, **kw)
-    return tracker, results, failed
-
-
 def logged(tracker, kind):
     return [v for k, v in tracker.tickets[1].get("log", []) if k == kind]
 
 
-class ReconcileTest(unittest.TestCase):
-    def test_missing_review_focus_refired(self):
-        t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "focus_missing": ["behaviour"]})
-        self.assertEqual(results[0]["node"], "review")
-        self.assertIn('"factory:review-behaviour"', logged(t, "label"))
+class FinishLostTest(unittest.TestCase):
+    """GitHub closes a ticket on merge; reconcile finishes one whose `finish` run was lost."""
 
-    def test_wakes_match_the_configured_stage_prefix(self):
-        """Table: stage prefix of the tracker -> the waking label the trigger carries (`slop:` nodes wake only under `slop:`)."""
-        slop = json.loads(json.dumps(NODES).replace("factory:", "slop:"))
-        ticket = {"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "focus_missing": ["behaviour"]}
-        for prefix, nodes, want in (("slop:", slop, ['"slop:review-behaviour"']), ("factory:", slop, []),
-                                    ("slop:", NODES, []), ("factory:", NODES, ['"factory:review-behaviour"'])):
-            with self.subTest(prefix=prefix, triggers="slop" if nodes is slop else "factory"), \
-                    mock.patch.object(reconcile.vocab, "stage_prefix", return_value=prefix):
-                t, _, _ = run(copy.deepcopy(ticket), nodes=nodes)
-                self.assertEqual(logged(t, "label"), want)
-
-    def test_landed_review_marker_reapplies_outcome_without_refiring_reviewer(self):
-        ticket = {"stage": "in-review", "pr": 5, "pr_state": "open", "ci": "green", "since": OLD,
-                  "head": "abc", "pr_labels": ["factory:review-behaviour"],
-                  "log": [["label", '"factory:review-behaviour"']],
-                  "reviews": [{"agent": True, "focus": "behaviour", "verdict": "changes",
-                               "commit_id": "abc", "round": 1}]}
-        t, results, failed = run(ticket)
-        self.assertFalse(failed)
-        self.assertEqual((results[0]["reconcile"], results[0]["node"], results[0]["outcome"]),
-                         ("reapply", "review", "changes"))
-        self.assertNotIn("factory:review-behaviour", t.facts(1)["pr_labels"])
-
-    def test_stale_review_label_without_review_refired(self):
-        t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": FRESH,
-                             "focus_missing": ["behaviour"],
-                             "review_labels": [("factory:review-behaviour", OLD)]})
-        self.assertEqual(results[0]["node"], "review")
-        self.assertIn('"factory:review-behaviour"', logged(t, "label"))
-
-    def test_command_label_without_outcome_refired(self):
-        t, results, _ = run({"stage": "in-dev", "since": OLD, "command": "factory:implement-mid"})
-        self.assertEqual(results[0]["reconcile"], "refire")
-        self.assertIn('"factory:implement-mid"', logged(t, "label"))
-        self.assertTrue(logged(t, "comment")[0].startswith(f'"{reconcile.PREFIX} stage=in-dev head= re-fired'))
-
-    def test_pending_ci_does_not_wake_a_ci_label(self):
-        graph = {"nodes": {"merge": {"role": "script", "when": {"stage": "approved"},
-                                     "triggers": ["pull_request.labeled factory:ci-green"]}}}
-        self.assertEqual(list(reconcile.wakes(graph, {"stage": "approved", "pr": 5, "ci": "pending"})), [])
-        self.assertEqual([w[1] for w in reconcile.wakes(graph, {"stage": "approved", "pr": 5, "ci": "green"})],
-                         ["factory:ci-green"])
-
-    def test_conflicting_unapproved_pr_goes_to_fix(self):
-        t, results, _ = run({"stage": "in-review", "pr": 5, "conflict": True, "since": OLD,
-                             "round_complete": False})
-        self.assertEqual(results[0]["reconcile"], "conflict")
-        self.assertEqual(t.tickets[1]["stage"], "changes-requested")
-        self.assertIn('"factory:fix-cheap"', logged(t, "label"))
-
-    def test_stale_fix_label_on_conflicting_pr_refired(self):
-        t, results, _ = run({"stage": "changes-requested", "pr": 5, "conflict": True, "since": OLD,
-                             "round_complete": False, "command": "factory:fix-cheap",
-                             "command_at": FRESH, "commit_at": OLD, "attrs": ["factory:fix-cheap"]})
-        self.assertEqual((results[0]["node"], results[0]["reconcile"]), ("fix", "refire"))
-        self.assertIn('"factory:fix-cheap"', logged(t, "label"))
-
-    def test_conflicting_pr_without_command_does_not_fail(self):
-        t, results, failed = run({"stage": "changes-requested", "pr": 5, "conflict": True,
-                                  "since": OLD, "command": None})
-        self.assertFalse(failed)
-        self.assertEqual(results, [])
-        self.assertEqual(t.tickets[1]["stage"], "changes-requested")
-
-    def test_second_miss_blocks_and_needs_human(self):
-        refired = [["comment", '"[factory] reconcile: stage=in-dev head=aaa re-fired factory:implement-mid (x)"']]
-        t, results, _ = run({"stage": "in-dev", "since": OLD, "head": "aaa", "command": "factory:implement-mid", "log": refired})
-        self.assertEqual((results[0]["reconcile"], t.tickets[1]["stage"]), ("blocked", "blocked"))
-        self.assertIn('"factory:needs-human"', logged(t, "label"))
-
-    def test_second_miss_counts_per_step(self):
-        refired = [["comment", '"[factory] reconcile: stage=in-review head=aaa re-fired factory:review-behaviour (x)"']]
-        t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD,
-                             "head": "aaa", "focus_missing": ["structure-security"], "log": refired})
-        self.assertEqual((results[0]["reconcile"], t.tickets[1]["stage"]), ("refire", "in-review"))
-
-    def test_retry_is_per_head(self):
-        refired = [["comment", '"[factory] reconcile: stage=in-review head=aaa re-fired factory:review-behaviour (x)"']]
-        t, results, _ = run({"stage": "in-review", "pr": 5, "ci": "green", "since": OLD, "head": "bbb",
-                             "focus_missing": ["behaviour"], "log": refired})
-        self.assertEqual((results[0]["reconcile"], t.tickets[1]["stage"]), ("refire", "in-review"))
-
-    def test_waiting_stage_reminded_not_refired(self):
-        ticket = {"stage": "blocked", "since": "2026-11-02T11:00:00Z", "stage_at": "2026-11-02T11:00:00Z",
-                  "assignees": ["alice"], "command": "factory:implement-mid"}
-        t, results, _ = run(ticket)
-        self.assertEqual([r["reconcile"] for r in results], ["remind"])
-        self.assertEqual(logged(t, "comment")[0],
-                         '"[factory] reconcile: stage=blocked entry=2026-11-02T11:00:00Z waiting-reminder: @alice, this ticket is still waiting for you."')
-        _, results, _ = run({**ticket, "log": [["comment", logged(t, "comment")[0]]]})
-        self.assertEqual(results, [])
-        _, results, _ = run({**ticket, "stage": "needs-answers", "assignees": []})
-        self.assertEqual(results, [])
-
-    def test_waiting_stage_reminds_assignee_marked_needs_human(self):
-        ticket = {"stage": "blocked", "since": "2026-11-02T11:00:00Z",
-                  "stage_at": "2026-11-02T11:00:00Z", "assignees": ["alice"],
-                  "attrs": ["factory:needs-human"]}
-        t, results, _ = run(ticket)
-        self.assertEqual([r["reconcile"] for r in results], ["remind"])
-        self.assertIn("@alice, this ticket is still waiting for you.", logged(t, "comment")[0])
-
-    def test_custom_stage_kind_from_config(self):
-        kinds = {**CONFIG["tracker"]["stage_kinds"], "investigating": "active"}
-        nodes = copy.deepcopy(NODES)
-        del nodes["nodes"]["investigate"]  # the custom node alone owns this stage
-        nodes["nodes"]["custom"] = {"role": "script", "triggers": ["issues.labeled factory:custom"],
-                                    "when": {"stage": "investigating"}, "outcomes": {"x": {}}, "timeout_minutes": 5}
-        t, results, _ = run({"stage": "investigating", "since": OLD}, nodes, stage_kinds=kinds)
-        self.assertEqual(results[0]["node"], "custom")
-        self.assertIn('"factory:custom"', logged(t, "label"))
-
-    def test_lists_only_open_tickets_in_non_final_stages(self):
-        asked = []
-
-        class Counting(MemorySystem):
-            def sweep_tickets(self, stages, open_only=False):
-                asked.append((sorted(stages), open_only))
-                return super().sweep_tickets(stages, open_only)
-
-            def stale_facts(self, ticket):
-                read.append(ticket)
-                return super().stale_facts(ticket)
-
-        read = []
-        tracker = Counting({1: {"stage": "in-dev", "since": OLD, "command": "factory:implement-mid"},
-                            2: {"stage": "done", "since": OLD},
-                            3: {"stage": "blocked", "since": OLD, "issue_state": "closed"}})
-        reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
-        finals = {s for s, k in CONFIG["tracker"]["stage_kinds"].items() if k == "final"}
-        self.assertEqual(asked[0], (sorted(s for s in STAGES if s not in finals), True))
-        self.assertEqual(read, [1])  # no facts reads for a done or closed ticket
+    def finish(self, ticket):
+        tracker = MemorySystem({1: ticket})
+        results = reconcile.finish_lost(tracker, definition.load(RecoverDefinitionTest.SLOP), [s for s in reconcile.LOST_FINISH if s in STAGES],
+                                        tracker.sweep_tickets(STAGES, open_only=True), False, None)
+        return tracker, results
 
     def test_closed_approved_ticket_with_merged_pr_is_finished(self):
-        t, results, failed = run({"stage": "approved", "pr": 5, "pr_state": "merged", "issue_state": "closed",
-                                  "since": OLD})
-        self.assertFalse(failed)
-        self.assertEqual((results[0]["ticket"], results[0]["reconcile"]), (1, "finish"))
+        t, results = self.finish({"stage": "approved", "pr": 5, "pr_state": "merged", "issue_state": "closed", "since": OLD})
+        self.assertEqual([(r["ticket"], r["reconcile"]) for r in results], [(1, "finish")])
         self.assertEqual(t.tickets[1]["stage"], "done")
 
-    def test_closed_done_ticket_is_left_alone(self):
-        t, results, _ = run({"stage": "done", "pr": 5, "pr_state": "merged", "issue_state": "closed", "since": OLD})
-        self.assertEqual((results, t.tickets[1]["stage"]), ([], "done"))
+    def test_disabled_merged_listeners_are_skipped(self):
+        ticket = {"stage": "approved", "pr": 5, "pr_state": "merged", "issue_state": "closed", "since": OLD}
+        base = definition.load(RecoverDefinitionTest.SLOP)
+        nodes = base["workflow"]["nodes"]
+        name, node = next((k, v) for k, v in nodes.items()
+                          if any(isinstance(t, dict) and t.get("pr") == "merged" for t in v.get("triggers") or []))
+        for label, active_too, stage in (("disabled listener first", True, "done"),
+                                         ("only a disabled listener", False, "approved")):
+            with self.subTest(label):
+                defn = copy.deepcopy(base)
+                new = {"disabled-" + name: {**copy.deepcopy(node), "enabled": False}}
+                if active_too:
+                    new[name] = defn["workflow"]["nodes"][name]
+                rest = {k: v for k, v in defn["workflow"]["nodes"].items() if k != name}
+                defn["workflow"]["nodes"] = {**new, **rest}
+                tracker = MemorySystem({1: dict(ticket)})
+                results = reconcile.finish_lost(tracker, defn, [s for s in reconcile.LOST_FINISH if s in STAGES],
+                                                tracker.sweep_tickets(STAGES, open_only=True), False, None)
+                self.assertEqual(tracker.tickets[1]["stage"], stage, results)
+                self.assertFalse([r for r in results if "error" in r], results)
 
-    def test_closed_approved_ticket_with_open_pr_is_left_alone(self):
-        t, results, _ = run({"stage": "approved", "pr": 5, "pr_state": "open", "issue_state": "closed", "since": OLD})
-        self.assertEqual(([r["reconcile"] for r in results], t.tickets[1]["stage"]), (["orphan-pr"], "approved"))  # #1052
-
-    def test_open_main_red_closes_only_when_main_ci_is_green(self):
-        """Table: CI at the main head -> the Main is red ticket is closed (green) or left open (red, pending); others stay open."""
-        cases = [(stage, ci, ci) for stage in ("ready", "draft", "needs-answers", "blocked", "investigating")
-                 for ci in (True, False)]
-        for stage, ci, closed in cases:
-            with self.subTest(stage=stage, green=ci):
-                tracker = MemorySystem({1: {"stage": stage, "since": FRESH, "title": "Main is red: agnix"},
-                                        2: {"stage": "ready", "since": FRESH, "title": "Other ticket"}})
-                tracker.green_main = ci
-                results, _ = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, stage_kinds=CONFIG["tracker"]["stage_kinds"], now=NOW)
-                self.assertEqual([(r["ticket"], r["reconcile"]) for r in results], [(1, "stale-red")] if closed else [])
-                self.assertEqual(logged(tracker, "close") != [], closed)
-                self.assertEqual([k for k, _ in tracker.tickets[2].get("log", [])], [])
-
-    def test_fresh_step_waits_for_the_timeout(self):
-        _, results, _ = run({"stage": "in-dev", "since": FRESH, "command": "factory:implement-mid"})
-        self.assertEqual(results, [])
-
-    def test_steps_come_from_graph(self):
-        nodes = copy.deepcopy(NODES)
-        nodes["nodes"]["custom"] = {"role": "script", "triggers": ["issues.labeled factory:custom"],
-                                    "when": {"stage": "investigating"}, "outcomes": {"x": {}}, "timeout_minutes": 5}
-        _, results, _ = run({"stage": "investigating", "since": OLD}, nodes)
-        self.assertEqual(results, [])  # a waiting stage even with a node
-        nodes["nodes"]["custom"]["when"] = {"stage": "ready"}
-        nodes["nodes"]["start"]["enabled"] = False
-        t, results, _ = run({"stage": "ready", "since": "2026-11-03T11:54:00Z"}, nodes)
-        self.assertEqual(results[0]["node"], "custom")
-        self.assertIn('"factory:custom"', logged(t, "label"))
-
-    def test_each_scheduled_pass_runs_the_ci_label_sync(self):
-        import contextlib
-        import io
-        import json
-        from unittest.mock import patch
-        out, synced = io.StringIO(), {"repo": "o/app", "pr": 1, "ci": "green"}
-        with patch("factory_plugins.github.gate.GitHubGateTracker.from_config", return_value=MemorySystem({})), \
-                patch("factory_plugins.github.ci_sync.run_ci_sync", return_value=([synced], False)) as sync, \
-                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(reconcile.main(["--dry-run"]), 0)
-        self.assertTrue(sync.call_args.args[0])  # the pass's --dry-run
-        self.assertEqual(json.loads(out.getvalue())["ci_sync"], [synced])
-
+    def test_other_closed_tickets_are_left_alone(self):
+        for ticket in ({"stage": "done", "pr": 5, "pr_state": "merged", "issue_state": "closed"},
+                       {"stage": "approved", "pr": 5, "pr_state": "open", "issue_state": "closed"},
+                       {"stage": "approved", "pr": 5, "pr_state": "merged"}):  # still open: the sweep's job
+            with self.subTest(ticket=ticket):
+                t, results = self.finish({**ticket, "since": OLD})
+                self.assertEqual((results, t.tickets[1]["stage"]), ([], ticket["stage"]))
 
 
 class WakeReadyTest(unittest.TestCase):
@@ -285,7 +123,8 @@ class CiSyncTicketRepositoriesTest(unittest.TestCase):
                               ({"repository": "o/r", "repositories": ["o/r", "o/b"]}, ["o/r", "o/b"]),
                               ({"repository": "o/r"}, ["o/r"])]:
             with self.subTest(tracker=tracker):
-                config = {**CONFIG, "tracker": {**CONFIG["tracker"], **tracker}, "repositories": [
+                base = {k: v for k, v in CONFIG["tracker"].items() if k not in ("repository", "repositories")}
+                config = {**CONFIG, "tracker": {**base, **tracker}, "repositories": [
                     {"name": "app", "url": "https://github.com/o/app", "role": "project"},
                     {"name": "r", "url": "https://github.com/o/r", "role": "project"}]}
                 with patch.object(ci_sync.config_mod, "load", return_value=config), \
@@ -316,6 +155,33 @@ class WakeApprovedTest(unittest.TestCase):
     def test_waits_for_an_open_blocker_and_ignores_the_default_mode(self):
         self.assertEqual(self.wake(blockers_open=1)[1], [])
         self.assertEqual(self.wake({**self.NODES, "blockers": "start"})[1], [])
+
+
+class ApprovalGraphTest(unittest.TestCase):
+    """`wake_approved` reads the team definition, not engine/nodes.yaml."""
+    SLOP = Path(__file__).resolve().parent / "fixtures/slop"
+
+    def graph(self, blockers, held):
+        defn = copy.deepcopy(definition.load(self.SLOP))
+        if blockers:
+            defn["workflow"]["blockers"] = blockers
+        if held:
+            defn["workflow"]["nodes"]["merge"]["when"] = {"stage": "approved", "blockers": "closed"}
+        return reconcile.approval_graph(defn)
+
+    def test_blockers_mode_and_merge_node_come_from_the_definition(self):
+        for blockers, held, want in (("merge", True, [("merge", "factory:merge")]), ("merge", False, []),
+                                     ("start", True, []), (None, True, [])):
+            with self.subTest(blockers=blockers, held=held):
+                graph = self.graph(blockers, held)
+                self.assertEqual(graph["blockers"], blockers or "start")
+                self.assertEqual([(n, label) for n, label, _ in reconcile.merge_labels(graph)],
+                                 [("merge", "factory:merge")] if held else [])
+                tr = MemorySystem({1: {"stage": "approved", "blockers_open": 0, "pr": 5, "pr_state": "open",
+                                        "label_at": {"factory:merge": "2026-11-06T10:00:00Z"}}})
+                tr.blocked_by = lambda n: [{"number": 9, "state": "closed"}]
+                got = reconcile.wake_approved(tr, graph, 30, now=WakeApprovedTest.NOW)
+                self.assertEqual([(r["node"], r["label"]) for r in got], want)
 
 
 class RecoverDefinitionTest(unittest.TestCase):
@@ -532,8 +398,8 @@ class RecoverDefinitionTest(unittest.TestCase):
     def missed_twice(self):
         ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
                          label_at={"factory:review-low": OLD})
-        ticket["log"] = [("comment", json.dumps(f"{reconcile.PREFIX} stage=in-review head=abc123def456 "
-                                                "re-fired factory:review-low (no review-low outcome)"))]
+        ticket["log"] = [("comment", json.dumps(tagged(f"{reconcile.PREFIX} stage=in-review head=abc123def456 "
+                                                "re-fired factory:review-low (no review-low outcome)")))]
         return ticket
 
     def run_many(self, count):
@@ -547,6 +413,16 @@ class RecoverDefinitionTest(unittest.TestCase):
         tr, results = self.run_many(3)
         self.assertEqual({(r["reconcile"], r.get("systemic")) for r in results}, {("refire", True)})
         self.assertEqual({tr.get_stage(tr.tickets[i]) for i in (1, 2, 3)}, {"in-review"})
+
+    def test_a_miss_recorded_in_the_old_one_line_form_counts_like_the_new_form(self):
+        old = self.missed_twice()
+        old["log"] = [("comment", json.dumps(f"[factory] {reconcile.PREFIX} stage=in-review head=abc123def456 "
+                                             "re-fired factory:review-low (no review-low outcome)"))]
+        tr = MemorySystem({1: old})
+        tracker = self.config["tracker"]
+        results = reconcile.recover_definition(tr, self.defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
+                                               self.config["limits"], now=NOW)
+        self.assertEqual([r.get("reconcile") for r in results], ["blocked"], results)
 
     def test_one_second_miss_still_blocks(self):
         tr, results = self.run_many(1)
@@ -633,6 +509,58 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(tracker.tickets[1].get("log", []), [])
 
 
+class ReconcileMainBlockersTest(unittest.TestCase):
+    """`reconcile_main` hands `wake_approved` the definition's graph, whatever engine/nodes.yaml says."""
+    SLOP = Path(__file__).resolve().parent / "fixtures/slop"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.previous = cfg.team_root()
+        cfg.set_team(cls.SLOP)
+
+    @classmethod
+    def tearDownClass(cls):
+        cfg.set_team(cls.previous)
+
+    def run_main(self, blockers, engine_blockers):
+        import io
+        import tempfile
+        defn = copy.deepcopy(definition.load(self.SLOP))
+        defn["workflow"]["blockers"] = blockers
+        defn["workflow"]["nodes"]["merge"]["when"] = {"stage": "approved", "blockers": "closed"}
+        ticket = {"stage": "approved", "blockers_open": 0, "pr": 5, "pr_state": "open",
+                  "label_at": {"factory:merge": "2026-11-06T10:00:00Z"}}
+        engine = {"blockers": engine_blockers, "nodes": {}}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(definition, "load", return_value=defn), \
+                mock.patch.object(nodes_mod, "load", return_value=engine), \
+                mock.patch.object(MemorySystem, "blocked_by", lambda self, n: [{"number": 9, "state": "closed"}],
+                                  create=True), \
+                mock.patch.object(reconcile, "recover_definition", return_value=[]), \
+                mock.patch.object(reconcile, "finish_lost", return_value=[]), \
+                mock.patch("sys.stdout", io.StringIO()) as out:
+            spec = Path(tmp) / "tickets.json"
+            spec.write_text(json.dumps({"1": ticket}))
+            self.assertEqual(reconcile.reconcile_main(["--dry-run", f"memory:{spec}"]), 0)
+        return [(r["node"], r["label"]) for r in json.loads(out.getvalue())["reconcile"]
+                if r.get("outcome") == "refire" and r.get("node") == "merge"]
+
+    def test_the_blockers_mode_comes_from_the_definition_not_the_engine(self):
+        for blockers, engine, want in (("merge", "start", [("merge", "factory:merge")]),
+                                       ("start", "merge", [])):
+            with self.subTest(definition=blockers, engine=engine):
+                self.assertEqual(self.run_main(blockers, engine), want)
+
+
+class NoDefinitionTest(unittest.TestCase):
+    def test_a_team_without_a_definition_reports_instead_of_reconciling(self):
+        import io
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(cfg, "team_root", return_value=Path(tmp)), \
+                mock.patch("sys.stderr", io.StringIO()) as err:
+            self.assertEqual(reconcile.reconcile_main([]), 2)
+        self.assertIn("factory.yaml and workflow.yaml", err.getvalue())
+
+
 class ReconcileFailureTest(unittest.TestCase):
     """#845: a reconcile crash is a Doctor ticket, not a silent `reconciled` run."""
     def setUp(self):
@@ -663,133 +591,6 @@ class ReconcileFailureTest(unittest.TestCase):
         self.assertEqual([c[:3] for c in self.calls if c[:2] == ["issue", "close"]], [["issue", "close", "7"]])
 
 
-STAGE_LABELS = {f"factory:{s}" for s in STAGES}
-KINDS = ("close", "no-pr", "stage-labels", "orphan-pr")
-
-
-class ConsistencyTest(unittest.TestCase):
-    """The consistency pass: states of tickets and PRs that disagree (#1052)."""
-    STALE = "2026-11-03T08:00:00Z"  # older than limits.stuck_minutes at NOW
-
-    def sweep(self, tracker, **kw):
-        results, failed = reconcile.reconcile(tracker, NODES, STAGES, LIMITS, now=NOW,
-                                              stage_kinds=CONFIG["tracker"].get("stage_kinds", {}), **kw)
-        self.assertFalse(failed)
-        return [r for r in results if r.get("reconcile") in KINDS]
-
-    def pass_(self, tickets):
-        tracker = MemorySystem(tickets)
-        return tracker, self.sweep(tracker)
-
-    def comments(self, tracker, n):
-        return [v for k, v in tracker.tickets[n].get("log", []) if k == "comment"]
-
-    def test_open_done_ticket_is_closed(self):
-        merged, closed = {"pr": 5, "pr_state": "merged"}, {"pr": 6, "pr_state": "closed"}
-        for stage in [s for s in ("done", "merged") if s in STAGES]:  # `merged` only when the team declares it
-            for prs in ([], [merged], [closed, merged]):
-                with self.subTest(stage=stage, prs=prs):
-                    t, found = self.pass_({1: {"stage": stage, "prs": prs}})
-                    self.assertEqual([(r["ticket"], r["reconcile"]) for r in found], [(1, "close")])
-                    self.assertEqual(t.tickets[1]["issue_state"], "closed")
-        for ticket in ({"stage": "done", "prs": [{"pr": 5, "pr_state": "open"}]}, {"stage": "done", "issue_state": "closed"}):
-            with self.subTest(ticket=ticket):
-                self.assertEqual(self.pass_({1: ticket})[1], [])
-
-    def test_review_stage_without_pr_is_blocked_once(self):
-        open_pr = {"pr": 5, "pr_state": "open"}
-        cases = [("in-review", [], True), ("approved", [], True), ("changes-requested", [], True),
-                 ("in-review", [{"pr": 5, "pr_state": "merged"}], True),
-                 ("in-review", [{"pr": 5, "pr_state": "closed"}], True),
-                 ("in-review", [{**open_pr, "branch": "feature/x"}], True),
-                 ("in-review", [open_pr], False), ("in-dev", [], False), ("blocked", [], False)]
-        for stage, prs, blocked in cases:
-            for updated, expect in ((self.STALE, blocked), (FRESH, False), (None, False)):
-                with self.subTest(stage=stage, prs=prs, updated=updated):
-                    t, found = self.pass_({1: {"stage": stage, "prs": prs, "updated_at": updated}})
-                    self.assertEqual([r["reconcile"] for r in found], ["no-pr"] if expect else [])
-                    if expect:
-                        self.assertEqual(t.tickets[1]["stage"], "blocked")
-                        self.assertIn("factory:needs-human", t.tickets[1]["attrs"])
-                        self.assertTrue(self.comments(t, 1)[0].startswith(f'"{reconcile.PREFIX} no-pr:'))
-                        self.assertIn(f"stage {stage}", self.comments(t, 1)[0])
-                        self.assertEqual(self.sweep(t), [])  # blocked now: once
-
-    def test_two_stage_labels_ask_a_person(self):
-        ready, dev = "factory:ready", "factory:in-dev"
-        cases = [([ready, dev], 1), ([ready, dev, "factory:done"], 1), ([], 0), (["bug"], 0),
-                 (["factory:needs-human"], 1), (["factory:lesson"], 1), ([ready], 0), ([ready, "bug"], 0)]
-        for labels, asks in cases:
-            with self.subTest(labels=labels):
-                t, found = self.pass_({1: {"labels": labels}})
-                self.assertEqual([r["reconcile"] for r in found], ["stage-labels"] * asks)
-                if asks:
-                    self.assertIn("factory:needs-human", t.tickets[1]["attrs"])
-                    self.assertEqual(len(self.comments(t, 1)), 1)
-                    for label in set(labels) & STAGE_LABELS:
-                        self.assertIn(label, self.comments(t, 1)[0])
-
-    def test_pr_of_closed_ticket_asks_a_person(self):
-        for pr_state, asks in (("open", True), ("merged", False), ("closed", False)):
-            with self.subTest(pr_state=pr_state):
-                t, found = self.pass_({1: {"stage": "in-review", "issue_state": "closed", "pr": 9, "pr_state": pr_state}})
-                self.assertEqual([(r["reconcile"], r["pr"]) for r in found], [("orphan-pr", 9)] if asks else [])
-                self.assertEqual("factory:needs-human" in t.tickets[1].get("pr_labels", []), asks)
-                self.assertEqual(len(self.comments(t, 1)), int(asks))
-        self.assertEqual(self.pass_({1: {"stage": "in-review", "pr": 9, "pr_state": "open"}})[1], [])  # its ticket is open
-
-    def test_map_ticket_is_skipped(self):
-        for labels in (["factory:map"], ["factory:map", "factory:ready", "factory:in-dev"]):
-            with self.subTest(labels=labels):
-                t, found = self.pass_({1: {"labels": labels, "updated_at": self.STALE}})
-                self.assertEqual(found, [])
-                self.assertEqual(self.comments(t, 1), [])
-
-    def test_second_pass_writes_nothing(self):
-        tracker, first = self.pass_({1: {"stage": "done"}, 2: {"stage": "in-review", "updated_at": self.STALE},
-                                     3: {"labels": ["factory:ready", "factory:in-dev"]},
-                                     4: {"issue_state": "closed", "pr": 9, "pr_state": "open"}})
-        self.assertEqual(sorted(r["reconcile"] for r in first), ["close", "no-pr", "orphan-pr", "stage-labels"])
-        before = json.dumps(tracker.tickets, sort_keys=True)
-        self.assertEqual(self.sweep(tracker), [])
-        self.assertEqual(json.dumps(tracker.tickets, sort_keys=True), before)
-
-    def test_dry_run_lists_without_writing(self):
-        tracker = MemorySystem({1: {"stage": "done"}})
-        self.assertEqual([r["reconcile"] for r in self.sweep(tracker, dry_run=True)], ["close"])
-        self.assertNotIn("issue_state", tracker.tickets[1])
-
-
-class GitHubConsistencyViewTest(unittest.TestCase):
-    """The GitHub tracker's view: PR states from the pull list, forks and non-factory branches ignored."""
-
-    def test_view_groups_prs_by_ticket_and_finds_orphans(self):
-        from factory_plugins.github.gate import GitHubGateTracker
-        pr = lambda number, ref, state, merged=None, fork=False: {  # noqa: E731
-            "number": number, "state": state, "merged_at": merged,
-            "head": {"ref": ref, "repo": {"full_name": "other/fork" if fork else "o/r"}}}
-        pulls = [pr(10, "ez/1-a", "closed", merged="2026-11-01T00:00:00Z"), pr(11, "ez/1-b", "closed"),
-                 pr(12, "ez/2-a", "open"), pr(13, "ez/3-a", "open"), pr(14, "ez/4-a", "open", fork=True),
-                 pr(15, "feature/x", "open"), pr(16, "ez/99-a", "open")]
-        issues = [{"number": 1, "labels": [{"name": "factory:done"}], "updated_at": "t"},
-                  {"number": 2, "labels": [], "updated_at": "t"}, {"number": 20, "pull_request": {}, "labels": []}]
-
-        def gh(args, **kw):
-            path = next(a for a in args if a.startswith("repos/"))
-            if path.startswith("repos/o/r/pulls"):
-                return "\n".join(json.dumps(x) for x in pulls)
-            if path.startswith("repos/o/r/issues?"):
-                return "\n".join(json.dumps(x) for x in issues)
-            if path == "repos/o/r/issues/3":
-                return json.dumps({"number": 3, "state": "closed", "labels": []})
-            raise RuntimeError("HTTP 404: Not Found")  # #99 is no issue
-
-        view = GitHubGateTracker("o/r", {}, "bot", run=gh).consistency_view()
-        self.assertEqual([(t["number"], [p["state"] for p in t["prs"]]) for t in view["tickets"]],
-                         [(1, ["merged", "closed"]), (2, ["open"])])
-        self.assertEqual(view["orphan_prs"], [{"number": 13, "ticket": 3}])
-
-
 class GitHubOrphanCommentTargetTest(unittest.TestCase):
     """An `orphan-pr` comment lands on the PR it names, not on the ticket's newest open PR."""
 
@@ -817,3 +618,34 @@ class GitHubOrphanCommentTargetTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DoctorTicketRepositoryTest(unittest.TestCase):
+    """offline-eval-factory#90: a YouTrack team's GitHub Issues environment files its doctor tickets there, not in the
+    code host of another organization its token cannot see."""
+    DEFN = {"factory": {"tracker": {"adapter": "youtrack", "project": "LME"}, "environments": {
+        "team": {"repositories": [{"repo": "me/team-factory", "write": True, "tracker": {"adapter": "github-issues"}},
+                                  {"repo": "Org/app", "tracker": "none"}]},
+        "app": {"repositories": [{"repo": "Org/app", "write": True, "tracker": {"scope": {"field": "S", "value": "A"}}}]}}}}
+    SETTINGS = {"tracker": {"adapter": "youtrack"}, "code_host": {"repository": "Org/app"}}
+
+    def test_the_environment_home_wins_only_for_a_non_github_tracker(self):
+        import doctor
+        self.assertEqual(doctor.ticket_repository(self.SETTINGS, "team", self.DEFN), "me/team-factory")
+        self.assertEqual(doctor.ticket_repository(self.SETTINGS, "app", self.DEFN), "Org/app")
+        self.assertEqual(doctor.ticket_repository(self.SETTINGS, "", self.DEFN), "Org/app")
+        github = {"tracker": {"adapter": "github-issues", "repository": "me/engine"}}
+        self.assertEqual(doctor.ticket_repository(github, "team", self.DEFN), "me/engine")
+
+
+class StateRulesSkipGitHubStoreTest(unittest.TestCase):
+    """offline-eval-factory#90: the YouTrack State rules pass skips a GitHub Issues store instead of failing on it."""
+
+    def test_a_github_store_gives_no_results_and_no_failure(self):
+        from unittest import mock
+        import gate
+        from factory_plugins.youtrack import state
+        tracker = type("T", (), {"tickets": object()})()
+        config = {"tracker": {"adapter": "youtrack", "state_rules": {"Obsolete": "stop"}, "stages": {"triage": {}}}}
+        with mock.patch.object(gate, "tracker_of", return_value=tracker):
+            self.assertEqual(state.reconcile_pass(config, True, None), {"state_rules": ([], False)})

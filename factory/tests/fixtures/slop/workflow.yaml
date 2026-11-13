@@ -102,6 +102,8 @@ nodes:
       small:  { effects: [{ label: "complexity:small" },  { label: "factory:implement-small" },  { stage: in-dev }] }
       medium: { effects: [{ label: "complexity:medium" }, { label: "factory:implement-medium" }, { stage: in-dev }] }
       large:  { effects: [{ label: "complexity:large" },  { label: "factory:implement-large" },  { stage: in-dev }] }
+      blocked: { effects: [{ comment: reason }, { stage: blocked }] }   # a person must act; notify tells the owner
+      triage:  { effects: [{ comment: reason }, { stage: triage }] }    # not startable as written: scope it again
 
   # --- Implement: the developer sets the risk it found and picks the review ---------------------
   implement-small:

@@ -26,7 +26,6 @@ defaults:
     branch_pattern: "ez/{ticket}-{slug}"
     commit_prefix: "#{ticket} "
     bot_login: "jetbrains-air[bot]"
-    issues_token_env: FACTORY_ISSUES_TOKEN   # the gate's issue, label and comment writes to slop-eval-factory (slop-factory#652)
     confirm_external_writes: true
     confirm_external_writes_scope: []
     knowledge:                    # the knowledge base: an additional repository of the environments that read it
@@ -117,9 +116,6 @@ roles:
     description: Scopes a ticket, sets risk and complexity, or asks, splits, or rejects it
     skills: [to-tickets]
     mcp: {}
-    env:
-      FACTORY_ISSUES_TOKEN: { required: true, secret: true,
-                              description: "GitHub token, Issues read/write on every repository; the router opens per-repository tickets" }
 
 # Agents: a role (above; roles/<role>/: role.md, setup.sh) + a model
 # + settings (a repository's `write` says where a run may push, ADR-0027). `gate` and `human` have no role.
@@ -147,7 +143,7 @@ environments:
   engine:                         # engine tickets and PRs
     repositories:
       - { repo: zaharchenko-evgeny/slop-factory, write: true }
-      - { repo: zaharchenko-evgeny/slop-eval-factory }   # read-only context; its tickets are the team environment's
+      - { repo: zaharchenko-evgeny/slop-eval-factory, token: FACTORY_ISSUES_TOKEN }   # read-only context; its tickets are the team environment's
     ci: { workflow: quality-gates }   # `ci: failed` = Air workflow_run.failed for this workflow
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               "*.blob.core.windows.net", pypi.org, files.pythonhosted.org, registry.npmjs.org]
@@ -163,7 +159,7 @@ environments:
   intake:                         # triage of every ticket: both repositories, nothing writable
     repositories:
       - { repo: zaharchenko-evgeny/slop-factory }
-      - { repo: zaharchenko-evgeny/slop-eval-factory, tracker: none }
+      - { repo: zaharchenko-evgeny/slop-eval-factory, tracker: none, token: FACTORY_ISSUES_TOKEN }
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               pypi.org, files.pythonhosted.org]
     vm: default

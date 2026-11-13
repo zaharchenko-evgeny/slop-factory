@@ -151,7 +151,7 @@ class GitHubContractTest(SystemContract, unittest.TestCase):
         ("join", "ticket"): lambda s: s.gh.reviews.append(review(BOT, M)),  # the round at the head is complete
         ("request-reviewers", "pr"): lambda s: s.gh.reviews.append(review("alice", "", state="CHANGES_REQUESTED")),
         ("pr-notes-sync", "pr"): lambda s: s.gh.comments.append(
-            {"body": f"{gate_github.NOTES_PARKED}\n\n{derive.notes_block({'for': 'fixer', 'hint': 'h'})}",
+            {"body": f"[factory]\n{gate_github.NOTES_PARKED}\n\n{derive.notes_block({'for': 'fixer', 'hint': 'h'})}",
              "user": {"login": BOT, "type": "Bot"}, "created_at": "2026-01-02T00:00:00Z"}),
     }
     XFAIL = {
@@ -292,7 +292,7 @@ class YouTrackContractTest(SystemContract, unittest.TestCase):
         ("join", "ticket"): GitHubContractTest.SETUP[("join", "ticket")],
         ("request-reviewers", "pr"): GitHubContractTest.SETUP[("request-reviewers", "pr")],
         ("pr-notes-sync", "pr"): lambda s: s.tickets.comment(
-            7, f"{gate_github.NOTES_PARKED}\n\n{derive.notes_block({'for': 'fixer', 'hint': 'h'})}"),
+            7, f"[factory]\n{gate_github.NOTES_PARKED}\n\n{derive.notes_block({'for': 'fixer', 'hint': 'h'})}"),
     }
     NO_WRITE = GitHubContractTest.NO_WRITE
     EXEMPT = GitHubContractTest.EXEMPT

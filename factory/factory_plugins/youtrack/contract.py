@@ -25,11 +25,11 @@ class YouTrack:
 
     @staticmethod
     def filters(block):
-        """Air's project selector (`projectShortName`, case-sensitive: AIRA-790) and the scope field's value."""
+        """Air's project selector (`projectShortName`, case-sensitive: AIRA-790). Air's YouTrack triggers take no custom
+        field filter (a `Subsystem` filter never fires, #1327): every environment's copy wakes, and the gate's scope check
+        skips a ticket of another environment."""
         b = block or {}
-        scope = b.get("scope") or {}
-        out = {"projectShortName": b["project"]} if b.get("project") else {}
-        return {"youtrack": {**out, **({scope["field"]: scope["value"]} if scope.get("field") else {})}} if out or scope else {}
+        return {"youtrack": {"projectShortName": b["project"]}} if b.get("project") else {}
 
     @staticmethod
     def check(block, where):

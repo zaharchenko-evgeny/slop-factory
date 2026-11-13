@@ -10,6 +10,7 @@ from pathlib import Path
 
 import yaml
 
+import effects
 import plugins  # ADR-0026: a plugin's code is imported when the core calls it
 import scopes
 
@@ -894,6 +895,22 @@ def _used_stages(w):
     return used
 
 
+def youtrack_tickets(defn):
+    """Whether a ticket repository of the definition keeps its tickets in YouTrack: the adapter of its own tracker
+    block, else its environment's, else the top-level one (`tracker: none` holds no tickets)."""
+    f = defn["factory"]
+    top = _as_block(f.get("tracker")) or {}
+    for env in (f.get("environments") or {}).values():
+        env = env or {}
+        for r in env.get("repositories") or []:
+            if not isinstance(r, dict) or r.get("tracker") in ("none", False):
+                continue
+            layers = (_as_block(r.get("tracker")), _as_block(env.get("tracker")), top)
+            if next((b["adapter"] for b in layers if b and b.get("adapter")), None) == "youtrack":
+                return True
+    return False
+
+
 def to_project(defn):
     """(project descriptor, format-2 workflow) of the definition, for the project loaders (`project.load`,
     `workflow.load`) and `config`. The definition must have no `errors`."""
@@ -932,12 +949,15 @@ def to_project(defn):
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP,
                             # ADR-0027: a repository's own tracker is a ticket place (`ticket_places`), not a #1069 project
                             **({"tracker": dict(e["tracker"])} if isinstance(e.get("tracker"), dict) and not new_model else {}),
-                            **({"vcs": e["vcs"]} if e.get("vcs") else {})}  # its own vcs (#1070)
+                            **({"vcs": e["vcs"]} if e.get("vcs") else {}),  # its own vcs (#1070)
+                            # the checks that count as CI (#1211); the gate reads them as `ci_checks_of`
+                            **({"ci": {"checks": list(e["ci"]["checks"])}} if (e.get("ci") or {}).get("checks") else {})}
 
     # Stages: every name the nodes use, plus the engine's PR facts.
     used = _used_stages(w)
     kind = {s: k for k in ("final", "waiting") for s in stages.get(k) or []}
-    states = {s: {"kind": kind.get(s, "active"), "store": {"label": f"{prefix}{s}"}} for s in sorted(used)}
+    ticket_store = "tag" if youtrack_tickets(defn) else "label"  # a ticket-side label is a tag where tickets live in YouTrack
+    states = {s: {"kind": kind.get(s, "active"), "store": {ticket_store: f"{prefix}{s}"}} for s in sorted(used)}
     states["pr-merged"] = {"kind": "final", "store": {"pr": "merged"}}
 
     # Commands: every label a trigger or an effect names; on the PR when an effect puts it there (`on: pr`).
@@ -949,7 +969,7 @@ def to_project(defn):
                       if ("label" in e or "unlabel" in e) and e.get("on") == "pr"}
     commands = {}
     for label in sorted({x for n in nodes.values() for x in _labels_of(n)}):
-        commands[_name(label, prefix)] = {"store": {("pr_label" if label in on_pr else "label"): label}}
+        commands[_name(label, prefix)] = {"store": {("pr_label" if label in on_pr else ticket_store): label}}
 
     def role_of(agent_name):
         a = agents[agent_name]
@@ -1214,9 +1234,9 @@ def config(defn):
     """The engine config of the definition, to merge over engine/defaults.yaml: its project descriptor, with the
     tracker's `stages`, `stage_kinds` and `commands` that the gate reads."""
     descriptor = to_project(defn)[0]
-    states = {name: s for name, s in descriptor["states"].items() if "label" in s["store"]}
+    states = {name: s for name, s in descriptor["states"].items() if {"label", "tag"} & s["store"].keys()}
     out = {**descriptor, "tracker": {**descriptor["tracker"], "label_prefix": label_prefix(defn),
-                                     "stages": {name: s["store"]["label"] for name, s in states.items()},
+                                     "stages": {name: s["store"].get("label") or s["store"]["tag"] for name, s in states.items()},
                                      "stage_kinds": {name: s["kind"] for name, s in states.items()},
                                      "commands": {name: c["store"] for name, c in descriptor["commands"].items()}}}
     return {**out, **ticket_places(defn, out["tracker"])} if adopted(defn) else out
@@ -1228,17 +1248,24 @@ def ticket_places(defn, tracker):
     `tracker.repository` first; every repository whose tracker has no home (YouTrack) is a `ticket_places` entry the
     gate routes to by id and scope, its PRs on its own vcs."""
     homes, places = [], []
+    # #1325: the GitHub Issues homes share the top tracker only when it is GitHub Issues too; under another top tracker
+    # (YouTrack) each home is a place of its own, or its issues get the top tracker's adapter and fall out of scope
+    shared = scopes.adapter(tracker) == "github-issues"
     for env in (defn["factory"].get("environments") or {}):
         repos = repositories(defn, env)
         for r in repos:
             c = contract(defn, "tracker", r["tracker"]) if r["tracker"] else None
             if c is None:
                 continue
-            if home := c.home(r["tracker"], r["repo"]):
+            if (home := c.home(r["tracker"], r["repo"])) and shared:
                 homes.append(next((x["repo"] for x in repos if x["repo"].lower() == home), home))
-            elif r["repo"] not in {p["repository"] for p in places}:
-                places.append({"repository": r["repo"], "tracker": r["tracker"], "vcs": r["vcs"],
-                               "repositories": [r["repo"], *(x["repo"] for x in repos if x["repo"] != r["repo"])]})
+            else:
+                block = {**r["tracker"], "repository": r["repo"]} if home else r["tracker"]  # #1325: its own issues
+                if not any(p["repository"] == r["repo"] and p["tracker"] == block for p in places):
+                    places.append({"repository": r["repo"], "tracker": block, "vcs": r["vcs"],
+                                   "repositories": [r["repo"], *(x["repo"] for x in repos if x["repo"] != r["repo"])]})
+    places.sort(key=lambda p: not p["tracker"].get("scope"))  # #1361: an unscoped place (intake) holds every ticket of
+    # its tracker, so the gate tries it after the scoped places, whatever the order of the environments
     top = next((h for h in homes if h.lower() == full_name(tracker.get("repository") or "").lower()), None)
     ordered = list(dict.fromkeys([*([top] if top else []), *homes]))
     return {"tracker": {**tracker, "repositories": ordered, **({"repository": ordered[0]} if ordered and not top else {})},
@@ -1286,8 +1313,8 @@ def plan(graph, facts, auto_merge=None, default_tier="mid", blockers="start", st
         if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
             if allowed("finish", "child-blocked"):
                 what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)
-                return "finish", "child-blocked", {"reason": f"[factory] Blocked: child tickets need a person: {what}. "
-                                                             f"Fix them, then set {gate.vocab.stage('ready')} on this ticket."}
+                return "finish", "child-blocked", {"reason": effects.tagged(f"Blocked: child tickets need a person: {what}. "
+                                                                          f"Fix them, then set {gate.vocab.stage('ready')} on this ticket.")}
         elif all(c["state"] == "closed" for c in kids) and allowed("finish", "children-done"):
             return "finish", "children-done", {}
     if stage == "in-review" and allowed("join", "waiting") and facts.get("waiting_reviewers") \

@@ -3,35 +3,30 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""`factory reconcile`: re-fire the waking label of a node whose outcome is missing, from the state alone.
+"""`factory reconcile`: re-fire the waking label of a node whose outcome is missing, from the definition and the state alone.
 
 Usage: reconcile.py [--dry-run] [--tracker memory:FILE]
-No model and no Air quota: the expected next step of each ticket comes from engine/nodes.yaml (the node whose
+No model and no Air quota: the expected next step of each ticket comes from workflow.yaml (the node whose
 `when` matches the ticket's state and whose trigger is a label). A step with no outcome after `limits.run_timeout_minutes`
 (a node's `timeout_minutes` overrides it) gets its label once; a second miss sets `blocked` and `factory:needs-human`.
 A closed ticket in a PR stage with a merged PR is finished (its `finish` run was lost).
-A ticket in a waiting stage, closed, or already marked `factory:needs-human` is left alone.
-A consistency pass then reports states that disagree: an open `done` ticket with no open PR is closed, a PR-stage ticket
-with no open PR is blocked, zero or several stage labels and an open PR of a closed ticket ask a person (`consistency`).
-Each pass also runs the CI label sync (`gate.py ci-sync`) over the `role: project` repositories (not with memory:FILE).
+A ticket that is closed or already marked `factory:needs-human` is left alone.
 """
 import json
-import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
+import effects
 import definition
-import nodes as nodes_mod
 import vocab
 
-PREFIX = "[factory] reconcile:"
+PREFIX = "reconcile:"
 SYSTEMIC_MISSES = 3  # second misses in one run that mean the factory, not the tickets, is broken
 RUN = "reconcile"
 LOST_FINISH = ("approved", "in-review", "changes-requested")
-RED_TITLE = re.compile(r"Main is red(?: in Air)?: (.+)")
 FACTS_ERROR = f"{PREFIX} ticket facts failed:"
 EXTERNAL_LATE = "external review late, re-woke"  # the once-per-head marker of `late_external_review`
 
@@ -47,244 +42,27 @@ def ticket_error(tracker, number, error, dry_run=False):
             comments = [c["body"] for c in store.comments(number)]
         else:
             comments = [json.loads(value) for kind, value in store[number].get("log", []) if kind == "comment"]
-        if not any(comment.startswith(FACTS_ERROR) for comment in comments):
+        if not any(effects.has_tag(comment, FACTS_ERROR) for comment in comments):
             tracker.apply({"ticket": number, "run_id": RUN, "kind": "comment",
-                           "value": f"{FACTS_ERROR} {result['error']}"})
+                           "value": effects.tagged(f"{FACTS_ERROR} {result['error']}")})
     except Exception as comment_error:
         result["comment_error"] = f"{type(comment_error).__name__}: {comment_error}"
     return result
 
 
-def wakes(nodes, facts):
-    """(node, label, on, why) per waking label the graph expects for this state."""
-    stage = facts["stage"]
-    for name, n in nodes["nodes"].items():
-        when = n.get("when") or {}
-        stages = when.get("stage")
-        if n.get("enabled") is False or n.get("routine") or n["role"] == "human" or stage not in (
-                stages if isinstance(stages, list) else [stages]):
-            continue
-        ci = when.get("ci")
-        if (when.get("blockers") == "closed" and facts.get("blockers_open")) or (
-                ci and facts.get("ci") not in (ci if isinstance(ci, list) else [ci])) or (
-                when.get("round") == "complete" and not facts.get("round_complete")):
-            continue
-        for t in n.get("triggers") or []:
-            event, _, label = str(t).partition(" ")
-            on = "issue" if event.startswith("issues.") else "pr"
-            if not label.startswith(vocab.stage_prefix()):
-                continue
-            if "<focus>" in label:
-                for focus in facts.get("focus_missing") or []:
-                    yield name, label.replace("<focus>", focus), on, f"no {focus} review at the head"
-            elif n.get("focuses"):
-                continue  # its labels wake a focus only while that focus is missing
-            elif "<tier>" in label:
-                cmd = facts.get("command")
-                if cmd and re.fullmatch(label.replace("<tier>", "[a-z]+"), cmd):
-                    yield name, cmd, on, "no outcome after the command label"
-            elif label not in (vocab.ci("ci-green"), vocab.ci("ci-red")) or (
-                    facts.get("ci") in ("green", "red") and label == vocab.ci(f"ci-{facts['ci']}")):  # pending: CI's job
-                yield name, label, on, f"no {name} outcome"
-
-
-def reconcile(tracker, nodes, stages, limits, now=None, dry_run=False, progress=None, stage_kinds=None):
-    """Returns (results, failed). One re-fire per ticket and stage; the second miss blocks the ticket."""
-    now, results, failed = now or datetime.now(timezone.utc), [], False
-    default = limits.get("run_timeout_minutes", 30)
-    stage_kinds = stage_kinds or {}
-    # Open tickets in an active or waiting stage only: each listed ticket costs a dozen API reads, and a closed or
-    # done one is never re-fired, so listing them spent the hourly GitHub budget for nothing.
-    listed = tracker.sweep_tickets([s for s in stages if stage_kinds.get(s) != "final"], open_only=True)
-    import gate  # lazily, as finish_lost does
-    gate.prefetch(tracker, listed)
-    finish_lost(tracker, nodes, [s for s in LOST_FINISH if s in stages], listed, dry_run, results, progress)
-    for n in listed:
-        try:
-            facts, stage = tracker.stale_facts(n), None
-            stage, since = facts["stage"], facts.get("since")
-            if stage_kinds.get(stage) == "final":
-                continue
-            red = RED_TITLE.match(facts.get("title") or "")
-            if red and facts.get("issue_state", "open") == "open" and tracker.main_green():
-                r = {"ticket": n, "stage": stage, "reconcile": "stale-red", "why": f"{red[1]} is green on the main head"}
-                results.append(r)
-                if not dry_run:
-                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "comment",
-                                   "value": f"{PREFIX} CI is green on the main head. Closing this ticket; tickets it blocks resume."})
-                    tracker.apply({"ticket": n, "run_id": RUN, "kind": "close"})
-                if progress:
-                    progress(r)
-                continue
-            if stage_kinds.get(stage) == "waiting":
-                stage_since = facts.get("stage_at") or since
-                if (facts.get("issue_state", "open") != "open" or not stage_since
-                        or not facts.get("assignees")):
-                    continue
-                age = now - datetime.fromisoformat(stage_since.replace("Z", "+00:00"))
-                marker = f"{PREFIX} stage={stage} entry={stage_since} waiting-reminder"
-                if (age >= timedelta(hours=limits.get("remind_after_hours", 24))
-                        and not any(c.startswith(marker) for c in facts.get("recover_comments", []))):
-                    people = " ".join(f"@{person}" for person in facts["assignees"])
-                    r = {"ticket": n, "stage": stage, "reconcile": "remind", "why": "waiting for a person"}
-                    results.append(r)
-                    if not dry_run:
-                        tracker.apply({"ticket": n, "run_id": RUN, "kind": "comment",
-                                       "value": f"{marker}: {people}, this ticket is still waiting for you."})
-                    if progress:
-                        progress(r)
-                continue
-            if (facts.get("issue_state", "open") != "open" or not since
-                    or vocab.needs_human() in facts.get("attrs", [])):
-                continue
-            age = now - datetime.fromisoformat(since.replace("Z", "+00:00"))
-            conflict = (stage == "in-review" and facts.get("conflict") and facts.get("pr")
-                        and not facts.get("command") and facts.get("pr_state") in (None, "none", "open"))
-            conflicting_fix = (stage == "changes-requested" and facts.get("conflict")
-                               and (facts.get("command") or "").startswith(vocab.prefix("fix-<tier>")))
-            if conflict:
-                step = ("fix", None, "pr", "the unapproved PR conflicts with main")
-                if age <= timedelta(minutes=default):
-                    continue
-            elif conflicting_fix:
-                step = ("fix", facts["command"], "pr", "conflicting PR has a fix label with no later run")
-                if age <= timedelta(minutes=default):
-                    continue
-            else:
-                replay = gate.stale_review_plan(facts) if stage == "in-review" else None
-                if replay:
-                    node, outcome, payload = replay
-                    if age <= timedelta(minutes=nodes["nodes"][node].get("timeout_minutes", default)):
-                        continue
-                    r = {"ticket": n, "stage": stage, "node": node, "outcome": outcome,
-                         "reconcile": "reapply", "why": "review marker landed at the head; finish its outcome"}
-                    results.append(r)
-                    if not dry_run:
-                        _, out = gate.apply(node, outcome, {"ticket": n, **payload, "run_id": RUN}, tracker, nodes)
-                        r.update(applied=out["applied"], written=out.get("written", []))
-                    if progress:
-                        progress(r)
-                    continue
-                step = next((w for w in wakes(nodes, facts)
-                             if age > timedelta(minutes=nodes["nodes"][w[0]].get("timeout_minutes", default))), None)
-                stale_reviews = [label for label, at in facts.get("review_labels", [])
-                                 if label.startswith(vocab.prefix("review-<focus>"))
-                                 and now - datetime.fromisoformat(at.replace("Z", "+00:00")) > timedelta(minutes=default)]
-                stale_focuses = {label.removeprefix(vocab.prefix("review-<focus>")) for label in stale_reviews}
-                stale_step = next((w for w in wakes(nodes, facts)
-                                   if w[0] == "review" and w[1].removeprefix(vocab.prefix("review-<focus>")) in stale_focuses), None)
-                if stale_step:
-                    step = stale_step
-                if step is None:
-                    continue
-            node, label, on, why = step
-            head = (facts.get("head") or "")[:12]
-            missed = sum(f"stage={stage} head={head} re-fired {label} (" in c for c in facts.get("recover_comments", []))
-            kind = "conflict" if conflict else "blocked" if missed else "refire"
-            r = {"ticket": n, "stage": stage, "node": node, "reconcile": kind, "why": why}
-            results.append(r)
-            if not dry_run:
-                send(tracker, n, nodes, stage, head, kind, label, on, why)
-            if progress:
-                progress(r)
-        except Exception as e:  # one ticket failing does not stop the others
-            failed = True
-            results.append(ticket_error(tracker, n, e, dry_run))
-            if progress:
-                progress(results[-1])
-    try:
-        consistency(tracker, stages, limits, now, dry_run, results, progress)
-    except Exception as e:  # a failed listing is reported; the results above stand
-        failed = True
-        results.append({"reconcile": "consistency", "error": f"{type(e).__name__}: {e}"})
-        if progress:
-            progress(results[-1])
-    return results, failed
-
-
-def consistency(tracker, stages, limits, now, dry_run, results, progress):
-    """States that disagree, found from the open tickets and the factory PRs (not from the stage sweep):
-    an open `done`/`merged` ticket whose PRs are all finished is closed (`close`); a PR-stage ticket with no open
-    `ez/<n>-*` PR for `limits.stuck_minutes` is blocked (`no-pr`); a ticket with zero or several stage labels asks a
-    person (`stage-labels`); an open PR of a closed ticket asks a person (`orphan-pr`). A finding whose comment is
-    already on the ticket or PR is not reported again. The map ticket is skipped."""
-    view = getattr(tracker, "consistency_view", None)
-    if view is None:
-        return
-    stage_of = {vocab.stage(s): s for s in stages}
-    namespace = vocab.stage("ready").partition(":")[0] + ":"
-    stuck = timedelta(minutes=limits.get("stuck_minutes", 120))
-    found = view()
-
-    def report(r, comment=None, on="issue", pr=None, effects=()):
-        n = r["ticket"]
-        if comment:
-            if any(c.startswith(comment) for c in tracker.comment_bodies(n, pr)):
-                return
-            effects = [*effects, {"kind": "comment", "value": comment, "on": on, **({"pr": pr} if pr else {})}]
-        results.append(r)
-        if not dry_run:
-            for e in effects:
-                tracker.apply({"ticket": n, "run_id": RUN, **e})
-        if progress:
-            progress(r)
-
-    for t in found["tickets"]:
-        n, labels = t["number"], t["labels"]
-        try:
-            if vocab.map_label() in labels:
-                continue
-            have = sorted(label for label in labels if label in stage_of)
-            prs = t["prs"]
-            if len(have) != 1:
-                if any(label.startswith(namespace) for label in labels):
-                    r = {"ticket": n, "reconcile": "stage-labels", "why": f"{len(have)} stage labels"}
-                    report(r, f"{PREFIX} stage-labels: this ticket has {len(have)} stage labels: "
-                              f"{', '.join(f'`{x}`' for x in have) or 'none'}. A person keeps one and removes the rest.",
-                           effects=[{"kind": "label", "value": vocab.needs_human()}])
-                continue
-            stage = stage_of[have[0]]
-            if stage in ("done", "merged"):
-                if all(p["state"] != "open" for p in prs):
-                    r = {"ticket": n, "stage": stage, "reconcile": "close", "why": f"open in stage {stage}; no PR is open"}
-                    results.append(r)
-                    if not dry_run:
-                        tracker.close_ticket(n)
-                    if progress:
-                        progress(r)
-                continue
-            if stage in LOST_FINISH and not any(p["state"] == "open" and p["branch"].startswith(f"ez/{n}-") for p in prs):
-                at = t.get("updated_at")
-                if not at or now - datetime.fromisoformat(at.replace("Z", "+00:00")) <= stuck:
-                    continue
-                r = {"ticket": n, "stage": stage, "reconcile": "no-pr", "why": f"stage {stage} with no open PR"}
-                report(r, f"{PREFIX} no-pr: this ticket is in stage {stage}, but no PR from a branch `ez/{n}-*` is open. "
-                          f"A person opens the PR again and sets {vocab.stage('ready')}, or closes the ticket.",
-                       effects=[{"kind": "label", "value": vocab.needs_human()}, {"kind": "stage", "value": "blocked"}])
-        except Exception as e:  # one ticket failing does not stop the others
-            results.append(ticket_error(tracker, n, e, dry_run))
-            if progress:
-                progress(results[-1])
-    for p in found["orphan_prs"]:
-        n = p["ticket"]
-        try:
-            r = {"ticket": n, "pr": p["number"], "reconcile": "orphan-pr", "why": "open PR of a closed ticket"}
-            report(r, f"[factory] reconcile: orphan-pr: this PR is open, but ticket #{n} is closed. "
-                      "A person merges or closes the PR, or reopens the ticket.", on="pr", pr=p["number"],
-                   effects=[{"kind": "label", "value": vocab.needs_human(), "on": "pr"}])
-        except Exception as e:
-            results.append(ticket_error(tracker, n, e, dry_run))
-            if progress:
-                progress(results[-1])
-
-
-def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress):
-    """GitHub closes a ticket on merge; when the `finish` run was lost the ticket is closed but still in a PR stage.
-    A closed ticket there whose PR is merged gets the `finish` outcome, as `gate.py sweep --issue <n>` would."""
+def finish_lost(tracker, defn, stages, open_listed, dry_run, progress):
+    """GitHub closes a ticket on merge; when the run of the node that listens to a merged PR was lost, the ticket is
+    closed but still in a PR stage. A closed ticket there whose PR is merged gets that node's outcome, as
+    `factory decide` would."""
     import gate
-    still_open = set(open_listed)
-    closed = [n for n in dict.fromkeys(tracker.sweep_tickets(stages)) if n not in still_open]  # ids mix numbers and refs
+    nodes = (defn["workflow"].get("nodes") or {})
+    finish = [name for name, n in nodes.items()
+              if n.get("enabled") is not False
+              and any(isinstance(t, dict) and t.get("pr") == "merged" for t in n.get("triggers") or [])]
+    results, still_open = [], set(open_listed)
+    closed = [n for n in dict.fromkeys(tracker.sweep_tickets(stages)) if n not in still_open] if finish else []
     gate.prefetch(tracker, closed)
+    graph = definition.nodes(defn)
     for n in closed:
         try:
             if tracker.facts(n).get("pr_state") != "merged":
@@ -292,12 +70,14 @@ def finish_lost(tracker, nodes, stages, open_listed, dry_run, results, progress)
             r = {"ticket": n, "reconcile": "finish", "why": "closed on merge with no finish outcome"}
             results.append(r)
             if not dry_run:
-                gate.sweep(tracker, nodes, issue=n)
+                status, out = gate.decide(finish[0], n, tracker, graph)
+                r.update(outcome=out.get("outcome"), applied=out.get("applied"))
         except Exception as e:  # one ticket failing does not stop the others
             r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
             results.append(r)
         if progress:
             progress(r)
+    return results
 
 
 def fact_value(key, facts):
@@ -329,9 +109,9 @@ def stuck_label(wakes, nodes, facts, on_pr, ago):
 
 
 def last_end_failure(facts, node, head):
-    """The error block of the last `[factory] end failed:` comment for `node` at `head`, else None (#997)."""
+    """The error block of the last `[factory]` `end failed:` comment for `node` at `head`, else None (#997)."""
     for c in reversed(facts.get("recover_comments", [])):
-        if c.startswith("[factory] end failed:") and f"node={node} " in c and f"head={head} " in c:
+        if effects.has_tag(c, "end failed:") and f"node={node} " in c and f"head={head} " in c:
             body = c.split("\n", 1)[1] if "\n" in c else ""
             return body.split("The outcome did not land")[0].strip() or "no error output"
     return None
@@ -342,26 +122,28 @@ def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="change
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
     if kind == "end-failed":
         apply(kind="label", value=vocab.needs_human())
-        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} end failed, not re-fired: {why}\n"
-                                    f"Options: fix the cause (a new head, a token, a setting), then set {vocab.stage('ready')} "
-                                    f"or re-add `{label}`.")
+        apply(kind="comment", value=effects.tagged(
+            f"{PREFIX} stage={stage} head={head} end failed, not re-fired: {why}\n"
+            f"Options: fix the cause (a new head, a token, a setting), then set {vocab.stage('ready')} "
+            f"or re-add `{label}`."))
         apply(kind="stage", value="blocked")
     elif kind == "stuck":
         apply(kind="label", value=vocab.needs_human())
-        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} stuck: {why}\nOptions: fix the cause and set "
-                                    f"{vocab.stage('ready')}, or remove `{label}` and move the ticket by hand.")
+        apply(kind="comment", value=effects.tagged(
+            f"{PREFIX} stage={stage} head={head} stuck: {why}\nOptions: fix the cause and set "
+            f"{vocab.stage('ready')}, or remove `{label}` and move the ticket by hand."))
         apply(kind="stage", value="blocked")
     elif kind == "conflict":
         apply(kind="label", value=label or vocab.cmd("fix-<tier>", "cheap"), on="pr")
         apply(kind="stage", value=fix_stage)
     elif kind == "blocked":
         apply(kind="label", value=vocab.needs_human())
-        apply(kind="comment", value=f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets {vocab.stage('ready')}.")
+        apply(kind="comment", value=effects.tagged(f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets {vocab.stage('ready')}."))
         apply(kind="stage", value="blocked")
     else:  # the comment last: the counter for the second miss
         apply(kind="unlabel", value=label, on=on)
         apply(kind="label", value=label, on=on)
-        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} re-fired {label} ({why})")
+        apply(kind="comment", value=effects.tagged(f"{PREFIX} stage={stage} head={head} re-fired {label} ({why})"))
 
 
 def _outcome_effects(node):
@@ -502,7 +284,7 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
                     tracker.apply({"ticket": n, "run_id": RUN, "kind": "unlabel", "value": label, "on": on})
                     tracker.apply({"ticket": n, "run_id": RUN, "kind": "label", "value": label, "on": on})
                     tracker.apply({"ticket": n, "run_id": RUN, "kind": "comment",  # the comment last: once per head
-                                   "value": f"{PREFIX} stage={stage} head={head} {EXTERNAL_LATE} {label} ({why})"})
+                                   "value": effects.tagged(f"{PREFIX} stage={stage} head={head} {EXTERNAL_LATE} {label} ({why})")})
                 if progress:
                     progress(r)
                 continue
@@ -575,6 +357,20 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
     return results
 
 
+def merge_labels(nodes):
+    """(node, label, on) per stage label that wakes a node held back by open blockers in the `approved` stage."""
+    for name, n in nodes["nodes"].items():
+        when = n.get("when") or {}
+        stages = when.get("stage")
+        if n.get("enabled") is False or when.get("blockers") != "closed" or "approved" not in (
+                stages if isinstance(stages, list) else [stages]):
+            continue
+        for t in n.get("triggers") or []:
+            event, _, label = str(t).partition(" ")
+            if label.startswith(vocab.stage_prefix()):
+                yield name, label, "issue" if event.startswith("issues.") else "pr"
+
+
 def wake_approved(tracker, nodes, minutes, now=None, dry_run=False):
     """`blockers: merge`: an `approved` ticket that had blockers, all now closed, whose merge label is older than
     `minutes` did not merge (a blocker closed by hand, or the wake was lost): re-fire the merge node's label."""
@@ -586,10 +382,9 @@ def wake_approved(tracker, nodes, minutes, now=None, dry_run=False):
         had = tracker.blocked_by(n) if hasattr(tracker, "blocked_by") else facts.get("blocked_by") or []
         if facts["stage"] != "approved" or facts.get("blockers_open") or not had or facts.get("issue_state", "open") != "open":
             continue
-        for node, label, on, why in wakes(nodes, facts):
+        for node, label, on in merge_labels(nodes):
             at = (facts.get("label_at") or {}).get(label) or facts.get("stage_at")
-            if (nodes["nodes"][node].get("when") or {}).get("blockers") != "closed" or not at or \
-                    now - datetime.fromisoformat(at.replace("Z", "+00:00")) < timedelta(minutes=minutes):
+            if not at or now - datetime.fromisoformat(at.replace("Z", "+00:00")) < timedelta(minutes=minutes):
                 continue
             if not dry_run:
                 send(tracker, n, nodes, "approved", (facts.get("head") or "")[:12], "refire", label, on,
@@ -598,6 +393,11 @@ def wake_approved(tracker, nodes, minutes, now=None, dry_run=False):
                         "why": "approved, unblocked and not merged"})
             break
     return out
+
+
+def approval_graph(defn):
+    """The definition's node graph with its workflow `blockers` mode, as `wake_approved` reads it."""
+    return {**definition.nodes(defn), "blockers": defn["workflow"].get("blockers", "start")}
 
 
 def gate_blockers(nodes):
@@ -633,7 +433,7 @@ def main(argv, run=None):
     import doctor
     settings = config_mod.load()
     run = run or doctor.issue_run(settings)
-    repo = settings["tracker"].get("repository") or config_mod.vcs(settings)["repository"]
+    repo = doctor.ticket_repository(settings)
     try:
         code = reconcile_main(argv)
     except Exception as e:
@@ -648,7 +448,7 @@ def report_systemic(config, systemic, run=None):
     """Open `Doctor: runs end without an outcome` (no new comment while it is open), or close it when no run missed."""
     import doctor
     run = run or doctor.issue_run(config)
-    repo = config["tracker"].get("repository") or config_mod.vcs(config)["repository"]
+    repo = doctor.ticket_repository(config)
     probe = "runs-without-outcome"
     if not systemic:
         return doctor.close_ticket(repo, probe, run, run_id=RUN)
@@ -674,6 +474,9 @@ def ticket_passes(config, dry_run, progress, out):
 
 
 def reconcile_main(argv):
+    if not definition.present(config_mod.team_root()):
+        print("factory reconcile: the team root has no factory.yaml and workflow.yaml (ADR-0021)", file=sys.stderr)
+        return 2
     dry_run = "--dry-run" in argv
     spec = next((a[7:] for a in argv if a.startswith("memory:")), None)
     if spec:
@@ -683,33 +486,22 @@ def reconcile_main(argv):
         import gate
         tracker = gate.tracker_of(config_mod.load())
     config = config_mod.load()
-    if definition.present(config_mod.team_root()):  # ADR-0021: the waits the gate cannot see, from the definition
-        progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
-        minutes = config["limits"].get("run_timeout_minutes", 30)
-        results = wake_ready(tracker, minutes, dry_run=dry_run)
-        results += wake_approved(tracker, nodes_mod.load(), minutes, dry_run=dry_run)
-        results += recover_definition(tracker, definition.load(config_mod.team_root()), config["tracker"]["stages"],
-                                      config["tracker"].get("stage_kinds", {}), config["limits"],
-                                      dry_run=dry_run, progress=progress)
-        if not dry_run and not spec:
-            report_systemic(config, [r for r in results if r.get("systemic")])
-        out, failed = {"dry_run": dry_run, "reconcile": results}, any("error" in r for r in results)
-        if not spec:
-            failed = ticket_passes(config, dry_run, progress, out) or failed
-        print(json.dumps(out))
-        return 1 if failed else 0
     progress = lambda r: print(json.dumps(r), file=sys.stderr, flush=True)  # noqa: E731
-    results, failed = reconcile(tracker, nodes_mod.load(), list(config["tracker"]["stages"]), config["limits"],
-                                stage_kinds=config["tracker"].get("stage_kinds", {}),
-                                dry_run=dry_run, progress=progress)
-    out = {"dry_run": dry_run, "reconcile": results}
+    stages, kinds = list(config["tracker"]["stages"]), config["tracker"].get("stage_kinds", {})
+    minutes = config["limits"].get("run_timeout_minutes", 30)
+    defn = definition.load(config_mod.team_root())
+    results = wake_ready(tracker, minutes, dry_run=dry_run)
+    results += wake_approved(tracker, approval_graph(defn), minutes, dry_run=dry_run)
+    results += recover_definition(tracker, defn, stages, kinds, config["limits"],
+                                  dry_run=dry_run, progress=progress)
+    results += finish_lost(tracker, defn, [s for s in LOST_FINISH if s in stages],
+                           tracker.sweep_tickets([s for s in stages if kinds.get(s) != "final"], open_only=True),
+                           dry_run, progress)
+    if not dry_run and not spec:
+        report_systemic(config, [r for r in results if r.get("systemic")])
+    out, failed = {"dry_run": dry_run, "reconcile": results}, any("error" in r for r in results)
     if not spec:
         failed = ticket_passes(config, dry_run, progress, out) or failed
-    if not spec:  # the plugins' scheduled passes (github: the CI label sync); each reports its own errors
-        import plugins
-        for passes in plugins.registry(config).hook("reconcile.passes"):
-            for name, (got, pass_failed) in passes(config, dry_run, progress).items():
-                out[name], failed = got, failed or pass_failed
     print(json.dumps(out))
     return 1 if failed else 0
 

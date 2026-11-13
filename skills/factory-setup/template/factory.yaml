@@ -160,12 +160,14 @@ environments:
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               pypi.org, files.pythonhosted.org]
     vm: default
+    setup: environments/setup.sh  # Node and Java for `factory check-workflow`
   team:                           # routines on the team repository
     repositories:
       - repo: {{TEAM_REPOSITORY}}
     domains: [github.com, api.github.com, objects.githubusercontent.com, release-assets.githubusercontent.com,
               pypi.org, files.pythonhosted.org]
     vm: default
+    setup: environments/setup.sh
 
 # Webhooks: endpoints that wake nodes, for example `deploy: { description: ..., api_key_env: ... }`.
 webhooks: {}

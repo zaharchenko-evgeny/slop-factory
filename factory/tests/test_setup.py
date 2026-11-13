@@ -249,3 +249,21 @@ class RolesInEnvironments(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FetchRetryTest(unittest.TestCase):
+    """offline-eval-factory#84: a transient clone failure (GitHub 429) is retried, and the last one shows stderr."""
+
+    def test_a_failed_clone_is_retried_then_reports_stderr(self):
+        import subprocess
+        from unittest import mock
+        results = [subprocess.CompletedProcess([], 128, "", "HTTP 429"), subprocess.CompletedProcess([], 0, "", "")]
+        waits = []
+        with mock.patch.object(team_setup.subprocess, "run", side_effect=lambda *a, **k: results.pop(0)):
+            team_setup._fetch_run(["git", "clone", "x"], sleep=waits.append)
+        self.assertEqual(waits, [2])
+        with mock.patch.object(team_setup.subprocess, "run",
+                               return_value=subprocess.CompletedProcess([], 128, "", "fatal: HTTP 429")):
+            with self.assertRaisesRegex(RuntimeError, "failed 4 times .*HTTP 429"):
+                team_setup._fetch_run(["git", "clone", "x"], sleep=waits.append)
+        self.assertEqual(waits, [2, 2, 4, 8])

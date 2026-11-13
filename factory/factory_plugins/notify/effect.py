@@ -54,7 +54,7 @@ def send(effects, tracker, ticket, name):
             raise gate.Bad(str(err))
         failures += errors
         if sent:
-            body = "[factory] " + notifiers.render(message) + "\n\nNotified: " + ", ".join(f"{p} via {v}" for v, p, _ in sent)
+            body = gate.effects_mod.tagged(notifiers.render(message) + "\n\nNotified: " + ", ".join(f"{p} via {v}" for v, p, _ in sent))
             body += "".join("\n" + notifiers.marker(v, p, r) for v, p, r in sent)
             if gate.definition_team():
                 body += f"\n\n{gate.comment_marker(name)}"
