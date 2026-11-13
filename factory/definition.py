@@ -622,8 +622,11 @@ def errors(defn):
         repos = (spec or {}).get("repositories") or []
         if not repos:  # compiling needs a repository for the node output (`_primary`)
             errs.append(f"empty-environment: environments.{e}: lists no repositories")
-        errs += [f"unknown-role: environments.{e}.roles: {r} is not in `roles`"
-                 for r in (spec or {}).get("roles") or [] if r not in roles]
+        env_roles = (spec or {}).get("roles") or []
+        if not isinstance(env_roles, list) or not all(isinstance(r, str) for r in env_roles):
+            errs.append(f"bad-roles: environments.{e}.roles: a list of role names")
+        else:
+            errs += [f"unknown-role: environments.{e}.roles: {r} is not in `roles`" for r in env_roles if r not in roles]
         errs += [f"removed-key: environments.{e}: {r.get('repo')}: `{k}` (ADR-0027: a repository's `write` names the "
                  "environment's writable repository)" for r in repos for k in REMOVED_REPOSITORY_KEYS if k in r]
     errs += scopes.errors(f)  # environments with their own trackers (#1069)

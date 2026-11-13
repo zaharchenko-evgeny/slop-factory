@@ -184,8 +184,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                         {"repository": core.repository(r), "branch": r["default_branch"]} for r in projects]
             automations.append(automation)
     for env, d in envs_def.items():  # #1377: an environment no node uses is planned when people or agents use its roles
-        if d.get("roles") and env not in used:
-            used.append(env)
+        if d.get("roles") and env not in unscoped:  # also when its nodes run only in per-node or per-repository copies
+            used += [] if env in used else [env]
             unscoped.add(env)
     envs = []
     registry = plugins.registry(config)

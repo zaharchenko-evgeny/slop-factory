@@ -122,6 +122,9 @@ class SetupTest(unittest.TestCase):
         self.assertTrue({"factory-step", "factory-troubleshoot", "retro"} <= skills, skills)
         self.assertNotIn("tdd", skills)
         self.assertIn("skill retro: github:mattpocock/skills@a496f5513d4a", lines)
+        defn = definition.load(self.root)
+        defn["factory"]["environments"]["knowledge"]["roles"] = ["retro", "developer"]
+        self.assertEqual(team_setup.roles_in(defn, "knowledge"), ["retro", "reviewer", "developer"])  # retro once
 
     def test_roles_in_reads_every_environment_form(self):
         defn = {"factory": {"agents": {"a": {"role": "dev"}, "b": {"role": "ops"}}},

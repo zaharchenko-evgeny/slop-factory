@@ -34,7 +34,8 @@ environments:
 - `factory validate` rejects a variable whose name starts with `FACTORY_` (reserved for the factory).
 - An environment's `roles` (#1377) lists roles that people or agents use there outside the workflow, such as an Air Mate.
   `factory deploy` plans such an environment even when no node runs in it, and `factory setup` installs those roles'
-  skills and `roles/<role>/setup.sh`. `factory validate` rejects a role that `roles` does not declare.
+  skills and `roles/<role>/setup.sh`. `factory validate` rejects a role that `roles` does not declare. The `env` (variables and secrets) of such a
+  role is not planned: declare it on the environment. Only definition teams (`factory.yaml`) have this key.
 - `factory deploy` plans an environment's variables as the declared ones plus `FACTORY_ENV`. A person sets each secret's value in Air;
   `deploy --dry-run` lists one that is missing as `set by a person: <env> secret <NAME>` and does not fail.
   Air's API cannot delete a variable: `deploy` prints `remove by hand in Air: <env> variable <NAME>` for one the plan lacks,
