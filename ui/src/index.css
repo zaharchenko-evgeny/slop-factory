@@ -234,16 +234,89 @@ html[data-theme="dark"] {
 .legend-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--teal); }
 .waiting-dot { background: var(--amber); }
 .final-dot { background: var(--green); }
-.route-legend-line { position: relative; display: inline-block; width: 15px; height: 1px; background: var(--teal); opacity: .75; }
-.route-legend-line::after { position: absolute; top: -3px; right: 0; width: 0; height: 0; border-top: 3px solid transparent; border-bottom: 3px solid transparent; border-left: 4px solid var(--teal); content: ""; }
 .flow-scroll { max-height: min(48vh, 500px); min-height: 315px; overflow: auto; scrollbar-color: var(--line-strong) transparent; scrollbar-width: thin; }
 .flow-track { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(218px, 1fr); align-items: stretch; gap: 0; min-height: 100%; width: max-content; min-width: 100%; padding: 10px; }
-.flow-track.workflow-track { position: relative; padding-top: 86px; }
-.stage-route-layer { position: absolute; z-index: 1; top: 0; left: 0; overflow: visible; pointer-events: none; }
-.stage-route-path { fill: none; stroke: var(--teal); stroke-width: 1.4; stroke-linecap: round; opacity: .58; }
-.stage-route-loop { stroke: var(--amber); stroke-dasharray: 3 3; opacity: .72; }
-.stage-route-arrow { fill: var(--teal); }
-.stage-route-loop-arrow { fill: var(--amber); }
+.unknown-dot { background: var(--muted); }
+.workflow-focus-row { display: flex; min-height: 40px; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+.workflow-focus-caption { display: flex; min-width: 0; flex: 1; align-items: center; gap: 4px; margin: 0; padding: 0; color: var(--muted); font-size: 9px; }
+.workflow-focus-caption > strong { flex: 0 0 auto; color: var(--teal); font-weight: 650; }
+.workflow-focus-caption > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-focus-caption b { color: var(--ink-soft); font-weight: 620; }
+.return-route-note { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; color: var(--muted); font-size: 8px; white-space: nowrap; }
+.return-route-note i { width: 15px; border-top: 1px dashed var(--amber); }
+.workflow-focus-select { width: 190px !important; height: 28px !important; flex: 0 0 auto; border-color: var(--line) !important; color: var(--ink-soft) !important; background: var(--surface) !important; font-size: 9px !important; }
+.workflow-mode-toggle { height: 28px !important; flex: 0 0 auto; padding: 0 9px !important; border-color: var(--line-strong) !important; font-size: 9px !important; white-space: nowrap; }
+.workflow-mode-active { color: var(--teal) !important; }
+.workflow-graph-canvas { position: relative; height: clamp(500px, 60vh, 560px); background: var(--background); }
+.workflow-graph-canvas .react-flow { background: transparent; }
+.workflow-graph-canvas .react-flow__controls { overflow: hidden; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); box-shadow: var(--shadow-card); }
+.workflow-graph-canvas .react-flow__controls-button { width: 28px; height: 28px; border-bottom-color: var(--line); background: var(--surface); fill: var(--ink-soft); color: var(--ink-soft); }
+.workflow-graph-canvas .react-flow__controls-button:hover { background: var(--soft); }
+.workflow-graph-canvas .react-flow__minimap { overflow: hidden; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); box-shadow: var(--shadow-card); }
+.workflow-graph-canvas .react-flow__minimap-mask { fill: color-mix(in srgb, var(--background) 70%, transparent); }
+.workflow-graph-canvas .react-flow__edge-path { stroke: var(--teal); stroke-width: 1.8; }
+.workflow-graph-canvas .workflow-return-edge .react-flow__edge-path { stroke: var(--amber); stroke-dasharray: 4 3; }
+.workflow-graph-empty { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; pointer-events: none; color: var(--muted); font-size: 10px; }
+.workflow-graph-empty strong { color: var(--ink-soft); font-size: 12px; }
+.workflow-stage-node { box-sizing: border-box; display: flex; width: 240px; height: 180px; flex-direction: column; gap: 5px; padding: 8px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-card); }
+.stage-node-focused { border-color: var(--teal); box-shadow: 0 0 0 2px color-mix(in srgb, var(--teal) 18%, transparent), var(--shadow-card); }
+.stage-node-waiting { border-top: 2px solid var(--amber); }
+.stage-node-final { border-top: 2px solid var(--green); }
+.stage-node-unknown { border-style: dashed; }
+.workflow-stage-node .react-flow__handle { width: 7px; height: 7px; border: 1px solid var(--surface); background: var(--teal); }
+.workflow-stage-node .react-flow__handle-right { opacity: 0; }
+.workflow-stage-heading { display: flex; width: 100%; min-width: 0; align-items: center; gap: 5px; padding: 0 0 7px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; color: var(--ink); background: transparent; text-align: left; cursor: pointer; }
+.workflow-stage-heading:hover { background: color-mix(in srgb, var(--soft) 48%, transparent); }
+.workflow-stage-heading > strong { min-width: 0; flex: 1; overflow: hidden; font-size: 12px; font-weight: 640; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-stage-heading .stage-kind { min-height: 18px; flex: 0 0 auto; font-size: 9px; }
+.workflow-stage-heading .stage-count { flex: 0 0 auto; }
+.workflow-stage-signals { display: flex; min-height: 19px; align-items: center; gap: 8px; overflow: hidden; color: var(--faint); font-size: 9px; }
+.workflow-stage-review-count, .workflow-stage-warning-count { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.workflow-stage-review-count { color: var(--rose); }
+.workflow-stage-warning-count { color: var(--amber); }
+.workflow-stage-quiet-count { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-stage-previews { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 4px; overflow: hidden; }
+.workflow-ticket-preview { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 5px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; color: var(--ink-soft); background: var(--background); text-align: left; cursor: pointer; }
+.workflow-ticket-preview:hover { border-color: var(--teal-line); background: var(--soft); }
+.workflow-ticket-preview-copy { display: flex; min-width: 0; flex: 1; align-items: baseline; gap: 5px; overflow: hidden; }
+.workflow-ticket-preview-copy strong { flex: 0 0 auto; color: var(--muted); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.workflow-ticket-preview-copy > span { overflow: hidden; color: var(--ink); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-ticket-preview-signals { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; }
+.preview-warning-mark, .preview-review-mark, .preview-attention-mark { width: 6px; height: 6px; display: inline-block; border-radius: 50%; }
+.preview-warning-mark, .preview-attention-mark { background: var(--amber); }
+.preview-review-mark { background: var(--rose); }
+.workflow-stage-more { min-height: 22px; align-self: flex-start; padding: 0 4px; border: 0; border-radius: 4px; color: var(--teal); background: transparent; font-size: 9px; cursor: pointer; }
+.workflow-stage-more:hover { background: var(--teal-soft); }
+.selected-stage-inspector { padding: 14px; border-top: 1px solid var(--line); background: var(--surface); }
+.selected-stage-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+.inspector-overline { color: var(--faint); font-size: 8px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+.selected-stage-heading h3 { margin: 3px 0 0; color: var(--ink); font-size: 14px; font-weight: 640; }
+.selected-stage-count { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9px; }
+.selected-stage-count > strong { color: var(--ink); font-size: 13px; font-variant-numeric: tabular-nums; }
+.selected-stage-count .stage-kind { margin-left: 5px; }
+.focused-route-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.focused-route-group h4 { margin: 0 0 6px; color: var(--faint); font-size: 8px; font-weight: 660; letter-spacing: .05em; text-transform: uppercase; }
+.focused-route-list { display: flex; flex-wrap: wrap; align-items: stretch; gap: 5px; }
+.focused-route-chip { display: flex; max-width: 100%; flex-direction: column; align-items: flex-start; gap: 4px; padding: 6px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--background); color: var(--ink-soft); text-align: left; cursor: pointer; }
+.focused-route-chip:hover { border-color: var(--teal-line); background: var(--soft); }
+.focused-route-endpoints { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-soft); font-size: 8px; }
+.focused-route-endpoints svg { flex: 0 0 auto; color: var(--faint); }
+.focused-route-evidence { display: flex; flex-wrap: wrap; gap: 3px; color: var(--muted); }
+.focused-route-evidence code { max-width: 100%; overflow-wrap: anywhere; padding: 2px 4px; border-radius: 4px; color: var(--teal); background: var(--teal-soft); font: 7px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.focused-route-evidence i, .focused-route-empty { color: var(--faint); font-size: 8px; font-style: normal; }
+.selected-stage-columns { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(250px, .8fr); gap: 12px; margin-top: 13px; }
+.selected-stage-tickets, .selected-stage-execution { min-width: 0; }
+.inspector-section-heading { display: flex; min-height: 28px; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 8px; }
+.inspector-section-heading strong { color: var(--ink-soft); font-size: 9px; font-weight: 640; }
+.inspector-section-heading > span { font-variant-numeric: tabular-nums; }
+.selected-stage-ticket-grid { display: grid; max-height: 360px; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); align-content: start; gap: 6px; overflow: auto; padding: 2px 3px 4px 1px; scrollbar-color: var(--line-strong) transparent; scrollbar-width: thin; }
+.selected-stage-execution { align-self: start; }
+.selected-stage-execution > summary { cursor: pointer; list-style: none; }
+.selected-stage-execution > summary::-webkit-details-marker { display: none; }
+.selected-stage-execution > summary::before { width: 0; height: 0; margin-right: 7px; border-top: 4px solid transparent; border-bottom: 4px solid transparent; border-left: 5px solid var(--faint); content: ""; }
+.selected-stage-execution[open] > summary::before { transform: rotate(90deg); }
+.selected-stage-node-list { display: flex; max-height: 360px; flex-direction: column; gap: 5px; overflow: auto; padding: 3px 3px 4px 1px; scrollbar-color: var(--line-strong) transparent; scrollbar-width: thin; }
+.inspector-empty { padding: 8px; border: 1px dashed var(--line-strong); border-radius: 6px; color: var(--faint); font-size: 8px; }
 .stage-lane { position: relative; width: 238px; min-width: 218px; display: flex; flex-direction: column; align-self: stretch; margin-right: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--background); }
 .stage-lane:last-child { margin-right: 0; }
 .stage-lane-header { min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 9px; border-bottom: 1px solid var(--line); background: var(--surface); border-radius: 8px 8px 0 0; }
@@ -513,6 +586,8 @@ html[data-theme="dark"] {
   .filter-select { flex: 1 1 120px; }
   .older-toggle { margin-left: 0; }
   .flow-scroll { min-height: 300px; }
+  .workflow-graph-canvas .react-flow__minimap { display: none; }
+  .selected-stage-columns { grid-template-columns: minmax(0, 1.3fr) minmax(220px, .7fr); }
   .flow-track { padding: 8px; }
   .stage-lane { width: 225px; }
   .columns-surface .flow-scroll { min-height: 340px; }
@@ -558,6 +633,16 @@ html[data-theme="dark"] {
   .surface-caption > span:last-child { display: none; }
   .surface-legend { gap: 8px; font-size: 8px; }
   .flow-scroll { min-height: 330px; max-height: none; }
+  .workflow-focus-row { align-items: flex-start; flex-direction: column; gap: 6px; padding: 8px; }
+  .workflow-focus-caption { width: 100%; flex-wrap: wrap; line-height: 1.4; }
+  .workflow-focus-caption > span { overflow: visible; white-space: normal; }
+  .workflow-focus-select { width: 100% !important; }
+  .workflow-mode-toggle { width: 100%; justify-content: center !important; }
+  .workflow-graph-canvas { height: 480px; }
+  .selected-stage-inspector { padding: 10px; }
+  .focused-route-groups, .selected-stage-columns { grid-template-columns: minmax(0, 1fr); }
+  .selected-stage-count { gap: 4px; }
+  .selected-stage-ticket-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
   .flow-track { min-height: 330px; }
   .stage-lane { width: 218px; min-width: 218px; }
   .connections-panel { padding: 8px; }

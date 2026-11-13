@@ -70,19 +70,30 @@ Each registration needs a unique `id`, a label, a description and a component.
 The component receives the snapshot, filtered tickets, ticket selection action
 and selected ticket key.
 
-The graph shows declared stages and nodes. Unknown stage references do not
-create configured graph stages or edges. Outcome destinations appear as
-outcome targets. A ticket in an undeclared stage gets an `Unknown stage: <id>`
-lane. Eligibility is a projection from available configuration and event data,
-not a record that a node ran. Missing condition facts and missing event
-evidence appear as unknown. Missing event evidence becomes not matched only
-when a completed local poll covers supported event types. Manual, scheduled,
-webhook, unsupported and incomplete sources remain unknown. Execution is
-always unknown. Unknown times, node data, nullable links, and empty CI, head or
-PR state keep an explicit unknown or unavailable label. Only HTTP and HTTPS
-URLs become links. If a PR read fails, ticket details warn that PR evidence may
-be stale; an empty PR list then does not confirm that no PR exists. Do not
-present unknown as a positive or negative result.
+The Workflow view shows configured stages in a pan and zoom graph. The default
+Focused neighborhood shows the selected stage and only the endpoints of its
+direct incoming and outgoing declared routes. Use **Inspect stage** or a stage
+heading button to change the selected stage. If the neighborhood is too wide to
+read, the graph centers the selected stage and keeps its neighbors available by
+pan and zoom. Use **Full workflow** to show every declared stage and route in a
+left-to-right graph. The inspector stays focused on the selected stage in both
+modes and lists only its direct route evidence, filtered tickets, and execution
+nodes. Dashed amber edges mark a route back to an earlier stage or a self-loop.
+Each stage node shows at most two compact ticket previews; use **+N more** to
+inspect all filtered tickets for that stage. The Columns view remains a
+horizontal ticket board. A ticket in an undeclared stage gets an unconnected
+`Unknown stage: <id>` node. The graph does not infer routes from stage order.
+
+Eligibility is a projection from available configuration and event data, not a
+record that a node ran. Missing condition facts and missing event evidence
+appear as unknown. Missing event evidence becomes not matched only when a
+completed local poll covers supported event types. Manual, scheduled, webhook,
+unsupported and incomplete sources remain unknown. Execution is always
+unknown. Unknown times, node data, nullable links, and empty CI, head or PR
+state keep an explicit unknown or unavailable label. Only HTTP and HTTPS URLs
+become links. If a PR read fails, ticket details warn that PR evidence may be
+stale; an empty PR list then does not confirm that no PR exists. Do not present
+unknown as a positive or negative result.
 
 If the first snapshot cannot load, the page shows an error and a retry action.
 If a source fails during a snapshot refresh, the page keeps the last available

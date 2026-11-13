@@ -1,19 +1,20 @@
 import { Columns3, Workflow } from 'lucide-react'
+import { WorkflowGraph } from '@/components/WorkflowGraph'
 import { WorkflowView } from '@/components/WorkflowView'
 import { registerProgressView, type ProgressViewProps } from './registry'
 
 function WorkflowCanvas(props: ProgressViewProps) {
-  return <WorkflowView {...props} />
+  return <WorkflowGraph {...props} />
 }
 
 function TicketColumns(props: ProgressViewProps) {
-  return <WorkflowView {...props} columns />
+  return <WorkflowView {...props} />
 }
 
 registerProgressView({
   id: 'workflow',
   label: 'Workflow',
-  description: 'Stages, nodes, and declared routes from the current factory definition.',
+  description: 'Explore declared stage routes and inspect tickets and execution nodes.',
   icon: Workflow,
   component: WorkflowCanvas,
 })

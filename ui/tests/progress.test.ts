@@ -11,6 +11,7 @@ import {
 } from '../src/preferences'
 import { getProgressViews, registerProgressView } from '../src/views/registry'
 import { declaredStageRoutes } from '../src/routes'
+import { prioritizeStageTickets } from '../src/graph-layout'
 
 function makeSnapshot() {
   return {
@@ -174,6 +175,18 @@ describe('ticket filters', () => {
     expect(hiddenDraftReview).toEqual([])
     expect(restoredDraftReview.map((ticket) => ticket.id)).toEqual(['#4'])
     expect(filteredTickets(snapshot, defaultFilters).map((ticket) => ticket.id)).toEqual(snapshot.tickets.map((ticket) => ticket.id))
+  })
+
+  it('prioritizes review and warning tickets in stable stage previews', () => {
+    const ticketById = (id: string) => {
+      const ticket = snapshot.tickets.find((item) => item.id === id)
+      if (ticket === undefined) throw new Error(`Ticket ${id} is missing from the test snapshot`)
+      return ticket
+    }
+    const warning = { ...ticketById('#3'), key: 'ticket:warning', id: '#warning', warning: true }
+    const stageTickets = [ticketById('#2'), warning, ticketById('#4'), ticketById('#1')]
+    expect(prioritizeStageTickets(stageTickets).map((ticket) => ticket.id)).toEqual(['#1', '#4', '#warning', '#2'])
+    expect(stageTickets.map((ticket) => ticket.id)).toEqual(['#2', '#warning', '#4', '#1'])
   })
 })
 
