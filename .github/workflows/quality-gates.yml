@@ -103,7 +103,7 @@ jobs:
           rm betterleaks.tar.gz
       - id: betterleaks_repository
         name: Betterleaks repository
-        run: ./betterleaks dir . --no-banner -v --redact
+        run: ./betterleaks dir . --no-banner
       - id: betterleaks_diff
         name: Betterleaks PR diff
         if: github.event_name == 'pull_request'
