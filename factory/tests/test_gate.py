@@ -98,7 +98,8 @@ class GateTest(unittest.TestCase):
 
     def test_unsupported_effect_refuses_before_writing_any_outcome_effect(self):
         graph = {"nodes": {"intake": {"when": {}, "outcomes": {"ready": {"effects": [
-            {"label": "risk:high"}, {"field": {"name": "Effort", "from": "size_estimate"}}]}}}}}
+            {"label": "risk:high"}, {"review": "approve-at-head", "on": "pr"},
+            {"field": {"name": "Effort", "from": "size_estimate"}}]}}}}}
 
         class NoField(MemorySystem):
             effects = (Effect("label", "ticket", MemorySystem._fx_log),)
