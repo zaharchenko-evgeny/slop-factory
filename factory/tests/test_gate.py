@@ -1135,6 +1135,32 @@ class TriggerTest(unittest.TestCase):
         self.assertIn({"kind": "label", "ticket": "7", "value": "factory:needs-human", "on": "pr"}, effects)
         self.assertEqual([e for e in effects if e["kind"] == "assign"], [])
 
+    def test_blocked_definition_transition_keeps_needs_human_command_label(self):
+        team = ROOT / "factory/tests/fixtures/slop"
+        team_definition = definition.load(team)
+        graph = definition.nodes(team_definition)
+        self.assertTrue(any("factory:needs-human" in trigger for trigger in graph["nodes"]["notify-pr"]["triggers"]))
+        graph["nodes"]["blocker"] = {"when": {}, "outcomes": {"blocked": {"effects": [{"stage": "blocked"}]}}}
+        effects = []
+        class Capture(MemorySystem):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+
+        tracker = Capture({"7": {"stage": "ready", "attrs": ["factory:needs-human"],
+                                 "assignees": ["owner"]}})
+        config = cfg.load()
+        config = {**config, "tracker": {**config["tracker"],
+                                         "commands": definition.config(team_definition)["tracker"]["commands"]}}
+        with patch.object(cfg, "team_root", return_value=team), patch.object(cfg, "load", return_value=config):
+            gate.apply("blocker", "blocked", {"ticket": "7"}, tracker, graph)
+
+        self.assertIn("factory:needs-human", tracker.tickets["7"]["attrs"])
+        self.assertEqual(tracker.tickets["7"]["assignees"], ["owner"])
+        self.assertNotIn({"kind": "unlabel", "ticket": "7", "value": "factory:needs-human"}, effects)
+        self.assertIn({"kind": "unlabel", "ticket": "7", "value": "factory:implement-small"}, effects)
+        self.assertIn({"kind": "unlabel", "ticket": "7", "value": "factory:review-high", "on": "pr"}, effects)
+
     def test_resume_clears_pr_mark(self):
         effects = []
         class Capture(MemorySystem):
