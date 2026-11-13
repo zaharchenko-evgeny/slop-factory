@@ -65,6 +65,11 @@ class Templates(unittest.TestCase):
         want = cur[cur.index("## Development workflow"):cur.index("## Tracker and git")]
         self.assertEqual(text.rstrip("\n"), want.rstrip("\n"))
 
+    def test_extras_have_the_workflow_guide(self):
+        text = render.render(ANSWERS)["docs/reading-the-workflow.md"]
+        self.assertIn("## Where is a ticket, and what runs next", text)
+        self.assertIn("factory-troubleshoot", text)
+
     def test_templates_name_no_project_value(self):
         for f in [*files(render.T), *files(render.PROJECT_T)]:
             for word in PROJECT:

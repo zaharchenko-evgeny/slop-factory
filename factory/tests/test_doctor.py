@@ -24,6 +24,7 @@ cfg.set_team(HERE / "fixtures/team")
 import doctor  # noqa: E402
 import nodes  # noqa: E402
 from factory_plugins.github import probes as github_probes  # noqa: E402
+from factory_plugins.github import heartbeat  # noqa: E402
 from factory_plugins.youtrack import probes as youtrack_probes  # noqa: E402
 
 REPO = "o/r"
@@ -140,6 +141,42 @@ class ProjectWriteProbeTest(unittest.TestCase):
                                 "detail": "FACTORY_ISSUES_TOKEN is not set (token of o/app)"}])
         self.assertEqual(gh.calls, [])
 
+
+class ReconcileHeartbeatProbeTest(unittest.TestCase):
+    NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
+    SETTINGS = {"tracker": {"repository": REPO, "map_label": "factory:map"},
+                "targets": {"air": {"bot_login": "factory[bot]"}}}
+
+    def test_probe_requires_a_recent_comment_from_the_configured_identity(self):
+        body = heartbeat.comment_body("2026-11-03T11:00:00Z")
+        cases = (("59 minutes", [{"user": {"login": "factory[bot]", "type": "Bot"}, "body": body,
+                                   "updated_at": "2026-11-03T11:01:00Z"}], "ok"),
+                 ("61 minutes", [{"user": {"login": "factory[bot]", "type": "Bot"}, "body": body,
+                                   "updated_at": "2026-11-03T10:59:00Z"}], "fail"),
+                 ("no comment", [], "fail"),
+                 ("other bot", [{"user": {"login": "other[bot]", "type": "Bot"}, "body": body,
+                                  "updated_at": "2026-11-03T11:59:00Z"}], "fail"),
+                 ("human", [{"user": {"login": "person", "type": "User"}, "body": body,
+                              "updated_at": "2026-11-03T11:59:00Z"}], "fail"),
+                 ("marker missing", [{"user": {"login": "factory[bot]", "type": "Bot"},
+                                       "body": body.replace(heartbeat.MARKER, ""),
+                                       "updated_at": "2026-11-03T11:59:00Z"}], "fail"),
+                 ("updated_at missing", [{"user": {"login": "factory[bot]", "type": "Bot"}, "body": body}], "fail"))
+
+        for name, comments, want in cases:
+            def gh(args, **_):
+                if args[:2] == ["issue", "list"]:
+                    return json.dumps([{"number": 404}])
+                if args[0] == "api" and "issues/404/comments" in " ".join(args):
+                    return "\n".join(json.dumps(c) for c in comments)
+                return ""
+            with self.subTest(name=name):
+                got = heartbeat.doctor_probe(self.SETTINGS, gh, now=self.NOW)
+                self.assertEqual(got["result"], want)
+
+class ProjectWriteTokenProbeTest(unittest.TestCase):
+    SETTINGS = ProjectWriteProbeTest.SETTINGS
+
     def test_a_token_declared_primary_repository_is_probed(self):
         """#1236 B2: `role: primary` is not a project repository, but its declared `token` is still probed."""
         settings = {**self.SETTINGS, "environments": {"team": {"secrets": [], "tokens": {"main": "FACTORY_ISSUES_TOKEN"}}}}
@@ -147,6 +184,27 @@ class ProjectWriteProbeTest(unittest.TestCase):
         got = github_probes.project_write_probes(settings, "team", gh, {"FACTORY_ISSUES_TOKEN": "iss"})
         self.assertEqual([(r["probe"], r["result"]) for r in got], [("write:label:o/r", "ok")])
         self.assertEqual(gh.tokens, ["iss", "iss"])
+
+    def test_push_probe_creates_and_deletes_a_branch_for_a_writable_repository_with_a_token(self):
+        """#1237: only `write: true` plus `token` is push-probed; the branch is deleted at once, with the same token."""
+        for name, env, pushed in (("writable", {"secrets": [], "tokens": {"app": "APP_TOKEN"}, "writable": ["app"]}, True),
+                                  ("read-only", {"secrets": [], "tokens": {"app": "APP_TOKEN"}, "writable": ["main"]}, False)):
+            with self.subTest(name):
+                settings = {**self.SETTINGS, "environments": {"team": env}}
+                class Gh(FakeGh):
+                    def __call__(self, args, token=None):
+                        out = super().__call__(args, token)
+                        return json.dumps({"sha": "abc"}) if args[:2] == ["api", "repos/o/app/commits/HEAD"] else out
+                gh = Gh()
+                got = github_probes.project_write_probes(settings, "team", gh, {"APP_TOKEN": "tok"})
+                self.assertEqual([(r["probe"], r["result"]) for r in got],
+                                 [("write:label:o/app", "ok")] + ([("push:branch:o/app", "ok")] if pushed else []))
+                refs = [c for c in gh.calls if c[:1] == ["api"] and "git/refs" in " ".join(c)]
+                self.assertEqual([c[2] for c in refs], ["POST", "DELETE"] if pushed else [])
+                if pushed:
+                    self.assertEqual(refs[0][3], "repos/o/app/git/refs")
+                    self.assertTrue(refs[1][-1].endswith(refs[0][5].removeprefix("ref=refs/heads/")))
+                    self.assertEqual(set(gh.tokens), {"tok"})
 
     def test_the_environment_repository_is_not_probed_for_the_issues_token(self):
         """#1126: Air's own token writes the environment's repository, so the issues token is not needed there."""

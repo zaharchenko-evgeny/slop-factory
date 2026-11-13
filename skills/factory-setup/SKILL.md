@@ -94,8 +94,9 @@ tools go there), `.github/workflows/factory-workflow-check.yml` (runs
 `{{NAME}}` placeholder with the interview answer (a missing answer is an
 error; Jinja's `{{ name }}` in role bodies is rendered later, by setup).
 `render.py --extras ANSWERS.json OUT_DIR` writes `templates/`: the
-"Development workflow" section of `AGENTS.md` (`AGENTS.workflow.md`) and
-`docs/agents/issue-tracker.md`. Never overwrite a file that has local edits
+"Development workflow" section of `AGENTS.md` (`AGENTS.workflow.md`),
+`docs/agents/issue-tracker.md` and `docs/reading-the-workflow.md` (how to read the workflow and find what runs next
+for a ticket; the engine's `factory-troubleshoot` skill, which `factory setup` installs in every environment, uses it). Never overwrite a file that has local edits
 without showing the diff. Then apply the interview's choices to the generated
 files and run `factory validate --team OUT_DIR`.
 

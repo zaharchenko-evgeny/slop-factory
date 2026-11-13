@@ -1073,7 +1073,8 @@ def clear_commands(ticket):
     if "implement-<tier>" not in declared:  # a definition team (ADR-0021): its routing labels on ticket and PR
         return [{"kind": "unlabel", "ticket": ticket, "value": next(iter(store.values())),
                  **({"on": "pr"} if "pr_label" in store else {})}
-                for name, store in declared.items() if ":" not in name]
+                for name, store in declared.items()
+                if ":" not in name and next(iter(store.values())) != vocab.needs_human()]
     return [{"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("implement-<tier>", "*")},
             {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("fix-<tier>", "*"), "on": "pr"},
             {"kind": "unlabel", "ticket": ticket, "value": vocab.cmd("update-<tier>", "*"), "on": "pr"}]

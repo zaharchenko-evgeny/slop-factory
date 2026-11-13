@@ -450,6 +450,15 @@ class ApplyTest(unittest.TestCase):
         for e in plan["environments"]:
             self.assertEqual(set(e["variables"]), {"FACTORY_ENV", "FACTORY_ENV_REPOSITORY"})
 
+    def test_environment_with_roles_and_no_node_is_planned(self):  # #1377
+        def add(f):
+            f["environments"]["people"] = {**f["environments"]["team"], "roles": ["retro"]}
+        envs = {e["name"]: e for e in definition_plan(add)["environments"]}
+        self.assertNotIn("[Slop factory] people", {e["name"] for e in definition_plan()["environments"]})
+        people = envs["[Slop factory] people"]
+        self.assertEqual(people["variables"]["FACTORY_ENV"], "people")
+        self.assertEqual(people["repository"], envs["[Slop factory] team"]["repository"])
+
     def test_declared_variable_is_planned_beside_factory_env(self):
         data = nodes.load()
         data["environments"]["engine"] = {**data["environments"]["engine"], "variables": {"YOUTRACK_URL": "https://y.example"},
@@ -2244,6 +2253,25 @@ class RepositoryCopiesTest(unittest.TestCase):
                 cfg.set_team(before)
         self.assertIn(f"several-writable: environments.engine: {SLOP}, {TEAM}: the air surface allows one writable "
                       "repository per environment", errs)
+
+    def test_air_allows_a_second_writable_repository_with_a_token(self):
+        for token, refused in (("TEAM_TOKEN", False), (None, True)):
+            with self.subTest(token=token):
+                f, w = adr27({"engine": [(SLOP, {"write": True}), (TEAM, {"write": True, **({"token": token} if token else {})})],
+                              "intake": [(SLOP, {})]}, {"intake": ["intake"]})
+                with tempfile.TemporaryDirectory() as tmp:
+                    shutil.copytree(HERE / "fixtures/slop", tmp, dirs_exist_ok=True)
+                    for name, edit in ((definition.FACTORY, f), (definition.WORKFLOW, w)):
+                        data = yaml.safe_load((Path(tmp) / name).read_text())
+                        edit(data)
+                        (Path(tmp) / name).write_text(yaml.safe_dump(data, sort_keys=False))
+                    before = cfg.team_root()
+                    cfg.set_team(tmp)
+                    try:
+                        errs = deploy.output_errors(nodes.load(), cfg.load())
+                    finally:
+                        cfg.set_team(before)
+                self.assertEqual(any(e.startswith("several-writable") for e in errs), refused, errs)
 
 if __name__ == "__main__":
     unittest.main()

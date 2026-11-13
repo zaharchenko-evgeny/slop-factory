@@ -106,6 +106,8 @@
           "domains": {"type": "array", "items": {"type": "string"}},
           "secrets": {"type": "array", "items": {"type": "string"}},
           "secret_help": {"type": "object", "additionalProperties": {"type": "string"}},
+          "roles": {"type": "array", "items": {"type": "string"},
+                    "description": "Roles used in this environment outside the workflow (#1377): deploy plans it and setup installs their skills."},
           "variables": {"type": "object", "additionalProperties": {"type": "string"}},
           "vm": {"type": "string"},
           "startup": {"type": "string"},

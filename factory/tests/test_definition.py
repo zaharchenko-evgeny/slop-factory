@@ -78,6 +78,25 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    def test_environment_roles_must_be_declared(self):  # #1377
+        def change(f):
+            f["environments"]["people"] = {**f["environments"]["knowledge"], "roles": ["retro", "nobody"]}
+        self.edit("factory.yaml", change)
+        self.assertEqual([e for e in self.errors() if "environments.people" in e],
+                         ["unknown-role: environments.people.roles: nobody is not in `roles`"])
+        self.assertEqual(definition.config(definition.load(self.root))["environments"]["people"]["roles"], ["retro", "nobody"])
+        self.edit("factory.yaml", lambda f: f["environments"]["people"].update(roles="retro"))
+        self.assertIn("bad-roles: environments.people.roles: a list of role names", self.errors())
+
+    def test_environment_roles_pass_the_compiled_checks(self):  # #1377: `factory validate` checks the compiled schema too
+        import subprocess
+        self.edit("factory.yaml", lambda f: f["environments"].__setitem__(
+            "people", {**f["environments"]["knowledge"], "roles": ["retro"]}))
+        out = subprocess.run([sys.executable, str(ROOT / "cli.py"), "--team", str(self.root), "validate"],
+                             capture_output=True, text=True)
+        self.assertNotIn("unknown-key", out.stdout + out.stderr)
+        self.assertIn("factory: ok", out.stdout, out.stdout + out.stderr)
+
     # --- ADR-0027: repository tracker, vcs and write; node environments ----------------------------------------
     def _envs(self, f, **envs):
         """Replace the environments with `envs`: {name: [(repo, {keys})]}, keeping the engine's other settings."""
@@ -240,6 +259,21 @@ class DefinitionTest(unittest.TestCase):
                       "repository per environment", warns)
         self.assertTrue(any(w.startswith("deprecated-key: nodes.implement-small: `writes`") for w in warns), warns)
         self.assertTrue(any(w.startswith("deprecated-key: agents.") and "`access`" in w for w in warns), warns)
+
+    def test_several_writable_needs_a_token_on_each_but_the_main(self):
+        """ADR-0027 (#1237): a writable repository besides the main (first) one is pushed with its `token`."""
+        main, other = {"write": True}, {"write": True}
+        cases = [("second has a token", [(MAIN, main), (OTHER, {**other, "token": "OTHER_TOKEN"})], False),
+                 ("second has no token", [(MAIN, main), (OTHER, other)], True),
+                 ("second has an empty token", [(MAIN, main), (OTHER, {**other, "token": ""})], True),
+                 ("main has a token only", [(MAIN, {**main, "token": "MAIN_TOKEN"}), (OTHER, other)], True),
+                 ("second is read-only", [(MAIN, main), (OTHER, {})], False),
+                 ("one writable repository", [(OTHER, {}), (MAIN, main)], False)]
+        for name, repos, refused in cases:
+            with self.subTest(name):
+                self.edit("factory.yaml", lambda f: self._envs(f, engine=repos))
+                warns = [w for w in definition.warnings(definition.load(self.root)) if w.startswith("several-writable")]
+                self.assertEqual(bool(warns), refused, warns)
 
     def test_migrated_slop_definition_validates_clean(self):
         """The Slop definition in the ADR-0027 form (slop-eval-factory#92): no errors, no warnings, the copies below."""
@@ -1069,6 +1103,20 @@ class DefinitionTest(unittest.TestCase):
             self.assertIn("tdd", skills)
             self.assertIn("factory-step", skills)
             self.assertNotIn("retro", skills)        # retro runs in `knowledge`
+        finally:
+            config.set_team(before)
+
+    def test_doctor_reads_the_skills_of_environment_roles(self):  # #1377
+        import config
+        import doctor
+        import nodes as nodes_mod
+        self.edit("factory.yaml", lambda f: f["environments"].__setitem__(
+            "people", {**f["environments"]["knowledge"], "roles": ["developer"]}))
+        before = config._team
+        config.set_team(self.root)
+        try:
+            _, skills = doctor.env_needs("people", nodes_mod.load())
+            self.assertIn("tdd", skills)
         finally:
             config.set_team(before)
 

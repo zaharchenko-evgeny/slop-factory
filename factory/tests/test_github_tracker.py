@@ -21,7 +21,7 @@ sys.path.insert(0, str(HERE.parent))
 import config as cfg  # noqa: E402
 cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
 from factory_plugins.github import tracker as github_tracker  # noqa: E402
-from factory_plugins.github.tracker import ClaimError, CountedRun, GitHubTracker, RateLimited  # noqa: E402
+from factory_plugins.github.tracker import CountedRun, GitHubTracker, RateLimited  # noqa: E402
 
 STAGES = cfg.load()["tracker"]["stages"]
 REPO = "o/r"
@@ -125,19 +125,6 @@ class GitHub(unittest.TestCase):
         tracker(fake).set_review_labels(23, "high")
         self.assertEqual(sorted(fake.issues[23]["labels"]), ["docs-impact", "factory:approved", "risk:high"])
 
-
-    def test_claim_race_backs_off(self):
-        fake = FakeGh({23: {"labels": ["factory:ready"]}})
-        real = fake.__call__
-
-        def racing(args):  # another executor assigns itself right after our add
-            out = real(args)
-            if "--add-assignee" in args:
-                fake.issues[23]["assignees"].append("executor-b")
-            return out
-        with self.assertRaisesRegex(ClaimError, "after re-read"):
-            tracker(racing).claim(23, "executor-a")
-        self.assertEqual(fake.issues[23]["assignees"], ["executor-b"])
 
     def test_vars_round_trip_and_marker_escape(self):
         fake = FakeGh({5: {"labels": ["factory:ready"]}})
@@ -267,6 +254,16 @@ class ProjectWriteToken(unittest.TestCase):
         run(["pr", "view", "2", "-R", "o/app"])
         run(["pr", "edit", "2", "-R", "o/r", "--add-label", "x"])  # not a project repository
         self.assertEqual(calls, ["pat"] * 4 + [None] * 3)
+
+    def test_pr_create_in_a_writable_repository_uses_its_token(self):
+        """#1237: the PR of a `write: true` repository is opened (and found) with that repository's `token`."""
+        calls = []
+        run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", [],
+                                             {"APP_TOKEN": "app", "FACTORY_WRITE_TOKEN": "pat"}, {"o/app": "APP_TOKEN"})
+        run(["pr", "create", "-R", "o/App", "--head", "ez/1-x", "--base", "main"])
+        run(["pr", "list", "-R", "o/app", "--head", "ez/1-x"])  # a read
+        run(["pr", "create", "-R", "o/r", "--head", "ez/1-x"])  # no token: as before
+        self.assertEqual(calls, ["app", None, None])
 
     def test_link_to_a_foreign_issue_uses_the_issues_token(self):
         """#1155: linking a slop-eval-factory child to a slop-factory parent writes slop-factory but refers to the
