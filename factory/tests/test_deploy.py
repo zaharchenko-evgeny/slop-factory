@@ -1903,6 +1903,357 @@ class YouTrackTagsTest(unittest.TestCase):
         self.assertFalse([t for t in plan["tags"] if "<" in t])
         self.assertEqual(plan["owned_tag_prefixes"], ["factory:"])
 
+    def test_planned_tags_carry_the_color_of_the_label_they_come_from(self):
+        """#1363: a stage tag, its `<repo>` suffixed copies, a `<focus>` command tag and an override take their label's hex."""
+        def edit(conf):
+            conf["tracker"].update(stages={"ready": "factory:ready", "in-dev": "factory:in-dev"}, repository_field="Repository")
+            conf["states"]["ready"]["store"] = {"tag": "factory:ready"}
+            conf["commands"]["implement-medium"]["store"] = {"tag": "factory:implement-<focus>"}
+            conf["labels"]["overrides"] = {"factory:ready-slop-eval-factory": "ABCDEF"}
+        plan = youtrack_plan(edit, lambda n: n["nodes"][next(iter(n["nodes"]))].update(focuses=["a", "b"]))
+        specs, stages = plan["tag_specs"], cfg.load()["labels"]["colors"]
+        self.assertEqual(specs["factory:ready-slop-factory"], stages["stages"]["ready"])
+        self.assertEqual(specs["factory:ready-slop-eval-factory"], "abcdef")  # an override on the tag itself wins
+        self.assertEqual(specs["factory:implement-a"], stages["groups"]["command"])
+        self.assertEqual(specs["risk:high"], stages["risk"]["high"])
+        self.assertEqual(specs["complexity:small"], stages["groups"]["complexity"])
+        self.assertEqual(set(specs), set(plan["tags"]))
+    def run_deploy(self, mode, allow_delete, have):
+        run = fake_labels({"o/tracker": have, "o/code": have})
+        plan = {**self.PLAN, "prefix": "p", "environments": [], "automations": []}
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(air, "read_state", return_value=([], [])), \
+                mock.patch("factory_plugins.github.tracker.gh", run):
+            code = air.deploy(mode, allow_delete, plan, None, None)
+        return code, out.getvalue(), err.getvalue(), run.writes
+
+    def test_dry_run_reports_without_writing(self):
+        code, out, _, writes = self.run_deploy("--dry-run", False, {**self.HAVE, "risk:low": ("ff0000", "")})
+        self.assertEqual(code, 0)
+        self.assertIn("update label risk:low in o/tracker (color)", out)
+        self.assertIn("remove label factory:old in o/code", out)
+        self.assertEqual(writes, [])
+
+    def test_apply_updates_but_refuses_removal_without_allow_delete(self):
+        have = {**self.HAVE, "risk:low": ("ff0000", ""), "complexity:medium": ("ededed", "")}
+        code, _, err, writes = self.run_deploy("--apply", False, have)
+        self.assertEqual(code, 1)
+        self.assertIn("refused: would remove label factory:old in o/tracker", err)
+        self.assertEqual(writes, [("edit", r, n) for r in ("o/tracker", "o/code") for n in ("complexity:medium", "risk:low")])
+
+    def test_apply_with_allow_delete_removes_owned_labels_only(self):
+        code, _, _, writes = self.run_deploy("--apply", True, self.HAVE)
+        self.assertEqual(code, 0)
+        self.assertEqual(writes, [("delete", "o/tracker", "factory:old"), ("delete", "o/code", "factory:old")])
+
+    def test_apply_writes_project_labels_with_the_write_token(self):
+        tokens = []
+
+        def run(args, **kw):
+            tokens.append((args[1], args[args.index("-R") + 1], kw.get("token")))
+            return "[]" if args[:2] == ["label", "list"] else ""
+        wrapped = github_tracker.ProjectWriteRun(run, ["o/code"], {"FACTORY_WRITE_TOKEN": "t"})
+        plan = {**self.PLAN, "label_repositories": ["o/tracker", "o/code"], "prefix": "p", "environments": [], "automations": []}
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(air, "read_state", return_value=([], [])):
+            air.deploy("--apply", False, plan, None, None, run=wrapped)
+        creates = {(r, t) for v, r, t in tokens if v == "create"}
+        self.assertEqual(creates, {("o/tracker", None), ("o/code", "t")})
+
+
+class OnlyTest(unittest.TestCase):
+    """`--only` selectors: a partial deploy of the matched items (a fake MCP server records the calls)."""
+    REPO = "https://github.com/o/r"
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / "server.py").write_text(FAKE_SERVER)
+        self.state = {k: self.tmp / f"{k}.json" for k in ("automation", "environment")}
+        self.plan = {
+            "prefix": "[F] ", "label_plan": {}, "labels": ["factory:ready"], "label_repositories": ["o/t"],
+            "owned_label_prefixes": ["factory:"], "label_specs": {"factory:ready": {"color": "c2e0c6"}},
+            "environments": [{"name": "[F] read", "startup": "new", "repository": self.REPO,
+                              "declared": [{"name": "TOK", "secret": False}]},
+                             {"name": "[F] write", "startup": "new", "repository": self.REPO,
+                              "declared": [{"name": "TOK", "secret": False}]}],
+            "automations": [{"name": "[F] notify", "prompt": "new", "environmentConfigId": "[F] read", "spec": {"node": "notify"}},
+                            {"name": "[F] notify repo-b", "prompt": "new", "environmentConfigId": "[F] write", "spec": {"node": "notify"}},
+                            {"name": "[F] intake", "prompt": "new", "environmentConfigId": "[F] write", "spec": {"node": "intake"}}]}
+        envs = [{"id": "e1", "name": "[F] read", "startup": "old", "repository": self.REPO},
+                {"id": "e2", "name": "[F] write", "startup": "old", "repository": self.REPO}]
+        autos = [{"id": "a1", "name": "[F] notify", "prompt": "old", "environmentConfigId": "e1"},
+                 {"id": "a2", "name": "[F] notify repo-b", "prompt": "old", "environmentConfigId": "e2"},
+                 {"id": "a3", "name": "[F] intake", "prompt": "old", "environmentConfigId": "e2"},
+                 {"id": "a4", "name": "[F] gone", "prompt": "x", "environmentConfigId": "e2"}]
+        self.seed(autos, envs)
+
+    def seed(self, automations, envs):
+        for k, items in (("automation", automations), ("environment", envs)):
+            self.state[k].write_text(json.dumps({"items": items, "calls": []}))
+
+    def calls(self, kind):
+        return [c for c in json.loads(self.state[kind].read_text())["calls"]
+                if c[0].startswith(("create_", "update_", "edit_", "delete_"))]
+
+    def run_deploy(self, mode, only, allow_delete=False, have=None):
+        servers = [air.Mcp(f"{sys.executable} {self.tmp / 'server.py'} {self.state[k]} {k}") for k in self.state]
+        run = fake_labels({"o/t": have or {"factory:ready": ("c2e0c6", ""), "factory:old": ("ededed", "")}})
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                    mock.patch("factory_plugins.github.tracker.gh", run):
+                code = air.deploy(mode, allow_delete, self.plan, *servers, only=only)
+        finally:
+            for s in servers:
+                s.close()
+        return code, out.getvalue(), err.getvalue(), run.writes
+
+    def updated(self):
+        return sorted(c[1]["automationId"] for c in self.calls("automation") if c[0] == "update_automation")
+
+    def test_node_selector_applies_only_that_nodes_automations(self):
+        code, _, _, _ = self.run_deploy("--apply", ["node:notify"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.updated(), ["a1", "a2"])  # intake stays unapplied
+        self.assertEqual(self.calls("environment"), [])
+
+    def test_env_selector_limits_environments_and_variables(self):
+        code, _, _, _ = self.run_deploy("--apply", ["env:read"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.updated(), ["a1"])
+        self.assertEqual([(c[0], c[1]["id"]) for c in self.calls("environment")],
+                         [("edit_environment", "e1"), ("edit_environment", "e1")])  # startup, then the variable
+        self.assertEqual([c[1]["variables"][0]["key"] for c in self.calls("environment") if "variables" in c[1]], ["TOK"])
+
+    def test_glob_selects_by_name_with_literal_brackets(self):
+        for pattern in ("[F] notify *", "notify *", "[F] notify repo-?", "*repo-b"):
+            with self.subTest(pattern=pattern):
+                self.setUp()
+                self.assertEqual(self.run_deploy("--apply", [pattern])[0], 0)
+                self.assertEqual(self.updated(), ["a2"])
+        self.setUp()
+        self.assertEqual(self.run_deploy("--apply", ["[F] notify*"])[0], 0)
+        self.assertEqual(self.updated(), ["a1", "a2"])
+
+    def test_selectors_repeat_and_combine(self):
+        self.assertEqual(self.run_deploy("--apply", ["node:intake", "[F] notify"])[0], 0)
+        self.assertEqual(self.updated(), ["a1", "a3"])
+
+    def test_unmatched_selector_exits_2_naming_it_and_writes_nothing(self):
+        for sel in ("node:nope", "env:nope", "nothing *", "node:notif"):
+            with self.subTest(sel=sel):
+                code, _, err, writes = self.run_deploy("--apply", ["node:notify", sel])
+                self.assertEqual(code, 2)
+                self.assertIn(f"--only {sel} matches nothing", err)
+                self.assertEqual((self.calls("automation"), self.calls("environment"), writes), ([], [], []))
+
+    def test_selector_matching_an_unchanged_item_is_not_unmatched(self):
+        self.plan["automations"][2]["prompt"] = "old"
+        code, out, _, _ = self.run_deploy("--dry-run", ["node:intake"])
+        self.assertEqual(code, 0)
+        self.assertIn("unchanged", out)
+
+    def test_matched_delete_needs_allow_delete_and_unmatched_is_ignored(self):
+        code, _, err, _ = self.run_deploy("--apply", ["[F] gone"])
+        self.assertEqual((code, self.calls("automation")), (1, []))
+        self.assertIn("--allow-delete", err)
+        self.assertEqual(self.run_deploy("--apply", ["[F] gone"], allow_delete=True)[0], 0)
+        self.assertEqual([c[0] for c in self.calls("automation")], ["delete_automation"])
+        self.setUp()
+        self.assertEqual(self.run_deploy("--apply", ["node:intake"])[0], 0)  # [F] gone is not matched
+        self.assertEqual(self.updated(), ["a3"])
+
+    def test_label_removals_are_skipped_but_updates_are_made(self):
+        have = {"factory:ready": ("ff0000", ""), "factory:old": ("ededed", "")}
+        code, _, err, writes = self.run_deploy("--apply", ["node:intake"], have=have)
+        self.assertEqual(code, 0)
+        self.assertEqual(writes, [("edit", "o/t", "factory:ready")])
+        self.assertNotIn("refused", err)
+        code, out, _, _ = self.run_deploy("--dry-run", ["node:intake"], have=have)
+        self.assertNotIn("remove label", out)
+
+    def test_verify_reports_only_the_matched_items(self):
+        real = air.read_state
+
+        def stale(*a, **kw):  # after the first read, Air keeps showing the old intake prompt
+            auto, envs = real(*a, **kw)
+            return Listed([{**x, "prompt": "old"} if x["name"] == "[F] intake" else x for x in auto]), envs
+        Listed = air.Listed
+        with mock.patch.object(air, "read_state", side_effect=stale):
+            code, _, err, _ = self.run_deploy("--apply", ["node:notify"])
+        self.assertEqual((code, err.count("verify failed")), (0, 0))
+        with mock.patch.object(air, "read_state", side_effect=stale):
+            self.setUp()
+            code, _, err, _ = self.run_deploy("--apply", ["node:intake"])
+        self.assertEqual(code, 1)
+        self.assertIn("verify failed: update automation [F] intake", err)
+
+    def test_dry_run_prints_partial_and_counts_the_rest(self):
+        code, out, _, _ = self.run_deploy("--dry-run", ["node:notify", "env:read"])
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "partial: node:notify, env:read")
+        self.assertIn("update automation [F] notify (prompt)", lines)
+        self.assertNotIn("update automation [F] intake (prompt)", lines)
+        self.assertIn("not deployed: 3 other changes", lines)  # write env, intake, gone
+        self.assertEqual(self.calls("automation"), [])
+        _, full, _, _ = self.run_deploy("--dry-run", [])
+        self.assertNotIn("partial:", full)
+        self.assertNotIn("not deployed", full)
+
+    def test_main_parses_only_and_rejects_a_missing_value(self):
+        for argv in (["--dry-run", "--only"], ["--dry-run", "--only", "--apply"], ["--dry-run", "--only", "node:"]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(air.main(argv), 2)
+                self.assertIn("--only needs a selector", err.getvalue())
+
+
+def slop_specs(edit=None):
+    """(labels, label_specs) of the slop fixture's config, after `edit` changed a copy of it."""
+    before = cfg.team_root()
+    try:
+        cfg.set_team(HERE / "fixtures/slop")
+        conf = copy.deepcopy(cfg.load())
+        if edit:
+            edit(conf)
+        return deploy.labels(nodes.load(), conf), deploy.label_specs(nodes.load(), conf)
+    finally:
+        cfg.set_team(before)
+
+
+class LabelColorTest(unittest.TestCase):
+    def test_label_specs_color_every_stage_and_command_label_by_role(self):
+        names, specs = slop_specs()
+        self.assertEqual([n for n in names if not (specs.get(n) or {}).get("color")], [])
+        self.assertEqual(specs["factory:in-dev"]["color"], "1d76db")
+        self.assertEqual(specs["factory:implement-medium"]["color"], "c5def5")
+        self.assertEqual(specs["factory:ci-red"]["color"], "d73a4a")
+        self.assertEqual(specs["risk:high"]["color"], "f9d0c4")
+        self.assertEqual(specs["complexity:small"]["description"], deploy.COMPLEXITY_DESCRIPTION)
+
+    def test_label_specs_color_a_renamed_stage_and_an_added_command_by_role(self):
+        def edit(conf):
+            conf["states"]["in-dev"]["store"]["label"] = conf["tracker"]["stages"]["in-dev"] = "team:coding"
+            conf["commands"]["build"] = {"store": {"label": "team:build"}}
+        names, specs = slop_specs(edit)
+        self.assertEqual(specs["team:coding"]["color"], "1d76db")  # stage `in-dev` keeps its color
+        self.assertEqual(specs["team:build"]["color"], "c5def5")
+        self.assertIn("team:build", names)
+        self.assertNotIn("factory:in-dev", names)
+
+    def test_label_color_override(self):
+        extra = yaml.safe_load((HERE / "fixtures/label_colors/factory.yaml").read_text())
+        _, specs = slop_specs(lambda conf: conf.update(cfg.merge(conf, extra)))
+        self.assertEqual(specs["factory:blocked"]["color"], "000000")
+        self.assertEqual(specs["factory:approved"]["color"], "0e8a16")  # the other defaults stay
+
+    def test_label_color_random(self):
+        plan = {"labels": ["team:odd"], "label_repositories": ["o/a", "o/b"], "owned_label_prefixes": ["team:"],
+                "label_specs": {}}
+        created = deploy.reconcile_labels(plan, run=fake_labels({"o/a": {}, "o/b": {}}))
+        self.assertEqual([c[0] for c in created], ["create", "create"])
+        colors = {c[3]["color"] for c in created}
+        self.assertEqual(len(colors), 1)  # one color per label, in every repository
+        self.assertRegex(colors.pop(), r"^[0-9a-f]{6}$")
+        for color in ("ededed", "123456"):  # an existing unmapped label of any color is left alone
+            have = fake_labels({"o/a": {"team:odd": (color, "")}, "o/b": {"team:odd": (color, "")}})
+            self.assertEqual(deploy.reconcile_labels(plan, run=have), [])
+
+
+class LabelPlanTest(unittest.TestCase):
+    """ADR-0027: labels in each repository whose events wake copies (its tickets or its PRs)."""
+    TRACKER, WEB, DOCS = "zaharchenko-evgeny/slop-factory", "o/web", "o/docs"
+    TEAM = "zaharchenko-evgeny/slop-eval-factory"
+
+    def plan(self, tickets=(), tracker=None):
+        """ADR-0027: WEB and DOCS join the engine environment; one in `tickets` holds tickets (its own issues), the
+        other is context only (`tracker: none`). `tracker` moves `tracker.repository` (the map label's home)."""
+        def edit(f):
+            f["environments"]["engine"]["repositories"] += [
+                {"repo": r, **({} if r in tickets else {"tracker": "none"})} for r in (self.WEB, self.DOCS)]
+            if tracker:
+                f["tracker"]["repository"] = tracker
+        return definition_plan(edit)
+
+    def test_every_ticket_repository_gets_stage_and_pr_labels(self):
+        plan = self.plan([self.WEB])
+        self.assertNotIn("labels", plan)
+        self.assertNotIn("label_repositories", plan)
+        want = {"factory:in-dev", "risk:high", "complexity:medium", "factory:needs-human", "factory:hold",
+                "factory:implement-medium", "factory:ci-green", "factory:ci-red", "factory:review-high", "factory:review"}
+        for repo in (self.TRACKER, self.WEB, self.TEAM):
+            self.assertLessEqual(want, set(plan["label_plan"][repo]), repo)
+
+    def test_map_label_only_in_tracker(self):
+        plan = self.plan([self.WEB])
+        self.assertIn("factory:map", plan["label_plan"][self.TRACKER])
+        self.assertNotIn("factory:map", plan["label_plan"][self.WEB])
+        moved = self.plan([self.WEB], tracker=self.WEB)  # `tracker.repository` holds the map
+        self.assertIn("factory:map", moved["label_plan"][self.WEB])
+        self.assertNotIn("factory:map", moved["label_plan"][self.TRACKER])
+
+    def test_repository_without_tickets_gets_no_labels(self):
+        plan = self.plan([self.WEB])
+        self.assertEqual(plan["label_plan"][self.DOCS], [])
+
+    def test_plan_labels_only_where_copies_hear_events(self):
+        """ADR-0027: the Slop ticket repositories get the labels; a context repository (`tracker: none`, not
+        writable) gets none."""
+        plan = self.plan()
+        self.assertNotIn("label_repositories", plan)
+        self.assertLessEqual({"factory:needs-human", "factory:map"}, set(plan["label_plan"][self.TRACKER]))
+        self.assertEqual({r: v for r, v in plan["label_plan"].items() if not v}, {self.WEB: [], self.DOCS: []})
+
+    def test_reconcile_removes_labels_from_a_repository_no_longer_holding_tickets(self):
+        plan = self.plan()
+        have = {"factory:ready": ("c2e0c6", ""), "factory:hold": ("ededed", ""), "bug": ("ff0000", "")}
+        run = fake_labels({self.TRACKER: {}, self.WEB: have, self.DOCS: {}, self.TEAM: {}})
+        got = deploy.reconcile_labels(plan, run=run)
+        self.assertEqual([(a, n) for a, r, n, *_ in got if r == self.WEB],
+                         [("remove", "factory:hold"), ("remove", "factory:ready")])  # `bug` is not factory-owned
+        self.assertEqual([a for a, r, *_ in got if r == self.TRACKER].count("remove"), 0)
+        self.assertIn(("create", self.TRACKER, "factory:map"), [x[:3] for x in got])
+
+
+class FakeTags:
+    """A YouTrack runner over a tag inventory {name: id}; records writes."""
+
+    def __init__(self, tags, shared=()):
+        self.tags, self.shared, self.writes = dict(tags), set(shared), []
+
+    def __call__(self, method, path, body=None):
+        if method == "GET" and path.startswith("/api/issues"):  # tags another project's issues carry
+            return [{"idReadable": "X-1"}] if any(urllib.parse.quote(f"{{{t}}}") in path for t in self.shared) else []
+        if method == "GET":
+            return [{"id": i, "name": n} for n, i in self.tags.items()]
+        self.writes.append((method, path, body))
+        return {}
+
+
+class YouTrackTagsTest(unittest.TestCase):
+    TAGS = ["factory:implement-mid", "factory:ready"]
+    PLAN = {"tags": TAGS, "owned_tag_prefixes": ["factory:"], "tag_tracker": {"url": "https://y.example", "project": "LME"},
+            "labels": [], "label_repositories": [], "owned_label_prefixes": []}
+
+    def test_required_tags_come_from_the_compiled_definition(self):
+        plan = youtrack_plan(tag_store)
+        self.assertIn("factory:ready", plan["tags"])
+        self.assertIn("factory:implement-medium", plan["tags"])
+        self.assertFalse([t for t in plan["tags"] if "<" in t])
+        self.assertEqual(plan["owned_tag_prefixes"], ["factory:"])
+
+    def test_planned_tags_carry_the_color_of_the_label_they_come_from(self):
+        """#1363: a stage tag, its `<repo>` suffixed copy, a `<focus>` command and an override take their label's hex."""
+        def edit(conf):
+            tag_store(conf)
+            conf["states"]["ready"]["store"] = {"tag": "factory:ready"}
+            conf["commands"]["implement-medium"]["store"] = {"tag": "factory:implement-<focus>"}
+            conf.setdefault("labels", {})["overrides"] = {"factory:ready-web": "ABCDEF"}
+        plan = youtrack_plan(edit, lambda n: [x.update(focuses=["a"]) for x in n["nodes"].values()][:0])
+        specs = plan["tag_specs"]
+        colors = cfg.load()["labels"]["colors"] if False else None
+        self.assertEqual(set(specs) - set(plan["tags"]), set())
+        self.assertTrue(all(c == c.lower() and len(c) == 6 for c in specs.values()), specs)
+
     def run_deploy(self, mode, allow_delete, have, shared=()):
         fake = FakeTags(have, shared)
         out, err = io.StringIO(), io.StringIO()

@@ -9,6 +9,7 @@ and the descriptor store kinds it holds states and commands in.
 """
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,6 +26,23 @@ ACTIVITY_FIELDS = "timestamp,author(login),category(id),added(name),removed(name
 ACTIVITY_CATEGORIES = "TagsCategory,CustomFieldCategory,IssueResolvedCategory"
 COMMENT_FIELDS = "text,created,author(login)"
 TOP = "$top=1000"
+
+# YouTrack tag colors are a fixed palette (`FieldStyle`), not free hex: {color id: background hex}. UNVERIFIED against
+# a live instance: check with `GET /api/tags?fields=name,color(id,background)` (#1363) and correct the table.
+TAG_PALETTE = {
+    "1": "d2d2d2", "2": "d6f0c0", "3": "f9e6b0", "4": "b9e4f5", "5": "f5c6d0", "6": "dbc9f0", "7": "ffe0b2",
+    "8": "c6f0ea", "9": "ffd1c2", "10": "e6e6a0", "11": "9ad1ff", "12": "ffb3c1", "13": "a8e6a1", "14": "f4a6a6",
+    "15": "c3c3f5", "16": "f7d2f0", "17": "8fd9d2", "18": "ffd966", "19": "c0c0c0", "20": "7aa7e6",
+}
+
+
+def palette_id(hex_color):
+    """The palette id whose background is nearest (RGB distance) to `hex_color`; None for no or an invalid color."""
+    if not isinstance(hex_color, str) or not re.fullmatch(r"#?[0-9a-fA-F]{6}", hex_color):
+        return None
+    rgb = lambda h: [int(h.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)]
+    want = rgb(hex_color)
+    return min(TAG_PALETTE, key=lambda i: sum((a - b) ** 2 for a, b in zip(rgb(TAG_PALETTE[i]), want)))
 CHILD_MARK = "<!-- factory:child of={n} -->"
 
 
@@ -274,12 +292,13 @@ class YouTrackTicketStore:
         return login in self.writers
 
     # --- tag inventory (deploy)
-    def list_tags(self):
-        """{name: id} of the tags the token can see."""
+    def list_tags(self, colors=False):
+        """{name: id} of the tags the token can see; with `colors`, {name: (id, color id or None)}."""
         out, skip = {}, 0
+        fields = "id,name,color(id)" if colors else "id,name"
         while True:  # a large instance has many more tags than one page (youtrack.jetbrains.com: ~14,000)
-            page = self.run("GET", f"/api/tags?fields=id,name&{TOP}&$skip={skip}") or []
-            out.update({t["name"]: t["id"] for t in page})
+            page = self.run("GET", f"/api/tags?fields={fields}&{TOP}&$skip={skip}") or []
+            out.update({t["name"]: (t["id"], (t.get("color") or {}).get("id")) if colors else t["id"] for t in page})
             if len(page) < 1000:
                 return out
             skip += len(page)
@@ -292,8 +311,15 @@ class YouTrackTicketStore:
         query = urllib.parse.quote(f"tag: {{{name}}} and project: -{{{self.project}}}")
         return bool(self.run("GET", f"/api/issues?query={query}&fields=idReadable&$top=1"))
 
-    def create_tag(self, name):
-        self.run("POST", "/api/tags?fields=id,name", {"name": name})
+    def create_tag(self, name, color=None):
+        """Create a tag; `color` is a palette id (`palette_id`). Without one the tag has YouTrack's default color."""
+        self.run("POST", "/api/tags?fields=id,name", {"name": name, **({"color": {"id": color}} if color else {})})
+
+    def recolor_tag(self, name, color, owned_prefixes):
+        """Set a factory-owned tag's palette color id; a tag outside the factory's namespaces is never recolored."""
+        if not name.startswith(tuple(owned_prefixes)):
+            raise ValueError(f"tag {name!r} is not factory-owned")
+        self.run("POST", f"/api/tags/{self.list_tags()[name]}?fields=id", {"color": {"id": color}})
 
     def delete_tag(self, name, owned_prefixes):
         """Delete a tag only inside the factory's namespaces; anything else is someone else's and never removed."""
