@@ -71,13 +71,16 @@ def fetch(spec, tmp):
 
 
 def roles_in(defn, environment):
-    """The roles of the enabled agent nodes that run in `environment` (a node's `environments` list counts)."""
+    """The roles of the enabled agent nodes that run in `environment` (a node's `environments` list counts), then the
+    environment's own `roles`."""
     f, w = defn["factory"], defn["workflow"]
     out = []
     for name, n in (w.get("nodes") or {}).items():
         role = ((f.get("agents") or {}).get(n.get("agent")) or {}).get("role")
         if role and n.get("enabled") is not False and environment in definition.node_environments(defn, name) and role not in out:
             out.append(role)
+    # #1377: the roles of people or agents that use the environment outside the workflow (an Air Mate)
+    out += [r for r in ((f.get("environments") or {}).get(environment) or {}).get("roles") or [] if r not in out]
     return out
 
 

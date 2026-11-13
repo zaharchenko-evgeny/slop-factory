@@ -622,6 +622,11 @@ def errors(defn):
         repos = (spec or {}).get("repositories") or []
         if not repos:  # compiling needs a repository for the node output (`_primary`)
             errs.append(f"empty-environment: environments.{e}: lists no repositories")
+        env_roles = (spec or {}).get("roles") or []
+        if not isinstance(env_roles, list) or not all(isinstance(r, str) for r in env_roles):
+            errs.append(f"bad-roles: environments.{e}.roles: a list of role names")
+        else:
+            errs += [f"unknown-role: environments.{e}.roles: {r} is not in `roles`" for r in env_roles if r not in roles]
         errs += [f"removed-key: environments.{e}: {r.get('repo')}: `{k}` (ADR-0027: a repository's `write` names the "
                  "environment's writable repository)" for r in repos for k in REMOVED_REPOSITORY_KEYS if k in r]
     errs += scopes.errors(f)  # environments with their own trackers (#1069)
@@ -946,6 +951,7 @@ def to_project(defn):
                             # where the gate may write in this environment (#994): what its nodes write (ADR-0024)
                             "writable": [names[r["repo"]] for r in repos if full_name(r["repo"]) in written],
                             "secret_help": help_,
+                            **({"roles": list(e["roles"])} if e.get("roles") else {}),  # #1377: used outside the workflow
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP,
                             # ADR-0027: a repository's own tracker is a ticket place (`ticket_places`), not a #1069 project
                             **({"tracker": dict(e["tracker"])} if isinstance(e.get("tracker"), dict) and not new_model else {}),
@@ -1193,7 +1199,8 @@ def nodes(defn):
         environments[en] = {"repository": "primary" if repos and repos[0]["repo"] == primary else repos[0]["repo"].split("/")[-1],
                             "secrets": secrets, "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"),
                             "startup": STARTUP,
-                            "declared": [{"name": k, **v} for k, v in environment_variables(defn, en).items()]}
+                            "declared": [{"name": k, **v} for k, v in environment_variables(defn, en).items()],
+                            **({"roles": list(e["roles"])} if e.get("roles") else {})}
     schedules, out = {}, {}
     for name, n in (w.get("nodes") or {}).items():
         a = agents[n["agent"]]

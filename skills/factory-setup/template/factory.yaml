@@ -153,6 +153,8 @@ environments:
               "*.blob.core.windows.net", pypi.org, files.pythonhosted.org]
     vm: default
     setup: null                   # optional script path, run after the engine's bootstrap; installs the environment's tools
+    # roles: [<role>]           # optional: roles used here outside the workflow (an Air Mate); deploy plans the
+                                  # environment and `factory setup` installs their skills even when no node runs here
   knowledge:                      # retro: the knowledge base is written, the project is evidence
     repositories:
       - repo: {{TEAM_REPOSITORY}}

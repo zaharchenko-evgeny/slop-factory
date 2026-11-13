@@ -112,6 +112,20 @@ class SetupTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             team_setup.set_credentials(defn, "engine", self.tmp / "main", run=lambda *a, **k: None, environ={})
 
+    def test_environment_roles_install_without_a_node(self):  # #1377: an Air Mate's environment
+        path = self.root / "factory.yaml"
+        data = yaml.safe_load(path.read_text())
+        data["environments"]["people"] = {**data["environments"]["knowledge"], "roles": ["retro"]}
+        path.write_text(yaml.safe_dump(data, sort_keys=False))
+        lines = self.install("people")
+        skills = {p.name for p in (self.home / ".agents/skills").iterdir()}
+        self.assertTrue({"factory-step", "factory-troubleshoot", "retro"} <= skills, skills)
+        self.assertNotIn("tdd", skills)
+        self.assertIn("skill retro: github:mattpocock/skills@a496f5513d4a", lines)
+        defn = definition.load(self.root)
+        defn["factory"]["environments"]["knowledge"]["roles"] = ["retro", "developer"]
+        self.assertEqual(team_setup.roles_in(defn, "knowledge"), ["retro", "reviewer", "developer"])  # retro once
+
     def test_roles_in_reads_every_environment_form(self):
         defn = {"factory": {"agents": {"a": {"role": "dev"}, "b": {"role": "ops"}}},
                 "workflow": {"settings": {}, "nodes": {"n": {"agent": "a"}, "m": {"agent": "b"}}}}
