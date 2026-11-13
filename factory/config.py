@@ -107,6 +107,13 @@ def descriptor():
 
 
 def load():
+    cfg = _load()
+    import tag
+    tag.configure(cfg.get("comment_tag"))  # every text the factory writes starts with it (#1366)
+    return cfg
+
+
+def _load():
     root = team_root()
     defaults = yaml.safe_load((engine_root() / "engine/defaults.yaml").read_text()) or {}
     import definition

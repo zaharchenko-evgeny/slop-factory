@@ -28,6 +28,9 @@ the user approves a plan. The layout is the engine's ADR-0021:
   outcomes; the gate applies an outcome's effects. A node's `writes` names the
   repositories it writes and its `listens` the ticket repositories it hears
   (ADR-0024; `references/nodes.md`).
+- `comment_tag` (top-level `factory.yaml`, optional) sets the tag line of every comment, review and PR body the factory
+  writes: unset is `[factory]`, a string is that tag, `""` adds none. Hidden `factory:kind` markers keep the engine's
+  own comments findable in all three cases.
 - `assign` takes a GitHub login, a list of logins or `owner` (the top-level
   `factory.yaml` owner). `unassign` takes the same values or `all`. With
   `on: pr`, `assign` targets every open PR. Without `on`, it targets the ticket.

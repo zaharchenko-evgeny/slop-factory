@@ -460,6 +460,16 @@ class DefinitionTest(unittest.TestCase):
         self.edit("factory.yaml", lambda f: f.pop("owner"))
         self.assertIn("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)", self.errors())
 
+    def test_comment_tag_is_validated_and_reaches_the_config(self):
+        for value, ok in [("[eval-bot]", True), ("", True), (None, True), (3, False), ("a\nb", False), (["x"], False)]:
+            self.edit("factory.yaml", lambda f, v=value: f.update(comment_tag=v))
+            self.assertEqual(not any(e.startswith("bad-comment-tag") for e in self.errors()), ok, value)
+            got = definition.config(definition.load(self.root)).get("comment_tag", "unset")
+            if ok and value is not None:
+                self.assertEqual(got, value)
+            elif value is None:
+                self.assertEqual(got, "unset")
+
     def test_owner_reaches_the_descriptor(self):
         descriptor, _ = definition.to_project(definition.load(self.root))
         self.assertEqual(descriptor["owner"], "zaharchenko-evgeny")

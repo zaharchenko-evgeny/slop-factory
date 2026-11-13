@@ -3,6 +3,7 @@
 name: {{PROJECT_NAME}}
 engine: "{{ENGINE}}"              # what the Air startup script installs (uv tool install)
 owner: {{GITHUB_USER}}            # the GitHub login the notify node tells
+# comment_tag: "[factory]"       # the tag line of every comment, review and PR body; unset is "[factory]", "" adds none
 tracker:
   label_prefix: "factory:"       # a stage is the label <label_prefix><stage>
 {{TRACKER}}
