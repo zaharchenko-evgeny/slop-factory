@@ -88,6 +88,15 @@ class DefinitionTest(unittest.TestCase):
         self.edit("factory.yaml", lambda f: f["environments"]["people"].update(roles="retro"))
         self.assertIn("bad-roles: environments.people.roles: a list of role names", self.errors())
 
+    def test_environment_roles_pass_the_compiled_checks(self):  # #1377: `factory validate` checks the compiled schema too
+        import subprocess
+        self.edit("factory.yaml", lambda f: f["environments"].__setitem__(
+            "people", {**f["environments"]["knowledge"], "roles": ["retro"]}))
+        out = subprocess.run([sys.executable, str(ROOT / "cli.py"), "--team", str(self.root), "validate"],
+                             capture_output=True, text=True)
+        self.assertNotIn("unknown-key", out.stdout + out.stderr)
+        self.assertIn("factory: ok", out.stdout, out.stdout + out.stderr)
+
     # --- ADR-0027: repository tracker, vcs and write; node environments ----------------------------------------
     def _envs(self, f, **envs):
         """Replace the environments with `envs`: {name: [(repo, {keys})]}, keeping the engine's other settings."""
