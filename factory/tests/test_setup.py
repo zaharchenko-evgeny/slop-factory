@@ -79,7 +79,7 @@ class SetupTest(unittest.TestCase):
                     self.assertEqual(ran[1][-2:], ["credential.useHttpPath", "true"])
                     self.assertIn("password=$OTHER_TOKEN", ran[2][-1])
                     self.assertEqual(lines, ["credential o/other: OTHER_TOKEN"])
-                    self.assertEqual(ran[1][:3], ["git", "-C", str(checkout.parent / "other")])
+                    self.assertEqual(ran[1][:3], ["git", "-C", str((checkout.parent / "other").resolve())])
 
     def test_credential_helper_answers_only_for_its_repository(self):
         """B1: run real `git credential fill`; the token goes to https://github.com/o/other only."""
