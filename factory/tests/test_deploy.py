@@ -1903,6 +1903,22 @@ class YouTrackTagsTest(unittest.TestCase):
         self.assertFalse([t for t in plan["tags"] if "<" in t])
         self.assertEqual(plan["owned_tag_prefixes"], ["factory:"])
 
+    def test_planned_tags_carry_the_color_of_the_label_they_come_from(self):
+        """#1363: a stage tag, its `<repo>` suffixed copies, a `<focus>` command tag and an override take their label's hex."""
+        def edit(conf):
+            conf["tracker"].update(stages={"ready": "factory:ready", "in-dev": "factory:in-dev"}, repository_field="Repository")
+            conf["states"]["ready"]["store"] = {"tag": "factory:ready"}
+            conf["commands"]["implement-medium"]["store"] = {"tag": "factory:implement-<focus>"}
+            conf["labels"]["overrides"] = {"factory:ready-slop-eval-factory": "ABCDEF"}
+        plan = youtrack_plan(edit, lambda n: n["nodes"][next(iter(n["nodes"]))].update(focuses=["a", "b"]))
+        specs, stages = plan["tag_specs"], cfg.load()["labels"]["colors"]
+        self.assertEqual(specs["factory:ready-slop-factory"], stages["stages"]["ready"])
+        self.assertEqual(specs["factory:ready-slop-eval-factory"], "abcdef")  # an override on the tag itself wins
+        self.assertEqual(specs["factory:implement-a"], stages["groups"]["command"])
+        self.assertEqual(specs["risk:high"], stages["risk"]["high"])
+        self.assertEqual(specs["complexity:small"], stages["groups"]["complexity"])
+        self.assertEqual(set(specs), set(plan["tags"]))
+
     def run_deploy(self, mode, allow_delete, have, shared=()):
         fake = FakeTags(have, shared)
         out, err = io.StringIO(), io.StringIO()

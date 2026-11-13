@@ -9,6 +9,7 @@ and the descriptor store kinds it holds states and commands in.
 """
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,6 +26,34 @@ ACTIVITY_FIELDS = "timestamp,author(login),category(id),added(name),removed(name
 ACTIVITY_CATEGORIES = "TagsCategory,CustomFieldCategory,IssueResolvedCategory"
 COMMENT_FIELDS = "text,created,author(login)"
 TOP = "$top=1000"
+
+# YouTrack tag colors are a fixed palette (`FieldStyle`), not free hex: {background color: palette id}. Read from
+# youtrack.jetbrains.com with `GET /api/tags?fields=name,color(id,background)` (#1363); id 0 (#fff, no color) is left out.
+# The factory works in colors; the id is used only in the API call.
+TAG_COLORS = {
+    "893e13": "1", "b95716": "2", "1f8039": "3", "315fbd": "4", "8b0d55": "5", "27498a": "6", "068287": "7",
+    "932530": "8", "c01173": "9", "208a3c": "10", "e56d17": "11", "e20f86": "12", "ffaf0f": "13", "89c398": "14",
+    "b6e5e7": "15", "f7f8fa": "16", "c0e3c8": "17", "fed277": "18", "f477bd": "19", "db3b4b": "20", "d0dffc": "21",
+    "fcc3e2": "22", "ebdcab": "23", "7bcccf": "24", "a2bef8": "25", "dbc482": "26", "c9ccd6": "27", "039ba1": "28",
+    "3574f0": "29", "818594": "30", "494b57": "31", "1a5b2c": "32", "096a6e": "33", "5d431d": "34", "27282e": "35",
+}
+
+
+def _background(tag):
+    """A tag's background as lowercase hex without `#`; None for no color (id 0) or none returned."""
+    c = tag.get("color") or {}
+    return None if c.get("id") in (None, "0") else (c.get("background") or "").lstrip("#").lower() or None
+
+
+def tag_color(hex_color):
+    """The palette color nearest (RGB distance) to `hex_color`, as lowercase hex without `#`; None for no or an invalid color."""
+    if not isinstance(hex_color, str) or not re.fullmatch(r"#?[0-9a-fA-F]{6}", hex_color):
+        return None
+    rgb = lambda h: [int(h.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4)]
+    want = rgb(hex_color)
+    return min(TAG_COLORS, key=lambda c: sum((a - b) ** 2 for a, b in zip(rgb(c), want)))
+
+
 CHILD_MARK = "<!-- factory:child of={n} -->"
 
 
@@ -274,12 +303,13 @@ class YouTrackTicketStore:
         return login in self.writers
 
     # --- tag inventory (deploy)
-    def list_tags(self):
-        """{name: id} of the tags the token can see."""
+    def list_tags(self, colors=False):
+        """{name: id} of the tags the token can see; with `colors`, {name: (id, background color or None)}."""
         out, skip = {}, 0
+        fields = "id,name,color(id,background)" if colors else "id,name"
         while True:  # a large instance has many more tags than one page (youtrack.jetbrains.com: ~14,000)
-            page = self.run("GET", f"/api/tags?fields=id,name&{TOP}&$skip={skip}") or []
-            out.update({t["name"]: t["id"] for t in page})
+            page = self.run("GET", f"/api/tags?fields={fields}&{TOP}&$skip={skip}") or []
+            out.update({t["name"]: (t["id"], _background(t)) if colors else t["id"] for t in page})
             if len(page) < 1000:
                 return out
             skip += len(page)
@@ -292,8 +322,16 @@ class YouTrackTicketStore:
         query = urllib.parse.quote(f"tag: {{{name}}} and project: -{{{self.project}}}")
         return bool(self.run("GET", f"/api/issues?query={query}&fields=idReadable&$top=1"))
 
-    def create_tag(self, name):
-        self.run("POST", "/api/tags?fields=id,name", {"name": name})
+    def create_tag(self, name, color=None):
+        """Create a tag; `color` is a palette color (`tag_color`). Without one the tag has YouTrack's default color."""
+        self.run("POST", "/api/tags?fields=id,name", {"name": name, **({"color": {"id": TAG_COLORS[color]}} if color else {})})
+
+    def recolor_tag(self, name, color, owned_prefixes, tag_id=None):
+        """Set a factory-owned tag's palette color (`tag_color`); a tag outside the factory's namespaces is never recolored.
+        `tag_id` is the id `list_tags` already read: listing a large instance's tags again costs many pages per tag."""
+        if not name.startswith(tuple(owned_prefixes)):
+            raise ValueError(f"tag {name!r} is not factory-owned")
+        self.run("POST", f"/api/tags/{tag_id or self.list_tags()[name]}?fields=id", {"color": {"id": TAG_COLORS[color]}})
 
     def delete_tag(self, name, owned_prefixes):
         """Delete a tag only inside the factory's namespaces; anything else is someone else's and never removed."""
