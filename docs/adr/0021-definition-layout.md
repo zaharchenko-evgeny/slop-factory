@@ -17,7 +17,7 @@ focuses are hidden expansions of one node into several automations.
 Decision:
 
 1. **`factory.yaml` lists what the factory has**: `name`, `engine` (the pinned
-   engine package), `tracker` (with `label_prefix`, the stage label prefix), `models` (aliases, the only place a model ID
+   engine package), `comment_tag` (the tag line of the factory's texts: unset `[factory]`, blank none), `tracker` (with `label_prefix`, the stage label prefix), `models` (aliases, the only place a model ID
    appears), `defaults` (`model`, `env`, `mcp`, `skills`, `settings`), `skills`
    (local `path`, or `source` + `path` + `sha256`), `roles` (`description`,
    `skills`, `mcp`), `agents` (a role + a model + `access` + `settings`; the

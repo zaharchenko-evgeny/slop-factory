@@ -318,7 +318,9 @@ where a repository requires it.
 - Triggers match narrowly: every event trigger filters on the factory branch
   prefix, a label or a tag. Never trigger on every comment.
 - Identity: actions run under the token owner for v1; every bot-written text
-  carries a `[factory]` marker and a `Factory-Run: <url>` trailer. The project
+  carries a tag line (`[factory]`; `comment_tag:` in `factory.yaml` changes it, a blank value drops it, #1366) and a
+  `Factory-Run: <url>` trailer. The engine finds its own `recover:`, `reconcile:` and `end failed:` comments by a hidden
+  `<!-- factory:kind <kind> -->` marker, and still by the old `[factory] <kind>` prefix. The project
   service account (AIRA-619) is a follow-up.
 - Slack: a personal channel with an Air Mate bot bound to this repository; its
   responsibilities point to the router role.

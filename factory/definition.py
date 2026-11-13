@@ -592,6 +592,8 @@ def errors(defn):
     registry = plugins.registry(f)
     if not f.get("owner"):
         errs.append("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)")
+    if f.get("comment_tag") is not None and (not isinstance(f["comment_tag"], str) or "\n" in f["comment_tag"]):
+        errs.append("bad-comment-tag: factory.yaml: `comment_tag` is one line of text; blank adds no tag")
     errs += [e for n, s in skills.items() for e in _skill_spec_errors(f"skills.{n}", s)]
     for s in (f.get("defaults") or {}).get("skills") or []:
         errs += _skill_errors("defaults.skills", s, skills)
@@ -1011,6 +1013,7 @@ def to_project(defn):
                   "confirm_external_writes_scope": dset.get("confirm_external_writes_scope") or []},
         "reviews": {"trusted_bots": []},
         **({"owner": f["owner"]} if f.get("owner") else {}),
+        **({"comment_tag": f["comment_tag"]} if isinstance(f.get("comment_tag"), str) else {}),  # "" is no tag (#1366)
         **({"plugins": plugins.listed(f)} if plugins.listed(f) else {}),
         **({"surface": f["surface"]} if f.get("surface") else {}),  # where the nodes run (ADR-0026: air, local)
     }
