@@ -32,10 +32,6 @@ def random_color():
     return f"{random.randrange(0x1000000):06x}"
 
 
-class ClaimError(Exception):
-    pass
-
-
 MARKER = re.compile(r"<!-- factory-state (\{.*?\}) -->", re.S)
 
 
@@ -300,9 +296,6 @@ class GitHubTracker:
     def _edit(self, n, *flags):
         self.run(["issue", "edit", str(n), "-R", self.repo, *flags])
 
-    def _assignees(self, n):
-        return [a["login"] for a in self._issue(n)["assignees"]]
-
     @in_ticket_repository
     def issue(self, n):
         """The ticket's title, body and label names."""
@@ -384,24 +377,6 @@ class GitHubTracker:
             self.run(["api", f"repos/{self.repo}/issues/{n}/comments", "-f", f"body={body}"])
         else:
             self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/comments/{cid}", "-f", f"body={body}"])
-
-    @in_ticket_repository
-    def claim(self, n, executor):
-        """Assign, then re-read. Raise ClaimError, without writing, if another assignee holds it."""
-        others = [a for a in self._assignees(n) if a != executor]
-        if others:
-            raise ClaimError(f"issue {n}: claimed by {', '.join(others)}")
-        self._edit(n, "--add-assignee", executor)
-        holders = self._assignees(n)
-        if holders != [executor]:
-            # Two executors assigned at once: both back off, so neither holds a half claim.
-            self.release(n, executor)
-            raise ClaimError(f"issue {n}: claimed by {', '.join(holders) or 'nobody'} after re-read")
-
-    @in_ticket_repository
-    def release(self, n, executor):
-        if executor in self._assignees(n):
-            self._edit(n, "--remove-assignee", executor)
 
     def in_stage(self, stage, closed=False):
         """Ids of the open issues (with `closed`: also the closed ones) with the stage label of `stage`, in every
