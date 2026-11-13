@@ -450,6 +450,15 @@ class ApplyTest(unittest.TestCase):
         for e in plan["environments"]:
             self.assertEqual(set(e["variables"]), {"FACTORY_ENV", "FACTORY_ENV_REPOSITORY"})
 
+    def test_environment_with_roles_and_no_node_is_planned(self):  # #1377
+        def add(f):
+            f["environments"]["people"] = {**f["environments"]["team"], "roles": ["retro"]}
+        envs = {e["name"]: e for e in definition_plan(add)["environments"]}
+        self.assertNotIn("[Slop factory] people", {e["name"] for e in definition_plan()["environments"]})
+        people = envs["[Slop factory] people"]
+        self.assertEqual(people["variables"]["FACTORY_ENV"], "people")
+        self.assertEqual(people["repository"], envs["[Slop factory] team"]["repository"])
+
     def test_declared_variable_is_planned_beside_factory_env(self):
         data = nodes.load()
         data["environments"]["engine"] = {**data["environments"]["engine"], "variables": {"YOUTRACK_URL": "https://y.example"},

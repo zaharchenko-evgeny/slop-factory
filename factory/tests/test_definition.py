@@ -78,6 +78,14 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    def test_environment_roles_must_be_declared(self):  # #1377
+        def change(f):
+            f["environments"]["people"] = {**f["environments"]["knowledge"], "roles": ["retro", "nobody"]}
+        self.edit("factory.yaml", change)
+        self.assertEqual([e for e in self.errors() if "environments.people" in e],
+                         ["unknown-role: environments.people.roles: nobody is not in `roles`"])
+        self.assertEqual(definition.config(definition.load(self.root))["environments"]["people"]["roles"], ["retro", "nobody"])
+
     # --- ADR-0027: repository tracker, vcs and write; node environments ----------------------------------------
     def _envs(self, f, **envs):
         """Replace the environments with `envs`: {name: [(repo, {keys})]}, keeping the engine's other settings."""
