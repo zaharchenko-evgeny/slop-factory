@@ -11,7 +11,7 @@ import config as config_mod
 import definition
 import deploy as core
 import scopes
-from factory_plugins.youtrack.store import MissingField, YouTrackTicketStore, palette_id, repo_stage_tags
+from factory_plugins.youtrack.store import MissingField, YouTrackTicketStore, repo_stage_tags, tag_color
 
 
 def youtrack(config):
@@ -207,7 +207,7 @@ def reconcile_fields(plan: dict, run=None) -> list[tuple]:
 
 
 def reconcile_tags(plan: dict, run=None) -> list[tuple]:
-    """(action, tag[, color id]) per required YouTrack tag to create, per factory-owned tag whose color differs from the
+    """(action, tag, palette color or None) per required YouTrack tag to create, per factory-owned tag whose color differs from the
     planned one (`recolor`), and per factory-owned tag no longer required to remove; tags outside the factory's
     namespaces, or still used by another project's issues, are never listed for removal. A tag with no planned color
     is created without one and never recolored."""
@@ -216,7 +216,7 @@ def reconcile_tags(plan: dict, run=None) -> list[tuple]:
     store = tag_store(plan, run)
     have = store.list_tags(colors=True)
     owned = tuple(plan.get("owned_tag_prefixes") or [])
-    want = {t: palette_id(c) for t, c in (plan.get("tag_specs") or {}).items()}
+    want = {t: tag_color(c) for t, c in (plan.get("tag_specs") or {}).items()}
     return [("create", t, want.get(t)) for t in plan["tags"] if t not in have] + \
         [("recolor", t, want[t]) for t in plan["tags"] if t in have and owned and t.startswith(owned) and want.get(t)
          and have[t][1] != want[t]] + \
@@ -238,7 +238,8 @@ class Provisioner:
             self.error = str(e)
 
     def dry_run(self):
-        return [f"{action} tag {tag} in YouTrack" for action, tag, _ in self.tags] + \
+        return [f"{action} tag {tag}{f' (#{color})' if color and action != 'remove' else ''} in YouTrack"
+                for action, tag, color in self.tags] + \
             [f"{action} {name} value {value} in YouTrack" for action, name, value, _ in self.fields]
 
     def write(self):
@@ -246,10 +247,10 @@ class Provisioner:
         for action, tag, color in self.tags:  # a missing tag fails every handoff that adds it
             if action == "create":
                 tag_store(self.plan, self.run).create_tag(tag, color)
-                lines.append(f"created tag {tag} in YouTrack")
+                lines.append(f"created tag {tag}{f' (#{color})' if color else ''} in YouTrack")
             elif action == "recolor":
                 tag_store(self.plan, self.run).recolor_tag(tag, color, self.plan["owned_tag_prefixes"])
-                lines.append(f"recolored tag {tag} in YouTrack")
+                lines.append(f"recolored tag {tag} (#{color}) in YouTrack")
         for action, name, value, resolved in self.fields:
             if action == "create":
                 tag_store(self.plan, self.run).create_field_value(name, value, resolved)

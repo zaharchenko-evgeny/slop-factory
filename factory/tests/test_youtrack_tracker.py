@@ -536,24 +536,30 @@ class TagColorTest(unittest.TestCase):
         def run(method, path, body=None):
             calls.append((method, path, body))
             if method == "GET" and path.startswith("/api/tags"):
-                return [{"id": f"id:{n}", "name": n, **({"color": {"id": c}} if c else {})} for n, c in have.items()]
+                return [{"id": f"id:{n}", "name": n,  # `have` is {name: background}, as YouTrack returns it
+                         **({"color": {"id": yt.TAG_COLORS[c], "background": "#" + c.upper()}} if c else {})}
+                        for n, c in have.items()]
             return [] if method == "GET" else {}
         return run, calls
 
-    def test_palette_id_is_the_nearest_entry_and_none_without_a_valid_hex(self):
-        for hexa, want in [(c, i) for i, c in yt.TAG_PALETTE.items()] + [("#" + yt.TAG_PALETTE["4"].upper(), "4")]:
-            self.assertEqual(yt.palette_id(hexa), want, hexa)
-        self.assertEqual(yt.palette_id("1d76db"), yt.palette_id("#1D76DB"))
-        for bad in (None, "", "zzzzzz", "fff", 5):
-            self.assertIsNone(yt.palette_id(bad), bad)
+    def test_the_palette_is_the_live_one(self):  # read from youtrack.jetbrains.com (#1363)
+        self.assertEqual(len(yt.TAG_COLORS), 35)
+        self.assertEqual((yt.TAG_COLORS["1f8039"], yt.TAG_COLORS["315fbd"], yt.TAG_COLORS["27282e"]), ("3", "4", "35"))
 
-    def test_a_created_stage_tag_carries_the_nearest_palette_id(self):
+    def test_tag_color_is_the_nearest_palette_color_and_none_without_a_valid_hex(self):
+        for c in yt.TAG_COLORS:
+            self.assertEqual((yt.tag_color(c), yt.tag_color("#" + c.upper())), (c, c))
+        self.assertEqual(yt.tag_color("1d76db"), "3574f0")  # labels.colors.stages.in-dev
+        for bad in (None, "", "zzzzzz", "fff", 5):
+            self.assertIsNone(yt.tag_color(bad), bad)
+
+    def test_a_created_stage_tag_carries_the_nearest_palette_color(self):
         run, calls = self.runner({})
-        hexa = "1d76db"  # labels.colors.stages.in-dev
-        provision.Provisioner(self.plan(["factory:in-dev"], {"factory:in-dev": hexa}), run).write()
-        post = [c for c in calls if c[0] == "POST"]
-        self.assertEqual(post, [("POST", "/api/tags?fields=id,name",
-                                 {"name": "factory:in-dev", "color": {"id": yt.palette_id(hexa)}})])
+        prov = provision.Provisioner(self.plan(["factory:in-dev"], {"factory:in-dev": "1d76db"}), run)
+        self.assertEqual(prov.dry_run(), ["create tag factory:in-dev (#3574f0) in YouTrack"])
+        self.assertEqual(prov.write(), ["created tag factory:in-dev (#3574f0) in YouTrack"])
+        self.assertEqual([c for c in calls if c[0] == "POST"],
+                         [("POST", "/api/tags?fields=id,name", {"name": "factory:in-dev", "color": {"id": "29"}})])
 
     def test_a_tag_with_no_mapped_color_is_created_without_a_color_field(self):
         for specs in ({}, {"factory:x": None}, {"factory:x": "not-a-color"}):
@@ -562,29 +568,30 @@ class TagColorTest(unittest.TestCase):
             self.assertEqual([c[2] for c in calls if c[0] == "POST"], [{"name": "factory:x"}], specs)
 
     def test_an_owned_tag_of_another_color_is_recolored_once_in_dry_run_and_write(self):
-        run, calls = self.runner({"factory:in-dev": "1", "factory:ready": None})
+        run, calls = self.runner({"factory:in-dev": "893e13", "factory:ready": None})
         plan = self.plan(["factory:in-dev", "factory:ready"], {"factory:in-dev": "1d76db", "factory:ready": "c2e0c6"})
-        want = {t: yt.palette_id(c) for t, c in plan["tag_specs"].items()}
         prov = provision.Provisioner(plan, run)
-        self.assertEqual(prov.dry_run(), ["recolor tag factory:in-dev in YouTrack", "recolor tag factory:ready in YouTrack"])
+        ready = yt.tag_color("c2e0c6")
+        self.assertEqual(prov.dry_run(), ["recolor tag factory:in-dev (#3574f0) in YouTrack",
+                                          f"recolor tag factory:ready (#{ready}) in YouTrack"])
         self.assertEqual([c for c in calls if c[0] != "GET"], [])
         prov.write()
         self.assertEqual([c for c in calls if c[0] == "POST"],
-                         [("POST", "/api/tags/id:factory:in-dev?fields=id", {"color": {"id": want["factory:in-dev"]}}),
-                          ("POST", "/api/tags/id:factory:ready?fields=id", {"color": {"id": want["factory:ready"]}})])
+                         [("POST", "/api/tags/id:factory:in-dev?fields=id", {"color": {"id": "29"}}),
+                          ("POST", "/api/tags/id:factory:ready?fields=id", {"color": {"id": yt.TAG_COLORS[ready]}})])
 
     def test_a_tag_that_has_the_planned_color_is_left_alone(self):
-        run, calls = self.runner({"factory:in-dev": yt.palette_id("1d76db")})
+        run, calls = self.runner({"factory:in-dev": "3574f0"})
         prov = provision.Provisioner(self.plan(["factory:in-dev"], {"factory:in-dev": "1d76db"}), run)
         self.assertEqual((prov.dry_run(), prov.write()), ([], []))
 
     def test_a_tag_outside_the_owned_prefixes_is_never_recolored(self):
-        run, calls = self.runner({"bug": "1", "factory:a": "1"})
+        run, calls = self.runner({"bug": "893e13", "factory:a": "893e13"})
         prov = provision.Provisioner(self.plan(["bug", "factory:a"], {"bug": "ff0000", "factory:a": "ff0000"}), run)
-        self.assertEqual(prov.dry_run(), ["recolor tag factory:a in YouTrack"])
+        self.assertEqual(prov.dry_run(), [f"recolor tag factory:a (#{yt.tag_color('ff0000')}) in YouTrack"])
         with self.assertRaises(ValueError):
-            yt.YouTrackTicketStore(run).recolor_tag("bug", "2", ["factory:"])
-        run, calls = self.runner({"bug": "1"})
+            yt.YouTrackTicketStore(run).recolor_tag("bug", "b95716", ["factory:"])
+        run, calls = self.runner({"bug": "893e13"})
         self.assertEqual(provision.Provisioner(self.plan(["bug"], {"bug": "ff0000"}, owned=()), run).dry_run(), [])
 
 
