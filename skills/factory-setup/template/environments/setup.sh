@@ -11,7 +11,15 @@ bin="$HOME/.local/bin"
 mkdir -p "$bin"
 
 # Node from PyPI: Air's domains allow pypi.org, not nodejs.org.
-uv tool install --quiet nodejs-wheel==22.20.0 || fail "tool install failed: nodejs-wheel 22.20.0"
+# A Node the statechart skill accepts (22.18 to 22.x, or 23.6+) is kept; otherwise `--force` replaces the one in the
+# bin directory.
+node_ok() {
+  command -v node >/dev/null 2>&1 || return 1
+  v=$(node --version 2>/dev/null | sed -n 's/^v\([0-9]*\)\.\([0-9]*\).*/\1 \2/p' | { read -r a b; echo $(( ${a:-0} * 1000 + ${b:-0} )); })
+  [ "$v" -ge 23006 ] || { [ "$v" -ge 22018 ] && [ "$v" -lt 23000 ]; }
+}
+node_ok || uv tool install --quiet --force nodejs-wheel==22.20.0 || fail "tool install failed: nodejs-wheel 22.20.0"
+node_ok || fail "node on PATH is $(command -v node) $(node --version 2>/dev/null); put $(uv tool dir --bin) first"
 
 # Java: a Java 11+ on PATH is kept; otherwise the Temurin JRE from GitHub releases (linux only).
 java_major() {
@@ -28,16 +36,17 @@ if [ "$(java_major)" -lt 11 ]; then
   esac
   home="$HOME/.local/share/temurin-jre-21.0.13"
   if [ ! -x "$home/bin/java" ]; then
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT
+    jtmp="$(mktemp -d)"
     url="https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jre_${arch}_linux_hotspot_21.0.13_9.tar.gz"
-    curl -fsSL --retry 3 -o "$tmp/jre.tgz" "$url" || fail "download failed: Temurin JRE 21.0.13"
-    echo "$sha  $tmp/jre.tgz" | sha256sum -c --quiet - || fail "sha256 mismatch: Temurin JRE 21.0.13"
-    mkdir -p "$tmp/x"
-    tar -xzf "$tmp/jre.tgz" -C "$tmp/x" --strip-components=1 || fail "unpack failed: Temurin JRE"
+    curl -fsSL --retry 3 -o "$jtmp/jre.tgz" "$url" || fail "download failed: Temurin JRE 21.0.13"
+    echo "$sha  $jtmp/jre.tgz" | sha256sum -c --quiet - || fail "sha256 mismatch: Temurin JRE 21.0.13"
+    mkdir -p "$jtmp/x"
+    tar -xzf "$jtmp/jre.tgz" -C "$jtmp/x" --strip-components=1 || fail "unpack failed: Temurin JRE"
     rm -rf "$home"
     mkdir -p "$(dirname "$home")"
-    mv "$tmp/x" "$home"
+    mv "$jtmp/x" "$home"
+    rm -rf "$jtmp"
   fi
   ln -sfn "$home/bin/java" "$bin/java"
 fi
+[ "$(java_major)" -ge 11 ] || fail "java on PATH is $(command -v java), not Java 11+; put $bin first"
