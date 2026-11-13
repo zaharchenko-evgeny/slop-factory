@@ -81,11 +81,20 @@ def gate_args(state, *more):
     return [*sel, "--spec", state["spec"], *state["tracker"], *more]
 
 
+def ticket_ref(text):
+    """`--issue`: an issue number, `owner/repo#N` (ADR-0024) or a YouTrack id `PROJECT-N` (#1319)."""
+    if text.isdigit():
+        return int(text)
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*-\d+|[\w.-]+/[\w.-]+#\d+", text):
+        return text
+    raise argparse.ArgumentTypeError(f"not an issue number, owner/repo#N or PROJECT-N: {text!r}")
+
+
 def begin(argv, team=None):
     p = argparse.ArgumentParser(prog="factory begin")
     p.add_argument("automation")
     p.add_argument("payload", nargs="?")
-    p.add_argument("--issue", type=int)
+    p.add_argument("--issue", type=ticket_ref)  # N, owner/repo#N, or a YouTrack id PROJECT-N (#1319)
     p.add_argument("--pr", type=int)
     p.add_argument("--main", action="store_true")
     p.add_argument("--tracker")  # tests: a memory tracker
@@ -289,7 +298,7 @@ def end(argv, team=None):
     return code
 
 
-END_FAILED = "[factory] end failed:"
+END_FAILED = "end failed:"
 
 
 def gate_error(stdout):
@@ -314,6 +323,8 @@ def report_end_failure(state, outcome, error, run=subprocess.run):
             f"The outcome did not land; a retry on this head fails the same way until the cause is fixed.\n\n"
             f"Factory-Run: {os.environ.get('FACTORY_NODE') or state['node']}")
     try:
+        from effects import tagged
+        body = tagged(body)
         from gate_port import split_ticket
         repo, number = split_ticket(state["ticket"], config.load()["tracker"].get("repository"))
         run(["gh", "issue", "comment", str(number), *(["-R", repo] if repo else []), "--body", body],
@@ -413,6 +424,10 @@ def report_crash(cmd, error, run=subprocess.run):
         return
     gh = lambda *a: run(["gh", *a], capture_output=True, text=True, timeout=60)  # noqa: E731
     try:
+        from effects import tagged as tag
+    except ImportError:  # the engine files may be the missing ones (#984): same layout as `effects.tagged`
+        tag = lambda text: f"[factory]\n{text}"  # noqa: E731
+    try:
         repo = os.environ.get("GITHUB_REPOSITORY") or gh("repo", "view", "--json", "nameWithOwner", "-q",
                                                          ".nameWithOwner").stdout.strip()
         title = f"Doctor: factory {cmd or 'help'} crashes"
@@ -425,9 +440,9 @@ def report_crash(cmd, error, run=subprocess.run):
             except Exception:
                 label = None
             gh("issue", "create", "-R", repo, "--title", title, *(["--label", label] if label else []), "--body",
-               f"[factory] `factory {cmd}` crashed in Air environment `{os.environ['FACTORY_ENV']}`: "
+               tag(f"`factory {cmd}` crashed in Air environment `{os.environ['FACTORY_ENV']}`: "
                f"`{type(error).__name__}: {str(error)[:500]}`. Every node that runs this command fails until it is "
-               f"fixed.\n\nFactory-Run: {os.environ.get('FACTORY_NODE') or 'factory'}")
+               f"fixed.\n\nFactory-Run: {os.environ.get('FACTORY_NODE') or 'factory'}"))
     except Exception as e:  # the crash itself is what matters; never hide it behind a reporting error
         print(f"factory: could not report the crash: {e}", file=sys.stderr)
 

@@ -1,6 +1,8 @@
 """#591: an agent asks another agent in the thread, with a hop budget (ADR-0025 plugin)."""
 import re
 
+from effects import has_tag, tagged
+
 ASK = re.compile(r"<!-- factory:ask id=(\S+) from=(\S+) to=(\S+) hop=(\d+) -->")
 ANSWER = re.compile(r"<!-- factory:answer id=(\S+) -->")
 
@@ -25,16 +27,16 @@ def ask_effects(name, node, out, payload, tracker, ticket, effects):
     facts = tracker.facts(ticket)
     pr = pr_comments(facts, tracker, ticket)
     asked = sum(1 for c in [*(facts.get("comments") or []), *(pr or [])]  # only the factory's own asks count
-                if c.get("author_is_factory") and (c.get("body") or "").startswith("[factory]") and ASK.search(c["body"]))
+                if c.get("author_is_factory") and has_tag(c.get("body")) and ASK.search(c["body"]))
     limit = gate.config_mod.load().get("limits", {}).get("mention_hops", 3)
     if asked >= limit:
-        return [{"kind": "comment", "ticket": ticket, "value": f"[factory] Ask refused: this ticket reached its limit of "
-                 f"{limit} asks (`limits.mention_hops`). Go on without asking."}]
+        return [{"kind": "comment", "ticket": ticket, "value": tagged(f"Ask refused: this ticket reached its limit of "
+                                                          f"{limit} asks (`limits.mention_hops`). Go on without asking.")}]
     who = f"{gate.agent_of(name) if gate.definition_team() else node.get('agent', name)} ({node.get('role')})"
     marker = f"<!-- factory:ask id={ticket}-{asked + 1} from={name} to=reply-{to} hop={asked + 1} -->"
     text = " ".join(str(payload["text"]).split())
     on = {"on": effects[0]["on"]} if effects[0].get("on") else {}
-    return [{**effects[0], "value": f"[factory] **{who}:** @factory:{to} {text}\n{marker}"},
+    return [{**effects[0], "value": tagged(f"**{who}:** @factory:{to} {text}\n{marker}")},
             {"kind": "label", "ticket": ticket, "value": vocab.comment(), **on}]
 
 
@@ -76,7 +78,7 @@ def wake(effects, name, payload, facts, tracker, nodes, ticket):
     except gate.Bad as err:
         why = str(err)
     if why:
-        text = f"[factory] The answer to ask {ask[1]} did not wake `{ask[2]}`: {why}."
+        text = tagged(f"The answer to ask {ask[1]} did not wake `{ask[2]}`: {why}.")
         if gate.definition_team():
             text += f"\n\n{gate.comment_marker(name)}"
         return [], [{"kind": "comment", "ticket": ticket, "value": text,

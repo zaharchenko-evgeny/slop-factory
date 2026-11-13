@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import config
@@ -28,21 +29,44 @@ def tree_hash(d):
     return h.hexdigest()
 
 
+def _fetch_run(cmd, attempts=4, wait=2, sleep=time.sleep, clean=None):
+    """Run network command `cmd`; retry a failure with backoff (wait, 2*wait, ...) after removing `clean`: a GitHub
+    429 or a network blip is transient (offline-eval-factory#84). The last failure raises with git's or npm's stderr."""
+    for i in range(attempts):
+        p = subprocess.run(cmd, capture_output=True, text=True)
+        if p.returncode == 0:
+            return
+        if i + 1 < attempts:
+            if clean:
+                shutil.rmtree(clean, ignore_errors=True)
+            sleep(wait * 2 ** i)
+    raise RuntimeError(f"{' '.join(cmd)} failed {attempts} times (exit {p.returncode}): {(p.stderr or '').strip()[-500:]}")
+
+
+def _npm(name, version, spec, tmp):
+    _fetch_run(["npm", "pack", f"{name}@{version}", "--pack-destination", tmp])
+    subprocess.run(["tar", "-xzf", str(next(Path(tmp).glob("*.tgz"))), "-C", tmp], check=True)
+    return Path(tmp) / "package" / spec["path"]
+
+
+def _git(name, version, spec, tmp):
+    src = f"{tmp}/src"
+    _fetch_run(["git", "clone", "--quiet", f"https://github.com/{name}.git", src], clean=src)
+    subprocess.run(["git", "-C", src, "checkout", "--quiet", version], check=True)
+    return Path(src) / spec["path"]
+
+
+SOURCES = {"npm": _npm, "github": _git}  # a skill source is a fetch scheme, not a tracker
+
+
 def fetch(spec, tmp):
     """The directory of a sourced skill (`github:owner/repo@commit` or `npm:package@version`), fetched into `tmp`."""
     kind, _, ref = spec["source"].partition(":")
     name, _, version = ref.rpartition("@")
     Path(tmp).mkdir(parents=True, exist_ok=True)
-    if kind == "npm":
-        subprocess.run(["npm", "pack", f"{name}@{version}", "--pack-destination", tmp], check=True, capture_output=True)
-        subprocess.run(["tar", "-xzf", str(next(Path(tmp).glob("*.tgz"))), "-C", tmp], check=True)
-        return Path(tmp) / "package" / spec["path"]
-    if kind == "github":
-        src = f"{tmp}/src"
-        subprocess.run(["git", "clone", "--quiet", f"https://github.com/{name}.git", src], check=True)
-        subprocess.run(["git", "-C", src, "checkout", "--quiet", version], check=True)
-        return Path(src) / spec["path"]
-    raise ValueError(f"unknown skill source: {spec['source']}")
+    if kind not in SOURCES:
+        raise ValueError(f"unknown skill source: {spec['source']}")
+    return SOURCES[kind](name, version, spec, tmp)
 
 
 def roles_in(defn, environment):

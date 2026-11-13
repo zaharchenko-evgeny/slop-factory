@@ -48,6 +48,12 @@ Finish by reporting one outcome of your step with the data it needs, as the
 pushes the branch after the run. Report facts (commands, results), not your
 reasoning.
 
+Always report exactly one outcome; never stop without one, or the ticket stays in its stage and nobody hears.
+When you cannot do the work, report the step's outcome to a person (`blocked` or the like, with the reason)
+or back to triage when the ticket itself is wrong. When `factory begin` fails (not exit 10), retry once, then
+report that outcome with the error. When `factory end` cannot run either, make your final message name the
+ticket, the command and its error.
+
 ## Notes and process gaps
 
 Write every note to the object that woke the role. A pull-request-triggered

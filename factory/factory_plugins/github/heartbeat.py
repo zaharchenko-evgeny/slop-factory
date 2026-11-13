@@ -10,6 +10,11 @@ MARKER = "<!-- factory:heartbeat -->"
 PREFIX = "[factory] reconcile heartbeat"
 
 
+def applies(config):
+    """The heartbeat lives on a GitHub Issues map ticket: a team with another tracker has none (#1234)."""
+    return (config.get("tracker") or {}).get("adapter") in (None, "github-issues")
+
+
 def map_issue(config, run):
     tracker = config["tracker"]
     repo, label = tracker["repository"], tracker.get("map_label") or vocab.map_label()

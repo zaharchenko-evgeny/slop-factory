@@ -8,6 +8,7 @@ import uuid
 
 import plugins
 from doctor import probe
+from effects import tagged
 from factory_plugins.github import tracker as github_tracker
 from factory_plugins.github import wake
 
@@ -15,8 +16,9 @@ from factory_plugins.github import wake
 def probes(settings, env, run, *, repo, risk_label, run_id="doctor", environ=os.environ, **_):
     """Hook `doctor.probes`: the repository probes, the comment wake files and the project write token."""
     results = repo_probes(repo, run, risk_label, run_id)
-    from factory_plugins.github.heartbeat import doctor_probe
-    results.append(doctor_probe(settings, run))
+    from factory_plugins.github import heartbeat
+    if heartbeat.applies(settings):
+        results.append(heartbeat.doctor_probe(settings, run))
     try:
         results += comment_wake_probes(settings, run)
     except Exception as e:
@@ -35,7 +37,7 @@ def run_log(api, run, repo):
 def repo_probes(repo, run, risk_label, run_id="doctor"):
     """Every write and read probe on `repo`. Probe objects are removed at the end, also when a probe fails."""
     api = lambda *a: run(["api", *a])  # noqa: E731
-    note = lambda text: f"[factory] {text}\n\nFactory-Run: {run_id}"  # noqa: E731
+    note = lambda text: tagged(f"{text}\n\nFactory-Run: {run_id}")  # noqa: E731
     results, made = [], {"issues": [], "pr": None, "branch": None}
     issue = child = None
     try:
@@ -62,6 +64,7 @@ def repo_probes(repo, run, risk_label, run_id="doctor"):
         probe(results, "write:update-branch", lambda: api("-X", "PUT", f"repos/{repo}/pulls/{pr}/update-branch"))
         probe(results, "read:actions-run-logs", lambda: run_log(api, run, repo))
         probe(results, "read:check-runs", lambda: api(f"repos/{repo}/commits/{sha}/check-runs"))
+        probe(results, "read:branch-rules", lambda: api(f"repos/{repo}/rules/branches/main"))
         probe(results, "read:commit-statuses", lambda: api(f"repos/{repo}/commits/{sha}/status"))
         probe(results, "read:timeline", lambda: api(f"repos/{repo}/issues/{issue}/timeline"))
     except Exception as e:
@@ -143,3 +146,8 @@ def comment_wake_probes(settings, run):
                     raise RuntimeError("file content differs from factory source")
             probe(results, name, check)
     return results
+
+
+def frontier():
+    """Hook `doctor.frontier`: the function that returns the issue numbers of the GitHub tracker's frontier."""
+    return github_tracker.GitHubTracker.from_config()._frontier

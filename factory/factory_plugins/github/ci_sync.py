@@ -82,6 +82,8 @@ def reconcile_heartbeat(config, dry_run, progress):
     """The heartbeat pass also runs for definition-based teams, which do not run legacy scheduled passes."""
     try:
         from factory_plugins.github import heartbeat
+        if not heartbeat.applies(config):
+            return {}
         return {"reconcile_heartbeat": heartbeat.reconcile_pass(config, dry_run, progress)}
     except Exception as e:
         return {"reconcile_heartbeat": ([{"error": f"{type(e).__name__}: {e}"}], True)}

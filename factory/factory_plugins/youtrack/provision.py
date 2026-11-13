@@ -7,14 +7,61 @@ names the per-repository stage tags a trigger listens to, `deploy.trigger_filter
 YouTrack project linked to it (#981), `deploy.errors` checks `tracker.projects`, and `deploy.tracker` returns the
 `Provisioner` that the Air deploy (`factory_plugins.air.deploy.deploy`) drives between its label steps.
 """
+import config as config_mod
 import definition
 import deploy as core
 import scopes
-from factory_plugins.youtrack.store import MissingField, YouTrackTicketStore, repo_stage_tags
+from factory_plugins.youtrack.store import MissingField, YouTrackTicketStore, repo_stage_tags, tag_color
 
 
 def youtrack(config):
     return (config.get("tracker") or {}).get("adapter") == "youtrack"
+
+
+def tracker_block(config):
+    """The YouTrack tracker block the definition keeps tickets in: the top-level one, else the first `ticket_places`
+    entry on YouTrack; None when no ticket lives in YouTrack."""
+    if youtrack(config):
+        return config["tracker"]
+    place = next((p for p in config.get("ticket_places") or [] if scopes.adapter(scopes.merged(config, p.get("tracker") or {})) == "youtrack"), None)
+    return scopes.merged(config, place["tracker"]) if place else None
+
+
+def identity(block):
+    """Hook `tracker.identity`: (adapter, url, project) of a YouTrack block; None for another adapter."""
+    if scopes.adapter(block) == "youtrack":
+        return "youtrack", str(block.get("url") or "").rstrip("/"), block.get("project")
+
+
+def owns_id(block, ticket):
+    """Hook `tracker.owns_id`: whether `ticket` is `<project>-<n>` of a YouTrack block; None for another adapter."""
+    if scopes.adapter(block) == "youtrack":
+        return isinstance(ticket, str) and (not block.get("project") or ticket.startswith(f"{block['project']}-"))
+
+
+def block_errors(block):
+    """Hook `tracker.block_errors`: the errors of an environment's merged YouTrack block; None for another adapter."""
+    if scopes.adapter(block) == "youtrack":
+        return [] if block.get("url") and block.get("project") else \
+            ["youtrack needs `url` and `project` (here or in the top-level tracker)"]
+
+
+def tracker_errors(descriptor, t, where):
+    """Hook `config.tracker_errors`: a youtrack tracker names its url and project and needs `vcs.repository` (alias
+    `code_host.repository`) for the pull requests; None for another adapter."""
+    if t.get("adapter") == "youtrack":
+        need = [f"{where}.tracker.{k}: required with adapter youtrack" for k in ("url", "project") if k not in t]
+        if not config_mod.vcs(descriptor).get("repository"):
+            need.append(f"{where}.code_host.repository: required with tracker.adapter youtrack")
+        return need
+
+
+def scope_filter(trig, block):
+    """Hook `deploy.scope_filter`: a YouTrack event trigger also matches the scope field's value."""
+    scope = block.get("scope") or {}
+    if trig.get("source") == "youtrack" and scope.get("field"):
+        return {**trig, "filters": {**trig.get("filters", {}), scope["field"]: scope["value"]}}
+    return trig
 
 
 def repo_tags(config: dict) -> list[str]:
@@ -54,9 +101,9 @@ def errors(nodes: dict, config: dict) -> list[str]:
             linked[str(repo).lower()] = project
     listened, defn = set(), core.team_definition() if linked else None
     trackers = scopes.project_envs(config)  # #1069: a default-environment node runs once per project, not per repository
-    default_env = core.default_environment(nodes, defn) if trackers else None
+    default_env = definition.default_environment(defn) if trackers and defn else None
     for name, n in (nodes["nodes"] if defn else {}).items():
-        if n.get("enabled") is False or n["role"] == "human" or n.get("runner") or trackers and n["env"] == default_env:
+        if n.get("enabled") is False or n["role"] == "human" or trackers and n["env"] == default_env:
             continue
         sources = {core.trigger(t, None).get("source") for t in n.get("triggers") or []
                    if not str(t).startswith(("schedule ", "webhook ")) and str(t) != "manual"}
@@ -67,27 +114,59 @@ def errors(nodes: dict, config: dict) -> list[str]:
                    for p in linked.values() if p not in listened]
 
 
+def _store_kinds(config):
+    return {k for x in [*(config.get("states") or {}).values(), *(config.get("commands") or {}).values()] for k in x["store"]}
+
+
 def youtrack_tags(nodes: dict, config: dict) -> list[str]:
-    """The tags a YouTrack definition stores its stages and commands in, `<tier>` and `<focus>` expanded; none for other adapters."""
-    if not youtrack(config):
-        return []
+    """The tags a YouTrack definition needs: those of its stores and, when it stores in tags, the ticket attributes."""
+    stored = store_tags(nodes, config)
+    return sorted({*stored, *(core.attribute_labels(config) if stored and "tag" in _store_kinds(config) else ())})
+
+
+def store_tag_sources(nodes: dict, config: dict) -> dict:
+    """{tag: label it comes from} for the tags a YouTrack definition stores its stages and commands in, `<tier>` and
+    `<focus>` expanded: a repo-suffixed tag comes from `<tag>`, an expanded one from its template. None for other adapters."""
+    if not tracker_block(config):
+        return {}
     tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
     focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
-    per_repo, out = repo_stage_tags(config), set()
+    per_repo, out = repo_stage_tags(config), {}
     for x in [*(config.get("states") or {}).values(), *(config.get("commands") or {}).values()]:
         tag = x["store"].get("tag")
         if tag in per_repo:  # one tag per repository
-            out |= {f"{tag}-{r['name']}" for r in config["repositories"]}
+            out.update({f"{tag}-{r['name']}": tag for r in config["repositories"]})
         elif isinstance(tag, str):
-            out |= {tag.replace("<tier>", t) for t in tiers} if "<tier>" in tag else \
-                {tag.replace("<focus>", f) for f in focuses} if "<focus>" in tag else {tag}
-    return sorted(out)
+            names = [tag.replace("<tier>", t) for t in tiers] if "<tier>" in tag else \
+                [tag.replace("<focus>", f) for f in focuses] if "<focus>" in tag else [tag]
+            out.update({n: tag for n in names})
+    return out
+
+
+def store_tags(nodes: dict, config: dict) -> list[str]:
+    """The tags a YouTrack definition stores its stages and commands in, `<tier>` and `<focus>` expanded; none for other adapters."""
+    return sorted(store_tag_sources(nodes, config))
+
+
+def tag_specs(nodes: dict, config: dict, tags: list[str]) -> dict:
+    """{tag: hex color} of the planned tags that have one, from `deploy.label_specs` (so `labels.overrides` applies): the
+    tag's own label first, then the label it comes from; a `<focus>` command template takes the command group color."""
+    specs, sources = core.label_specs(nodes, config), store_tag_sources(nodes, config)
+    command = ((config.get("labels") or {}).get("colors") or {}).get("groups", {}).get("command")
+    commands = {x["store"].get("tag") for x in (config.get("commands") or {}).values()}
+    out = {}
+    for tag in tags:
+        source = sources.get(tag)
+        color = (specs.get(tag) or specs.get(source) or {}).get("color") or (command if source in commands else None)
+        if color:
+            out[tag] = str(color).lower()
+    return out
 
 
 def youtrack_fields(config: dict) -> dict:
     """{field: {value: resolved}} the state and command stores of a YouTrack definition keep in custom fields;
     a `final` state is resolved. Empty for other adapters."""
-    if not youtrack(config):
+    if not tracker_block(config):
         return {}
     out = {}
     for x in [*(config.get("states") or {}).values(), *(config.get("commands") or {}).values()]:
@@ -100,10 +179,11 @@ def youtrack_fields(config: dict) -> dict:
 def plan(nodes: dict, config: dict) -> dict:
     """Hook `deploy.plan`: the tag and field plan; empty (the plan unchanged) without tags or fields."""
     tags, fields = youtrack_tags(nodes, config), youtrack_fields(config)
-    tag_plan = {"tags": tags, "owned_tag_prefixes": sorted({t.partition(":")[0] + ":" for t in tags if ":" in t})} if tags else {}
+    owned = {t.partition(":")[0] + ":" for t in store_tags(nodes, config) if ":" in t}  # not the attribute tags
+    tag_plan = {"tags": tags, "owned_tag_prefixes": sorted(owned), "tag_specs": tag_specs(nodes, config, tags)} if tags else {}
     field_plan = {"fields": fields, "owned_field_prefixes": sorted(
         {v.partition(":")[0] + ":" for f in fields.values() for v in f if ":" in v})} if fields else {}
-    return {**tag_plan, **field_plan, "tag_tracker": config["tracker"]} if tags or fields else {}
+    return {**tag_plan, **field_plan, "tag_tracker": tracker_block(config)} if tags or fields else {}
 
 
 def tag_store(plan: dict, run=None):
@@ -127,15 +207,20 @@ def reconcile_fields(plan: dict, run=None) -> list[tuple]:
 
 
 def reconcile_tags(plan: dict, run=None) -> list[tuple]:
-    """(action, tag) per required YouTrack tag to create and per factory-owned tag no longer required to remove;
-    tags outside the factory's namespaces, or still used by another project's issues, are never listed for removal."""
+    """(action, tag, palette color or None, tag id or None) per required YouTrack tag to create, per factory-owned tag
+    whose color differs from the planned one (`recolor`), and per factory-owned tag no longer required to remove. Tags
+    outside the factory's namespaces, or still used by another project's issues, are never recolored or removed: tags
+    are account-wide. A tag with no planned color is created without one and never recolored."""
     if not plan.get("tags"):
         return []
     store = tag_store(plan, run)
-    have = store.list_tags()
+    have = store.list_tags(colors=True)
     owned = tuple(plan.get("owned_tag_prefixes") or [])
-    return [("create", t) for t in plan["tags"] if t not in have] + \
-        [("remove", t) for t in sorted(have) if owned and t.startswith(owned) and t not in plan["tags"]
+    want = {t: tag_color(c) for t, c in (plan.get("tag_specs") or {}).items()}
+    return [("create", t, want.get(t), None) for t in plan["tags"] if t not in have] + \
+        [("recolor", t, want[t], have[t][0]) for t in plan["tags"] if t in have and owned and t.startswith(owned)
+         and want.get(t) and have[t][1] != want[t] and not store.used_outside_project(t)] + \
+        [("remove", t, None, have[t][0]) for t in sorted(have) if owned and t.startswith(owned) and t not in plan["tags"]
          and not store.used_outside_project(t)]
 
 
@@ -153,15 +238,19 @@ class Provisioner:
             self.error = str(e)
 
     def dry_run(self):
-        return [f"{action} tag {tag} in YouTrack" for action, tag in self.tags] + \
+        return [f"{action} tag {tag}{f' (#{color})' if color and action != 'remove' else ''} in YouTrack"
+                for action, tag, color, _ in self.tags] + \
             [f"{action} {name} value {value} in YouTrack" for action, name, value, _ in self.fields]
 
     def write(self):
         lines = []
-        for action, tag in self.tags:  # a missing tag fails every handoff that adds it
+        for action, tag, color, tag_id in self.tags:  # a missing tag fails every handoff that adds it
             if action == "create":
-                tag_store(self.plan, self.run).create_tag(tag)
-                lines.append(f"created tag {tag} in YouTrack")
+                tag_store(self.plan, self.run).create_tag(tag, color)
+                lines.append(f"created tag {tag}{f' (#{color})' if color else ''} in YouTrack")
+            elif action == "recolor":
+                tag_store(self.plan, self.run).recolor_tag(tag, color, self.plan["owned_tag_prefixes"], tag_id)
+                lines.append(f"recolored tag {tag} (#{color}) in YouTrack")
         for action, name, value, resolved in self.fields:
             if action == "create":
                 tag_store(self.plan, self.run).create_field_value(name, value, resolved)
@@ -173,12 +262,12 @@ class Provisioner:
         return lines
 
     def refusals(self):
-        return [f"refused: would remove tag {t} in YouTrack" for a, t in self.tags if a == "remove"] + \
+        return [f"refused: would remove tag {t} in YouTrack" for a, t, _, _ in self.tags if a == "remove"] + \
             [f"refused: would remove {name} value {value} in YouTrack" for a, name, value, _ in self.fields if a == "remove"]
 
     def remove(self):
         lines = []
-        for tag in [t for a, t in self.tags if a == "remove"]:
+        for tag in [t for a, t, _, _ in self.tags if a == "remove"]:
             tag_store(self.plan, self.run).delete_tag(tag, self.plan["owned_tag_prefixes"])
             lines.append(f"removed tag {tag} in YouTrack")
         for _, name, value, _ in [c for c in self.fields if c[0] == "remove"]:

@@ -82,6 +82,13 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.run_cli("begin", "implement-mid", "--issue", "7", "--tracker", "memory:tickets.json")
         self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
 
+    def test_begin_takes_a_youtrack_ticket_id(self):  # #1319: a YouTrack gate owns only PROJECT-N
+        self.tracker()
+        Path("event.json").unlink()
+        self.run_cli("begin", "implement-mid", "--issue", "LME-7", "--tracker", "memory:tickets.json")
+        event = json.loads(Path(".factory/event/implement-mid.json").read_text())
+        self.assertEqual(event["issue"], {"number": "LME-7"})
+
     def test_begin_issue_number_is_in_the_copys_repository(self):
         """#1155: a copy whose main is not the tracker (slop-eval-factory) reads `--issue 98` as its own repository's
         issue; Air sets the copy's main as FACTORY_ENV_REPOSITORY."""
@@ -171,6 +178,37 @@ class BeginEndTest(unittest.TestCase):
         got = json.loads(out)
         self.assertEqual([n["hint"] for n in got["agent_notes"]], ["see a.py", "all"])
         self.assertNotIn("agent_notes", got["context"])
+
+    def as_instructed(self):
+        """The engine's implement node opening its own PR (#1261): `done` labels the draft PR for the factory review."""
+        import nodes
+        load = nodes.load
+
+        def patched(path=None):
+            graph = load(path)
+            node = graph["nodes"]["implement"]
+            node["output"] = "as-instructed"
+            node["outcomes"]["done"]["effects"].insert(0, {"label": "factory:review-low", "on": "pr"})
+            return graph
+        return mock.patch.object(nodes, "load", patched)
+
+    def test_check_prints_the_draft_pr_command_of_an_as_instructed_implement_node(self):
+        tracker = self.tracker()
+        with self.as_instructed():
+            code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        self.assertEqual(code, 0, out)
+        got = json.loads(out)
+        self.assertEqual(got["pr_create"]["done"], f"gh pr create --draft --head {got['branch']} --label factory:review-low "
+                                                   '--title "#7 <subject>" --body-file .factory/pr-body.md')
+
+    def test_end_done_without_a_pr_is_refused_for_an_as_instructed_node(self):
+        tracker = self.tracker()
+        with self.as_instructed():
+            self.run_cli("begin", "implement-mid", "event.json", *tracker)
+            code, out = self.run_cli("end", "done")
+        self.assertEqual(code, 2, out)
+        self.assertIn("no PR for the ticket's branch: open it as a draft first", out)
+        self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-dev")
 
     def test_end_without_begin_is_an_error(self):
         self.assertEqual(self.run_cli("end", "done")[0], 2)
@@ -603,7 +641,7 @@ class EndFailureTest(unittest.TestCase):
         args = calls[0]
         self.assertEqual(args[:5], ["gh", "issue", "comment", "7", "-R"])
         body = args[args.index("--body") + 1]
-        self.assertTrue(body.startswith("[factory] end failed: node=review-low head=abc123def456 outcome=approve-low"))
+        self.assertTrue(body.startswith("[factory]\nend failed: node=review-low head=abc123def456 outcome=approve-low"))
         self.assertIn("HTTP 403", body)
 
     def test_a_memory_tracker_run_posts_nothing(self):

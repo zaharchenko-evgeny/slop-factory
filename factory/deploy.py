@@ -4,7 +4,7 @@
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """The target-neutral deploy plan of the nodes of engine/nodes.yaml (ADR-0014): each node's spec, prompts and
-triggers, its tier and focus variants, and the labels the trackers must carry. A surface plugin (ADR-0026) turns it
+triggers, its model tier, and the labels the trackers must carry. A surface plugin (ADR-0026) turns it
 into its own shape: `air` (factory_plugins/air/deploy.py: the Air automations and environments, their diff and
 apply), `local` (factory_plugins/local/surface.py).
 
@@ -51,12 +51,16 @@ OUTCOME_WORDS = {
 }
 
 
+# --- `factory begin` (cli.py) compiles one automation from the node graph, tiers and focuses included; the old
+# layout's graphs (engine/nodes.yaml) need them until #682 deletes that layout. The plan below never reads them.
 def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | None, nodes: dict, top: bool = True) -> dict:
     """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
     spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
             "when": n.get("when"), "outcomes": n["outcomes"]}
     if n.get("routine"):
         spec["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
+    if n.get("output") == "as-instructed":
+        spec["output"] = n["output"]  # the run opens its PR itself: the gate prints and checks it (#1261)
     if n.get("tiers"):
         spec["tiers"] = n["tiers"]  # the ordered tiers the gate escalates through
     if any((o or {}).get("else") for o in n["outcomes"].values()):
@@ -156,24 +160,14 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
 
 
 def repository(r: dict) -> dict:
-    """The `repository` input of create_automation from a factory.descriptor.yaml repository."""
+    """The `repository` input of create_automation from a repository of the compiled config."""
     url = r["url"].rstrip("/")
     return {"fullName": "/".join(url.split("/")[-2:]), "cloneUrl": url + ".git", "browseUrl": url,
             "provider": "github" if "github.com" in url else "other"}
 
 
-# A script node runs one command and judges nothing: the gate's sweep decides every scripted step (join, waiting
-# reviewers, merged to done) from facts. `--main` runs it from main's graph (a PR-triggered node never trusts the PR).
-SCRIPT_PROMPT = ("This step runs one command and judges nothing: it changes no file, label, comment or review "
-                 "itself. Run `factory sweep{args}` in the foreground with no time limit; "
-                 "wait until it exits, "
-                 "and report its JSON output.")
 INSTALLED_FACTORY = (" Run the installed `factory` command (`command -v factory`); never `uv run`, `python` or a path "
                      "into the engine checkout.")
-PR_NUMBER = " --main --issue <the number after the leading # of the PR title, or else the body's Closes #<n>>"
-SCRIPT_ARGS = {"join": PR_NUMBER, "start": " --main --issue <the issue number>", "finish": PR_NUMBER,
-               "reopen": PR_NUMBER, "merge": PR_NUMBER,
-               "doctor": " doctor", "doctor-write": " doctor", "doctor-ops": " doctor"}
 
 
 def team_is_project(team: dict, config: dict) -> bool:
@@ -182,48 +176,19 @@ def team_is_project(team: dict, config: dict) -> bool:
         repository(r)["fullName"] == repository(team)["fullName"] for r in config["repositories"])
 
 
-def workflow_drift(fixture: Path, team: Path) -> list[str]:
-    """Describe differences between the migrated Slop fixture and the live team files."""
-    project_file, workflow_file = "factory.project.yaml", "workflows/delivery.yaml"
-    fixture_project = yaml.safe_load((fixture / project_file).read_text())
-    team_project = yaml.safe_load((team / project_file).read_text())
-    drift = [project_file] if fixture_project != team_project else []
-    fixture_workflow = yaml.safe_load((fixture / workflow_file).read_text())
-    team_workflow = yaml.safe_load((team / workflow_file).read_text())
-    if fixture_workflow != team_workflow:
-        fixture_nodes, team_nodes = fixture_workflow.get("nodes", {}), team_workflow.get("nodes", {})
-        outcomes = [f"{name}.{outcome}" for name in sorted(fixture_nodes.keys() | team_nodes.keys())
-                    for outcome in sorted((fixture_nodes.get(name) or {}).get("outcomes", {}).keys() |
-                                          (team_nodes.get(name) or {}).get("outcomes", {}).keys())
-                    if (fixture_nodes.get(name) or {}).get("outcomes", {}).get(outcome) !=
-                       (team_nodes.get(name) or {}).get("outcomes", {}).get(outcome)]
-        drift.extend(f"{workflow_file}: {item}" for item in outcomes)
-        if not outcomes:
-            drift.append(workflow_file)
-    return drift
-
-
 def check_fixture_drift(config: dict, team: Path | None = None) -> int:
     """Fail before contacting Air when this engine's Slop fixture differs from its deployed team."""
     if not SLOP_FIXTURE.is_dir():
         return 0
-    if (SLOP_FIXTURE / "factory.yaml").is_file():  # ADR-0021: the fixture is a copy of the team's files
-        team = Path(team or config_mod.team_root())
-        fixture = yaml.safe_load((SLOP_FIXTURE / "factory.yaml").read_text()) or {}
-        if not (team / "factory.yaml").is_file() or \
-                (yaml.safe_load((team / "factory.yaml").read_text()) or {}).get("name") != fixture.get("name"):
-            return 0
-        drift = [p.relative_to(SLOP_FIXTURE).as_posix() for p in sorted(SLOP_FIXTURE.rglob("*"))
-                 if p.is_file() and p.name != "SOURCE" and
-                 (not (team / p.relative_to(SLOP_FIXTURE)).is_file() or
-                  (team / p.relative_to(SLOP_FIXTURE)).read_bytes() != p.read_bytes())]
-        for item in drift:
-            print(f"fixture drift: {item}", file=sys.stderr)
-        return 1 if drift else 0
-    fixture_project = yaml.safe_load((SLOP_FIXTURE / "factory.project.yaml").read_text())
-    if config.get("team_repository", "").rstrip("/") != fixture_project.get("team_repository", "").rstrip("/"):
+    team = Path(team or config_mod.team_root())  # ADR-0021: the fixture is a copy of the team's files
+    fixture = yaml.safe_load((SLOP_FIXTURE / "factory.yaml").read_text()) or {}
+    if not (team / "factory.yaml").is_file() or \
+            (yaml.safe_load((team / "factory.yaml").read_text()) or {}).get("name") != fixture.get("name"):
         return 0
-    drift = workflow_drift(SLOP_FIXTURE, team or config_mod.team_root())
+    drift = [p.relative_to(SLOP_FIXTURE).as_posix() for p in sorted(SLOP_FIXTURE.rglob("*"))
+             if p.is_file() and p.name != "SOURCE" and
+             (not (team / p.relative_to(SLOP_FIXTURE)).is_file() or
+              (team / p.relative_to(SLOP_FIXTURE)).read_bytes() != p.read_bytes())]
     for item in drift:
         print(f"fixture drift: {item}", file=sys.stderr)
     return 1 if drift else 0
@@ -258,6 +223,12 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
         return (f"## Working directory\n\nRun every command from `/workspaces/{tracker.rsplit('/', 1)[-1]}`: "
                 "GitHub access there reaches the tracker. This automation's own checkout is the team repository.\n\n")
     project = main_repository["fullName"].rsplit("/", 1)[-1]
+    home = repository(team)["fullName"].rsplit("/", 1)[-1]
+    # Air runs only the main checkout's .air/cloud/startup.sh: the team's (engine, `factory setup`) runs here (#1315)
+    boot = (f"First, when `factory` is not on PATH or `$HOME/factory-team` is missing, run "
+            f"`cd /workspaces/{home} && sh .air/cloud/startup.sh` once: "
+            "Air ran only this project's startup script. Put `$HOME/.local/bin` on PATH in every command "
+            "(`export PATH=\"$HOME/.local/bin:$PATH\"`).\n\n")
     others = ", ".join(f"`/workspaces/{repository(r)['fullName'].rsplit('/', 1)[-1]}`"
                        for r in other_projects(main_repository, team, config))
     if team_is_project(team, config):
@@ -266,7 +237,7 @@ def checkout_instructions(main_repository: dict | None, config: dict) -> str:
                 "The factory reads its roles and skills from `$HOME/factory-team`, never from that checkout.\n\n")
     else:
         tail = "The factory repository is checked out beside it and is read-only.\n\n"
-    return (f"## Project checkout\n\nBefore running project commands, `cd /workspaces/{project}`. "
+    return (f"## Project checkout\n\n{boot}Before running project commands, `cd /workspaces/{project}`. "
             + (f"The other project repositories are checked out beside it: {others}. " if others else "")
             + tail)
 
@@ -279,32 +250,6 @@ def node_repository_prefix(main_repository: dict | None, config: dict) -> str:
     tickets = (config.get("tracker") or {}).get("repositories") or ([tracker] if tracker else [])
     repo = main_repository["fullName"]
     return f"FACTORY_NODE_REPO={repo} " if repo != tracker and repo in tickets else ""
-
-
-def script_prompt(name: str, main_repository: dict | None = None, config: dict | None = None,
-                  webhook: bool = False) -> str:
-    checkout = checkout_instructions(main_repository, config) if config else ""
-    command_prefix = node_repository_prefix(main_repository, config) if config else ""
-    if name.startswith("doctor"):
-        engine = name == "doctor-ops"
-        command = f"`{command_prefix}factory doctor --engine`" if engine else f"`{command_prefix}factory doctor`"
-        prompt = (f"Run the installed {command} command exactly once in the foreground with "
-                  + ("only the `--engine` argument. " if engine else "no arguments. ")
-                  + f"Do not use `uv run`, `--help` or add {'other ' if engine else ''}arguments. Report every JSON probe line and the command's exit code. "
-                  "It creates a temporary probe issue, a child issue and a PR, then deletes them when possible. "
-                  "A failed probe creates or updates a `Doctor: <probe> fails` ticket; denied ticket writes appear as a "
-                  "`report` probe line. You must not create, edit or close tickets yourself.")
-    elif name == "reconcile":
-        prompt = ("This step runs one command and judges nothing: it changes no file, label, comment or review itself. "
-                  f"Run `{command_prefix}factory reconcile` in the foreground with no time limit; wait until it exits, and report its JSON output.")
-    else:
-        args = SCRIPT_ARGS.get(name, "")
-        prompt = SCRIPT_PROMPT.format(args=args).replace("`factory ", f"`{command_prefix}factory ")
-        if "--issue" in args:
-            prompt += " Copy only that one number; never write the payload or any JSON."
-        if webhook:
-            prompt = prompt.replace("<the issue number>", "<the `issue` field of the trigger payload>")
-    return checkout + prompt + INSTALLED_FACTORY
 
 
 def skill_lines(role: str) -> str:
@@ -345,6 +290,15 @@ def begin_arg(node: str, n: dict) -> str:
     return "--issue <the issue number>"
 
 
+def ticket_arg(arg: str, main_repository: dict | None, config: dict) -> str:
+    """`arg` with the YouTrack ticket id instead of the issue number when the main repository's tickets live in
+    YouTrack: its gate owns only `<project>-<n>` ids (#1317)."""
+    if not main_repository or main_repository["fullName"].lower() not in youtrack_repositories(config):
+        return arg
+    project = (config.get("tracker") or {}).get("project") or "ABC"
+    return arg.replace("--issue <the issue number>", f"--issue <the YouTrack ticket id, such as {project}-123, never the number alone>")
+
+
 def mcp_connectors(n: dict, config: dict, focus: str | None) -> list[str]:
     """The Air MCP connectors of an automation: its node's list, else its mode's, else its role's, else none."""
     role = (config["roles"].get(n["role"]) or {}) if isinstance(config["roles"], dict) else {}
@@ -367,7 +321,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
         agent = (defn["factory"].get("agents") or {}).get(((defn["workflow"].get("nodes") or {}).get(name) or {}).get("agent")) or {}
         if agent.get("run"):  # ADR-0021: a step with no judgement: the agent only runs the engine command
             prefix = node_repository_prefix(main_repository, config)
-            return (f"{who}\n\n{checkout}Run `{prefix}factory {agent['run']} --node {name} {begin_arg(name, n)}` once, in the "
+            return (f"{who}\n\n{checkout}Run `{prefix}factory {agent['run']} --node {name} {ticket_arg(begin_arg(name, n), main_repository, config)}` once, in the "
                     "foreground, and wait until it exits. Copy only that one number. It applies "
                     "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
                     "Report its JSON output." + INSTALLED_FACTORY)
@@ -379,7 +333,7 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
         text = "\n\n".join(config_mod.resolve(f).read_text().strip() for f in (f"roles/{role}/role.md", "roles/_common.md"))
         skills = skill_lines(role)
     mcp = ("## Your MCP servers\n\n" + "\n".join(f"- {c}" for c in servers) + "\n\n") if servers else ""
-    arg = begin_arg(name, n)
+    arg = ticket_arg(begin_arg(name, n), main_repository, config)
     arg = f" {arg}" if arg else ""
     command_prefix = node_repository_prefix(main_repository, config)
     return (f"{who}\n\n{checkout}{text}\n\n## Your skills\n\n{skills}\n\n{mcp}## This step\n\n{this_step(n, focus)}\n\n"
@@ -402,27 +356,17 @@ def variants(name: str, n: dict, roles: dict, agent: dict | None = None) -> list
     return [(name, None, n.get("tier") or role.get("tier") or "cheap", None)]
 
 
-def default_environment(nodes: dict, defn: dict | None) -> str | None:
-    """The environment a node runs in unless it names one: the definition's `settings.environment`, else the one
-    most nodes run in."""
-    if defn:
-        return definition.default_environment(defn)
-    envs = [n["env"] for n in nodes["nodes"].values() if n.get("env")]
-    return max(dict.fromkeys(envs), key=envs.count) if envs else None
-
-
 def scope_filter(trig: dict, block: dict) -> dict:
     """An EVENT trigger of a project environment (#1069), narrowed to its scope where Air can filter on it: a YouTrack
     event also matches the scope field's value. A GitHub event has no filter on a label the issue already carries
     (`label` is the label the event adds), so the gate's scope check leaves another project's ticket alone."""
-    scope = block.get("scope") or {}
-    if trig.get("source") == "youtrack" and scope.get("field"):
-        return {**trig, "filters": {**trig.get("filters", {}), scope["field"]: scope["value"]}}
+    for fn in plugins.registry({"tracker": block}).hook("deploy.scope_filter"):
+        trig = fn(trig, block)
     return trig
 
 
 def team_definition() -> dict | None:
-    """The team's definition (ADR-0021), else None (a descriptor team)."""
+    """The team's definition (ADR-0021), else None (a team with no factory.yaml and workflow.yaml)."""
     return definition.load(config_mod.team_root()) if definition.present(config_mod.team_root()) else None
 
 
@@ -448,12 +392,6 @@ def tracker_schema(nodes: dict, config: dict, repositories=()) -> TrackerSchema:
         names = sorted({*names, *extra})
         specs = {**{k: v for k, v in extra.items() if v}, **specs}
     return TrackerSchema(tuple(names), tuple(repositories), specs, tuple(owned_label_prefixes(config)))
-
-
-def actions_files(nodes: dict, config: dict) -> dict:
-    """{path: text} of the workflows the graph's `runner: actions` nodes render in the factory repository (hook
-    `deploy.plan_files`: the github plugin renders GitHub Actions workflows)."""
-    return {k: v for hook in plugins.registry(config).hook("deploy.plan_files") for k, v in hook(nodes, config).items()}
 
 
 def sync_wake_files(config: dict, run, apply: bool) -> int:
@@ -506,16 +444,54 @@ def label_specs(nodes: dict, config: dict) -> dict:
     return out
 
 
+def github_homes(config: dict) -> list[str]:
+    """The repositories that hold tickets on their own GitHub issues: the top tracker's `repositories`, then each
+    GitHub Issues `ticket_places` entry (#1325: a home under a YouTrack top tracker is a place of its own)."""
+    t = config.get("tracker") or {}
+    places = [p["repository"] for p in config.get("ticket_places") or []
+              if scopes_mod.adapter(p.get("tracker") or {}) == "github-issues"]
+    return list(dict.fromkeys([*(definition.full_name(r) for r in t.get("repositories") or []), *places]))
+
+
+def youtrack_repositories(config: dict) -> set[str]:
+    """The lowercase full names of the repositories whose tickets live in YouTrack: every repository with a YouTrack
+    top-level tracker except the GitHub homes (`tracker.repositories`), and each `ticket_places` entry with a YouTrack tracker."""
+    t = config.get("tracker") or {}
+    homes = {r.lower() for r in github_homes(config)}
+    out = {definition.full_name(p["repository"]).lower() for p in config.get("ticket_places") or []
+           if scopes_mod.adapter(scopes_mod.merged(config, p.get("tracker") or {})) == "youtrack"}
+    if t.get("adapter") == "youtrack":
+        out |= {core_name for r in config.get("repositories") or [] if (core_name := repository(r)["fullName"].lower()) not in homes}
+    return out
+
+
+def pr_side_labels(config: dict) -> set[str]:
+    """The labels that stay on the pull request: `pr_label` command stores, the PR fact labels and the review trigger."""
+    t = config.get("tracker") or {}
+    out = {c["store"]["pr_label"] for c in (config.get("commands") or {}).values() if "pr_label" in c.get("store", {})}
+    out |= set((t.get("pr_fact_labels") or {}).values()) | {vocab.ci("ci-green"), vocab.ci("ci-red")}
+    return {x for x in (*out, t.get("review_trigger")) if x}
+
+
+def attribute_labels(config: dict) -> list[str]:
+    """The labels the gate writes on a ticket besides its stage and commands: risk, complexity, lesson."""
+    t = config.get("tracker") or {}
+    risks = (t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values()
+    return sorted({*risks, vocab.lesson(), *(f"complexity:{c}" for c in ("small", "medium", "large"))})
+
+
 def label_plan(nodes: dict, config: dict, tickets=()) -> dict[str, list[str]]:
     """{repository: [labels]} for a definition with `tracker.repositories` (ADR-0024). Every ticket repository (those,
     then `tickets`) gets the tracker schema's labels and the hold and review-trigger labels; the tracker (the first one)
     also gets the map label. A project repository that holds no tickets maps to `[]`, so `reconcile_labels` removes
     the factory-owned labels it still has."""
     t = config.get("tracker") or {}
-    tickets = list(dict.fromkeys([*(definition.full_name(r) for r in t.get("repositories") or []), *tickets]))
+    tickets = list(dict.fromkeys([*github_homes(config), *tickets]))
     common = sorted({*tracker_schema(nodes, config).labels,
                      *(x for x in (t.get("hold_label"), t.get("review_trigger")) if x)})
-    out = {r: [*common, *([t["map_label"]] if i == 0 and t.get("map_label") else [])] for i, r in enumerate(tickets)}
+    yt, pr_side = youtrack_repositories(config), pr_side_labels(config)
+    out = {r: [x for x in common if x in pr_side] if r.lower() in yt else
+           [*common, *([t["map_label"]] if i == 0 and t.get("map_label") else [])] for i, r in enumerate(tickets)}
     for r in config.get("repositories") or []:
         out.setdefault(repository(r)["fullName"], [])
     return {r: sorted(set(ls)) for r, ls in out.items()}
@@ -539,7 +515,7 @@ def provision_labels(plan: dict, changes: list, apply: str, run=None, config=Non
 
 def labels(nodes: dict, config: dict) -> list[str]:
     """Every label the gate may write or a trigger filters on: stage labels, risk and complexity labels, and
-    the command labels of the nodes with `<tier>` expanded over each node's tiers (a missing label makes
+    the command labels of the config with `<tier>` expanded over every tier (a missing label makes
     `gh issue edit --add-label` fail, so the deploy creates them first)."""
     t = config.get("tracker") or {}
     out = set((t.get("stages") or {}).values()) | set((t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values())
@@ -550,41 +526,16 @@ def labels(nodes: dict, config: dict) -> list[str]:
     out.add(vocab.comment())
     out |= {vocab.ci("ci-green"), vocab.ci("ci-red")}  # ci-sync writes them from the head checks (#1207)
     out |= {f"complexity:{c}" for c in ("small", "medium", "large")}
-    tiers = sorted({x for n in nodes["nodes"].values() for x in n.get("tiers") or []}) or ["cheap", "mid", "strong"]
-    focuses = sorted({x for n in nodes["nodes"].values() for x in n.get("focuses") or []})
-    found, namespace = [], ((t.get("stages") or {}).get("ready") or vocab.stage("ready")).partition(":")[0] + ":"
-    if "states" in config:  # factory.project.yaml: the labels its state and command stores name (ADR-0016)
-        facts = t.get("pr_fact_labels") or {}
-        found += [s["store"].get("label") or facts.get(s["store"].get("pr")) for s in config["states"].values()]
-        found += [c["store"].get("label") or c["store"].get("pr_label") for c in (config.get("commands") or {}).values()]
-        found = [x for x in found if x]
-    for n in nodes["nodes"].values() if "states" not in config else []:
-        found += [t.split(" ", 1)[1] for t in n.get("triggers") or [] if t.endswith(">") or t.count(" ") == 1
-                  and t.split(" ", 1)[1].startswith(namespace)]
-        found += [v for o in (n.get("outcomes") or {}).values() for e in (o or {}).get("effects") or []
-                  for k, v in e.items() if k == "label"]
+    facts = t.get("pr_fact_labels") or {}  # the labels the config's state and command stores name (ADR-0016)
+    found = [s["store"].get("label") or s["store"].get("tag") or facts.get(s["store"].get("pr")) for s in config["states"].values()]
+    found += [c["store"].get("label") or c["store"].get("tag") or c["store"].get("pr_label") for c in (config.get("commands") or {}).values()]
+    found = [x for x in found if x]
     for x in found:
         if "<tier>" in x:
-            out |= {x.replace("<tier>", t) for t in tiers}
-        elif "<focus>" in x:
-            out |= {x.replace("<focus>", f) for f in focuses}
-        elif "<" not in x:
+            out |= {x.replace("<tier>", tier) for tier in ("cheap", "mid", "strong")}
+        elif "<" not in x:  # a `<focus>` label has no focus to expand over
             out.add(x)
     return sorted(out)
-
-
-def write_files(files: dict, apply: bool) -> int:
-    """Create or update the rendered workflow files under the factory repository's root (never a target repository)."""
-    root = config_mod.team_root()
-    for path, text in files.items():
-        target = root / path
-        if target.exists() and target.read_text() == text:
-            continue
-        print(f"{'update' if target.exists() else 'create'} file {path}")
-        if apply:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text)
-    return 0
 
 
 def surface_name(config: dict) -> str | None:
@@ -613,7 +564,7 @@ def _output_errors(nodes: dict, config: dict, name: str) -> list[str]:
     return env_errs + [f"unsupported-output: nodes.{k}: output {n['output']!r} is not supported by surface {', '.join(names)} "
             f"(supported: {', '.join(sorted(supported))})"
             for k, n in nodes["nodes"].items() if n.get("output") and n["output"] not in supported
-            and n.get("enabled") is not False and n.get("role") != "human" and not n.get("runner")]
+            and n.get("enabled") is not False and n.get("role") != "human"]
 
 
 def main(argv: list[str]) -> int:

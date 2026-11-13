@@ -17,7 +17,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+import config  # noqa: E402
 import definition  # noqa: E402
+import gate  # noqa: E402
+import scopes  # noqa: E402
 
 FIXTURE = ROOT / "tests/fixtures/v2"
 MAIN, OTHER = "zaharchenko-evgeny/slop-factory", "zaharchenko-evgeny/slop-eval-factory"
@@ -55,6 +58,22 @@ class DefinitionTest(unittest.TestCase):
         errs = self.errors()
         self.assertTrue(any(e.startswith(prefix) for e in errs), errs)
 
+    def test_environment_ci_checks_reach_the_compiled_config(self):
+        """#1211: `environments.<env>.ci.checks` of factory.yaml survives `config`, so the gate's `ci_checks_of` sees it."""
+        for label, ci, want in [("names", {"checks": ["a", "b"]}, ["a", "b"]), ("one name", {"checks": ["a"]}, ["a"]),
+                                ("empty list", {"checks": []}, []), ("no checks key", {}, []), ("ci null", None, [])]:
+            with self.subTest(label):
+                def change(f, ci=ci):
+                    for e in f["environments"].values():
+                        e.pop("ci", None)
+                    if ci is not None:
+                        f["environments"]["engine"]["ci"] = ci
+                self.edit("factory.yaml", change)
+                conf = definition.config(definition.load(self.root))
+                got = list(((conf["environments"]["engine"].get("ci")) or {}).get("checks") or [])
+                self.assertEqual(got, want)
+                self.assertEqual(list((conf["environments"].get("other") or {}).get("ci", {}).get("checks") or []), [])
+
     def test_fixture_is_valid(self):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
@@ -72,6 +91,8 @@ class DefinitionTest(unittest.TestCase):
         self.edit("factory.yaml", lambda f: (
             self._envs(f, engine=[(MAIN, {"write": True}),
                                   (OTHER, {"tracker": {"adapter": "youtrack", "scope": {"field": "Subsystem", "value": "S3"}}})]),
+            f["tracker"].update(state_mirror={"ready": "Open"}, state_mirror_field="State",
+                                state_rules={"Closed": "stop"}),
             f["environments"]["engine"].update(tracker={"adapter": "youtrack", "url": "https://yt", "project": "LME"})))
         defn = definition.load(self.root)
         main, other = definition.repositories(defn, "engine")
@@ -79,6 +100,8 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual((main["tracker"]["adapter"], main["tracker"]["project"], main["tracker"].get("scope")), ("youtrack", "LME", None))
         self.assertEqual(other["tracker"]["scope"], {"field": "Subsystem", "value": "S3"})
         self.assertNotIn("repository", other["tracker"])  # the github system key does not cross to youtrack
+        for key in ("state_mirror", "state_mirror_field", "state_rules"):
+            self.assertNotIn(key, other["tracker"])
         self.assertEqual(main["vcs"]["adapter"], "github")
 
     def test_github_issues_place_defaults_to_the_repository(self):
@@ -258,6 +281,44 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(c["environments"]["b"]["writable"], ["c"])
         self.assertNotIn("tracker", c["environments"]["b"])  # a place, not a #1069 project environment
 
+    def test_scoped_project_and_unscoped_intake_keep_separate_places_for_one_repository(self):
+        yt = {"adapter": "youtrack", "url": "https://yt", "project": "LME"}
+        scoped = {**yt, "scope": {"field": "Subsystem", "value": "JBeval"}}
+        self.edit("factory.yaml", lambda f: (
+            f.update(tracker=yt),
+            self._envs(f, engine=[("o/jbeval", {"write": True, "tracker": scoped})],
+                       intake=[("o/jbeval", {"tracker": {"adapter": "youtrack"}})])))
+        config = definition.config(definition.load(self.root))
+        places = config["ticket_places"]
+        self.assertEqual([(p["repository"], p["tracker"].get("scope")) for p in places],
+                         [("o/jbeval", scoped["scope"]), ("o/jbeval", None)])
+        envs, _ = gate.place_keys(config)
+        self.assertEqual(list(envs), ["place:o/jbeval", "place:o/jbeval#2"])
+        self.assertEqual(gate.run_place(config, "engine", envs), "place:o/jbeval")
+        self.assertIsNone(gate.run_place(config, "intake", envs))
+        scoped_tracker, _ = gate.place_systems(config, "place:o/jbeval", yt_run=lambda *a, **k: [], run=lambda *a, **k: "")
+        intake_tracker, _ = gate.place_systems(config, "place:o/jbeval#2", yt_run=lambda *a, **k: [], run=lambda *a, **k: "")
+        self.assertEqual(scoped_tracker.tickets.scope, scoped["scope"])
+        self.assertIsNone(intake_tracker.tickets.scope)
+
+    def test_github_issues_home_under_a_youtrack_top_tracker_is_its_own_place(self):
+        """#1325: offline-eval-factory has LME (YouTrack) on top and one repository on its own GitHub issues. That home
+        is a GitHub Issues place; on the top tracker it took YouTrack's adapter, and no number was in any scope."""
+        yt = {"adapter": "youtrack", "url": "https://yt", "project": "LME"}
+
+        def factory(f):
+            f["tracker"] = {**{k: v for k, v in f["tracker"].items() if k != "repositories"}, **yt}
+            self._envs(f, engine=[("o/c", {"write": True, "tracker": {"scope": {"field": "Subsystem", "value": "S3"}}})],
+                       team=[(MAIN, {"write": True, "tracker": {"adapter": "github-issues"}}), ("o/c", {"tracker": "none"})])
+        self.edit("factory.yaml", factory)
+        c = definition.config(definition.load(self.root))
+        self.assertEqual(c["tracker"]["repositories"], [])  # no GitHub home shares the YouTrack tracker
+        places = {p["repository"]: p for p in c["ticket_places"]}
+        self.assertEqual((places[MAIN]["tracker"]["adapter"], places[MAIN]["tracker"]["repository"]), ("github-issues", MAIN))
+        envs, _ = gate.place_keys(c)
+        owners = lambda ticket: [k for k, block in envs.items() if scopes.owns_id(block, ticket)]  # noqa: E731
+        self.assertEqual((owners(76), owners("LME-1")), ([f"place:{MAIN}"], ["place:o/c"]))
+
     def test_workflow_environments_list_is_the_default(self):
         self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True})], team=[(OTHER, {"write": True})]))
 
@@ -313,6 +374,22 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(self.errors(), [])
         self.edit("workflow.yaml", lambda w: w["nodes"]["automerge"]["settings"].pop("external_review_label"))
         self.assertError("external-review: nodes.automerge")
+
+    def test_state_mirror_and_rules_compile_against_the_schema(self):  # #1287: #1260's keys in the compiled tracker
+        keys = {"state_mirror": {"ready": "Open", "in-dev": "In progress"}, "state_mirror_field": "State",
+                "state_rules": {"Obsolete": "stop", "To be discussed": "blocked"}}
+        self.edit("factory.yaml", lambda f: f["tracker"].update(keys))
+        compiled, _ = definition.to_project(definition.load(self.root))
+        self.assertEqual({k: compiled["tracker"].get(k) for k in keys}, keys)
+        schema = json.loads((Path(__file__).resolve().parents[2] / "engine/project.schema.json").read_text())
+        errs = []
+        config._check(schema, compiled, "factory.project.yaml", errs)
+        self.assertEqual([e for e in errs if "state_" in e], [])
+        self.edit("factory.yaml", lambda f: f["tracker"].update(state_rules={"Open": "drop"}))
+        compiled, _ = definition.to_project(definition.load(self.root))
+        errs = []
+        config._check(schema, compiled, "factory.project.yaml", errs)
+        self.assertTrue(any("factory.project.yaml.tracker.state_rules.Open" in e for e in errs), errs)
 
     def test_assignment_field_form_validates(self):
         effects = [{"assign": {"field": "assignee"}, "on": "pr"}]
@@ -932,7 +1009,7 @@ class DefinitionTest(unittest.TestCase):
             t = MemorySystem({"7": {"stage": "in-dev"}})
             gate.apply("implement-medium", "ask", {"ticket": "7", "to": "reviewer", "text": "Is X in scope?"}, t, n)
             ask = next(json.loads(v) for k, v in t.tickets["7"]["log"] if k == "comment")
-            self.assertTrue(ask.startswith("[factory] **dev (developer):** @factory:reviewer Is X in scope?\n"))
+            self.assertTrue(ask.startswith("[factory]\n**dev (developer):** @factory:reviewer Is X in scope?\n"))
             self.assertEqual(t.facts("7")["stage"], "in-dev")
             self.assertIn("factory:comment", t.facts("7")["attrs"])                    # the comment node wakes
             t.tickets["7"]["comments"] = [{"author": "bot", "body": ask, "at": "1"}]
@@ -1107,7 +1184,7 @@ class YouTrackRepositoryScopesTest(unittest.TestCase):
             intake = plan[f"[Slop factory] intake {full.split('/')[1]}"]
             self.assertEqual(intake["repository"]["fullName"], full)
             self.assertEqual(intake["triggers"][0]["filters"],
-                             {"tagAdded": "factory:triage", "projectShortName": "LME", "Subsystem": value})
+                             {"tagAdded": "factory:triage", "projectShortName": "LME"})  # no field filter: Air ignores it (#1327)
 
     def test_the_harbor_copies_merge_and_update_on_master_with_their_own_ci(self):
         plan = self.plan()

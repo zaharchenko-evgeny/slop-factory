@@ -7,6 +7,8 @@ only what differs.
 """
 import re
 
+from effects import tagged
+
 from factory_plugins.youtrack.store import MissingRepository
 
 
@@ -24,7 +26,7 @@ def stage(system, e, ctx):
     try:
         wrote = have != [want] and system.tickets.set_stage(n, want, have)
     except MissingRepository as err:
-        system.tickets.comment(n, f"[factory] Blocked: {err}")
+        system.tickets.comment(n, tagged(f"Blocked: {err}"))
         system.tickets.set_stage(n, system.stages["blocked"], have)
         return _mirror(system, n, "blocked", e) or True
     return _mirror(system, n, value, e) or wrote

@@ -31,16 +31,43 @@ from gate_tracker import OnVcs  # noqa: E402
 LABELS = ["factory:in-review", "risk:low", "factory:fix-mid"]
 
 
+def foreign_in_memory(tracker):
+    tracker.tickets[7].setdefault("comments", []).extend(
+        {"author": a, "author_is_bot": bot, "author_is_factory": False, "body": "hi", "at": None}
+        for a, bot in (("alice", False), ("ci[bot]", True)))
+
+
+def relate_in_memory(tracker):
+    """Ticket 7 has sub-tickets 21 and 22 and blocks 22; ticket 30 has its own sub-ticket 31."""
+    kid = lambda n: {"number": n, "state": "open", "not_planned": False, "attrs": []}  # noqa: E731
+    tracker.tickets[7].update(children=[kid(21), kid(22)], blocking=[{"number": 22, "state": "open"}])
+    tracker.tickets.update({n: {"stage": "in-dev", "attrs": [], "assignees": []} for n in (21, 22, 31)})
+    tracker.tickets[30] = {"stage": "in-dev", "children": [kid(31)], "attrs": [], "assignees": []}
+    return {"children": (7, [21, 22]), "blocking": (7, [22]), "other": (30, [31])}
+
+
 class MemorySystemContractTest(SystemContract, unittest.TestCase):
     def make(self):
         return MemorySystem({7: {"stage": "in-review", "attrs": ["risk:low", "factory:fix-mid"], "pr": 5, "head": "h1",
                                  "pr_labels": ["factory:fix-mid"], "assignees": []}})
 
+    def relate(self, s):
+        return relate_in_memory(s)
+
+    def foreign_comments(self, s):
+        foreign_in_memory(s)
+
 
 class TagTrackerContractTest(SystemContract, unittest.TestCase):
     def make(self):
-        return TagTracker({7: {"attrs": ["stage:in-review", "risk:low", "factory:fix-mid"], "pr": 5, "head": "h1",
+        return TagTracker({7: {"tags": ["stage:in-review"], "attrs": ["risk:low", "factory:fix-mid"], "pr": 5, "head": "h1",
                                "pr_labels": ["factory:fix-mid"], "assignees": []}})
+
+    def relate(self, s):
+        return relate_in_memory(s)
+
+    def foreign_comments(self, s):
+        foreign_in_memory(s)
 
 
 def flag(args, name):
@@ -59,7 +86,7 @@ class ContractGh(FakeGh):
 
     def __init__(self, **kw):
         super().__init__(labels=LABELS, **kw)
-        self.pr_comments, self.pr_body = [], ""
+        self.pr_comments, self.pr_body, self.draft = [], "", True  # the PR opens as a draft (#1261)
 
     def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), "")
@@ -83,6 +110,10 @@ class ContractGh(FakeGh):
         if args[:2] == ["pr", "edit"] and "--body" in args:
             self.writes.append(args)
             self.pr_body = flag(args, "body")
+            return ""
+        if args[:2] == ["pr", "ready"]:
+            self.writes.append(args)
+            self.draft = False
             return ""
         if args[:2] == ["pr", "merge"]:
             self.writes.append(args)
@@ -120,8 +151,15 @@ class GitHubContractTest(SystemContract, unittest.TestCase):
         ("join", "ticket"): lambda s: s.gh.reviews.append(review(BOT, M)),  # the round at the head is complete
         ("request-reviewers", "pr"): lambda s: s.gh.reviews.append(review("alice", "", state="CHANGES_REQUESTED")),
         ("pr-notes-sync", "pr"): lambda s: s.gh.comments.append(
-            {"body": f"{gate_github.NOTES_PARKED}\n\n{derive.notes_block({'for': 'fixer', 'hint': 'h'})}",
+            {"body": f"[factory]\n{gate_github.NOTES_PARKED}\n\n{derive.notes_block({'for': 'fixer', 'hint': 'h'})}",
              "user": {"login": BOT, "type": "Bot"}, "created_at": "2026-01-02T00:00:00Z"}),
+    }
+    XFAIL = {
+        "test_a_stage_effect_that_expects_another_stage_writes_nothing": "#1280: the stage effect ignores `expect`",
+        "test_a_ticket_event_names_its_actor": "#1280: the stub keeps no events of what the tracker writes",
+        "test_find_blocking_lists_the_tickets_a_ticket_blocks": "#1280: find has no `blocking` query",
+        "test_event_keeps_the_canonical_trigger_name": "#1280: event reads raw webhook payloads",
+        "test_event_without_a_ticket_is_none": "#1280: event reads raw webhook payloads",
     }
     NO_WRITE = {("seen", "ticket"): "GitHub keeps no seen list: a duplicate event fails its node's conditions"}
     EXEMPT = {
@@ -135,6 +173,19 @@ class GitHubContractTest(SystemContract, unittest.TestCase):
         for p in (patch.object(G.M_GH.time, "sleep"), patch.object(GitHubGateTracker, "RECENT_MERGE_SECONDS", 0)):
             p.start()
             self.addCleanup(p.stop)
+
+    def foreign_comments(self, s):
+        s.gh.comments.extend({"body": "hi", "user": {"login": a, "type": t}, "created_at": "2026-01-01T00:00:00Z"}
+                             for a, t in (("alice", "User"), ("ci[bot]", "Bot")))
+
+    NUMBERS = (1, 2)  # what the stub numbers the two sub-tickets that `relate` creates
+
+    def relate(self, s):
+        """Two sub-tickets of 7, created through the effect: the second waits for the first."""
+        self.assertTrue(s.apply({"ticket": 7, "kind": "create-issues",
+                                 "value": [{"title": "A", "body": "a"}, {"title": "B", "body": "b"}]}))
+        first, second = self.NUMBERS
+        return {"children": (7, [first, second]), "blocking": (first, [second]), "other": (second, [])}
 
     def make(self):
         gh = ContractGh()
@@ -241,11 +292,25 @@ class YouTrackContractTest(SystemContract, unittest.TestCase):
         ("join", "ticket"): GitHubContractTest.SETUP[("join", "ticket")],
         ("request-reviewers", "pr"): GitHubContractTest.SETUP[("request-reviewers", "pr")],
         ("pr-notes-sync", "pr"): lambda s: s.tickets.comment(
-            7, f"{gate_github.NOTES_PARKED}\n\n{derive.notes_block({'for': 'fixer', 'hint': 'h'})}"),
+            7, f"[factory]\n{gate_github.NOTES_PARKED}\n\n{derive.notes_block({'for': 'fixer', 'hint': 'h'})}"),
     }
     NO_WRITE = GitHubContractTest.NO_WRITE
     EXEMPT = GitHubContractTest.EXEMPT
+    NUMBERS = ("T-901", "T-902")
+    XFAIL = {
+        "test_a_stage_effect_that_expects_another_stage_writes_nothing": "#1281: the stage effect ignores `expect`",
+        "test_a_ticket_event_names_its_actor": "#1281: the store keeps no events of what it writes",
+        "test_a_stage_effect_that_expects_the_current_stage_moves_it": "#1281: the stage effect ignores `expect`",
+        "test_find_stage_lists_the_tickets_in_a_stage": "#1281: find stage reads no stage of the stub's tickets",
+        "test_find_blocking_lists_the_tickets_a_ticket_blocks": "#1281: find has no `blocking` query",
+        "test_event_keeps_the_canonical_trigger_name": "#1281: event reads raw webhook payloads",
+        "test_event_without_a_ticket_is_none": "#1281: event reads raw webhook payloads",
+    }
     setUp = GitHubContractTest.setUp
+    relate = GitHubContractTest.relate
+
+    def foreign_comments(self, s):
+        s.yt.issues["7"]["comments"].extend({"text": "hi", "created": 1, "author": {"login": a}} for a in ("alice", "ci[bot]"))
 
     def make(self):
         gh, yt = ContractGh(), ContractYouTrack([STAGES["in-review"], "risk:low", "factory:fix-mid"])
@@ -307,6 +372,12 @@ class SpaceContractTest(SystemContract, unittest.TestCase):
         s = OnVcs.of(MemorySystemContractTest.make(self), vcs)
         s.space = space
         return s
+
+    def relate(self, s):
+        return relate_in_memory(s.tracker)
+
+    def foreign_comments(self, s):
+        foreign_in_memory(s.tracker)
 
     def test_pr_effects_are_spaces_and_write_space(self):
         s = self.make()
