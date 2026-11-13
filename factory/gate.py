@@ -273,9 +273,20 @@ def place_keys(config):
     if t.get("repositories") and (key := default_place(config)):
         envs[key], repos[key] = t, list(t["repositories"])
     for p in config["ticket_places"]:
-        key = f"place:{p['repository']}"
+        key = place_key(config["ticket_places"], p)
         envs[key], repos[key] = scopes.merged(config, p["tracker"]), p["repositories"]
     return envs, repos
+
+
+def place_key(places, place):
+    """The stable key for a ticket place, including a second tracker for the same repository."""
+    repository = place["repository"]
+    duplicate = 0
+    for candidate in places:
+        if candidate is place:
+            break
+        duplicate += candidate["repository"] == repository
+    return f"place:{repository}" if not duplicate else f"place:{repository}#{duplicate + 1}"
 
 
 def place_systems(config, key, **runners):
@@ -285,7 +296,7 @@ def place_systems(config, key, **runners):
         tracker = tracker_of({k: v for k, v in config.items() if k != "ticket_places"}, **runners)
         vcs_cls = vcs_class(config, config_mod.vcs(config))
         return beside(tracker, vcs_cls.from_config(**({"run": tracker.run} if hasattr(tracker, "run") else {})))
-    place = next(p for p in config["ticket_places"] if f"place:{p['repository']}" == key)
+    place = next(p for p in config["ticket_places"] if place_key(config["ticket_places"], p) == key)
     by = {"/".join(r["url"].rstrip("/").split("/")[-2:]).lower(): r for r in config.get("repositories") or []}
     repos = [{**by[n.lower()], "role": "primary" if i == 0 else "project"} for i, n in enumerate(place["repositories"])
              if n.lower() in by]
@@ -312,7 +323,9 @@ def run_place(config, env, keys):
     writable = ((config.get("environments") or {}).get(env) or {}).get("writable") or []
     full = {r.get("name"): "/".join(r["url"].rstrip("/").split("/")[-2:]) for r in config.get("repositories") or []}
     for name in writable:
-        key = f"place:{full.get(name, name)}"
+        prefix = f"place:{full.get(name, name)}"
+        key = next((key for key, block in keys.items() if (key == prefix or key.startswith(f"{prefix}#"))
+                    and block.get("scope")), f"place:{full.get(name, name)}")
         if key in keys:
             return key
     return None

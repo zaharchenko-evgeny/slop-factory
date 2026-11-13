@@ -1249,10 +1249,13 @@ def ticket_places(defn, tracker):
                 continue
             if (home := c.home(r["tracker"], r["repo"])) and shared:
                 homes.append(next((x["repo"] for x in repos if x["repo"].lower() == home), home))
-            elif r["repo"] not in {p["repository"] for p in places}:
+            else:
                 block = {**r["tracker"], "repository": r["repo"]} if home else r["tracker"]  # #1325: its own issues
-                places.append({"repository": r["repo"], "tracker": block, "vcs": r["vcs"],
-                               "repositories": [r["repo"], *(x["repo"] for x in repos if x["repo"] != r["repo"])]})
+                if not any(p["repository"] == r["repo"] and p["tracker"] == block for p in places):
+                    places.append({"repository": r["repo"], "tracker": block, "vcs": r["vcs"],
+                                   "repositories": [r["repo"], *(x["repo"] for x in repos if x["repo"] != r["repo"])]})
+    places.sort(key=lambda p: not p["tracker"].get("scope"))  # #1361: an unscoped place (intake) holds every ticket of
+    # its tracker, so the gate tries it after the scoped places, whatever the order of the environments
     top = next((h for h in homes if h.lower() == full_name(tracker.get("repository") or "").lower()), None)
     ordered = list(dict.fromkeys([*([top] if top else []), *homes]))
     return {"tracker": {**tracker, "repositories": ordered, **({"repository": ordered[0]} if ordered and not top else {})},

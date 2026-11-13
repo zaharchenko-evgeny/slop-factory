@@ -37,13 +37,16 @@ def definition_errors(defn):
     return errs
 
 
-def apply_rules(tracker, rules, stages, final=(), dry_run=False, progress=None):
-    """[result] per ticket whose person-set State has a rule; see the module."""
+def apply_rules(tracker, rules, stages, final=(), dry_run=False, progress=None, seen=None):
+    """[result] per ticket whose person-set State has a rule; see the module. A ticket in `seen` (a set this call
+    adds to) was another place's: an unscoped place (#1361) also lists the scoped places' tickets."""
     store = tracker.tickets
     field = store.state_mirror_field
     tags = {tag: stage for stage, tag in stages.items()}
     results = []
     for n in store.tickets_by_stage([t for s, t in stages.items() if s not in final], open_only=True):
+        if seen is not None and (n in seen or seen.add(n)):
+            continue
         try:
             state, who = store.last_field_change(n, field)
             action = rules.get(state)
@@ -85,8 +88,9 @@ def reconcile_pass(config, dry_run, progress):
         final = [s for s, k in (t.get("stage_kinds") or {}).items() if k == "final"]
         from factory_plugins.youtrack.store import YouTrackTicketStore
         # a GitHub Issues environment (a team's own tickets) has no State to read (offline-eval-factory#90)
+        seen = set()  # ticket_places lists the scoped places first: a ticket's PRs are its scoped place's
         results = [r for tracker in trackers if isinstance(getattr(tracker, "tickets", None), YouTrackTicketStore)
-                   for r in apply_rules(tracker, t["state_rules"], stages, final, dry_run, progress)]
+                   for r in apply_rules(tracker, t["state_rules"], stages, final, dry_run, progress, seen)]
         return {"state_rules": (results, any(r.get("rule") == "error" for r in results))}
     except Exception as e:
         return {"state_rules": ([{"error": f"{type(e).__name__}: {e}"}], True)}
