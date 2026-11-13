@@ -203,7 +203,7 @@ function App() {
     setViewingOlder(true)
   }
 
-  if (loading && snapshot === null) return <LoadingState />
+  if ((loading || fetching) && snapshot === null) return <LoadingState />
   if (snapshot === null) return <InitialError message={loadError ?? 'The snapshot could not be loaded.'} onRetry={() => { void refreshSnapshot(false) }} busy={fetching} />
   if (displaySnapshot === null) return <LoadingState />
 
