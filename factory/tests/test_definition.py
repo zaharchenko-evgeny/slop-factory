@@ -1000,7 +1000,7 @@ class DefinitionTest(unittest.TestCase):
             t = MemorySystem({"7": {"stage": "in-dev"}})
             gate.apply("implement-medium", "ask", {"ticket": "7", "to": "reviewer", "text": "Is X in scope?"}, t, n)
             ask = next(json.loads(v) for k, v in t.tickets["7"]["log"] if k == "comment")
-            self.assertTrue(ask.startswith("[factory] **dev (developer):** @factory:reviewer Is X in scope?\n"))
+            self.assertTrue(ask.startswith("[factory]\n**dev (developer):** @factory:reviewer Is X in scope?\n"))
             self.assertEqual(t.facts("7")["stage"], "in-dev")
             self.assertIn("factory:comment", t.facts("7")["attrs"])                    # the comment node wakes
             t.tickets["7"]["comments"] = [{"author": "bot", "body": ask, "at": "1"}]

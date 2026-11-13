@@ -7,6 +7,7 @@
   `stop` removes the stage tag and closes the ticket's open PRs with a comment, `blocked` sets the stage `blocked`
   and keeps the person's State.
 """
+import effects
 import vocab
 
 ACTIONS = ("stop", "blocked")
@@ -59,7 +60,7 @@ def apply_rules(tracker, rules, stages, final=(), dry_run=False, progress=None, 
             results.append(r)
             if not dry_run:
                 if action == "stop":
-                    note = f"[factory] {field} is {state}: the factory stops work on this ticket."
+                    note = effects.tagged(f"{field} is {state}: the factory stops work on this ticket.")
                     tracker.close_prs(n, note)
                     store.remove_attr(n, *[x for x in store.issue(n)["attrs"] if x in tags])
                     store.comment(n, note)

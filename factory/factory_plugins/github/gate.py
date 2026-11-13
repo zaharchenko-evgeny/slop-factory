@@ -35,7 +35,7 @@ from ports.system import Effect, Event, Query, Subject
 import vocab
 
 COMPARE_FILE_LIMIT = 300  # GitHub compare lists at most this many files
-NOTES_PARKED = "[factory] Agent notes for the PR description"  # ticket comment that holds them until the PR exists
+NOTES_PARKED = "Agent notes for the PR description"  # ticket comment that holds them until the PR exists
 
 
 def gate_clear(n):
@@ -532,8 +532,8 @@ class GitHubTicketStore:
         red = next((i for i in self.read_list("issues?state=open&per_page=100") if "pull_request" not in i and i["title"] == title
                     and all(x in [y["name"] for y in i.get("labels") or []] for x in self.scope_labels())), None)
         if red is None:
-            body = (f"[factory] The required check `{check}` fails identically on unchanged `main` in Air (found while working on #{n}). "
-                    "Fix main; the tickets blocked by this one restart when it closes.")
+            body = effects_mod.tagged(f"The required check `{check}` fails identically on unchanged `main` in Air (found while working on #{n}). "
+                                      "Fix main; the tickets blocked by this one restart when it closes.")
             red = json.loads(self.run(["api", "-X", "POST", f"repos/{self.repo}/issues", "-f", f"title={title}", "-f", f"body={body}",
                                        *[x for label in [triage, *self.scope_labels()] for x in ("-f", f"labels[]={label}")]]))
         if red["id"] in {b["id"] for b in self.read_list(f"issues/{n}/dependencies/blocked_by")}:
@@ -732,18 +732,18 @@ class GitHubGateTracker(DescriptorPort):
             elif key == "labels":
                 old, new = {x: x for x in old}, {x: x for x in new}
             items.extend(f"- {key}: {name}" for name in sorted(old.keys() | new.keys()) if old.get(name) != new.get(name))
-        body = ("[factory] The merged commit changes the Air deploy plan. Run `factory deploy --apply` locally.\n\n"
+        body = effects_mod.tagged("The merged commit changes the Air deploy plan. Run `factory deploy --apply` locally.\n\n"
                 + "\n".join(items) + f"\n\nFactory-Run: finish:{pr}")
         if existing:
             self.run(["issue", "edit", str(existing["number"]), "-R", self.repo, "--body", body,
                       "--add-label", vocab.needs_human(), "--add-assignee", config.owner()])
             self.run(["issue", "comment", str(existing["number"]), "-R", self.repo, "--body",
-                      f"[factory] Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}"])
+                      effects_mod.tagged(f"Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}")])
         else:
             url = self.run(["issue", "create", "-R", self.repo, "--title", title, "--body", body,
                             "--label", vocab.needs_human(), "--assignee", config.owner()]).strip()
             self.run(["issue", "comment", url.rsplit("/", 1)[-1], "-R", self.repo, "--body",
-                      f"[factory] Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}"])
+                      effects_mod.tagged(f"Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}")])
 
         files = self._list(f"pulls/{pr}/files?per_page=100", repo=self.pr_repo)
         if not any(f.get("filename") == "factory.descriptor.yaml" or
@@ -1094,7 +1094,7 @@ class GitHubGateTracker(DescriptorPort):
         latest_event = max([e["at"] or "" for _, e in events] + [commit_at or ""])
         latest_command = max((e["at"] for e in command_events), default="")
         stage_at = labeled.get((n, self.stages[f["stage"]]), "") if f["stage"] in self.stages else ""
-        comments = [c["body"] for c in self.tickets.comments(n) if c["body"].startswith(("[factory] recover:", "[factory] reconcile:", "[factory] end failed:"))
+        comments = [c["body"] for c in self.tickets.comments(n) if any(effects_mod.has_tag(c["body"], p) for p in ("recover:", "reconcile:", "end failed:"))
                     and c["at"] >= stage_at]
         return {**f, "since": max([*labeled.values(), commit_at or ""]) or None, "command": cmd and cmd[1], "stage_at": stage_at or None,
                 "command_pending": bool(latest_command and latest_command == latest_event),
@@ -1205,7 +1205,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def _fx_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
-        if any(c["body"] == body for c in self.tickets.comments(n)):
+        if any(effects_mod.same_text(c["body"], body) for c in self.tickets.comments(n)):
             return False
         self.tickets.comment(n, body + self._block(e))
         return True
@@ -1218,7 +1218,7 @@ class GitHubGateTracker(DescriptorPort):
             pr = self._pr(n)
         if pr is None:
             raise RuntimeError(f"comment: no PR for ticket {n}")
-        if any(c["body"] == body for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
+        if any(effects_mod.same_text(c["body"], body) for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
             return False
         self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body", body + self._block(e)])
         return True
@@ -1228,14 +1228,14 @@ class GitHubGateTracker(DescriptorPort):
         pr = self._pr(n)
         if kind == "pr-notes" and pr is None:  # Air opens the PR after the run: park the notes on the ticket
             body = effects_mod.frame(f"{NOTES_PARKED}\n\n{value}", e.get("run_id"), once=False)
-            if any(c["body"] == body for c in self.tickets.comments(n)):
+            if any(effects_mod.same_text(c["body"], body) for c in self.tickets.comments(n)):
                 return False
             self.tickets.comment(n, body)
             return True
         if pr is None:
             return False
         if kind == "pr-notes-sync":  # the first gate step that sees the PR copies the parked notes
-            parked = [c for c in self.tickets.comments(n) if c["body"].startswith(NOTES_PARKED)]
+            parked = [c for c in self.tickets.comments(n) if effects_mod.has_tag(c["body"], NOTES_PARKED)]
             found = parse_notes(parked[-1]["body"], "", "Bot" if parked[-1]["author_is_factory"] else "User") if parked else []
             if not found:
                 return False
@@ -1487,7 +1487,7 @@ class GitHubGateTracker(DescriptorPort):
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
         defang = lambda t: str(t).replace("<!--", "<!\u200b--")  # noqa: E731  # prose never carries a marker
         lines = [defang(f"**{x['id']}** {x['file']} — {x['finding']}") for x in found]
-        summary = f"[factory] {defang(e['summary'])}" if e.get("summary") else "[factory]"
+        summary = effects_mod.tagged(defang(e["summary"])) if e.get("summary") else effects_mod.TAG
         body = "\n\n".join(x for x in (summary, "\n".join(lines), marker) if x)
         if e.get("run_id"):
             body += f"\n\nFactory-Run: {e['run_id']}"

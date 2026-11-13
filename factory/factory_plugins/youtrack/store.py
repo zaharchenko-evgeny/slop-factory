@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
+import effects
 from gate_port import CLOSED_HOURS, child_links, child_order
 from ports.system import Effect
 from scopes import matches
@@ -465,9 +466,10 @@ class YouTrackTicketStore:
                                 f"&fields=idReadable,summary&{TOP}")
         red = next((i["idReadable"] for i in found if i["summary"] == title), None)
         if red is None:
-            red = self._create(title, f"[factory] The required check `{check}` fails identically on unchanged `main` in Air "
-                                      f"(found while working on {n}). Fix main; the tickets blocked by this one restart "
-                                      "when it closes.", [triage])
+            red = self._create(title, effects.tagged(
+                f"The required check `{check}` fails identically on unchanged `main` in Air "
+                f"(found while working on {n}). Fix main; the tickets blocked by this one restart "
+                "when it closes."), [triage])
         if red in self.open_blockers_all(n):
             return False
         self._command(n, f"depends on {red}")

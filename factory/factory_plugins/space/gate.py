@@ -96,7 +96,7 @@ def _fx_review(host, e, ctx):
     if any(r["commit_id"] == head and marker in (r.get("body") or "") for r in mr.get("reviews") or []):
         return False
     lines = [f"**{x['id']}** {x['file']} \u2014 {x['finding']}" for x in e.get("findings") or []]
-    body = "\n\n".join(x for x in (f"[factory] {e.get('summary') or ''}".strip(), "\n".join(lines), marker) if x)
+    body = "\n\n".join(x for x in (effects_mod.tagged(e["summary"]) if e.get("summary") else effects_mod.TAG, "\n".join(lines), marker) if x)
     host._send("review", "POST", f"{path}/reviews", {"commitId": head, "verdict": verdict, "body": body})
     return True
 

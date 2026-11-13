@@ -641,7 +641,7 @@ class EndFailureTest(unittest.TestCase):
         args = calls[0]
         self.assertEqual(args[:5], ["gh", "issue", "comment", "7", "-R"])
         body = args[args.index("--body") + 1]
-        self.assertTrue(body.startswith("[factory] end failed: node=review-low head=abc123def456 outcome=approve-low"))
+        self.assertTrue(body.startswith("[factory]\nend failed: node=review-low head=abc123def456 outcome=approve-low"))
         self.assertIn("HTTP 403", body)
 
     def test_a_memory_tracker_run_posts_nothing(self):

@@ -21,6 +21,7 @@ import definition  # noqa: E402
 import reconcile  # noqa: E402
 import gate  # noqa: E402
 from gate_port import MemorySystem  # noqa: E402
+from tag import tagged  # noqa: E402
 
 NODES, CONFIG = nodes_mod.load(), cfg.load()
 STAGES, LIMITS = list(CONFIG["tracker"]["stages"]), CONFIG["limits"]
@@ -397,8 +398,8 @@ class RecoverDefinitionTest(unittest.TestCase):
     def missed_twice(self):
         ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
                          label_at={"factory:review-low": OLD})
-        ticket["log"] = [("comment", json.dumps(f"{reconcile.PREFIX} stage=in-review head=abc123def456 "
-                                                "re-fired factory:review-low (no review-low outcome)"))]
+        ticket["log"] = [("comment", json.dumps(tagged(f"{reconcile.PREFIX} stage=in-review head=abc123def456 "
+                                                "re-fired factory:review-low (no review-low outcome)")))]
         return ticket
 
     def run_many(self, count):
@@ -412,6 +413,16 @@ class RecoverDefinitionTest(unittest.TestCase):
         tr, results = self.run_many(3)
         self.assertEqual({(r["reconcile"], r.get("systemic")) for r in results}, {("refire", True)})
         self.assertEqual({tr.get_stage(tr.tickets[i]) for i in (1, 2, 3)}, {"in-review"})
+
+    def test_a_miss_recorded_in_the_old_one_line_form_counts_like_the_new_form(self):
+        old = self.missed_twice()
+        old["log"] = [("comment", json.dumps(f"[factory] {reconcile.PREFIX} stage=in-review head=abc123def456 "
+                                             "re-fired factory:review-low (no review-low outcome)"))]
+        tr = MemorySystem({1: old})
+        tracker = self.config["tracker"]
+        results = reconcile.recover_definition(tr, self.defn, list(tracker["stages"]), tracker.get("stage_kinds", {}),
+                                               self.config["limits"], now=NOW)
+        self.assertEqual([r.get("reconcile") for r in results], ["blocked"], results)
 
     def test_one_second_miss_still_blocks(self):
         tr, results = self.run_many(1)

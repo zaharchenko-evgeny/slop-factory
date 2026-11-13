@@ -113,7 +113,7 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual(mail["Subject"], "[factory #7] Tests fail on main")
         self.assertIn("1. Retry (suggested)", mail.get_payload())
         (comment,) = self.comments(tr)
-        self.assertTrue(comment.startswith("[factory] Tests fail"))
+        self.assertTrue(comment.startswith("[factory]\nTests fail"))
         self.assertEqual(comment.count("<!-- factory:notify "), 2)
         for who, login in (("ann@example.com", "ann"), ("bob@example.com", "bob")):
             self.assertIn(f"<!-- factory:notify via=email person={login} ref={ids[who]} -->", comment)

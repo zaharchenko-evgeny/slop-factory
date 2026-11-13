@@ -8,6 +8,7 @@ import uuid
 
 import plugins
 from doctor import probe
+from effects import tagged
 from factory_plugins.github import tracker as github_tracker
 from factory_plugins.github import wake
 
@@ -33,7 +34,7 @@ def run_log(api, run, repo):
 def repo_probes(repo, run, risk_label, run_id="doctor"):
     """Every write and read probe on `repo`. Probe objects are removed at the end, also when a probe fails."""
     api = lambda *a: run(["api", *a])  # noqa: E731
-    note = lambda text: f"[factory] {text}\n\nFactory-Run: {run_id}"  # noqa: E731
+    note = lambda text: tagged(f"{text}\n\nFactory-Run: {run_id}")  # noqa: E731
     results, made = [], {"issues": [], "pr": None, "branch": None}
     issue = child = None
     try:

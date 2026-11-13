@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 import vocab
+from effects import has_tag
 from factory_plugins.comments import EFFECTS
 from factory_plugins.comments.asks import ASK
 
@@ -24,7 +25,7 @@ def cursor(comments):
     """The highest id in a `factory:comment-seen` marker of the factory's own comments (0: none). Only
     `author_is_factory` counts; another integration cannot move the cursor."""
     return max((int(m[1]) for c in comments if c.get("author_is_factory")
-                and (c.get("body") or "").startswith("[factory]") and (m := SEEN.search(c["body"]))), default=0)
+                and has_tag(c.get("body")) and (m := SEEN.search(c["body"]))), default=0)
 
 
 def new_comments(facts, tracker=None, ticket=None):
