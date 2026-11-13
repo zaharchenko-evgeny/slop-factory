@@ -430,7 +430,7 @@ def main(argv, run=None):
     import doctor
     settings = config_mod.load()
     run = run or doctor.issue_run(settings)
-    repo = settings["tracker"].get("repository") or config_mod.vcs(settings)["repository"]
+    repo = doctor.ticket_repository(settings)
     try:
         code = reconcile_main(argv)
     except Exception as e:
@@ -445,7 +445,7 @@ def report_systemic(config, systemic, run=None):
     """Open `Doctor: runs end without an outcome` (no new comment while it is open), or close it when no run missed."""
     import doctor
     run = run or doctor.issue_run(config)
-    repo = config["tracker"].get("repository") or config_mod.vcs(config)["repository"]
+    repo = doctor.ticket_repository(config)
     probe = "runs-without-outcome"
     if not systemic:
         return doctor.close_ticket(repo, probe, run, run_id=RUN)

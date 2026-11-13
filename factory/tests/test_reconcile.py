@@ -607,3 +607,34 @@ class GitHubOrphanCommentTargetTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DoctorTicketRepositoryTest(unittest.TestCase):
+    """offline-eval-factory#90: a YouTrack team's GitHub Issues environment files its doctor tickets there, not in the
+    code host of another organization its token cannot see."""
+    DEFN = {"factory": {"tracker": {"adapter": "youtrack", "project": "LME"}, "environments": {
+        "team": {"repositories": [{"repo": "me/team-factory", "write": True, "tracker": {"adapter": "github-issues"}},
+                                  {"repo": "Org/app", "tracker": "none"}]},
+        "app": {"repositories": [{"repo": "Org/app", "write": True, "tracker": {"scope": {"field": "S", "value": "A"}}}]}}}}
+    SETTINGS = {"tracker": {"adapter": "youtrack"}, "code_host": {"repository": "Org/app"}}
+
+    def test_the_environment_home_wins_only_for_a_non_github_tracker(self):
+        import doctor
+        self.assertEqual(doctor.ticket_repository(self.SETTINGS, "team", self.DEFN), "me/team-factory")
+        self.assertEqual(doctor.ticket_repository(self.SETTINGS, "app", self.DEFN), "Org/app")
+        self.assertEqual(doctor.ticket_repository(self.SETTINGS, "", self.DEFN), "Org/app")
+        github = {"tracker": {"adapter": "github-issues", "repository": "me/engine"}}
+        self.assertEqual(doctor.ticket_repository(github, "team", self.DEFN), "me/engine")
+
+
+class StateRulesSkipGitHubStoreTest(unittest.TestCase):
+    """offline-eval-factory#90: the YouTrack State rules pass skips a GitHub Issues store instead of failing on it."""
+
+    def test_a_github_store_gives_no_results_and_no_failure(self):
+        from unittest import mock
+        import gate
+        from factory_plugins.youtrack import state
+        tracker = type("T", (), {"tickets": object()})()
+        config = {"tracker": {"adapter": "youtrack", "state_rules": {"Obsolete": "stop"}, "stages": {"triage": {}}}}
+        with mock.patch.object(gate, "tracker_of", return_value=tracker):
+            self.assertEqual(state.reconcile_pass(config, True, None), {"state_rules": ([], False)})

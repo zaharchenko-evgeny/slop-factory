@@ -83,7 +83,9 @@ def reconcile_pass(config, dry_run, progress):
             trackers = [gate.tracker_of(config)]
         stages = {s: vocab.stage(s) for s in t.get("stages") or {}}
         final = [s for s, k in (t.get("stage_kinds") or {}).items() if k == "final"]
-        results = [r for tracker in trackers if hasattr(tracker, "tickets")
+        from factory_plugins.youtrack.store import YouTrackTicketStore
+        # a GitHub Issues environment (a team's own tickets) has no State to read (offline-eval-factory#90)
+        results = [r for tracker in trackers if isinstance(getattr(tracker, "tickets", None), YouTrackTicketStore)
                    for r in apply_rules(tracker, t["state_rules"], stages, final, dry_run, progress)]
         return {"state_rules": (results, any(r.get("rule") == "error" for r in results))}
     except Exception as e:

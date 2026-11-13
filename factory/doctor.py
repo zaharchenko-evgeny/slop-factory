@@ -239,6 +239,22 @@ def report_engine(repo, results, run, run_id="doctor"):
             close_ticket(repo, r["probe"], run, run_id)
 
 
+def ticket_repository(settings, env=None, defn=None):
+    """The GitHub repository the doctor and reconcile file their tickets in: `tracker.repository`, else the code host.
+    When the team's tracker is not GitHub Issues, environment `env` (FACTORY_ENV) with a GitHub Issues repository files
+    there: the run's token reaches it, the code host can be in another organization (offline-eval-factory#90)."""
+    env = os.environ.get("FACTORY_ENV") if env is None else env
+    if env and settings["tracker"].get("adapter") not in (None, "github-issues"):
+        import definition
+        if defn is None and definition.present(config.team_root()):
+            defn = definition.load(config.team_root())
+        home = next((r["repo"] for r in (definition.repositories(defn, env) if defn else [])
+                     if (r["tracker"] or {}).get("adapter") == "github-issues"), None)
+        if home:
+            return home
+    return settings["tracker"].get("repository") or config.vcs(settings)["repository"]
+
+
 def issue_run(settings):
     """The runner of the `gh`-style calls that file the doctor's tickets (hook `doctor.run`, from the tracker's plugin)."""
     return next(iter(plugins.registry(settings).hook("doctor.run")))
@@ -273,7 +289,7 @@ def main(argv=None, run=None):
         return 2
     settings = config.load()
     run = run or issue_run(settings)  # the doctor files its tickets where the tracker's plugin says
-    repo = settings["tracker"].get("repository") or config.vcs(settings)["repository"]
+    repo = ticket_repository(settings, env)
     run_id = f"doctor:{env}"
     results = run_probes(repo, env, nodes_mod.load(), run, (settings["tracker"].get("risk_labels") or {"low": "risk:low"})["low"], run_id=run_id)
     engine = engine_probes(settings) if "--engine" in (argv or []) else []
