@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   ArrowDownToLine,
   ArrowRight,
-  Check,
   Clock3,
   GitPullRequest,
   LoaderCircle,
@@ -47,6 +46,7 @@ import {
   savePreferences,
   ticketNeedsReview,
   ticketsForAttention,
+  visibilitySchema,
   type Filters,
   type Preferences,
 } from './preferences'
@@ -250,7 +250,7 @@ function App() {
   const activeSourceFailures = displaySnapshot.sources.filter((source) => !source.ok)
   const warningCount = visibleTickets.filter((ticket) => ticket.warning).length
   const filters = preferences.filters
-  const hasFilters = filters.query !== '' || filters.repository !== 'all' || filters.environment !== 'all' || filters.stage !== 'all' || filters.warningOnly || filters.reviewOnly || filters.hideCompleted || filters.activeOnly
+  const hasFilters = filters.query !== '' || filters.repository !== 'all' || filters.environment !== 'all' || filters.stage !== 'all' || filters.warningOnly || filters.reviewOnly || filters.visibility !== 'all'
   const lastUpdated = formatTimestamp(displaySnapshot.generatedAt)
 
   return (
@@ -363,10 +363,15 @@ function App() {
               <SelectTrigger aria-label="Filter by stage" className="filter-select stage-filter"><SelectValue placeholder="All stages" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All stages</SelectItem>{displaySnapshot.stages.map((stage) => <SelectItem key={stage.id} value={stage.id}>{stage.name}</SelectItem>)}</SelectContent>
             </Select>
+            <Select value={preferences.filters.visibility} onValueChange={(value) => {
+              const visibility = visibilitySchema.safeParse(value)
+              if (visibility.success) updateFilters({ visibility: visibility.data })
+            }}>
+              <SelectTrigger aria-label="Ticket visibility" className="filter-select visibility-filter"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All tickets</SelectItem><SelectItem value="unfinished">Unfinished</SelectItem><SelectItem value="active">Active only</SelectItem></SelectContent>
+            </Select>
             <Button variant={preferences.filters.warningOnly ? 'secondary' : 'outline'} className={`filter-button ${preferences.filters.warningOnly ? 'warning-filter-active' : ''}`} aria-pressed={preferences.filters.warningOnly} onClick={() => updateFilters({ warningOnly: !preferences.filters.warningOnly })}><AlertTriangle size={14} /> Warnings</Button>
             <Button variant={preferences.filters.reviewOnly ? 'secondary' : 'outline'} className={`filter-button review-filter ${preferences.filters.reviewOnly ? 'review-filter-active' : ''}`} aria-pressed={preferences.filters.reviewOnly} onClick={() => updateFilters({ reviewOnly: !preferences.filters.reviewOnly })}><UserRoundCheck size={14} /> Review</Button>
-            <Button variant="outline" className="hide-completed" aria-pressed={preferences.filters.hideCompleted} onClick={() => updateFilters({ hideCompleted: !preferences.filters.hideCompleted })}><Check size={13} /> {preferences.filters.hideCompleted ? 'Completed hidden' : 'Hide completed'}</Button>
-            <Button variant={preferences.filters.activeOnly ? 'secondary' : 'outline'} className={`filter-button ${preferences.filters.activeOnly ? 'active-only-active' : ''}`} aria-pressed={preferences.filters.activeOnly} title="Hide draft and completed tickets" onClick={() => updateFilters({ activeOnly: !preferences.filters.activeOnly })}>Active only</Button>
             {hasFilters && <Button variant="ghost" className="clear-filters" onClick={clearFilters}>Clear</Button>}
             {olderSnapshot !== null
               ? <Button variant={viewingOlder ? 'secondary' : 'outline'} className="older-toggle" onClick={() => setViewingOlder((current) => !current)}><Clock3 size={14} />{viewingOlder ? 'Latest snapshot' : 'Older snapshot'}</Button>

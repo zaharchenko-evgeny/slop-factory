@@ -6,6 +6,7 @@ import {
   filteredTickets,
   loadPreferences,
   safeHttpUrl,
+  savePreferences,
   ticketsForAttention,
   ticketNeedsReview,
 } from '../src/preferences'
@@ -145,8 +146,7 @@ describe('ticket filters', () => {
       stage: 'in-dev',
       warningOnly: true,
       reviewOnly: true,
-      hideCompleted: true,
-      activeOnly: true,
+      visibility: 'active',
     })
     expect(filtered.map((ticket) => ticket.id)).toEqual(['#1'])
     expect(ticketNeedsReview(filtered[0]!)).toBe(true)
@@ -158,8 +158,7 @@ describe('ticket filters', () => {
       repository: 'alpha',
       environment: 'prod',
       reviewOnly: true,
-      hideCompleted: true,
-      activeOnly: true,
+      visibility: 'active',
     }
     const visible = filteredTickets(snapshot, filters)
     const attentionCandidates = ticketsForAttention(snapshot, filters)
@@ -167,17 +166,17 @@ describe('ticket filters', () => {
     expect(attentionCandidates.map((ticket) => ticket.id)).toEqual(['#1', '#2', '#8'])
   })
 
-  it('hides draft and every configured final stage while keeping waiting and unknown stages', () => {
-    const active = filteredTickets(snapshot, { ...defaultFilters, activeOnly: true })
+  it('keeps draft in unfinished mode and hides it in active mode', () => {
+    const active = filteredTickets(snapshot, { ...defaultFilters, visibility: 'active' })
     expect(active.map((ticket) => ticket.id)).toEqual(['#1', '#2', '#6', '#8'])
-    expect(filteredTickets(snapshot, { ...defaultFilters, hideCompleted: true }).map((ticket) => ticket.id)).toEqual(['#1', '#2', '#4', '#6', '#8'])
+    expect(filteredTickets(snapshot, { ...defaultFilters, visibility: 'unfinished' }).map((ticket) => ticket.id)).toEqual(['#1', '#2', '#4', '#6', '#8'])
     expect(filteredTickets(snapshot, defaultFilters).map((ticket) => ticket.id)).toContain('#7')
   })
 
-  it('combines active-only with search and review filters, and restores tickets when turned off', () => {
+  it('combines active visibility with search and review filters, and restores tickets in all mode', () => {
     const activeReview = filteredTickets(snapshot, {
       ...defaultFilters,
-      activeOnly: true,
+      visibility: 'active',
       query: 'alpha result',
       reviewOnly: true,
     })
@@ -185,7 +184,7 @@ describe('ticket filters', () => {
 
     const hiddenDraftReview = filteredTickets(snapshot, {
       ...defaultFilters,
-      activeOnly: true,
+      visibility: 'active',
       query: 'draft',
       reviewOnly: true,
     })
@@ -215,7 +214,7 @@ describe('ticket filters', () => {
 describe('saved preferences', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('loads old preferences without resetting the saved view or filters', () => {
+  it('migrates the old flags without resetting the saved view or filters', () => {
     vi.stubGlobal('window', {
       localStorage: {
         getItem: vi.fn().mockReturnValue(JSON.stringify({
@@ -237,9 +236,64 @@ describe('saved preferences', () => {
     expect(preferences.filters).toEqual({
       ...defaultFilters,
       query: 'alpha', repository: 'alpha', environment: 'prod', stage: 'in-dev',
-      warningOnly: true, hideCompleted: true,
+      warningOnly: true, visibility: 'unfinished',
     })
     expect(preferences.selectedKey).toBe('ticket:1')
+  })
+
+  it.each([
+    { hideCompleted: false, activeOnly: false, visibility: 'all' },
+    { hideCompleted: true, activeOnly: false, visibility: 'unfinished' },
+    { hideCompleted: false, activeOnly: true, visibility: 'active' },
+    { hideCompleted: true, activeOnly: true, visibility: 'active' },
+  ])('maps legacy flags to $visibility visibility', ({ hideCompleted, activeOnly, visibility }) => {
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: vi.fn().mockReturnValue(JSON.stringify({
+          ...defaultPreferences,
+          filters: {
+            query: '', repository: 'all', environment: 'all', stage: 'all',
+            warningOnly: false, reviewOnly: false, hideCompleted, activeOnly,
+          },
+        })),
+      },
+    })
+
+    expect(loadPreferences('test-factory').filters.visibility).toBe(visibility)
+  })
+
+  it('keeps a valid new visibility value and saves only the current filter shape', () => {
+    const setItem = vi.fn()
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: vi.fn().mockReturnValue(JSON.stringify({
+          ...defaultPreferences,
+          filters: { ...defaultFilters, visibility: 'unfinished', hideCompleted: false, activeOnly: true },
+        })),
+        setItem,
+      },
+    })
+
+    const preferences = loadPreferences('test-factory')
+    expect(preferences.filters.visibility).toBe('unfinished')
+    savePreferences('test-factory', preferences)
+    expect(setItem).toHaveBeenCalledWith(
+      'factory-progress:test-factory:preferences:v1',
+      JSON.stringify({ ...defaultPreferences, filters: { ...defaultFilters, visibility: 'unfinished' } }),
+    )
+  })
+
+  it('uses defaults when a saved visibility value is invalid', () => {
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: vi.fn().mockReturnValue(JSON.stringify({
+          ...defaultPreferences,
+          filters: { ...defaultFilters, visibility: 'invalid', hideCompleted: true },
+        })),
+      },
+    })
+
+    expect(loadPreferences('test-factory')).toEqual(defaultPreferences)
   })
 })
 

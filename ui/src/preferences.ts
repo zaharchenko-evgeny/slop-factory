@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import type { Snapshot } from './model'
 
+export const visibilitySchema = z.enum(['all', 'unfinished', 'active'])
+
 const filterSchema = z.object({
   query: z.string(),
   repository: z.string(),
@@ -8,8 +10,7 @@ const filterSchema = z.object({
   stage: z.string(),
   warningOnly: z.boolean(),
   reviewOnly: z.boolean(),
-  hideCompleted: z.boolean(),
-  activeOnly: z.boolean().default(false),
+  visibility: visibilitySchema,
 })
 
 const preferencesSchema = z.object({
@@ -21,6 +22,15 @@ const preferencesSchema = z.object({
   selectedKey: z.string().nullable(),
 })
 
+const legacyFilterSchema = filterSchema.omit({ visibility: true }).extend({
+  hideCompleted: z.boolean().default(false),
+  activeOnly: z.boolean().default(false),
+})
+
+const legacyPreferencesSchema = preferencesSchema.extend({ filters: legacyFilterSchema })
+
+const storedFiltersSchema = z.object({ filters: z.record(z.string(), z.unknown()) })
+
 export type Filters = z.infer<typeof filterSchema>
 export type Preferences = z.infer<typeof preferencesSchema>
 
@@ -31,8 +41,7 @@ export const defaultFilters: Filters = {
   stage: 'all',
   warningOnly: false,
   reviewOnly: false,
-  hideCompleted: false,
-  activeOnly: false,
+  visibility: 'all',
 }
 
 export const defaultPreferences: Preferences = {
@@ -53,8 +62,18 @@ export function loadPreferences(factoryId: string): Preferences {
     const raw = window.localStorage.getItem(storageKey(factoryId))
     if (raw === null) return defaultPreferences
     const parsed: unknown = JSON.parse(raw)
-    const result = preferencesSchema.safeParse(parsed)
-    return result.success ? result.data : defaultPreferences
+    const current = preferencesSchema.safeParse(parsed)
+    if (current.success) return current.data
+    const storedFilters = storedFiltersSchema.safeParse(parsed)
+    if (storedFilters.success && 'visibility' in storedFilters.data.filters) return defaultPreferences
+
+    const legacy = legacyPreferencesSchema.safeParse(parsed)
+    if (!legacy.success) return defaultPreferences
+
+    const { filters: legacyFilters, ...savedPreferences } = legacy.data
+    const { hideCompleted, activeOnly, ...filters } = legacyFilters
+    const visibility = activeOnly ? 'active' : hideCompleted ? 'unfinished' : 'all'
+    return { ...savedPreferences, filters: { ...filters, visibility } }
   } catch {
     return defaultPreferences
   }
@@ -80,8 +99,8 @@ export function filteredTickets(snapshot: Snapshot, filters: Filters): Snapshot[
     if (filters.environment !== 'all' && !ticket.environments.includes(filters.environment)) return false
     if (filters.stage !== 'all' && ticket.stage !== filters.stage) return false
     if (filters.warningOnly && !ticket.warning) return false
-    if (filters.hideCompleted && (ticket.state === 'closed' || stage?.kind === 'final')) return false
-    if (filters.activeOnly && (ticket.state === 'closed' || ticket.stage === 'draft' || stage?.kind === 'final')) return false
+    if (filters.visibility === 'unfinished' && (ticket.state === 'closed' || stage?.kind === 'final')) return false
+    if (filters.visibility === 'active' && (ticket.state === 'closed' || ticket.stage === 'draft' || stage?.kind === 'final')) return false
     if (filters.reviewOnly && ticket.attention.kind !== 'review') return false
     return true
   })

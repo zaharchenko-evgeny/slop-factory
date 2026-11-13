@@ -218,14 +218,14 @@ html[data-theme="dark"] {
 .search-control input::placeholder { color: var(--faint); }
 .filter-select { height: 32px !important; width: 130px; padding: 0 8px !important; border-color: var(--line) !important; border-radius: 7px !important; background: var(--surface) !important; color: var(--ink-soft) !important; font-size: 10px !important; box-shadow: none !important; }
 .stage-filter { width: 118px; }
-.filter-button, .hide-completed, .older-toggle { height: 32px !important; padding: 0 9px !important; gap: 5px !important; border-color: var(--line) !important; color: var(--ink-soft) !important; background: var(--surface) !important; font-size: 10px !important; border-radius: 7px !important; }
-.filter-button svg, .hide-completed svg, .older-toggle svg { color: var(--muted); }
-.filter-button:hover, .hide-completed:hover, .older-toggle:hover { background: var(--soft) !important; }
+.visibility-filter { width: 124px; }
+.filter-button, .older-toggle { height: 32px !important; padding: 0 9px !important; gap: 5px !important; border-color: var(--line) !important; color: var(--ink-soft) !important; background: var(--surface) !important; font-size: 10px !important; border-radius: 7px !important; }
+.filter-button svg, .older-toggle svg { color: var(--muted); }
+.filter-button:hover, .older-toggle:hover { background: var(--soft) !important; }
 .warning-filter-active { color: var(--amber) !important; border-color: var(--amber-line) !important; background: var(--amber-soft) !important; }
 .warning-filter-active svg { color: var(--amber); }
 .review-filter-active { color: var(--rose) !important; border-color: var(--rose-line) !important; background: var(--rose-soft) !important; }
 .review-filter-active svg { color: var(--rose); }
-.active-only-active { color: var(--teal) !important; border-color: var(--teal-line) !important; background: var(--teal-soft) !important; }
 .clear-filters { height: 28px !important; padding: 0 6px !important; color: var(--muted) !important; font-size: 10px !important; }
 .older-toggle { margin-left: auto; }
 .inline-error { display: flex; align-items: center; gap: 6px; margin: -5px 0 9px; color: var(--amber); font-size: 10px; }
@@ -646,7 +646,7 @@ html[data-theme="dark"] {
   .search-control { flex: 1 1 calc(100% - 6px); }
   .filter-select { flex: 1 1 calc(50% - 6px); width: auto; }
   .stage-filter { flex-basis: calc(50% - 6px); }
-  .filter-button, .hide-completed, .older-toggle { flex: 1 1 auto; justify-content: center !important; padding: 0 7px !important; font-size: 9px !important; }
+  .filter-button, .older-toggle { flex: 1 1 auto; justify-content: center !important; padding: 0 7px !important; font-size: 9px !important; }
   .clear-filters { flex: 0 0 auto; }
   .view-heading-row { margin-bottom: 7px; }
   .view-heading-row p { max-width: 270px; line-height: 1.35; }
