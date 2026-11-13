@@ -594,6 +594,19 @@ class TagColorTest(unittest.TestCase):
         run, calls = self.runner({"bug": "893e13"})
         self.assertEqual(provision.Provisioner(self.plan(["bug"], {"bug": "ff0000"}, owned=()), run).dry_run(), [])
 
+    def test_a_tag_another_project_uses_is_not_recolored(self):  # tags are account-wide
+        def run(method, path, body=None):
+            if method == "GET" and path.startswith("/api/tags"):
+                return [{"id": "id:factory:a", "name": "factory:a", "color": {"id": "1", "background": "#893E13"}}]
+            return [{"idReadable": "OTHER-1"}] if method == "GET" and path.startswith("/api/issues") else {}
+        prov = provision.Provisioner(self.plan(["factory:a"], {"factory:a": "1d76db"}), run)
+        self.assertEqual((prov.dry_run(), prov.write()), ([], []))
+
+    def test_recolor_reuses_the_listed_tag_id(self):
+        run, calls = self.runner({"factory:in-dev": "893e13"})
+        provision.Provisioner(self.plan(["factory:in-dev"], {"factory:in-dev": "1d76db"}), run).write()
+        self.assertEqual(len([c for c in calls if c[0] == "GET" and c[1].startswith("/api/tags")]), 1)
+
 
 class ListTagsPagingTest(unittest.TestCase):  # list_tags pages past the first 1000
     def test_finds_a_tag_past_the_first_page(self):

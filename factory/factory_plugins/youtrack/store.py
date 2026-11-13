@@ -326,11 +326,12 @@ class YouTrackTicketStore:
         """Create a tag; `color` is a palette color (`tag_color`). Without one the tag has YouTrack's default color."""
         self.run("POST", "/api/tags?fields=id,name", {"name": name, **({"color": {"id": TAG_COLORS[color]}} if color else {})})
 
-    def recolor_tag(self, name, color, owned_prefixes):
-        """Set a factory-owned tag's palette color (`tag_color`); a tag outside the factory's namespaces is never recolored."""
+    def recolor_tag(self, name, color, owned_prefixes, tag_id=None):
+        """Set a factory-owned tag's palette color (`tag_color`); a tag outside the factory's namespaces is never recolored.
+        `tag_id` is the id `list_tags` already read: listing a large instance's tags again costs many pages per tag."""
         if not name.startswith(tuple(owned_prefixes)):
             raise ValueError(f"tag {name!r} is not factory-owned")
-        self.run("POST", f"/api/tags/{self.list_tags()[name]}?fields=id", {"color": {"id": TAG_COLORS[color]}})
+        self.run("POST", f"/api/tags/{tag_id or self.list_tags()[name]}?fields=id", {"color": {"id": TAG_COLORS[color]}})
 
     def delete_tag(self, name, owned_prefixes):
         """Delete a tag only inside the factory's namespaces; anything else is someone else's and never removed."""

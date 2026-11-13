@@ -207,20 +207,20 @@ def reconcile_fields(plan: dict, run=None) -> list[tuple]:
 
 
 def reconcile_tags(plan: dict, run=None) -> list[tuple]:
-    """(action, tag, palette color or None) per required YouTrack tag to create, per factory-owned tag whose color differs from the
-    planned one (`recolor`), and per factory-owned tag no longer required to remove; tags outside the factory's
-    namespaces, or still used by another project's issues, are never listed for removal. A tag with no planned color
-    is created without one and never recolored."""
+    """(action, tag, palette color or None, tag id or None) per required YouTrack tag to create, per factory-owned tag
+    whose color differs from the planned one (`recolor`), and per factory-owned tag no longer required to remove. Tags
+    outside the factory's namespaces, or still used by another project's issues, are never recolored or removed: tags
+    are account-wide. A tag with no planned color is created without one and never recolored."""
     if not plan.get("tags"):
         return []
     store = tag_store(plan, run)
     have = store.list_tags(colors=True)
     owned = tuple(plan.get("owned_tag_prefixes") or [])
     want = {t: tag_color(c) for t, c in (plan.get("tag_specs") or {}).items()}
-    return [("create", t, want.get(t)) for t in plan["tags"] if t not in have] + \
-        [("recolor", t, want[t]) for t in plan["tags"] if t in have and owned and t.startswith(owned) and want.get(t)
-         and have[t][1] != want[t]] + \
-        [("remove", t, None) for t in sorted(have) if owned and t.startswith(owned) and t not in plan["tags"]
+    return [("create", t, want.get(t), None) for t in plan["tags"] if t not in have] + \
+        [("recolor", t, want[t], have[t][0]) for t in plan["tags"] if t in have and owned and t.startswith(owned)
+         and want.get(t) and have[t][1] != want[t] and not store.used_outside_project(t)] + \
+        [("remove", t, None, have[t][0]) for t in sorted(have) if owned and t.startswith(owned) and t not in plan["tags"]
          and not store.used_outside_project(t)]
 
 
@@ -239,17 +239,17 @@ class Provisioner:
 
     def dry_run(self):
         return [f"{action} tag {tag}{f' (#{color})' if color and action != 'remove' else ''} in YouTrack"
-                for action, tag, color in self.tags] + \
+                for action, tag, color, _ in self.tags] + \
             [f"{action} {name} value {value} in YouTrack" for action, name, value, _ in self.fields]
 
     def write(self):
         lines = []
-        for action, tag, color in self.tags:  # a missing tag fails every handoff that adds it
+        for action, tag, color, tag_id in self.tags:  # a missing tag fails every handoff that adds it
             if action == "create":
                 tag_store(self.plan, self.run).create_tag(tag, color)
                 lines.append(f"created tag {tag}{f' (#{color})' if color else ''} in YouTrack")
             elif action == "recolor":
-                tag_store(self.plan, self.run).recolor_tag(tag, color, self.plan["owned_tag_prefixes"])
+                tag_store(self.plan, self.run).recolor_tag(tag, color, self.plan["owned_tag_prefixes"], tag_id)
                 lines.append(f"recolored tag {tag} (#{color}) in YouTrack")
         for action, name, value, resolved in self.fields:
             if action == "create":
@@ -262,12 +262,12 @@ class Provisioner:
         return lines
 
     def refusals(self):
-        return [f"refused: would remove tag {t} in YouTrack" for a, t, _ in self.tags if a == "remove"] + \
+        return [f"refused: would remove tag {t} in YouTrack" for a, t, _, _ in self.tags if a == "remove"] + \
             [f"refused: would remove {name} value {value} in YouTrack" for a, name, value, _ in self.fields if a == "remove"]
 
     def remove(self):
         lines = []
-        for tag in [t for a, t, _ in self.tags if a == "remove"]:
+        for tag in [t for a, t, _, _ in self.tags if a == "remove"]:
             tag_store(self.plan, self.run).delete_tag(tag, self.plan["owned_tag_prefixes"])
             lines.append(f"removed tag {tag} in YouTrack")
         for _, name, value, _ in [c for c in self.fields if c[0] == "remove"]:
