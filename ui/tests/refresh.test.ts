@@ -168,6 +168,25 @@ describe('refresh polling', () => {
     expect(api.read).not.toHaveBeenCalled()
   })
 
+  it('stops polling when the server restarts with a lower refresh ID', async () => {
+    const api: RefreshApi = {
+      start: vi.fn().mockResolvedValue(makeEnvelope({ refresh: makeStatus({ id: 1 }) })),
+      status: vi.fn().mockResolvedValue(makeStatusEnvelope(null, makeStatus({ id: 0, state: 'idle' }))),
+      read: vi.fn(),
+    }
+
+    await expect(refreshSnapshot({
+      scope: 'latest',
+      signal: new AbortController().signal,
+      pollIntervalMs: 0,
+      api,
+      onSnapshot: () => undefined,
+      onProgress: () => undefined,
+    })).rejects.toThrow('Factory server restarted. Refresh again.')
+    expect(api.status).toHaveBeenCalledTimes(1)
+    expect(api.read).not.toHaveBeenCalled()
+  })
+
   it('finishes the requested run when snapshotRunId reaches it while a newer run is active', async () => {
     const snapshot = makeSnapshot()
     const requested = makeStatus({ id: 8 })

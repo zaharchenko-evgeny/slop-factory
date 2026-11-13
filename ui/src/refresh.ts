@@ -139,6 +139,9 @@ export async function refreshSnapshot({
     }
 
     onProgress(status.refresh)
+    if (!hasRequestedSnapshot(status.snapshotRunId, requestedRunId) && status.refresh.id < requestedRunId) {
+      throw new Error('Factory server restarted. Refresh again.')
+    }
     if (isRequestedRunFailed(status.refresh, requestedRunId) && !hasRequestedSnapshot(status.snapshotRunId, requestedRunId)) {
       throw new Error(status.refresh.error ?? 'The snapshot refresh failed.')
     }
