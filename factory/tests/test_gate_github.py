@@ -2192,7 +2192,7 @@ if __name__ == "__main__":
 
 
 class DeployPlanAssigneeTest(unittest.TestCase):
-    def assignees(self, author, owner, existing=False):
+    def assignees(self, author, owner, existing=False, old=(), flag=None):
         calls = []
         def run(args):
             calls.append(args)
@@ -2204,7 +2204,7 @@ class DeployPlanAssigneeTest(unittest.TestCase):
             if path.endswith("labels?per_page=100"):
                 return recorded_action(path, [{"name": "factory:new"}])
             if path.endswith("issues?state=open&per_page=100"):
-                return json.dumps({"number": 7, "title": "Deploy needed"}) if existing else ""
+                return json.dumps({"number": 7, "title": "Deploy needed", "assignees": [{"login": x} for x in old]}) if existing else ""
             if args[:2] == ["issue", "create"]:
                 return "https://github.com/o/r/issues/99"
             return "{}"
@@ -2214,7 +2214,7 @@ class DeployPlanAssigneeTest(unittest.TestCase):
                 patch("config.owner", return_value=owner):
             GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
         call = next(c for c in calls if c[:2] == ["issue", "edit" if existing else "create"])
-        flag = "--add-assignee" if existing else "--assignee"
+        flag = flag or ("--add-assignee" if existing else "--assignee")
         return [call[i + 1] for i, a in enumerate(call) if a == flag]
 
     def test_assignee_is_author_then_owner_then_nobody(self):
@@ -2223,3 +2223,15 @@ class DeployPlanAssigneeTest(unittest.TestCase):
                 self.assertEqual(self.assignees("alice", "boss", existing), ["alice"])
                 self.assertEqual(self.assignees(None, "boss", existing), ["boss"])
                 self.assertEqual(self.assignees(None, None, existing), [])
+
+    def test_edit_removes_stale_assignees(self):
+        for author, owner, old, keep, drop in [
+                ("alice", "boss", ["bob"], ["alice"], ["bob"]),
+                ("alice", "boss", ["alice", "bob"], ["alice"], ["bob"]),
+                (None, "boss", ["bob"], ["boss"], ["bob"]),
+                (None, None, ["bob", "carol"], [], ["bob", "carol"]),
+                (None, None, [], [], []),
+                ("alice", None, ["alice"], ["alice"], [])]:
+            with self.subTest(author=author, owner=owner, old=old):
+                self.assertEqual(self.assignees(author, owner, True, old), keep)
+                self.assertEqual(self.assignees(author, owner, True, old, "--remove-assignee"), drop)

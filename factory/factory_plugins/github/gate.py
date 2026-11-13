@@ -747,7 +747,9 @@ class GitHubGateTracker(DescriptorPort):
         assignee = ["--assignee", who] if who else []
         if existing:
             self.run(["issue", "edit", str(existing["number"]), "-R", self.repo, "--body", body,
-                      "--add-label", vocab.needs_human(), *(["--add-assignee", who] if who else [])])
+                      "--add-label", vocab.needs_human(), *(["--add-assignee", who] if who else []),
+                      *(f for x in sorted({a.get("login") for a in existing.get("assignees") or []} - {who, None})
+                        for f in ("--remove-assignee", x))])
             self.run(["issue", "comment", str(existing["number"]), "-R", self.repo, "--body",
                       effects_mod.tagged(f"Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}")])
         else:
