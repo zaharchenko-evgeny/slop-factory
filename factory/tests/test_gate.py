@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/gate.py on both fakes. Run: uv run factory/tests/test_gate.py"""
 import copy
@@ -260,7 +260,7 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self.ask(tr)[0], gate.GO)
         posted = [json.loads(v) for k, v in tr.tickets["7"]["log"] if k == "comment"]
         self.assertEqual(len(posted), 1)
-        self.assertTrue(posted[0].startswith("[factory] **dev (developer):** @factory:reviewer Is X in scope?\n"))
+        self.assertTrue(posted[0].startswith("[factory]\n**dev (developer):** @factory:reviewer Is X in scope?\n"))
         self.assertIn("<!-- factory:ask id=7-1 from=intake to=reply-reviewer hop=1 -->", posted[0])
         self.assertEqual(tr.facts("7")["stage"], "triage")
 
@@ -515,7 +515,7 @@ class GateTest(unittest.TestCase):
             {"text": "The router  misses ADRs", "scope": "factory", "about": "router", "evidence": "#7"}]}, tr, NODES)
         log = tr.tickets["7"]["log"]
         lesson = [json.loads(v) for k, v in log if k == "comment" and "factory:lesson" in v]
-        self.assertEqual(lesson, ["[factory] Lessons from `intake`\n<!-- factory:lesson -->\n"
+        self.assertEqual(lesson, ["[factory]\nLessons from `intake`\n<!-- factory:lesson -->\n"
                                   "- [factory] router: The router misses ADRs (evidence: #7)"])
         self.assertIn("factory:lesson", tr.facts("7")["attrs"])
         with self.assertRaises(gate.Bad):
@@ -575,8 +575,14 @@ class GateTest(unittest.TestCase):
         self.assertIsNone(tr.deploy_ticket)
 
     def test_new_labels_created_at_merge(self):
-        plan = air.plan_air(NODES, CONFIG)
-        self.assertIn("factory:needs-human", plan["label_plan"][CONFIG["tracker"]["repository"]])
+        before = cfg.team_root()
+        cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
+        try:
+            config = cfg.load()
+            plan = air.plan_air(nodes.load(), config)
+        finally:
+            cfg.set_team(before)
+        self.assertIn("factory:needs-human", plan["label_plan"][config["tracker"]["repository"]])
 
     def test_review_check_reads_the_focus_from_the_event(self):
         tracker = MemorySystem({"7": {
@@ -1232,7 +1238,7 @@ class StaleSweepTest(unittest.TestCase):
         self.assertEqual([(r["recover"], r["applied"]) for r in res], [("refire", True)])
         self.assertEqual(tr.tickets[1]["stage"], "ready")
         self.assertIn(["label", '"factory:ready"'], tr.tickets[1]["log"])
-        self.assertIn("[factory] recover: stage=ready", tr.tickets[1]["log"][-1][1])
+        self.assertIn("[factory]\\nrecover: stage=ready", tr.tickets[1]["log"][-1][1])
         res = gate.sweep_stale(tr, NODES, 2, self.NOW)[0]
         self.assertEqual([r["recover"] for r in res], ["blocked"])
         self.assertEqual(tr.tickets[1]["stage"], "blocked")
@@ -1643,7 +1649,7 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(11, "unblocked")])
         self.assertEqual(tr.tickets[11]["log"], [
             ["label", '"factory:ready"'],
-            ["comment", '"[factory] unblocked by #10"'],
+            ["comment", '"[factory]\\nunblocked by #10"'],
         ])
         self.assertNotIn("recover", json.dumps(tr.tickets[11]["log"]))
         tr.tickets[11]["stage"] = "in-dev"  # intake accepted the re-fire
@@ -1669,7 +1675,7 @@ class UnblockedSweepTest(unittest.TestCase):
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(11, "re-triage")])
         self.assertEqual(tr.tickets[11]["stage"], "triage")
         self.assertEqual(tr.tickets[11]["log"], [
-            ["comment", '"[factory] Blocker #10 was closed as not planned; re-triage this ticket"']])
+            ["comment", '"[factory]\\nBlocker #10 was closed as not planned; re-triage this ticket"']])
 
     def test_completed_blocker_wakes_dependent(self):
         tr, (results, failed) = self.sweep({
@@ -1714,7 +1720,7 @@ class UnblockedSweepTest(unittest.TestCase):
 
         self.assertFalse(failed)
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(10, "merged"), (11, "unblocked")])
-        self.assertIn(["comment", '"[factory] unblocked by #10"'], tr.tickets[11]["log"])
+        self.assertIn(["comment", '"[factory]\\nunblocked by #10"'], tr.tickets[11]["log"])
 
     def test_sweep_finishes_person_merged_pr_from_changes_requested(self):
         tr = MemorySystem({10: {"stage": "changes-requested", "pr_state": "merged"}})

@@ -3,19 +3,20 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
-"""Render the nodes of engine/nodes.yaml as deployable specs (ADR-0014). Output is JSON.
+"""Render the nodes of the team's definition as deployable specs (ADR-0021). Output is JSON.
 
 Usage: deploy.py plan --target air
-       deploy.py (--dry-run | --apply [--allow-delete]) [--rename 'OLD NAME=NEW NAME']...
+       deploy.py (--dry-run | --apply [--allow-delete]) [--rename 'OLD NAME=NEW NAME']... [--only SELECTOR]...
 --dry-run prints the diff against the existing automations and environments; --apply also writes it and re-lists to
 verify. The two Air MCP servers are started over stdio from the commands in FACTORY_MCP_AIR_AUTOMATIONS and
 FACTORY_MCP_AIR_CLOUD (they use the operator's local OAuth). Each --rename updates the existing item named OLD in
 place (same id) to NEW instead of creating NEW and deleting OLD.
-air: {"automations": [...], "environments": [...]}: one automation per enabled node (per tier or focus
-     where the node has them) and one environment per environment in use, for the factory-deploy skill.
+air: {"automations": [...], "environments": [...]}: one automation per enabled node and one environment per environment in use,
+     for the factory-deploy skill.
 """
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -82,9 +83,7 @@ def definition_copies(defn: dict, name: str, n: dict, config: dict) -> list[dict
 
 
 def plan_air(nodes: dict, config: dict) -> dict:
-    air, roles, agents = config["targets"]["air"]["models"], config["roles"], core.agents_of(nodes, config)
-    for aid in sorted({a["id"] for a in agents.values() if a.get("effort")}):
-        print(f"deploy: agent {aid}: effort ignored, Air automations take no reasoning setting", file=sys.stderr)
+    air = config["targets"]["air"]["models"]
     repos = {r["name"]: r for r in config["repositories"]}
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     team = {"name": "team", "url": config.get("team_repository") or primary["url"]}
@@ -95,7 +94,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     prefix = f"[{core.project_name(config)}] "
     automations = []
     repo_tags = tuple(t for hook in plugins.registry(config).hook("deploy.repo_tags") for t in hook(config))
-    used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human" and not n.get("runner")))
+    used = list(dict.fromkeys(n["env"] for n in nodes["nodes"].values() if n["role"] != "human"))
     unscoped = set()  # environments some automation shares across the project
     scoped = []  # (env, node, repository) of the per-node automations and of the copies in another repository
     defn = core.team_definition()
@@ -104,20 +103,18 @@ def plan_air(nodes: dict, config: dict) -> dict:
     # once per project, in its environment (FACTORY_ENV), and the gate takes only that environment's tickets
     adopted = bool(defn) and definition.adopted(defn)  # ADR-0027: copies come from the definition, no #1069 fan-out
     trackers = {} if adopted else scopes_mod.project_envs(config)
-    default_env = core.default_environment(nodes, defn) if trackers else None
+    default_env = definition.default_environment(defn) if trackers else None
     for name, n in nodes["nodes"].items():
-        if n.get("enabled") is False or n["role"] == "human" or n.get("runner"):
+        if n.get("enabled") is False or n["role"] == "human":
             continue
         fan = list(trackers) if trackers and n["env"] == default_env else [None]
         if adopted:
             own = definition_copies(defn, name, n, config) or [None]
         else:
-            own = node_copies(defn, name, n, config) if defn and fan == [None] else [None]  # #1069: per project instead
-        for project, copy_, (aname, tier_arg, tier, focus) in [
-                (p, c, v) for p in fan for c in own for v in core.variants(name, n, roles, agents.get(name))]:
-            if project and focus == "knowledge" and project != fan[0]:
-                continue  # the knowledge review runs once, in the team's environment
-            project = None if focus == "knowledge" else project
+            own = node_copies(defn, name, n, config) if fan == [None] else [None]  # #1069: per project instead
+        aname = name
+        tier = n.get("tier") or (config["roles"].get(n["role"]) or {}).get("tier") or "cheap"  # the model alias
+        for project, copy_ in [(p, c) for p in fan for c in own]:
             if project and project not in used:
                 used.append(project)
             env = (copy_ or {}).get("env") or project or n["env"]
@@ -128,8 +125,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
             scope = copy_["repo"] if copy_ and copy_["suffix"] and not adopted else None
             agent, _, model = air[tier].partition("/")
             trig = []
-            webhook = any(str(t).startswith("webhook ") for t in n["triggers"])
-            spec = core.node_spec(name, n, config, tier_arg or tier, focus, nodes)
+            spec = core.node_spec(name, n, config, tier, None, nodes)
             narrow = {k: v for hook in filter_hooks for k, v in hook(config, scope).items()} if scope else {}
             for t in n["triggers"]:
                 if str(t).startswith("schedule "):
@@ -141,7 +137,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     t = (copy_ or {}).get("event")(t) if (copy_ or {}).get("event") else t  # ADR-0027: the copy's tracker
                     if str(t).startswith("workflow_run ") and (copy_ or {}).get("ci"):
                         t = f"workflow_run {copy_['ci']}"  # #1259: the CI of the copy's own environment
-                    trig.append(core.trigger(t, tier_arg, bot if aname.startswith(core.BOT_FILTERED) else None, focus,
+                    trig.append(core.trigger(t, None, bot if aname.startswith(core.BOT_FILTERED) else None, None,
                                              scope["name"] if scope else None, repo_tags))
                     if project:
                         trig[-1] = core.scope_filter(trig[-1], trackers[project])
@@ -149,15 +145,13 @@ def plan_air(nodes: dict, config: dict) -> dict:
                             **(((copy_ or {}).get("filters") or {}).get(trig[-1].get("source")) or {})}
                     if more:
                         trig[-1] = {**trig[-1], "filters": {**trig[-1].get("filters", {}), **more}}
-            automation_repository = core.repository(team if focus == "knowledge" else (copy_ or {}).get("repo")
+            automation_repository = core.repository((copy_ or {}).get("repo")
                                                     or repos.get(envs_def[env]["repository"]) or primary)
-            if focus == "knowledge":  # Air runs an automation only in an environment of its own repository
-                env = next((e for e in used if (repos.get(envs_def[e]["repository"]) or primary)["url"] == team["url"]), env)
             # A node with custom MCP servers runs in an environment of its own: setup writes `.mcp.json` per environment
-            env_node = name if defn and focus != "knowledge" and definition.mcp_custom(definition.mcp(defn, name)) else None
+            env_node = name if definition.mcp_custom(definition.mcp(defn, name)) else None
             env_repo = repos.get(envs_def[env]["repository"]) or primary
             # #1112: a copy in another repository runs in that repository's variant of its environment
-            variant = copy_["repo"] if copy_ and focus != "knowledge" and \
+            variant = copy_["repo"] if copy_ and \
                 definition.full_name(copy_["repo"]["url"]) != definition.full_name(env_repo["url"]) else None
             env_suffix = (f" {env_node}" if env_node else "") + (f" {variant['name']}" if variant else "")
             if env_node or variant:
@@ -173,9 +167,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "agentAndModel": {"id": model, "name": model, "isDefault": False, "agentId": agent},
                 "repository": automation_repository,
                 "environmentConfigId": f"{prefix}{env}{env_suffix}",
-                "mcpConnectors": core.mcp_connectors(n, config, focus),
-                "prompt": core.script_prompt(name, automation_repository, config, webhook) if n["role"] == "script" else core.agent_prompt(
-                    name, n, config, aname, focus, automation_repository, tier_arg or tier),
+                "mcpConnectors": core.mcp_connectors(n, config, None),
+                "prompt": core.agent_prompt(name, n, config, aname, None, automation_repository, tier),
             }
             if copy_:
                 if copy_["repo"].get("default_branch", "main") != "main":  # Air checks out `main` unless told (#1259)
@@ -230,7 +223,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
     return {"prefix": prefix, "automations": automations, "environments": envs,
             "label_plan": core.label_plan(nodes, config, label_repos),  # ADR-0024: labels per repository
             "label_specs": schema.specs, "owned_label_prefixes": list(schema.owned_prefixes),
-            **tag_plan, "files": core.actions_files(nodes, config)}
+            **tag_plan}
 
 
 class Mcp:
@@ -314,6 +307,16 @@ class Backend:
     def get_automation(self, automation_id: str) -> dict:
         return self.request("GET", f"/automations/{urllib.parse.quote(automation_id, safe='')}")
 
+    def list_automations(self) -> list[dict]:
+        """Every personal automation, page by page (`cursor`): the MCP `list_automations` stops at LIST_CAP (#1347)."""
+        out, cursor = [], None
+        while True:
+            page = self.request("GET", "/automations?limit=100" + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else ""))
+            out += page.get("automations") or []
+            cursor = page.get("nextCursor")
+            if not page.get("hasMore") or not cursor:
+                return out
+
     @staticmethod
     def _settled(call, attempts: int, pause: float):
         """`call()`, retried while Air answers 403 or 404: an automation created a moment ago does until it settles,
@@ -349,6 +352,8 @@ def same(key: str, have, want) -> bool:
             return sorted((item.get("repository", {}).get("fullName") if isinstance(item.get("repository"), dict)
                            else item.get("repository"), item.get("branch")) for item in (items or []))
         return identities(have) == identities(want)
+    if key == "repository" and isinstance(have, str) and isinstance(want, str):  # #1304: Air lowercases the organization
+        return same_repository(have, want)
     if key == "mcpConnectors":
         return sorted(have or []) == sorted(want or [])
     if key == "domains":
@@ -390,14 +395,24 @@ def environment_detail(x: dict) -> dict:
     return x
 
 
-def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
+LIST_CAP = 100  # list_automations returns at most this many personal automations, with no paging (#1338)
+
+
+class Listed(list):
+    """The personal automations read from Air; `capped` when the list has `LIST_CAP` entries, so it may miss some."""
+    capped = False
+
+
+def diff(plan: dict, automations: list[dict], envs: list[dict], capped: bool = False) -> list[tuple]:
     """(action, kind, name, planned item, existing item, changed fields) per create, update, delete; by name, prefix only.
-    `plan["renames"]` ({old name: new name}) matches an existing item under its old name, so the update keeps its id."""
+    `plan["renames"]` ({old name: new name}) matches an existing item under its old name, so the update keeps its id.
+    `capped` (the automation list may be incomplete, #1338): a planned automation not found is `unknown`, not `create`,
+    and nothing is deleted."""
     new_to_old = {new: old for old, new in (plan.get("renames") or {}).items()}
     env_ids = {e["name"]: e.get("id") for e in envs}
     # Air cannot move an environment to another repository: it is replaced, and its automations follow the new one.
     replaced = {e["name"] for e in plan["environments"] for x in envs
-                if x["name"] == e["name"] and "repository" in x and x["repository"] != e["repository"]}
+                if x["name"] == e["name"] and "repository" in x and same_repository(x["repository"], e["repository"]) is False}
     env_ids.update({name: f"(replaced) {name}" for name in replaced})
     out = []
     for kind, planned, have in (("environment", plan["environments"], envs), ("automation", plan["automations"], automations)):
@@ -410,9 +425,12 @@ def diff(plan: dict, automations: list[dict], envs: list[dict]) -> list[tuple]:
                        and not same(k, x.get(k), want[k])]
             if kind == "environment" and p["name"] in replaced:
                 out.append(("replace", kind, p["name"], p, x, ["repository"]))
+            elif x is None and capped and kind == "automation":
+                out.append(("unknown", kind, p["name"], p, x, []))
             elif x is None or changed:
                 out.append(("create" if x is None else "update", kind, p["name"], p, x, changed))
-        out += [("delete", kind, n, None, x, []) for n, x in have.items()]
+        if not capped:
+            out += [("delete", kind, n, None, x, []) for n, x in have.items()]
     return out
 
 
@@ -428,6 +446,13 @@ def automation_detail(x: dict) -> dict:
     if isinstance(x.get("repository"), str):  # "owner/repo" stands for the planned repository object
         x["repository"] = {"fullName": x["repository"]}
     return x
+
+
+def same_repository(a: str | None, b: str | None) -> bool:
+    """Whether two repository URLs name the same repository: Air lowercases the organization (`jetbrains/jbeval`),
+    so names compare case-insensitively, and a trailing `.git` or `/` does not count."""
+    norm = lambda u: (u or "").strip().rstrip("/").removesuffix(".git").lower()  # noqa: E731
+    return norm(a) == norm(b)
 
 
 def env_url(x: dict) -> str | None:
@@ -451,8 +476,12 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, bac
                additional_names=()) -> tuple[list[dict], list[dict]]:
     listed = automations.call("list_automations", {"privacy": "private"})
     automation_items = listed if isinstance(listed, list) else listed["personal"]
-    automation_items = [automation_detail(automations.call("get_automation", {"automationId": x["automationId"]}))
-                        for x in automation_items if x["name"].startswith(prefix)]
+    capped = len(automation_items) >= LIST_CAP
+    if capped and backend:  # the REST API pages: the full list, so nothing is `unknown` (#1347)
+        automation_items, capped = [x for x in backend.list_automations() if not x.get("projectId")], False
+    automation_items = Listed(automation_detail(automations.call("get_automation", {"automationId": x["automationId"]}))
+                              for x in automation_items if x["name"].startswith(prefix))
+    automation_items.capped = capped
     if backend:
         for item in automation_items:
             if item["name"] in additional_names:
@@ -462,6 +491,33 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, bac
     env_items = [environment_detail(cloud.call("get_environment", {"id": x["id"]}))
                  for x in env_items if x["name"].startswith(prefix)]
     return automation_items, env_items
+
+
+def _glob(pattern: str) -> re.Pattern:
+    """A name glob: `*` and `?` only, so the `[...]` of a prefix such as `[Offline eval]` stays literal."""
+    return re.compile("".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in pattern), re.DOTALL)
+
+
+def selector_matcher(only: list[str], plan: dict):
+    """`match(kind, name, planned item)` for `--only` selectors (`node:<node>`, `env:<environment>`, a name glob)."""
+    prefix = plan["prefix"]
+    short = lambda name: name[len(prefix):] if name.startswith(prefix) else name  # noqa: E731
+    in_env = lambda name, env: short(name) == env or short(name).startswith(env + " ")  # noqa: E731
+    env_names = {sel: {e["name"] for e in plan["environments"] if in_env(e["name"], sel[4:])}
+                 for sel in only if sel.startswith("env:")}
+
+    def one(sel: str, kind: str, name: str, p: dict | None) -> bool:
+        if sel.startswith("node:"):
+            node = ((p or {}).get("spec") or {}).get("node") or short(name).split(" ")[0]
+            return kind == "automation" and node == sel[5:]
+        if sel.startswith("env:"):
+            if kind == "environment":
+                return in_env(name, sel[4:])
+            return bool(p) and p.get("environmentConfigId") in env_names[sel]
+        glob = _glob(sel)
+        return bool(glob.fullmatch(name) or glob.fullmatch(short(name)))
+
+    return lambda kind, name, p=None: any(one(sel, kind, name, p) for sel in only)
 
 
 def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", *, backend=None,
@@ -486,7 +542,7 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
         if p and kind == "automation":  # the environment id exists only after its create
             env_ids = env_ids or {e["name"]: e["id"] for e in list_envs(cloud, repo_url)
                                   if e["id"] not in retired and (env_url(e) is None or e["name"] not in env_repositories
-                                                                 or env_url(e) == env_repositories[e["name"]])}
+                                                                 or same_repository(env_url(e), env_repositories[e["name"]]))}
             p = {**p, "environmentConfigId": env_ids[p["environmentConfigId"]]}
         p = {k: v for k, v in (p or {}).items() if k not in ("spec", "additionalRepositories")}
         if action == "update":
@@ -542,8 +598,11 @@ def missing_variables(plan: dict, envs: list[dict]) -> list[tuple[dict, dict]]:
     return out
 
 
+UNSET = "unset"  # Air refuses an empty value; doctor reports this placeholder as missing
+
+
 def create_missing_variables(plan: dict, envs: list[dict], cloud: Mcp, dry_run: bool = False) -> None:
-    """List (`--dry-run`) or create each declared variable that its environment lacks, with an empty value
+    """List (`--dry-run`) or create each declared variable that its environment lacks, with the value `unset`
     (`isSecret` for a secret one). A variable that exists is never listed, so a value a person set stays."""
     ids = {x["name"]: x["id"] for x in envs}
     by_env = {}
@@ -551,10 +610,10 @@ def create_missing_variables(plan: dict, envs: list[dict], cloud: Mcp, dry_run: 
         by_env.setdefault(e["name"], []).append(v)
     for name, declared in by_env.items():
         for v in declared:
-            print(f"create variable {v['name']} (empty{', secret' if v['secret'] else ''}) in {name[len(plan['prefix']):]}")
+            print(f"create variable {v['name']} ({UNSET}{', secret' if v['secret'] else ''}) in {name[len(plan['prefix']):]}")
         if not dry_run and name in ids:
             cloud.call("edit_environment", {"id": ids[name], "variables": [
-                {"key": v["name"], "value": "", **({"isSecret": True} if v["secret"] else {}),
+                {"key": v["name"], "value": UNSET, **({"isSecret": True} if v["secret"] else {}),
                  **({"description": v["description"]} if v.get("description") else {})} for v in declared]})
 
 
@@ -575,21 +634,52 @@ def repository_urls(plan: dict) -> list[str]:
 
 
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None, yt_run=None,
-           config=None) -> int:
+           config=None, only: list[str] | None = None) -> int:
     """Write only to Air, to repository labels (through `run`, a `gh` runner) and to the tracker's own setup (through
     `yt_run` for YouTrack): deploy never creates, edits or closes a tracker ticket. `config` selects the plugins that
-    provision the labels (github when None) and the tracker setup (every plugin's, for what the plan names, when None)."""
+    provision the labels (github when None) and the tracker setup (every plugin's, for what the plan names, when None).
+    `only` (`--only` selectors) limits the diff, the verify and the variables to the matched items and never removes a
+    label or tracker tag; a selector that matches nothing in the plan or in Air returns 2."""
     repo_urls = repository_urls(plan)
     env_repositories = {e["name"]: e["repository"] for e in plan["environments"]}
     additional_names = {a["name"] for a in plan["automations"] if "additionalRepositories" in a}
-    backend = backend or (Backend() if additional_names else None)
+    backend = backend or (Backend() if additional_names else None)  # main passes one: a capped list pages through it
     state = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                        additional_names=additional_names)
-    changes = diff(plan, *state)
+    capped = getattr(state[0], "capped", False)
+    changes = diff(plan, *state, capped)
+    match, others = None, 0
+    if only:
+        match = selector_matcher(only, plan)
+        known = [(k, x["name"], p) for k, items, planned in (("environment", state[1], plan["environments"]),
+                                                              ("automation", state[0], plan["automations"]))
+                 for x, p in [(x, None) for x in items if x["name"].startswith(plan["prefix"])] + [(p, p) for p in planned]]
+        for sel in only:
+            if not any(selector_matcher([sel], plan)(k, n, p) for k, n, p in known):
+                print(f"error: --only {sel} matches nothing in the plan or in Air", file=sys.stderr)
+                return 2
+        kept = [c for c in changes if match(c[1], c[2], c[3])]
+        others, changes = len(changes) - len(kept), kept
+        print(f"partial: {', '.join(only)}")
+        plan = {**plan, "environments": [e for e in plan["environments"] if match("environment", e["name"], e)]}
     for action, kind, name, _, _, changed in changes:
-        print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
+        if action == "unknown":
+            print(f"unknown {kind} {name} (list capped at {LIST_CAP})")
+        else:
+            print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
     if not changes:
         print("unchanged")
+    if only and others and mode == "--dry-run":
+        print(f"not deployed: {others} other changes")
+    if capped and not any(c[0] == "unknown" for c in changes):
+        print(f"warning: Air listed {LIST_CAP} personal automations (its cap): none is deleted from an incomplete list",
+              file=sys.stderr)
+    unknown = [c[2] for c in changes if c[0] == "unknown"]
+    if unknown and mode == "--apply":
+        print(f"refused: Air lists at most {LIST_CAP} personal automations and listed {LIST_CAP}, so these planned "
+              f"automations could not be told from missing ones: {', '.join(unknown)}. Delete or move other personal "
+              f"automations in Air to get the list under {LIST_CAP}, then rerun.", file=sys.stderr)
+        return 1
     for line in missing_secrets(plan, state[1]):
         print(line)
     for line in extra_variables(plan, state[1]):
@@ -597,6 +687,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     if mode == "--dry-run":
         create_missing_variables(plan, state[1], cloud, dry_run=True)
     label_changes = core.reconcile_labels(plan, run, config)
+    if only:  # a partial deploy never removes
+        label_changes = [c for c in label_changes if c[0] != "remove"]
     # the tracker's own setup beside the labels (youtrack: tags and field values), from the `deploy.tracker` hooks;
     # without a config, every plugin's hook sets up what the plan names
     setup = plugins.registry(config) if config is not None else plugins.Registry(plugins.KNOWN)
@@ -608,14 +700,14 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     if mode == "--dry-run":
         for action, repo, label, *rest in label_changes:
             print(f"{action} label {label} in {repo}" + (f" ({', '.join(rest[1])})" if action == "update" else ""))
-        for line in [x for p in trackers for x in p.dry_run()]:
+        for line in [x for p in trackers for x in p.dry_run() if not (only and x.startswith("remove"))]:
             print(line)
         return 0
     for line in [x for p in trackers for x in p.write()]:  # a missing tag fails every handoff that adds it
         print(line)
     core.provision_labels(plan, label_changes, "write", run, config)  # a missing label fails every handoff that adds it
     removals = [c for c in label_changes if c[0] == "remove"]
-    refusals = [x for p in trackers for x in p.refusals()]
+    refusals = [] if only else [x for p in trackers for x in p.refusals()]
     if (removals or refusals or any(c[0] == "delete" for c in changes)) and not allow_delete:
         for _, repo, label, _ in removals:
             print(f"refused: would remove label {label} in {repo}", file=sys.stderr)
@@ -624,7 +716,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
     core.provision_labels(plan, removals, "remove", run, config)
-    for p in trackers:
+    for p in [] if only else trackers:
         for line in p.remove():
             print(line)
     if changes:
@@ -632,13 +724,14 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                            additional_names=additional_names)
         state = after
-        left = [c for c in diff(plan, *after) if not (c[0] == "delete" and c[1] == "environment")]
+        left = [c for c in diff(plan, *after, getattr(after[0], "capped", False))
+                if not (c[0] == "delete" and c[1] == "environment") and (match is None or match(c[1], c[2], c[3]))]
         for action, kind, name, *_ in left:
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:
             return 1
     create_missing_variables(plan, state[1], cloud)  # after the environments exist: their ids are in `state`
-    for x in state[0]:  # a person registers each webhook with its sender; also on an unchanged plan
+    for x in (x for x in state[0] if match is None or match("automation", x["name"])):  # a person registers each webhook with its sender; also on an unchanged plan
         for w in x["webhooks"]:
             print(f"webhook {x['name']}: trigger {w['id']}" + (f" {w['url']}" if w["url"] else ""))
     return 0
@@ -646,7 +739,18 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
 
 def main(argv: list[str]) -> int:
     argv = config_mod.pop_team(argv)
-    rest, renames = argv[1:], {}
+    if not definition.present(config_mod.team_root()):
+        print("deploy: the team root has no factory.yaml and workflow.yaml (ADR-0021)", file=sys.stderr)
+        return 2
+    rest, renames, only = argv[1:], {}, []
+    while "--only" in rest:
+        i = rest.index("--only")
+        sel = rest[i + 1] if i + 1 < len(rest) else ""
+        if not sel or sel in ("node:", "env:") or sel.startswith("--"):
+            print("--only needs a selector: node:<node>, env:<environment> or a name glob", file=sys.stderr)
+            return 2
+        only.append(sel)
+        del rest[i:i + 2]
     while "--rename" in rest:
         i = rest.index("--rename")
         old, sep, new = (rest[i + 1] if i + 1 < len(rest) else "").partition("=")
@@ -667,11 +771,11 @@ def main(argv: list[str]) -> int:
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
             run = next((hook(config) for hook in plugins.registry(config).hook("deploy.run")), None)
-            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run, config=config)
+            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, backend=Backend(), run=run, config=config,
+                          only=only)
             if code:
                 return code
-            code = core.write_files(plan["files"], argv[0] == "--apply")
-            return code or core.sync_wake_files(config, run, argv[0] == "--apply")
+            return core.sync_wake_files(config, run, argv[0] == "--apply")
         finally:
             for server in servers:
                 server.close()

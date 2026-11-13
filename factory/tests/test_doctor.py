@@ -95,6 +95,21 @@ class YouTrackDoctorTest(unittest.TestCase):
                                "youtrack:field:State=In Progress": "ok"})
         self.assertEqual(set(calls), {"GET"})
 
+    def test_a_tag_past_the_first_page_is_found(self):  # #1315: youtrack.jetbrains.com has ~14,000 tags
+        import re as _re
+        names = [f"t{i}" for i in range(1500)] + ["factory:triage"]
+
+        def yt(method, path, body=None):
+            if path.startswith("/api/admin/projects?"):
+                return [{"id": "0-1", "shortName": "LME"}]
+            if path.startswith("/api/tags"):
+                skip = int(_re.search(r"\$skip=(\d+)", path)[1])
+                return [{"name": x} for x in names[skip:skip + 1000]]
+            return []
+        settings = {"tracker": {"url": "u", "project": "LME"}, "commands": {"triage": {"store": {"tag": "factory:triage"}}}}
+        got = {r["probe"]: r["result"] for r in youtrack_probes.youtrack_probes(settings, [], {"YOUTRACK_TOKEN": "x"}, yt)}
+        self.assertEqual(got["youtrack:tag:factory:triage"], "ok")
+
     def test_unset_token_is_missing(self):
         got = youtrack_probes.youtrack_probes({"tracker": {"url": "u", "project": "LME"}}, [], {})
         self.assertEqual([r["result"] for r in got], ["missing"])
@@ -199,7 +214,7 @@ class DoctorTest(unittest.TestCase):
                                     "help": "Issues read/write"}], gh)
         create = next(c for c in gh.calls if c[:2] == ["issue", "create"])
         body = create[create.index("--body") + 1]
-        self.assertTrue(body.startswith("[factory] Set `ISSUES_TOKEN` in the Air environment of `engine`."), body)
+        self.assertTrue(body.startswith("[factory]\nSet `ISSUES_TOKEN` in the Air environment of `engine`."), body)
         self.assertIn("Issues read/write", body)
         self.assertIn("as a secret", body)
 
@@ -244,7 +259,7 @@ class DoctorTest(unittest.TestCase):
             {"name": "TEAMCITY_TOKEN", "secret": True, "required": True, "description": ""},
             {"name": "FILLED", "secret": True, "required": True, "description": ""},
             {"name": "OPTIONAL", "secret": False, "required": False, "description": ""}]}
-        environ = {"TEAMCITY_URL": "", "FILLED": "s3cret-value", "OPTIONAL": ""}
+        environ = {"TEAMCITY_URL": "unset", "FILLED": "s3cret-value", "OPTIONAL": ""}  # `unset`: deploy's placeholder (#1310)
         results = doctor.run_probes(REPO, "write", data, FakeGh(), "risk:low", environ=environ)
         got = {r["probe"]: r for r in results}
         self.assertEqual([got[f"env:{n}"]["result"] for n in ("TEAMCITY_URL", "TEAMCITY_TOKEN", "FILLED")],

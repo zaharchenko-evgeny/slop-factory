@@ -82,6 +82,13 @@ class BeginEndTest(unittest.TestCase):
         code, out = self.run_cli("begin", "implement-mid", "--issue", "7", "--tracker", "memory:tickets.json")
         self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
 
+    def test_begin_takes_a_youtrack_ticket_id(self):  # #1319: a YouTrack gate owns only PROJECT-N
+        self.tracker()
+        Path("event.json").unlink()
+        self.run_cli("begin", "implement-mid", "--issue", "LME-7", "--tracker", "memory:tickets.json")
+        event = json.loads(Path(".factory/event/implement-mid.json").read_text())
+        self.assertEqual(event["issue"], {"number": "LME-7"})
+
     def test_begin_issue_number_is_in_the_copys_repository(self):
         """#1155: a copy whose main is not the tracker (slop-eval-factory) reads `--issue 98` as its own repository's
         issue; Air sets the copy's main as FACTORY_ENV_REPOSITORY."""
@@ -634,7 +641,7 @@ class EndFailureTest(unittest.TestCase):
         args = calls[0]
         self.assertEqual(args[:5], ["gh", "issue", "comment", "7", "-R"])
         body = args[args.index("--body") + 1]
-        self.assertTrue(body.startswith("[factory] end failed: node=review-low head=abc123def456 outcome=approve-low"))
+        self.assertTrue(body.startswith("[factory]\nend failed: node=review-low head=abc123def456 outcome=approve-low"))
         self.assertIn("HTTP 403", body)
 
     def test_a_memory_tracker_run_posts_nothing(self):

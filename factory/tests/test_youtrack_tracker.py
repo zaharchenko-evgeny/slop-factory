@@ -16,6 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
 import test_gate_github as contract  # noqa: E402
+from factory_plugins.youtrack import provision  # noqa: E402
 from factory_plugins.youtrack import store as yt  # noqa: E402
 
 FIXTURES = HERE / "fixtures/youtrack"
@@ -520,3 +521,139 @@ class FieldInventoryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TagColorTest(unittest.TestCase):
+    """#1363: tags get the palette color nearest to the planned hex; an owned tag of another color is recolored."""
+    TRACKER = {"url": "https://y.example", "project": "LME"}
+
+    def plan(self, tags, specs, owned=("factory:",)):
+        return {"tags": tags, "tag_specs": specs, "owned_tag_prefixes": list(owned), "tag_tracker": self.TRACKER}
+
+    def runner(self, have):
+        calls = []
+
+        def run(method, path, body=None):
+            calls.append((method, path, body))
+            if method == "GET" and path.startswith("/api/tags"):
+                return [{"id": f"id:{n}", "name": n,  # `have` is {name: background}, as YouTrack returns it
+                         **({"color": {"id": yt.TAG_COLORS[c], "background": "#" + c.upper()}} if c else {})}
+                        for n, c in have.items()]
+            return [] if method == "GET" else {}
+        return run, calls
+
+    def test_the_palette_is_the_live_one(self):  # read from youtrack.jetbrains.com (#1363)
+        self.assertEqual(len(yt.TAG_COLORS), 35)
+        self.assertEqual((yt.TAG_COLORS["1f8039"], yt.TAG_COLORS["315fbd"], yt.TAG_COLORS["27282e"]), ("3", "4", "35"))
+
+    def test_tag_color_is_the_nearest_palette_color_and_none_without_a_valid_hex(self):
+        for c in yt.TAG_COLORS:
+            self.assertEqual((yt.tag_color(c), yt.tag_color("#" + c.upper())), (c, c))
+        self.assertEqual(yt.tag_color("1d76db"), "3574f0")  # labels.colors.stages.in-dev
+        for bad in (None, "", "zzzzzz", "fff", 5):
+            self.assertIsNone(yt.tag_color(bad), bad)
+
+    def test_a_created_stage_tag_carries_the_nearest_palette_color(self):
+        run, calls = self.runner({})
+        prov = provision.Provisioner(self.plan(["factory:in-dev"], {"factory:in-dev": "1d76db"}), run)
+        self.assertEqual(prov.dry_run(), ["create tag factory:in-dev (#3574f0) in YouTrack"])
+        self.assertEqual(prov.write(), ["created tag factory:in-dev (#3574f0) in YouTrack"])
+        self.assertEqual([c for c in calls if c[0] == "POST"],
+                         [("POST", "/api/tags?fields=id,name", {"name": "factory:in-dev", "color": {"id": "29"}})])
+
+    def test_a_tag_with_no_mapped_color_is_created_without_a_color_field(self):
+        for specs in ({}, {"factory:x": None}, {"factory:x": "not-a-color"}):
+            run, calls = self.runner({})
+            provision.Provisioner(self.plan(["factory:x"], specs), run).write()
+            self.assertEqual([c[2] for c in calls if c[0] == "POST"], [{"name": "factory:x"}], specs)
+
+    def test_an_owned_tag_of_another_color_is_recolored_once_in_dry_run_and_write(self):
+        run, calls = self.runner({"factory:in-dev": "893e13", "factory:ready": None})
+        plan = self.plan(["factory:in-dev", "factory:ready"], {"factory:in-dev": "1d76db", "factory:ready": "c2e0c6"})
+        prov = provision.Provisioner(plan, run)
+        ready = yt.tag_color("c2e0c6")
+        self.assertEqual(prov.dry_run(), ["recolor tag factory:in-dev (#3574f0) in YouTrack",
+                                          f"recolor tag factory:ready (#{ready}) in YouTrack"])
+        self.assertEqual([c for c in calls if c[0] != "GET"], [])
+        prov.write()
+        self.assertEqual([c for c in calls if c[0] == "POST"],
+                         [("POST", "/api/tags/id:factory:in-dev?fields=id", {"color": {"id": "29"}}),
+                          ("POST", "/api/tags/id:factory:ready?fields=id", {"color": {"id": yt.TAG_COLORS[ready]}})])
+
+    def test_a_tag_that_has_the_planned_color_is_left_alone(self):
+        run, calls = self.runner({"factory:in-dev": "3574f0"})
+        prov = provision.Provisioner(self.plan(["factory:in-dev"], {"factory:in-dev": "1d76db"}), run)
+        self.assertEqual((prov.dry_run(), prov.write()), ([], []))
+
+    def test_a_tag_outside_the_owned_prefixes_is_never_recolored(self):
+        run, calls = self.runner({"bug": "893e13", "factory:a": "893e13"})
+        prov = provision.Provisioner(self.plan(["bug", "factory:a"], {"bug": "ff0000", "factory:a": "ff0000"}), run)
+        self.assertEqual(prov.dry_run(), [f"recolor tag factory:a (#{yt.tag_color('ff0000')}) in YouTrack"])
+        with self.assertRaises(ValueError):
+            yt.YouTrackTicketStore(run).recolor_tag("bug", "b95716", ["factory:"])
+        run, calls = self.runner({"bug": "893e13"})
+        self.assertEqual(provision.Provisioner(self.plan(["bug"], {"bug": "ff0000"}, owned=()), run).dry_run(), [])
+
+    def test_a_tag_another_project_uses_is_not_recolored(self):  # tags are account-wide
+        def run(method, path, body=None):
+            if method == "GET" and path.startswith("/api/tags"):
+                return [{"id": "id:factory:a", "name": "factory:a", "color": {"id": "1", "background": "#893E13"}}]
+            return [{"idReadable": "OTHER-1"}] if method == "GET" and path.startswith("/api/issues") else {}
+        prov = provision.Provisioner(self.plan(["factory:a"], {"factory:a": "1d76db"}), run)
+        self.assertEqual((prov.dry_run(), prov.write()), ([], []))
+
+    def test_recolor_reuses_the_listed_tag_id(self):
+        run, calls = self.runner({"factory:in-dev": "893e13"})
+        provision.Provisioner(self.plan(["factory:in-dev"], {"factory:in-dev": "1d76db"}), run).write()
+        self.assertEqual(len([c for c in calls if c[0] == "GET" and c[1].startswith("/api/tags")]), 1)
+
+
+class ListTagsPagingTest(unittest.TestCase):  # list_tags pages past the first 1000
+    def test_finds_a_tag_past_the_first_page(self):
+        import re as _re
+        names = [f"t{i}" for i in range(2500)] + ["risk:low"]
+
+        def run(method, path, body=None):
+            skip = int((_re.search(r"\$skip=(\d+)", path) or [0, 0])[1])
+            return [{"id": f"id-{n}", "name": n} for n in names[skip:skip + 1000]]
+        store = yt.YouTrackTicketStore(run)
+        self.assertEqual(store.list_tags()["risk:low"], "id-risk:low")
+        self.assertEqual(len(store.list_tags()), 2501)
+
+
+class BeginEventTest(unittest.TestCase):  # #1321: `factory begin --issue LME-7` writes the id as the number
+    def test_a_youtrack_ticket_id_is_the_ticket(self):
+        import gate
+        for extra in ({}, {"repository": {"full_name": "o/app"}}):
+            got = gate.from_trigger({"eventType": "issue.event", "issue": {"number": "LME-7"}, **extra})
+            self.assertEqual(got["ticket"], "LME-7")
+
+    def test_other_text_is_still_refused(self):
+        import gate
+        with self.assertRaises(gate.MissingNumber):
+            gate.from_trigger({"eventType": "issue.event", "issue": {"number": "seven"}})
+
+
+class HttpErrorDetailTest(unittest.TestCase):  # #1323: the error names the failing request, never the token
+    def test_a_403_names_the_method_path_and_body(self):
+        import io
+        import urllib.error
+        from unittest import mock
+        from factory_plugins.youtrack import store as yt_store
+        err = urllib.error.HTTPError("https://yt/api/issues/LME-7/comments?fields=id", 403, "Forbidden", {},
+                                     io.BytesIO(b'{"error":"Forbidden","error_description":"no Create Comment"}'))
+        with mock.patch.object(yt_store._OPENER, "open", side_effect=err):
+            run = yt_store.urllib_runner("https://yt", "perm-secret")
+            with self.assertRaises(urllib.error.HTTPError) as got:
+                run("POST", "/api/issues/LME-7/comments?fields=id", {"text": "x"})
+        text = str(got.exception)
+        self.assertIn("POST /api/issues/LME-7/comments", text)
+        self.assertIn("no Create Comment", text)
+        self.assertNotIn("perm-secret", text)
+
+
+class TriggerFiltersTest(unittest.TestCase):  # #1327: Air's YouTrack triggers take no custom field filter
+    def test_a_scoped_block_filters_by_project_only(self):
+        from factory_plugins.youtrack import contract
+        block = {"project": "LME", "scope": {"field": "Subsystem", "value": "Harbor"}}
+        self.assertEqual(contract.TRACKER.filters(block), {"youtrack": {"projectShortName": "LME"}})

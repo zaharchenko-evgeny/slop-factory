@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
+import effects  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 import plugins  # noqa: E402
 
@@ -93,7 +94,7 @@ def run_probes(repo, env, nodes, run, risk_label, which=shutil.which, has_skill=
     names = [*(declared.get("variables") or {}), *(declared.get("secrets") or []),
              *(v["name"] for v in declared.get("declared") or [] if v.get("required", True))]
     for name in dict.fromkeys(names):
-        results.append({"probe": f"env:{name}", "result": "ok" if environ.get(name) else "missing", "detail": env,
+        results.append({"probe": f"env:{name}", "result": "ok" if environ.get(name) and environ.get(name) != "unset" else "missing", "detail": env,
                         "help": (declared.get("secret_help") or {}).get(name, "")})
     return results
 
@@ -102,11 +103,11 @@ def env_ticket_body(r, run_id):
     """The readable ticket for a variable that a person must set in Air (roles/_common.md layout)."""
     name, env = r["probe"].split(":", 1)[1], r["detail"]
     why = f"- The factory's `{env}` environment declares it" + (f": {r['help']}" if r.get("help") else ".")
-    return (f"[factory] Set `{name}` in the Air environment of `{env}`. Runs there fail without it.\n\n"
-            f"Why:\n{why}\n- The doctor found it missing or empty in that environment.\n\n"
-            f"How:\n1. In Air, open Environments, then the factory environment for `{env}`.\n"
-            f"2. Add the variable `{name}` as a secret. Leave the other variables as they are.\n"
-            f"3. The next doctor run checks it again.\n\nFactory-Run: {run_id}")
+    return effects.tagged(f"Set `{name}` in the Air environment of `{env}`. Runs there fail without it.\n\n"
+                            f"Why:\n{why}\n- The doctor found it missing or empty in that environment.\n\n"
+                            f"How:\n1. In Air, open Environments, then the factory environment for `{env}`.\n"
+                            f"2. Add the variable `{name}` as a secret. Leave the other variables as they are.\n"
+                            f"3. The next doctor run checks it again.\n\nFactory-Run: {run_id}")
 
 
 def triage_label():
@@ -126,7 +127,7 @@ def close_ticket(repo, probe, run, run_id="doctor"):
                                 "--json", "number,title"]))
         for n in [i["number"] for i in found if i["title"] == title]:
             run(["issue", "close", str(n), "-R", repo, "--comment",
-                 f"[factory] `{probe}` passes again.\n\nFactory-Run: {run_id}"])
+                 effects.tagged(f"`{probe}` passes again.\n\nFactory-Run: {run_id}")])
     except Exception as e:
         print(json.dumps({"probe": "report", "result": "denied", "detail": f"{title}: {e}"[:200]}))
 
@@ -136,7 +137,7 @@ def file_tickets(repo, failed, run, run_id="doctor"):
     for r in failed:
         title = f"Doctor: {r['probe']} fails"
         body = env_ticket_body(r, run_id) if r["probe"].startswith("env:") and r["result"] == "missing" else \
-            f"[factory] `factory doctor` probe `{r['probe']}`: {r['result']}. {r['detail']}\n\nFactory-Run: {run_id}"
+            effects.tagged(f"`factory doctor` probe `{r['probe']}`: {r['result']}. {r['detail']}\n\nFactory-Run: {run_id}")
         try:
             found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--search",
                                     f'"{title}" in:title', "--json", "number,title"]))
@@ -239,6 +240,22 @@ def report_engine(repo, results, run, run_id="doctor"):
             close_ticket(repo, r["probe"], run, run_id)
 
 
+def ticket_repository(settings, env=None, defn=None):
+    """The GitHub repository the doctor and reconcile file their tickets in: `tracker.repository`, else the code host.
+    When the team's tracker is not GitHub Issues, environment `env` (FACTORY_ENV) with a GitHub Issues repository files
+    there: the run's token reaches it, the code host can be in another organization (offline-eval-factory#90)."""
+    env = os.environ.get("FACTORY_ENV") if env is None else env
+    if env and settings["tracker"].get("adapter") not in (None, "github-issues"):
+        import definition
+        if defn is None and definition.present(config.team_root()):
+            defn = definition.load(config.team_root())
+        home = next((r["repo"] for r in (definition.repositories(defn, env) if defn else [])
+                     if (r["tracker"] or {}).get("adapter") == "github-issues"), None)
+        if home:
+            return home
+    return settings["tracker"].get("repository") or config.vcs(settings)["repository"]
+
+
 def issue_run(settings):
     """The runner of the `gh`-style calls that file the doctor's tickets (hook `doctor.run`, from the tracker's plugin)."""
     return next(iter(plugins.registry(settings).hook("doctor.run")))
@@ -273,7 +290,7 @@ def main(argv=None, run=None):
         return 2
     settings = config.load()
     run = run or issue_run(settings)  # the doctor files its tickets where the tracker's plugin says
-    repo = settings["tracker"].get("repository") or config.vcs(settings)["repository"]
+    repo = ticket_repository(settings, env)
     run_id = f"doctor:{env}"
     results = run_probes(repo, env, nodes_mod.load(), run, (settings["tracker"].get("risk_labels") or {"low": "risk:low"})["low"], run_id=run_id)
     engine = engine_probes(settings) if "--engine" in (argv or []) else []

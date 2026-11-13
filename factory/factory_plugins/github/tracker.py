@@ -20,6 +20,7 @@ from pathlib import Path
 import yaml
 
 import config
+import effects
 import vocab
 from gate_port import in_ticket_repository, ticket_ref, tracker_repositories
 
@@ -347,7 +348,7 @@ class GitHubTracker:
         or (None, {}). Comments by anyone else are data, even with a marker."""
         me = self.login()
         for c in reversed(self._api_list(f"issues/{n}/comments")):
-            mine = (c.get("user") or {}).get("login") == me and c["body"].startswith("[factory]")
+            mine = (c.get("user") or {}).get("login") == me and effects.has_tag(c["body"])
             m = MARKER.search(c["body"]) if mine else None
             if m:
                 try:
@@ -369,8 +370,8 @@ class GitHubTracker:
             raise ValueError(f"issue {n}: vars must be a mapping")
         # `>` only occurs inside JSON strings; escaping it keeps `-->` from closing the marker.
         data = json.dumps(vars_, sort_keys=True).replace(">", "\\u003e")
-        body = (f"[factory] Delivery state, edited in place by the factory.\n\n<!-- factory-state {data} -->\n\n"
-                f"Factory-Run: {vars_.get('run_id') or 'local'}")
+        body = effects.tagged(f"Delivery state, edited in place by the factory.\n\n<!-- factory-state {data} -->\n\n"
+                              f"Factory-Run: {vars_.get('run_id') or 'local'}")
         cid, _ = self._state_comment(n)
         if cid is None:
             self.run(["api", f"repos/{self.repo}/issues/{n}/comments", "-f", f"body={body}"])

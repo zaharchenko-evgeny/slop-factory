@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 import lease
+from tag import has_tag
 from ports.system import Effect
 
 CLOSED_HOURS = 48  # a ticket closed on merge while its finish run was lost (#567) is found for this long
@@ -184,17 +185,24 @@ class DescriptorPort:
             raise ValueError("no project descriptor: the tracker reads states and commands from factory.project.yaml")
         return self.project.get(section) or {}
 
+    def _as_label(self, kind, kinds):
+        """#1298: a ticket-side `tag` store (YouTrack tickets in the definition) is a label on a tracker without tags,
+        so a github-issues repository beside a YouTrack one keeps its stages and commands as labels."""
+        return "label" if kind == "tag" and "tag" not in kinds and "label" in kinds else kind
+
     def _state_store(self, name):
         import project as project_mod
         states = self._entries("states")
         if name not in states:
             raise KeyError(f"unknown state: {name}")
         store = states[name]["store"]
-        return project_mod.store_kind(store), store
+        kind = self._as_label(project_mod.store_kind(store), self.state_kinds)
+        return kind, ({"label": store["tag"]} if kind == "label" and "tag" in store and "label" not in store else store)
 
     def _command(self, name):
         import workflow
         _, kind, value = workflow.resolve(self._entries("commands"), name)
+        kind = self._as_label(kind, self.command_kinds)
         if kind not in self.command_kinds:
             raise UnsupportedStore(f"command {name}: this tracker has no {kind} store")
         return kind, value
@@ -203,7 +211,8 @@ class DescriptorPort:
         """The ticket's state held in a ticket store (label, field or tag), else `none`."""
         stage = self.facts(ticket)["stage"]
         states = self._entries("states")
-        return stage if stage in states and any(k in (states[stage].get("store") or {}) for k in self.state_kinds) else "none"
+        kinds = (*self.state_kinds, *(("tag",) if "label" in self.state_kinds else ()))  # #1298: a tag is a label here
+        return stage if stage in states and any(k in (states[stage].get("store") or {}) for k in kinds) else "none"
 
     def pr_states(self, ticket):
         """The PR-fact states (`store: {pr: ...}`) that hold for the ticket's PR."""
@@ -227,7 +236,7 @@ class DescriptorPort:
         facts, found = self.facts(ticket), []
         attrs = facts.get("attrs") or []
         held = {"label": attrs, "tag": attrs, "pr_label": facts.get("pr_labels") or []}
-        held = {k: v for k, v in held.items() if k in self.command_kinds}
+        held = {k: v for k, v in held.items() if k in self.command_kinds or self._as_label(k, self.command_kinds) == "label"}
         for name, entry in self._entries("commands").items():
             store = entry.get("store") or {}
             kind = next(iter(store), None)
@@ -384,27 +393,6 @@ class MemorySystem(DescriptorPort):
         return sorted(k for k, t in self.tickets.items() if self.get_stage(t) in stages
                       and not (open_only and t.get("issue_state", "open") != "open"))
 
-    def consistency_view(self):
-        """Reconcile's consistency pass over the records: a record's `labels` (else its `attrs` plus its stage's label),
-        its `prs` (else its `pr`, `pr_state` and `branch`) and its `issue_state`."""
-        import vocab
-        tickets, orphans = [], []
-        for k, t in sorted(self.tickets.items(), key=lambda kv: str(kv[0])):
-            prs = t.get("prs") or ([{"pr": t["pr"], "pr_state": t.get("pr_state", "open")}]
-                                   if t.get("pr") else [])
-            prs = [{"number": p["pr"], "state": p["pr_state"], "branch": p.get("branch") or f"ez/{k}-x"} for p in prs]
-            stage = self.get_stage(t)
-            stage_label = [vocab.stage(stage)] if stage in vocab._tracker()["stages"] else []
-            labels = t["labels"] if "labels" in t else list(dict.fromkeys([*t.get("attrs", []), *stage_label]))
-            if t.get("issue_state", "open") == "open":
-                tickets.append({"number": k, "labels": labels, "updated_at": t.get("updated_at"), "prs": prs})
-            else:
-                orphans += [{"number": p["number"], "ticket": k} for p in prs if p["state"] == "open"]
-        return {"tickets": tickets, "orphan_prs": orphans}
-
-    def comment_bodies(self, n, pr=None):
-        return [json.loads(v) for kind, v in self._t(n).get("log", []) if kind == "comment"]
-
     def close_ticket(self, n):
         self._t(n)["issue_state"] = "closed"
 
@@ -479,7 +467,7 @@ class MemorySystem(DescriptorPort):
         t = self._t(ticket)
         sent = [json.loads(v) for k, v in t.get("log", []) if k == "comment"]
         return {**self.facts(ticket), **{k: t.get(k) for k in ("since", "stage_at", "command", "command_at", "commit_at", "ci_label", "command_pending", "pr_state", "issue_state", "label_at") if k in t},
-                "recover_comments": [c for c in sent if c.startswith(("[factory] recover:", "[factory] reconcile:", "[factory] end failed:"))]}
+                "recover_comments": [c for c in sent if any(has_tag(c, p) for p in ("recover:", "reconcile:", "end failed:"))]}
 
     def apply(self, effect):
         import effects

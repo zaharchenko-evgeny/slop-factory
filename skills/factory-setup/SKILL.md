@@ -84,7 +84,9 @@ branch protection). Ask only for decisions.
 `render.py ANSWERS.json OUT_DIR` writes a team from `template/`:
 `factory.yaml`, `workflow.yaml`, `roles/`, `skills/` (the local skills the
 definition names), `.air/cloud/startup.sh` (the Air
-startup script, which runs `factory setup`), `.github/workflows/factory-workflow-check.yml` (runs
+startup script, which runs `factory setup`), `environments/setup.sh` (the `setup:` of the environments that check
+out the team repository; it installs Node and Java, which `factory check-workflow` needs, and the environment's other
+tools go there), `.github/workflows/factory-workflow-check.yml` (runs
 `factory check-workflow` on pull requests, so a hand edit of `workflow.yaml` stays valid) and `README.md`, replacing every
 `{{NAME}}` placeholder with the interview answer (a missing answer is an
 error; Jinja's `{{ name }}` in role bodies is rendered later, by setup).
