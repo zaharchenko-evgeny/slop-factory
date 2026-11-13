@@ -10,6 +10,7 @@ from pathlib import Path
 
 import yaml
 
+import effects
 import plugins  # ADR-0026: a plugin's code is imported when the core calls it
 import scopes
 
@@ -1303,8 +1304,8 @@ def plan(graph, facts, auto_merge=None, default_tier="mid", blockers="start", st
         if bad := [c for c in kids if c["blocked"] or c["not_planned"]]:
             if allowed("finish", "child-blocked"):
                 what = ", ".join(f"#{c['number']} ({'closed as not planned' if c['not_planned'] else 'blocked'})" for c in bad)
-                return "finish", "child-blocked", {"reason": f"[factory] Blocked: child tickets need a person: {what}. "
-                                                             f"Fix them, then set {gate.vocab.stage('ready')} on this ticket."}
+                return "finish", "child-blocked", {"reason": effects.tagged(f"Blocked: child tickets need a person: {what}. "
+                                                                          f"Fix them, then set {gate.vocab.stage('ready')} on this ticket.")}
         elif all(c["state"] == "closed" for c in kids) and allowed("finish", "children-done"):
             return "finish", "children-done", {}
     if stage == "in-review" and allowed("join", "waiting") and facts.get("waiting_reviewers") \

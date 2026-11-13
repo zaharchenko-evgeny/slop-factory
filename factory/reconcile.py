@@ -19,10 +19,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
+import effects
 import definition
 import vocab
 
-PREFIX = "[factory] reconcile:"
+PREFIX = "reconcile:"
 SYSTEMIC_MISSES = 3  # second misses in one run that mean the factory, not the tickets, is broken
 RUN = "reconcile"
 LOST_FINISH = ("approved", "in-review", "changes-requested")
@@ -41,9 +42,9 @@ def ticket_error(tracker, number, error, dry_run=False):
             comments = [c["body"] for c in store.comments(number)]
         else:
             comments = [json.loads(value) for kind, value in store[number].get("log", []) if kind == "comment"]
-        if not any(comment.startswith(FACTS_ERROR) for comment in comments):
+        if not any(effects.has_tag(comment, FACTS_ERROR) for comment in comments):
             tracker.apply({"ticket": number, "run_id": RUN, "kind": "comment",
-                           "value": f"{FACTS_ERROR} {result['error']}"})
+                           "value": effects.tagged(f"{FACTS_ERROR} {result['error']}")})
     except Exception as comment_error:
         result["comment_error"] = f"{type(comment_error).__name__}: {comment_error}"
     return result
@@ -108,9 +109,9 @@ def stuck_label(wakes, nodes, facts, on_pr, ago):
 
 
 def last_end_failure(facts, node, head):
-    """The error block of the last `[factory] end failed:` comment for `node` at `head`, else None (#997)."""
+    """The error block of the last `[factory]` `end failed:` comment for `node` at `head`, else None (#997)."""
     for c in reversed(facts.get("recover_comments", [])):
-        if c.startswith("[factory] end failed:") and f"node={node} " in c and f"head={head} " in c:
+        if effects.has_tag(c, "end failed:") and f"node={node} " in c and f"head={head} " in c:
             body = c.split("\n", 1)[1] if "\n" in c else ""
             return body.split("The outcome did not land")[0].strip() or "no error output"
     return None
@@ -121,26 +122,28 @@ def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="change
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
     if kind == "end-failed":
         apply(kind="label", value=vocab.needs_human())
-        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} end failed, not re-fired: {why}\n"
-                                    f"Options: fix the cause (a new head, a token, a setting), then set {vocab.stage('ready')} "
-                                    f"or re-add `{label}`.")
+        apply(kind="comment", value=effects.tagged(
+            f"{PREFIX} stage={stage} head={head} end failed, not re-fired: {why}\n"
+            f"Options: fix the cause (a new head, a token, a setting), then set {vocab.stage('ready')} "
+            f"or re-add `{label}`."))
         apply(kind="stage", value="blocked")
     elif kind == "stuck":
         apply(kind="label", value=vocab.needs_human())
-        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} stuck: {why}\nOptions: fix the cause and set "
-                                    f"{vocab.stage('ready')}, or remove `{label}` and move the ticket by hand.")
+        apply(kind="comment", value=effects.tagged(
+            f"{PREFIX} stage={stage} head={head} stuck: {why}\nOptions: fix the cause and set "
+            f"{vocab.stage('ready')}, or remove `{label}` and move the ticket by hand."))
         apply(kind="stage", value="blocked")
     elif kind == "conflict":
         apply(kind="label", value=label or vocab.cmd("fix-<tier>", "cheap"), on="pr")
         apply(kind="stage", value=fix_stage)
     elif kind == "blocked":
         apply(kind="label", value=vocab.needs_human())
-        apply(kind="comment", value=f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets {vocab.stage('ready')}.")
+        apply(kind="comment", value=effects.tagged(f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets {vocab.stage('ready')}."))
         apply(kind="stage", value="blocked")
     else:  # the comment last: the counter for the second miss
         apply(kind="unlabel", value=label, on=on)
         apply(kind="label", value=label, on=on)
-        apply(kind="comment", value=f"{PREFIX} stage={stage} head={head} re-fired {label} ({why})")
+        apply(kind="comment", value=effects.tagged(f"{PREFIX} stage={stage} head={head} re-fired {label} ({why})"))
 
 
 def _outcome_effects(node):
@@ -281,7 +284,7 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
                     tracker.apply({"ticket": n, "run_id": RUN, "kind": "unlabel", "value": label, "on": on})
                     tracker.apply({"ticket": n, "run_id": RUN, "kind": "label", "value": label, "on": on})
                     tracker.apply({"ticket": n, "run_id": RUN, "kind": "comment",  # the comment last: once per head
-                                   "value": f"{PREFIX} stage={stage} head={head} {EXTERNAL_LATE} {label} ({why})"})
+                                   "value": effects.tagged(f"{PREFIX} stage={stage} head={head} {EXTERNAL_LATE} {label} ({why})")})
                 if progress:
                     progress(r)
                 continue

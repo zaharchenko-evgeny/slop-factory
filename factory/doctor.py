@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
+import effects  # noqa: E402
 import nodes as nodes_mod  # noqa: E402
 import plugins  # noqa: E402
 
@@ -102,11 +103,11 @@ def env_ticket_body(r, run_id):
     """The readable ticket for a variable that a person must set in Air (roles/_common.md layout)."""
     name, env = r["probe"].split(":", 1)[1], r["detail"]
     why = f"- The factory's `{env}` environment declares it" + (f": {r['help']}" if r.get("help") else ".")
-    return (f"[factory] Set `{name}` in the Air environment of `{env}`. Runs there fail without it.\n\n"
-            f"Why:\n{why}\n- The doctor found it missing or empty in that environment.\n\n"
-            f"How:\n1. In Air, open Environments, then the factory environment for `{env}`.\n"
-            f"2. Add the variable `{name}` as a secret. Leave the other variables as they are.\n"
-            f"3. The next doctor run checks it again.\n\nFactory-Run: {run_id}")
+    return effects.tagged(f"Set `{name}` in the Air environment of `{env}`. Runs there fail without it.\n\n"
+                            f"Why:\n{why}\n- The doctor found it missing or empty in that environment.\n\n"
+                            f"How:\n1. In Air, open Environments, then the factory environment for `{env}`.\n"
+                            f"2. Add the variable `{name}` as a secret. Leave the other variables as they are.\n"
+                            f"3. The next doctor run checks it again.\n\nFactory-Run: {run_id}")
 
 
 def triage_label():
@@ -126,7 +127,7 @@ def close_ticket(repo, probe, run, run_id="doctor"):
                                 "--json", "number,title"]))
         for n in [i["number"] for i in found if i["title"] == title]:
             run(["issue", "close", str(n), "-R", repo, "--comment",
-                 f"[factory] `{probe}` passes again.\n\nFactory-Run: {run_id}"])
+                 effects.tagged(f"`{probe}` passes again.\n\nFactory-Run: {run_id}")])
     except Exception as e:
         print(json.dumps({"probe": "report", "result": "denied", "detail": f"{title}: {e}"[:200]}))
 
@@ -136,7 +137,7 @@ def file_tickets(repo, failed, run, run_id="doctor"):
     for r in failed:
         title = f"Doctor: {r['probe']} fails"
         body = env_ticket_body(r, run_id) if r["probe"].startswith("env:") and r["result"] == "missing" else \
-            f"[factory] `factory doctor` probe `{r['probe']}`: {r['result']}. {r['detail']}\n\nFactory-Run: {run_id}"
+            effects.tagged(f"`factory doctor` probe `{r['probe']}`: {r['result']}. {r['detail']}\n\nFactory-Run: {run_id}")
         try:
             found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--search",
                                     f'"{title}" in:title', "--json", "number,title"]))

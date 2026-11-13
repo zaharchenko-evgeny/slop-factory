@@ -214,7 +214,7 @@ class DoctorTest(unittest.TestCase):
                                     "help": "Issues read/write"}], gh)
         create = next(c for c in gh.calls if c[:2] == ["issue", "create"])
         body = create[create.index("--body") + 1]
-        self.assertTrue(body.startswith("[factory] Set `ISSUES_TOKEN` in the Air environment of `engine`."), body)
+        self.assertTrue(body.startswith("[factory]\nSet `ISSUES_TOKEN` in the Air environment of `engine`."), body)
         self.assertIn("Issues read/write", body)
         self.assertIn("as a secret", body)
 

@@ -396,7 +396,7 @@ def intake_fields(h):
                 f"{proposed}" if proposed.strip() not in ("", "none") else "")
     return {"complexity": "small" if n <= 150 else "medium" if n <= 400 else "large",
             "tier": "cheap" if n <= 150 else "mid" if n <= 400 else "strong",
-            "questions": f"[factory] Needs answers before work starts: {h.get('reason', '')}{proposal}",
+            "questions": effects_mod.tagged(f"Needs answers before work starts: {h.get('reason', '')}{proposal}"),
             "children": slices(h.get("slices"))}
 
 
@@ -427,7 +427,7 @@ def lesson_effects(ticket, node, payload):
         return []
     lines = [f"- [{x.get('scope', 'project')}] {x.get('about') or 'general'}: {' '.join(str(x['text']).split())}"
              + (f" (evidence: {x['evidence']})" if x.get("evidence") else "") for x in lessons]
-    body = f"[factory] Lessons from `{node}`\n{LESSON_MARKER}\n" + "\n".join(lines)
+    body = effects_mod.tagged(f"Lessons from `{node}`\n{LESSON_MARKER}\n" + "\n".join(lines))
     if payload.get("run_id"):
         body += f"\n\nFactory-Run: {payload['run_id']}"
     return [{"kind": "comment", "ticket": ticket, "value": body}, {"kind": "label", "ticket": ticket, "value": vocab.lesson()}]
@@ -488,7 +488,7 @@ def decide(name, ticket, tracker, nodes, dry_run=False):
             continue
         if dry_run:  # the outcome whose guards hold, nothing written
             return GO, {"outcome": outcome, "applied": False, "dry_run": True}
-        payload = {"ticket": ticket, "reason": f"[factory] {name}: {outcome}"}
+        payload = {"ticket": ticket, "reason": effects_mod.tagged(f"{name}: {outcome}")}
         status, res = apply(name, outcome, payload, tracker, nodes)
         return status, {"outcome": outcome, **res}
     return NO_GO, {"outcome": None, "applied": False, "reason": "no outcome's guards hold"}
@@ -864,7 +864,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             payload = {**payload, "next tier": tiers[i]}
         elif outcome == "escalate" and "unresolvable" in node["outcomes"]:  # no higher tier: a person decides
             outcome = "unresolvable"
-            payload = {**payload, "reason": payload.get("reason") or f"[factory] Blocked: the {payload['tier']} tier could not resolve it and no higher tier exists. A person decides."}
+            payload = {**payload, "reason": payload.get("reason") or effects_mod.tagged(f"Blocked: the {payload['tier']} tier could not resolve it and no higher tier exists. A person decides.")}
     out = node["outcomes"][outcome]
     if out.get("if") and not guard_holds(out["if"], tracker.facts(ticket), tracker, ticket):
         if out.get("else") not in node["outcomes"]:
@@ -997,7 +997,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         except Exception as error:
             if written:
                 report = {"kind": "comment", "ticket": ticket, "on": "pr",
-                          "value": f"[factory] Outcome stopped after these effects landed: {', '.join(written)}.",
+                          "value": effects_mod.tagged(f"Outcome stopped after these effects landed: {', '.join(written)}."),
                           "run_id": payload.get("run_id") or "gate:partial-outcome"}
                 try:
                     tracker.apply(report)
@@ -1083,11 +1083,11 @@ def stop_reason(facts, fix=False):
     """Why no further developer run may start for this ticket, else None: the spend guard, and for a fix
     round the fix-round cap (`limits.fix_rounds`)."""
     if facts.get("agent_runs", 0) >= facts.get("run_cap", 8):
-        return (f"[factory] Stopped: {facts['agent_runs']} developer runs since the last {vocab.stage('ready')} reached "
-                f"limits.agent_runs_per_ticket. A person decides, then sets {vocab.stage('ready')}.")
+        return effects_mod.tagged(f"Stopped: {facts['agent_runs']} developer runs since the last {vocab.stage('ready')} reached "
+                                  f"limits.agent_runs_per_ticket. A person decides, then sets {vocab.stage('ready')}.")
     if fix and facts.get("fix_rounds", 0) >= facts.get("fix_cap", 3):
-        return (f"[factory] Stopped: {facts['fix_rounds']} fix rounds reached limits.fix_rounds and the review "
-                f"still requests changes. A person decides, then sets {vocab.stage('ready')}.")
+        return effects_mod.tagged(f"Stopped: {facts['fix_rounds']} fix rounds reached limits.fix_rounds and the review "
+                                  f"still requests changes. A person decides, then sets {vocab.stage('ready')}.")
     return None
 
 
@@ -1112,7 +1112,7 @@ def merge_decision(facts, auto_merge):
         return None
     if not auto_merge.get("enabled") or RISK_RANK.get(facts.get("risk", "high"), 1) > RISK_RANK.get(auto_merge.get("max_risk"), -1):
         next_step = f"Merge PR #{facts['pr']}" if facts.get("pr") else "waiting for a person to merge"
-        return "waiting", {"reason": f"[factory] {next_step}: auto-merge is off or this PR exceeds its risk limit."}
+        return "waiting", {"reason": effects_mod.tagged(f"{next_step}: auto-merge is off or this PR exceeds its risk limit.")}
     return ("updated" if facts.get("behind") else "merged"), {}
 
 
@@ -1251,10 +1251,10 @@ def sweep(tracker, nodes, dry_run=False, closed_ticket=None, auto_merge=None, de
                     if dry_run:
                         continue
                     effects = ({"kind": "comment", "ticket": n, "run_id": "finish:re-triage",
-                                "value": f"[factory] Blocker #{source} was closed as not planned; re-triage this ticket"},
+                                "value": effects_mod.tagged(f"Blocker #{source} was closed as not planned; re-triage this ticket")},
                                {"kind": "stage", "ticket": n, "value": "triage"}) if not_planned else ({"kind": "unlabel", "ticket": n, "value": vocab.stage("ready")},
                                    {"kind": "label", "ticket": n, "value": vocab.stage("ready")},
-                                   {"kind": "comment", "ticket": n, "value": f"[factory] unblocked by #{source}",
+                                   {"kind": "comment", "ticket": n, "value": effects_mod.tagged(f"unblocked by #{source}"),
                                     "run_id": "finish:unblocked"})
                     for effect in effects:
                         tracker.apply(effect)
@@ -1274,7 +1274,7 @@ def prefetch(tracker, numbers):
 
 
 STALE_STAGES = ("triage", "ready", "in-dev", "in-review", "changes-requested", "approved")
-RECOVER = "[factory] recover:"
+RECOVER = "recover:"
 
 
 def recovered(facts, stage):
@@ -1360,7 +1360,7 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                 r["applied"] = out["applied"]
             elif kind == "comment":
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
-                                              "value": f"{RECOVER} stage={stage} {why}"})
+                                              "value": effects_mod.tagged(f"{RECOVER} stage={stage} {why}")})
             elif kind == "human":
                 if vocab.needs_human() in facts.get("attrs", []):
                     if progress:
@@ -1368,19 +1368,19 @@ def sweep_stale(tracker, nodes, hours, now=None, dry_run=False, command_minutes=
                     continue  # preserve an existing human wait and its assignee
                 tracker.apply({"ticket": n, "kind": "label", "value": vocab.needs_human()})
                 tracker.apply({"ticket": n, "kind": "label", "value": vocab.needs_human(), "on": "pr"})
-                text = f"{RECOVER} stage={stage}: {why}. A person decides, then sets {vocab.stage('ready')}."
+                text = effects_mod.tagged(f"{RECOVER} stage={stage}: {why}. A person decides, then sets {vocab.stage('ready')}.")
                 r["applied"] = tracker.apply({"ticket": n, "kind": "comment", "run_id": run, "value": text})
             elif recovered(facts, stage):
                 r["recover"] = "blocked"
                 _, out = apply("recover", "blocked", {"ticket": n, "run_id": run,
-                                                          "reason": f"[factory] Stopped: the node did not respond twice in {stage}. A person decides, then sets {vocab.stage('ready')}."},
+                                                          "reason": effects_mod.tagged(f"Stopped: the node did not respond twice in {stage}. A person decides, then sets {vocab.stage('ready')}.")},
                                tracker, nodes)
                 r["applied"] = out["applied"]
             else:  # the comment last: for `ready` the re-added stage label starts the stage, and the comment must follow it
                 tracker.apply({"ticket": n, "kind": "unlabel", "value": label, "on": on})
                 r["applied"] = tracker.apply({"ticket": n, "kind": "label", "value": label, "on": on})
                 tracker.apply({"ticket": n, "kind": "comment", "run_id": run,
-                               "value": f"{RECOVER} stage={stage} re-fired {label} ({why})"})
+                               "value": effects_mod.tagged(f"{RECOVER} stage={stage} re-fired {label} ({why})")})
             if progress:
                 progress(r)
         except Exception as e:  # one ticket failing does not stop the others

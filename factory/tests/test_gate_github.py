@@ -734,7 +734,7 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(tr(gh).apply(eff("review", "request-changes-at-head", focus="full", round=1,
                                          summary="Close.", findings=found, run_id="r9")))
         body = gh.writes[0][-1].removeprefix("body=")
-        self.assertEqual(body.split("\n\n")[0], "[factory] Close.")
+        self.assertEqual(body.split("\n\n")[0], "[factory]\nClose.")
         self.assertLess(body.index("**B1** b.py:9 — crashes on empty"), body.index("**M1** a.py:2 — name it"))
         self.assertTrue(body.endswith("Factory-Run: r9"))
         gh = FakeGh(reviews=[review(BOT, body)])  # the longer body still parses
@@ -825,7 +825,7 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(any(c[:2] == ["issue", "create"] and "Deploy needed" in c for c in calls))
         create = next(c for c in calls if c[:2] == ["issue", "create"])
         body = create[create.index("--body") + 1]
-        self.assertTrue(body.startswith("[factory] "))
+        self.assertTrue(body.startswith("[factory]\n"))
         self.assertTrue(body.endswith("Factory-Run: finish:300"))
 
     def test_nodes_yaml_on_pr_reaches_the_effect(self):
