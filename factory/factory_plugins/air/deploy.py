@@ -307,6 +307,16 @@ class Backend:
     def get_automation(self, automation_id: str) -> dict:
         return self.request("GET", f"/automations/{urllib.parse.quote(automation_id, safe='')}")
 
+    def list_automations(self) -> list[dict]:
+        """Every personal automation, page by page (`cursor`): the MCP `list_automations` stops at LIST_CAP (#1347)."""
+        out, cursor = [], None
+        while True:
+            page = self.request("GET", "/automations?limit=100" + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else ""))
+            out += page.get("automations") or []
+            cursor = page.get("nextCursor")
+            if not page.get("hasMore") or not cursor:
+                return out
+
     @staticmethod
     def _settled(call, attempts: int, pause: float):
         """`call()`, retried while Air answers 403 or 404: an automation created a moment ago does until it settles,
@@ -467,6 +477,8 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, bac
     listed = automations.call("list_automations", {"privacy": "private"})
     automation_items = listed if isinstance(listed, list) else listed["personal"]
     capped = len(automation_items) >= LIST_CAP
+    if capped and backend:  # the REST API pages: the full list, so nothing is `unknown` (#1347)
+        automation_items, capped = [x for x in backend.list_automations() if not x.get("projectId")], False
     automation_items = Listed(automation_detail(automations.call("get_automation", {"automationId": x["automationId"]}))
                               for x in automation_items if x["name"].startswith(prefix))
     automation_items.capped = capped
@@ -631,7 +643,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     repo_urls = repository_urls(plan)
     env_repositories = {e["name"]: e["repository"] for e in plan["environments"]}
     additional_names = {a["name"] for a in plan["automations"] if "additionalRepositories" in a}
-    backend = backend or (Backend() if additional_names else None)
+    backend = backend or (Backend() if additional_names else None)  # main passes one: a capped list pages through it
     state = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                        additional_names=additional_names)
     capped = getattr(state[0], "capped", False)
@@ -759,7 +771,8 @@ def main(argv: list[str]) -> int:
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
             run = next((hook(config) for hook in plugins.registry(config).hook("deploy.run")), None)
-            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run, config=config, only=only)
+            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, backend=Backend(), run=run, config=config,
+                          only=only)
             if code:
                 return code
             return core.sync_wake_files(config, run, argv[0] == "--apply")
