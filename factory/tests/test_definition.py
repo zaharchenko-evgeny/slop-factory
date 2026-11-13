@@ -277,6 +277,26 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(c["environments"]["b"]["writable"], ["c"])
         self.assertNotIn("tracker", c["environments"]["b"])  # a place, not a #1069 project environment
 
+    def test_scoped_project_and_unscoped_intake_keep_separate_places_for_one_repository(self):
+        yt = {"adapter": "youtrack", "url": "https://yt", "project": "LME"}
+        scoped = {**yt, "scope": {"field": "Subsystem", "value": "JBeval"}}
+        self.edit("factory.yaml", lambda f: (
+            f.update(tracker=yt),
+            self._envs(f, engine=[("o/jbeval", {"write": True, "tracker": scoped})],
+                       intake=[("o/jbeval", {"tracker": {"adapter": "youtrack"}})])))
+        config = definition.config(definition.load(self.root))
+        places = config["ticket_places"]
+        self.assertEqual([(p["repository"], p["tracker"].get("scope")) for p in places],
+                         [("o/jbeval", scoped["scope"]), ("o/jbeval", None)])
+        envs, _ = gate.place_keys(config)
+        self.assertEqual(list(envs), ["place:o/jbeval", "place:o/jbeval#2"])
+        self.assertEqual(gate.run_place(config, "engine", envs), "place:o/jbeval")
+        self.assertIsNone(gate.run_place(config, "intake", envs))
+        scoped_tracker, _ = gate.place_systems(config, "place:o/jbeval", yt_run=lambda *a, **k: [], run=lambda *a, **k: "")
+        intake_tracker, _ = gate.place_systems(config, "place:o/jbeval#2", yt_run=lambda *a, **k: [], run=lambda *a, **k: "")
+        self.assertEqual(scoped_tracker.tickets.scope, scoped["scope"])
+        self.assertIsNone(intake_tracker.tickets.scope)
+
     def test_github_issues_home_under_a_youtrack_top_tracker_is_its_own_place(self):
         """#1325: offline-eval-factory has LME (YouTrack) on top and one repository on its own GitHub issues. That home
         is a GitHub Issues place; on the top tracker it took YouTrack's adapter, and no number was in any scope."""
