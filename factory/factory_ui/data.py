@@ -380,7 +380,12 @@ class SnapshotStore:
                         'name': self.config.get('project', {}).get('name') or 'Factory'}
         self.structure = project_graph(self.config, self.graph)
 
-    def read_source(self, source, now, older=False):
+    def read_source(self, source, now, older=False, progress=None):
+        def report(phase, *, completed_tickets=0, total_tickets=None, error_count=None):
+            if progress is not None:
+                progress(source, phase, completed_tickets=completed_tickets,
+                         total_tickets=total_tickets, error_count=error_count)
+
         previous = self.cache.get(source.id) or {'tickets': {}, 'updatedAt': None}
         tickets, errors = {}, []
         try:
@@ -389,14 +394,18 @@ class SnapshotStore:
             kinds = self.config['tracker'].get('stage_kinds') or {}
             active = tuple(s for s in self.config['tracker']['stages'] if kinds.get(s) != 'final')
             final = tuple(s for s in self.config['tracker']['stages'] if kinds.get(s) == 'final')
+            report('listing')
             ids = tracker.find(Query('stage', values=active, closed_hours=None)) if active else []
             if final:
                 ids += tracker.find(Query('stage', values=final, closed_hours=None, updated_hours=None if older else 168))
             ids = list(dict.fromkeys(ids))
+            report('listing', total_tickets=len(ids))
+            report('prefetch', total_tickets=len(ids))
             if hasattr(tracker, 'prefetch'):
                 tracker.prefetch(ids)
             plan = plan_local(self.graph, self.config)
             try:
+                report('events', total_tickets=len(ids), error_count=len(errors))
                 events = []
                 views = [tracker.at(repo) for repo in tracker.ticket_repos] if scopes.adapter(source.block) != 'youtrack' and hasattr(tracker, 'at') else [tracker]
                 for view in views:
@@ -405,6 +414,8 @@ class SnapshotStore:
             except Exception as exc:
                 events = None
                 errors.append(f'Trigger evidence unavailable ({type(exc).__name__})')
+            report('tickets', total_tickets=len(ids), error_count=len(errors))
+            completed_tickets = 0
             for ticket_id in ids:
                 try:
                     record = tracker.read(Subject('ticket', ticket_id, scope=getattr(tracker, 'scope', None)))
@@ -421,6 +432,10 @@ class SnapshotStore:
                     for key, old in previous['tickets'].items():
                         if old['id'] in (str(ticket_id), '#' + str(ticket_id)):
                             tickets[key] = old
+                finally:
+                    completed_tickets += 1
+                    report('tickets', completed_tickets=completed_tickets,
+                           total_tickets=len(ids), error_count=len(errors))
             updated = stamp(self.now()) if not errors else previous['updatedAt']
         except Exception as exc:
             tickets = previous['tickets']
@@ -431,7 +446,7 @@ class SnapshotStore:
                 errors.append(f'Source unavailable ({type(exc).__name__}). Check server credentials, network and tracker access.')
         return source, tickets, updated, list(dict.fromkeys(errors))
 
-    def snapshot(self, older=False):
+    def snapshot(self, older=False, progress=None):
         if not self.lock.acquire(blocking=False):
             if self.latest:
                 return self.visible({**self.latest, 'stale': True}, older)
@@ -439,8 +454,16 @@ class SnapshotStore:
         try:
             now = self.now()
             statuses, merged = [], {}
+            def read_one(source):
+                result = self.read_source(source, now, older, progress=progress)
+                if progress is not None:
+                    _, _, _, errors = result
+                    progress(source, 'complete', completed_tickets=None,
+                             total_tickets=None, error_count=len(errors))
+                return result
+
             with ThreadPoolExecutor(max_workers=min(4, max(1, len(self.sources)))) as pool:
-                results = list(pool.map(lambda s: self.read_source(s, now, older), self.sources))
+                results = list(pool.map(read_one, self.sources))
             for source, tickets, updated, errors in results:
                 self.cache[source.id] = {'tickets': tickets, 'updatedAt': updated}
                 statuses.append({'id': source.id, 'name': source.name, 'ok': not errors,

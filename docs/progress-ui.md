@@ -97,12 +97,32 @@ become links. If a PR read fails, ticket details warn that PR evidence may be
 stale; an empty PR list then does not confirm that no PR exists. Do not present
 unknown as a positive or negative result.
 
+## Snapshot loading and refresh
+
+The browser starts a background read with `GET /api/snapshot?refresh=1` when it
+opens, and when the user or auto refresh asks for new data. The server returns
+the last cached snapshot and the refresh status at once. The browser shows that
+snapshot while the server reads sources. If no cached snapshot exists, the page
+shows source progress until it can show data.
+
+The browser reads `GET /api/status` while the requested run is active. When the
+server reports a snapshot for that run, the browser reads `/api/snapshot`
+without `refresh=1` and replaces the cached data. A snapshot read without
+`refresh=1` never starts a new read. Add `older=1` to these requests to use the
+older snapshot scope.
+
+The progress bar counts sources marked complete. It does not show an estimate
+or elapsed-time percentage. Each source row shows its current step and ticket
+counts when the server knows them. A completed source with errors shows a
+warning count. If the source list has not arrived, the progress bar stays
+indeterminate and the page does not show a ticket count.
+
 If the first snapshot cannot load, the page shows an error and a retry action.
-If a source fails during a snapshot refresh, the page keeps the last available
-snapshot and shows a warning with the source error. An unavailable older
-snapshot shows an inline error and a retry action. If a later snapshot request
-fails, the page keeps the previous snapshot and shows a refresh error. Do not
-present a missing field or source error as an empty, complete result.
+If a later refresh fails, the page keeps the last available snapshot and shows
+an error with a retry action. An older-snapshot load keeps the current view in
+place until older data is available. If an older snapshot cannot load, the page
+shows an inline error and a retry action. Do not present a missing field or
+source error as an empty, complete result.
 
 ## Startup
 

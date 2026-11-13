@@ -30,7 +30,15 @@ const TicketDetails = lazy(async () => {
   const module = await import('@/components/TicketDetails')
   return { default: module.TicketDetails }
 })
-import { snapshotSchema, type Snapshot, type Ticket } from './model'
+import { type Snapshot, type Ticket } from './model'
+import { Progress } from '@/components/ui/progress'
+import {
+  refreshSnapshot as loadUpdatedSnapshot,
+  refreshSourceLabel,
+  summarizeRefresh,
+  type RefreshStatus,
+  type SnapshotScope,
+} from './refresh'
 import {
   defaultPreferences,
   filteredTickets,
@@ -70,49 +78,75 @@ function App() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [olderError, setOlderError] = useState<string | null>(null)
   const [olderLoading, setOlderLoading] = useState(false)
+  const [refreshStatuses, setRefreshStatuses] = useState<Record<SnapshotScope, RefreshStatus | null>>({ latest: null, older: null })
+  const [busyScopes, setBusyScopes] = useState<ReadonlySet<SnapshotScope>>(() => new Set())
   const [preferences, setPreferences] = useState<Preferences>(defaultPreferences)
   const [loadedFactoryId, setLoadedFactoryId] = useState<string | null>(null)
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null)
-  const inFlight = useRef(false)
+  const inFlight = useRef(new Map<SnapshotScope, { key: symbol; promise: Promise<boolean> }>())
+  const controllers = useRef(new Map<SnapshotScope, AbortController>())
   const alive = useRef(true)
   const registeredViews = useProgressViews()
 
   const refreshSnapshot = useCallback(async (older: boolean) => {
-    if (inFlight.current) return false
-    inFlight.current = true
-    setFetching(true)
-    if (older) {
-      setOlderLoading(true)
-      setOlderError(null)
-    } else {
-      setLoadError(null)
-    }
-    try {
-      const response = await fetch(older ? '/api/snapshot?older=1' : '/api/snapshot', { cache: 'no-store' })
-      if (!response.ok) throw new Error(`Snapshot request failed (${response.status} ${response.statusText}).`)
-      const body: unknown = await response.json()
-      const parsed = snapshotSchema.parse(body)
-      if (!alive.current) return false
+    const scope: SnapshotScope = older ? 'older' : 'latest'
+    const existing = inFlight.current.get(scope)
+    if (existing !== undefined) return existing.promise
+
+    const controller = new AbortController()
+    const key = Symbol(scope)
+    controllers.current.set(scope, controller)
+    const request = async (): Promise<boolean> => {
+      setBusyScopes((current) => new Set(current).add(scope))
+      setFetching(true)
       if (older) {
-        setOlderSnapshot(parsed)
+        setOlderLoading(true)
+        setOlderError(null)
       } else {
-        setSnapshot(parsed)
+        setLoadError(null)
       }
-      return true
-    } catch (error: unknown) {
-      if (!alive.current) return false
-      const message = errorMessage(error)
-      if (older) setOlderError(message)
-      else setLoadError(message)
-      return false
-    } finally {
-      inFlight.current = false
-      if (alive.current) {
-        setFetching(false)
-        setLoading(false)
-        setOlderLoading(false)
+      try {
+        await loadUpdatedSnapshot({
+          scope,
+          signal: controller.signal,
+          onSnapshot: (nextSnapshot) => {
+            if (!alive.current || controller.signal.aborted) return
+            if (older) setOlderSnapshot(nextSnapshot)
+            else setSnapshot(nextSnapshot)
+          },
+          onProgress: (refresh) => {
+            if (alive.current && !controller.signal.aborted) setRefreshStatuses((current) => ({ ...current, [scope]: refresh }))
+          },
+        })
+        if (!alive.current || controller.signal.aborted || inFlight.current.get(scope)?.key !== key) return false
+        if (older) setOlderError(null)
+        else setLoadError(null)
+        return true
+      } catch (error: unknown) {
+        if (!alive.current || controller.signal.aborted || inFlight.current.get(scope)?.key !== key) return false
+        const message = errorMessage(error)
+        if (older) setOlderError(message)
+        else setLoadError(message)
+        return false
+      } finally {
+        const isCurrent = inFlight.current.get(scope)?.key === key
+        if (isCurrent) inFlight.current.delete(scope)
+        if (controllers.current.get(scope) === controller) controllers.current.delete(scope)
+        if (alive.current && isCurrent) {
+          setBusyScopes((current) => {
+            const next = new Set(current)
+            next.delete(scope)
+            return next
+          })
+          setFetching(inFlight.current.size > 0)
+          setLoading(inFlight.current.has('latest'))
+          if (older) setOlderLoading(false)
+        }
       }
     }
+    const promise = request()
+    inFlight.current.set(scope, { key, promise })
+    return promise
   }, [])
 
   const displaySnapshot = viewingOlder && olderSnapshot !== null ? olderSnapshot : snapshot
@@ -121,7 +155,12 @@ function App() {
   useEffect(() => {
     alive.current = true
     void refreshSnapshot(false)
-    return () => { alive.current = false }
+    return () => {
+      alive.current = false
+      controllers.current.forEach((controller) => controller.abort())
+      controllers.current.clear()
+      inFlight.current.clear()
+    }
   }, [refreshSnapshot])
 
   useEffect(() => {
@@ -171,6 +210,7 @@ function App() {
   const repositories = useMemo(() => displaySnapshot === null ? [] : [...new Set(displaySnapshot.tickets.map((ticket) => ticket.repository))].sort(), [displaySnapshot])
   const environments = useMemo(() => displaySnapshot === null ? [] : [...new Set(displaySnapshot.tickets.flatMap((ticket) => ticket.environments))].sort(), [displaySnapshot])
   const activeView = registeredViews.find((view) => view.id === preferences.view) ?? registeredViews[0]
+  const activeRefreshScopes = [...busyScopes]
 
   const updateFilters = (change: Partial<Filters>) => {
     setPreferences((current) => ({ ...current, filters: { ...current.filters, ...change } }))
@@ -203,9 +243,9 @@ function App() {
     setViewingOlder(true)
   }
 
-  if ((loading || fetching) && snapshot === null) return <LoadingState />
+  if ((loading || fetching) && snapshot === null) return <LoadingState status={refreshStatuses.latest} />
   if (snapshot === null) return <InitialError message={loadError ?? 'The snapshot could not be loaded.'} onRetry={() => { void refreshSnapshot(false) }} busy={fetching} />
-  if (displaySnapshot === null) return <LoadingState />
+  if (displaySnapshot === null) return <LoadingState status={refreshStatuses.older} />
 
   const activeSourceFailures = displaySnapshot.sources.filter((source) => !source.ok)
   const warningCount = visibleTickets.filter((ticket) => ticket.warning).length
@@ -268,6 +308,15 @@ function App() {
               {viewingOlder && <Badge variant="outline" className="older-badge"><Clock3 size={12} /> Older snapshot</Badge>}
             </div>
           </section>
+
+          {activeRefreshScopes.map((scope) => {
+            const status = refreshStatuses[scope]
+            if (status === null) return null
+            const title = scope === 'older'
+              ? (viewingOlder ? 'Updating older snapshot' : 'Loading older snapshot')
+              : 'Updating snapshot'
+            return <RefreshProgressPanel key={scope} title={title} status={status} compact />
+          })}
 
           {(displaySnapshot.stale || activeSourceFailures.length > 0) && (
             <section className="source-notice" role="status">
@@ -349,8 +398,39 @@ function App() {
   )
 }
 
-function LoadingState() {
-  return <main className="loading-screen" role="status" aria-live="polite"><span className="loading-mark"><Workflow size={20} /></span><strong>Loading factory snapshot</strong><span>Reading the latest progress data…</span></main>
+function RefreshProgressPanel({ title, status, compact = false }: { title: string; status: RefreshStatus; compact?: boolean }) {
+  const summary = summarizeRefresh(status.sources)
+  const message = status.state === 'queued' ? 'Waiting for current refresh' : summary.label
+  return (
+    <section className={`refresh-progress ${compact ? 'refresh-progress-compact' : ''}`} role="status" aria-live="polite" aria-label={title}>
+      <div className="refresh-progress-heading">
+        <div><strong>{title}</strong><span>{message}</span></div>
+        <Progress value={summary.percent} aria-label={`${title} source progress`} aria-valuetext={summary.label} />
+      </div>
+      {status.sources.length > 0 && (
+        <ul className="refresh-source-list">
+          {status.sources.map((source) => (
+            <li key={source.id}>
+              <span className="refresh-source-name">{source.name}</span>
+              <span className={source.errorCount > 0 ? 'refresh-source-warning' : ''}>{refreshSourceLabel(source)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function LoadingState({ status }: { status: RefreshStatus | null }) {
+  return (
+    <main className="loading-screen" role="status" aria-live="polite">
+      <span className="loading-mark"><Workflow size={20} /></span>
+      <strong>Loading factory snapshot</strong>
+      {status === null
+        ? <span>Connecting to factory sources…</span>
+        : <RefreshProgressPanel title="Reading factory data" status={status} />}
+    </main>
+  )
 }
 
 function InitialError({ message, onRetry, busy }: { message: string; onRetry: () => void; busy: boolean }) {

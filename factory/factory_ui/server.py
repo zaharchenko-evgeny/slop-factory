@@ -11,13 +11,20 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import config
-from .data import SnapshotStore
+from .data import SnapshotStore, public
+from .refresh import RefreshController
 
 STATIC = Path(__file__).parent / 'static'
 
 
 def make_server(store, port=0, static=STATIC):
     root = static.resolve()
+
+    class FactoryHTTPServer(ThreadingHTTPServer):
+        def server_close(self):
+            super().server_close()
+            self.refresh_controller.close()
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -45,16 +52,24 @@ def make_server(store, port=0, static=STATIC):
             if not self.allowed():
                 return self.reply(403, b'Only same-origin loopback requests are accepted')
             target = urlsplit(self.path)
-            if target.path == '/api/snapshot':
-                if set(parse_qs(target.query)) - {'older'}:
-                    return self.reply(400, b'Unknown snapshot option')
-                try:
-                    body = store.snapshot(older=parse_qs(target.query).get('older') == ['1'])
-                except BlockingIOError:
-                    return self.reply(503, b'Initial refresh is in progress')
-                except Exception:
-                    return self.reply(500, b'Could not read factory state. Check server configuration and refresh.')
-                return self.reply(200, json.dumps(body).encode(), 'application/json; charset=utf-8')
+            if target.path in ('/api/snapshot', '/api/status'):
+                options = parse_qs(target.query, keep_blank_values=True)
+                allowed = {'older'} if target.path == '/api/status' else {'older', 'refresh'}
+                if set(options) - allowed:
+                    return self.reply(400, b'Unknown API option')
+                if any(values != ['1'] for key, values in options.items()
+                       if key in ('older', 'refresh')):
+                    return self.reply(400, b'API options must be 1 when supplied')
+                older = options.get('older') == ['1']
+                if target.path == '/api/status':
+                    body = self.server.refresh_controller.status(older)
+                else:
+                    if options.get('refresh') == ['1']:
+                        self.server.refresh_controller.request(older)
+                    snapshot, snapshot_run_id, refresh = self.server.refresh_controller.snapshot(older)
+                    body = {'snapshot': snapshot, 'snapshotRunId': snapshot_run_id,
+                            'refresh': refresh}
+                return self.reply(200, json.dumps(public(body)).encode(), 'application/json; charset=utf-8')
             if target.path.startswith('/api/'):
                 return self.reply(404)
             path = root / ('index.html' if target.path == '/' else unquote(target.path).lstrip('/'))
@@ -68,8 +83,9 @@ def make_server(store, port=0, static=STATIC):
 
         do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_POST
 
-    server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    server = FactoryHTTPServer(('127.0.0.1', port), Handler)
     server.daemon_threads = True
+    server.refresh_controller = RefreshController(store)
     return server
 
 

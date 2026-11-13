@@ -381,6 +381,33 @@ def test_snapshot_retains_failed_source_and_shows_partial_success(monkeypatch):
         working, tracker, tracker.record, cfg, {"nodes": {}}, [], NOW)[0]["key"]}
 
 
+def test_snapshot_progress_counts_each_attempted_ticket_and_source_errors(monkeypatch):
+    cfg = config_for()
+
+    class TicketReadFails(ReadOnlyTracker):
+        def read(self, subject, want=frozenset()):
+            if subject.kind == "ticket":
+                raise RuntimeError("tracker returned a private response")
+            return super().read(subject, want)
+
+    tracker = TicketReadFails(cfg)
+    source = source_for(cfg, tracker)
+    monkeypatch.setattr(data, "plan_local", lambda *args: [])
+    monkeypatch.setattr(data, "poll", lambda *args: [])
+    store = data.SnapshotStore(config=cfg, graph={"nodes": {}}, sources=[source], now=lambda: NOW)
+    progress = []
+
+    snapshot = store.snapshot(progress=lambda current, phase, **details:
+                              progress.append((current.id, phase, details)))
+
+    assert snapshot["sources"][0]["ok"] is False
+    assert [(phase, details.get("completed_tickets")) for _, phase, details in progress
+            if phase == "tickets"][-1] == ("tickets", 1)
+    complete = progress[-1]
+    assert complete[0:2] == ("source", "complete")
+    assert complete[2]["error_count"] == 1
+
+
 @pytest.mark.parametrize(("age", "visible"), [(7 * 86400, True), (7 * 86400 + 1, False)])
 def test_final_ticket_visibility_uses_seven_day_boundary(age, visible):
     store = data.SnapshotStore(config=config_for(), graph={"nodes": {}}, sources=[], now=lambda: NOW)
