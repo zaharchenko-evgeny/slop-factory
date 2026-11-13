@@ -487,12 +487,14 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, bac
     """`project_id` (#1387): read the automations of that project, and only those, in place of the personal ones."""
     if project_id:
         listed = automations.call("list_automations", {})
-        automation_items = [x for key, v in ([("", listed)] if isinstance(listed, list) else listed.items())
-                            if isinstance(v, list) for x in v if x.get("projectId") == project_id]
+        every = [x for v in ([listed] if isinstance(listed, list) else listed.values()) if isinstance(v, list) for x in v]
+        automation_items = [x for x in every if x.get("projectId") == project_id]
+        unfiltered = len(every)  # B2: the cap applies to what Air returned, not to what is left after the filter
     else:
         listed = automations.call("list_automations", {"privacy": "private"})
         automation_items = listed if isinstance(listed, list) else listed["personal"]
-    capped = len(automation_items) >= LIST_CAP
+        unfiltered = len(automation_items)
+    capped = unfiltered >= LIST_CAP
     if capped and backend:  # the REST API pages: the full list, so nothing is `unknown` (#1347)
         automation_items, capped = ([x for x in backend.list_automations(project_id)] if project_id
                                     else [x for x in backend.list_automations() if not x.get("projectId")]), False
@@ -507,6 +509,8 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, bac
     env_items = list_envs(cloud, repository_url)
     env_items = [environment_detail(cloud.call("get_environment", {"id": x["id"]}))
                  for x in env_items if x["name"].startswith(prefix)]
+    if project_id:  # B1: only an environment of the project can be diffed, updated or resolved by id
+        env_items = [x for x in env_items if x.get("projectId") == project_id]
     return automation_items, env_items
 
 

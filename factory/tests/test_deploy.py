@@ -2402,6 +2402,35 @@ class ProjectTargetTest(unittest.TestCase):  # #1387: automations owned by an Ai
         self.assertEqual([x["id"] for x in items], ["i1"])
         self.assertFalse(items.capped)
 
+    def test_project_cap_counts_the_unfiltered_response(self):  # B2
+        other = [{"automationId": f"o{i}", "name": f"[F] o{i}", "projectId": "other"} for i in range(air.LIST_CAP)]
+        for listed in ({"personal": [], "project": other}, other[:60] and {"personal": other[:50], "project": other[:50]}):
+            with self.subTest(keys=list(listed)):
+                items, _ = air.read_state(self.Automations(listed), self.Cloud([]), "[F] ", "u", project_id=PROJECT)
+                self.assertEqual(list(items), [])
+                self.assertTrue(items.capped)
+        items, _ = air.read_state(self.Automations({"project": other[:5]}), self.Cloud([]), "[F] ", "u", project_id=PROJECT)
+        self.assertFalse(items.capped)
+
+    def test_read_state_keeps_only_the_projects_environments(self):  # B1
+        plan = self.plan()
+        owned = self.owned_envs(plan)
+        twin = {**owned[0], "id": "personal-twin", "projectId": None}
+        for have, ids in (([twin, *owned], {e["id"] for e in owned}), ([twin], set()),
+                          ([{**owned[0], "projectId": "other"}], set())):
+            with self.subTest(have=[e["id"] for e in have]):
+                _, envs = air.read_state(self.Automations({}), self.Cloud(have), plan["prefix"], "u", project_id=PROJECT)
+                self.assertEqual({e["id"] for e in envs}, ids)
+
+    def test_apply_never_writes_to_a_personal_environment_of_the_same_name(self):  # B1
+        plan = self.plan()
+        owned = self.owned_envs(plan)
+        twin = {**owned[0], "id": "personal-twin", "projectId": None, "vm": "other"}
+        code, _, _, a, c = self.run_deploy("--apply", plan, {"project": []}, [twin, *owned[1:]])
+        self.assertEqual(code, 1)
+        self.assertEqual([t for t, _ in a.calls if t.startswith(("create_", "update_"))], [])
+        self.assertEqual([t for t, _ in c.calls if t.startswith(("create_", "edit_"))], [])
+
     def owned_envs(self, plan, project=PROJECT):
         return [{"id": f"e{i}", "name": e["name"], "repository": e["repository"], "projectId": project}
                 for i, e in enumerate(plan["environments"])]
