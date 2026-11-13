@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowDownToLine,
   ArrowRight,
+  ChevronRight,
   Clock3,
   GitPullRequest,
   LoaderCircle,
@@ -248,6 +249,7 @@ function App() {
   if (displaySnapshot === null) return <LoadingState status={refreshStatuses.older} />
 
   const activeSourceFailures = displaySnapshot.sources.filter((source) => !source.ok)
+  const refreshIsBusy = activeRefreshScopes.length > 0
   const warningCount = visibleTickets.filter((ticket) => ticket.warning).length
   const filters = preferences.filters
   const hasFilters = filters.query !== '' || filters.repository !== 'all' || filters.environment !== 'all' || filters.stage !== 'all' || filters.warningOnly || filters.reviewOnly || filters.visibility !== 'all'
@@ -315,15 +317,20 @@ function App() {
             const title = scope === 'older'
               ? (viewingOlder ? 'Updating older snapshot' : 'Loading older snapshot')
               : 'Updating snapshot'
-            return <RefreshProgressPanel key={scope} title={title} status={status} compact />
+            return <RefreshProgressPanel key={scope} title={title} status={status} previousSources={displaySnapshot.sources} previousSnapshotStale={displaySnapshot.stale} compact />
           })}
 
-          {(displaySnapshot.stale || activeSourceFailures.length > 0) && (
-            <section className="source-notice" role="status">
-              <AlertCircle size={16} />
-              <div><strong>Showing the last available snapshot</strong><span>{activeSourceFailures.length ? `${activeSourceFailures.map((source) => `${source.name}: ${source.error ?? 'refresh failed'}`).join(' · ')}` : 'A source did not complete its latest refresh.'}</span></div>
-              <div className="source-notice-links">{displaySnapshot.sources.map((source) => <span key={source.id} className={source.ok ? 'source-ok' : 'source-failed'}><i />{source.name}</span>)}</div>
-            </section>
+          {!refreshIsBusy && (displaySnapshot.stale || activeSourceFailures.length > 0) && (
+            <details className="source-warning-details">
+              <summary>
+                <ChevronRight className="details-chevron" size={12} aria-hidden="true" />
+                <AlertTriangle size={13} aria-hidden="true" />
+                <span>{activeSourceFailures.length > 0 ? `${activeSourceFailures.length} ${activeSourceFailures.length === 1 ? 'source warning' : 'source warnings'} · Some data may be stale` : 'Some data may be stale'}</span>
+              </summary>
+              {activeSourceFailures.length > 0
+                ? <ul>{activeSourceFailures.map((source) => <li key={source.id}><strong>{source.name}</strong><span>{source.error ?? 'Refresh failed; source details are unavailable.'}</span></li>)}</ul>
+                : <p>The snapshot is marked stale, but no source error details are available.</p>}
+            </details>
           )}
           {(viewingOlder ? olderError : loadError) && <div className="refresh-error" role="status"><AlertCircle size={14} /><span>{viewingOlder ? 'Older snapshot refresh failed.' : 'Latest refresh failed.'} Showing the previous snapshot: {viewingOlder ? olderError : loadError}</span><Button variant="ghost" onClick={() => { void refreshVisibleSnapshot() }}>Retry</Button></div>}
 
@@ -403,37 +410,50 @@ function App() {
   )
 }
 
-function RefreshProgressPanel({ title, status, compact = false }: { title: string; status: RefreshStatus; compact?: boolean }) {
-  const summary = summarizeRefresh(status.sources)
-  const message = status.state === 'queued' ? 'Waiting for current refresh' : summary.label
+function RefreshProgressPanel({ title, status, previousSources = [], previousSnapshotStale = false, compact = false }: { title: string; status: RefreshStatus | null; previousSources?: Snapshot['sources']; previousSnapshotStale?: boolean; compact?: boolean }) {
+  const sources = status?.sources ?? []
+  const summary = summarizeRefresh(sources)
+  const message = status?.state === 'queued' ? 'Waiting for current refresh' : summary.label
+  const currentWarnings = sources.filter((source) => source.errorCount > 0)
+  const previousWarnings = previousSources.filter((source) => !source.ok)
+  const warningSourceIds = new Set([...currentWarnings.map((source) => source.id), ...previousWarnings.map((source) => source.id)])
+  const warningLabel = warningSourceIds.size > 0
+    ? `${warningSourceIds.size} ${warningSourceIds.size === 1 ? 'source warning' : 'source warnings'}`
+    : previousSnapshotStale ? 'Stale' : null
   return (
-    <section className={`refresh-progress ${compact ? 'refresh-progress-compact' : ''}`} role="status" aria-live="polite" aria-label={title}>
-      <div className="refresh-progress-heading">
-        <div><strong>{title}</strong><span>{message}</span></div>
+    <section className={`refresh-progress ${compact ? 'refresh-progress-compact' : ''}`} aria-label={title}>
+      <div className="refresh-progress-content">
+        <div className="refresh-progress-heading">
+          <div className="refresh-progress-status" role="status" aria-live="polite"><strong>{title}</strong><span>{message}</span></div>
+          <details className="refresh-details">
+            <summary><ChevronRight className="details-chevron" size={12} aria-hidden="true" /><span>Details</span>{warningLabel !== null && <span className="refresh-warning-count"><AlertTriangle size={12} aria-hidden="true" />{warningLabel}</span>}</summary>
+            <div className="refresh-details-content">
+              {sources.length > 0
+                ? <ul className="refresh-source-list">{sources.map((source) => {
+                  const label = refreshSourceLabel(source)
+                  const warningCount = source.errorCount > 0 && source.phase !== 'complete'
+                    ? ` · ${source.errorCount} ${source.errorCount === 1 ? 'warning' : 'warnings'}`
+                    : ''
+                  return <li key={source.id}><span className="refresh-source-name">{source.name}</span><span className={source.errorCount > 0 ? 'refresh-source-warning' : ''}>{label}{warningCount}</span></li>
+                })}</ul>
+                : <p>Source details are not available yet.</p>}
+              {previousWarnings.length > 0 && <section className="refresh-previous-warnings"><strong>Previous snapshot warnings</strong><ul>{previousWarnings.map((source) => <li key={source.id}><span className="refresh-source-name">{source.name}</span><span>{source.error ?? 'Refresh failed; source details are unavailable.'}</span></li>)}</ul></section>}
+              {previousSnapshotStale && previousWarnings.length === 0 && <p>Previous snapshot is marked stale, but no source error details are available.</p>}
+            </div>
+          </details>
+        </div>
         <Progress value={summary.percent} aria-label={`${title} source progress`} aria-valuetext={summary.label} />
       </div>
-      {status.sources.length > 0 && (
-        <ul className="refresh-source-list">
-          {status.sources.map((source) => (
-            <li key={source.id}>
-              <span className="refresh-source-name">{source.name}</span>
-              <span className={source.errorCount > 0 ? 'refresh-source-warning' : ''}>{refreshSourceLabel(source)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
     </section>
   )
 }
 
 function LoadingState({ status }: { status: RefreshStatus | null }) {
   return (
-    <main className="loading-screen" role="status" aria-live="polite">
+    <main className="loading-screen" aria-busy="true">
       <span className="loading-mark"><Workflow size={20} /></span>
       <strong>Loading factory snapshot</strong>
-      {status === null
-        ? <span>Connecting to factory sources…</span>
-        : <RefreshProgressPanel title="Reading factory data" status={status} />}
+      <RefreshProgressPanel title="Reading factory data" status={status} />
     </main>
   )
 }

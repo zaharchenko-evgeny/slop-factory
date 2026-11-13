@@ -102,8 +102,9 @@ unknown as a positive or negative result.
 The browser starts a background read with `GET /api/snapshot?refresh=1` when it
 opens, and when the user or auto refresh asks for new data. The server returns
 the last cached snapshot and the refresh status at once. The browser shows that
-snapshot while the server reads sources. If no cached snapshot exists, the page
-shows source progress until it can show data.
+snapshot while the server reads sources. A compact panel shows the refresh
+title, the number of sources read, and a progress bar. If no cached snapshot
+exists, the page shows the same panel while it reads sources.
 
 The browser reads `GET /api/status` while the requested run is active. When the
 server reports a snapshot for that run, the browser reads `/api/snapshot`
@@ -112,10 +113,12 @@ without `refresh=1` and replaces the cached data. A snapshot read without
 older snapshot scope.
 
 The progress bar counts sources marked complete. It does not show an estimate
-or elapsed-time percentage. Each source row shows its current step and ticket
-counts when the server knows them. A completed source with errors shows a
-warning count. If the source list has not arrived, the progress bar stays
-indeterminate and the page does not show a ticket count.
+or elapsed-time percentage. Open **Details** to see each source's current step
+and ticket counts when the server knows them. During a refresh, previous
+snapshot warnings also appear there. Outside a refresh, stale-source warnings
+stay collapsed until opened. A completed source with errors shows a warning
+count. If the source list has not arrived, the progress bar stays indeterminate
+and the page does not show a ticket count.
 
 If the first snapshot cannot load, the page shows an error and a retry action.
 If a later refresh fails, the page keeps the last available snapshot and shows
