@@ -19,7 +19,7 @@ from pathlib import Path
 import config
 import definition
 
-ENGINE_SKILLS = ("factory-step",)
+ENGINE_SKILLS = ("factory-step", "factory-troubleshoot")
 
 
 def tree_hash(d):

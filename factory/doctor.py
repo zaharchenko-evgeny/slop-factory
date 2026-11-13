@@ -42,7 +42,8 @@ def env_needs(env, nodes, resolve=config.resolve):
         known = defn["factory"].get("roles") or {}
         for r in roles:
             skills |= set(definition.role_skills(defn, r)) if r in known else set()
-        return sorted(tools), sorted(skills | {"factory-step"})
+        from team_setup import ENGINE_SKILLS
+        return sorted(tools), sorted(skills | set(ENGINE_SKILLS))
     for r in roles:
         setup, names = Path(resolve(f"roles/{r}/setup.sh")), Path(resolve(f"roles/{r}/skills.txt"))
         tools |= {t for line in setup.read_text().splitlines() if line.startswith("need_tools ") for t in line.split()[1:]}
