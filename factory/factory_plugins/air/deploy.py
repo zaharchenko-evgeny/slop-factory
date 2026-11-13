@@ -6,7 +6,7 @@
 """Render the nodes of the team's definition as deployable specs (ADR-0021). Output is JSON.
 
 Usage: deploy.py plan --target air
-       deploy.py (--dry-run | --apply [--allow-delete]) [--rename 'OLD NAME=NEW NAME']...
+       deploy.py (--dry-run | --apply [--allow-delete]) [--rename 'OLD NAME=NEW NAME']... [--only SELECTOR]...
 --dry-run prints the diff against the existing automations and environments; --apply also writes it and re-lists to
 verify. The two Air MCP servers are started over stdio from the commands in FACTORY_MCP_AIR_AUTOMATIONS and
 FACTORY_MCP_AIR_CLOUD (they use the operator's local OAuth). Each --rename updates the existing item named OLD in
@@ -16,6 +16,7 @@ air: {"automations": [...], "environments": [...]}: one automation per enabled n
 """
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -480,6 +481,33 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, bac
     return automation_items, env_items
 
 
+def _glob(pattern: str) -> re.Pattern:
+    """A name glob: `*` and `?` only, so the `[...]` of a prefix such as `[Offline eval]` stays literal."""
+    return re.compile("".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in pattern), re.DOTALL)
+
+
+def selector_matcher(only: list[str], plan: dict):
+    """`match(kind, name, planned item)` for `--only` selectors (`node:<node>`, `env:<environment>`, a name glob)."""
+    prefix = plan["prefix"]
+    short = lambda name: name[len(prefix):] if name.startswith(prefix) else name  # noqa: E731
+    in_env = lambda name, env: short(name) == env or short(name).startswith(env + " ")  # noqa: E731
+    env_names = {sel: {e["name"] for e in plan["environments"] if in_env(e["name"], sel[4:])}
+                 for sel in only if sel.startswith("env:")}
+
+    def one(sel: str, kind: str, name: str, p: dict | None) -> bool:
+        if sel.startswith("node:"):
+            node = ((p or {}).get("spec") or {}).get("node") or short(name).split(" ")[0]
+            return kind == "automation" and node == sel[5:]
+        if sel.startswith("env:"):
+            if kind == "environment":
+                return in_env(name, sel[4:])
+            return bool(p) and p.get("environmentConfigId") in env_names[sel]
+        glob = _glob(sel)
+        return bool(glob.fullmatch(name) or glob.fullmatch(short(name)))
+
+    return lambda kind, name, p=None: any(one(sel, kind, name, p) for sel in only)
+
+
 def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", *, backend=None,
                env_repositories=None) -> None:
     """Environments before automations on create, update and replace, after them on delete. A replaced environment
@@ -594,10 +622,12 @@ def repository_urls(plan: dict) -> list[str]:
 
 
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None, yt_run=None,
-           config=None) -> int:
+           config=None, only: list[str] | None = None) -> int:
     """Write only to Air, to repository labels (through `run`, a `gh` runner) and to the tracker's own setup (through
     `yt_run` for YouTrack): deploy never creates, edits or closes a tracker ticket. `config` selects the plugins that
-    provision the labels (github when None) and the tracker setup (every plugin's, for what the plan names, when None)."""
+    provision the labels (github when None) and the tracker setup (every plugin's, for what the plan names, when None).
+    `only` (`--only` selectors) limits the diff, the verify and the variables to the matched items and never removes a
+    label or tracker tag; a selector that matches nothing in the plan or in Air returns 2."""
     repo_urls = repository_urls(plan)
     env_repositories = {e["name"]: e["repository"] for e in plan["environments"]}
     additional_names = {a["name"] for a in plan["automations"] if "additionalRepositories" in a}
@@ -606,6 +636,20 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
                        additional_names=additional_names)
     capped = getattr(state[0], "capped", False)
     changes = diff(plan, *state, capped)
+    match, others = None, 0
+    if only:
+        match = selector_matcher(only, plan)
+        known = [(k, x["name"], p) for k, items, planned in (("environment", state[1], plan["environments"]),
+                                                              ("automation", state[0], plan["automations"]))
+                 for x, p in [(x, None) for x in items if x["name"].startswith(plan["prefix"])] + [(p, p) for p in planned]]
+        for sel in only:
+            if not any(selector_matcher([sel], plan)(k, n, p) for k, n, p in known):
+                print(f"error: --only {sel} matches nothing in the plan or in Air", file=sys.stderr)
+                return 2
+        kept = [c for c in changes if match(c[1], c[2], c[3])]
+        others, changes = len(changes) - len(kept), kept
+        print(f"partial: {', '.join(only)}")
+        plan = {**plan, "environments": [e for e in plan["environments"] if match("environment", e["name"], e)]}
     for action, kind, name, _, _, changed in changes:
         if action == "unknown":
             print(f"unknown {kind} {name} (list capped at {LIST_CAP})")
@@ -613,6 +657,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
             print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
     if not changes:
         print("unchanged")
+    if only and others and mode == "--dry-run":
+        print(f"not deployed: {others} other changes")
     if capped and not any(c[0] == "unknown" for c in changes):
         print(f"warning: Air listed {LIST_CAP} personal automations (its cap): none is deleted from an incomplete list",
               file=sys.stderr)
@@ -629,6 +675,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     if mode == "--dry-run":
         create_missing_variables(plan, state[1], cloud, dry_run=True)
     label_changes = core.reconcile_labels(plan, run, config)
+    if only:  # a partial deploy never removes
+        label_changes = [c for c in label_changes if c[0] != "remove"]
     # the tracker's own setup beside the labels (youtrack: tags and field values), from the `deploy.tracker` hooks;
     # without a config, every plugin's hook sets up what the plan names
     setup = plugins.registry(config) if config is not None else plugins.Registry(plugins.KNOWN)
@@ -640,14 +688,14 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     if mode == "--dry-run":
         for action, repo, label, *rest in label_changes:
             print(f"{action} label {label} in {repo}" + (f" ({', '.join(rest[1])})" if action == "update" else ""))
-        for line in [x for p in trackers for x in p.dry_run()]:
+        for line in [x for p in trackers for x in p.dry_run() if not (only and x.startswith("remove"))]:
             print(line)
         return 0
     for line in [x for p in trackers for x in p.write()]:  # a missing tag fails every handoff that adds it
         print(line)
     core.provision_labels(plan, label_changes, "write", run, config)  # a missing label fails every handoff that adds it
     removals = [c for c in label_changes if c[0] == "remove"]
-    refusals = [x for p in trackers for x in p.refusals()]
+    refusals = [] if only else [x for p in trackers for x in p.refusals()]
     if (removals or refusals or any(c[0] == "delete" for c in changes)) and not allow_delete:
         for _, repo, label, _ in removals:
             print(f"refused: would remove label {label} in {repo}", file=sys.stderr)
@@ -656,7 +704,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         print("refused: the diff deletes items; rerun with --allow-delete", file=sys.stderr)
         return 1
     core.provision_labels(plan, removals, "remove", run, config)
-    for p in trackers:
+    for p in [] if only else trackers:
         for line in p.remove():
             print(line)
     if changes:
@@ -664,13 +712,14 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
                            additional_names=additional_names)
         state = after
-        left = [c for c in diff(plan, *after, getattr(after[0], "capped", False)) if not (c[0] == "delete" and c[1] == "environment")]
+        left = [c for c in diff(plan, *after, getattr(after[0], "capped", False))
+                if not (c[0] == "delete" and c[1] == "environment") and (match is None or match(c[1], c[2], c[3]))]
         for action, kind, name, *_ in left:
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:
             return 1
     create_missing_variables(plan, state[1], cloud)  # after the environments exist: their ids are in `state`
-    for x in state[0]:  # a person registers each webhook with its sender; also on an unchanged plan
+    for x in (x for x in state[0] if match is None or match("automation", x["name"])):  # a person registers each webhook with its sender; also on an unchanged plan
         for w in x["webhooks"]:
             print(f"webhook {x['name']}: trigger {w['id']}" + (f" {w['url']}" if w["url"] else ""))
     return 0
@@ -681,7 +730,15 @@ def main(argv: list[str]) -> int:
     if not definition.present(config_mod.team_root()):
         print("deploy: the team root has no factory.yaml and workflow.yaml (ADR-0021)", file=sys.stderr)
         return 2
-    rest, renames = argv[1:], {}
+    rest, renames, only = argv[1:], {}, []
+    while "--only" in rest:
+        i = rest.index("--only")
+        sel = rest[i + 1] if i + 1 < len(rest) else ""
+        if not sel or sel in ("node:", "env:") or sel.startswith("--"):
+            print("--only needs a selector: node:<node>, env:<environment> or a name glob", file=sys.stderr)
+            return 2
+        only.append(sel)
+        del rest[i:i + 2]
     while "--rename" in rest:
         i = rest.index("--rename")
         old, sep, new = (rest[i + 1] if i + 1 < len(rest) else "").partition("=")
@@ -702,7 +759,7 @@ def main(argv: list[str]) -> int:
         try:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
             run = next((hook(config) for hook in plugins.registry(config).hook("deploy.run")), None)
-            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run, config=config)
+            code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, run=run, config=config, only=only)
             if code:
                 return code
             return core.sync_wake_files(config, run, argv[0] == "--apply")
