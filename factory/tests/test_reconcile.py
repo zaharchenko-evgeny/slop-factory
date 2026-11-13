@@ -22,6 +22,7 @@ import reconcile  # noqa: E402
 import gate  # noqa: E402
 from gate_port import MemorySystem  # noqa: E402
 from tag import tagged  # noqa: E402
+from factory_plugins.github import heartbeat  # noqa: E402
 
 NODES, CONFIG = nodes_mod.load(), cfg.load()
 STAGES, LIMITS = list(CONFIG["tracker"]["stages"]), CONFIG["limits"]
@@ -549,6 +550,99 @@ class ReconcileMainBlockersTest(unittest.TestCase):
                                        ("start", "merge", [])):
             with self.subTest(definition=blockers, engine=engine):
                 self.assertEqual(self.run_main(blockers, engine), want)
+
+
+class ReconcileHeartbeatTest(unittest.TestCase):
+    CONFIG = {"tracker": {"repository": "o/map", "map_label": "factory:map"},
+              "targets": {"air": {"bot_login": "factory[bot]"}},
+              "repositories": [{"name": "map", "url": "https://github.com/o/map", "role": "primary"}],
+              "environments": {"write": {"repositories": [], "tokens": {"map": "MAP_TOKEN"}}}}
+
+    def test_pass_creates_once_then_edits_and_dry_run_writes_nothing(self):
+        class Gh:
+            def __init__(self):
+                self.comments, self.calls = [], []
+
+            def __call__(self, args, **kw):
+                self.calls.append((args, kw))
+                if args[:2] == ["issue", "list"]:
+                    return json.dumps([{"number": 404}])
+                if args[0] == "api" and "repos/o/map/issues/404/comments" in " ".join(args):
+                    if "-f" not in args:
+                        return "\n".join(json.dumps(c) for c in self.comments)
+                    body = next(a[5:] for a in args if a.startswith("body="))
+                    self.comments.append({"id": 7, "body": body, "user": {"login": "factory[bot]"},
+                                          "updated_at": "2026-11-03T12:00:00Z"})
+                    return ""
+                if args[0] == "api" and "issues/comments/7" in args[3]:
+                    self.comments[0]["body"] = next(a[5:] for a in args if a.startswith("body="))
+                    return ""
+                return ""
+
+        gh = Gh()
+        env = {"FACTORY_ENV": "write", "MAP_TOKEN": "test-token"}
+        now = NOW
+        first, failed = heartbeat.reconcile_pass(self.CONFIG, False, None, run=gh, environ=env, now=now)
+        second, _ = heartbeat.reconcile_pass(self.CONFIG, False, None, run=gh, environ=env, now=now + timedelta(minutes=1))
+        self.assertFalse(failed)
+        self.assertEqual([first[0]["action"], second[0]["action"]], ["create", "edit"])
+        writes = [(args, kw) for args, kw in gh.calls if args[0] == "api" and ("-X" in args or "-f" in args)]
+        self.assertEqual(len(writes), 2)
+        self.assertTrue(all(kw.get("token") == "test-token" for _, kw in writes))
+
+        dry = Gh()
+        result, _ = heartbeat.reconcile_pass(self.CONFIG, True, None, run=dry, environ=env, now=now)
+        self.assertEqual(result[0]["action"], "create")
+        self.assertFalse(any(args[0] == "api" and ("-X" in args or "-f" in args) for args, _ in dry.calls))
+
+    def test_only_the_configured_identity_and_heartbeat_marker_match(self):
+        body = heartbeat.comment_body("2026-11-03T12:00:00Z")
+        cases = (("configured bot", {"login": "factory[bot]", "type": "Bot"}, body, True),
+                 ("configured identity user type", {"login": "factory[bot]", "type": "User"}, body, True),
+                 ("other bot", {"login": "other[bot]", "type": "Bot"}, body, False),
+                 ("human", {"login": "person", "type": "User"}, body, False),
+                 ("missing author", None, body, False),
+                 ("marker missing", {"login": "factory[bot]", "type": "Bot"}, body.replace(heartbeat.MARKER, ""), False),
+                 ("prefix missing", {"login": "factory[bot]", "type": "Bot"}, body.removeprefix("[factory] "), False),
+                 ("body missing", {"login": "factory[bot]", "type": "Bot"}, "", False))
+        for name, user, comment, want in cases:
+            with self.subTest(name=name):
+                got = heartbeat.heartbeat_comment([{"id": 1, "user": user, "body": comment}], "factory[bot]")
+                self.assertEqual(bool(got), want)
+
+    def run_main(self, beat):
+        """reconcile_main on the Slop fixture with no tickets; `beat` patches the heartbeat pass. (exit code, output)"""
+        import io
+        before = cfg.team_root()
+        cfg.set_team(Path(__file__).resolve().parent / "fixtures/slop")
+        try:
+            with mock.patch.object(gate, "tracker_of", return_value=MemorySystem({})), \
+                    mock.patch("factory_plugins.github.heartbeat.reconcile_pass", **beat) as patched, \
+                    mock.patch.object(reconcile, "ticket_passes", return_value=False), \
+                    mock.patch("sys.stdout", io.StringIO()) as out, mock.patch("sys.stderr", io.StringIO()):
+                code = reconcile.reconcile_main(["--dry-run"])
+        finally:
+            cfg.set_team(before)
+        return code, json.loads(out.getvalue()), patched
+
+    def test_each_pass_ends_with_the_heartbeat(self):
+        """#1234: reconcile runs the heartbeat pass with its --dry-run and reports it."""
+        code, out, beat = self.run_main({"return_value": ([{"action": "create"}], False)})
+        self.assertEqual(code, 0, out)
+        self.assertTrue(beat.call_args.args[1])
+        self.assertEqual(out["reconcile_heartbeat"], [{"action": "create"}])
+
+    def test_a_failed_heartbeat_fails_the_pass(self):
+        code, out, _ = self.run_main({"side_effect": RuntimeError("no map")})
+        self.assertEqual(code, 1)
+        self.assertIn("no map", out["reconcile_heartbeat"][0]["error"])
+
+    def test_the_heartbeat_is_skipped_for_a_tracker_that_is_not_github(self):
+        from factory_plugins.github import ci_sync
+        self.assertEqual(ci_sync.reconcile_heartbeat({"tracker": {"adapter": "youtrack"}}, False, None), {})
+        self.assertFalse(heartbeat.applies({"tracker": {"adapter": "youtrack"}}))
+        self.assertTrue(heartbeat.applies({"tracker": {"repository": "o/r"}}))
+        self.assertTrue(heartbeat.applies({"tracker": {"adapter": "github-issues", "repository": "o/r"}}))
 
 
 class NoDefinitionTest(unittest.TestCase):

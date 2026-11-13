@@ -24,6 +24,7 @@ cfg.set_team(HERE / "fixtures/team")
 import doctor  # noqa: E402
 import nodes  # noqa: E402
 from factory_plugins.github import probes as github_probes  # noqa: E402
+from factory_plugins.github import heartbeat  # noqa: E402
 from factory_plugins.youtrack import probes as youtrack_probes  # noqa: E402
 
 REPO = "o/r"
@@ -139,6 +140,42 @@ class ProjectWriteProbeTest(unittest.TestCase):
         self.assertEqual(got, [{"probe": "write:label:o/app", "result": "fail",
                                 "detail": "FACTORY_ISSUES_TOKEN is not set (token of o/app)"}])
         self.assertEqual(gh.calls, [])
+
+
+class ReconcileHeartbeatProbeTest(unittest.TestCase):
+    NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
+    SETTINGS = {"tracker": {"repository": REPO, "map_label": "factory:map"},
+                "targets": {"air": {"bot_login": "factory[bot]"}}}
+
+    def test_probe_requires_a_recent_comment_from_the_configured_identity(self):
+        body = heartbeat.comment_body("2026-11-03T11:00:00Z")
+        cases = (("59 minutes", [{"user": {"login": "factory[bot]", "type": "Bot"}, "body": body,
+                                   "updated_at": "2026-11-03T11:01:00Z"}], "ok"),
+                 ("61 minutes", [{"user": {"login": "factory[bot]", "type": "Bot"}, "body": body,
+                                   "updated_at": "2026-11-03T10:59:00Z"}], "fail"),
+                 ("no comment", [], "fail"),
+                 ("other bot", [{"user": {"login": "other[bot]", "type": "Bot"}, "body": body,
+                                  "updated_at": "2026-11-03T11:59:00Z"}], "fail"),
+                 ("human", [{"user": {"login": "person", "type": "User"}, "body": body,
+                              "updated_at": "2026-11-03T11:59:00Z"}], "fail"),
+                 ("marker missing", [{"user": {"login": "factory[bot]", "type": "Bot"},
+                                       "body": body.replace(heartbeat.MARKER, ""),
+                                       "updated_at": "2026-11-03T11:59:00Z"}], "fail"),
+                 ("updated_at missing", [{"user": {"login": "factory[bot]", "type": "Bot"}, "body": body}], "fail"))
+
+        for name, comments, want in cases:
+            def gh(args, **_):
+                if args[:2] == ["issue", "list"]:
+                    return json.dumps([{"number": 404}])
+                if args[0] == "api" and "issues/404/comments" in " ".join(args):
+                    return "\n".join(json.dumps(c) for c in comments)
+                return ""
+            with self.subTest(name=name):
+                got = heartbeat.doctor_probe(self.SETTINGS, gh, now=self.NOW)
+                self.assertEqual(got["result"], want)
+
+class ProjectWriteTokenProbeTest(unittest.TestCase):
+    SETTINGS = ProjectWriteProbeTest.SETTINGS
 
     def test_a_token_declared_primary_repository_is_probed(self):
         """#1236 B2: `role: primary` is not a project repository, but its declared `token` is still probed."""
