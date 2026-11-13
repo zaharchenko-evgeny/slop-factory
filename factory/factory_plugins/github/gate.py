@@ -6,7 +6,10 @@ A marker `<!-- factory:review focus=<f> round=<n> verdict=approve|changes -->` c
 (agent reviews are COMMENT reviews: the author cannot approve its own PR; the verdict is in the marker)
 (`targets.air.bot_login`; `gh api user` answers 403 inside an Air run, so it is never called).
 """
+import contextlib
 import copy
+import fcntl
+import hashlib
 import json
 import os
 import re
@@ -1220,13 +1223,11 @@ class GitHubGateTracker(DescriptorPort):
 
     def _fx_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
-        if any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"]) for c in self.tickets.comments(n)):
-            return False
-        text = body + self._block(e) + self._once_line(e)
-        self.tickets.comment(n, text)
-        if not e.get("once") or not hasattr(self.tickets, "delete_comment"):
-            return True
-        return self._keep_first(e, text, self.tickets.comments(n), lambda cid: self.tickets.delete_comment(n, cid))
+        with self._once_lock(e):
+            if any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"]) for c in self.tickets.comments(n)):
+                return False
+            self.tickets.comment(n, body + self._block(e) + self._once_line(e))
+        return True
 
     @staticmethod
     def _once(e, text):
@@ -1236,17 +1237,22 @@ class GitHubGateTracker(DescriptorPort):
     def _once_line(e):
         return f"\n\n{e['once']}" if e.get("once") else ""
 
-    @classmethod
-    def _keep_first(cls, e, text, comments, delete):
-        """#1373: the read and the write are two calls, so runs that overlap can both pass the check. After the write,
-        the comment with the lowest id that holds the once marker stays; a run whose own comment is a later one removes it.
-        True when this run's comment stays."""
-        marked = sorted((c for c in comments if cls._once(e, c["body"])), key=lambda c: int(c["id"]))
-        mine = next((c for c in marked if c["body"].strip() == text.strip()), None)
-        if mine is None or marked[0] is mine:
-            return True
-        delete(mine["id"])
-        return False
+    @staticmethod
+    @contextlib.contextmanager
+    def _once_lock(e):
+        """#1373: the check and the write are two remote calls. Runs on one host that end together take this lock
+        (an flock on a file named by the marker), so the second one reads the first one's comment before it writes.
+        Runs on other hosts are not serialized: GitHub has no atomic claim for a comment."""
+        if not e.get("once"):
+            yield
+            return
+        name = hashlib.sha256(e["once"].encode()).hexdigest()[:32]
+        with open(os.path.join(tempfile.gettempdir(), f"factory-once-{name}.lock"), "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
 
     def _fx_pr_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
@@ -1256,15 +1262,13 @@ class GitHubGateTracker(DescriptorPort):
             pr = self._pr(n)
         if pr is None:
             raise RuntimeError(f"comment: no PR for ticket {n}")
-        if any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"])
-               for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
-            return False
-        text = body + self._block(e) + self._once_line(e)
-        self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body", text])
-        if not e.get("once"):
-            return True
-        return self._keep_first(e, text, self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo),
-                                lambda cid: self.run(["api", "-X", "DELETE", f"repos/{self.pr_repo}/issues/comments/{cid}"]))
+        with self._once_lock(e):
+            if any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"])
+                   for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
+                return False
+            self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body",
+                      body + self._block(e) + self._once_line(e)])
+        return True
 
     def _fx_pr_notes(self, e, ctx):  # a developer's `done` notes for the PR description
         n, kind, value = e["ticket"], e["kind"], e["value"]

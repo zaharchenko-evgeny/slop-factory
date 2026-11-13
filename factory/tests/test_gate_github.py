@@ -1328,19 +1328,23 @@ class JoinTest(unittest.TestCase):
         run("please review D", "r4")
         self.assertEqual(len([w for w in gh.writes if w[:2] == ["issue", "comment"]]), 2)
 
-    def test_overlapping_runs_of_one_node_keep_the_first_comment_only(self):  # #1373 review B1
+    def test_overlapping_runs_of_one_node_post_one_comment(self):  # #1373 review B1
         import threading
         barrier = threading.Barrier(2)
 
         class Racing(FakeGh):
             def __init__(self, *a, **k):
                 super().__init__(*a, **k)
-                self.posted, self.lock = [], threading.Lock()
+                self.posted, self.lock, self.posts = [], threading.Lock(), 0
 
             def __call__(self, args, timeout=None):
                 if args[:3] == ["issue", "comment", "5"]:
-                    barrier.wait(timeout=5)  # both runs have read the comments before either one writes
+                    try:
+                        barrier.wait(timeout=1)  # a run that is not serialized would meet the other one here
+                    except threading.BrokenBarrierError:
+                        pass
                     with self.lock:
+                        self.posts += 1
                         self.posted.append({"id": len(self.posted) + 1, "body": args[args.index("--body") + 1]})
                     return ""
                 if args[:3] == ["api", "-X", "DELETE"] and "issues/comments/" in args[3]:
@@ -1365,6 +1369,7 @@ class JoinTest(unittest.TestCase):
         [t.join(10) for t in threads]
         self.assertEqual(len(results), 2)
         self.assertEqual(len(gh.posted), 1)
+        self.assertEqual(gh.posts, 1, "one POST, no cleanup")
         self.assertIn("<!-- factory:once node=ask outcome=ask-human head=h1 -->", gh.posted[0]["body"])
 
     def test_sweep_asks_waiting_reviewers_again_after_a_comment(self):
