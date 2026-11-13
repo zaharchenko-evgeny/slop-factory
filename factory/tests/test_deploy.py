@@ -2245,6 +2245,25 @@ class RepositoryCopiesTest(unittest.TestCase):
         self.assertIn(f"several-writable: environments.engine: {SLOP}, {TEAM}: the air surface allows one writable "
                       "repository per environment", errs)
 
+    def test_air_allows_a_second_writable_repository_with_a_token(self):
+        for token, refused in (("TEAM_TOKEN", False), (None, True)):
+            with self.subTest(token=token):
+                f, w = adr27({"engine": [(SLOP, {"write": True}), (TEAM, {"write": True, **({"token": token} if token else {})})],
+                              "intake": [(SLOP, {})]}, {"intake": ["intake"]})
+                with tempfile.TemporaryDirectory() as tmp:
+                    shutil.copytree(HERE / "fixtures/slop", tmp, dirs_exist_ok=True)
+                    for name, edit in ((definition.FACTORY, f), (definition.WORKFLOW, w)):
+                        data = yaml.safe_load((Path(tmp) / name).read_text())
+                        edit(data)
+                        (Path(tmp) / name).write_text(yaml.safe_dump(data, sort_keys=False))
+                    before = cfg.team_root()
+                    cfg.set_team(tmp)
+                    try:
+                        errs = deploy.output_errors(nodes.load(), cfg.load())
+                    finally:
+                        cfg.set_team(before)
+                self.assertEqual(any(e.startswith("several-writable") for e in errs), refused, errs)
+
 if __name__ == "__main__":
     unittest.main()
 

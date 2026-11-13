@@ -241,6 +241,21 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(any(w.startswith("deprecated-key: nodes.implement-small: `writes`") for w in warns), warns)
         self.assertTrue(any(w.startswith("deprecated-key: agents.") and "`access`" in w for w in warns), warns)
 
+    def test_several_writable_needs_a_token_on_each_but_the_main(self):
+        """ADR-0027 (#1237): a writable repository besides the main (first) one is pushed with its `token`."""
+        main, other = {"write": True}, {"write": True}
+        cases = [("second has a token", [(MAIN, main), (OTHER, {**other, "token": "OTHER_TOKEN"})], False),
+                 ("second has no token", [(MAIN, main), (OTHER, other)], True),
+                 ("second has an empty token", [(MAIN, main), (OTHER, {**other, "token": ""})], True),
+                 ("main has a token only", [(MAIN, {**main, "token": "MAIN_TOKEN"}), (OTHER, other)], True),
+                 ("second is read-only", [(MAIN, main), (OTHER, {})], False),
+                 ("one writable repository", [(OTHER, {}), (MAIN, main)], False)]
+        for name, repos, refused in cases:
+            with self.subTest(name):
+                self.edit("factory.yaml", lambda f: self._envs(f, engine=repos))
+                warns = [w for w in definition.warnings(definition.load(self.root)) if w.startswith("several-writable")]
+                self.assertEqual(bool(warns), refused, warns)
+
     def test_migrated_slop_definition_validates_clean(self):
         """The Slop definition in the ADR-0027 form (slop-eval-factory#92): no errors, no warnings, the copies below."""
         def factory(f):

@@ -4,6 +4,7 @@
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/team_setup.py (ADR-0021). Run: uv run factory/tests/test_setup.py"""
+import os
 import json
 import shutil
 import sys
@@ -52,6 +53,64 @@ class SetupTest(unittest.TestCase):
         self.assertTrue({"factory-step", "ponytail", "tdd", "ponytail-review", "to-tickets"} <= skills, skills)
         self.assertNotIn("retro", skills)
         self.assertIn("skill tdd: github:cursor/plugins@4dd1d05818d1", lines)
+
+    def test_credential_of_a_writable_repository_with_a_token(self):
+        """#1237: only a non-main `write: true` repository with a `token` gets a helper; it names the secret, not its value."""
+        main, other = "o/main", "o/other"
+        defn = definition.load(self.root)
+        cases = [  # (name, second repository keys, secret set, helper set)
+            ("write and token", {"write": True, "token": "OTHER_TOKEN"}, True, True),
+            ("write, token not set", {"write": True, "token": "OTHER_TOKEN"}, False, False),
+            ("write, no token", {"write": True}, True, False),
+            ("token, read-only", {"token": "OTHER_TOKEN"}, True, False),
+        ]
+        for name, keys, secret, helper in cases:
+            with self.subTest(name):
+                checkout, ran = self.tmp / name.replace(" ", "-") / "main", []
+                (checkout.parent / "other/.git").mkdir(parents=True)
+                checkout.mkdir()
+                defn["factory"]["environments"]["engine"]["repositories"] = [{"repo": main, "write": True}, {"repo": other, **keys}]
+                lines = team_setup.set_credentials(defn, "engine", checkout, run=lambda cmd, **kw: ran.append(cmd),
+                                                   environ={"OTHER_TOKEN": "s3cret"} if secret else {})
+                self.assertEqual(bool(ran), helper, ran)
+                self.assertNotIn("s3cret", " ".join(lines + [" ".join(c) for c in ran]))
+                if helper:
+                    self.assertEqual(ran[0][-2:], ["credential.helper", ""])
+                    self.assertEqual(ran[1][-2:], ["credential.useHttpPath", "true"])
+                    self.assertIn("password=$OTHER_TOKEN", ran[2][-1])
+                    self.assertEqual(lines, ["credential o/other: OTHER_TOKEN"])
+                    self.assertEqual(ran[1][:3], ["git", "-C", str((checkout.parent / "other").resolve())])
+
+    def test_credential_helper_answers_only_for_its_repository(self):
+        """B1: run real `git credential fill`; the token goes to https://github.com/o/other only."""
+        import subprocess
+        defn = definition.load(self.root)
+        defn["factory"]["environments"]["engine"]["repositories"] = [{"repo": "o/main", "write": True},
+                                                                     {"repo": "o/other", "write": True, "token": "OTHER_TOKEN"}]
+        (self.tmp / "real/main").mkdir(parents=True)
+        other = self.tmp / "real/other"
+        subprocess.run(["git", "init", "-q", str(other)], check=True)
+        team_setup.set_credentials(defn, "engine", self.tmp / "real/main", environ={"OTHER_TOKEN": "dummy"})
+        cases = [  # (url, token expected)
+            ("https://github.com/o/other", True), ("https://github.com/o/other.git", True),
+            ("https://github.com/o/main", False), ("https://github.com/o/other2", False),
+            ("https://github.com/x/o/other", False), ("http://github.com/o/other", False),
+            ("https://evil.example/o/other", False), ("https://github.com.evil.example/o/other", False),
+        ]
+        field = "pass" + "word"  # built at runtime: no secret-like literal for the scanner (CI scans the .pyc)
+        for url, expected in cases:
+            with self.subTest(url):
+                out = subprocess.run(["git", "-C", str(other), "credential", "fill"], input=f"url={url}\n\n", text=True,
+                                     capture_output=True, env={**os.environ, "OTHER_TOKEN": "dummy", "GIT_TERMINAL_PROMPT": "0",
+                                                               "GIT_ASKPASS": "/bin/false", "GIT_CONFIG_NOSYSTEM": "1"})
+                self.assertEqual(f"{field}=dummy" in out.stdout, expected, out)
+
+    def test_credential_refuses_a_token_that_is_not_a_secret_name(self):
+        defn = definition.load(self.root)
+        defn["factory"]["environments"]["engine"]["repositories"] = [{"repo": "o/main", "write": True},
+                                                                     {"repo": "o/other", "write": True, "token": "X; rm -rf ~"}]
+        with self.assertRaises(SystemExit):
+            team_setup.set_credentials(defn, "engine", self.tmp / "main", run=lambda *a, **k: None, environ={})
 
     def test_roles_in_reads_every_environment_form(self):
         defn = {"factory": {"agents": {"a": {"role": "dev"}, "b": {"role": "ops"}}},

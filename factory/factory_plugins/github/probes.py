@@ -95,6 +95,15 @@ def cleanup(repo, made, run):
     return out
 
 
+def writable_repositories(settings, env):
+    """owner/repo (lower case) of the repositories `env` may push to (`write: true`) that have a `token`."""
+    names = ((settings.get("environments") or {}).get(env) or {}).get("writable") or []
+    tokens = github_tracker.repository_tokens(settings, {"FACTORY_ENV": env})
+    urls = {r.get("name"): "/".join(r["url"].rstrip("/").removesuffix(".git").split("/")[-2:]).lower()
+            for r in settings.get("repositories") or [] if r.get("url")}
+    return {urls[n] for n in names if n in urls and urls[n] in tokens}
+
+
 def project_write_probes(settings, env, run, environ=os.environ):
     """One `write:label:<owner/repo>` probe per `role: project` repository the environment writes with a token: one
     with a `token` in `env` (ADR-0027), or any when `env` declares $FACTORY_WRITE_TOKEN (github_tracker.token_env).
@@ -111,6 +120,7 @@ def project_write_probes(settings, env, run, environ=os.environ):
     if not repos:
         return []
     run = github_tracker.ProjectWriteRun(run, repos, environ, tokens, issues_token_env=issues)
+    writable = writable_repositories(settings, env)
     results = []
     for repo in repos:
         name = f"write:label:{repo}"
@@ -125,6 +135,22 @@ def project_write_probes(settings, env, run, environ=os.environ):
                 run(["label", "delete", label, "-R", repo, "--yes"])
             except Exception as e:
                 results.append({"probe": "cleanup", "result": "denied", "detail": f"label delete {repo}: {e}"[:200]})
+        if repo.lower() in writable and environ.get(secret or ""):
+            results += push_probe(run, repo, environ[secret])
+    return results
+
+
+def push_probe(run, repo, token):
+    """`push:branch:<owner/repo>`: with `token`, create a throwaway branch at the head of the default branch (the
+    API call `git push` makes), then delete it at once. A branch that cannot be deleted is a `cleanup` failure."""
+    name, branch, results = f"push:branch:{repo}", f"factory/doctor-probe-{uuid.uuid4().hex[:12]}", []
+    probe(results, name, lambda: run(["api", "-X", "POST", f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{branch}", "-f",
+                                      "sha=" + json.loads(run(["api", f"repos/{repo}/commits/HEAD"], token=token))["sha"]]))
+    if results[-1]["result"] == "ok":
+        try:
+            run(["api", "-X", "DELETE", f"repos/{repo}/git/refs/heads/{branch}"])
+        except Exception as e:
+            results.append({"probe": "cleanup", "result": "denied", "detail": f"branch delete {repo}: {e}"[:200]})
     return results
 
 
