@@ -49,7 +49,7 @@ class SetupTest(unittest.TestCase):
         lines = self.install()
         skills = {p.name for p in (self.home / ".agents/skills").iterdir()}
         # engine: developer, reviewer, router agents run there; retro runs in `knowledge`
-        self.assertTrue({"factory-step", "ponytail", "tdd", "ponytail-review", "to-tickets"} <= skills, skills)
+        self.assertTrue({"factory-step", "factory-troubleshoot", "ponytail", "tdd", "ponytail-review", "to-tickets"} <= skills, skills)
         self.assertNotIn("retro", skills)
         self.assertIn("skill tdd: github:cursor/plugins@4dd1d05818d1", lines)
 
