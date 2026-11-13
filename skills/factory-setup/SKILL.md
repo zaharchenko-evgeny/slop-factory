@@ -28,8 +28,9 @@ the user approves a plan. The layout is the engine's ADR-0021:
   outcomes; the gate applies an outcome's effects. A node's `writes` names the
   repositories it writes and its `listens` the ticket repositories it hears
   (ADR-0024; `references/nodes.md`).
-- `assign` takes a GitHub login, a list of logins or `owner` (the top-level
-  `factory.yaml` owner). `unassign` takes the same values or `all`. With
+- `assign` takes a GitHub login, a list of logins or `owner` (the optional top-level
+  `factory.yaml` `owner`, the fallback person; `factory validate` rejects `assign: owner`
+  without it). `unassign` takes the same values or `all`. With
   `on: pr`, `assign` targets every open PR. Without `on`, it targets the ticket.
   Assigning a ticket in `ready` hides it from the frontier because the frontier
   skips assigned tickets.

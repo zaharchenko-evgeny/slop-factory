@@ -742,14 +742,17 @@ class GitHubGateTracker(DescriptorPort):
             items.extend(f"- {key}: {name}" for name in sorted(old.keys() | new.keys()) if old.get(name) != new.get(name))
         body = effects_mod.tagged("The merged commit changes the Air deploy plan. Run `factory deploy --apply` locally.\n\n"
                 + "\n".join(items) + f"\n\nFactory-Run: finish:{pr}")
+        # The person who caused the change, else the `owner` fallback, else nobody.
+        who = (pull.get("user") or {}).get("login") or config.owner()
+        assignee = ["--assignee", who] if who else []
         if existing:
             self.run(["issue", "edit", str(existing["number"]), "-R", self.repo, "--body", body,
-                      "--add-label", vocab.needs_human(), "--add-assignee", config.owner()])
+                      "--add-label", vocab.needs_human(), *(["--add-assignee", who] if who else [])])
             self.run(["issue", "comment", str(existing["number"]), "-R", self.repo, "--body",
                       effects_mod.tagged(f"Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}")])
         else:
             url = self.run(["issue", "create", "-R", self.repo, "--title", title, "--body", body,
-                            "--label", vocab.needs_human(), "--assignee", config.owner()]).strip()
+                            "--label", vocab.needs_human(), *assignee]).strip()
             self.run(["issue", "comment", url.rsplit("/", 1)[-1], "-R", self.repo, "--body",
                       effects_mod.tagged(f"Deploy plan changed by #{pr}.\n\nFactory-Run: finish:{pr}")])
 

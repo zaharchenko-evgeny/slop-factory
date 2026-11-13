@@ -588,6 +588,25 @@ def _event_errors(defn, name, node):
     return errs
 
 
+_OWNER_TEMPLATE = re.compile(r"\{\{-?\s*factory\.owner\b")
+
+
+def _owner_uses(defn):
+    """`missing-owner` errors, one per place that needs `factory.yaml` `owner`: an `assign: owner` effect or a
+    role template that renders `{{ factory.owner }}`."""
+    errs = []
+    for r, body in sorted(defn["bodies"].items()):
+        if _OWNER_TEMPLATE.search(body):
+            errs.append(f"missing-owner: {ROLES}/{r}/role.md: uses `{{{{ factory.owner }}}}` but factory.yaml has no `owner`")
+    for n, node in sorted((defn["workflow"].get("nodes") or {}).items()):
+        for o, oc in sorted((node.get("outcomes") or {}).items()):
+            for e in (oc or {}).get("effects") or []:
+                v = e.get("assign") if isinstance(e, dict) else None
+                if v == "owner" or (isinstance(v, list) and "owner" in v):
+                    errs.append(f"missing-owner: nodes.{n}.{o}: `assign: owner` but factory.yaml has no `owner`")
+    return errs
+
+
 def errors(defn):
     f, w = defn["factory"], defn["workflow"]
     errs = []
@@ -599,8 +618,8 @@ def errors(defn):
     hooks = f.get("webhooks") or {}
     nodes = w.get("nodes") or {}
     registry = plugins.registry(f)
-    if not f.get("owner"):
-        errs.append("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)")
+    if not f.get("owner"):  # `owner` is the optional fallback person; refuse the places that need it
+        errs += _owner_uses(defn)
     errs += [e for n, s in skills.items() for e in _skill_spec_errors(f"skills.{n}", s)]
     for s in (f.get("defaults") or {}).get("skills") or []:
         errs += _skill_errors("defaults.skills", s, skills)
