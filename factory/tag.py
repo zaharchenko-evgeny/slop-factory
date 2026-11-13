@@ -31,9 +31,12 @@ def kind_marker(kind):
 def untag(body):
     """`body` without its leading tag (the current one or the legacy one) and the whitespace after it."""
     body = body or ""
-    for t in dict.fromkeys(t for t in (_tag, LEGACY) if t):
-        if body.startswith(t) and (len(body) == len(t) or body[len(t)].isspace()):
-            return body[len(t):].lstrip()
+    # The current tag is its own line, so a message that merely starts with the same words keeps them.
+    # The legacy tag also matches in the old one-line form (`[factory] text`).
+    if _tag and (body == _tag or body.startswith(_tag + "\n")):
+        return body[len(_tag):].lstrip()
+    if body.startswith(LEGACY) and (len(body) == len(LEGACY) or body[len(LEGACY)].isspace()):
+        return body[len(LEGACY):].lstrip()
     return body
 
 

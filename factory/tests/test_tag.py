@@ -18,7 +18,7 @@ import gate_port  # noqa: E402
 import reconcile  # noqa: E402
 import config  # noqa: E402
 import tag  # noqa: E402
-from tag import has_tag, same_text, tagged  # noqa: E402
+from tag import has_tag, same_text, tagged, untag  # noqa: E402
 
 
 class TagTest(unittest.TestCase):
@@ -116,6 +116,18 @@ class ConfiguredTagTest(unittest.TestCase):
         tag.configure("")
         self.assertTrue(has_tag(posted, "end failed:"))
         self.assertFalse(posted.startswith("end failed:") and "factory:kind end-failed" not in posted)
+
+    def test_tag_equal_to_a_message_start_keeps_the_message(self):
+        kinds = ("recover:", "reconcile:", "end failed:")
+        for setting in kinds + ("recover", "end", "Stopped:"):
+            tag.configure(setting)
+            for k in kinds:
+                body = tagged(f"{k} stage=ready")
+                self.assertTrue(has_tag(body, k), (setting, k, body))
+                self.assertIn(f"{k} stage=ready", untag(body), (setting, k))
+                self.assertIn(f"factory:kind {k.rstrip(':').replace(' ', '-')}", body, (setting, k))
+                self.assertFalse(has_tag(f"{k} stage=ready", k), (setting, k, "untagged person text"))
+                self.assertEqual(tagged(body), body, (setting, k, "tagging twice changes nothing"))
 
     def test_blank_tag_matches_untagged_text_only_for_a_given_start(self):
         tag.configure("")
