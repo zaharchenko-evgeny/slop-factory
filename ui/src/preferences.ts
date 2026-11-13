@@ -9,6 +9,7 @@ const filterSchema = z.object({
   warningOnly: z.boolean(),
   reviewOnly: z.boolean(),
   hideCompleted: z.boolean(),
+  activeOnly: z.boolean().default(false),
 })
 
 const preferencesSchema = z.object({
@@ -31,6 +32,7 @@ export const defaultFilters: Filters = {
   warningOnly: false,
   reviewOnly: false,
   hideCompleted: false,
+  activeOnly: false,
 }
 
 export const defaultPreferences: Preferences = {
@@ -79,6 +81,7 @@ export function filteredTickets(snapshot: Snapshot, filters: Filters): Snapshot[
     if (filters.stage !== 'all' && ticket.stage !== filters.stage) return false
     if (filters.warningOnly && !ticket.warning) return false
     if (filters.hideCompleted && stage?.kind === 'final') return false
+    if (filters.activeOnly && (ticket.stage === 'draft' || stage?.kind === 'final')) return false
     if (filters.reviewOnly && ticket.attention.kind !== 'review') return false
     return true
   })

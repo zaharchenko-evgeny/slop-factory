@@ -58,6 +58,12 @@ sync.
 
 ## Views and state
 
+Filters are saved with the selected view and apply to every registered progress
+view and the human-attention counts. **Active only** is off by default. When
+enabled, it hides the `draft` stage and all configured final stages. It keeps
+waiting and unknown stages. **Hide completed** remains a separate filter that
+hides configured final stages only.
+
 Register each view with `registerProgressView` from
 `ui/src/views/registry.tsx`. Follow `ui/src/views/builtins.tsx` for an example.
 Each registration needs a unique `id`, a label, a description and a component.

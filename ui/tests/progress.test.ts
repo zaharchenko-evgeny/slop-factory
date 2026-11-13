@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseSnapshot } from '../src/model'
 import {
   defaultFilters,
   defaultPreferences,
   filteredTickets,
+  loadPreferences,
   safeHttpUrl,
   ticketsForAttention,
   ticketNeedsReview,
@@ -23,6 +24,8 @@ function makeSnapshot() {
       { id: 'in-dev', name: 'In development', kind: 'active' },
       { id: 'blocked', name: 'Blocked', kind: 'waiting' },
       { id: 'done', name: 'Done', kind: 'final' },
+      { id: 'draft', name: 'Draft', kind: 'active' },
+      { id: 'archived', name: 'Archived', kind: 'final' },
     ],
     nodes: [],
     edges: [],
@@ -45,6 +48,27 @@ function makeSnapshot() {
         key: 'ticket:3', id: '#3', title: 'Finish the beta report', url: null,
         repository: 'beta', environments: ['dev'], stage: 'done',
         stageEnteredAt: null, ageSeconds: 0, warning: false,
+        attention: { kind: 'none', reason: null, reviewers: [], url: null },
+        prs: [], blockers: [], history: [], nodes: [],
+      },
+      {
+        key: 'ticket:4', id: '#4', title: 'Draft alpha result', url: null,
+        repository: 'alpha', environments: ['prod'], stage: 'draft',
+        stageEnteredAt: null, ageSeconds: 0, warning: false,
+        attention: { kind: 'review', reason: 'Draft review requested', reviewers: ['Lin'], url: null },
+        prs: [], blockers: [], history: [], nodes: [],
+      },
+      {
+        key: 'ticket:5', id: '#5', title: 'Archive the gamma result', url: null,
+        repository: 'gamma', environments: ['dev'], stage: 'archived',
+        stageEnteredAt: null, ageSeconds: 0, warning: false,
+        attention: { kind: 'none', reason: null, reviewers: [], url: null },
+        prs: [], blockers: [], history: [], nodes: [],
+      },
+      {
+        key: 'ticket:6', id: '#6', title: 'Inspect the gamma queue', url: null,
+        repository: 'gamma', environments: ['dev'], stage: 'custom-pending',
+        stageEnteredAt: null, ageSeconds: null, warning: false,
         attention: { kind: 'none', reason: null, reviewers: [], url: null },
         prs: [], blockers: [], history: [], nodes: [],
       },
@@ -100,6 +124,7 @@ describe('ticket filters', () => {
       warningOnly: true,
       reviewOnly: true,
       hideCompleted: true,
+      activeOnly: true,
     })
     expect(filtered.map((ticket) => ticket.id)).toEqual(['#1'])
     expect(ticketNeedsReview(filtered[0]!)).toBe(true)
@@ -112,11 +137,74 @@ describe('ticket filters', () => {
       environment: 'prod',
       reviewOnly: true,
       hideCompleted: true,
+      activeOnly: true,
     }
     const visible = filteredTickets(snapshot, filters)
     const attentionCandidates = ticketsForAttention(snapshot, filters)
     expect(visible.map((ticket) => ticket.id)).toEqual(['#1'])
     expect(attentionCandidates.map((ticket) => ticket.id)).toEqual(['#1', '#2'])
+  })
+
+  it('hides draft and every configured final stage while keeping waiting and unknown stages', () => {
+    const active = filteredTickets(snapshot, { ...defaultFilters, activeOnly: true })
+    expect(active.map((ticket) => ticket.id)).toEqual(['#1', '#2', '#6'])
+    expect(filteredTickets(snapshot, { ...defaultFilters, hideCompleted: true }).map((ticket) => ticket.id)).toEqual(['#1', '#2', '#4', '#6'])
+  })
+
+  it('combines active-only with search and review filters, and restores tickets when turned off', () => {
+    const activeReview = filteredTickets(snapshot, {
+      ...defaultFilters,
+      activeOnly: true,
+      query: 'alpha result',
+      reviewOnly: true,
+    })
+    expect(activeReview.map((ticket) => ticket.id)).toEqual(['#1'])
+
+    const hiddenDraftReview = filteredTickets(snapshot, {
+      ...defaultFilters,
+      activeOnly: true,
+      query: 'draft',
+      reviewOnly: true,
+    })
+    const restoredDraftReview = filteredTickets(snapshot, {
+      ...defaultFilters,
+      query: 'draft',
+      reviewOnly: true,
+    })
+    expect(hiddenDraftReview).toEqual([])
+    expect(restoredDraftReview.map((ticket) => ticket.id)).toEqual(['#4'])
+    expect(filteredTickets(snapshot, defaultFilters).map((ticket) => ticket.id)).toEqual(snapshot.tickets.map((ticket) => ticket.id))
+  })
+})
+
+describe('saved preferences', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('loads old preferences without resetting the saved view or filters', () => {
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: vi.fn().mockReturnValue(JSON.stringify({
+          view: 'ticket-list',
+          theme: 'dark',
+          autoRefresh: true,
+          refreshSeconds: 30,
+          filters: {
+            query: 'alpha', repository: 'alpha', environment: 'prod', stage: 'in-dev',
+            warningOnly: true, reviewOnly: false, hideCompleted: true,
+          },
+          selectedKey: 'ticket:1',
+        })),
+      },
+    })
+
+    const preferences = loadPreferences('test-factory')
+    expect(preferences.view).toBe('ticket-list')
+    expect(preferences.filters).toEqual({
+      ...defaultFilters,
+      query: 'alpha', repository: 'alpha', environment: 'prod', stage: 'in-dev',
+      warningOnly: true, hideCompleted: true,
+    })
+    expect(preferences.selectedKey).toBe('ticket:1')
   })
 })
 

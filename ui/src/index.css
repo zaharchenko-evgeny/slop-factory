@@ -210,6 +210,7 @@ html[data-theme="dark"] {
 .warning-filter-active svg { color: var(--amber); }
 .review-filter-active { color: var(--rose) !important; border-color: var(--rose-line) !important; background: var(--rose-soft) !important; }
 .review-filter-active svg { color: var(--rose); }
+.active-only-active { color: var(--teal) !important; border-color: var(--teal-line) !important; background: var(--teal-soft) !important; }
 .clear-filters { height: 28px !important; padding: 0 6px !important; color: var(--muted) !important; font-size: 10px !important; }
 .older-toggle { margin-left: auto; }
 .inline-error { display: flex; align-items: center; gap: 6px; margin: -5px 0 9px; color: var(--amber); font-size: 10px; }
