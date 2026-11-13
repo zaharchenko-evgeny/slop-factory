@@ -365,6 +365,109 @@ class ValidationTest(unittest.TestCase):
         self.assertTrue(errs)
 
 
+class IntakePlaceTest(unittest.TestCase):
+    """#1361: offline-eval-factory's shape. Four environments narrow LME by Subsystem, `intake` (writes nothing) lists
+    o/jbeval on all of LME, and `team` keeps its own GitHub issues. A ticket with no Subsystem is intake's; the
+    unscoped place never takes a ticket a scoped place holds, whatever the order of the environments."""
+    SCOPED = {"engine": ("o/jbeval", "JBeval"), "harbor": ("o/harbor-infra", "Harbor"),
+              "corpus": ("o/corpus", "Datasets"), "docs": ("o/docs", "Documentation")}
+    TICKETS = {"LME-1": "JBeval", "LME-2": "Harbor", "LME-3": "Datasets", "LME-1760": None}
+
+    def config(self, intake_first):
+        import shutil
+        import yaml
+        import definition
+        root = Path(tempfile.mkdtemp()) / "team"
+        self.addCleanup(shutil.rmtree, root.parent)
+        shutil.copytree(Path(__file__).parent / "fixtures/v2", root)
+        f = yaml.safe_load((root / "factory.yaml").read_text())
+        base = {k: v for k, v in f["environments"]["engine"].items() if k != "repositories"}
+        envs = {e: [{"repo": r, "write": True, "tracker": {"scope": {"field": "Subsystem", "value": v}}},
+                    *({"repo": o, "tracker": "none"} for o, _ in self.SCOPED.values() if o != r)]
+                for e, (r, v) in self.SCOPED.items()}
+        intake = {"intake": [{"repo": "o/jbeval", "tracker": {"adapter": "youtrack"}},
+                             *({"repo": o, "tracker": "none"} for o, _ in list(self.SCOPED.values())[1:])]}
+        envs = {**intake, **envs} if intake_first else {**envs, **intake}
+        envs["team"] = [{"repo": "o/team", "write": True, "tracker": {"adapter": "github-issues"}},
+                        {"repo": "o/jbeval", "tracker": "none"}]
+        f["environments"] = {n: {**base, "repositories": rs} for n, rs in envs.items()}
+        f["tracker"] = {"label_prefix": "factory:", **YT, "project": "LME"}
+        (root / "factory.yaml").write_text(yaml.safe_dump(f, sort_keys=False))
+        return definition.config(definition.load(root))
+
+    def scoped(self, config, env):
+        yt = FakeYouTrack({n: yt_issue(n, s) for n, s in self.TICKETS.items()})
+        gh = FakeGh({76: ["factory:triage"]})
+        envs, repos = gate.place_keys(config)
+
+        def build(c, key):
+            youtrack = scopes.adapter(envs[key]) == "youtrack"
+            return gate.place_systems(c, key, run=gh, **({"yt_run": yt} if youtrack else {}))
+        return scopes.ScopedTracker(config, build, gate.run_place(config, env, envs), envs, repos), yt, gh
+
+    def test_scoped_places_come_first_and_keep_their_keys(self):
+        for intake_first in (False, True):
+            with self.subTest(intake_first=intake_first):
+                envs, _ = gate.place_keys(self.config(intake_first))
+                self.assertEqual([(k, b.get("scope", {}).get("value"), b["adapter"]) for k, b in envs.items()],
+                                 [("place:o/jbeval", "JBeval", "youtrack"), ("place:o/harbor-infra", "Harbor", "youtrack"),
+                                  ("place:o/corpus", "Datasets", "youtrack"), ("place:o/docs", "Documentation", "youtrack"),
+                                  ("place:o/jbeval#2", None, "youtrack"), ("place:o/team", None, "github-issues")])
+
+    def test_intake_resolves_each_ticket_to_its_scoped_place_else_the_unscoped_one(self):
+        for intake_first in (False, True):
+            with self.subTest(intake_first=intake_first):
+                s, yt, gh = self.scoped(self.config(intake_first), "intake")
+                self.assertEqual({n: s.env_of(n) for n in [*self.TICKETS, 76]},
+                                 {"LME-1": "place:o/jbeval", "LME-2": "place:o/harbor-infra", "LME-3": "place:o/corpus",
+                                  "LME-1760": "place:o/jbeval#2", 76: "place:o/team"})
+                self.assertEqual(s.systems("place:o/harbor-infra")[1].repo, "o/harbor-infra")  # LME-2's PRs
+                self.assertEqual(s.env_of_repository("o/jbeval"), "place:o/jbeval")  # a jbeval PR: the scoped place
+                s.apply({"ticket": "LME-1760", "kind": "stage", "value": "blocked", "mirror": False, "run_id": "r"})
+                self.assertTrue(yt.writes())
+                self.assertTrue(all("LME-1760" in path for _, path, _ in yt.writes()), yt.writes())
+                self.assertEqual(gh.writes(), [])
+
+    def test_a_swept_ticket_is_its_scoped_places_before_the_unscoped_one(self):
+        s, _, _ = self.scoped(self.config(True), "intake")
+        found = {"place:o/jbeval": ["LME-1"], "place:o/harbor-infra": ["LME-2"], "place:o/jbeval#2": [*self.TICKETS]}
+        for key in s.envs:
+            s.systems(key)[0].sweep_tickets = lambda *a, key=key, **k: found.get(key, [])
+        self.assertEqual(s.sweep_tickets(["ready"]), ["LME-1", "LME-2", "LME-3", "LME-1760"])
+        self.assertEqual({n: s._env_of[n] for n in self.TICKETS},
+                         {"LME-1": "place:o/jbeval", "LME-2": "place:o/harbor-infra", "LME-3": "place:o/jbeval#2",
+                          "LME-1760": "place:o/jbeval#2"})  # LME-3: no Datasets sweep found it, so intake's
+
+    def test_each_writable_environment_takes_only_its_scoped_place(self):
+        config = self.config(True)
+        for env, (repo, _) in self.SCOPED.items():
+            with self.subTest(env=env):
+                s, _, _ = self.scoped(config, env)
+                self.assertEqual(s.candidates(), [f"place:{repo}"])
+                self.assertEqual(s.envs[f"place:{repo}"]["scope"]["value"], self.SCOPED[env][1])
+                self.assertIsNone(s.env_of("LME-1760"))  # no Subsystem: skipped outside intake
+        s, _, _ = self.scoped(config, "harbor")
+        self.assertEqual((s.env_of("LME-2"), s.env_of("LME-1")), ("place:o/harbor-infra", None))
+        s, _, _ = self.scoped(config, "team")
+        self.assertEqual((s.candidates(), s.env_of(76), s.env_of("LME-1760")), (["place:o/team"], "place:o/team", None))
+
+    def test_deploy_reads_the_extra_place_once(self):
+        import deploy
+        config = self.config(True)
+        self.assertEqual(deploy.github_homes(config), ["o/team"])
+        self.assertEqual(deploy.youtrack_repositories(config), {"o/jbeval", "o/harbor-infra", "o/corpus", "o/docs"})
+
+    def test_state_rules_handle_a_ticket_once_on_its_scoped_place(self):
+        from factory_plugins.youtrack import state
+        seen, calls = set(), []
+        for place, listed in (("harbor", ["LME-2"]), ("intake", ["LME-2", "LME-1760"])):
+            store = mock.Mock(state_mirror_field="State", bots=set(), tickets_by_stage=lambda *a, listed=listed, **k: listed,
+                              last_field_change=lambda n, f, place=place: calls.append((place, n)) or ("Obsolete", "person"),
+                              issue=lambda n: {"attrs": ["factory:ready"]})
+            state.apply_rules(mock.Mock(tickets=store), {"Obsolete": "stop"}, {"ready": "factory:ready"}, dry_run=True, seen=seen)
+        self.assertEqual(calls, [("harbor", "LME-2"), ("intake", "LME-1760")])
+
+
 if __name__ == "__main__":
     unittest.main()
 
