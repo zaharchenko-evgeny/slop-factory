@@ -80,8 +80,8 @@ export function filteredTickets(snapshot: Snapshot, filters: Filters): Snapshot[
     if (filters.environment !== 'all' && !ticket.environments.includes(filters.environment)) return false
     if (filters.stage !== 'all' && ticket.stage !== filters.stage) return false
     if (filters.warningOnly && !ticket.warning) return false
-    if (filters.hideCompleted && stage?.kind === 'final') return false
-    if (filters.activeOnly && (ticket.stage === 'draft' || stage?.kind === 'final')) return false
+    if (filters.hideCompleted && (ticket.state === 'closed' || stage?.kind === 'final')) return false
+    if (filters.activeOnly && (ticket.state === 'closed' || ticket.stage === 'draft' || stage?.kind === 'final')) return false
     if (filters.reviewOnly && ticket.attention.kind !== 'review') return false
     return true
   })

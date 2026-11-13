@@ -396,6 +396,7 @@ function TicketPreview({ ticket, stageId, onFocusStage, onSelectTicket }: {
   }}>
     <span className="workflow-ticket-preview-copy"><strong>{ticket.id}</strong><span title={ticket.title}>{ticket.title}</span></span>
     <span className="workflow-ticket-preview-signals">
+      {ticket.state === 'closed' && <span className="closed-preview-badge">Closed</span>}
       {ticket.warning && <i className="preview-warning-mark" aria-label={`Age warning: ${formatAge(ticket.ageSeconds)}`} title={`Age warning: ${formatAge(ticket.ageSeconds)}`} />}
       {ticketNeedsReview(ticket) && <i className="preview-review-mark" aria-label="Needs human review" title="Needs human review" />}
       {ticket.attention.kind === 'attention' && <i className="preview-attention-mark" aria-label="Human attention" title="Human attention" />}

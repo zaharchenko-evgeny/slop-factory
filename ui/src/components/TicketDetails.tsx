@@ -27,7 +27,7 @@ export function TicketDetails({ snapshot, ticket, onClose }: { snapshot: Snapsho
       <SheetContent side="right" className="ticket-sheet">
         {ticket !== null && <>
           <SheetHeader className="ticket-sheet-header">
-            <div className="sheet-eyebrow"><span className="sheet-ticket-key">{ticket.id}</span><span className="sheet-repo">{ticket.repository}</span><Badge variant="outline" className={`sheet-stage-badge stage-kind-${stage?.kind ?? 'unknown'}`}>{stage?.name ?? `Unknown stage: ${ticket.stage}`}</Badge></div>
+            <div className="sheet-eyebrow"><span className="sheet-ticket-key">{ticket.id}</span><span className="sheet-repo">{ticket.repository}</span>{ticket.state === 'closed' && <Badge variant="outline" className="closed-badge">Closed</Badge>}<Badge variant="outline" className={`sheet-stage-badge stage-kind-${stage?.kind ?? 'unknown'}`}>{stage?.name ?? `Unknown stage: ${ticket.stage}`}</Badge></div>
             <SheetTitle>{ticket.title}</SheetTitle>
             <SheetDescription>{ticket.environments.length ? ticket.environments.join(', ') : 'No environment recorded'}</SheetDescription>
           </SheetHeader>

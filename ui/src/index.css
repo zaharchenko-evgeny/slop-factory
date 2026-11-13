@@ -379,6 +379,10 @@ html[data-theme="dark"] {
 .ticket-review.ticket-warning { border-left-color: var(--amber); }
 .ticket-selected { border-color: var(--teal-line); background: color-mix(in srgb, var(--teal-soft) 45%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--teal) 15%, transparent); }
 .ticket-card-top, .ticket-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 5px; }
+.ticket-card-status { display: inline-flex; align-items: center; gap: 5px; }
+.closed-badge, .closed-preview-badge { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: var(--soft); font-size: 8px; line-height: 1; white-space: nowrap; }
+.closed-badge { padding: 3px 6px; }
+.closed-preview-badge { padding: 3px 5px; font-size: 7px; }
 .ticket-key { color: var(--muted); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .ticket-pr-count { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); font-size: 8px; }
 .ticket-title { display: -webkit-box; overflow: hidden; color: var(--ink); font-size: 10px; line-height: 1.4; font-weight: 560; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }

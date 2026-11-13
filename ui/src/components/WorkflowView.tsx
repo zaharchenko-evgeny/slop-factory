@@ -151,7 +151,7 @@ export function TicketCard({ ticket, onSelect, selected }: { ticket: Ticket; onS
   const genericAttention = ticket.attention.kind === 'attention'
   return (
     <button className={`ticket-card ${ticket.warning ? 'ticket-warning' : ''} ${review ? 'ticket-review' : ''} ${selected ? 'ticket-selected' : ''}`} type="button" onClick={() => onSelect(ticket)} aria-label={`Open ${ticket.id}: ${ticket.title}`} aria-current={selected ? 'true' : undefined}>
-      <span className="ticket-card-top"><span className="ticket-key">{ticket.id}</span>{ticket.prs.length > 0 && <span className="ticket-pr-count"><GitPullRequest size={11} />{ticket.prs.length}</span>}</span>
+      <span className="ticket-card-top"><span className="ticket-key">{ticket.id}</span><span className="ticket-card-status">{ticket.state === 'closed' && <span className="closed-badge">Closed</span>}{ticket.prs.length > 0 && <span className="ticket-pr-count"><GitPullRequest size={11} />{ticket.prs.length}</span>}</span></span>
       <strong className="ticket-title">{ticket.title}</strong>
       {(ticket.warning || review || genericAttention) && <span className="ticket-signals">
         {ticket.warning && <span className="ticket-signal signal-warning"><AlertTriangle size={11} />Stage age over 1h <b>{formatAge(ticket.ageSeconds)}</b></span>}

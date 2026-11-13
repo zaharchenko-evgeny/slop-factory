@@ -42,6 +42,7 @@ const ticketSchema = z.object({
   repository: z.string(),
   environments: z.array(z.string()),
   stage: z.string(),
+  state: z.enum(['open', 'closed', 'unknown']).default('unknown'),
   stageEnteredAt: z.string().nullable(),
   ageSeconds: z.number().nullable(),
   warning: z.boolean(),

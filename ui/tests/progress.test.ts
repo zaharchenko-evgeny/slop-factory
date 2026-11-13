@@ -33,42 +33,56 @@ function makeSnapshot() {
     tickets: [
       {
         key: 'ticket:1', id: '#1', title: 'Review the alpha result', url: null,
-        repository: 'alpha', environments: ['prod'], stage: 'in-dev',
+        repository: 'alpha', environments: ['prod'], stage: 'in-dev', state: 'open',
         stageEnteredAt: '2026-11-13T08:00:00Z', ageSeconds: 7200, warning: true,
         attention: { kind: 'review', reason: 'Review requested', reviewers: ['Ada'], url: null },
         prs: [], blockers: [], history: [], nodes: [],
       },
       {
         key: 'ticket:2', id: '#2', title: 'Check the alpha dependency', url: null,
-        repository: 'alpha', environments: ['prod'], stage: 'blocked',
+        repository: 'alpha', environments: ['prod'], stage: 'blocked', state: 'open',
         stageEnteredAt: null, ageSeconds: null, warning: false,
         attention: { kind: 'attention', reason: 'Owner input needed', reviewers: [], url: null },
         prs: [], blockers: ['Wait for input'], history: [], nodes: [],
       },
       {
         key: 'ticket:3', id: '#3', title: 'Finish the beta report', url: null,
-        repository: 'beta', environments: ['dev'], stage: 'done',
+        repository: 'beta', environments: ['dev'], stage: 'done', state: 'open',
         stageEnteredAt: null, ageSeconds: 0, warning: false,
         attention: { kind: 'none', reason: null, reviewers: [], url: null },
         prs: [], blockers: [], history: [], nodes: [],
       },
       {
         key: 'ticket:4', id: '#4', title: 'Draft alpha result', url: null,
-        repository: 'alpha', environments: ['prod'], stage: 'draft',
+        repository: 'alpha', environments: ['prod'], stage: 'draft', state: 'open',
         stageEnteredAt: null, ageSeconds: 0, warning: false,
         attention: { kind: 'review', reason: 'Draft review requested', reviewers: ['Lin'], url: null },
         prs: [], blockers: [], history: [], nodes: [],
       },
       {
         key: 'ticket:5', id: '#5', title: 'Archive the gamma result', url: null,
-        repository: 'gamma', environments: ['dev'], stage: 'archived',
+        repository: 'gamma', environments: ['dev'], stage: 'archived', state: 'open',
         stageEnteredAt: null, ageSeconds: 0, warning: false,
         attention: { kind: 'none', reason: null, reviewers: [], url: null },
         prs: [], blockers: [], history: [], nodes: [],
       },
       {
         key: 'ticket:6', id: '#6', title: 'Inspect the gamma queue', url: null,
-        repository: 'gamma', environments: ['dev'], stage: 'custom-pending',
+        repository: 'gamma', environments: ['dev'], stage: 'custom-pending', state: 'open',
+        stageEnteredAt: null, ageSeconds: null, warning: false,
+        attention: { kind: 'none', reason: null, reviewers: [], url: null },
+        prs: [], blockers: [], history: [], nodes: [],
+      },
+      {
+        key: 'ticket:7', id: '#7', title: 'Inspect the closed alpha ticket', url: null,
+        repository: 'alpha', environments: ['prod'], stage: 'in-dev', state: 'closed',
+        stageEnteredAt: '2026-11-13T08:00:00Z', ageSeconds: 7200, warning: false,
+        attention: { kind: 'none', reason: null, reviewers: [], url: null },
+        prs: [], blockers: [], history: [], nodes: [],
+      },
+      {
+        key: 'ticket:8', id: '#8', title: 'Inspect a ticket with unknown state', url: null,
+        repository: 'alpha', environments: ['prod'], stage: 'in-dev', state: 'unknown',
         stageEnteredAt: null, ageSeconds: null, warning: false,
         attention: { kind: 'none', reason: null, reviewers: [], url: null },
         prs: [], blockers: [], history: [], nodes: [],
@@ -81,6 +95,13 @@ describe('snapshot boundary', () => {
   it('parses v1 data and defaults newly optional PR evidence errors', () => {
     const snapshot = parseSnapshot(makeSnapshot())
     expect(snapshot.tickets[0]?.evidenceErrors).toEqual([])
+  })
+
+  it('defaults a missing ticket state in legacy snapshots to unknown', () => {
+    const legacy = makeSnapshot()
+    const ticketsWithoutState = legacy.tickets.map(({ state: _state, ...ticket }) => ticket)
+    const snapshot = parseSnapshot({ ...legacy, tickets: ticketsWithoutState })
+    expect(snapshot.tickets.every((ticket) => ticket.state === 'unknown')).toBe(true)
   })
 
   it('rejects unknown snapshot versions', () => {
@@ -143,13 +164,14 @@ describe('ticket filters', () => {
     const visible = filteredTickets(snapshot, filters)
     const attentionCandidates = ticketsForAttention(snapshot, filters)
     expect(visible.map((ticket) => ticket.id)).toEqual(['#1'])
-    expect(attentionCandidates.map((ticket) => ticket.id)).toEqual(['#1', '#2'])
+    expect(attentionCandidates.map((ticket) => ticket.id)).toEqual(['#1', '#2', '#8'])
   })
 
   it('hides draft and every configured final stage while keeping waiting and unknown stages', () => {
     const active = filteredTickets(snapshot, { ...defaultFilters, activeOnly: true })
-    expect(active.map((ticket) => ticket.id)).toEqual(['#1', '#2', '#6'])
-    expect(filteredTickets(snapshot, { ...defaultFilters, hideCompleted: true }).map((ticket) => ticket.id)).toEqual(['#1', '#2', '#4', '#6'])
+    expect(active.map((ticket) => ticket.id)).toEqual(['#1', '#2', '#6', '#8'])
+    expect(filteredTickets(snapshot, { ...defaultFilters, hideCompleted: true }).map((ticket) => ticket.id)).toEqual(['#1', '#2', '#4', '#6', '#8'])
+    expect(filteredTickets(snapshot, defaultFilters).map((ticket) => ticket.id)).toContain('#7')
   })
 
   it('combines active-only with search and review filters, and restores tickets when turned off', () => {

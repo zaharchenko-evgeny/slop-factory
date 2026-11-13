@@ -164,6 +164,15 @@ def stage_clock(ticket, stages, stage, now):
     return entered if parsed else None, age, history
 
 
+def ticket_state(record):
+    state = getattr(record, 'state', None)
+    if isinstance(state, str):
+        normalized = state.strip().lower()
+        if normalized in ('open', 'closed'):
+            return normalized
+    return 'unknown'
+
+
 def attention(ticket, prs, config, graph, facts, url, pr_evidence_complete=True):
     """Review evidence is independent of the generic human-needed marker."""
     for pr, pr_url in prs:
@@ -274,6 +283,7 @@ def node_projection(name, node, source, facts, events):
 
 def project_ticket(source, tracker, record, config, graph, events, now):
     stages = config['tracker']['stages']
+    state = ticket_state(record)
     if scopes.adapter(source.block) != 'youtrack':
         actual_repo, _ = split_ticket(record.id, source.block.get('repository') or getattr(tracker, 'repo', ''))
         if actual_repo and actual_repo.lower() != str(getattr(tracker, 'repo', '')).lower() and hasattr(tracker, 'at'):
@@ -329,10 +339,11 @@ def project_ticket(source, tracker, record, config, graph, events, now):
     projections = [node_projection(name, node, source, facts, mine) for name, node in graph['nodes'].items()]
     result = {'key': key, 'id': str(record.id) if not str(record.id).isdigit() else '#' + str(record.id),
               'title': record.title, 'url': url, 'repository': names[0] if names else (repo or 'Unknown'),
-              'environments': list(source.environments), 'stage': stage, 'stageEnteredAt': entered,
-              'ageSeconds': age, 'warning': age is not None and age > 3600 and
+              'environments': list(source.environments), 'stage': stage, 'state': state,
+              'stageEnteredAt': entered, 'ageSeconds': age, 'warning': state != 'closed' and age is not None and age > 3600 and
               config['tracker'].get('stage_kinds', {}).get(stage, 'active') == 'active',
-              'attention': attention(record, prs, config, graph, facts, url, pr_evidence_complete=not any(e.startswith('PR evidence unavailable') for e in errors)),
+              'attention': {'kind': 'none', 'reason': None, 'reviewers': [], 'url': None} if state == 'closed' else
+              attention(record, prs, config, graph, facts, url, pr_evidence_complete=not any(e.startswith('PR evidence unavailable') for e in errors)),
               'evidenceErrors': list(errors),
               'prs': [{'number': str(p.number), 'url': link, 'repository': p.repo, 'head': p.head,
                        'state': 'merged' if p.merged else p.state, 'ci': p.ci,

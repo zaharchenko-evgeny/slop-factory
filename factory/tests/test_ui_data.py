@@ -39,12 +39,12 @@ def config_for(block=None, environments=None):
 
 
 def ticket_record(ticket_id=7, stage="ready", entered_at=None, *, attrs=None, updated_at=None,
-                  assignees=None, blockers=None, events=None):
+                  assignees=None, blockers=None, events=None, state="open"):
     labels = [STAGES[stage], "risk:low", *(attrs or [])]
     history = list(events or [])
     if not history:
         history = [{"kind": "labeled", "value": STAGES[stage], "at": entered_at, "actor": "human"}]
-    return TicketRecord(id=ticket_id, title=f"Ticket {ticket_id}", updated_at=updated_at,
+    return TicketRecord(id=ticket_id, title=f"Ticket {ticket_id}", state=state, updated_at=updated_at,
                         attrs=labels, assignees=list(assignees or []), events=history,
                         blockers_open=list(blockers or []))
 
@@ -119,6 +119,53 @@ def test_active_stage_warning_changes_after_one_hour(seconds, warning):
     assert not errors
     assert projected["ageSeconds"] == seconds
     assert projected["warning"] is warning
+
+
+def test_closed_ticket_keeps_stage_and_post_closure_node_eligibility():
+    cfg = config_for()
+    entered = (NOW - timedelta(hours=2)).isoformat()
+    record = ticket_record(entered_at=entered, state=" CLOSED ", attrs=["factory:needs-human"])
+    pr = PrRecord(repo="project", number=9, head="sha-9", state="open", ci="pending",
+                  requested_reviewers=["alice"])
+    tracker = ReadOnlyTracker(cfg, record, prs={"project": pr})
+    graph = {"nodes": {"close-handler": {"role": "worker", "triggers": ["issues.closed"],
+                                    "when": {"stage": "ready"}, "outcomes": {}}}}
+    events = [("closed:7", {"node": "close-handler"},
+               {"repository": {"full_name": "owner/project"}, "issue": {"number": 7}})]
+
+    closed, errors = project(cfg, tracker, graph=graph, events=events)
+    reopened_record = ticket_record(entered_at=entered, attrs=["factory:needs-human"], state="OPEN")
+    reopened_tracker = ReadOnlyTracker(cfg, reopened_record, prs={"project": pr})
+    reopened, reopen_errors = project(cfg, reopened_tracker, graph=graph, events=events)
+
+    assert not errors
+    assert closed["state"] == "closed"
+    assert closed["stage"] == "ready"
+    assert closed["ageSeconds"] == 2 * 3600
+    assert closed["warning"] is False
+    assert closed["attention"]["kind"] == "none"
+    assert closed["nodes"][0]["trigger"] == "matched"
+    assert closed["nodes"][0]["eligibility"] == "matched"
+    assert closed["nodes"][0]["execution"] == "unknown"
+    assert not reopen_errors
+    assert reopened["state"] == "open"
+    assert reopened["stage"] == "ready"
+    assert reopened["warning"] is True
+    assert reopened["attention"]["kind"] == "review"
+    assert reopened["nodes"][0]["trigger"] == "matched"
+    assert reopened["nodes"][0]["eligibility"] == "matched"
+
+
+@pytest.mark.parametrize(("state", "expected"), [("Open", "open"), ("CLOSED", "closed"),
+                                                    ("completed", "unknown"), (None, "unknown")])
+def test_ticket_state_normalizes_supported_values_and_marks_other_values_unknown(state, expected):
+    cfg = config_for()
+    record = ticket_record(state=state)
+
+    projected, errors = project(cfg, ReadOnlyTracker(cfg, record))
+
+    assert not errors
+    assert projected["state"] == expected
 
 
 @pytest.mark.parametrize(("stage", "kind"), [("waiting", "waiting"), ("done", "final")])

@@ -60,9 +60,11 @@ sync.
 
 Filters are saved with the selected view and apply to every registered progress
 view and the human-attention counts. **Active only** is off by default. When
-enabled, it hides the `draft` stage and all configured final stages. It keeps
-waiting and unknown stages. **Hide completed** remains a separate filter that
-hides configured final stages only.
+enabled, it hides closed tickets, the `draft` stage and all configured final
+stages. It keeps waiting and unknown stages. **Hide completed** also hides
+closed tickets and configured final stages. The UI shows a ticket's actual
+workflow stage and its open or closed state separately. A closed ticket remains
+visible when these filters are off, even if its workflow stage is not final.
 
 Register each view with `registerProgressView` from
 `ui/src/views/registry.tsx`. Follow `ui/src/views/builtins.tsx` for an example.
