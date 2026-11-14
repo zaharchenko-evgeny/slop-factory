@@ -224,7 +224,7 @@ def handoff_of(a):
             data[key] = data.get(key, []) + items
     data.update({k: v for k, v in (("reason", a.reason), ("summary", a.summary), ("size_estimate", a.size_estimate),
                                    ("reply", a.reply), ("to", a.to), ("text", a.text), ("message", a.message), ("assignee", a.assignee),
-                                   ("problem", a.problem),
+                                   ("problem", a.problem), ("verdict", a.verdict), ("walkthrough", a.walkthrough),
                                    ("recommended", a.recommended)) if v is not None and v != ""})
     for item in a.field:  # `--field KEY=VALUE`: any payload field without its own option (#1048)
         key, sep, value = item.partition("=")
@@ -254,7 +254,8 @@ def end_parser():
     p = argparse.ArgumentParser(prog="factory end", allow_abbrev=False)
     p.add_argument("outcome")
     for opt in ("findings", "slices", "checks", "reason", "summary", "size-estimate", "reply", "addressed", "disputed-focuses", "notes",
-                "note-for", "note-hint", "note-repro", "to", "text", "message", "assignee", "problem"):
+                "note-for", "note-hint", "note-repro", "to", "text", "message", "assignee", "problem", "verdict",
+                "walkthrough"):
         p.add_argument(f"--{opt}")
     p.add_argument("--recommended", type=int)
     p.add_argument("--failing-check")

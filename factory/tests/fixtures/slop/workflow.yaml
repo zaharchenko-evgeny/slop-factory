@@ -66,18 +66,18 @@ nodes:
     output: read-only
     settings: { max_repositories: 3 }
     outcomes:
-      small-low:      { effects: [{ label: "complexity:small" },  { label: "risk:low" },  { stage: ready }] }
-      small-high:     { effects: [{ label: "complexity:small" },  { label: "risk:high" }, { stage: ready }] }
-      medium-low:     { effects: [{ label: "complexity:medium" }, { label: "risk:low" },  { stage: ready }] }
-      medium-high:    { effects: [{ label: "complexity:medium" }, { label: "risk:high" }, { stage: ready }] }
-      large-high:     { effects: [{ label: "complexity:large" },  { label: "risk:high" }, { stage: ready }] }
-      ready:          { effects: [{ stage: ready }] }               # no estimate: dispatch makes one
+      small-low:      { effects: [{ comment: verdict }, { label: "complexity:small" },  { label: "risk:low" },  { stage: ready }] }
+      small-high:     { effects: [{ comment: verdict }, { label: "complexity:small" },  { label: "risk:high" }, { stage: ready }] }
+      medium-low:     { effects: [{ comment: verdict }, { label: "complexity:medium" }, { label: "risk:low" },  { stage: ready }] }
+      medium-high:    { effects: [{ comment: verdict }, { label: "complexity:medium" }, { label: "risk:high" }, { stage: ready }] }
+      large-high:     { effects: [{ comment: verdict }, { label: "complexity:large" },  { label: "risk:high" }, { stage: ready }] }
+      ready:          { effects: [{ comment: verdict }, { stage: ready }] }               # no estimate: dispatch makes one
       grill:          { effects: [{ comment: questions }, { stage: needs-answers }] }
-      split:          { effects: [{ create-issues: children }, { stage: split }] }
+      split:          { effects: [{ comment: verdict }, { create-issues: children }, { stage: split }] }
       not-actionable: { effects: [{ comment: reason }, { label: "close:wont-do" }, { stage: not-actionable }] }
       duplicate:      { effects: [{ comment: reason }, { label: "close:duplicate" }, { stage: not-actionable }] }
       superseded:     { effects: [{ comment: reason }, { label: "close:superseded" }, { stage: not-actionable }] }
-      bug:            { effects: [{ stage: investigating }] }       # a bug report with an unknown cause
+      bug:            { effects: [{ comment: verdict }, { stage: investigating }] }       # a bug report with an unknown cause
 
   # --- Investigate: a bug report -> reproduced and diagnosed, or rejected with evidence ----------
   investigate:
@@ -116,7 +116,9 @@ nodes:
       done-low:   { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
       done-high:  { effects: [{ unlabel: "factory:implement-small" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       error:      { effects: [{ unlabel: "factory:implement-small" }, { label: "factory:implement-medium" }] }   # retry on a stronger model
-      blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
+      blocked:    { effects: [{ unlabel: "factory:implement-small" }, { comment: reason }, { stage: blocked }] }
+      env-broken: { effects: [{ unlabel: "factory:implement-small" }, { park-behind-main-red: failing_check }, { stage: ready }] }   # main is red too, or Air lacks a tool
+      triage:     { effects: [{ unlabel: "factory:implement-small" }, { comment: reason }, { stage: triage }] }   # the ticket is wrong or already done
 
   implement-medium:
     agent: dev
@@ -128,7 +130,9 @@ nodes:
       done-low:   { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
       done-high:  { effects: [{ unlabel: "factory:implement-medium" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       error:      { effects: [{ unlabel: "factory:implement-medium" }, { label: "factory:implement-large" }] }
-      blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
+      blocked:    { effects: [{ unlabel: "factory:implement-medium" }, { comment: reason }, { stage: blocked }] }
+      env-broken: { effects: [{ unlabel: "factory:implement-medium" }, { park-behind-main-red: failing_check }, { stage: ready }] }   # main is red too, or Air lacks a tool
+      triage:     { effects: [{ unlabel: "factory:implement-medium" }, { comment: reason }, { stage: triage }] }   # the ticket is wrong or already done
 
   implement-large:
     agent: dev-strong
@@ -139,7 +143,9 @@ nodes:
     outcomes:
       done-low:   { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
       done-high:  { effects: [{ unlabel: "factory:implement-large" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
-      blocked:    { effects: [{ comment: reason }, { stage: blocked }] }
+      blocked:    { effects: [{ unlabel: "factory:implement-large" }, { comment: reason }, { stage: blocked }] }
+      env-broken: { effects: [{ unlabel: "factory:implement-large" }, { park-behind-main-red: failing_check }, { stage: ready }] }   # main is red too, or Air lacks a tool
+      triage:     { effects: [{ unlabel: "factory:implement-large" }, { comment: reason }, { stage: triage }] }   # the ticket is wrong or already done
 
   # --- Review: one review per ticket, chosen by risk; CI may still run (red CI: never approved) -----
   review-low:
@@ -156,6 +162,7 @@ nodes:
                        effects: [{ review: approve-at-head }, { unlabel: "factory:review-low" }, { label: "risk:high" },
                                 { label: "factory:needs-human", on: pr }, { stage: approved }] }   # merge risk medium or high: a person merges
       changes:       { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-low" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
+      incomplete:    { effects: [{ unlabel: "factory:review-low" }, { comment: reason }, { stage: blocked }] }   # evidence a person must supply (access, a tool); notify tells the owner
 
   review-high:
     agent: reviewer
@@ -171,6 +178,7 @@ nodes:
                        effects: [{ review: approve-at-head }, { unlabel: "factory:review-high" }, { label: "risk:high" },
                                 { label: "factory:needs-human", on: pr }, { stage: approved }] }   # merge risk medium or high: a person merges
       changes:       { effects: [{ review: request-changes-at-head }, { unlabel: "factory:review-high" }, { label: "factory:fix", on: pr }, { stage: changes-requested }] }
+      incomplete:    { effects: [{ unlabel: "factory:review-high" }, { comment: reason }, { stage: blocked }] }   # evidence a person must supply (access, a tool); notify tells the owner
 
   ci-failed:                      # CI finished red after the approval: the developer fixes it, then a new review
     agent: clerk
@@ -193,6 +201,8 @@ nodes:
       done-low:  { effects: [{ unlabel: "factory:fix" }, { label: "risk:low" }, { label: "factory:review-low", on: pr }, { stage: in-review }] }
       done-high: { effects: [{ unlabel: "factory:fix" }, { label: "risk:high" }, { label: "factory:review-high", on: pr }, { stage: in-review }] }
       blocked:   { effects: [{ unlabel: "factory:fix" }, { comment: reason }, { stage: blocked }] }
+      env-broken: { effects: [{ unlabel: "factory:fix" }, { park-behind-main-red: failing_check }, { stage: ready }] }
+      triage:    { effects: [{ unlabel: "factory:fix" }, { comment: reason }, { stage: triage }] }
 
   rounds-out:                     # a fix label at the fix cap: no round left, a person decides (notify tells them)
     agent: clerk
@@ -283,6 +293,7 @@ nodes:
     outcomes:
       approve: { effects: [{ review: approve-at-head }, { unlabel: "factory:knowledge-review" }] }
       changes: { effects: [{ review: request-changes-at-head }, { unlabel: "factory:knowledge-review" }] }
+      incomplete: { effects: [{ unlabel: "factory:knowledge-review" }, { comment: reason, on: pr }] }   # a person sees why on the PR
 
   accept-knowledge:               # a person; a later node can accept automatically
     agent: human

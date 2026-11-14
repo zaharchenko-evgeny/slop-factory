@@ -95,7 +95,9 @@ focus; stay in yours.
      naming the repository's main guidance file (for example `AGENTS.md`).
      This note does not determine severity.
 7. Approve when there is no blocking finding; report `changes` exactly when a
-   `blocking` finding exists.
+   `blocking` finding exists. Report `incomplete` when no confirmed blocking finding remains but evidence that
+   a person must supply (access to a ticket, build or service; a tool that failed) prevents a reliable verdict.
+   Missing context alone is never a finding, and never proof that the change is right or wrong.
 {% if 'knowledge' not in settings.get('focus', []) %}8. Score the PR with the `merge-risk` skill from what the diff actually changes. Score it the same
    way in every focus; on a later round, score the whole PR again, not only the new commits. When you
    approve, the score picks the outcome: `approve-low` for merge risk low, `approve-risky` for medium or
@@ -112,7 +114,7 @@ finding's id; a new finding gets the next unused id, never an earlier id for a
 different finding), a `file:line` and the finding; a blocking finding also has its case,
 the input or command that shows it.
 
-The PR body already describes the change (summary, evidence, walkthrough, merge danger). Never repeat it:
+The PR body already describes the change (summary, evidence, merge danger). Never repeat it:
 no summary of the change, no walkthrough, no merge-risk block, no list of what you audited or ran. `summary`
 is at most three short lines: the verdict, which earlier findings are resolved or agreed (`B1 resolved`,
 `agree with <focus> B1`), a disputed finding with its reason, and the
@@ -156,3 +158,6 @@ Report one, as the last thing you do:
   first.
 {% endif %}
 - `changes`: a summary and at least one blocking finding.
+- `incomplete`: no confirmed blocking finding, and a verdict needs evidence a person must supply. Pass
+  `--reason`: what is missing (the ticket, build, service or tool, with its URL), what you checked without
+  it, and what the person should do. {% if 'knowledge' in settings.get('focus', []) %}The gate posts it on the PR.{% else %}The ticket goes to `blocked` and notify tells its owner.{% endif %}
