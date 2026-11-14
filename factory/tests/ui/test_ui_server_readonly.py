@@ -45,7 +45,7 @@ class ReadOnly(unittest.TestCase):
         self.assertEqual(self.calls, [])  # a refused request never built a snapshot
 
     def test_get_serves_index_assets_and_snapshot(self):
-        for path, ctype in (("/", "text/html"), ("/assets/app.js", "javascript"), ("/assets/app.css", "text/css"), ("/api/snapshot", "application/json")):
+        for path, ctype in (("/", "text/html"), ("/assets/app.js", "javascript"), ("/assets/index.css", "text/css"), ("/api/snapshot", "application/json")):
             with self.subTest(path=path):
                 res, body = self.request("GET", path)
                 self.assertEqual(res.status, 200)

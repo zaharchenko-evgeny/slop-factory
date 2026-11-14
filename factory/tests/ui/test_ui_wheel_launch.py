@@ -57,12 +57,12 @@ class WheelLaunch(unittest.TestCase):
                 url = proc.stdout.readline()
                 port = int(re.search(r"http://127\.0\.0\.1:(\d+)/", url).group(1))
                 bodies = {}
-                for path_ in ("/", "/assets/app.js", "/assets/app.css", "/api/snapshot"):
+                for path_ in ("/", "/assets/app.js", "/assets/index.css", "/api/snapshot"):
                     status, body = get(port, path_)
                     self.assertEqual(status, 200, path_)
                     bodies[path_] = body
                 self.assertIn(b"<html", bodies["/"])
-                self.assertIn(b"/api/snapshot", bodies["/assets/app.js"])
+                self.assertIn(b"api/snapshot", bodies["/assets/app.js"])
                 self.assertIn(b'"tickets"', bodies["/api/snapshot"])
                 for path_, body in bodies.items():
                     self.assertNotIn(SECRET.encode(), body, path_)
