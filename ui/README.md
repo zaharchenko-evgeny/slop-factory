@@ -25,4 +25,4 @@ registerView({ id: "by-repo", title: "By repository", component: ({ snapshot }) 
 
 `id` is a unique lowercase slug. `default: true` marks the first view shown (one only). The app lists the registry, so a
 new view needs no edit of the built-in views (`src/views/builtin.tsx`), `App.tsx` or the tracker adapters. The built-in
-views `workflow` (default) and `columns` register through this same call; they are empty placeholders for now.
+views `workflow` (default) and `columns` register through this same call; `columns` is in `src/views/Columns.tsx`.

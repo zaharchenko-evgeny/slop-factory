@@ -1,6 +1,17 @@
 // The part of the S1 snapshot (`factory/ui/snapshot.py`, `snapshot.build`) the app shell reads.
 export interface Stage { id: string; kind?: string | null }
-export interface Ticket { key: string; id: string; title: string | null; repository: string | null; stage: string }
+export interface StageAge { state: "ok" | "warn" | "exempt" | "unknown"; seconds: number | null; entered_at?: string | null; kind?: string | null; warn: boolean; reason?: string }
+export interface TicketPr { repo?: string | null; number?: number | null; head?: string | null; state?: string | null; ci?: string | null }
+export interface NodeMatch { node: string; eligible: string; outcomes?: { name: string; status: string; reason?: string | null }[]; guards?: { reason?: string | null } }
+export interface Ticket {
+  key: string; id: string; title: string | null; repository: string | null; stage: string;
+  // Fields below come from the S1 ticket record; each can be absent, and the UI says so.
+  tracker?: string; short_id?: number | string; stage_kind?: string | null; stage_age?: StageAge;
+  warnings?: { kind: string; level: string; message: string }[];
+  prs?: TicketPr[]; ci?: string | null; blockers_open?: number | null; nodes?: NodeMatch[];
+  history?: { stage: string; at?: string | null; actor?: string | null }[];
+  links?: { ticket?: string | null; prs?: string[] }; missing?: string[]; facts_error?: string | null;
+}
 export interface Condition { if?: unknown; ci?: unknown }
 export interface Outcome { name: string; to: string | null; else?: string | null; condition: Condition | null; enabled: boolean; comment_only: boolean }
 export interface GraphNode { id: string; role?: string | null; enabled: boolean; background: boolean; stages: string[]; outcomes: Outcome[] }
