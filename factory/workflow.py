@@ -48,10 +48,8 @@ PR_STATE_NAMES = {"merged": "pr-merged", "open": "pr-open"}
 
 
 def split_filters(text):
-    """`(text without its `key=value` filter words, [those words])`: `pr pushed by=human` -> `pr pushed`."""
-    words = str(text).split(" ")
-    is_filter = [w.partition("=")[0] in definition.TRIGGER_FILTERS and "=" in w for w in words]  # `priority=high` stays a label
-    return " ".join(w for w, f in zip(words, is_filter) if not f), [w for w, f in zip(words, is_filter) if f]
+    """`pr pushed by=human` -> `("pr pushed", ["by=human"])`; the label of a label event stays (definition.split_filters)."""
+    return definition.split_filters(text)
 
 
 def _defaults():

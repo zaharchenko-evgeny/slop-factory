@@ -1098,7 +1098,10 @@ class ProjectPlanTest(unittest.TestCase):
         """A word is a filter only when its key is a known filter: `priority=high` stays the label."""
         rows = [("issues.labeled priority=high", {"label": "priority=high"}),
                 ("issues.labeled priority=high by=human", {"label": "priority=high", "sender_type": "User"}),
-                ("issues.labeled by=human", {"sender_type": "User"}),
+                ("issues.labeled by=human", {"label": "by=human"}),
+                ("issues.labeled by=human by=human", {"label": "by=human", "sender_type": "User"}),
+                ("issues.labeled state=open pr_author=x", {"label": "state=open", "pr_author": "x"}),
+                ("pull_request.synchronize by=human", {"sender_type": "User"}),
                 ("pull_request.labeled a=b", {"label": "a=b"}),
                 ("issues.labeled factory:ready", {"label": "factory:ready"})]
         for text, want in rows:

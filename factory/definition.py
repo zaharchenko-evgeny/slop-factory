@@ -893,6 +893,19 @@ def trigger_parts(t):
     return main, t[main], {k: t[k] for k in keys if k != main}
 
 
+LABEL_EVENTS = ("issues.labeled", "pull_request.labeled", "label")  # the word after these is a label, never a filter
+
+
+def split_filters(text):
+    """`(text without its `key=value` filter words, [those words])`. The positional label of a label event stays in
+    the text even when it looks like a filter (`issues.labeled by=human` is the label `by=human`); `priority=high`
+    is no filter either."""
+    words = str(text).split(" ")
+    label_at = 1 if words[0] in LABEL_EVENTS else -1
+    is_filter = [i != label_at and "=" in w and w.partition("=")[0] in TRIGGER_FILTERS for i, w in enumerate(words)]
+    return " ".join(w for w, f in zip(words, is_filter) if not f), [w for w, f in zip(words, is_filter) if f]
+
+
 def _filter_tokens(filters):
     """The ` k=v` words a trigger's filters add to its event or wake string."""
     return "".join(f" {k}={filters[k]}" for k in TRIGGER_FILTERS if k in filters)
