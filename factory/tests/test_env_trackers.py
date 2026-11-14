@@ -10,6 +10,7 @@ import contextlib
 import copy
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -24,6 +25,7 @@ import test_gate_github as contract  # noqa: E402
 import config as cfg  # noqa: E402
 from factory_plugins.air import deploy as air  # noqa: E402
 import gate  # noqa: E402
+import gate_port  # noqa: E402
 import nodes  # noqa: E402
 import plugins  # noqa: E402
 import scopes  # noqa: E402
@@ -174,6 +176,41 @@ class ResolutionTest(unittest.TestCase):
         s = scoped(example(), yt, gh)
         self.assertEqual(s.ticket_for_pr(13, "o/frontend"), "PRJ-2")
         self.assertEqual((s.prefer, s.env_of("PRJ-2")), ("frontend", "frontend"))
+
+    def test_decide_looks_up_a_pr_in_the_run_environment_repository(self):
+        """A clerk run in a non-primary environment resolves the PR in that environment's repository."""
+        config = example()
+        config["environments"] = {
+            "backend": config["environments"]["backend"],
+            "web": config["environments"]["web"],
+        }
+        tracker = gate_port.MemorySystem({"136": {"stage": "approved", "pr_state": "merged"}})
+
+        class Host:
+            def __init__(self):
+                self.repositories = []
+
+            def ticket_for_pr(self, number, repository=None):
+                self.repositories.append(repository)
+                return 136 if repository == "o/web" else 128
+
+        host = Host()
+        graph = {"nodes": {"finish": {"when": {"always": True}, "outcomes": {
+            "done": {"if": {"pr": "merged"}, "effects": [{"stage": "done"}]},
+        }}}}
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, {"FACTORY_ENV": "web", "FACTORY_ENV_REPOSITORY": "o/web"}), \
+                mock.patch.object(gate, "default_place", return_value="github"), \
+                mock.patch.object(gate, "systems", return_value=(tracker, host)), \
+                mock.patch.object(gate.config_mod, "load", return_value=config), \
+                mock.patch.object(gate.nodes_mod, "load", return_value=graph), \
+                contextlib.redirect_stdout(output):
+            code = gate.main(["decide", "--node", "finish", "--pr", "136"])
+
+        self.assertEqual(code, gate.GO, output.getvalue())
+        self.assertEqual(json.loads(output.getvalue())["outcome"], "done")
+        self.assertEqual(tracker.facts(136)["stage"], "done")
+        self.assertEqual(host.repositories, ["o/web"])
 
     def test_no_environment_tracker_keeps_one_top_level_tracker(self):
         c = example()
