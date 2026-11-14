@@ -117,10 +117,6 @@ checks:
     mode: advisory
     requires: uvx
     run: uvx --quiet --from shellcheck-py==0.10.0.1 shellcheck -x engine/template-v1/roles/*.sh engine/template-v1/roles/*/setup.sh
-  - name: vendored-skills
-    stage: pre-review
-    mode: blocking
-    run: python3 scripts/vendor-skills.py --check
   - name: test-suite              # every test file, so main cannot go red outside CI (#912)
     stage: pre-review
     mode: blocking

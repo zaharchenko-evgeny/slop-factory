@@ -349,7 +349,7 @@ def validate():
         print("\n".join([*errs, *(f"warning: {w}" for w in definition.warnings(defn)), *([] if errs else ["factory: ok"])]))
         return 1 if errs else 0
     root = config.team_root()
-    if not any((root / f).is_file() for f in (config.DESCRIPTOR, config.PROJECT_DESCRIPTOR)):  # #1248: a report, not a crash
+    if not any((root / f).is_file() for f in (config.DESCRIPTOR,)):  # #1248: a report, not a crash
         print(f"factory: no factory definition at {root} (factory.yaml and workflow.yaml)")
         return 1
     errs = config.validate()
@@ -365,10 +365,10 @@ def check_workflow(argv):
     import yaml
     path = Path(argv[0] if argv else config.team_root()) / "workflow.yaml"
     skill = HERE.parent / "skills/factory-setup"
-    if not skill.is_dir():  # installed: the wheel records statechart.py and its pin files under share/factory
+    if not skill.is_dir():  # installed: the wheel records statechart.py under share/factory
         try:
             skill = next(d for d in (f.locate().resolve().parent for f in metadata.files("slop-factory") or []
-                                     if f.name == "statechart.py") if (d / "vendor-skills.py").is_file())
+                                     if f.name == "statechart.py"))
         except (metadata.PackageNotFoundError, StopIteration):
             pass
     if not path.is_file():
@@ -390,11 +390,10 @@ def check_workflow(argv):
 
 def env_roles(env):
     """Sorted roles of the enabled agent nodes (not human or script) whose `env` is `env`, from the project's workflow."""
-    import project
     import workflow
     import definition
     root = config.team_root()
-    wf = workflow.load(root, project.load(root))
+    wf = workflow.load(root)
     has_role_files = (root / "factory.yaml").is_file()
     defn = definition.load(root) if definition.present(root) else None
     # ADR-0027: a node runs in every environment it names, not only its first (the compiled `env`)
@@ -524,15 +523,9 @@ def _main(argv):
             print("factory: command 'facts' is not available: no selected plugin provides it", file=sys.stderr)
             return 2
         return command(rest)
-    if cmd == "migrate" and rest[:1] == ["workflow"]:
-        from workflow import main as workflow_main
-        return workflow_main(["migrate", *rest[1:]])
     if cmd == "migrate" and rest[:1] == ["project"]:
         from workflow import project_main
         return project_main(rest[1:])
-    if cmd == "upgrade":
-        from upgrade import main as upgrade_main
-        return upgrade_main(rest)
     if cmd == "check-workflow" and len(rest) <= 1:
         return check_workflow(rest)
     if cmd == "validate" and not rest:

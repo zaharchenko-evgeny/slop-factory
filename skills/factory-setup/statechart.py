@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check a workflow.yaml with the pinned `statechart` skill (skills.lock; TLC runs the spec).
+"""Check a workflow.yaml with the pinned `statechart` skill (`PIN` below; TLC runs the spec).
 
 `model(workflow)` turns the stages and node outcomes into a TLA+ spec, `check(workflow)` runs the skill on
 it and returns `(broken rules, Mermaid chart)`. Python only builds the spec; TLC and the chart come from the skill, which is fetched at its pin when the
@@ -12,7 +12,6 @@ an outcome sets is declared, so a ticket has exactly one stage label), MovingNod
 stage has a step out, reachable or not), NoDeadlock (TLC's own check), DoneReachable (`done` is reachable from `triage`).
 """
 import hashlib
-import importlib.util
 import os
 import re
 import subprocess
@@ -25,20 +24,33 @@ from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
 TLC_URL = "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar"
 TLC_SHA = "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
+PIN = {"source": "cursor/plugins", "commit": "519d36aa9895", "path": "pstack/skills/statechart",
+       "sha256": "9c7d9289a592eda0dbd7854a3db08895ade57e91d66178431a59c009c536ab15"}
 RULES = ("OneStageLabel", "MovingNode", "NoDeadlock", "DoneReachable")
 
 
+def tree_hash(d):
+    h = hashlib.sha256()
+    for f in sorted(p for p in Path(d).rglob("*") if p.is_file()):
+        h.update(f.relative_to(d).as_posix().encode() + b"\0" + f.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
 def skill_dir(dest):
-    """The statechart skill fetched at its pin (skills.lock, not vendored) into `dest`, checked by its sha256.
+    """The statechart skill fetched at `PIN` (not vendored) into the empty directory `dest`, checked by its sha256.
     Raises RuntimeError when it cannot be fetched or the hash differs."""
-    script = next(p for p in (ROOT / "scripts/vendor-skills.py", Path(__file__).resolve().parent / "vendor-skills.py") if p.is_file())
-    spec = importlib.util.spec_from_file_location("vendor_skills", script)
-    vs = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(vs)
-    return vs.fetch_pinned("statechart", dest)
+    try:
+        subprocess.run(["git", "clone", "--quiet", f"https://github.com/{PIN['source']}.git", f"{dest}/src"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", f"{dest}/src", "checkout", "--quiet", PIN["commit"]], check=True, capture_output=True)
+    except (subprocess.CalledProcessError, OSError) as err:
+        raise RuntimeError(f"cannot fetch skill statechart at its pin ({PIN['source']}@{PIN['commit']}): {err}")
+    src = Path(dest) / "src" / PIN["path"]
+    if tree_hash(src) != PIN["sha256"]:
+        raise RuntimeError("skill statechart fetched at its pin differs from the hash in PIN")
+    return src
 
 
 def tlc_jar():

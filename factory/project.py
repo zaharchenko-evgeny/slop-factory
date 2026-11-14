@@ -12,11 +12,14 @@ PERSONA = re.compile(r"[a-z][a-z0-9-]*")  # the handle in `@factory:<persona>`
 NO_AGENT_ROLES = ("script", "human")
 
 
+LABEL = "project"  # the prefix of a validation error: the descriptor compiled from the definition (ADR-0021)
+
+
 def _read(team_root):
     import definition
-    if definition.present(team_root):  # ADR-0021: the definition compiled into this shape
-        return definition.to_project(definition.load(team_root))[0]
-    return yaml.safe_load((Path(team_root) / config.PROJECT_DESCRIPTOR).read_text()) or {}
+    if not definition.present(team_root):
+        raise OSError(f"{team_root}: no factory.yaml and workflow.yaml (ADR-0021)")
+    return definition.to_project(definition.load(team_root))[0]
 
 
 def load(team_root):
@@ -47,44 +50,44 @@ def _repo_key(url):
 
 
 def validate(team_root):
-    """Return errors for a project's factory.project.yaml descriptor."""
+    """Return errors for the project descriptor compiled from a team definition."""
     root = Path(team_root)
     try:
         descriptor = _read(root)
     except (OSError, yaml.YAMLError) as exc:
-        return [f"{config.PROJECT_DESCRIPTOR}: {exc}"]
+        return [f"{LABEL}: {exc}"]
     schema = json.loads((config.engine_root() / "engine/project.schema.json").read_text())
     errors = []
-    config._check(schema, descriptor, config.PROJECT_DESCRIPTOR, errors)
+    config._check(schema, descriptor, LABEL, errors)
     if not isinstance(descriptor, dict):
         return errors
-    errors += config.tracker_errors(descriptor, config.PROJECT_DESCRIPTOR)
+    errors += config.tracker_errors(descriptor, LABEL)
     import scopes
-    errors += scopes.errors(descriptor, config.PROJECT_DESCRIPTOR)  # environments with their own trackers (#1069)
-    errors += scopes.vcs_errors(descriptor, config.PROJECT_DESCRIPTOR)  # every vcs named is provided (#1070)
+    errors += scopes.errors(descriptor, LABEL)  # environments with their own trackers (#1069)
+    errors += scopes.vcs_errors(descriptor, LABEL)  # every vcs named is provided (#1070)
     repositories = descriptor.get("repositories")
     if isinstance(repositories, list):
         primaries = [r.get("name") for r in repositories if isinstance(r, dict) and r.get("role") == "primary"]
         if len(primaries) != 1:
-            errors.append(f"{config.PROJECT_DESCRIPTOR}.repositories: exactly one repository needs role primary, "
+            errors.append(f"{LABEL}.repositories: exactly one repository needs role primary, "
                           f"found {len(primaries)}")
         team = _repo_key(descriptor.get("team_repository"))
         for i, r in enumerate(repositories):
             if team and isinstance(r, dict) and _repo_key(r.get("url")) == team and r.get("role") != "project":
-                errors.append(f"{config.PROJECT_DESCRIPTOR}.repositories[{i}].role: the team repository "
+                errors.append(f"{LABEL}.repositories[{i}].role: the team repository "
                               f"{r.get('name')} must have role project, found {r.get('role')}")
     environments = descriptor.get("environments")
     for env, entry in (environments.items() if isinstance(environments, dict) else ()):
         variables = entry.get("variables") if isinstance(entry, dict) else None
         for name in (variables if isinstance(variables, dict) else ()):
             if str(name).startswith("FACTORY_"):
-                errors.append(f"{config.PROJECT_DESCRIPTOR}.environments.{env}.variables.{name}: "
+                errors.append(f"{LABEL}.environments.{env}.variables.{name}: "
                               "names starting with FACTORY_ are reserved for the factory")
     targets = descriptor.get("targets")
     local = targets.get("local") if isinstance(targets, dict) else None
     poll = local.get("poll_seconds") if isinstance(local, dict) else None
     if isinstance(poll, int) and poll < 10:
-        errors.append(f"{config.PROJECT_DESCRIPTOR}.targets.local.poll_seconds: must be at least 10")
+        errors.append(f"{LABEL}.targets.local.poll_seconds: must be at least 10")
     for section in ("states", "commands"):
         entries = descriptor.get(section)
         if not isinstance(entries, dict):
@@ -95,7 +98,7 @@ def validate(team_root):
             try:
                 store_kind(entry["store"])
             except ValueError as exc:
-                errors.append(f"{config.PROJECT_DESCRIPTOR}.{section}.{name}.store: {exc}")
+                errors.append(f"{LABEL}.{section}.{name}.store: {exc}")
     return errors
 
 
