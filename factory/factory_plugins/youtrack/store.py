@@ -452,7 +452,7 @@ class YouTrackTicketStore:
     def comment(self, n, body):
         self.run("POST", f"/api/issues/{n}/comments?fields=id", {"text": body})
 
-    def close(self, n):
+    def close(self, n, reason=None):  # the State is the only close a YouTrack ticket has
         self.set_field(n, self.state_field or "State", self.done_state)
 
     def _command(self, n, query):

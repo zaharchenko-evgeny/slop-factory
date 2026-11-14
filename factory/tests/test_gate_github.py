@@ -298,6 +298,28 @@ def eff(kind, value, **kw):
     return {"ticket": 7, "kind": kind, "value": value, **kw}
 
 
+class FinalStageCloseTest(unittest.TestCase):
+    """A stage of kind `final` closes the GitHub issue: `not-actionable` as not planned, the others as completed."""
+
+    def test_final_stage_closes_with_its_reason(self):
+        for stage, closes, reason in (("not-actionable", True, ["--reason", "not planned"]), ("done", True, []),
+                                      ("triage", False, None), ("in-review", False, None)):
+            with self.subTest(stage=stage):
+                gh = FakeGh(labels=["factory:in-review"])
+                tr(gh).apply(eff("stage", stage))
+                close = [a for a in gh.writes if a[:2] == ["issue", "close"]]
+                self.assertEqual(len(close), 1 if closes else 0)
+                if closes:
+                    self.assertEqual(close[0][5:], reason)
+                    self.assertIn(f"factory:{stage}", gh.labels)
+
+    def test_a_closed_issue_is_not_closed_again(self):
+        gh = FakeGh(labels=["factory:in-review"])
+        gh.state = "closed"
+        tr(gh).apply(eff("stage", "not-actionable"))
+        self.assertEqual([a for a in gh.writes if a[:2] == ["issue", "close"]], [])
+
+
 class FactsTest(unittest.TestCase):
     def test_prefers_open_then_merged_then_newest_pr(self):
         gh = FakeGh()
