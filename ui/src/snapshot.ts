@@ -36,3 +36,20 @@ export async function loadSnapshot(fetcher: typeof fetch = fetch): Promise<Snaps
   if (!response.ok) throw new Error(`snapshot request failed: HTTP ${response.status}`);
   return (await response.json()) as Snapshot;
 }
+
+/**
+ * Apply a refreshed snapshot over the previous one. A source that failed has no tickets in `next`; keep its tickets
+ * from `prev` (stale) so a source error does not blank the board, and take every successful source as it is.
+ */
+export function mergeSnapshot(prev: Snapshot | undefined, next: Snapshot): Snapshot {
+  if (!prev) return next;
+  const failed = new Set<string>();
+  for (const s of next.sources ?? []) if (!s.ok) failed.add(s.id);
+  for (const e of next.errors ?? []) if (e.source && !e.ticket) failed.add(e.source);
+  const failedTickets = new Set((next.errors ?? []).filter((e) => e.ticket).map((e) => e.ticket));
+  const have = new Set(next.tickets.map((t) => t.key));
+  const stale = prev.tickets.filter(
+    (t) => !have.has(t.key) && ((t.tracker !== undefined && failed.has(t.tracker)) || failedTickets.has(t.key) || failedTickets.has(t.id)),
+  );
+  return stale.length ? { ...next, tickets: [...next.tickets, ...stale] } : next;
+}
