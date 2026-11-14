@@ -37,9 +37,13 @@ export function TicketCard({ ticket, showTracker, selected, onSelect }: {
   );
 }
 
-/** True for a short time after the ticket changes while mounted; the first render is not a change. */
+/** True for a short time after the ticket changes while mounted; the first render is not a change.
+ * Covers every field the card shows. The age text is left out: it changes on every refresh. Crossing the amber limit counts. */
 function useChanged(ticket: Ticket): boolean {
-  const sig = JSON.stringify([ticket.stage, ticket.title, ticket.human, ticket.warnings, ticket.ci, ticket.prs]);
+  const sig = JSON.stringify([
+    ticket.id, ticket.short_id, ticket.tracker, ticket.title, ticket.repository, ticket.stage,
+    ticket.human, ticket.warnings, isAmber(ticket), ticket.ci, ticket.prs,
+  ]);
   const prev = useRef(sig);
   const [changed, setChanged] = useState(false);
   useEffect(() => {

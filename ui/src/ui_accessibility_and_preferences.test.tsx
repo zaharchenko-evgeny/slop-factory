@@ -110,4 +110,19 @@ describe("ui_accessibility_and_preferences", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(900); });
     expect(screen.getByTestId("ticket-card")).toHaveAttribute("data-changed", "false");
   });
+
+  it.each([
+    ["title", { title: "New title" }],
+    ["repository", { repository: "other/repo" }],
+    ["short_id", { short_id: 99 }],
+    ["tracker", { tracker: "other-tracker" }],
+    ["stage", { stage: "review" }],
+    ["warnings", { warnings: [{ kind: "x", level: "warn", message: "new warning" }] }],
+    ["human", { human: { kind: "review" as const, label: "Review" } }],
+  ])("flashes when the displayed %s changes", (_name, patch) => {
+    const props = { showTracker: true, selected: false, onSelect: () => {} };
+    const { rerender } = render(<TicketCard ticket={mk({ id: "1" })} {...props} />);
+    rerender(<TicketCard ticket={mk({ id: "1", ...patch })} {...props} />);
+    expect(screen.getByTestId("ticket-card")).toHaveAttribute("data-changed", "true");
+  });
 });
