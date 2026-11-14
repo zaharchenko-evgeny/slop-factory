@@ -884,6 +884,14 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
         payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
+    skipped_fields = []
+    supports = getattr(tracker, "supports", lambda e: effects_mod.spec(tracker, e) is not None)
+    if any(e["kind"] == "field" and not supports(e) for e in effects):
+        system = getattr(tracker, "tracker", tracker)
+        tracker_name = getattr(system, "adapter", None) or type(system).__module__.partition("factory_plugins.")[2].partition(".")[0]
+        tracker_name = tracker_name or type(system).__name__
+        skipped_fields = [f"field: skipped on {tracker_name} tracker"]
+        effects = [e for e in effects if e["kind"] != "field"]
     declared = [e for e in effects if e["kind"] == "comment"]  # the comments the node declares (not a plugin's)
     # ADR-0026: the effects, `on:` targets and outcome a plugin owns; the config is read only when there are some
     owns = plugins.owner(outcome, "outcome")
@@ -976,7 +984,6 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
               and stale_review_plan(facts, nodes) == (name, outcome, {"focus": payload.get("focus"),
                                                                "round": payload.get("round"),
                                                                "review_replay": True}))
-    supports = getattr(tracker, "supports", lambda e: effects_mod.spec(tracker, e) is not None)
     # `notify` effects are not written as such: gate.send replaces each with a comment, so check that comment
     unsupported = next((e["kind"] for e in effects + after
                         if not supports({**e, "kind": "comment"} if e["kind"] == "notify" else e)), None)
@@ -993,7 +1000,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         for e in posted:
             tracker.apply(e)
         raise RuntimeError("notify failed: " + "; ".join(failures))
-    written, skipped = [], []  # skipped: what an effect left out and why (request-reviewers: the PR author)
+    written, skipped = [], skipped_fields  # skipped: what an effect left out and why (request-reviewers: the PR author)
     for e in effects + after:
         if payload.get("review_replay") and e["kind"] == "review":
             continue  # the marker proves this review already landed

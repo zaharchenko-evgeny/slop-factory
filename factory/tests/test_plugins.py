@@ -386,6 +386,12 @@ class LazinessTest(unittest.TestCase):
             """)
         self.assertIn("factory_plugins.chart.render", drawn)
 
+    def test_chart_help_prints_usage_without_loading_nodes(self):
+        result = subprocess.run([sys.executable, str(ROOT / "cli.py"), "chart", "--help"],
+                                cwd=ROOT.parent, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage: factory chart", result.stdout)
+
 
 class SurfaceTest(unittest.TestCase):
     """#1072: a node's `output:` against its surface's `outputs()`, and `factory deploy` routed to the team's surface."""

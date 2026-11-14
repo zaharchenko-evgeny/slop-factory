@@ -2,7 +2,10 @@
 @source "../index.html";
 @source ".";
 
-@custom-variant dark (@media (prefers-color-scheme: dark));
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) { @slot; }
+  @media (prefers-color-scheme: dark) { &:where(:root:not([data-theme="light"]) *) { @slot; } }
+}
 
 @theme inline {
   --color-background: var(--background);
@@ -25,7 +28,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --background: oklch(0.145 0 0);
     --foreground: oklch(0.985 0 0);
     --muted: oklch(0.269 0 0);
@@ -33,8 +36,24 @@
     --border: oklch(0.3 0 0);
     --primary: oklch(0.922 0 0);
     --primary-foreground: oklch(0.205 0 0);
+    color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --border: oklch(0.3 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  color-scheme: dark;
 }
 
 body { background: var(--background); color: var(--foreground); font-family: system-ui, sans-serif; }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* Short animation for a ticket that changed on refresh; none when the user asks for reduced motion. */
+@keyframes factory-flash { from { box-shadow: 0 0 0 3px var(--primary); } to { box-shadow: 0 0 0 0 transparent; } }
+.changed { animation: factory-flash 0.8s ease-out 1; }
+@media (prefers-reduced-motion: reduce) { .changed { animation: none; } * { scroll-behavior: auto !important; transition-duration: 0.01ms !important; } }
