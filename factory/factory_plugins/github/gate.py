@@ -116,15 +116,15 @@ def workflow_checks(run, repository, sha, workflow):
     runs = [r for r in _lines(run(["api", "--paginate", f"repos/{repository}/actions/runs?head_sha={sha}&per_page=100",
                                    "--jq", ".workflow_runs[]"])) if r.get("name") == workflow]
     if not runs:
-        return [{"conclusion": None, "at": None}]
+        return [{"conclusion": None, "at": None, "name": None}]
     latest = max(runs, key=lambda r: (r.get("run_number") or 0, r.get("id") or 0))
     done = latest.get("status") == "completed"
     jobs = _lines(run(["api", "--paginate", f"repos/{repository}/actions/runs/{latest['id']}/jobs?per_page=100",
                        "--jq", ".jobs[]"]))
     if not jobs:
-        return [{"conclusion": latest.get("conclusion") if done else None, "at": latest.get("updated_at")}]
+        return [{"conclusion": latest.get("conclusion") if done else None, "at": latest.get("updated_at"), "name": workflow}]
     return [{"conclusion": j.get("conclusion") if done and j.get("status") == "completed" else None,
-             "at": j.get("completed_at")} for j in jobs]
+             "at": j.get("completed_at"), "name": j.get("name"), "workflow": workflow} for j in jobs]
 
 
 def head_checks(run, repository, sha, names=None, branch=BASE_BRANCH, workflow=None):
@@ -166,14 +166,20 @@ def head_checks(run, repository, sha, names=None, branch=BASE_BRANCH, workflow=N
     if counted is not None:
         runs = [r for r in runs if r.get("name") in counted]
         statuses = [s for s in statuses if s.get("context") in counted]
+    seen = {r.get("name") for r in runs} | {s.get("context") for s in statuses}
+    if counted is not None and workflow_out:
+        # a counted name is read from the workflow only when it is the workflow or one of its jobs; any other
+        # required name with no readable result stays pending (#1424)
+        seen |= {e.get("name") for e in workflow_out} | {workflow}
+        workflow_out = [e for e in workflow_out if e.get("name") is None or e["name"] in counted or workflow in counted]
     out = ([{"conclusion": r.get("conclusion") if r.get("status") == "completed" else None, "at": r.get("completed_at")}
             for r in runs]
            + [{"conclusion": None if s["state"] == "pending" else "success" if s["state"] == "success" else "failure",
                "at": s.get("updated_at")} for s in statuses]
            + workflow_out)
-    if counted is not None and not workflow_out:
-        seen = {r.get("name") for r in runs} | {s.get("context") for s in statuses}
+    if counted is not None:
         out += [{"conclusion": None, "at": None} for _ in counted - seen]
+    out = [{k: v for k, v in e.items() if k in ("conclusion", "at")} for e in out]
     if unreadable and not out and not names:
         out = [{"conclusion": "unknown", "at": None}]
     return out

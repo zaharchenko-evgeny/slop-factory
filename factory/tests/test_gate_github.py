@@ -2187,6 +2187,18 @@ class ActionsCiWithoutChecksPermissionTest(unittest.TestCase):
             with self.subTest(label):
                 self.assertEqual(self.state(self.host(runs, jobs)), want)
 
+    def test_required_names_the_workflow_does_not_cover_stay_pending(self):
+        ok = {"id": 1, "run_number": 1, "name": "CI", "status": "completed", "conclusion": "success"}
+        job = lambda n: {"name": n, "status": "completed", "conclusion": "success"}  # noqa: E731
+        for label, names, jobs, want in [
+                ("workflow name counted alone", ["CI"], [job("build")], "green"),
+                ("workflow plus an external required name", ["CI", "external-required"], [job("build")], "pending"),
+                ("job names counted", ["build", "lint"], [job("build"), job("lint")], "green"),
+                ("job counted plus external", ["build", "external-required"], [job("build"), job("lint")], "pending"),
+                ("only external required", ["external-required"], [job("build")], "pending")]:
+            with self.subTest(label):
+                self.assertEqual(self.state(self.host([ok], jobs), names=names), want)
+
     def test_a_status_403_without_names_reads_unknown_and_never_raises(self):
         for label, kwargs, want in [("no workflow: check runs readable, nothing there", {"checks": "ok"}, "unknown"),
                                     ("statuses readable and empty", {"checks": "ok", "statuses": []}, "none")]:
