@@ -275,10 +275,9 @@ def adopted(defn):
 
 def label_prefix(defn):
     """The stage label prefix (`tracker.label_prefix`, default `factory:`) of the primary repository of the default
-    environment: the top-level tracker block, then the environment's, then the repository's own (ADR-0027). While
-    `workflow.yaml` still has `stages.label_prefix`, it is the fallback (`warnings` reports the move)."""
+    environment: the top-level tracker block, then the environment's, then the repository's own (ADR-0027)."""
     f = defn["factory"]
-    fallback = (defn["workflow"].get("stages") or {}).get("label_prefix") or "factory:"
+    fallback = "factory:"
     envs = f.get("environments") or {}
     env = envs.get(default_environment(defn)) or {}
     try:
@@ -664,6 +663,8 @@ def errors(defn):
     if "label_prefix" in (f.get("tracker") or {}) and not (
             isinstance(f["tracker"]["label_prefix"], str) and f["tracker"]["label_prefix"]):
         errs.append("bad-label-prefix: factory.yaml: `tracker.label_prefix` is a non-empty string")
+    if "label_prefix" in (w.get("stages") or {}):
+        errs.append("removed-key: workflow.yaml: `stages.label_prefix`; use `tracker.label_prefix` in factory.yaml")
     listed = (f.get("tracker") or {}).get("repositories")
     if listed is not None and (not isinstance(listed, list) or not all(isinstance(r, str) for r in listed)):
         errs.append("bad-tracker-repositories: factory.yaml: `tracker.repositories` is a list of repositories")
@@ -862,9 +863,7 @@ def warnings(defn):
     legacy = ["deprecated-key: defaults.settings.issues_token_env: declare `token: <SECRET_NAME>` on each environment "
               "repository the gate writes with it (ADR-0027)"] \
         if ((defn["factory"].get("defaults") or {}).get("settings") or {}).get("issues_token_env") else []
-    moved = ["deprecated-key: workflow.yaml stages.label_prefix moved to tracker.label_prefix in factory.yaml"] \
-        if "label_prefix" in (defn["workflow"].get("stages") or {}) else []
-    return legacy + moved + [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
+    return legacy + [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
             if label.startswith(prefix) and label not in triggered] + off + more + _repository_warnings(defn)
 
 

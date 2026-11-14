@@ -140,3 +140,9 @@ def frame(body, run_id=None, once=True):
     if run_id and (not once or "Factory-Run:" not in body):
         body += f"\n\nFactory-Run: {run_id}"
     return body
+
+
+def once_marker(node, outcome, head):
+    """The hidden marker of a comment that one node writes once per outcome and head (#1373): runs of a node that
+    end at the same head at once each read the PR before another wrote, so the write itself checks for it."""
+    return f"<!-- factory:once node={node} outcome={outcome} head={head} -->"

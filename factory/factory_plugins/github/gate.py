@@ -6,7 +6,9 @@ A marker `<!-- factory:review focus=<f> round=<n> verdict=approve|changes -->` c
 (agent reviews are COMMENT reviews: the author cannot approve its own PR; the verdict is in the marker)
 (`targets.air.bot_login`; `gh api user` answers 403 inside an Air run, so it is never called).
 """
+import contextlib
 import copy
+import hashlib
 import json
 import os
 import re
@@ -1224,10 +1226,51 @@ class GitHubGateTracker(DescriptorPort):
 
     def _fx_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
-        if any(effects_mod.same_text(c["body"], body) for c in self.tickets.comments(n)):
-            return False
-        self.tickets.comment(n, body + self._block(e))
+        with self._once_claim(e, n) as mine:
+            if not mine or any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"])
+                               for c in self.tickets.comments(n)):
+                return False
+            self.tickets.comment(n, body + self._block(e) + self._once_line(e))
         return True
+
+    @staticmethod
+    def _once(e, text):
+        return bool(e.get("once")) and e["once"] in (text or "")
+
+    @staticmethod
+    def _once_line(e):
+        return f"\n\n{e['once']}" if e.get("once") else ""
+
+    ONCE_REF = "refs/factory/once"
+
+    @contextlib.contextmanager
+    def _once_claim(self, e, n):
+        """#1373: runs of one node that end at one head on separate Air hosts each read the comments before another
+        wrote. The claim is a ref named by the marker and the ticket, created atomically (GitHub refuses a second
+        create with 422), so one run at a time reads the comments and writes; the next holder then reads the
+        first one's comment and skips. Yields False while another run holds it: write nothing. A host that cannot
+        create refs (no contents write) writes unclaimed, as before #1373. A crashed run leaves the ref; a person
+        deletes it."""
+        if not e.get("once"):
+            yield True
+            return
+        key = f"{self.repo}#{n} {e['once']}"
+        ref = f"{self.ONCE_REF}/{hashlib.sha256(key.encode()).hexdigest()[:32]}"
+        head = re.search(r"head=(\S+) -->", e["once"])
+        try:
+            self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/git/refs", "-f", f"ref={ref}",
+                      "-f", f"sha={head.group(1) if head else ''}"])
+        except RuntimeError as err:
+            if "Reference already exists" in str(err):
+                yield False  # another run holds the claim
+                return
+            print(f"factory: once claim {ref} not taken ({err}); writing unclaimed", file=sys.stderr)
+            yield True
+            return
+        try:
+            yield True
+        finally:
+            self.run(["api", "-X", "DELETE", f"repos/{self.pr_repo}/git/{ref}"])
 
     def _fx_pr_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
@@ -1237,9 +1280,12 @@ class GitHubGateTracker(DescriptorPort):
             pr = self._pr(n)
         if pr is None:
             raise RuntimeError(f"comment: no PR for ticket {n}")
-        if any(effects_mod.same_text(c["body"], body) for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
-            return False
-        self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body", body + self._block(e)])
+        with self._once_claim(e, n) as mine:
+            if not mine or any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"])
+                               for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
+                return False
+            self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body",
+                      body + self._block(e) + self._once_line(e)])
         return True
 
     def _fx_pr_notes(self, e, ctx):  # a developer's `done` notes for the PR description
