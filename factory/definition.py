@@ -758,7 +758,10 @@ def errors(defn):
         outcomes = n.get("outcomes") or {}
         if not outcomes:
             errs.append(f"no-outcome: {where}")
-        routine = bool(n.get("triggers")) and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"])
+        routine = all_numberless(n.get("triggers"))
+        if not routine and any(numberless_trigger(t) for t in n.get("triggers") or []):
+            errs.append(f"mixed-triggers: {where}: a push or CI-green trigger has no ticket or PR number; "
+                        "do not mix it with triggers that have one")
         for o, oc in outcomes.items():
             oc = oc or {}
             if routine and oc.get("effects"):  # ADR-0015: `apply_routine` applies no effects
@@ -914,6 +917,19 @@ def split_filters(text):
 def _filter_tokens(filters):
     """The ` k=v` words a trigger's filters add to its event or wake string."""
     return "".join(f" {k}={filters[k]}" for k in TRIGGER_FILTERS if k in filters)
+
+
+def numberless_trigger(t):
+    """A trigger whose event has no ticket or PR number: a push, or a CI run that passed on any branch (#1438)."""
+    if not isinstance(t, dict) or not t:
+        return False
+    main, value, _ = trigger_parts(t)
+    return main == "push" or (main == "ci" and value in ("green", "checks_green"))
+
+
+def all_numberless(triggers):
+    """True when every trigger has no number (or is a schedule): the node is a routine, outside any ticket."""
+    return bool(triggers) and all(isinstance(t, dict) and ("schedule" in t or numberless_trigger(t)) for t in triggers)
 
 
 def trigger_errors(where, t):
@@ -1205,7 +1221,7 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
         out["output"] = n.get("output", "read-only")
     if pr_woken and "ci" not in when:
         out["ci-independent"] = True
-    if n.get("triggers") and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"]):
+    if all_numberless(n.get("triggers")):
         out["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
     if n.get("enabled") is False:
         out["enabled"] = False
@@ -1347,7 +1363,7 @@ def nodes(defn):
                        for t in n.get("triggers") or [])
         if pr_woken and "ci" not in node["when"]:
             node["ci-independent"] = True
-        if n.get("triggers") and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"]):
+        if all_numberless(n.get("triggers")):
             node["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
         if n.get("enabled") is False:
             node["enabled"] = False

@@ -30,6 +30,7 @@ from ports.system import TrackerSchema
 
 ROOT = Path(__file__).resolve().parents[1]
 SLOP_FIXTURE = ROOT / "factory/tests/fixtures/slop"
+NUMBERLESS_EVENTS = ("push", "check_suite", "workflow_run.completed")
 PR_TRIGGERED_NODES = {"review", "join", "fix", "update", "finish", "reopen"}
 BOT_FILTERED = ("review-", "join", "reopen")  # start only for the bot's own PRs until `adopt` (#160) removes the filter
 
@@ -307,9 +308,12 @@ def begin_arg(node: str, n: dict) -> str:
         return ""
     if any(str(t).startswith("webhook ") for t in n["triggers"]):
         return "--issue <the `issue` field of the trigger payload>"
+    events = [str(t) for t in n["triggers"] if str(t) != "manual"]
+    numberless = [t.startswith(NUMBERLESS_EVENTS) for t in events]  # a push or a branch CI run has no ticket or PR
+    if events and all(numberless):
+        return ""
     if node in PR_TRIGGERED_NODES:
         return "--pr <the pull request number>"
-    events = [str(t) for t in n["triggers"] if str(t) != "manual"]
     on_pr = [t.startswith(("pull_request", "issue_comment", "workflow_run", "check_suite")) for t in events]
     if events and all(on_pr):  # ADR-0021: what wakes the node says what it begins with, not its name
         return "--pr <the pull request number>"

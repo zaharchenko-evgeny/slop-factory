@@ -86,3 +86,9 @@ case-sensitive. A YouTrack trigger takes no PR events, no `by` and no `state`.
 `factory validate` fails on an unknown trigger key, event or filter, and on a filter that does not fit its event
 (`state` only fits `pr: reviewed`). The message names the supported values, for example
 `unknown-event: nodes.x: pr: pushd: supported pr events: pr closed, ...`.
+
+## Numberless events
+
+A `push`, `ci: green` or `ci: checks_green` trigger has no ticket or PR number. A node woken only by such triggers
+(or schedules) is a routine: `factory begin <node>` takes no number. Mixing these triggers with `pr`, `ticket` or
+other numbered triggers on one node is a `mixed-triggers` validation error.
