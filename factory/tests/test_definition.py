@@ -246,22 +246,19 @@ class DefinitionTest(unittest.TestCase):
                 self.assertIn("slop:", deploy.owned_label_prefixes(conf))
                 self.assertNotIn("factory:", deploy.owned_label_prefixes(conf))
 
-    def test_workflow_label_prefix_is_a_fallback_that_warns_about_the_move(self):
-        """Table: where the prefix is set -> the compiled prefix and whether `validate` warns about the move."""
-        moved = "deprecated-key: workflow.yaml stages.label_prefix moved to tracker.label_prefix in factory.yaml"
-        table = [(None, None, "factory:", False), (None, "work:", "work:", True), ("slop:", None, "slop:", False),
-                 ("slop:", "work:", "slop:", True)]  # the tracker key wins over the fallback
-        for tracker, workflow_key, want, warns in table:
-            with self.subTest(tracker=tracker, workflow=workflow_key):
+    def test_workflow_label_prefix_is_rejected_by_validate(self):
+        """Old key values, including empty and null, fail validation with the replacement key named."""
+        for value in (None, "", "work:"):
+            with self.subTest(value=value):
                 shutil.rmtree(self.root)
                 shutil.copytree(FIXTURE, self.root)
-                self.edit("factory.yaml", lambda f: f["tracker"].pop("label_prefix", None) if tracker is None
-                          else f["tracker"].update(label_prefix=tracker))
-                if workflow_key:
-                    self.edit("workflow.yaml", lambda w: w["stages"].update(label_prefix=workflow_key))
-                defn = definition.load(self.root)
-                self.assertEqual(definition.label_prefix(defn), want)
-                self.assertEqual(moved in definition.warnings(defn), warns)
+                self.edit("workflow.yaml", lambda w: w["stages"].update(label_prefix=value))
+                result = subprocess.run([sys.executable, str(ROOT / "cli.py"), "validate"],
+                                        cwd=ROOT.parent, env={**os.environ, "FACTORY_TEAM": str(self.root)},
+                                        capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("tracker.label_prefix", result.stdout)
+                self.assertIn("removed-key: workflow.yaml", result.stdout)
 
     def test_empty_or_non_string_label_prefix_is_an_error(self):
         for bad in ("", 7, ["slop:"]):
