@@ -1,0 +1,7887 @@
+{
+ "attention": {
+  "human_attention": 0,
+  "human_review": 0
+ },
+ "blocker_policy": "start",
+ "errors": [],
+ "generated_at": "2026-11-14T12:00:00+00:00",
+ "sources": [
+  {
+   "environments": [
+    "engine"
+   ],
+   "id": "github-issues|o/r",
+   "ok": true,
+   "tickets": 2
+  }
+ ],
+ "tickets": [
+  {
+   "blockers_open": 0,
+   "ci": "none",
+   "environments": [
+    "engine"
+   ],
+   "execution": {
+    "reason": "no execution evidence",
+    "status": "unknown"
+   },
+   "facts_error": null,
+   "history": [],
+   "human": {
+    "kind": null,
+    "label": null,
+    "reason": null,
+    "reviewer": null,
+    "sources": [],
+    "unknown": []
+   },
+   "id": "1",
+   "key": "github-issues|o/r#1",
+   "links": {
+    "prs": [],
+    "ticket": "https://github.com/o/r/issues/1"
+   },
+   "missing": [
+    "stage_entered_at",
+    "pr"
+   ],
+   "nodes": [
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "actor",
+        "reason": "needs an actor from an event",
+        "status": "unknown",
+        "want": "human"
+       }
+      ],
+      "reason": "needs an actor from an event",
+      "status": "unknown"
+     },
+     "node": "human",
+     "outcomes": [
+      {
+       "name": "triage",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "ready",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "manual",
+        "reason": "no event evidence for manual triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "label",
+        "reason": "label does not hold (have None)",
+        "status": "fail",
+        "want": "factory:needs-human"
+       }
+      ],
+      "reason": "label does not hold (have None)",
+      "status": "fail"
+     },
+     "node": "human-reply",
+     "outcomes": [
+      {
+       "name": "triage",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "ready",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "skipped",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.comment",
+        "reason": "no event evidence for issues.comment triggers",
+        "status": "unknown"
+       },
+       {
+        "events": [],
+        "raw": "issue_comment.created",
+        "reason": "no event evidence for issue_comment.created triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": [
+         "blocked",
+         "needs-answers"
+        ]
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "ticket-reply",
+     "outcomes": [
+      {
+       "name": "triage",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "ready",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "skipped",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.comment",
+        "reason": "no event evidence for issues.comment triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": "triage"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "intake",
+     "outcomes": [
+      {
+       "name": "small-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "small-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "medium-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "medium-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "large-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "ready",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "grill",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "split",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "not-actionable",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "duplicate",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "superseded",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "bug",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:triage",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": "investigating"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "investigate",
+     "outcomes": [
+      {
+       "name": "bug",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "intended",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "cannot-reproduce",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:investigating",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": null,
+        "status": "pass",
+        "want": "ready"
+       },
+       {
+        "key": "blockers",
+        "reason": null,
+        "status": "pass",
+        "want": "closed"
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "dispatch",
+     "outcomes": [
+      {
+       "name": "small",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "medium",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "large",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "triage",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:ready",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": "in-dev"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "implement-small",
+     "outcomes": [
+      {
+       "name": "done-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "done-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "error",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:implement-small",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": "in-dev"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "implement-medium",
+     "outcomes": [
+      {
+       "name": "done-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "done-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "error",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:implement-medium",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": "in-dev"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "implement-large",
+     "outcomes": [
+      {
+       "name": "done-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "done-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:implement-large",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": "in-review"
+       },
+       {
+        "key": "label",
+        "reason": "label does not hold (have None)",
+        "status": "fail",
+        "want": "risk:low"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "review-low",
+     "outcomes": [
+      {
+       "name": "approve-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "approve-risky",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "changes",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:review-low",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": "in-review"
+       },
+       {
+        "key": "label",
+        "reason": "label does not hold (have None)",
+        "status": "fail",
+        "want": "risk:high"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "review-high",
+     "outcomes": [
+      {
+       "name": "approve-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "approve-risky",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "changes",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:review-high",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": "approved"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "ci-failed",
+     "outcomes": [
+      {
+       "name": "fix",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "waiting",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:ci-red",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": [
+         "in-review",
+         "changes-requested",
+         "approved"
+        ]
+       },
+       {
+        "key": "fix-rounds",
+        "reason": null,
+        "status": "pass",
+        "want": "below-cap"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "fix",
+     "outcomes": [
+      {
+       "name": "done-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "done-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:fix",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": [
+         "in-review",
+         "changes-requested",
+         "approved"
+        ]
+       },
+       {
+        "key": "fix-rounds",
+        "reason": "fix-rounds does not hold (have None)",
+        "status": "fail",
+        "want": "at-cap"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "rounds-out",
+     "outcomes": [
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:fix",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": "changes-requested"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "update",
+     "outcomes": [
+      {
+       "name": "resolved",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "unresolvable",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:update",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": "approved"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "automerge",
+     "outcomes": [
+      {
+       "name": "merge",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "needs-human",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:automerge",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'ready')",
+        "status": "fail",
+        "want": "approved"
+       }
+      ],
+      "reason": "stage does not hold (have 'ready')",
+      "status": "fail"
+     },
+     "node": "merge",
+     "outcomes": [
+      {
+       "name": "conflict",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "updated-low",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "updated-high",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "merged",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "ci-red",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "waiting",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:merge",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "finish",
+     "outcomes": [
+      {
+       "name": "done",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "children-done",
+       "reason": "stage ready is not in the outcome's from",
+       "status": "blocked"
+      },
+      {
+       "name": "waiting",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.merged",
+        "reason": "poll found no pull_request.merged event for the ticket",
+        "status": "no-match"
+       },
+       {
+        "events": [],
+        "raw": "issues.closed",
+        "reason": "poll found no issues.closed event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "notify",
+     "outcomes": [
+      {
+       "name": "notified",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "skipped",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:blocked",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       },
+       {
+        "events": [],
+        "raw": "issues.labeled factory:needs-answers",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "notify-pr",
+     "outcomes": [
+      {
+       "name": "notified",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "skipped",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:needs-human",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "retro",
+     "outcomes": [
+      {
+       "name": "proposed",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "nothing",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "schedule retro",
+        "reason": "no event evidence for schedule triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "knowledge-review",
+     "outcomes": [
+      {
+       "name": "approve",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "changes",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:knowledge-review",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "actor",
+        "reason": "needs an actor from an event",
+        "status": "unknown",
+        "want": "human"
+       }
+      ],
+      "reason": "needs an actor from an event",
+      "status": "unknown"
+     },
+     "node": "accept-knowledge",
+     "outcomes": [
+      {
+       "name": "accepted",
+       "reason": "missing evidence: Bad bad condition value 'approved': allowed open, merged, behind, conflicting, none",
+       "status": "unknown"
+      },
+      {
+       "name": "rejected",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "manual",
+        "reason": "no event evidence for manual triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "reconcile",
+     "outcomes": [
+      {
+       "name": "reconciled",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "schedule reconcile",
+        "reason": "no event evidence for schedule triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "doctor-engine",
+     "outcomes": [
+      {
+       "name": "probed",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "schedule doctor-engine",
+        "reason": "no event evidence for schedule triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "doctor-team",
+     "outcomes": [
+      {
+       "name": "probed",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "schedule doctor-team",
+        "reason": "no event evidence for schedule triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    }
+   ],
+   "prs": [],
+   "repository": "o/r",
+   "short_id": 1,
+   "stage": "ready",
+   "stage_age": {
+    "entered_at": null,
+    "kind": "active",
+    "reason": "stage entry time is missing",
+    "seconds": null,
+    "stage": "ready",
+    "state": "unknown",
+    "warn": false
+   },
+   "stage_kind": "active",
+   "state": "open",
+   "title": "Example ticket",
+   "tracker": "github-issues|o/r",
+   "warnings": []
+  },
+  {
+   "blockers_open": 0,
+   "ci": "none",
+   "environments": [
+    "engine"
+   ],
+   "execution": {
+    "reason": "no execution evidence",
+    "status": "unknown"
+   },
+   "facts_error": null,
+   "history": [],
+   "human": {
+    "kind": null,
+    "label": null,
+    "reason": null,
+    "reviewer": null,
+    "sources": [],
+    "unknown": []
+   },
+   "id": "2",
+   "key": "github-issues|o/r#2",
+   "links": {
+    "prs": [],
+    "ticket": "https://github.com/o/r/issues/2"
+   },
+   "missing": [
+    "stage_entered_at",
+    "pr"
+   ],
+   "nodes": [
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "actor",
+        "reason": "needs an actor from an event",
+        "status": "unknown",
+        "want": "human"
+       }
+      ],
+      "reason": "needs an actor from an event",
+      "status": "unknown"
+     },
+     "node": "human",
+     "outcomes": [
+      {
+       "name": "triage",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "ready",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "manual",
+        "reason": "no event evidence for manual triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "label",
+        "reason": "label does not hold (have None)",
+        "status": "fail",
+        "want": "factory:needs-human"
+       }
+      ],
+      "reason": "label does not hold (have None)",
+      "status": "fail"
+     },
+     "node": "human-reply",
+     "outcomes": [
+      {
+       "name": "triage",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "ready",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "skipped",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.comment",
+        "reason": "no event evidence for issues.comment triggers",
+        "status": "unknown"
+       },
+       {
+        "events": [],
+        "raw": "issue_comment.created",
+        "reason": "no event evidence for issue_comment.created triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": [
+         "blocked",
+         "needs-answers"
+        ]
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "ticket-reply",
+     "outcomes": [
+      {
+       "name": "triage",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "ready",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "skipped",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.comment",
+        "reason": "no event evidence for issues.comment triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": "triage"
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "intake",
+     "outcomes": [
+      {
+       "name": "small-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "small-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "medium-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "medium-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "large-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "ready",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "grill",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "split",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "not-actionable",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "duplicate",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "superseded",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "bug",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:triage",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": "investigating"
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "investigate",
+     "outcomes": [
+      {
+       "name": "bug",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "intended",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "cannot-reproduce",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:investigating",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": "ready"
+       },
+       {
+        "key": "blockers",
+        "reason": null,
+        "status": "pass",
+        "want": "closed"
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "dispatch",
+     "outcomes": [
+      {
+       "name": "small",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "medium",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "large",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "triage",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:ready",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": null,
+        "status": "pass",
+        "want": "in-dev"
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "implement-small",
+     "outcomes": [
+      {
+       "name": "done-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "done-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "error",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:implement-small",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": null,
+        "status": "pass",
+        "want": "in-dev"
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "implement-medium",
+     "outcomes": [
+      {
+       "name": "done-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "done-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "error",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:implement-medium",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": null,
+        "status": "pass",
+        "want": "in-dev"
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "implement-large",
+     "outcomes": [
+      {
+       "name": "done-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "done-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:implement-large",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": "in-review"
+       },
+       {
+        "key": "label",
+        "reason": "label does not hold (have None)",
+        "status": "fail",
+        "want": "risk:low"
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "review-low",
+     "outcomes": [
+      {
+       "name": "approve-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "approve-risky",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "changes",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:review-low",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": "in-review"
+       },
+       {
+        "key": "label",
+        "reason": "label does not hold (have None)",
+        "status": "fail",
+        "want": "risk:high"
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "review-high",
+     "outcomes": [
+      {
+       "name": "approve-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "approve-risky",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "changes",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:review-high",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": "approved"
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "ci-failed",
+     "outcomes": [
+      {
+       "name": "fix",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "waiting",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:ci-red",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": [
+         "in-review",
+         "changes-requested",
+         "approved"
+        ]
+       },
+       {
+        "key": "fix-rounds",
+        "reason": null,
+        "status": "pass",
+        "want": "below-cap"
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "fix",
+     "outcomes": [
+      {
+       "name": "done-low",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "done-high",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:fix",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": [
+         "in-review",
+         "changes-requested",
+         "approved"
+        ]
+       },
+       {
+        "key": "fix-rounds",
+        "reason": "fix-rounds does not hold (have None)",
+        "status": "fail",
+        "want": "at-cap"
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "rounds-out",
+     "outcomes": [
+      {
+       "name": "blocked",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:fix",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": "changes-requested"
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "update",
+     "outcomes": [
+      {
+       "name": "resolved",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "unresolvable",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:update",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": "approved"
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "automerge",
+     "outcomes": [
+      {
+       "name": "merge",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "needs-human",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:automerge",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "stage",
+        "reason": "stage does not hold (have 'in-dev')",
+        "status": "fail",
+        "want": "approved"
+       }
+      ],
+      "reason": "stage does not hold (have 'in-dev')",
+      "status": "fail"
+     },
+     "node": "merge",
+     "outcomes": [
+      {
+       "name": "conflict",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "updated-low",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "updated-high",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "merged",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "ci-red",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "waiting",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:merge",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "finish",
+     "outcomes": [
+      {
+       "name": "done",
+       "reason": "the outcome's guard does not hold",
+       "status": "blocked"
+      },
+      {
+       "name": "children-done",
+       "reason": "stage in-dev is not in the outcome's from",
+       "status": "blocked"
+      },
+      {
+       "name": "waiting",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.merged",
+        "reason": "poll found no pull_request.merged event for the ticket",
+        "status": "no-match"
+       },
+       {
+        "events": [],
+        "raw": "issues.closed",
+        "reason": "poll found no issues.closed event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "notify",
+     "outcomes": [
+      {
+       "name": "notified",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "skipped",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:blocked",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       },
+       {
+        "events": [],
+        "raw": "issues.labeled factory:needs-answers",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "notify-pr",
+     "outcomes": [
+      {
+       "name": "notified",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "skipped",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "pull_request.labeled factory:needs-human",
+        "reason": "poll found no pull_request.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "retro",
+     "outcomes": [
+      {
+       "name": "proposed",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "nothing",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "schedule retro",
+        "reason": "no event evidence for schedule triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "no",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "knowledge-review",
+     "outcomes": [
+      {
+       "name": "approve",
+       "reason": null,
+       "status": "possible"
+      },
+      {
+       "name": "changes",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "no-match",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "issues.labeled factory:knowledge-review",
+        "reason": "poll found no issues.labeled event for the ticket",
+        "status": "no-match"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "actor",
+        "reason": "needs an actor from an event",
+        "status": "unknown",
+        "want": "human"
+       }
+      ],
+      "reason": "needs an actor from an event",
+      "status": "unknown"
+     },
+     "node": "accept-knowledge",
+     "outcomes": [
+      {
+       "name": "accepted",
+       "reason": "missing evidence: Bad bad condition value 'approved': allowed open, merged, behind, conflicting, none",
+       "status": "unknown"
+      },
+      {
+       "name": "rejected",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "manual",
+        "reason": "no event evidence for manual triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "reconcile",
+     "outcomes": [
+      {
+       "name": "reconciled",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "schedule reconcile",
+        "reason": "no event evidence for schedule triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "doctor-engine",
+     "outcomes": [
+      {
+       "name": "probed",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "schedule doctor-engine",
+        "reason": "no event evidence for schedule triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    },
+    {
+     "eligible": "unknown",
+     "execution": {
+      "reason": "no execution evidence: eligibility does not mean running",
+      "status": "unknown"
+     },
+     "guards": {
+      "keys": [
+       {
+        "key": "always",
+        "reason": null,
+        "status": "pass",
+        "want": true
+       }
+      ],
+      "reason": null,
+      "status": "pass"
+     },
+     "node": "doctor-team",
+     "outcomes": [
+      {
+       "name": "probed",
+       "reason": null,
+       "status": "possible"
+      }
+     ],
+     "trigger": {
+      "status": "unknown",
+      "triggers": [
+       {
+        "events": [],
+        "raw": "schedule doctor-team",
+        "reason": "no event evidence for schedule triggers",
+        "status": "unknown"
+       }
+      ]
+     }
+    }
+   ],
+   "prs": [],
+   "repository": "o/r",
+   "short_id": 2,
+   "stage": "in-dev",
+   "stage_age": {
+    "entered_at": null,
+    "kind": "active",
+    "reason": "stage entry time is missing",
+    "seconds": null,
+    "stage": "in-dev",
+    "state": "unknown",
+    "warn": false
+   },
+   "stage_kind": "active",
+   "state": "open",
+   "title": "Another",
+   "tracker": "github-issues|o/r",
+   "warnings": []
+  }
+ ],
+ "workflow": {
+  "branches": [
+   {
+    "kind": "stage",
+    "stage": "approved",
+    "targets": [
+     "blocked",
+     "changes-requested",
+     "done",
+     "in-review",
+     "ready",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "ci-failed",
+      "outcome": "fix",
+      "to": "changes-requested"
+     },
+     {
+      "node": "fix",
+      "outcome": "done-low",
+      "to": "in-review"
+     },
+     {
+      "node": "fix",
+      "outcome": "done-high",
+      "to": "in-review"
+     },
+     {
+      "node": "fix",
+      "outcome": "blocked",
+      "to": "blocked"
+     },
+     {
+      "node": "rounds-out",
+      "outcome": "blocked",
+      "to": "blocked"
+     },
+     {
+      "node": "merge",
+      "outcome": "conflict",
+      "to": "changes-requested"
+     },
+     {
+      "node": "merge",
+      "outcome": "updated-low",
+      "to": "in-review"
+     },
+     {
+      "node": "merge",
+      "outcome": "updated-high",
+      "to": "in-review"
+     },
+     {
+      "node": "merge",
+      "outcome": "ci-red",
+      "to": "changes-requested"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "kind": "stage",
+    "stage": "blocked",
+    "targets": [
+     "done",
+     "ready",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "ticket-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "ticket-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "kind": "stage",
+    "stage": "changes-requested",
+    "targets": [
+     "approved",
+     "blocked",
+     "done",
+     "in-review",
+     "ready",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "fix",
+      "outcome": "done-low",
+      "to": "in-review"
+     },
+     {
+      "node": "fix",
+      "outcome": "done-high",
+      "to": "in-review"
+     },
+     {
+      "node": "fix",
+      "outcome": "blocked",
+      "to": "blocked"
+     },
+     {
+      "node": "rounds-out",
+      "outcome": "blocked",
+      "to": "blocked"
+     },
+     {
+      "node": "update",
+      "outcome": "resolved",
+      "to": "approved"
+     },
+     {
+      "node": "update",
+      "outcome": "unresolvable",
+      "to": "blocked"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "kind": "stage",
+    "stage": "draft",
+    "targets": [
+     "done",
+     "ready",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "kind": "stage",
+    "stage": "in-dev",
+    "targets": [
+     "blocked",
+     "done",
+     "in-review",
+     "ready",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "implement-small",
+      "outcome": "done-low",
+      "to": "in-review"
+     },
+     {
+      "node": "implement-small",
+      "outcome": "done-high",
+      "to": "in-review"
+     },
+     {
+      "node": "implement-small",
+      "outcome": "blocked",
+      "to": "blocked"
+     },
+     {
+      "node": "implement-medium",
+      "outcome": "done-low",
+      "to": "in-review"
+     },
+     {
+      "node": "implement-medium",
+      "outcome": "done-high",
+      "to": "in-review"
+     },
+     {
+      "node": "implement-medium",
+      "outcome": "blocked",
+      "to": "blocked"
+     },
+     {
+      "node": "implement-large",
+      "outcome": "done-low",
+      "to": "in-review"
+     },
+     {
+      "node": "implement-large",
+      "outcome": "done-high",
+      "to": "in-review"
+     },
+     {
+      "node": "implement-large",
+      "outcome": "blocked",
+      "to": "blocked"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "kind": "stage",
+    "stage": "in-review",
+    "targets": [
+     "approved",
+     "blocked",
+     "changes-requested",
+     "done",
+     "in-review",
+     "ready",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "review-low",
+      "outcome": "approve-low",
+      "to": "approved"
+     },
+     {
+      "node": "review-low",
+      "outcome": "approve-risky",
+      "to": "approved"
+     },
+     {
+      "node": "review-low",
+      "outcome": "changes",
+      "to": "changes-requested"
+     },
+     {
+      "node": "review-high",
+      "outcome": "approve-low",
+      "to": "approved"
+     },
+     {
+      "node": "review-high",
+      "outcome": "approve-risky",
+      "to": "approved"
+     },
+     {
+      "node": "review-high",
+      "outcome": "changes",
+      "to": "changes-requested"
+     },
+     {
+      "node": "fix",
+      "outcome": "done-low",
+      "to": "in-review"
+     },
+     {
+      "node": "fix",
+      "outcome": "done-high",
+      "to": "in-review"
+     },
+     {
+      "node": "fix",
+      "outcome": "blocked",
+      "to": "blocked"
+     },
+     {
+      "node": "rounds-out",
+      "outcome": "blocked",
+      "to": "blocked"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "kind": "stage",
+    "stage": "investigating",
+    "targets": [
+     "done",
+     "in-dev",
+     "needs-answers",
+     "not-actionable",
+     "ready",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "investigate",
+      "outcome": "bug",
+      "to": "in-dev"
+     },
+     {
+      "node": "investigate",
+      "outcome": "intended",
+      "to": "not-actionable"
+     },
+     {
+      "node": "investigate",
+      "outcome": "cannot-reproduce",
+      "to": "needs-answers"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "kind": "stage",
+    "stage": "needs-answers",
+    "targets": [
+     "done",
+     "ready",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "ticket-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "ticket-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "kind": "stage",
+    "stage": "not-actionable",
+    "targets": [
+     "done",
+     "ready",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "kind": "stage",
+    "stage": "ready",
+    "targets": [
+     "blocked",
+     "done",
+     "in-dev",
+     "ready",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "dispatch",
+      "outcome": "small",
+      "to": "in-dev"
+     },
+     {
+      "node": "dispatch",
+      "outcome": "medium",
+      "to": "in-dev"
+     },
+     {
+      "node": "dispatch",
+      "outcome": "large",
+      "to": "in-dev"
+     },
+     {
+      "node": "dispatch",
+      "outcome": "blocked",
+      "to": "blocked"
+     },
+     {
+      "node": "dispatch",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "kind": "stage",
+    "stage": "split",
+    "targets": [
+     "done",
+     "ready",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     },
+     {
+      "node": "finish",
+      "outcome": "children-done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "kind": "stage",
+    "stage": "triage",
+    "targets": [
+     "done",
+     "investigating",
+     "needs-answers",
+     "not-actionable",
+     "ready",
+     "split",
+     "triage"
+    ],
+    "via": [
+     {
+      "node": "human",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "triage",
+      "to": "triage"
+     },
+     {
+      "node": "human-reply",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "intake",
+      "outcome": "small-low",
+      "to": "ready"
+     },
+     {
+      "node": "intake",
+      "outcome": "small-high",
+      "to": "ready"
+     },
+     {
+      "node": "intake",
+      "outcome": "medium-low",
+      "to": "ready"
+     },
+     {
+      "node": "intake",
+      "outcome": "medium-high",
+      "to": "ready"
+     },
+     {
+      "node": "intake",
+      "outcome": "large-high",
+      "to": "ready"
+     },
+     {
+      "node": "intake",
+      "outcome": "ready",
+      "to": "ready"
+     },
+     {
+      "node": "intake",
+      "outcome": "grill",
+      "to": "needs-answers"
+     },
+     {
+      "node": "intake",
+      "outcome": "split",
+      "to": "split"
+     },
+     {
+      "node": "intake",
+      "outcome": "not-actionable",
+      "to": "not-actionable"
+     },
+     {
+      "node": "intake",
+      "outcome": "duplicate",
+      "to": "not-actionable"
+     },
+     {
+      "node": "intake",
+      "outcome": "superseded",
+      "to": "not-actionable"
+     },
+     {
+      "node": "intake",
+      "outcome": "bug",
+      "to": "investigating"
+     },
+     {
+      "node": "finish",
+      "outcome": "done",
+      "to": "done"
+     }
+    ]
+   },
+   {
+    "else": "changes",
+    "kind": "else",
+    "node": "review-low",
+    "outcome": "approve-low"
+   },
+   {
+    "else": "changes",
+    "kind": "else",
+    "node": "review-low",
+    "outcome": "approve-risky"
+   },
+   {
+    "else": "changes",
+    "kind": "else",
+    "node": "review-high",
+    "outcome": "approve-low"
+   },
+   {
+    "else": "changes",
+    "kind": "else",
+    "node": "review-high",
+    "outcome": "approve-risky"
+   },
+   {
+    "else": "needs-human",
+    "kind": "else",
+    "node": "automerge",
+    "outcome": "merge"
+   }
+  ],
+  "edges": [
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "approved",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "blocked",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "changes-requested",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": false,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "draft",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "in-dev",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "in-review",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "investigating",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "needs-answers",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "not-actionable",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "ready",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "split",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "triage",
+    "source": "triage",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "approved",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "blocked",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "changes-requested",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": false,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "draft",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "in-dev",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "in-review",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "investigating",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "needs-answers",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "not-actionable",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "ready",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "split",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human",
+    "outcome": "ready",
+    "source": "triage",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "approved",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "blocked",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "changes-requested",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": false,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "draft",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "in-dev",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "in-review",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "investigating",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "needs-answers",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "not-actionable",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "ready",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "split",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "triage",
+    "source": "triage",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "approved",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "blocked",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "changes-requested",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": false,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "draft",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "in-dev",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "in-review",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "investigating",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "needs-answers",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "not-actionable",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "ready",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "split",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "human-reply",
+    "outcome": "ready",
+    "source": "triage",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "ticket-reply",
+    "outcome": "triage",
+    "source": "blocked",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "ticket-reply",
+    "outcome": "triage",
+    "source": "needs-answers",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "ticket-reply",
+    "outcome": "ready",
+    "source": "blocked",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "ticket-reply",
+    "outcome": "ready",
+    "source": "needs-answers",
+    "target": "ready"
+   },
+   {
+    "kind": "wake",
+    "node": "intake",
+    "outcome": null,
+    "source": "triage",
+    "target": "intake"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "small-low",
+    "source": "triage",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "small-high",
+    "source": "triage",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "medium-low",
+    "source": "triage",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "medium-high",
+    "source": "triage",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "large-high",
+    "source": "triage",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "ready",
+    "source": "triage",
+    "target": "ready"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "grill",
+    "source": "triage",
+    "target": "needs-answers"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "split",
+    "source": "triage",
+    "target": "split"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "not-actionable",
+    "source": "triage",
+    "target": "not-actionable"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "duplicate",
+    "source": "triage",
+    "target": "not-actionable"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "superseded",
+    "source": "triage",
+    "target": "not-actionable"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "intake",
+    "outcome": "bug",
+    "source": "triage",
+    "target": "investigating"
+   },
+   {
+    "kind": "wake",
+    "node": "investigate",
+    "outcome": null,
+    "source": "investigating",
+    "target": "investigate"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "investigate",
+    "outcome": "bug",
+    "source": "investigating",
+    "target": "in-dev"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "investigate",
+    "outcome": "intended",
+    "source": "investigating",
+    "target": "not-actionable"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "investigate",
+    "outcome": "cannot-reproduce",
+    "source": "investigating",
+    "target": "needs-answers"
+   },
+   {
+    "kind": "wake",
+    "node": "dispatch",
+    "outcome": null,
+    "source": "ready",
+    "target": "dispatch"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "dispatch",
+    "outcome": "small",
+    "source": "ready",
+    "target": "in-dev"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "dispatch",
+    "outcome": "medium",
+    "source": "ready",
+    "target": "in-dev"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "dispatch",
+    "outcome": "large",
+    "source": "ready",
+    "target": "in-dev"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "dispatch",
+    "outcome": "blocked",
+    "source": "ready",
+    "target": "blocked"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "dispatch",
+    "outcome": "triage",
+    "source": "ready",
+    "target": "triage"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "implement-small",
+    "outcome": "done-low",
+    "source": "in-dev",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "implement-small",
+    "outcome": "done-high",
+    "source": "in-dev",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "implement-small",
+    "outcome": "blocked",
+    "source": "in-dev",
+    "target": "blocked"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "implement-medium",
+    "outcome": "done-low",
+    "source": "in-dev",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "implement-medium",
+    "outcome": "done-high",
+    "source": "in-dev",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "implement-medium",
+    "outcome": "blocked",
+    "source": "in-dev",
+    "target": "blocked"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "implement-large",
+    "outcome": "done-low",
+    "source": "in-dev",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "implement-large",
+    "outcome": "done-high",
+    "source": "in-dev",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "implement-large",
+    "outcome": "blocked",
+    "source": "in-dev",
+    "target": "blocked"
+   },
+   {
+    "condition": {
+     "ci": [
+      "green",
+      "pending",
+      "none"
+     ]
+    },
+    "in_loop": true,
+    "kind": "transition",
+    "node": "review-low",
+    "outcome": "approve-low",
+    "source": "in-review",
+    "target": "approved"
+   },
+   {
+    "condition": {
+     "ci": [
+      "green",
+      "pending",
+      "none"
+     ]
+    },
+    "in_loop": true,
+    "kind": "transition",
+    "node": "review-low",
+    "outcome": "approve-risky",
+    "source": "in-review",
+    "target": "approved"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "review-low",
+    "outcome": "changes",
+    "source": "in-review",
+    "target": "changes-requested"
+   },
+   {
+    "condition": {
+     "ci": [
+      "green",
+      "pending",
+      "none"
+     ]
+    },
+    "in_loop": true,
+    "kind": "transition",
+    "node": "review-high",
+    "outcome": "approve-low",
+    "source": "in-review",
+    "target": "approved"
+   },
+   {
+    "condition": {
+     "ci": [
+      "green",
+      "pending",
+      "none"
+     ]
+    },
+    "in_loop": true,
+    "kind": "transition",
+    "node": "review-high",
+    "outcome": "approve-risky",
+    "source": "in-review",
+    "target": "approved"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "review-high",
+    "outcome": "changes",
+    "source": "in-review",
+    "target": "changes-requested"
+   },
+   {
+    "condition": {
+     "ci": [
+      "red"
+     ]
+    },
+    "in_loop": true,
+    "kind": "transition",
+    "node": "ci-failed",
+    "outcome": "fix",
+    "source": "approved",
+    "target": "changes-requested"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "fix",
+    "outcome": "done-low",
+    "source": "in-review",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "fix",
+    "outcome": "done-low",
+    "source": "changes-requested",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "fix",
+    "outcome": "done-low",
+    "source": "approved",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "fix",
+    "outcome": "done-high",
+    "source": "in-review",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "fix",
+    "outcome": "done-high",
+    "source": "changes-requested",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "fix",
+    "outcome": "done-high",
+    "source": "approved",
+    "target": "in-review"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "fix",
+    "outcome": "blocked",
+    "source": "in-review",
+    "target": "blocked"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "fix",
+    "outcome": "blocked",
+    "source": "changes-requested",
+    "target": "blocked"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "fix",
+    "outcome": "blocked",
+    "source": "approved",
+    "target": "blocked"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "rounds-out",
+    "outcome": "blocked",
+    "source": "in-review",
+    "target": "blocked"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "rounds-out",
+    "outcome": "blocked",
+    "source": "changes-requested",
+    "target": "blocked"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "rounds-out",
+    "outcome": "blocked",
+    "source": "approved",
+    "target": "blocked"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "update",
+    "outcome": "resolved",
+    "source": "changes-requested",
+    "target": "approved"
+   },
+   {
+    "condition": null,
+    "in_loop": true,
+    "kind": "transition",
+    "node": "update",
+    "outcome": "unresolvable",
+    "source": "changes-requested",
+    "target": "blocked"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "conflicting"
+     }
+    },
+    "in_loop": true,
+    "kind": "transition",
+    "node": "merge",
+    "outcome": "conflict",
+    "source": "approved",
+    "target": "changes-requested"
+   },
+   {
+    "condition": {
+     "if": {
+      "label": "risk:low",
+      "pr": "behind"
+     }
+    },
+    "in_loop": true,
+    "kind": "transition",
+    "node": "merge",
+    "outcome": "updated-low",
+    "source": "approved",
+    "target": "in-review"
+   },
+   {
+    "condition": {
+     "if": {
+      "label": "risk:high",
+      "pr": "behind"
+     }
+    },
+    "in_loop": true,
+    "kind": "transition",
+    "node": "merge",
+    "outcome": "updated-high",
+    "source": "approved",
+    "target": "in-review"
+   },
+   {
+    "condition": {
+     "ci": [
+      "red"
+     ]
+    },
+    "in_loop": true,
+    "kind": "transition",
+    "node": "merge",
+    "outcome": "ci-red",
+    "source": "approved",
+    "target": "changes-requested"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "approved",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "blocked",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "changes-requested",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "draft",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "in-dev",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "in-review",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "investigating",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "needs-answers",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "not-actionable",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "ready",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "split",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "pr": "merged"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "done",
+    "source": "triage",
+    "target": "done"
+   },
+   {
+    "condition": {
+     "if": {
+      "children": "closed"
+     }
+    },
+    "in_loop": false,
+    "kind": "transition",
+    "node": "finish",
+    "outcome": "children-done",
+    "source": "split",
+    "target": "done"
+   },
+   {
+    "kind": "wake",
+    "node": "notify",
+    "outcome": null,
+    "source": "blocked",
+    "target": "notify"
+   },
+   {
+    "kind": "wake",
+    "node": "notify",
+    "outcome": null,
+    "source": "needs-answers",
+    "target": "notify"
+   },
+   {
+    "kind": "route",
+    "node": "investigate",
+    "outcome": "bug",
+    "source": "investigate",
+    "target": "implement-medium",
+    "via": "factory:implement-medium"
+   },
+   {
+    "kind": "route",
+    "node": "dispatch",
+    "outcome": "small",
+    "source": "dispatch",
+    "target": "implement-small",
+    "via": "factory:implement-small"
+   },
+   {
+    "kind": "route",
+    "node": "dispatch",
+    "outcome": "medium",
+    "source": "dispatch",
+    "target": "implement-medium",
+    "via": "factory:implement-medium"
+   },
+   {
+    "kind": "route",
+    "node": "dispatch",
+    "outcome": "large",
+    "source": "dispatch",
+    "target": "implement-large",
+    "via": "factory:implement-large"
+   },
+   {
+    "kind": "route",
+    "node": "implement-small",
+    "outcome": "done-low",
+    "source": "implement-small",
+    "target": "review-low",
+    "via": "factory:review-low"
+   },
+   {
+    "kind": "route",
+    "node": "implement-small",
+    "outcome": "done-high",
+    "source": "implement-small",
+    "target": "review-high",
+    "via": "factory:review-high"
+   },
+   {
+    "kind": "route",
+    "node": "implement-small",
+    "outcome": "error",
+    "source": "implement-small",
+    "target": "implement-medium",
+    "via": "factory:implement-medium"
+   },
+   {
+    "kind": "route",
+    "node": "implement-medium",
+    "outcome": "done-low",
+    "source": "implement-medium",
+    "target": "review-low",
+    "via": "factory:review-low"
+   },
+   {
+    "kind": "route",
+    "node": "implement-medium",
+    "outcome": "done-high",
+    "source": "implement-medium",
+    "target": "review-high",
+    "via": "factory:review-high"
+   },
+   {
+    "kind": "route",
+    "node": "implement-medium",
+    "outcome": "error",
+    "source": "implement-medium",
+    "target": "implement-large",
+    "via": "factory:implement-large"
+   },
+   {
+    "kind": "route",
+    "node": "implement-large",
+    "outcome": "done-low",
+    "source": "implement-large",
+    "target": "review-low",
+    "via": "factory:review-low"
+   },
+   {
+    "kind": "route",
+    "node": "implement-large",
+    "outcome": "done-high",
+    "source": "implement-large",
+    "target": "review-high",
+    "via": "factory:review-high"
+   },
+   {
+    "kind": "route",
+    "node": "review-low",
+    "outcome": "approve-low",
+    "source": "review-low",
+    "target": "automerge",
+    "via": "factory:automerge"
+   },
+   {
+    "kind": "route",
+    "node": "review-low",
+    "outcome": "approve-risky",
+    "source": "review-low",
+    "target": "notify-pr",
+    "via": "factory:needs-human"
+   },
+   {
+    "kind": "route",
+    "node": "review-low",
+    "outcome": "changes",
+    "source": "review-low",
+    "target": "fix",
+    "via": "factory:fix"
+   },
+   {
+    "kind": "route",
+    "node": "review-low",
+    "outcome": "changes",
+    "source": "review-low",
+    "target": "rounds-out",
+    "via": "factory:fix"
+   },
+   {
+    "kind": "route",
+    "node": "review-high",
+    "outcome": "approve-low",
+    "source": "review-high",
+    "target": "automerge",
+    "via": "factory:automerge"
+   },
+   {
+    "kind": "route",
+    "node": "review-high",
+    "outcome": "approve-risky",
+    "source": "review-high",
+    "target": "notify-pr",
+    "via": "factory:needs-human"
+   },
+   {
+    "kind": "route",
+    "node": "review-high",
+    "outcome": "changes",
+    "source": "review-high",
+    "target": "fix",
+    "via": "factory:fix"
+   },
+   {
+    "kind": "route",
+    "node": "review-high",
+    "outcome": "changes",
+    "source": "review-high",
+    "target": "rounds-out",
+    "via": "factory:fix"
+   },
+   {
+    "kind": "route",
+    "node": "ci-failed",
+    "outcome": "fix",
+    "source": "ci-failed",
+    "target": "fix",
+    "via": "factory:fix"
+   },
+   {
+    "kind": "route",
+    "node": "ci-failed",
+    "outcome": "fix",
+    "source": "ci-failed",
+    "target": "rounds-out",
+    "via": "factory:fix"
+   },
+   {
+    "kind": "route",
+    "node": "fix",
+    "outcome": "done-low",
+    "source": "fix",
+    "target": "review-low",
+    "via": "factory:review-low"
+   },
+   {
+    "kind": "route",
+    "node": "fix",
+    "outcome": "done-high",
+    "source": "fix",
+    "target": "review-high",
+    "via": "factory:review-high"
+   },
+   {
+    "kind": "route",
+    "node": "update",
+    "outcome": "resolved",
+    "source": "update",
+    "target": "automerge",
+    "via": "factory:automerge"
+   },
+   {
+    "kind": "route",
+    "node": "automerge",
+    "outcome": "merge",
+    "source": "automerge",
+    "target": "merge",
+    "via": "factory:merge"
+   },
+   {
+    "kind": "route",
+    "node": "automerge",
+    "outcome": "needs-human",
+    "source": "automerge",
+    "target": "notify-pr",
+    "via": "factory:needs-human"
+   },
+   {
+    "kind": "route",
+    "node": "merge",
+    "outcome": "conflict",
+    "source": "merge",
+    "target": "update",
+    "via": "factory:update"
+   },
+   {
+    "kind": "route",
+    "node": "merge",
+    "outcome": "updated-low",
+    "source": "merge",
+    "target": "review-low",
+    "via": "factory:review-low"
+   },
+   {
+    "kind": "route",
+    "node": "merge",
+    "outcome": "updated-high",
+    "source": "merge",
+    "target": "review-high",
+    "via": "factory:review-high"
+   },
+   {
+    "kind": "route",
+    "node": "merge",
+    "outcome": "ci-red",
+    "source": "merge",
+    "target": "fix",
+    "via": "factory:fix"
+   },
+   {
+    "kind": "route",
+    "node": "merge",
+    "outcome": "ci-red",
+    "source": "merge",
+    "target": "rounds-out",
+    "via": "factory:fix"
+   }
+  ],
+  "loops": [
+   [
+    "approved",
+    "blocked",
+    "changes-requested",
+    "in-dev",
+    "in-review",
+    "investigating",
+    "needs-answers",
+    "not-actionable",
+    "ready",
+    "split",
+    "triage"
+   ]
+  ],
+  "nodes": [
+   {
+    "background": false,
+    "enabled": true,
+    "environment": null,
+    "id": "human",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "triage"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": [
+       "approved",
+       "blocked",
+       "changes-requested",
+       "draft",
+       "in-dev",
+       "in-review",
+       "investigating",
+       "needs-answers",
+       "not-actionable",
+       "ready",
+       "split",
+       "triage"
+      ],
+      "name": "triage",
+      "source_stages": [
+       "approved",
+       "blocked",
+       "changes-requested",
+       "draft",
+       "in-dev",
+       "in-review",
+       "investigating",
+       "needs-answers",
+       "not-actionable",
+       "ready",
+       "split",
+       "triage"
+      ],
+      "to": "triage"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "ready"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": [
+       "approved",
+       "blocked",
+       "changes-requested",
+       "draft",
+       "in-dev",
+       "in-review",
+       "investigating",
+       "needs-answers",
+       "not-actionable",
+       "ready",
+       "split",
+       "triage"
+      ],
+      "name": "ready",
+      "source_stages": [
+       "approved",
+       "blocked",
+       "changes-requested",
+       "draft",
+       "in-dev",
+       "in-review",
+       "investigating",
+       "needs-answers",
+       "not-actionable",
+       "ready",
+       "split",
+       "triage"
+      ],
+      "to": "ready"
+     }
+    ],
+    "output": null,
+    "role": "human",
+    "stages": [],
+    "tier": null,
+    "triggers": [
+     {
+      "event": "manual",
+      "kind": "manual",
+      "label": null,
+      "raw": "manual",
+      "stage": null
+     }
+    ],
+    "when": {
+     "actor": "human"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "human-reply",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:needs-human"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "triage"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": [
+       "approved",
+       "blocked",
+       "changes-requested",
+       "draft",
+       "in-dev",
+       "in-review",
+       "investigating",
+       "needs-answers",
+       "not-actionable",
+       "ready",
+       "split",
+       "triage"
+      ],
+      "name": "triage",
+      "source_stages": [
+       "approved",
+       "blocked",
+       "changes-requested",
+       "draft",
+       "in-dev",
+       "in-review",
+       "investigating",
+       "needs-answers",
+       "not-actionable",
+       "ready",
+       "split",
+       "triage"
+      ],
+      "to": "triage"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:needs-human"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "ready"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": [
+       "approved",
+       "blocked",
+       "changes-requested",
+       "draft",
+       "in-dev",
+       "in-review",
+       "investigating",
+       "needs-answers",
+       "not-actionable",
+       "ready",
+       "split",
+       "triage"
+      ],
+      "name": "ready",
+      "source_stages": [
+       "approved",
+       "blocked",
+       "changes-requested",
+       "draft",
+       "in-dev",
+       "in-review",
+       "investigating",
+       "needs-answers",
+       "not-actionable",
+       "ready",
+       "split",
+       "triage"
+      ],
+      "to": "ready"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "skipped",
+      "source_stages": [],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "resume",
+    "stages": [],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "issues.comment",
+      "kind": "event",
+      "label": null,
+      "raw": "issues.comment",
+      "stage": null
+     },
+     {
+      "event": "issue_comment.created",
+      "kind": "event",
+      "label": null,
+      "raw": "issue_comment.created",
+      "stage": null
+     }
+    ],
+    "when": {
+     "label": "factory:needs-human"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "ticket-reply",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "triage"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "triage",
+      "source_stages": [
+       "blocked",
+       "needs-answers"
+      ],
+      "to": "triage"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "ready"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "ready",
+      "source_stages": [
+       "blocked",
+       "needs-answers"
+      ],
+      "to": "ready"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "skipped",
+      "source_stages": [
+       "blocked",
+       "needs-answers"
+      ],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "resume",
+    "stages": [
+     "blocked",
+     "needs-answers"
+    ],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "issues.comment",
+      "kind": "event",
+      "label": null,
+      "raw": "issues.comment",
+      "stage": null
+     }
+    ],
+    "when": {
+     "stage": [
+      "blocked",
+      "needs-answers"
+     ]
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "intake",
+    "id": "intake",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "label",
+        "on": null,
+        "value": "complexity:small"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:low"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "ready"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "small-low",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "ready"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "label",
+        "on": null,
+        "value": "complexity:small"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:high"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "ready"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "small-high",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "ready"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "label",
+        "on": null,
+        "value": "complexity:medium"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:low"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "ready"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "medium-low",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "ready"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "label",
+        "on": null,
+        "value": "complexity:medium"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:high"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "ready"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "medium-high",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "ready"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "label",
+        "on": null,
+        "value": "complexity:large"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:high"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "ready"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "large-high",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "ready"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "ready"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "ready",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "ready"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "questions"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "needs-answers"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "grill",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "needs-answers"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "create-issues",
+        "on": null,
+        "value": "children"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "split"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "split",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "split"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "close:wont-do"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "not-actionable"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "not-actionable",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "not-actionable"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "close:duplicate"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "not-actionable"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "duplicate",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "not-actionable"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "close:superseded"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "not-actionable"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "superseded",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "not-actionable"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "investigating"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "bug",
+      "source_stages": [
+       "triage"
+      ],
+      "to": "investigating"
+     }
+    ],
+    "output": "read-only",
+    "role": "router",
+    "stages": [
+     "triage"
+    ],
+    "tier": "sonnet",
+    "triggers": [
+     {
+      "event": "issues.labeled",
+      "kind": "event",
+      "label": "factory:triage",
+      "raw": "issues.labeled factory:triage",
+      "stage": "triage"
+     }
+    ],
+    "when": {
+     "stage": "triage"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "investigate",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "factory:implement-medium"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-dev"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "bug",
+      "source_stages": [
+       "investigating"
+      ],
+      "to": "in-dev"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "close:intended"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "not-actionable"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "intended",
+      "source_stages": [
+       "investigating"
+      ],
+      "to": "not-actionable"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "needs-answers"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "cannot-reproduce",
+      "source_stages": [
+       "investigating"
+      ],
+      "to": "needs-answers"
+     }
+    ],
+    "output": "read-only",
+    "role": "developer",
+    "stages": [
+     "investigating"
+    ],
+    "tier": "sonnet",
+    "triggers": [
+     {
+      "event": "issues.labeled",
+      "kind": "event",
+      "label": "factory:investigating",
+      "raw": "issues.labeled factory:investigating",
+      "stage": "investigating"
+     }
+    ],
+    "when": {
+     "stage": "investigating"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "dispatch",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "label",
+        "on": null,
+        "value": "complexity:small"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "factory:implement-small"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-dev"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "small",
+      "source_stages": [
+       "ready"
+      ],
+      "to": "in-dev"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "label",
+        "on": null,
+        "value": "complexity:medium"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "factory:implement-medium"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-dev"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "medium",
+      "source_stages": [
+       "ready"
+      ],
+      "to": "in-dev"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "label",
+        "on": null,
+        "value": "complexity:large"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "factory:implement-large"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-dev"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "large",
+      "source_stages": [
+       "ready"
+      ],
+      "to": "in-dev"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "blocked"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "blocked",
+      "source_stages": [
+       "ready"
+      ],
+      "to": "blocked"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "triage"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "triage",
+      "source_stages": [
+       "ready"
+      ],
+      "to": "triage"
+     }
+    ],
+    "output": "read-only",
+    "role": "dispatcher",
+    "stages": [
+     "ready"
+    ],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "issues.labeled",
+      "kind": "event",
+      "label": "factory:ready",
+      "raw": "issues.labeled factory:ready",
+      "stage": "ready"
+     }
+    ],
+    "when": {
+     "blockers": "closed",
+     "stage": "ready"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "implement-small",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": null,
+        "value": "factory:implement-small"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:low"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:review-low"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "done-low",
+      "source_stages": [
+       "in-dev"
+      ],
+      "to": "in-review"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": null,
+        "value": "factory:implement-small"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:high"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:review-high"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "done-high",
+      "source_stages": [
+       "in-dev"
+      ],
+      "to": "in-review"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": null,
+        "value": "factory:implement-small"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "factory:implement-medium"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "error",
+      "source_stages": [
+       "in-dev"
+      ],
+      "to": null
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "blocked"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "blocked",
+      "source_stages": [
+       "in-dev"
+      ],
+      "to": "blocked"
+     }
+    ],
+    "output": "create-pr",
+    "role": "developer",
+    "stages": [
+     "in-dev"
+    ],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "issues.labeled",
+      "kind": "event",
+      "label": "factory:implement-small",
+      "raw": "issues.labeled factory:implement-small",
+      "stage": null
+     }
+    ],
+    "when": {
+     "stage": "in-dev"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "implement-medium",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": null,
+        "value": "factory:implement-medium"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:low"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:review-low"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "done-low",
+      "source_stages": [
+       "in-dev"
+      ],
+      "to": "in-review"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": null,
+        "value": "factory:implement-medium"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:high"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:review-high"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "done-high",
+      "source_stages": [
+       "in-dev"
+      ],
+      "to": "in-review"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": null,
+        "value": "factory:implement-medium"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "factory:implement-large"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "error",
+      "source_stages": [
+       "in-dev"
+      ],
+      "to": null
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "blocked"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "blocked",
+      "source_stages": [
+       "in-dev"
+      ],
+      "to": "blocked"
+     }
+    ],
+    "output": "create-pr",
+    "role": "developer",
+    "stages": [
+     "in-dev"
+    ],
+    "tier": "sonnet",
+    "triggers": [
+     {
+      "event": "issues.labeled",
+      "kind": "event",
+      "label": "factory:implement-medium",
+      "raw": "issues.labeled factory:implement-medium",
+      "stage": null
+     }
+    ],
+    "when": {
+     "stage": "in-dev"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "implement-large",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": null,
+        "value": "factory:implement-large"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:low"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:review-low"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "done-low",
+      "source_stages": [
+       "in-dev"
+      ],
+      "to": "in-review"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": null,
+        "value": "factory:implement-large"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:high"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:review-high"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "done-high",
+      "source_stages": [
+       "in-dev"
+      ],
+      "to": "in-review"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "blocked"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "blocked",
+      "source_stages": [
+       "in-dev"
+      ],
+      "to": "blocked"
+     }
+    ],
+    "output": "create-pr",
+    "role": "developer",
+    "stages": [
+     "in-dev"
+    ],
+    "tier": "sonnet",
+    "triggers": [
+     {
+      "event": "issues.labeled",
+      "kind": "event",
+      "label": "factory:implement-large",
+      "raw": "issues.labeled factory:implement-large",
+      "stage": null
+     }
+    ],
+    "when": {
+     "stage": "in-dev"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "review-low",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": {
+       "ci": [
+        "green",
+        "pending",
+        "none"
+       ]
+      },
+      "effects": [
+       {
+        "kind": "review",
+        "on": null,
+        "value": "approve-at-head"
+       },
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:review-low"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:low"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:automerge"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "approved"
+       }
+      ],
+      "else": "changes",
+      "enabled": true,
+      "from": null,
+      "name": "approve-low",
+      "source_stages": [
+       "in-review"
+      ],
+      "to": "approved"
+     },
+     {
+      "comment_only": false,
+      "condition": {
+       "ci": [
+        "green",
+        "pending",
+        "none"
+       ]
+      },
+      "effects": [
+       {
+        "kind": "review",
+        "on": null,
+        "value": "approve-at-head"
+       },
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:review-low"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:high"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:needs-human"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "approved"
+       }
+      ],
+      "else": "changes",
+      "enabled": true,
+      "from": null,
+      "name": "approve-risky",
+      "source_stages": [
+       "in-review"
+      ],
+      "to": "approved"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "review",
+        "on": null,
+        "value": "request-changes-at-head"
+       },
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:review-low"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:fix"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "changes-requested"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "changes",
+      "source_stages": [
+       "in-review"
+      ],
+      "to": "changes-requested"
+     }
+    ],
+    "output": "read-only",
+    "role": "reviewer",
+    "stages": [
+     "in-review"
+    ],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "pull_request.labeled",
+      "kind": "event",
+      "label": "factory:review-low",
+      "raw": "pull_request.labeled factory:review-low",
+      "stage": null
+     }
+    ],
+    "when": {
+     "label": "risk:low",
+     "stage": "in-review"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "review-high",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": {
+       "ci": [
+        "green",
+        "pending",
+        "none"
+       ]
+      },
+      "effects": [
+       {
+        "kind": "review",
+        "on": null,
+        "value": "approve-at-head"
+       },
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:review-high"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:low"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:automerge"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "approved"
+       }
+      ],
+      "else": "changes",
+      "enabled": true,
+      "from": null,
+      "name": "approve-low",
+      "source_stages": [
+       "in-review"
+      ],
+      "to": "approved"
+     },
+     {
+      "comment_only": false,
+      "condition": {
+       "ci": [
+        "green",
+        "pending",
+        "none"
+       ]
+      },
+      "effects": [
+       {
+        "kind": "review",
+        "on": null,
+        "value": "approve-at-head"
+       },
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:review-high"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:high"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:needs-human"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "approved"
+       }
+      ],
+      "else": "changes",
+      "enabled": true,
+      "from": null,
+      "name": "approve-risky",
+      "source_stages": [
+       "in-review"
+      ],
+      "to": "approved"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "review",
+        "on": null,
+        "value": "request-changes-at-head"
+       },
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:review-high"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:fix"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "changes-requested"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "changes",
+      "source_stages": [
+       "in-review"
+      ],
+      "to": "changes-requested"
+     }
+    ],
+    "output": "read-only",
+    "role": "reviewer",
+    "stages": [
+     "in-review"
+    ],
+    "tier": "sol",
+    "triggers": [
+     {
+      "event": "pull_request.labeled",
+      "kind": "event",
+      "label": "factory:review-high",
+      "raw": "pull_request.labeled factory:review-high",
+      "stage": null
+     }
+    ],
+    "when": {
+     "label": "risk:high",
+     "stage": "in-review"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "ci-failed",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": {
+       "ci": [
+        "red"
+       ]
+      },
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:automerge"
+       },
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:merge"
+       },
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:needs-human"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:fix"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "changes-requested"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "fix",
+      "source_stages": [
+       "approved"
+      ],
+      "to": "changes-requested"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "waiting",
+      "source_stages": [
+       "approved"
+      ],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "clerk",
+    "stages": [
+     "approved"
+    ],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "pull_request.labeled",
+      "kind": "event",
+      "label": "factory:ci-red",
+      "raw": "pull_request.labeled factory:ci-red",
+      "stage": null
+     }
+    ],
+    "when": {
+     "stage": "approved"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "fix",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:fix"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:low"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:review-low"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "done-low",
+      "source_stages": [
+       "in-review",
+       "changes-requested",
+       "approved"
+      ],
+      "to": "in-review"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:fix"
+       },
+       {
+        "kind": "label",
+        "on": null,
+        "value": "risk:high"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:review-high"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "done-high",
+      "source_stages": [
+       "in-review",
+       "changes-requested",
+       "approved"
+      ],
+      "to": "in-review"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:fix"
+       },
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "blocked"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "blocked",
+      "source_stages": [
+       "in-review",
+       "changes-requested",
+       "approved"
+      ],
+      "to": "blocked"
+     }
+    ],
+    "output": "push-to-source",
+    "role": "developer",
+    "stages": [
+     "in-review",
+     "changes-requested",
+     "approved"
+    ],
+    "tier": "sonnet",
+    "triggers": [
+     {
+      "event": "pull_request.labeled",
+      "kind": "event",
+      "label": "factory:fix",
+      "raw": "pull_request.labeled factory:fix",
+      "stage": null
+     }
+    ],
+    "when": {
+     "fix-rounds": "below-cap",
+     "stage": [
+      "in-review",
+      "changes-requested",
+      "approved"
+     ]
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "rounds-out",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:fix"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "blocked"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "blocked",
+      "source_stages": [
+       "in-review",
+       "changes-requested",
+       "approved"
+      ],
+      "to": "blocked"
+     }
+    ],
+    "output": "read-only",
+    "role": "clerk",
+    "stages": [
+     "in-review",
+     "changes-requested",
+     "approved"
+    ],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "pull_request.labeled",
+      "kind": "event",
+      "label": "factory:fix",
+      "raw": "pull_request.labeled factory:fix",
+      "stage": null
+     }
+    ],
+    "when": {
+     "fix-rounds": "at-cap",
+     "stage": [
+      "in-review",
+      "changes-requested",
+      "approved"
+     ]
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "update",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:update"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:automerge"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "approved"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "resolved",
+      "source_stages": [
+       "changes-requested"
+      ],
+      "to": "approved"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:update"
+       },
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "reason"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "blocked"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "unresolvable",
+      "source_stages": [
+       "changes-requested"
+      ],
+      "to": "blocked"
+     }
+    ],
+    "output": "push-to-source",
+    "role": "developer",
+    "stages": [
+     "changes-requested"
+    ],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "pull_request.labeled",
+      "kind": "event",
+      "label": "factory:update",
+      "raw": "pull_request.labeled factory:update",
+      "stage": null
+     }
+    ],
+    "when": {
+     "stage": "changes-requested"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "automerge",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": {
+       "if": {
+        "label": "risk:low"
+       }
+      },
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:automerge"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:merge"
+       }
+      ],
+      "else": "needs-human",
+      "enabled": true,
+      "from": null,
+      "name": "merge",
+      "source_stages": [
+       "approved"
+      ],
+      "to": null
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:automerge"
+       },
+       {
+        "kind": "comment",
+        "on": "pr",
+        "value": "reason"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:needs-human"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "needs-human",
+      "source_stages": [
+       "approved"
+      ],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "approver",
+    "stages": [
+     "approved"
+    ],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "pull_request.labeled",
+      "kind": "event",
+      "label": "factory:automerge",
+      "raw": "pull_request.labeled factory:automerge",
+      "stage": null
+     }
+    ],
+    "when": {
+     "stage": "approved"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "merge",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": {
+       "if": {
+        "pr": "conflicting"
+       }
+      },
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:merge"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:update"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "changes-requested"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "conflict",
+      "source_stages": [
+       "approved"
+      ],
+      "to": "changes-requested"
+     },
+     {
+      "comment_only": false,
+      "condition": {
+       "if": {
+        "label": "risk:low",
+        "pr": "behind"
+       }
+      },
+      "effects": [
+       {
+        "kind": "update-branch",
+        "on": null,
+        "value": "match-head"
+       },
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:merge"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:review-low"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "updated-low",
+      "source_stages": [
+       "approved"
+      ],
+      "to": "in-review"
+     },
+     {
+      "comment_only": false,
+      "condition": {
+       "if": {
+        "label": "risk:high",
+        "pr": "behind"
+       }
+      },
+      "effects": [
+       {
+        "kind": "update-branch",
+        "on": null,
+        "value": "match-head"
+       },
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:merge"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:review-high"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "in-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "updated-high",
+      "source_stages": [
+       "approved"
+      ],
+      "to": "in-review"
+     },
+     {
+      "comment_only": false,
+      "condition": {
+       "ci": [
+        "green"
+       ],
+       "if": {
+        "review": "approved-at-head"
+       }
+      },
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:merge"
+       },
+       {
+        "kind": "merge",
+        "on": null,
+        "value": "match-head"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "merged",
+      "source_stages": [
+       "approved"
+      ],
+      "to": null
+     },
+     {
+      "comment_only": false,
+      "condition": {
+       "ci": [
+        "red"
+       ]
+      },
+      "effects": [
+       {
+        "kind": "unlabel",
+        "on": "pr",
+        "value": "factory:merge"
+       },
+       {
+        "kind": "label",
+        "on": "pr",
+        "value": "factory:fix"
+       },
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "changes-requested"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "ci-red",
+      "source_stages": [
+       "approved"
+      ],
+      "to": "changes-requested"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "waiting",
+      "source_stages": [
+       "approved"
+      ],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "clerk",
+    "stages": [
+     "approved"
+    ],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "pull_request.labeled",
+      "kind": "event",
+      "label": "factory:merge",
+      "raw": "pull_request.labeled factory:merge",
+      "stage": null
+     }
+    ],
+    "when": {
+     "stage": "approved"
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "finish",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": {
+       "if": {
+        "pr": "merged"
+       }
+      },
+      "effects": [
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "done"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": [
+       "approved",
+       "blocked",
+       "changes-requested",
+       "draft",
+       "in-dev",
+       "in-review",
+       "investigating",
+       "needs-answers",
+       "not-actionable",
+       "ready",
+       "split",
+       "triage"
+      ],
+      "name": "done",
+      "source_stages": [
+       "approved",
+       "blocked",
+       "changes-requested",
+       "draft",
+       "in-dev",
+       "in-review",
+       "investigating",
+       "needs-answers",
+       "not-actionable",
+       "ready",
+       "split",
+       "triage"
+      ],
+      "to": "done"
+     },
+     {
+      "comment_only": false,
+      "condition": {
+       "if": {
+        "children": "closed"
+       }
+      },
+      "effects": [
+       {
+        "kind": "stage",
+        "on": null,
+        "value": "done"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": [
+       "split"
+      ],
+      "name": "children-done",
+      "source_stages": [
+       "split"
+      ],
+      "to": "done"
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "waiting",
+      "source_stages": [],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "clerk",
+    "stages": [],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "pull_request.merged",
+      "kind": "event",
+      "label": null,
+      "raw": "pull_request.merged",
+      "stage": null
+     },
+     {
+      "event": "issues.closed",
+      "kind": "event",
+      "label": null,
+      "raw": "issues.closed",
+      "stage": null
+     }
+    ],
+    "when": {
+     "always": true
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "notify",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": null,
+        "value": "message"
+       },
+       {
+        "kind": "assign",
+        "on": null,
+        "value": {
+         "field": "assignee"
+        }
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "notified",
+      "source_stages": [],
+      "to": null
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "skipped",
+      "source_stages": [],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "notify",
+    "stages": [],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "issues.labeled",
+      "kind": "event",
+      "label": "factory:blocked",
+      "raw": "issues.labeled factory:blocked",
+      "stage": "blocked"
+     },
+     {
+      "event": "issues.labeled",
+      "kind": "event",
+      "label": "factory:needs-answers",
+      "raw": "issues.labeled factory:needs-answers",
+      "stage": "needs-answers"
+     }
+    ],
+    "when": {
+     "always": true
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "engine",
+    "id": "notify-pr",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": "pr",
+        "value": "message"
+       },
+       {
+        "kind": "assign",
+        "on": "pr",
+        "value": {
+         "field": "assignee"
+        }
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "notified",
+      "source_stages": [],
+      "to": null
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "skipped",
+      "source_stages": [],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "notify",
+    "stages": [],
+    "tier": "luna",
+    "triggers": [
+     {
+      "event": "pull_request.labeled",
+      "kind": "event",
+      "label": "factory:needs-human",
+      "raw": "pull_request.labeled factory:needs-human",
+      "stage": null
+     }
+    ],
+    "when": {
+     "always": true
+    }
+   },
+   {
+    "background": true,
+    "enabled": true,
+    "environment": "team",
+    "id": "retro",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "proposed",
+      "source_stages": [],
+      "to": null
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "nothing",
+      "source_stages": [],
+      "to": null
+     }
+    ],
+    "output": "as-instructed",
+    "role": "retro",
+    "stages": [],
+    "tier": "sonnet",
+    "triggers": [
+     {
+      "cron": "0 2 * * *",
+      "event": "schedule",
+      "kind": "schedule",
+      "label": null,
+      "raw": "schedule retro",
+      "stage": null
+     }
+    ],
+    "when": {
+     "always": true
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": "team",
+    "id": "knowledge-review",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "review",
+        "on": null,
+        "value": "approve-at-head"
+       },
+       {
+        "kind": "unlabel",
+        "on": null,
+        "value": "factory:knowledge-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "approve",
+      "source_stages": [],
+      "to": null
+     },
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "review",
+        "on": null,
+        "value": "request-changes-at-head"
+       },
+       {
+        "kind": "unlabel",
+        "on": null,
+        "value": "factory:knowledge-review"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "changes",
+      "source_stages": [],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "reviewer",
+    "stages": [],
+    "tier": "sol",
+    "triggers": [
+     {
+      "event": "issues.labeled",
+      "kind": "event",
+      "label": "factory:knowledge-review",
+      "raw": "issues.labeled factory:knowledge-review",
+      "stage": null
+     }
+    ],
+    "when": {
+     "always": true
+    }
+   },
+   {
+    "background": false,
+    "enabled": true,
+    "environment": null,
+    "id": "accept-knowledge",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": {
+       "if": {
+        "pr": "approved"
+       }
+      },
+      "effects": [
+       {
+        "kind": "merge",
+        "on": null,
+        "value": "match-head"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "accepted",
+      "source_stages": [],
+      "to": null
+     },
+     {
+      "comment_only": true,
+      "condition": null,
+      "effects": [
+       {
+        "kind": "comment",
+        "on": "pr",
+        "value": "reason"
+       }
+      ],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "rejected",
+      "source_stages": [],
+      "to": null
+     }
+    ],
+    "output": null,
+    "role": "human",
+    "stages": [],
+    "tier": null,
+    "triggers": [
+     {
+      "event": "manual",
+      "kind": "manual",
+      "label": null,
+      "raw": "manual",
+      "stage": null
+     }
+    ],
+    "when": {
+     "actor": "human"
+    }
+   },
+   {
+    "background": true,
+    "enabled": true,
+    "environment": "team",
+    "id": "reconcile",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "reconciled",
+      "source_stages": [],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "ops",
+    "stages": [],
+    "tier": "luna",
+    "triggers": [
+     {
+      "cron": "*/15 * * * *",
+      "event": "schedule",
+      "kind": "schedule",
+      "label": null,
+      "raw": "schedule reconcile",
+      "stage": null
+     }
+    ],
+    "when": {
+     "always": true
+    }
+   },
+   {
+    "background": true,
+    "enabled": true,
+    "environment": "engine",
+    "id": "doctor-engine",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "probed",
+      "source_stages": [],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "ops",
+    "stages": [],
+    "tier": "luna",
+    "triggers": [
+     {
+      "cron": "0 5 * * *",
+      "event": "schedule",
+      "kind": "schedule",
+      "label": null,
+      "raw": "schedule doctor-engine",
+      "stage": null
+     }
+    ],
+    "when": {
+     "always": true
+    }
+   },
+   {
+    "background": true,
+    "enabled": true,
+    "environment": "team",
+    "id": "doctor-team",
+    "outcomes": [
+     {
+      "comment_only": false,
+      "condition": null,
+      "effects": [],
+      "else": null,
+      "enabled": true,
+      "from": null,
+      "name": "probed",
+      "source_stages": [],
+      "to": null
+     }
+    ],
+    "output": "read-only",
+    "role": "ops",
+    "stages": [],
+    "tier": "luna",
+    "triggers": [
+     {
+      "cron": "0 5 * * *",
+      "event": "schedule",
+      "kind": "schedule",
+      "label": null,
+      "raw": "schedule doctor-team",
+      "stage": null
+     }
+    ],
+    "when": {
+     "always": true
+    }
+   }
+  ],
+  "stages": [
+   {
+    "id": "approved",
+    "kind": "active",
+    "label": "factory:approved"
+   },
+   {
+    "id": "blocked",
+    "kind": "waiting",
+    "label": "factory:blocked"
+   },
+   {
+    "id": "changes-requested",
+    "kind": "active",
+    "label": "factory:changes-requested"
+   },
+   {
+    "id": "done",
+    "kind": "final",
+    "label": "factory:done"
+   },
+   {
+    "id": "draft",
+    "kind": "waiting",
+    "label": "factory:draft"
+   },
+   {
+    "id": "in-dev",
+    "kind": "active",
+    "label": "factory:in-dev"
+   },
+   {
+    "id": "in-review",
+    "kind": "active",
+    "label": "factory:in-review"
+   },
+   {
+    "id": "investigating",
+    "kind": "active",
+    "label": "factory:investigating"
+   },
+   {
+    "id": "needs-answers",
+    "kind": "waiting",
+    "label": "factory:needs-answers"
+   },
+   {
+    "id": "not-actionable",
+    "kind": "final",
+    "label": "factory:not-actionable"
+   },
+   {
+    "id": "ready",
+    "kind": "active",
+    "label": "factory:ready"
+   },
+   {
+    "id": "split",
+    "kind": "active",
+    "label": "factory:split"
+   },
+   {
+    "id": "triage",
+    "kind": "active",
+    "label": "factory:triage"
+   }
+  ]
+ }
+}
