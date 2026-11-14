@@ -321,8 +321,10 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
         agent = (defn["factory"].get("agents") or {}).get(((defn["workflow"].get("nodes") or {}).get(name) or {}).get("agent")) or {}
         if agent.get("run"):  # ADR-0021: a step with no judgement: the agent only runs the engine command
             prefix = node_repository_prefix(main_repository, config)
+            repository_hint = (" The PR lookup uses this run's writable repository from `FACTORY_ENV_REPOSITORY`."
+                               if agent["run"] == "decide" else "")
             return (f"{who}\n\n{checkout}Run `{prefix}factory {agent['run']} --node {name} {ticket_arg(begin_arg(name, n), main_repository, config)}` once, in the "
-                    "foreground, and wait until it exits. Copy only that one number. It applies "
+                    "foreground, and wait until it exits. Copy only that one number." + repository_hint + " It applies "
                     "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
                     "Report its JSON output." + INSTALLED_FACTORY)
         text = definition.render(defn, name, (main_repository or {}).get("fullName")).strip()

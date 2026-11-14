@@ -1245,6 +1245,7 @@ class PlanTest(unittest.TestCase):
         self.assertIn("`factory decide --node finish --pr <the pull request number>`", prompt)
         self.assertIn("do not run `factory begin` or `factory end`", prompt)
         self.assertIn("wait until it exits", prompt)
+        self.assertIn("writable repository from `FACTORY_ENV_REPOSITORY`", prompt)
         self.assertIn("never `uv run`", prompt)
         self.assertNotIn("## Your skills", prompt)
 
