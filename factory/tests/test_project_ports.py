@@ -162,10 +162,6 @@ class TicketRepositoriesTest(unittest.TestCase):
             ticket_repositories("repositories: o/other", names, "slop-factory")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class UserDescriptorIsNotRead(unittest.TestCase):
     """A `factory.project.yaml` in a team without a definition is ignored: only the compiled view is validated."""
 
@@ -179,3 +175,7 @@ class UserDescriptorIsNotRead(unittest.TestCase):
             self.assertIn("no factory definition", errors[0])
             with self.assertRaises(ValueError):
                 project.load(tmp)
+
+
+if __name__ == "__main__":
+    unittest.main()
