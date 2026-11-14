@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { FilterBar } from "@/views/FilterBar";
+import { FilterBar } from "@/FilterBar";
 import { type Filters, NO_FILTERS, filterSnapshot } from "@/filters";
 import { loadSnapshot, type Snapshot } from "@/snapshot";
 import { registry as defaultRegistry, type ViewRegistry } from "@/views/registry";

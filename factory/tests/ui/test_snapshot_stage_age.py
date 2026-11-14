@@ -19,6 +19,14 @@ class StageAge(unittest.TestCase):
     def age(self, kind, entered):
         return age.stage_age("x", kind, entered, s.NOW)
 
+    def test_exempt_stages_report_elapsed_seconds(self):
+        rows = [("final", ago(days=30), 30 * 86400), ("waiting", ago(days=3), 3 * 86400), ("final", ago(seconds=-30), 0),
+                ("final", None, None), ("final", "not a time", None), ("waiting", "", None)]
+        for kind, entered, seconds in rows:
+            with self.subTest(kind=kind, entered=entered):
+                got = self.age(kind, entered)
+                self.assertEqual((got["state"], got["seconds"], got["warn"]), ("exempt", seconds, False))
+
     def test_boundary_table(self):
         rows = [("active", ago(minutes=59, seconds=59), "ok", False), ("active", ago(hours=1), "ok", False),
                 ("active", ago(hours=1, seconds=1), "warn", True), ("active", ago(days=3), "warn", True),
