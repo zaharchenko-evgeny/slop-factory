@@ -878,7 +878,15 @@ class DefinitionTest(unittest.TestCase):
                  "pull_request_review.submitted by=factory state=approved"),
                 ({"pr": "closed"}, "pr closed", "pull_request.closed"),
                 ({"pr": "review_comment"}, "pr review_comment", "pull_request_review_comment.created"),
-                ({"label": "factory:fix", "by": "human"}, "command fix by=human", "pull_request.labeled factory:fix by=human")]
+                ({"label": "factory:fix", "by": "human"}, "command fix by=human", "pull_request.labeled factory:fix by=human"),
+                ({"ticket": "opened"}, "ticket opened", "issues.opened"),
+                ({"ticket": "reopened"}, "ticket reopened", "issues.reopened"),
+                ({"ticket": "unlabeled", "label": "wip"}, "ticket unlabeled label=wip", "issues.unlabeled label=wip"),
+                ({"ticket": "assigned"}, "ticket assigned", "issues.assigned"),
+                ({"push": "main"}, "push main", "push main"),
+                ({"push": "main", "by": "human"}, "push main by=human", "push main by=human"),
+                ({"ci": "green"}, "run-green quality-gates", "workflow_run.completed quality-gates"),
+                ({"ci": "checks_green"}, "ci checks_green", "check_suite.completed")]
         for trig, wake, event in rows:
             with self.subTest(trigger=trig):
                 self.edit("workflow.yaml", lambda w, trig=trig: w["nodes"]["fix"].update(triggers=[trig]))
@@ -889,8 +897,12 @@ class DefinitionTest(unittest.TestCase):
 
     def test_validate_names_the_supported_events_and_filters(self):
         rows = [({"pr": "pushd"}, "unknown-event: nodes.fix: pr: pushd: supported pr events: closed, commented"),
-                ({"ticket": "reopened"}, "unknown-event: nodes.fix: ticket: reopened: supported ticket events: closed, commented"),
-                ({"ci": "typo"}, "unknown-event: nodes.fix: ci: typo: supported ci events: failed"),
+                ({"ci": "typo"}, "unknown-event: nodes.fix: ci: typo: supported ci events: failed, green, checks_green"),
+                ({"ticket": "typo"}, "unknown-event: nodes.fix: ticket: typo: supported ticket events:"),
+                ({"push": "two words"}, "bad-filter: nodes.fix: push takes one branch name"),
+                ({"push": ""}, "bad-filter: nodes.fix: push takes one branch name"),
+                ({"push": "main", "state": "approved"}, "unknown-filter: nodes.fix: state does not fit `push`"),
+                ({"push": "main", "pr_author": "x"}, "unknown-filter: nodes.fix: pr_author does not fit `push`"),
                 ({"pr": "pushed", "who": "human"}, "unknown-filter: nodes.fix: who: supported filters: by, state, pr_author, label"),
                 ({"pr": "pushed", "state": "approved"}, "unknown-filter: nodes.fix: state fits only `pr: reviewed`"),
                 ({"pr": "reviewed", "state": "done"}, "bad-filter: nodes.fix: state done: supported states: approved, changes_requested, commented"),

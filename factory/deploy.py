@@ -166,8 +166,15 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
     if event == "workflow_run":  # ADR-0021 `ci: failed`: Air fires only on a failed run (AIRA-725)
         return {"triggerType": "EVENT", "source": "github", "eventType": "workflow_run.failed",
                 "filters": {"workflow_name": arg}}
+    if event == "workflow_run.completed":  # `ci: green`: a completed run that passed (docs/air-events.md)
+        return {"triggerType": "EVENT", "source": "github", "eventType": event,
+                "filters": {"workflow_name": arg, "conclusion": "success"}}
+    if event == "check_suite.completed":
+        return {"triggerType": "EVENT", "source": "github", "eventType": event, "filters": {"conclusion": "success"}}
     labeled = event.startswith("issues.") or event.startswith("pull_request.labeled")
     filters = {"label": arg} if labeled and arg else {}
+    if event == "push":
+        filters = {"branch": arg}
     if pr_author and event.startswith("pull_request"):
         filters["pr_author"] = pr_author
     if "pr_author" in wanted:
@@ -303,7 +310,7 @@ def begin_arg(node: str, n: dict) -> str:
     if node in PR_TRIGGERED_NODES:
         return "--pr <the pull request number>"
     events = [str(t) for t in n["triggers"] if str(t) != "manual"]
-    on_pr = [t.startswith(("pull_request", "issue_comment", "workflow_run")) for t in events]
+    on_pr = [t.startswith(("pull_request", "issue_comment", "workflow_run", "check_suite")) for t in events]
     if events and all(on_pr):  # ADR-0021: what wakes the node says what it begins with, not its name
         return "--pr <the pull request number>"
     if any(on_pr):

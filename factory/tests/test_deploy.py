@@ -1127,6 +1127,15 @@ class ProjectPlanTest(unittest.TestCase):
             ({"pr": "pushed", "by": "factory"}, "pull_request.synchronize", {"sender": bot}),
             ({"pr": "opened", "by": "carol"}, "pull_request.opened", {"sender": "carol"}),
             ({"pr": "opened", "pr_author": "carol"}, "pull_request.opened", {"pr_author": "carol"}),
+            ({"ticket": "opened"}, "issues.opened", {}),
+            ({"ticket": "reopened"}, "issues.reopened", {}),
+            ({"ticket": "unlabeled", "label": "wip"}, "issues.unlabeled", {"label": "wip"}),
+            ({"ticket": "assigned"}, "issues.assigned", {}),
+            ({"push": "main"}, "push", {"branch": "main"}),
+            ({"push": "release", "by": "human"}, "push", {"branch": "release", "sender_type": "User"}),
+            ({"ci": "green"}, "workflow_run.completed", {"workflow_name": "quality-gates", "conclusion": "success"}),
+            ({"ci": "checks_green"}, "check_suite.completed", {"conclusion": "success"}),
+            ({"ci": "failed"}, "workflow_run.failed", {"workflow_name": "quality-gates"}),
             ({"label": "factory:fix", "by": "human"}, "pull_request.labeled", {"label": "factory:fix", "sender_type": "User"}),
         ]
         for trig, event, filters in rows:
