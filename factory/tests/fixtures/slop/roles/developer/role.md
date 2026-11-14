@@ -59,7 +59,8 @@ nothing: this run has no branch. Use the `diagnosing-bugs` skill.
    is read-only. The platform pushes only the main checkout: publish the others as `Other project repositories`
    says.
 7. Your final message becomes the PR body: write it with the `pr` skill (summary sketch, before/after
-   evidence with every acceptance check, merge danger), and nothing else.
+   evidence with every acceptance check, merge danger), and nothing else. Its first line closes the ticket:
+   `Closes #<n>` (the ticket is in the PR's repository); without it the merge leaves the ticket open.
 
 ## Other project repositories
 
@@ -123,13 +124,20 @@ Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
 5. Hand off `outcome: resolved`. When you cannot resolve it, hand off
    `outcome: unresolvable` with `--reason` listing the conflicting files.
 
-## Baseline failures and nothing to fix
+## Main is red, the ticket is wrong, nothing to fix
 
 - When a required check fails and fails identically on `origin/main` (reproduce
-  it there), the failure is not yours: do not block on it. Run the tests of the
-  files you changed, record the check with
+  it there), the failure is not yours: do not block on it. When the other checks still verify your change,
+  run the tests of the files you changed, record the check with
   `--not-run '<check> | fails on origin/main: <failing tests>'`, report your done
   outcome, and add `--lesson "engine <check> | fails on origin/main: <failing tests>"`.
+  When it stops you from verifying the change, hand off `env-broken` with `failing_check` naming the check:
+  the gate opens or reuses `Main is red in Air: <check>`, parks the ticket behind it and moves it to `ready`.
+  Never report `blocked` for a failure main has too.
+- A tool a check needs is missing in Air (for example Java for `factory check-workflow`): `env-broken` with
+  `failing_check` naming the check and the missing tool.
+- The ticket itself is wrong: main already does what it asks, it contradicts itself, or it needs a decision it
+  does not give: `triage` with `--reason` (for "already done", the commit or PR that did it). Commit nothing.
 - In `fix` mode, when there is no blocking finding, no red CI and no conflict
   for the head (a stale or duplicate fix label), report your done outcome with
   no commit; the review runs again at the same head.
@@ -137,8 +145,8 @@ Input: the PR branch, which conflicts with `main`. Resolve the conflict only.
 ## Rules
 
 - Stay on the given branch and worktree. Never push, open PRs or change labels.
-- Stop and report `blocked` when the ticket is ambiguous or a check cannot run
-  after two repair attempts that test different causes.
+- Stop and report `triage` when the ticket is ambiguous, and `blocked` when a check cannot run
+  after two repair attempts that test different causes (`env-broken` when main or Air is the cause).
 
 ## Notes
 
@@ -156,5 +164,8 @@ Report one, as the last thing you do:
   reason; `done` with a failed check is refused. A `fix` run also lists each
   finding as fixed (with its commit) or disputed (with the reason) and, when
   it disputes every finding, the focuses it disputes.
-- `error`: nothing else; the next tier retries.
-- `blocked`, `failed` and the other outcomes the step lists: the reason.
+- `error`: nothing else; the next tier retries (not in `implement-large`).
+- `env-broken`: `failing_check` (main is red, or Air lacks a tool), as above.
+- `triage`: the reason the ticket is wrong or already done.
+- `blocked`: only for what a person must do (a decision, an access, a split); the reason and the action.
+- `failed` and the other outcomes the step lists: the reason.
