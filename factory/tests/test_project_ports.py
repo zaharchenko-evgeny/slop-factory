@@ -11,6 +11,8 @@ import json
 import re
 import sys
 import unittest
+
+import yaml
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,7 +92,7 @@ class ProjectPortsTest(unittest.TestCase):
     def youtrack(self):
         """A tracker over the fixture project-youtrack, its tickets in a stubbed YouTrack."""
         fake = FakeYouTrack(ISSUE, tags=("factory:implement-mid", "factory:implement-cheap", "risk:low", "close"))
-        descriptor = project.load(YOUTRACK)
+        descriptor = project.merged(yaml.safe_load((YOUTRACK / "factory.project.yaml").read_text()))
         stages = {n: s["store"]["field"]["value"] for n, s in descriptor["states"].items()}
         store = YouTrackTicketStore(fake, state_field="State")
         return GitHubGateTracker("example/project", stages, "factory[bot]", run=lambda *a, **k: "", project=descriptor,
@@ -162,3 +164,18 @@ class TicketRepositoriesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UserDescriptorIsNotRead(unittest.TestCase):
+    """A `factory.project.yaml` in a team without a definition is ignored: only the compiled view is validated."""
+
+    def test_team_without_definition_reports_one_error_and_ignores_the_file(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(project.validate(tmp)[0].split(":")[0], "factory.project.yaml")
+            (Path(tmp) / "factory.project.yaml").write_text((YOUTRACK / "factory.project.yaml").read_text())
+            errors = project.validate(tmp)
+            self.assertEqual(len(errors), 1)
+            self.assertIn("no factory definition", errors[0])
+            with self.assertRaises(ValueError):
+                project.load(tmp)

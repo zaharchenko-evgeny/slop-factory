@@ -1,4 +1,4 @@
-"""Project descriptor loading and validation (a compiled team definition, ADR-0021, or a `factory.project.yaml`)."""
+"""Project descriptor loading and validation (the view compiled from a team definition, ADR-0021)."""
 import json
 import re
 from pathlib import Path
@@ -14,18 +14,23 @@ NO_AGENT_ROLES = ("script", "human")
 
 def _read(team_root):
     import definition
-    if definition.present(team_root):  # ADR-0021: the definition compiled into this shape
-        return definition.to_project(definition.load(team_root))[0]
-    return yaml.safe_load((Path(team_root) / config.PROJECT_DESCRIPTOR).read_text()) or {}
+    if not definition.present(team_root):
+        raise OSError(f"no factory definition at {team_root} (factory.yaml and workflow.yaml, ADR-0021)")
+    return definition.to_project(definition.load(team_root))[0]
+
+
+def merged(descriptor):
+    """The descriptor merged over engine/defaults.yaml."""
+    defaults = yaml.safe_load((config.engine_root() / "engine/defaults.yaml").read_text()) or {}
+    return config.merge(defaults, descriptor)
 
 
 def load(team_root):
-    """Return the validated descriptor merged over engine/defaults.yaml; errors name the path and key."""
+    """Return the validated compiled view merged over engine/defaults.yaml; errors name the path and key."""
     errors = validate(team_root)
     if errors:
         raise ValueError("; ".join(errors))
-    defaults = yaml.safe_load((config.engine_root() / "engine/defaults.yaml").read_text()) or {}
-    return config.merge(defaults, _read(team_root))
+    return merged(_read(team_root))
 
 
 def store_kind(store):
@@ -47,12 +52,16 @@ def _repo_key(url):
 
 
 def validate(team_root):
-    """Return errors for a project's factory.project.yaml descriptor."""
-    root = Path(team_root)
+    """Return errors for the view compiled from the team definition."""
     try:
-        descriptor = _read(root)
+        descriptor = _read(Path(team_root))
     except (OSError, yaml.YAMLError) as exc:
         return [f"{config.PROJECT_DESCRIPTOR}: {exc}"]
+    return check(descriptor)
+
+
+def check(descriptor):
+    """Return errors for a compiled project view."""
     schema = json.loads((config.engine_root() / "engine/project.schema.json").read_text())
     errors = []
     config._check(schema, descriptor, config.PROJECT_DESCRIPTOR, errors)

@@ -958,24 +958,6 @@ GateMemory = tests_for(MemorySystem, 7)
 GateTag = tests_for(TagTracker, "PROJ-7")
 
 
-class YouTrackGateTest(unittest.TestCase):
-    """One implement step on LME-1701-shaped stub data (fixtures/project-youtrack): the ticket in a stubbed YouTrack,
-    its state a `field` store."""
-    FIXTURE = Path(__file__).resolve().parent / "fixtures/project-youtrack"
-
-    def setUp(self):
-        import project
-        from factory_plugins.github.gate import GitHubGateTracker
-        from test_youtrack_tracker import FakeYouTrack
-        from factory_plugins.youtrack.store import YouTrackTicketStore
-        self.addCleanup(cfg.set_team, cfg.team_root())  # importing the stub set a team of its own
-        cfg.set_team(self.FIXTURE)
-        self.fake = FakeYouTrack(json.loads((self.FIXTURE / "issue.json").read_text()), tags=("factory:implement-mid", "factory:needs-human"))
-        descriptor, self.config, self.nodes = project.load(self.FIXTURE), cfg.load(), nodes.load()
-        store = YouTrackTicketStore(self.fake, state_field="State")
-        self.tracker = GitHubGateTracker("example/project", self.config["tracker"]["stages"], "factory[bot]",
-                                         run=lambda *a, **k: "", project=descriptor, tickets=store)
-
 class CliAndValidate(unittest.TestCase):
     def test_opaque_ticket_id_in_branch_and_title(self):
         class Host:  # the code host knows PRs, the tracker knows tickets
