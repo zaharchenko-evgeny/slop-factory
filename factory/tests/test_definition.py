@@ -1239,7 +1239,7 @@ class SlopBugPathTest(unittest.TestCase):
         try:
             n = nodes_mod.load()
             t = MemorySystem({"7": {"stage": "triage"}})
-            self.assertTrue(gate.apply("intake", "bug", {"ticket": "7"}, t, n)[1]["applied"])
+            self.assertTrue(gate.apply("intake", "bug", {"ticket": "7", "verdict": "cause unknown"}, t, n)[1]["applied"])
             self.assertEqual(t.facts("7")["stage"], "investigating")
             code, _ = gate.apply("investigate", outcome, {"ticket": "7", "reason": reason}, t, n)
             self.assertEqual(code, gate.GO)

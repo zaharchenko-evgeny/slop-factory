@@ -13,8 +13,10 @@ resolving it silently:
    and the guidelines and specs they reference. Read them live; never copy them.
 4. The knowledge base, when this environment has `{{ settings.knowledge.repo }}`:
    `{{ settings.knowledge.dir }}/_shared.md`, `{{ settings.knowledge.dir }}/<repo>.md` for every
-   repository you touch, and `{{ settings.knowledge.dir }}/agents/{{ agent.name }}.md`. Lessons are
-   advice from earlier runs; the ticket and the repository rules win over them.
+   repository you touch, and `{{ settings.knowledge.dir }}/agents/{{ agent.name }}.md`; a missing file means
+   no lessons yet. Apply a lesson that fits your task; when it decides something, name it in your output
+   (`lesson: <file>: <line>`). Lessons are advice from earlier runs; the ticket and the repository rules win
+   over them, and a lesson that the code proves wrong is itself a lesson to report (below).
 5. The ticket and the handoff you were given.
 6. The `status` that `factory begin` returns: stage, CI at the head, fix rounds and each focus's
    open blocking findings. Start from it; read the full reviews, comments or history only for a
@@ -37,7 +39,8 @@ Branch pattern: `{{ settings.branch_pattern }}`. Never hard-code these.
 When this run taught something the next run should know (a trap in the code, a missing doc,
 a check that misleads, a step of the factory that failed), report each lesson with `--lesson` on
 `factory end`: one option per lesson, with its scope (`project`, `factory` or `engine`), the repo or
-agent it is about, and the evidence (a file, a command, a link). The gate posts them as a comment on the
+agent it is about, and the evidence (a file, a command, a link). Write it as one line a later agent can act on
+(`slop-factory: run X before Y, because Z (evidence)`), not a story of the run. The gate posts them as a comment on the
 ticket and labels it `{{ settings.knowledge.lesson_label }}`; retro collects them. Leave it empty
 when nothing is worth keeping.
 
