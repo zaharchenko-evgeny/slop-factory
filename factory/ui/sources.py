@@ -27,8 +27,10 @@ class Source:
     def ticket_url(self, ticket):
         if callable(self.url_for):
             return self.url_for(ticket)
-        if self.repository and str(ticket).split("#")[-1].isdigit():
-            return f"https://github.com/{self.repository}/issues/{str(ticket).split('#')[-1]}"
+        repo, _, number = str(ticket).rpartition("#")
+        repo = repo or self.repository
+        if repo and number.isdigit():
+            return f"https://github.com/{repo}/issues/{number}"
         return None
 
 
