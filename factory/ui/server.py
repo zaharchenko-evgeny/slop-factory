@@ -97,7 +97,11 @@ class Handler(BaseHTTPRequestHandler):
     def refuse(self):
         self.send(405, b"read-only server: only GET is allowed", allow="GET")
 
-    do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = do_TRACE = do_CONNECT = refuse
+    def __getattr__(self, name):
+        # BaseHTTPRequestHandler looks up do_<METHOD>; any method but GET (even BREW) is refused with 405, not 501.
+        if name.startswith("do_"):
+            return self.refuse
+        raise AttributeError(name)
 
 
 def make_server(build, port=0, secrets=None):

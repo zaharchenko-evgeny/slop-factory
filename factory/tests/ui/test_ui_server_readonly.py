@@ -36,7 +36,7 @@ class ReadOnly(unittest.TestCase):
         self.assertEqual(self.srv.server_address[0], "127.0.0.1")
 
     def test_every_non_get_method_is_405_on_every_path(self):
-        for method in ("POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"):
+        for method in ("POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE", "CONNECT", "BREW", "PROPFIND", "LINK"):
             for path in ("/api/snapshot", "/", "/assets/app.js", "/api/anything"):
                 with self.subTest(method=method, path=path):
                     res, _ = self.request(method, path)
