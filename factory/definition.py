@@ -726,7 +726,7 @@ def errors(defn):
                 if trigger == "manual" or isinstance(trigger, dict) and ("schedule" in trigger or "webhook" in trigger):
                     continue
                 pr_label = trigger.get("label") if isinstance(trigger, dict) else None
-                code_event = isinstance(trigger, dict) and next(iter(trigger), None) in ("pr", "ci")
+                code_event = isinstance(trigger, dict) and trigger_parts(trigger)[0] in ("pr", "ci")
                 pr_event = code_event or isinstance(trigger, dict) and pr_label in pr_labels
                 source_repos = pr_labels.get(pr_label)
                 if (source_repos and main_name not in source_repos) or (not pr_event and deaf_tracker(env, main_name)) \
@@ -752,6 +752,7 @@ def errors(defn):
         if late and not all(merged.get(k) for k in EXTERNAL_REVIEW):  # #1263: reconcile needs all three
             errs.append(f"external-review: {where}: set {', '.join(EXTERNAL_REVIEW)} together")
         for t in n.get("triggers") or []:
+            errs += trigger_errors(f"nodes.{name}", t)
             if isinstance(t, dict) and "webhook" in t and t["webhook"] not in hooks:
                 errs.append(f"unknown-webhook: {where}: {t['webhook']}")
         outcomes = n.get("outcomes") or {}
@@ -871,7 +872,75 @@ def warnings(defn):
 # an `if` the gate checks. Labels are commands named after themselves; one an effect adds `on: pr` is a PR label.
 TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed", ("pr", "opened"): "pr opened",
                  ("pr", "merged"): "state pr-merged", ("ticket", "closed"): "ticket closed", ("pr", "commented"): "pr commented",
-                 ("ticket", "commented"): "ticket commented"}
+                 ("ticket", "commented"): "ticket commented", ("pr", "reopened"): "pr reopened",
+                 ("pr", "ready_for_review"): "pr ready_for_review", ("pr", "converted_to_draft"): "pr converted_to_draft",
+                 ("pr", "closed"): "pr closed", ("pr", "review_requested"): "pr review_requested",
+                 ("pr", "unlabeled"): "pr unlabeled", ("pr", "edited"): "pr edited",
+                 ("pr", "review_comment"): "pr review_comment"}
+# Filters beside the one main key of a trigger (`{pr: pushed, by: human}`): `by` is `human`, `factory` or a login; `state`
+# is the review state of `pr: reviewed`; `pr_author` and `label` narrow the PR events. `docs/air-events.md` lists them.
+TRIGGER_FILTERS = ("by", "state", "pr_author", "label")
+REVIEW_STATES = ("approved", "changes_requested", "commented")
+FILTERED_ON = {"by": ("pr", "label"), "state": ("pr",), "pr_author": ("pr", "label"), "label": ("pr", "ticket")}  # main keys a filter fits
+
+
+def trigger_parts(t):
+    """`(main key, value, filters)` of a trigger mapping. The main key is `pr` or `ticket` when present (then `label`
+    is a filter), else the first key that is not a filter, else the first key (a bare `label` trigger)."""
+    keys = list(t)
+    main = next((k for k in ("pr", "ticket") if k in t), None) \
+        or next((k for k in keys if k not in TRIGGER_FILTERS), None) or keys[0]
+    return main, t[main], {k: t[k] for k in keys if k != main}
+
+
+LABEL_EVENTS = ("issues.labeled", "pull_request.labeled", "label")  # the word after these is a label, never a filter
+
+
+def split_filters(text):
+    """`(text without its `key=value` filter words, [those words])`. The positional label of a label event stays in
+    the text even when it looks like a filter (`issues.labeled by=human` is the label `by=human`); `priority=high`
+    is no filter either."""
+    words = str(text).split(" ")
+    label_at = 1 if words[0] in LABEL_EVENTS else -1
+    is_filter = [i != label_at and "=" in w and w.partition("=")[0] in TRIGGER_FILTERS for i, w in enumerate(words)]
+    return " ".join(w for w, f in zip(words, is_filter) if not f), [w for w, f in zip(words, is_filter) if f]
+
+
+def _filter_tokens(filters):
+    """The ` k=v` words a trigger's filters add to its event or wake string."""
+    return "".join(f" {k}={filters[k]}" for k in TRIGGER_FILTERS if k in filters)
+
+
+def trigger_errors(where, t):
+    """`unknown-trigger` and `unknown-filter` errors of one node trigger; each names what is supported."""
+    if t == "manual":
+        return []
+    if not isinstance(t, dict) or not t:
+        return [f"unknown-trigger: {where}: {t!r}: supported: manual or a mapping with one of {', '.join(MAIN_KEYS)}"]
+    main, value, filters = trigger_parts(t)
+    if main not in MAIN_KEYS:
+        return [f"unknown-trigger: {where}: {main}: supported keys: {', '.join(MAIN_KEYS)}"]
+    errs = []
+    if main == "ci" and value != "failed":
+        errs.append(f"unknown-event: {where}: ci: {value}: supported ci events: failed")
+    if main in ("pr", "ticket") and (main, value) not in TRIGGER_WAKES:
+        names = sorted(v for k, v in TRIGGER_WAKES if k == main)
+        errs.append(f"unknown-event: {where}: {main}: {value}: supported {main} events: {', '.join(names)}")
+    for k, v in filters.items():
+        if k not in TRIGGER_FILTERS:
+            errs.append(f"unknown-filter: {where}: {k}: supported filters: {', '.join(TRIGGER_FILTERS)}")
+        elif main not in FILTERED_ON[k]:
+            errs.append(f"unknown-filter: {where}: {k} does not fit `{main}`; it fits {', '.join(FILTERED_ON[k])}")
+        elif not isinstance(v, str) or not v or " " in v:
+            errs.append(f"bad-filter: {where}: {k} is one word, got {v!r}")
+        elif k == "state" and (main, value) != ("pr", "reviewed"):
+            errs.append(f"unknown-filter: {where}: state fits only `pr: reviewed`")
+        elif k == "state" and v not in REVIEW_STATES:
+            errs.append(f"bad-filter: {where}: state {v}: supported states: {', '.join(REVIEW_STATES)}")
+    return errs
+
+
+MAIN_KEYS = ("stage", "label", "schedule", "webhook", "ci", "pr", "ticket")
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
            "request-reviewers", "park-behind-main-red", "assign", "unassign", "ready-for-review")  # and the plugins' effects
 
@@ -916,7 +985,7 @@ def _labels_of(n):
 
 
 def _pr_woken(n):
-    return any(isinstance(t, dict) and next(iter(t)) in ("pr", "ci") for t in n.get("triggers") or [])
+    return any(isinstance(t, dict) and trigger_parts(t)[0] in ("pr", "ci") for t in n.get("triggers") or [])
 
 
 def _used_stages(w):
@@ -1079,11 +1148,11 @@ def to_project(defn):
 def _wake(t, name, prefix, schedules, env):
     if t == "manual":
         return "manual"
-    (k, v), = t.items()
+    k, v, filters = trigger_parts(t)
     if k == "stage":
         return f"state {v}"
     if k == "label":
-        return f"command {_name(v, prefix)}"
+        return f"command {_name(v, prefix)}{_filter_tokens(filters)}"
     if k == "schedule":
         key = name if name not in schedules or schedules[name]["cron"] == v else f"{name}-{len(schedules)}"
         schedules[key] = {"cron": v}
@@ -1092,7 +1161,7 @@ def _wake(t, name, prefix, schedules, env):
         return f"webhook {v}"
     if k == "ci":
         return f"run {(env.get('ci') or {}).get('workflow', 'quality-gates')}"
-    return TRIGGER_WAKES[(k, v)]
+    return TRIGGER_WAKES[(k, v)] + _filter_tokens(filters)
 
 
 def _effect(e, prefix):
@@ -1163,18 +1232,22 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
 EVENTS = {("pr", "reviewed"): "pull_request_review.submitted", ("pr", "pushed"): "pull_request.synchronize",
           ("pr", "opened"): "pull_request.opened", ("pr", "merged"): "pull_request.merged",
           ("pr", "commented"): "issue_comment.created", ("ticket", "closed"): "issues.closed",
-          ("ticket", "commented"): "issues.comment"}
+          ("ticket", "commented"): "issues.comment", ("pr", "reopened"): "pull_request.reopened",
+          ("pr", "ready_for_review"): "pull_request.ready_for_review",
+          ("pr", "converted_to_draft"): "pull_request.converted_to_draft", ("pr", "closed"): "pull_request.closed",
+          ("pr", "review_requested"): "pull_request.review_requested", ("pr", "unlabeled"): "pull_request.unlabeled",
+          ("pr", "edited"): "pull_request.edited", ("pr", "review_comment"): "pull_request_review_comment.created"}
 
 
 def _trigger(t, name, prefix, on_pr, schedules, env):
     """A trigger of a definition node as the gate's event string; a schedule is recorded in `schedules`."""
     if t == "manual":
         return "manual"
-    (k, v), = t.items()
+    k, v, filters = trigger_parts(t)
     if k == "stage":
         return f"issues.labeled {prefix}{v}"
     if k == "label":
-        return f"{'pull_request' if v in on_pr else 'issues'}.labeled {v}"
+        return f"{'pull_request' if v in on_pr else 'issues'}.labeled {v}{_filter_tokens(filters)}"
     if k == "schedule":
         key = name if name not in schedules or schedules[name]["cron"] == v else f"{name}-{len(schedules)}"
         schedules[key] = {"cron": v}
@@ -1183,7 +1256,7 @@ def _trigger(t, name, prefix, on_pr, schedules, env):
         return f"webhook {v}"
     if k == "ci":
         return f"workflow_run {(env.get('ci') or {}).get('workflow', 'quality-gates')}"
-    return EVENTS[(k, v)]
+    return EVENTS[(k, v)] + _filter_tokens(filters)
 
 
 def _outcome(oc, on_pr, all_stages):
@@ -1254,7 +1327,7 @@ def nodes(defn):
             node["tier"] = n.get("model") or a.get("model")
         if role != "human":
             node["output"] = n.get("output", "read-only")
-        pr_woken = any(isinstance(t, dict) and (next(iter(t)) in ("pr", "ci") or ("label" in t and t["label"] in on_pr))
+        pr_woken = any(isinstance(t, dict) and (trigger_parts(t)[0] in ("pr", "ci") or ("label" in t and t["label"] in on_pr))
                        for t in n.get("triggers") or [])
         if pr_woken and "ci" not in node["when"]:
             node["ci-independent"] = True
