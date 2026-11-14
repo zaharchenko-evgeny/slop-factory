@@ -2189,3 +2189,60 @@ if __name__ == "__main__":
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             gate.main(["sweep", "--issue", "7", "--dry-run"])
         self.assertIs(host.call_args.kwargs["run"], tracker.run)
+
+
+class DeployPlanAssigneeTest(unittest.TestCase):
+    def assignees(self, author, owner, existing=False, old=(), flag=None, kind="User"):
+        calls = []
+        def run(args):
+            calls.append(args)
+            path = next((x for x in args if x.startswith("repos/")), "")
+            if path.endswith("pulls/300"):
+                return json.dumps({"merge_commit_sha": "m1", "user": ({"login": author, **({"type": "Bot"} if kind == "Bot" else {})} if author else {})})
+            if path.endswith("commits/m1"):
+                return json.dumps({"parents": [{"sha": "p1"}]})
+            if path.endswith("labels?per_page=100"):
+                return recorded_action(path, [{"name": "factory:new"}])
+            if path.endswith("issues?state=open&per_page=100"):
+                return json.dumps({"number": 7, "title": "Deploy needed", "assignees": [{"login": x} for x in old]}) if existing else ""
+            if args[:2] == ["issue", "create"]:
+                return "https://github.com/o/r/issues/99"
+            return "{}"
+        before = {"automations": [], "environments": [], "labels": [], "files": {}}
+        after = {"automations": [{"name": "new"}], "environments": [], "labels": ["factory:new"], "files": {}}
+        with patch("factory_plugins.github.gate.deploy_plan_at", side_effect=[before, after]), \
+                patch("config.owner", return_value=owner):
+            GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
+        call = next(c for c in calls if c[:2] == ["issue", "edit" if existing else "create"])
+        flag = flag or ("--add-assignee" if existing else "--assignee")
+        return [call[i + 1] for i, a in enumerate(call) if a == flag]
+
+    def test_assignee_is_author_then_owner_then_nobody(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                self.assertEqual(self.assignees("alice", "boss", existing), ["alice"])
+                self.assertEqual(self.assignees(None, "boss", existing), ["boss"])
+                self.assertEqual(self.assignees(None, None, existing), [])
+
+    def test_edit_removes_stale_assignees(self):
+        for author, owner, old, keep, drop in [
+                ("alice", "boss", ["bob"], ["alice"], ["bob"]),
+                ("alice", "boss", ["alice", "bob"], ["alice"], ["bob"]),
+                (None, "boss", ["bob"], ["boss"], ["bob"]),
+                (None, None, ["bob", "carol"], [], ["bob", "carol"]),
+                (None, None, [], [], []),
+                ("alice", None, ["alice"], ["alice"], [])]:
+            with self.subTest(author=author, owner=owner, old=old):
+                self.assertEqual(self.assignees(author, owner, True, old), keep)
+                self.assertEqual(self.assignees(author, owner, True, old, "--remove-assignee"), drop)
+
+    def test_bot_author_is_skipped(self):
+        for author, kind in [("jetbrains-air[bot]", "Bot"), ("jetbrains-air[bot]", "User"), ("some-app", "Bot")]:
+            for existing in (False, True):
+                for owner, old, keep, drop in [("boss", ["bob"], ["boss"], ["bob"]),
+                                               (None, ["bob"], [], ["bob"]),
+                                               (None, [], [], [])]:
+                    with self.subTest(author=author, kind=kind, existing=existing, owner=owner, old=old):
+                        self.assertEqual(self.assignees(author, owner, existing, old, kind=kind), keep)
+                        if existing:
+                            self.assertEqual(self.assignees(author, owner, True, old, "--remove-assignee", kind), drop)

@@ -31,8 +31,9 @@ the user approves a plan. The layout is the engine's ADR-0021:
 - `comment_tag` (top-level `factory.yaml`, optional) sets the tag line of every comment, review and PR body the factory
   writes: unset is `[factory]`, a string is that tag, `""` adds none. Hidden `factory:kind` markers keep the engine's
   own comments findable in all three cases.
-- `assign` takes a GitHub login, a list of logins or `owner` (the top-level
-  `factory.yaml` owner). `unassign` takes the same values or `all`. With
+- `assign` takes a GitHub login, a list of logins or `owner` (the optional top-level
+  `factory.yaml` `owner`, the fallback person; `factory validate` rejects `assign: owner`
+  without it). `unassign` takes the same values or `all`. With
   `on: pr`, `assign` targets every open PR. Without `on`, it targets the ticket.
   Assigning a ticket in `ready` hides it from the frontier because the frontier
   skips assigned tickets.

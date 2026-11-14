@@ -470,9 +470,32 @@ class DefinitionTest(unittest.TestCase):
             effects=[{"assign": 3}]))
         self.assertError("bad-effect: nodes.intake.ready: assign")
 
-    def test_missing_owner_fails(self):
+    def test_owner_is_optional_unless_used(self):
+        def drop(f):
+            f.pop("owner")
+        def effect(v):
+            return lambda w: w["nodes"]["intake"]["outcomes"]["ready"].update(effects=[{"assign": v}])
+        def no_template(root):
+            for p in (root / "roles").glob("*/role.md"):
+                p.write_text(p.read_text().replace("{{ factory.owner }}", "the owner"))
+        self.edit("factory.yaml", drop)
+        no_template(self.root)
+        self.assertEqual(self.errors(), [])
+        for value in ("owner", ["someone", "owner"]):
+            with self.subTest(value=value):
+                self.edit("workflow.yaml", effect(value))
+                self.assertError("missing-owner: nodes.intake.ready: `assign: owner`")
+        for value in ("someone", ["a", "b"]):
+            with self.subTest(value=value):
+                self.edit("workflow.yaml", effect(value))
+                self.assertEqual(self.errors(), [])
+
+    def test_owner_template_without_owner_names_the_role(self):
         self.edit("factory.yaml", lambda f: f.pop("owner"))
-        self.assertIn("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)", self.errors())
+        for p in (self.root / "roles").glob("*/role.md"):
+            p.write_text(p.read_text().replace("{{ factory.owner }}", "{{factory.owner}}") + "\n{{- factory.owner }}\n")
+        errs = self.errors()
+        self.assertTrue(any(e.startswith("missing-owner: roles/") and "role.md" in e for e in errs), errs)
 
     def test_comment_tag_is_validated_and_reaches_the_config(self):
         for value, ok in [("[eval-bot]", True), ("", True), (None, True), (3, False), ("a\nb", False), (["x"], False)]:

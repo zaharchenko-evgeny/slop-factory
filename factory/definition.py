@@ -588,6 +588,25 @@ def _event_errors(defn, name, node):
     return errs
 
 
+_OWNER_TEMPLATE = re.compile(r"\{\{-?\s*factory\.owner\b")
+
+
+def _owner_uses(defn):
+    """`missing-owner` errors, one per place that needs `factory.yaml` `owner`: an `assign: owner` effect or a
+    role template that renders `{{ factory.owner }}`."""
+    errs = []
+    for r, body in sorted(defn["bodies"].items()):
+        if _OWNER_TEMPLATE.search(body):
+            errs.append(f"missing-owner: {ROLES}/{r}/role.md: uses `{{{{ factory.owner }}}}` but factory.yaml has no `owner`")
+    for n, node in sorted((defn["workflow"].get("nodes") or {}).items()):
+        for o, oc in sorted((node.get("outcomes") or {}).items()):
+            for e in (oc or {}).get("effects") or []:
+                v = e.get("assign") if isinstance(e, dict) else None
+                if v == "owner" or (isinstance(v, list) and "owner" in v):
+                    errs.append(f"missing-owner: nodes.{n}.{o}: `assign: owner` but factory.yaml has no `owner`")
+    return errs
+
+
 def _is_uuid(value) -> bool:
     try:
         return isinstance(value, str) and str(uuid.UUID(value)) == value.lower()
@@ -606,8 +625,8 @@ def errors(defn):
     hooks = f.get("webhooks") or {}
     nodes = w.get("nodes") or {}
     registry = plugins.registry(f)
-    if not f.get("owner"):
-        errs.append("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)")
+    if not f.get("owner"):  # `owner` is the optional fallback person; refuse the places that need it
+        errs += _owner_uses(defn)
     if f.get("comment_tag") is not None and (not isinstance(f["comment_tag"], str) or "\n" in f["comment_tag"]):
         errs.append("bad-comment-tag: factory.yaml: `comment_tag` is one line of text; blank adds no tag")
     if (pid := ((f.get("targets") or {}).get("air") or {}).get("project_id")) is not None and not _is_uuid(pid):
