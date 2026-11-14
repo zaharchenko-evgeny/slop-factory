@@ -22,7 +22,7 @@ class ThirdView(unittest.TestCase):
 
     def test_ui_views_import_only_the_snapshot_types_and_the_registry(self):
         allowed = {"react", "@/snapshot", "./registry", "./WorkflowFlow", "@/components/ui/badge",
-               "./Columns", "./TicketCard", "./TicketDetails", "./ticketFormat"}  # no fetch, no tracker adapter
+               "./Columns", "./TicketCard", "./TicketDetails", "./ticketFormat", "./HumanBadge"}  # no fetch, no tracker adapter
         for path in sorted((u.UI / "src" / "views").glob("*.ts*")):
             imports = set(re.findall(r'^import .* from "([^"]+)"', path.read_text(), re.M))
             with self.subTest(path.name):

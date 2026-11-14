@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { HumanBadge } from "./HumanBadge";
 import type { Branch, Condition, GraphNode, Outcome, Snapshot, Stage, Ticket } from "@/snapshot";
 
 const describeCondition = (c: Condition | null) => (c ? Object.entries(c).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join(", ") : "");
@@ -35,6 +36,7 @@ const TicketCard = ({ ticket }: { ticket: Ticket }) => (
   <li data-testid="ticket-card" className="rounded border border-border bg-background p-2 text-xs">
     <div className="font-medium">{ticket.title ?? `#${ticket.id}`}</div>
     <div className="text-muted-foreground">#{ticket.id}{ticket.repository ? ` · ${ticket.repository}` : ""}</div>
+    <HumanBadge human={ticket.human} />
   </li>
 );
 
