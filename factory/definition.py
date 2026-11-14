@@ -6,6 +6,7 @@ wrong; `settings(defn, node)` is a node's merged settings; `render(defn, node)` 
 Nothing else in the engine reads this layout yet (#669 compiles it into the config and the node graph).
 """
 import re
+import uuid
 from pathlib import Path
 
 import yaml
@@ -607,6 +608,13 @@ def _owner_uses(defn):
     return errs
 
 
+def _is_uuid(value) -> bool:
+    try:
+        return isinstance(value, str) and str(uuid.UUID(value)) == value.lower()
+    except ValueError:
+        return False
+
+
 def errors(defn):
     f, w = defn["factory"], defn["workflow"]
     errs = []
@@ -622,6 +630,8 @@ def errors(defn):
         errs += _owner_uses(defn)
     if f.get("comment_tag") is not None and (not isinstance(f["comment_tag"], str) or "\n" in f["comment_tag"]):
         errs.append("bad-comment-tag: factory.yaml: `comment_tag` is one line of text; blank adds no tag")
+    if (pid := ((f.get("targets") or {}).get("air") or {}).get("project_id")) is not None and not _is_uuid(pid):
+        errs.append("bad-project-id: factory.yaml: `targets.air.project_id` is a UUID (the Air project's id)")
     errs += [e for n, s in skills.items() for e in _skill_spec_errors(f"skills.{n}", s)]
     for s in (f.get("defaults") or {}).get("skills") or []:
         errs += _skill_errors("defaults.skills", s, skills)
@@ -1046,7 +1056,8 @@ def to_project(defn):
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
         "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},
-                           "mcp_connectors": list(air.get("mcp_connectors") or AIR_CONNECTORS)}},
+                           "mcp_connectors": list(air.get("mcp_connectors") or AIR_CONNECTORS),
+                           **({"project_id": air["project_id"]} if air.get("project_id") else {})}},
         "roles": roles,
         "limits": {**(wset.get("limits") or {}), **({"fix_rounds": fix_rounds} if fix_rounds else {})},
         "gates": {"auto_merge": {"enabled": bool(merge_settings.get("auto_merge", True)),

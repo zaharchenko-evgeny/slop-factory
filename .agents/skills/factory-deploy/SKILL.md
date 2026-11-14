@@ -42,6 +42,27 @@ the project once in Project settings → Workflows.
 
 The one-time rename of legacy `[factory:<node>]` items is not automated: apply it with `update_automation` or `edit_environment` (recorded ID, planned name) before step 3.
 
+## Project target (team-owned automations)
+
+By default deploy creates personal automations. To deploy them to an Air project, set `targets.air.project_id` in the
+team's `factory.yaml` to the project's UUID (a bad value fails `factory validate` with `bad-project-id`). Unset keeps the
+personal behaviour. Every planned automation then carries `projectId`, and deploy reads and diffs only that project's
+automations. The dry run prints `target: project <id>` or `target: personal`.
+
+Three preconditions, all checked by a person before the first apply:
+
+1. The Air organization is a team organization. A personal organization rejects `projectId` (AIRC-1855); apply stops with that reason.
+2. The project already has its service account (AIRA-619); apply stops with that reason when it has none.
+3. Every planned environment already exists in the project. The Air MCP and REST API cannot create a project-owned
+   environment (`create_environment` has no project field), and an automation linked to a personal environment fails
+   every run with 404 `ENVIRONMENT_CONFIGURATION_NOT_FOUND` (AIRA-1629). The dry run prints
+   `missing project environment <name>` for each one the project lacks. `--apply` then refuses and writes nothing. Create
+   each environment in the project in the Air UI (same name as the plan), then rerun. Deploy takes an environment as the
+   project's when its record has `projectId` equal to `project_id`.
+
+Moving existing personal automations to a project is manual: set `project_id`, apply, then delete the old personal
+automations by hand (`--allow-delete` does not remove them: deploy no longer lists personal ones). Open a follow-up ticket to automate it.
+
 ## Local target
 
 `factory --team <team-repo> deploy --target local` checks the harness CLI, the `gh` login and the repository checkouts and names what is missing; `--apply` writes `.factory/local.json` for `factory run --local` (ADR-0017, `docs/targets.md`).

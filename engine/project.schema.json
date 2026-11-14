@@ -194,7 +194,7 @@
       "properties": {
         "air": {
           "type": "object",
-          "properties": {"mcp_connectors": {"type": "array", "items": {"type": "string"}}}
+          "properties": {"mcp_connectors": {"type": "array", "items": {"type": "string"}}, "project_id": {"type": "string"}}
         },
         "local": {
           "type": "object",
