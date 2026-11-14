@@ -97,7 +97,9 @@ def ticket_repositories_tracker(staged, stages=None):
     numbers}); the caller replaces the facts and the writes."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from factory_plugins.github.gate import GitHubGateTracker
-    from test_gate import TicketReposGh
+    team = cfg._team
+    from test_gate import TicketReposGh  # importing test_gate sets its own team; keep this module's
+    cfg.set_team(team)
     return GitHubGateTracker("o/r", stages or CONFIG["tracker"]["stages"], "bot", run=TicketReposGh(staged=staged), ticket_repos=["o/r", "o/b"])
 
 
