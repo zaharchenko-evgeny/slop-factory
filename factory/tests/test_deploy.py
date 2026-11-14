@@ -2553,6 +2553,104 @@ class ProjectTargetTest(unittest.TestCase):  # #1387: automations owned by an Ai
         self.assertEqual(code, 0)  # a dry run reports and does not refuse
         self.assertNotIn("create environment", out)
 
+    class EnvBackend:  # air-backend REST: the project's environments, and the ones deploy creates there
+        def __init__(self, envs):
+            self.envs, self.calls = list(envs), []
+
+        def project_environments(self, project_id, prefix):
+            return [e for e in self.envs if e["projectId"] == project_id and e["name"].startswith(prefix)]
+
+        def duplicate(self, source_id, project_id):
+            self.calls.append(("duplicate", source_id))
+            self.envs.append({"id": f"copy-{source_id}", "name": self.sources[source_id], "projectId": project_id})
+
+        def create(self, p, project_id):
+            self.calls.append(("create", p["name"]))
+            self.envs.append({"id": f"new-{len(self.envs)}", "name": p["name"], "projectId": project_id})
+
+    def personal_envs(self, plan):
+        return [{"id": f"p{i}", "name": e["name"], "repository": e["repository"], "projectId": None}
+                for i, e in enumerate(plan["environments"])]
+
+    def run_project_deploy(self, mode, plan, personal, project_envs=()):
+        a, c, b = self.Automations({"personal": [], "project": []}), self.Cloud(personal), self.EnvBackend(project_envs)
+        b.sources = {e["id"]: e["name"] for e in personal}
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(air.core, "reconcile_labels", return_value=[]), \
+                mock.patch.object(air.core, "provision_labels"):
+            code = air.deploy(mode, False, plan, a, c, backend=mock.Mock(**{"get_automation.return_value": {}}),
+                              env_backend=b)
+        return code, out.getvalue(), err.getvalue(), a, c, b
+
+    def test_dry_run_lists_each_project_environment_it_would_create(self):
+        plan = self.plan()
+        plan = {**plan, "automations": plan["automations"][:1]}
+        personal = self.personal_envs(plan)[1:]  # the first one has no personal namesake: it is created new
+        code, out, _, a, c, b = self.run_project_deploy("--dry-run", plan, personal)
+        self.assertEqual(code, 0)
+        self.assertIn(f"create project environment {plan['environments'][0]['name']} (new)", out)
+        for e in personal:
+            self.assertIn(f"create project environment {e['name']} (copy of personal {e['id']})", out)
+        self.assertNotIn("by hand", out)
+        self.assertNotIn("unchanged", out)
+        self.assertEqual(b.calls, [])
+        self.assertEqual([t for t, _ in a.calls + c.calls if t.startswith(("create_", "update_", "edit_"))], [])
+
+    def test_apply_copies_missing_environments_into_the_project_before_the_automations(self):
+        plan = self.plan()
+        plan = {**plan, "automations": plan["automations"][:1]}
+        env_name = plan["automations"][0]["environmentConfigId"]
+        personal = self.personal_envs(plan)
+        owned = [{"id": "kept", "name": plan["environments"][-1]["name"], "projectId": PROJECT}]
+        _, out, _, a, _, b = self.run_project_deploy("--apply", plan, personal, owned)
+        copied = {e["id"] for e in personal if e["name"] != owned[0]["name"]}
+        self.assertEqual({s for t, s in b.calls if t == "duplicate"}, copied)  # the owned one is not copied again
+        self.assertNotIn(("create", owned[0]["name"]), b.calls)
+        self.assertIn("created project environment", out)
+        created = [args for t, args in a.calls if t == "create_automation"]
+        want = next(e["id"] for e in b.envs if e["name"] == env_name)
+        self.assertEqual([x["environmentConfigId"] for x in created], [want])
+        self.assertNotIn(want, {e["id"] for e in personal})
+
+    def test_only_creates_the_selected_environment(self):
+        plan = self.plan()
+        first = plan["environments"][0]["name"][len(plan["prefix"]):]
+        _, out, _, _, _, b = self.run_project_deploy("--dry-run", plan, self.personal_envs(plan))
+        self.assertEqual(out.count("create project environment"), len(plan["environments"]))
+        a, c, b = self.Automations({"project": []}), self.Cloud(self.personal_envs(plan)), self.EnvBackend([])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(air.core, "reconcile_labels", return_value=[]):
+            air.deploy("--dry-run", False, plan, a, c, backend=mock.Mock(), env_backend=b, only=[f"env:{first}"])
+        self.assertEqual(out.getvalue().count("create project environment"), 1)
+
+    def test_env_backend_reads_the_projects_environments(self):
+        class Rest(air.EnvBackend):
+            paths = []
+
+            def request(self, method, path, body=None):
+                self.paths.append((method, path, body))
+                if path.startswith("/env-configs?"):
+                    return [{"id": "e1", "name": "[F] a"}, {"id": "x", "name": "other"}]
+                if path.endswith("/preview"):
+                    return {"previewToken": "tok"}
+                return {"id": "e1", "name": "[F] a", "serviceHost": "github.com", "organization": "o",
+                        "repositoryName": "r", "allowedDomains": ["d"], "personalSecrets": [],
+                        "secrets": [{"key": "T", "value": "***", "isSecret": True}],
+                        "variables": [{"key": "V", "value": "1"}]}
+        rest = Rest(token="t")
+        envs = rest.project_environments(PROJECT, "[F] ")
+        self.assertEqual(rest.paths, [("GET", f"/env-configs?orgProjectId={PROJECT}", None), ("GET", "/env-configs/e1", None)])
+        self.assertEqual(envs, [{"id": "e1", "name": "[F] a", "repository": "https://github.com/o/r", "domains": ["d"],
+                                 "personalSecrets": [], "secrets": ["T"], "variable_keys": ["V"], "variables": {"V": "1"},
+                                 "projectId": PROJECT}])
+        rest.paths.clear()
+        rest.duplicate("p1", PROJECT)
+        self.assertEqual(rest.paths, [
+            ("POST", "/env-configs/p1/ownership-change/preview", {"targetProjectId": PROJECT, "requestedMode": "DUPLICATE"}),
+            ("POST", "/env-configs/p1/ownership-change", {"targetProjectId": PROJECT, "requestedMode": "DUPLICATE",
+                                                          "previewToken": "tok"})])
+
     def test_air_errors_become_a_clear_message(self):
         plan = self.plan()
         plan = {**plan, "automations": plan["automations"][:1]}
