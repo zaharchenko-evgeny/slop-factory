@@ -118,7 +118,17 @@ def _t(iso):
 
 
 def facts(tracker, since):
-    """Facts of every ticket whose `factory:done` label was added at or after `since`."""
+    """Facts of every GitHub-issue ticket whose `factory:done` label was added at or after `since`, in every
+    environment (#1426: a scoped tracker refuses `_list` itself)."""
+    import retro
+    out = []
+    for t in retro.issue_trackers(tracker):
+        out += _facts(t, since)
+    return {"tickets": out, "reviews": review_totals(out)}
+
+
+def _facts(tracker, since):
+    """`facts` on one GitHub-issue tracker: the ticket facts."""
     done = tracker.stages["done"]
     out = []
     later = [{"number": i["number"], "body": i.get("body") or "", "created_at": i["created_at"],
@@ -141,7 +151,7 @@ def facts(tracker, since):
         out.append(ticket_facts(n, events, pr_events, reviews, comments, {tracker.bot, *tracker.trusted},
                                 i.get("body") or "", lines, pr and pr["number"], bool(pr and pr.get("merged")),
                                 [t for t in later if t["created_at"] > finished and t["number"] != n]))
-    return {"tickets": out, "reviews": review_totals(out)}
+    return out
 
 
 def main(argv):
