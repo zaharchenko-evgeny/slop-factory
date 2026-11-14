@@ -150,6 +150,7 @@
             "bot_login": {
               "type": "string"
             },
+            "project_id": {"type": "string", "description": "The Air project (a UUID) that owns the deployed automations (#1387). Unset: personal automations."},
             "mcp_connectors": { "type": "array", "items": { "type": "string" } },
             "models": {
               "type": "object",
