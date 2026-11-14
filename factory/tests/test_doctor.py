@@ -400,17 +400,6 @@ class DoctorTest(unittest.TestCase):
             self.assertFalse({"pi", "claude", "codex"} & set(doctor.env_needs(env, nodes.load())[0]), env)
         self.assertIn("uv", doctor.env_needs("engine", nodes.load())[0])
 
-    def test_missing_team_skill_does_not_fall_back_to_engine_template(self):
-        before = cfg.team_root()
-        with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / "roles").symlink_to(ROOT / "engine/template-v1/roles", target_is_directory=True)
-            cfg.set_team(tmp)
-            try:
-                got = run(FakeGh(), "write")
-            finally:
-                cfg.set_team(before)
-        self.assertEqual(got["skill:tdd"]["result"], "missing")
-
     def test_probe_objects_are_deleted(self):
         for deny in ((), ("blocked_by", "update-branch")):
             gh = FakeGh(deny=deny)

@@ -27,8 +27,8 @@ processing. `deploy` creates Air automations, `chart` renders the workflow (the 
 
 ## Team configuration
 
-Each team keeps settings in `factory.descriptor.yaml`. The descriptor supports
-these top-level keys, defined by `engine/descriptor.schema.json`:
+Each team keeps its definition in `factory.yaml`, `workflow.yaml` and `roles/` (ADR-0021). The compiled
+configuration supports these top-level keys:
 `engine`, `project`, `repositories`, `branch_pattern`, `commit_prefix`,
 `team_repository`, `tracker`, `vcs` (alias `code_host`), `owner`, `notify` (v1: `github_user`), `targets`, `models`, `roles`,
 `limits`, `gates`, `ci`, `knowledge`, `nodes`, `reviews`, `checks`, `surface` (where the nodes run: `air`, the
@@ -39,20 +39,14 @@ engine plugins to turn on: `comments` turns on mentions, agent asks and the comm
 
 ### Project descriptor
 
-A project can keep its settings in `factory.project.yaml` and the workflow file
-it links with `workflow:` instead (ADR-0016, defined by `engine/project.schema.json`
-and `engine/workflow.schema.json`). States and commands name their tracker
-store; the workflow names only states and commands. When the team root has
-`factory.project.yaml`, the engine reads only that file and its workflow.
-`factory migrate workflow <nodes.yaml> <factory.descriptor.yaml> --out DIR`
-converts the old pair. `repositories[]` marks exactly one repository
+The engine compiles a team's definition into a project descriptor and a workflow
+(ADR-0016, ADR-0021; checked against `engine/project.schema.json` and `engine/workflow.schema.json`).
+States and commands name their tracker store; the workflow names only states and commands.
+`repositories[]` marks exactly one repository
 `role: primary` and the others `role: project`; `targets` takes `air` and
 `local` (ADR-0017). A new team starts from the factory-setup skill's
 [`skills/factory-setup/template/`](skills/factory-setup/template/README.md), in the layout of ADR-0021
-(`factory.yaml`, `workflow.yaml`, `roles/`). The old layout's template is
-[`engine/template-v1/`](engine/template-v1/README.md); `factory upgrade --diff` shows what changed
-in it since the project's `engine` version, and `factory upgrade --apply PATH`
-takes one file.
+(`factory.yaml`, `workflow.yaml`, `roles/`).
 
 A node's `writes` names the repositories its agent pushes to; `listens` names
 the ticket repositories it wakes on (ADR-0024). A node that listens to several
@@ -117,8 +111,7 @@ environment's vcs cannot apply; Space applies `label`, `unlabel`, `review`,
 ### Team-owned runtime files
 
 Runtime `roles/`, `skills/`, workflows, policies, and judgments come only from
-the team's repository. `engine/template-v1/roles/` and `engine/template-v1/skills/` are setup
-examples, not runtime fallbacks; the engine's node graph is `engine/nodes.yaml`.
+the team's repository. The engine's node graph is compiled from the team's definition.
 
 An environment can also define a `setup.sh` in the team's `environments`
 directory. It runs for every environment, followed by the `setup.sh` in the
@@ -133,8 +126,7 @@ configuration and runtime files live in the separate settings repository.
 Slop factory's settings live in
 [slop-eval-factory](https://github.com/zaharchenko-evgeny/slop-eval-factory):
 a change to its definition (`factory.yaml`, `workflow.yaml`, `roles/`; ADR-0021) goes there. CI checks the
-copy of those files in `factory/tests/fixtures/slop/`. The copy may differ from
-`engine/nodes.yaml`. To regenerate it, run this from a clean slop-eval-factory
+copy of those files in `factory/tests/fixtures/slop/`. To regenerate it, run this from a clean slop-eval-factory
 checkout at the commit to copy:
 
 ```bash
@@ -148,7 +140,7 @@ from a fresh copy. To run that test locally, set `FACTORY_SLOP_TEAM=<checkout>`.
 
 See [factory setup](skills/factory-setup/SKILL.md), [design](docs/design.md),
 [environment variables](docs/environment.md),
-and the [delivery template](engine/template-v1/workflows/delivery.md) for more detail.
+and the [setup template](skills/factory-setup/template/README.md) for more detail.
 
 ## Attention
 

@@ -19,7 +19,7 @@ def node_of(g, name):
 class Eligibility(unittest.TestCase):
     def snap(self, tickets, items=(), **kw):
         tracker = s.FakeTracker({t: {"facts": f, "events": []} for t, f in tickets.items()}, labeled_items=items, **kw)
-        with s.team("team") as (config, nodes):
+        with s.team("slop") as (config, nodes):
             snap = snapshot.build(config, nodes, [s.source(tracker)], s.NOW)
         return snap, tracker
 
@@ -31,7 +31,7 @@ class Eligibility(unittest.TestCase):
         ready = s.facts(stage="ready", blockers_open=0)
         snap, _ = self.snap({5: ready, 6: s.facts(stage="ready", blockers_open=2), 7: ready},
                             [s.item(5, "factory:ready"), s.item(6, "factory:ready")])
-        yes, blocked, nolabel = (self.node(snap, n, "start") for n in (5, 6, 7))
+        yes, blocked, nolabel = (self.node(snap, n, "dispatch") for n in (5, 6, 7))
         self.assertEqual((yes["eligible"], yes["trigger"]["status"], yes["guards"]["status"]), ("yes", "match", "pass"))
         self.assertEqual((blocked["eligible"], blocked["trigger"]["status"], blocked["guards"]["status"]), ("no", "match", "fail"))
         self.assertIn("blockers", blocked["guards"]["reason"])  # the non-match reason is shown
@@ -39,14 +39,15 @@ class Eligibility(unittest.TestCase):
         self.assertIn("no issues.labeled event", nolabel["trigger"]["triggers"][0]["reason"])
 
     def test_missing_evidence_is_unknown_not_a_guess(self):
-        snap, _ = self.snap({1: s.facts(stage="ready"), 2: s.facts(stage="in-review", ci="green")})
+        snap, _ = self.snap({1: s.facts(stage="ready"), 3: s.facts(stage="blocked"),
+                             2: s.facts(stage="in-review", ci="green", attrs=["risk:low"])})
         for ticket, name, why in ((1, "human", "manual trigger"), (1, "reconcile", "schedule trigger"),
-                                  (2, "join", "event-only trigger")):
+                                  (3, "ticket-reply", "event-only trigger")):
             with self.subTest(why):
                 got = self.node(snap, ticket, name)
                 self.assertEqual((got["eligible"], got["trigger"]["status"]), ("unknown", "unknown"))
-        review = self.node(snap, 2, "review")  # polled trigger without an event; its focus guard needs an event
-        self.assertEqual((review["trigger"]["status"], review["guards"]["status"]), ("no-match", "unknown"))
+        review = self.node(snap, 2, "review-low")  # a polled trigger without an event is a no-match, not a guess
+        self.assertEqual((review["trigger"]["status"], review["guards"]["status"]), ("no-match", "pass"))
 
     def test_a_guard_key_that_needs_event_evidence_is_unknown(self):
         node = {"id": "n", "when": {"stage": "ready", "actor": "human", "focus": "x", "due": True}}
@@ -61,7 +62,7 @@ class Eligibility(unittest.TestCase):
 
     def test_poll_failure_makes_polled_triggers_unknown(self):
         snap, _ = self.snap({5: s.facts(stage="ready")}, [s.item(5, "factory:ready")], poll_fails=True)
-        start = self.node(snap, 5, "start")
+        start = self.node(snap, 5, "dispatch")
         self.assertEqual((start["trigger"]["status"], start["eligible"]), ("unknown", "unknown"))
         self.assertIn("poll failed", start["trigger"]["triggers"][0]["reason"])
 
@@ -72,19 +73,19 @@ class Eligibility(unittest.TestCase):
             for n in card["nodes"]:
                 self.assertEqual(n["execution"]["status"], "unknown")
         self.assertNotIn("running", repr(snap["tickets"]).lower().replace("not running", "").replace("does not mean running", ""))
-        with s.team("team") as (config, nodes):
+        with s.team("slop") as (config, nodes):
             tracker = s.FakeTracker({5: {"facts": s.facts(), "events": []}}, labeled_items=[s.item(5, "factory:ready")])
             src = s.source(tracker)
-            seen = snapshot.build(config, nodes, [src], s.NOW, execution={(src.identity, 5, "start"): "running"})
-        self.assertEqual(next(n for n in seen["tickets"][0]["nodes"] if n["node"] == "start")["execution"]["status"], "running")  # only on evidence
+            seen = snapshot.build(config, nodes, [src], s.NOW, execution={(src.identity, 5, "dispatch"): "running"})
+        self.assertEqual(next(n for n in seen["tickets"][0]["nodes"] if n["node"] == "dispatch")["execution"]["status"], "running")  # only on evidence
 
     def test_outcome_guards_use_gate_guard_holds(self):
-        with s.team("team") as (config, nodes):
+        with s.team("slop") as (config, nodes):
             from ui import graph
             g = graph.build(nodes, config)
             merge = node_of(g, "merge")
             got = {o["name"]: o for o in eligibility.outcomes(merge, s.facts(stage="approved"))}
-            self.assertEqual(set(got), {"merged", "updated", "waiting"})
+            self.assertEqual(set(got), {"merged", "conflict", "updated-low", "updated-high", "ci-red", "waiting"})
             self.assertEqual(eligibility.outcomes(merge, s.facts(stage="triage"))[0]["status"], "blocked")
 
 
@@ -94,7 +95,7 @@ class ReadOnly(unittest.TestCase):
     def test_snapshot_never_writes_or_executes(self):
         tracker = s.FakeTracker({5: {"facts": s.facts(), "events": []}}, labeled_items=[s.item(5, "factory:ready")])
         boom = lambda name: mock.Mock(side_effect=AssertionError(f"{name} was called"))  # noqa: E731
-        with s.team("team") as (config, nodes), \
+        with s.team("slop") as (config, nodes), \
                 mock.patch.object(gate, "sweep", boom("gate.sweep")), mock.patch.object(gate, "check", boom("gate.check")), \
                 mock.patch.object(local, "run_event", boom("local.run_event")), mock.patch.object(local, "main", boom("local.main")), \
                 mock.patch.object(local, "poll", wraps=local.poll) as poll, \

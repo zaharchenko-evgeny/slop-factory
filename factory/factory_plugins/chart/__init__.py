@@ -2,7 +2,7 @@
 the node table of `docs/statechart*.md`. Using its command turns it on, whatever the config selects
 (`factory chart`, `nodes.py chart`); a team need not list it.
 
-- `render`: the chart, the table, the generated docs block (`block`) and `factory chart [nodes.yaml]` (`main`).
+- `render`: the chart, the table, the generated docs block (`block`) and `factory chart [nodes file]` (`main`).
 """
 from plugins import Plugin
 

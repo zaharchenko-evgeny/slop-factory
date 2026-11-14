@@ -22,9 +22,8 @@ This repository holds the engine and deploy tooling, the reusable setup skill,
 and template examples. It does not own Slop factory runtime files.
 
 - `skills/factory-setup/` — the reusable setup skill.
-- `engine/` and `factory/` — the engine, whose node graph is `engine/nodes.yaml`.
-- `engine/template-v1/roles/`, `engine/template-v1/skills/`, and `engine/template-v1/workflows/` — examples
-  used by setup and generators, never runtime fallbacks.
+- `engine/` and `factory/` — the engine, whose node graph is compiled from the team's definition (ADR-0021).
+- `skills/factory-setup/template/` — the example definition used by setup, never a runtime fallback.
 
 Slop factory runtime files (`factory.project.yaml`, roles, skills and workflow)
 live in `slop-eval-factory`.
@@ -121,7 +120,7 @@ hypothesis, acceptance check.
 The tracker label is the ticket's state. Each GitHub event starts one step that
 runs one role, and the step script decides the next state. The chart, the
 events, and the automations are in [the delivery state chart](statechart.md).
-Every step runs the same way: one node of `engine/nodes.yaml`, started by an Air automation or by hand.
+Every step runs the same way: one node of the team's workflow, started by an Air automation or by hand.
 
 ## 7. Plugins (ADR-0004)
 

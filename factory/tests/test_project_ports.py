@@ -6,10 +6,13 @@
 """Tests for the descriptor-backed tracker port (factory/gate_port.py DescriptorPort) against the fixture project.
 Run: uv run factory/tests/test_project_ports.py"""
 import ast
+import copy
 import json
 import re
 import sys
 import unittest
+
+import yaml
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,13 +24,26 @@ from gate_port import MemorySystem, UnsupportedStore  # noqa: E402
 from test_youtrack_tracker import FakeYouTrack  # noqa: E402
 from factory_plugins.youtrack.store import YouTrackTicketStore  # noqa: E402
 
-FIXTURE = ROOT / "tests/fixtures/project"
+PROJECT = {  # the states and commands of a project descriptor, one of each store kind
+    "states": {
+        "draft": {"kind": "waiting", "store": {"label": "factory:draft"}},
+        "ready": {"kind": "active", "store": {"label": "factory:ready"}},
+        "needs-review": {"kind": "active", "store": {"field": {"name": "Status", "value": "Review"}}},
+        "pr-approved": {"kind": "active", "store": {"pr": "approved"}},
+        "pr-merged": {"kind": "final", "store": {"pr": "merged"}},
+    },
+    "commands": {
+        "review": {"store": {"label": "factory:review"}},
+        "pr-review": {"store": {"pr_label": "factory:pr-review"}},
+        "close": {"store": {"tag": "close"}},
+    },
+}
 YOUTRACK = ROOT / "tests/fixtures/project-youtrack"
 ISSUE = json.loads((YOUTRACK / "issue.json").read_text())
 
 
 def tracker(**ticket):
-    return MemorySystem({7: {"stage": "draft", **ticket}}, project=project.load(FIXTURE))
+    return MemorySystem({7: {"stage": "draft", **ticket}}, project=copy.deepcopy(PROJECT))
 
 
 class ProjectPortsTest(unittest.TestCase):
@@ -64,7 +80,7 @@ class ProjectPortsTest(unittest.TestCase):
             t.add_command(7, "deploy")
 
     def test_tag_stores_are_labels_on_a_label_tracker(self):  # #1298: GitHub issues beside YouTrack tickets
-        descriptor = project.load(FIXTURE)
+        descriptor = copy.deepcopy(PROJECT)
         descriptor["states"]["ready"] = {"kind": "active", "store": {"tag": "factory:ready"}}
         descriptor["commands"]["implement-<tier>"] = {"store": {"tag": "factory:implement-<tier>"}}
         t = MemorySystem({7: {"stage": "draft"}}, project=descriptor)
@@ -76,7 +92,7 @@ class ProjectPortsTest(unittest.TestCase):
     def youtrack(self):
         """A tracker over the fixture project-youtrack, its tickets in a stubbed YouTrack."""
         fake = FakeYouTrack(ISSUE, tags=("factory:implement-mid", "factory:implement-cheap", "risk:low", "close"))
-        descriptor = project.load(YOUTRACK)
+        descriptor = project.merged(yaml.safe_load((YOUTRACK / "factory.project.yaml").read_text()))
         stages = {n: s["store"]["field"]["value"] for n, s in descriptor["states"].items()}
         store = YouTrackTicketStore(fake, state_field="State")
         return GitHubGateTracker("example/project", stages, "factory[bot]", run=lambda *a, **k: "", project=descriptor,
@@ -102,7 +118,7 @@ class ProjectPortsTest(unittest.TestCase):
         self.assertEqual(sorted(x["name"] for x in fake.issue["tags"]), ["close", "risk:low"])
 
     def test_command_templates_fill_their_placeholder(self):
-        descriptor = project.load(FIXTURE)
+        descriptor = copy.deepcopy(PROJECT)
         descriptor["commands"]["implement-<tier>"] = {"store": {"label": "factory:implement-<tier>"}}
         t = MemorySystem({7: {"stage": "ready"}}, project=descriptor)
         self.assertTrue(t.add_command(7, "implement-mid"))
@@ -144,6 +160,21 @@ class TicketRepositoriesTest(unittest.TestCase):
                          ["slop-factory", "slop-eval-factory"])
         with self.assertRaises(ValueError):
             ticket_repositories("repositories: o/other", names, "slop-factory")
+
+
+class UserDescriptorIsNotRead(unittest.TestCase):
+    """A `factory.project.yaml` in a team without a definition is ignored: only the compiled view is validated."""
+
+    def test_team_without_definition_reports_one_error_and_ignores_the_file(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(project.validate(tmp)[0].split(":")[0], "factory.project.yaml")
+            (Path(tmp) / "factory.project.yaml").write_text((YOUTRACK / "factory.project.yaml").read_text())
+            errors = project.validate(tmp)
+            self.assertEqual(len(errors), 1)
+            self.assertIn("no factory definition", errors[0])
+            with self.assertRaises(ValueError):
+                project.load(tmp)
 
 
 if __name__ == "__main__":

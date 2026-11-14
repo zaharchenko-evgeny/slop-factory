@@ -29,36 +29,6 @@ cli.load_engine(cli.HERE)
 V2 = ROOT / "factory/tests/fixtures/v2"
 
 
-LEGACY = {  # the old descriptor team, cut down to what `factory begin` reads
-    "engine": 1, "project": {"name": "Slop factory"},
-    "repositories": [{"name": "slop-factory", "url": "https://github.com/zaharchenko-evgeny/slop-factory",
-                      "default_branch": "main", "role": "primary"}],
-    "branch_pattern": "ez/{ticket}-{slug}", "commit_prefix": "#{ticket} ",
-    "tracker": {"adapter": "github-issues", "repository": "zaharchenko-evgeny/slop-factory"},
-    "targets": {"air": {"bot_login": "jetbrains-air[bot]", "models": {
-        "cheap": "codex/gpt-6-luna", "mid": "claude/claude-sonnet-5-5[1m]", "strong": "claude/claude-sonnet-5-5[1m]",
-        "review": "codex/gpt-6-luna", "review_strong": "codex/gpt-6.1-sol"}}},
-    "models": {t: "anthropic/claude-sonnet-5-5" for t in ("cheap", "mid", "strong", "review", "review_strong")},
-    "roles": {"router": {"tier": "cheap"}, "developer": {"tier": "mid", "tier_high_risk": "strong", "fallback": "mid"},
-              "reviewer": {"tools": "read-only", "modes": {"full": {"tier": "review_strong", "fallback": "cheap"},
-                                                          "behaviour": {"tier": "review", "fallback": "cheap"},
-                                                          "structure-security": {"tier": "review_strong", "fallback": "cheap"},
-                                                          "knowledge": {"tier": "review_strong", "fallback": "cheap"}}},
-              "retro": {"tier": "cheap"}},
-}
-
-
-def legacy_team(root):
-    """An old descriptor team (`factory.descriptor.yaml`, no `factory.yaml`): only such a team runs a pull request's node
-    from `main`'s engine (ADR-0021: a definition team never does); its nodes come from the engine's old node list."""
-    import project_mode
-    import yaml
-    root = Path(root)
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "factory.descriptor.yaml").write_text(yaml.safe_dump(LEGACY))
-    return project_mode.link_runtime_files(root)
-
-
 PAYLOAD = {"action": "labeled", "issue": {"number": 7, "title": "Add x", "updated_at": "T1"}}
 
 
@@ -421,44 +391,6 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(out)["context"]["ci_failure"], failure)
 
-    def test_pull_request_node_runs_main_gate_not_the_checkouts(self):
-        team = legacy_team("legacy-team")
-        self.addCleanup(cfg.set_team, V2)
-        cfg.set_team(team)
-        self.enterContext(mock.patch.dict(os.environ, {"FACTORY_TEAM": str(team.resolve())}))
-        main = Path("main")
-        shutil.copytree(ROOT, main, ignore=shutil.ignore_patterns(".git", ".factory", "tests"))
-        (main / "factory/gate.py").write_text(
-            'import json, sys\nprint(json.dumps({"gate": "main", "handoff_path": "h.json", "argv": sys.argv[1:]}))\n')
-        Path("event.json").write_text("{}")
-        pr_gate = mock.Mock(side_effect=AssertionError("the pull request's gate ran"))
-        with mock.patch.object(cli, "from_main", return_value=str(main.resolve())), \
-                mock.patch.object(cli, "load_engine"), mock.patch.object(cli.gate, "main", pr_gate):
-            code, out = self.run_cli("begin", "fix-mid", "event.json")
-            self.assertEqual((code, json.loads(out)["gate"]), (0, "main"), out)
-            code, out = self.run_cli("end", "h.json")
-            self.assertEqual((code, json.loads(out)["argv"][2]), (0, "apply"), out)
-        pr_gate.assert_not_called()
-
-    def test_begin_main_uses_existing_main_worktree(self):
-        team = legacy_team("legacy-team")
-        self.addCleanup(cfg.set_team, V2)
-        cfg.set_team(team)
-        self.enterContext(mock.patch.dict(os.environ, {"FACTORY_TEAM": str(team.resolve())}))
-        main = Path("main")
-        main.mkdir()
-        (main / "factory").mkdir()
-        (main / "factory/gate.py").write_text(
-            'import json, sys\nprint(json.dumps({"gate": "main", "handoff_path": "h.json"}))\n')
-        Path("event.json").write_text("{}")
-        with mock.patch.object(cli, "from_main", return_value=str(main.resolve())), \
-                mock.patch.object(cli, "load_engine"):
-            code, out = self.run_cli("begin", "implement-cheap", "event.json", "--main")
-        self.assertEqual((code, json.loads(out)["gate"]), (0, "main"), out)
-        state = json.loads(cli.STATE.read_text())
-        self.assertEqual(state["engine"], str(main.resolve()))
-        self.assertEqual(state["team"], str(team.resolve()))
-
     def test_sweep_main_uses_team_config(self):
         team = str((ROOT / "factory/tests/fixtures/v2").resolve())
         with mock.patch.object(cli, "from_main", return_value=str(ROOT)), \
@@ -519,49 +451,6 @@ class SkillTest(unittest.TestCase):
         skill = (ROOT / "skills/factory-step/SKILL.md").read_text()
         listed = re.search(r"`--note-for <([^>]+)>`", skill)[1].replace("\\|", "|").split("|")
         self.assertEqual(sorted(listed), sorted(NOTE_FOR))
-
-
-class ImportTimeBoundaryTest(unittest.TestCase):
-    def test_pull_request_module_with_import_side_effect_never_runs(self):
-        """A pull request that changes the engine cannot run code at import: begin imports main's modules."""
-        git = lambda cwd, *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True,
-                                             capture_output=True)
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            origin, pr = tmp / "origin.git", tmp / "pr"
-            git(tmp, "init", "--bare", "-b", "main", str(origin))
-            files = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
-            for rel in files:
-                if (ROOT / rel).is_file():
-                    (pr / rel).parent.mkdir(parents=True, exist_ok=True)
-                    (pr / rel).write_bytes((ROOT / rel).read_bytes())
-            # main's gate is a stub: begin only has to reach it
-            (pr / "factory/gate.py").write_text(
-                'import json\nif __name__ == "__main__":\n    print(json.dumps({"gate": "main", "handoff_path": "h.json"}))\n')
-            git(pr, "init", "-b", "main")
-            git(pr, "remote", "add", "origin", str(origin))
-            git(pr, "add", "-A")
-            git(pr, "commit", "-m", "main")
-            git(pr, "push", "origin", "main")
-            git(pr, "checkout", "-b", "pr")
-            marker = tmp / "pwned"
-            for mod in ("gate", "config", "deploy", "nodes"):
-                f = pr / "factory" / f"{mod}.py"
-                f.write_text(f'open({str(marker)!r}, "w").write("x")\n' + f.read_text())
-            Path(pr / "event.json").write_text("{}")
-            outer_home = tmp / "outer-home"
-            shared = outer_home / "factory-main" / "factory"
-            shared.mkdir(parents=True)
-            (shared / "gate.py").write_text(
-                'import json\nif __name__ == "__main__":\n    print(json.dumps({"gate": "outer-home"}))\n')
-            env = {**os.environ, "HOME": str(tmp / "isolated-home"),
-                   "FACTORY_TEAM": str(legacy_team(tmp / "legacy-team"))}
-            with mock.patch.dict(os.environ, {"HOME": str(outer_home)}):
-                done = subprocess.run([sys.executable, str(pr / "factory/cli.py"), "begin", "fix-mid", "event.json"], cwd=pr,
-                                      capture_output=True, text=True, env=env)
-            self.assertFalse(marker.exists(), "the pull request's engine module ran at import")
-            self.assertEqual(done.returncode, 0, done.stderr)
-            self.assertEqual(json.loads(done.stdout)["gate"], "main")
 
 
 class EnvRolesTest(unittest.TestCase):

@@ -38,7 +38,7 @@ change, whether you are a person, a pi session or a factory role.
    linked sub-issues only when it spans more than 3 repositories or holds
    independent changes. Deliver the first slice.
 4. **Deliver through the factory.** The factory is the node list in
-   [engine/nodes.yaml](engine/nodes.yaml) ([ADR-0014](docs/adr/0014-node-model.md)),
+   the `workflow.yaml` of the team repository ([ADR-0014](docs/adr/0014-node-model.md)),
    deployed as `[factory:<node>]` Air automations by the `factory-deploy` skill.
    Each automation's agent runs `factory begin`, does its role's work,
    and reports one outcome with `factory end` (the `factory-step` skill). The gate alone changes labels, posts
@@ -97,7 +97,7 @@ Models: Air tiers come from `targets.air.models` in the team repository’s `fac
 - Roles and workflows never name a repository, tracker project, model or
   harness. Put those in the team repository’s `factory.descriptor.yaml`.
 - `docs/design.md` and the ADRs change only with an issue that asks for it.
-- Keep `engine/template-v1/roles/*/setup.sh` and `skills/factory-setup/template/roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
+- Keep `skills/factory-setup/template/roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
   ShellCheck.
 - Run artefacts live in `.factory/` (git-ignored). Never commit them.
 - Slop factory's definition lives in `slop-eval-factory` (its `factory.yaml`,

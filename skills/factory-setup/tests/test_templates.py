@@ -230,8 +230,6 @@ class Templates(unittest.TestCase):
         pin = vs.load()["statechart"]
         self.assertEqual((pin["source"], pin["commit"], pin["path"]),
                          ("cursor/plugins", "519d36aa9895", "pstack/skills/statechart"))
-        self.assertEqual(vs.check(), [])
-        self.assertFalse((ROOT / "engine/template-v1/skills/statechart").exists())
         with tempfile.TemporaryDirectory() as tmp:  # the fetched folder matches the pin's sha256
             self.assertTrue((statechart.skill_dir(tmp) / "SKILL.md").is_file())
 
