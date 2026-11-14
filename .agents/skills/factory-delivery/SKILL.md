@@ -10,7 +10,7 @@ On Air each node is a `[factory:<node>]` automation (`engine/nodes.yaml`,
 steps yourself, for one node and one ticket. The gate alone changes labels,
 posts reviews and comments, and moves the stage; you never do.
 
-Read first: the team's `factory.project.yaml` or `factory.descriptor.yaml`, its
+Read first: the team's `factory.yaml` or `factory.descriptor.yaml`, its
 workflow, and `AGENTS.md`. Set `FACTORY_TEAM` to the team repository checkout,
 or pass its directory with `factory --team <team-repo>`. For local validation
 in this engine checkout, use `factory/tests/fixtures/team` as the team directory.

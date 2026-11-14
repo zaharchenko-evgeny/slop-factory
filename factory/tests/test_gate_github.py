@@ -635,10 +635,9 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(self.twice(gh, eff("unlabel", "factory:fix-mid")), (True, 2, False, 2))
 
     def test_descriptor_states_and_commands(self):
-        import project
         gh = FakeGh()
         t = tracker_of(REPO, STAGES, BOT, fix_cap=3, run=gh,
-                              project=project.load(Path(__file__).resolve().parent / "fixtures/project"))
+                              project=project_mode.legacy_descriptor(Path(__file__).resolve().parent / "fixtures/project"))
         self.assertTrue(t.set_state(7, "ready"))
         self.assertEqual(sorted(gh.labels), ["factory:ready", "risk:low"])
         self.assertTrue(t.add_command(7, "review"))

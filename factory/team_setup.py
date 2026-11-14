@@ -23,7 +23,7 @@ ENGINE_SKILLS = ("factory-step", "factory-troubleshoot")
 
 
 def tree_hash(d):
-    """The sha256 of a skill directory: every file's path and bytes, sorted (as scripts/vendor-skills.py)."""
+    """The sha256 of a skill directory: every file's path and bytes, sorted."""
     h = hashlib.sha256()
     for f in sorted(p for p in Path(d).rglob("*") if p.is_file()):
         h.update(f.relative_to(d).as_posix().encode() + b"\0" + f.read_bytes() + b"\0")

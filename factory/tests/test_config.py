@@ -86,7 +86,7 @@ class TeamRootTest(unittest.TestCase):
     def test_home_factory_team_wins_over_a_descriptor_in_the_working_directory(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cwd:
-            (Path(cwd) / config.PROJECT_DESCRIPTOR).write_text("engine: 1\n")
+            (Path(cwd) / config.DESCRIPTOR).write_text("engine: 1\n")
             (Path(tmp) / "factory-team").mkdir()
             with mock.patch.dict(config.os.environ, {"FACTORY_TEAM": "", "HOME": tmp}), \
                     mock.patch.object(config, "_team", None), mock.patch.object(config.Path, "cwd", return_value=Path(cwd)):

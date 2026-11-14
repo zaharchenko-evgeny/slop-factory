@@ -3,17 +3,15 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Workflow files, format v2 (ADR-0016): nodes name states and commands from factory.project.yaml,
-never tracker labels or event names. `migrate` converts a nodes.yaml and its team descriptor into v2; `copy_project`
-copies a v2 team's descriptor and workflow (`factory migrate project`, how factory/tests/fixtures/slop/ is made).
+"""Workflow files, format v2 (ADR-0016): nodes name states and commands of the compiled project descriptor,
+never tracker labels or event names. `copy_project` copies a team's definition (`factory migrate project`, how
+factory/tests/fixtures/slop/ is made).
 
-Usage: workflow.py migrate <nodes.yaml> <factory.descriptor.yaml> [--out DIR]
-       workflow.py project <team checkout> [--out DIR]
+Usage: workflow.py project <team checkout> [--out DIR]
 Each validate error starts with a name: unknown-state, unknown-command, unknown-schedule, unknown-webhook, unknown-wake,
 unknown-effect, unknown-condition, uncovered-state, and the agent errors of `project.node_agents`.
 """
 import argparse
-import copy
 import json
 import shutil
 import subprocess
@@ -28,8 +26,6 @@ import definition  # noqa: E402
 import plugins  # noqa: E402  (ADR-0026: a plugin's effects; definition.errors refuses them while it is off)
 import project as project_mod  # noqa: E402
 
-FORMAT = 2
-WORKFLOW_PATH = "workflows/delivery.yaml"
 # The team commit a `copy_project` output was copied from.
 SOURCE = "SOURCE"
 EFFECTS = {"state", "command", "uncommand", "comment", "review", "create-issues", "merge", "update-branch",
@@ -44,7 +40,6 @@ EVENTS = {"manual": "manual", "pr pushed": "pull_request.synchronize", "pr opene
           "pr converted_to_draft": "pull_request.converted_to_draft", "pr closed": "pull_request.closed",
           "pr review_requested": "pull_request.review_requested", "pr unlabeled": "pull_request.unlabeled",
           "pr edited": "pull_request.edited", "pr review_comment": "pull_request_review_comment.created"}
-PR_STATE_NAMES = {"merged": "pr-merged", "open": "pr-open"}
 
 
 def split_filters(text):
@@ -56,14 +51,13 @@ def _defaults():
     return yaml.safe_load((config.engine_root() / "engine/defaults.yaml").read_text()) or {}
 
 
-def load(team_root=None, descriptor=None):
-    """The workflow file a project's descriptor links with `workflow:`."""
+def load(team_root=None):
+    """The format-2 workflow compiled from a team's definition (ADR-0021)."""
     root = Path(team_root or config.team_root())
     import definition
-    if definition.present(root):  # ADR-0021
+    if definition.present(root):
         return definition.to_project(definition.load(root))[1]
-    descriptor = project_mod._read(root) if descriptor is None else descriptor
-    return yaml.safe_load((root / descriptor["workflow"]).read_text()) or {}
+    raise ValueError(f"{root}: no factory.yaml and workflow.yaml (ADR-0021)")
 
 
 def _template(name):
@@ -173,107 +167,8 @@ def validate(project, wf):
     return errs
 
 
-def migrate(nodes, descriptor):
-    """(project descriptor, v2 workflow) for a nodes.yaml and its factory.descriptor.yaml."""
-    tracker = config.merge(_defaults(), descriptor)["tracker"]
-    stages, kinds = tracker["stages"], tracker.get("stage_kinds") or {}
-    by_stage_label = {label: name for name, label in stages.items()}
-    by_fact_label = {label: fact for fact, label in (tracker.get("pr_fact_labels") or {}).items()}
-    by_event = {event: wake for wake, event in EVENTS.items()}
-    states = {name: {"kind": kinds[name], "store": {"label": label}} for name, label in stages.items()}
-    commands = {}
-
-    def pr_state(fact):
-        name = PR_STATE_NAMES.get(fact, fact)
-        name = f"pr-{fact}" if name in stages else name
-        states.setdefault(name, {"kind": "final" if fact == "merged" else "active", "store": {"pr": fact}})
-        return name
-
-    def command_name(label):
-        return label.split(":", 1)[-1]
-
-    def wake(trigger):
-        trigger, filters = split_filters(trigger)
-        if filters:
-            return " ".join([wake(trigger), *filters])
-        if trigger in by_event:
-            return by_event[trigger]
-        event, _, arg = trigger.partition(" ")
-        if event in ("schedule", "webhook"):
-            return trigger
-        if event == "workflow_run":
-            return f"run {arg}"
-        if event == "pull_request.merged":
-            return f"state {pr_state('merged')}"
-        if event == "issues.labeled" and arg in by_stage_label:
-            return f"state {by_stage_label[arg]}"
-        if event == "pull_request.labeled" and arg in by_fact_label:
-            return f"state {pr_state(by_fact_label[arg])}"
-        if event in ("issues.labeled", "pull_request.labeled"):
-            name, store = command_name(arg), {"label" if event == "issues.labeled" else "pr_label": arg}
-            if commands.get(name, {"store": store})["store"] != store:
-                raise ValueError(f"cannot migrate trigger {trigger}: command {name} has another store")
-            commands[name] = {"store": store}
-            return f"command {name}"
-        raise ValueError(f"cannot migrate trigger: {trigger}")
-
-    def effect(e):
-        key = next(k for k in e if k != "on")
-        if key == "stage":
-            return {"state": e["stage"]}
-        if key not in ("label", "unlabel"):
-            return copy.deepcopy(e)
-        label, kind = e[key], "pr_label" if e.get("on") == "pr" else "label"
-        name = command_name(label)
-        try:
-            _, found_kind, value = resolve(commands, name)
-        except KeyError:
-            commands[name] = {"store": {kind: label}}
-            found_kind, value = kind, label
-        if (found_kind, value) != (kind, label):
-            raise ValueError(f"cannot migrate effect {e}: command {name} is {found_kind} {value}")
-        return {"command" if key == "label" else "uncommand": name}
-
-    triggers = {name: [wake(t) for t in n.get("triggers") or []] for name, n in nodes["nodes"].items()}
-    wf_nodes = {}
-    for name, n in nodes["nodes"].items():
-        node = {}
-        for key, value in n.items():
-            if key == "triggers":
-                node["wakes_on"] = triggers[name]
-            elif key == "when":
-                node["when"] = {("state" if k == "stage" else k): copy.deepcopy(v) for k, v in value.items()}
-            elif key == "outcomes":
-                node["outcomes"] = {}
-                for oname, o in value.items():
-                    o = copy.deepcopy(o or {})
-                    if "effects" in o:
-                        o["effects"] = [effect(e) for e in o["effects"]]
-                    node["outcomes"][oname] = o
-            else:
-                node[key] = copy.deepcopy(value)
-        wf_nodes[name] = node
-    wf = {"format": FORMAT, **{k: copy.deepcopy(v) for k, v in nodes.items() if k not in ("nodes", "environments")},
-          "nodes": wf_nodes}
-    project = {k: copy.deepcopy(v) for k, v in descriptor.items() if k != "nodes"}
-    project["tracker"] = {k: v for k, v in (project.get("tracker") or {}).items() if k not in ("stages", "stage_kinds")}
-    primary = _primary(descriptor)
-    environments = {name: {("repositories" if k == "repository" else k):
-                           ([primary if v == "primary" else v] if k == "repository" else copy.deepcopy(v))
-                           for k, v in env.items()} for name, env in (nodes.get("environments") or {}).items()}
-    if environments:
-        project["environments"] = environments
-    project.update({"workflow": WORKFLOW_PATH, "states": states, "commands": commands})
-    return project, wf
-
-
-def dump(data):
-    return yaml.safe_dump(data, sort_keys=False, width=1000, allow_unicode=True)
-
-
 def copy_project(team, out):
-    """Copy a v2 team checkout's factory.project.yaml and the workflow it links into `out` byte for byte, after
-    validating them, and write the team's HEAD commit to SOURCE. Returns the written paths."""
+    """Copy a team checkout's definition into `out` byte for byte, after validating it, and write the team's HEAD commit to SOURCE. Returns the written paths."""
     team, out = Path(team), Path(out)
     import definition
     if definition.present(team):  # ADR-0021: factory.yaml, workflow.yaml and every file under roles/
@@ -283,14 +178,7 @@ def copy_project(team, out):
         files = [definition.FACTORY, definition.WORKFLOW,
                  *sorted(p.relative_to(team).as_posix() for p in (team / definition.ROLES).rglob("*") if p.is_file())]
         return _copy(team, out, files)
-    descriptor = project_mod.load(team)
-    wf = load(team, descriptor)
-    if wf.get("format") != FORMAT:
-        raise ValueError(f"{descriptor['workflow']}: not format {FORMAT}; convert it with `factory migrate workflow`")
-    errors = validate(descriptor, wf)
-    if errors:
-        raise ValueError("; ".join(errors))
-    return _copy(team, out, [config.PROJECT_DESCRIPTOR, descriptor["workflow"]])
+    raise ValueError(f"{team}: no factory.yaml and workflow.yaml (ADR-0021)")
 
 
 def _copy(team, out, files):
@@ -334,31 +222,6 @@ def project_main(argv):
     return 0
 
 
-def main(argv):
-    p = argparse.ArgumentParser(prog="workflow.py")
-    p.add_argument("cmd", choices=["migrate"])
-    p.add_argument("nodes")
-    p.add_argument("descriptor")
-    p.add_argument("--out", default=".factory/migrate")
-    try:
-        a = p.parse_args(argv)
-    except SystemExit:
-        return 2
-    nodes = yaml.safe_load(Path(a.nodes).read_text())
-    descriptor = yaml.safe_load(Path(a.descriptor).read_text()) or {}
-    try:
-        project, wf = migrate(nodes, descriptor)
-    except (KeyError, ValueError) as e:
-        print(f"migrate: {e}", file=sys.stderr)
-        return 1
-    out = Path(a.out)
-    (out / WORKFLOW_PATH).parent.mkdir(parents=True, exist_ok=True)
-    (out / config.PROJECT_DESCRIPTOR).write_text(dump(project))
-    (out / WORKFLOW_PATH).write_text(dump(wf))
-    print(json.dumps({"project": str(out / config.PROJECT_DESCRIPTOR), "workflow": str(out / WORKFLOW_PATH)}))
-    return 0
-
-
 if __name__ == "__main__":
     argv = config.pop_team(sys.argv[1:])
-    sys.exit(project_main(argv[1:]) if argv[:1] == ["project"] else main(argv))
+    sys.exit(project_main(argv[1:]) if argv[:1] == ["project"] else 2)

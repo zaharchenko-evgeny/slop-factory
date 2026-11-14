@@ -17,7 +17,7 @@ pushes the tag; the tag is not created by this change.
 ## Use
 
 `factory --help` lists the available commands. The subcommands are `begin`,
-`end`, `check`, `apply`, `sweep`, `deploy`, `contracts`, `chart`, `validate`, `setup`, `migrate`, `upgrade`, and `doctor`.
+`end`, `check`, `apply`, `sweep`, `deploy`, `contracts`, `chart`, `validate`, `setup`, `migrate`, and `doctor`.
 `begin` starts a node and prints its handoff path; `end` applies the completed
 handoff. `check` and `apply` operate the gate, while `sweep` runs its event
 processing. `deploy` creates Air automations, `chart` renders the workflow (the chart plugin, on whenever the command runs),
@@ -39,20 +39,14 @@ engine plugins to turn on: `comments` turns on mentions, agent asks and the comm
 
 ### Project descriptor
 
-A project can keep its settings in `factory.project.yaml` and the workflow file
-it links with `workflow:` instead (ADR-0016, defined by `engine/project.schema.json`
-and `engine/workflow.schema.json`). States and commands name their tracker
-store; the workflow names only states and commands. When the team root has
-`factory.project.yaml`, the engine reads only that file and its workflow.
-`factory migrate workflow <nodes.yaml> <factory.descriptor.yaml> --out DIR`
-converts the old pair. `repositories[]` marks exactly one repository
+The engine compiles a team's definition into a project descriptor and a workflow (ADR-0016, defined by
+`engine/project.schema.json` and `engine/workflow.schema.json`). States and commands name their tracker
+store; the workflow names only states and commands. `repositories[]` marks exactly one repository
 `role: primary` and the others `role: project`; `targets` takes `air` and
 `local` (ADR-0017). A new team starts from the factory-setup skill's
 [`skills/factory-setup/template/`](skills/factory-setup/template/README.md), in the layout of ADR-0021
 (`factory.yaml`, `workflow.yaml`, `roles/`). The old layout's template is
-[`engine/template-v1/`](engine/template-v1/README.md); `factory upgrade --diff` shows what changed
-in it since the project's `engine` version, and `factory upgrade --apply PATH`
-takes one file.
+[`engine/template-v1/`](engine/template-v1/README.md).
 
 A node's `writes` names the repositories its agent pushes to; `listens` names
 the ticket repositories it wakes on (ADR-0024). A node that listens to several

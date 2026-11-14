@@ -12,7 +12,6 @@ import yaml
 import plugins
 
 DESCRIPTOR = "factory.descriptor.yaml"
-PROJECT_DESCRIPTOR = "factory.project.yaml"
 NODES = "engine/nodes.yaml"
 _HERE = Path(__file__).resolve().parents[1]
 
@@ -54,7 +53,7 @@ def team_root():
     if home.is_dir():
         return home.resolve()
     cwd = Path.cwd()
-    if any((d / f).exists() for d in (cwd, ENGINE_ROOT) for f in (PROJECT_DESCRIPTOR, DESCRIPTOR)) \
+    if any((d / f).exists() for d in (cwd, ENGINE_ROOT) for f in (DESCRIPTOR,)) \
             or all((cwd / f).is_file() for f in ("factory.yaml", "workflow.yaml")):  # ADR-0021
         return cwd.resolve()
     raise SystemExit("factory: no team repository (set FACTORY_TEAM or run the installed factory)")
@@ -119,9 +118,6 @@ def _load():
     import definition
     if definition.present(root):
         return merge(defaults, definition.config(definition.load(root)))
-    if (root / PROJECT_DESCRIPTOR).is_file() and not (root / DESCRIPTOR).is_file():
-        raise SystemExit(f"factory: {root / PROJECT_DESCRIPTOR} is the old project layout; the engine reads "
-                         "factory.yaml + workflow.yaml (ADR-0021)")
     return merge(defaults, descriptor())
 
 

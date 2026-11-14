@@ -10,7 +10,7 @@ _cache = {}
 def _tracker():
     root = config.team_root()
     stamp = tuple((root / name).stat().st_mtime_ns if (root / name).is_file() else None
-                  for name in (config.DESCRIPTOR, config.PROJECT_DESCRIPTOR))
+                  for name in (config.DESCRIPTOR,))
     key = (str(root), str(config.engine_root()), stamp)
     if key not in _cache:
         _cache.clear()

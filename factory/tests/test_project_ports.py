@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
-import project  # noqa: E402
+import project_mode  # noqa: E402
 from factory_plugins.github.gate import GitHubGateTracker  # noqa: E402
 from gate_port import MemorySystem, UnsupportedStore  # noqa: E402
 from test_youtrack_tracker import FakeYouTrack  # noqa: E402
@@ -27,7 +27,7 @@ ISSUE = json.loads((YOUTRACK / "issue.json").read_text())
 
 
 def tracker(**ticket):
-    return MemorySystem({7: {"stage": "draft", **ticket}}, project=project.load(FIXTURE))
+    return MemorySystem({7: {"stage": "draft", **ticket}}, project=project_mode.legacy_descriptor(FIXTURE))
 
 
 class ProjectPortsTest(unittest.TestCase):
@@ -64,7 +64,7 @@ class ProjectPortsTest(unittest.TestCase):
             t.add_command(7, "deploy")
 
     def test_tag_stores_are_labels_on_a_label_tracker(self):  # #1298: GitHub issues beside YouTrack tickets
-        descriptor = project.load(FIXTURE)
+        descriptor = project_mode.legacy_descriptor(FIXTURE)
         descriptor["states"]["ready"] = {"kind": "active", "store": {"tag": "factory:ready"}}
         descriptor["commands"]["implement-<tier>"] = {"store": {"tag": "factory:implement-<tier>"}}
         t = MemorySystem({7: {"stage": "draft"}}, project=descriptor)
@@ -76,7 +76,7 @@ class ProjectPortsTest(unittest.TestCase):
     def youtrack(self):
         """A tracker over the fixture project-youtrack, its tickets in a stubbed YouTrack."""
         fake = FakeYouTrack(ISSUE, tags=("factory:implement-mid", "factory:implement-cheap", "risk:low", "close"))
-        descriptor = project.load(YOUTRACK)
+        descriptor = project_mode.legacy_descriptor(YOUTRACK)
         stages = {n: s["store"]["field"]["value"] for n, s in descriptor["states"].items()}
         store = YouTrackTicketStore(fake, state_field="State")
         return GitHubGateTracker("example/project", stages, "factory[bot]", run=lambda *a, **k: "", project=descriptor,
@@ -102,7 +102,7 @@ class ProjectPortsTest(unittest.TestCase):
         self.assertEqual(sorted(x["name"] for x in fake.issue["tags"]), ["close", "risk:low"])
 
     def test_command_templates_fill_their_placeholder(self):
-        descriptor = project.load(FIXTURE)
+        descriptor = project_mode.legacy_descriptor(FIXTURE)
         descriptor["commands"]["implement-<tier>"] = {"store": {"label": "factory:implement-<tier>"}}
         t = MemorySystem({7: {"stage": "ready"}}, project=descriptor)
         self.assertTrue(t.add_command(7, "implement-mid"))
