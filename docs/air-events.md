@@ -14,13 +14,15 @@ Air filters are exact or substring matches, ANDed. There is no OR, no NOT and no
 
 | Workflow filter | Air filter | Applies to | Status |
 | --- | --- | --- | --- |
-| `label: <name>` | `label` | `issues.labeled`, `pull_request.labeled` (probed), `pull_request.unlabeled` (assumed) | probed |
+| `label: <name>` | `label` | `issues.labeled`, `pull_request.labeled` (probed), `pull_request.unlabeled`, `issues.unlabeled` (assumed) | probed |
 | `pr_author: <login>` | `pr_author` | every `pull_request*` event | probed (#152 probe 5) |
 | `state: approved\|changes_requested\|commented` | `review_state` | `pull_request_review.submitted` | probed (recorded payload) |
 | `by: <login>` | `sender` | every GitHub event | assumed |
 | `by: factory` | `sender: <targets.air.bot_login>` | every GitHub event | assumed |
 | `by: human` | `sender_type: User` | every GitHub event | assumed |
-| (CI) | `workflow_name` | `workflow_run.failed` | in use |
+| `push: <branch>` | `branch` | `push` | assumed |
+| (CI) | `workflow_name` | `workflow_run.failed`, `workflow_run.completed` | in use, assumed |
+| (CI green) | `conclusion: success` | `workflow_run.completed`, `check_suite.completed` | assumed |
 | (YouTrack) | `tagAdded`, or a field name and value | `issueUpdated` | in use |
 
 `by: human` needs a positive filter because Air has no NOT. It matches the GitHub `sender.type` of `User`, so a push
@@ -49,6 +51,17 @@ or never matches it. Probe this before a team relies on `by`.
 | `{ pr: edited }` | `pull_request.edited` | assumed |
 | `{ pr: review_comment }` | `pull_request_review_comment.created` | assumed |
 | `{ ci: failed }` | `workflow_run.failed` | in use |
+| `{ ci: green }` | `workflow_run.completed` | assumed |
+| `{ ci: checks_green }` | `check_suite.completed` | assumed |
+| `{ push: <branch> }` | `push` | assumed |
+| `{ ticket: opened }` | `issues.opened` | assumed |
+| `{ ticket: reopened }` | `issues.reopened` | assumed |
+| `{ ticket: unlabeled }`, `{ ticket: unlabeled, label: <l> }` | `issues.unlabeled` | assumed |
+| `{ ticket: assigned }` | `issues.assigned` | assumed |
+
+`ci: green` and `ci: checks_green` compile to the `completed` events with a `conclusion: success` filter, because Air has no
+green-only event. `ci: green` also carries the environment's CI `workflow_name`. `push` takes one branch name (no glob) and
+accepts `by`. A node woken by `push` or `check_suite` has no PR or ticket number in its event.
 
 `pr: closed` stands for a close without a merge. Air has a separate `pull_request.merged` event. Whether `pull_request.closed`
 also fires for a merged PR is not probed; a node that must skip merged PRs checks the PR state in its `when`.
@@ -65,7 +78,7 @@ case-sensitive. A YouTrack trigger takes no PR events, no `by` and no `state`.
 | Automation finished (AIRA-1476) | The tracker stage chains the next step. |
 | PR labels on `pull_request.opened` and `synchronize` (AIRA-970) | The run checks the `ez/` branch prefix and exits at once otherwise. |
 | A trigger with NOT or OR (`not by factory`, `a or b`) | Use `by: human`, or list two triggers. |
-| Any event outside the tables above (a check run, a branch push, a deployment) | A `webhook` trigger, then a `schedule` trigger, then the reconcile sweep. |
+| Any event outside the tables above (a check run, a tag push, a deployment) | A `webhook` trigger, then a `schedule` trigger, then the reconcile sweep. |
 | A missed event (Air down, a run that failed before it started, AIRA-1300) | The reconcile sweep reads the tracker and wakes the node again. |
 
 ## Validation
@@ -73,3 +86,9 @@ case-sensitive. A YouTrack trigger takes no PR events, no `by` and no `state`.
 `factory validate` fails on an unknown trigger key, event or filter, and on a filter that does not fit its event
 (`state` only fits `pr: reviewed`). The message names the supported values, for example
 `unknown-event: nodes.x: pr: pushd: supported pr events: pr closed, ...`.
+
+## Numberless events
+
+A `push`, `ci: green` or `ci: checks_green` trigger has no ticket or PR number. A node woken only by such triggers
+(or schedules) is a routine: `factory begin <node>` takes no number. Mixing these triggers with `pr`, `ticket` or
+other numbered triggers on one node is a `mixed-triggers` validation error.
