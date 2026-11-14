@@ -889,6 +889,7 @@ class DefinitionTest(unittest.TestCase):
     def test_validate_names_the_supported_events_and_filters(self):
         rows = [({"pr": "pushd"}, "unknown-event: nodes.fix: pr: pushd: supported pr events: closed, commented"),
                 ({"ticket": "reopened"}, "unknown-event: nodes.fix: ticket: reopened: supported ticket events: closed, commented"),
+                ({"ci": "typo"}, "unknown-event: nodes.fix: ci: typo: supported ci events: failed"),
                 ({"pr": "pushed", "who": "human"}, "unknown-filter: nodes.fix: who: supported filters: by, state, pr_author, label"),
                 ({"pr": "pushed", "state": "approved"}, "unknown-filter: nodes.fix: state fits only `pr: reviewed`"),
                 ({"pr": "reviewed", "state": "done"}, "bad-filter: nodes.fix: state done: supported states: approved, changes_requested, commented"),

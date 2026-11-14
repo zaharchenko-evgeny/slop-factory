@@ -161,8 +161,9 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
         filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
         return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
     words = arg.split(" ") if arg else []
-    wanted = dict(w.partition("=")[::2] for w in words if "=" in w)
-    arg = " ".join(w for w in words if "=" not in w)
+    is_filter = [w.partition("=")[0] in definition.TRIGGER_FILTERS and "=" in w for w in words]  # `priority=high` stays a label
+    wanted = dict(w.partition("=")[::2] for w, f in zip(words, is_filter) if f)
+    arg = " ".join(w for w, f in zip(words, is_filter) if not f)
     if event == "workflow_run":  # ADR-0021 `ci: failed`: Air fires only on a failed run (AIRA-725)
         return {"triggerType": "EVENT", "source": "github", "eventType": "workflow_run.failed",
                 "filters": {"workflow_name": arg}}

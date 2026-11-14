@@ -1094,6 +1094,17 @@ class ProjectPlanTest(unittest.TestCase):
                        "filters": {"sender_type": "User"}}, a["fix"]["triggers"])
         self.assertFalse([t for t in a["fix"]["triggers"] if t["filters"].get("sender") == "jetbrains-air[bot]"])
 
+    def test_trigger_keeps_a_positional_label_that_contains_an_equals_sign(self):
+        """A word is a filter only when its key is a known filter: `priority=high` stays the label."""
+        rows = [("issues.labeled priority=high", {"label": "priority=high"}),
+                ("issues.labeled priority=high by=human", {"label": "priority=high", "sender_type": "User"}),
+                ("issues.labeled by=human", {"sender_type": "User"}),
+                ("pull_request.labeled a=b", {"label": "a=b"}),
+                ("issues.labeled factory:ready", {"label": "factory:ready"})]
+        for text, want in rows:
+            with self.subTest(text=text):
+                self.assertEqual(deploy.trigger(text, None)["filters"], want)
+
     def test_new_pr_events_and_filters_compile_to_the_catalog_event_types(self):
         """Every row of docs/air-events.md: the workflow trigger, its engine event string and its Air trigger."""
         bot = "jetbrains-air[bot]"

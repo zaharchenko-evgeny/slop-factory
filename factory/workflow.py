@@ -50,7 +50,8 @@ PR_STATE_NAMES = {"merged": "pr-merged", "open": "pr-open"}
 def split_filters(text):
     """`(text without its `key=value` filter words, [those words])`: `pr pushed by=human` -> `pr pushed`."""
     words = str(text).split(" ")
-    return " ".join(w for w in words if "=" not in w), [w for w in words if "=" in w]
+    is_filter = [w.partition("=")[0] in definition.TRIGGER_FILTERS and "=" in w for w in words]  # `priority=high` stays a label
+    return " ".join(w for w, f in zip(words, is_filter) if not f), [w for w, f in zip(words, is_filter) if f]
 
 
 def _defaults():
@@ -132,9 +133,6 @@ def validate(project, wf):
             continue
         for wake in n.get("wakes_on") or []:
             wake, filters = split_filters(wake)
-            bad = [w for w in filters if w.partition("=")[0] not in definition.TRIGGER_FILTERS]
-            if bad:
-                errs.append(f"unknown-filter: {name}: {' '.join(bad)}: supported filters: {', '.join(definition.TRIGGER_FILTERS)}")
             verb, _, arg = wake.partition(" ")
             if wake in EVENTS or verb == "run":
                 continue

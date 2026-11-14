@@ -908,6 +908,8 @@ def trigger_errors(where, t):
     if main not in MAIN_KEYS:
         return [f"unknown-trigger: {where}: {main}: supported keys: {', '.join(MAIN_KEYS)}"]
     errs = []
+    if main == "ci" and value != "failed":
+        errs.append(f"unknown-event: {where}: ci: {value}: supported ci events: failed")
     if main in ("pr", "ticket") and (main, value) not in TRIGGER_WAKES:
         names = sorted(v for k, v in TRIGGER_WAKES if k == main)
         errs.append(f"unknown-event: {where}: {main}: {value}: supported {main} events: {', '.join(names)}")
