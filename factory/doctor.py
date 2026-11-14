@@ -18,7 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -134,18 +134,50 @@ def close_ticket(repo, probe, run, run_id="doctor"):
         print(json.dumps({"probe": "report", "result": "denied", "detail": f"{title}: {e}"[:200]}))
 
 
-def file_tickets(repo, failed, run, run_id="doctor"):
-    """Open `Doctor: <probe> fails` in the triage stage, or comment on the open one."""
+COMMENT_EVERY = timedelta(days=1)
+
+
+def _report_text(body):
+    """A report without its `Factory-Run:` trailer, so two runs of the same detail compare equal."""
+    return re.sub(r"\n*Factory-Run:[^\n]*\s*$", "", body or "").strip()
+
+
+def _repeat(repo, number, body, run, now):
+    """Whether the factory already reported this detail on ticket `number`, or commented less than a day ago.
+    Only the factory's own text counts (`targets.air.bot_login`); a person's comment never silences the doctor."""
+    bot = ((config.load().get("targets") or {}).get("air") or {}).get("bot_login")
+    issue = json.loads(run(["issue", "view", str(number), "-R", repo, "--json", "body,createdAt,author,comments"]))
+    mine = [{"body": c.get("body"), "at": c.get("createdAt")} for c in issue.get("comments") or []
+            if bot and (c.get("author") or {}).get("login") == bot]
+    if bot and (issue.get("author") or {}).get("login") == bot:
+        mine.insert(0, {"body": issue.get("body"), "at": issue.get("createdAt")})
+    if not mine:
+        return False
+    last = mine[-1]
+    if _report_text(last["body"]) == _report_text(body):
+        return True
+    try:
+        return now - datetime.fromisoformat(last["at"].replace("Z", "+00:00")) < COMMENT_EVERY
+    except (AttributeError, ValueError):
+        return False
+
+
+def file_tickets(repo, failed, run, run_id="doctor", now=None):
+    """Open `Doctor: <probe> fails` in the triage stage, or reuse the open one. A reused ticket gets a comment only
+    when the detail changed and the last report is over a day old."""
+    now = now or datetime.now(timezone.utc)
     for r in failed:
         title = f"Doctor: {r['probe']} fails"
         body = env_ticket_body(r, run_id) if r["probe"].startswith("env:") and r["result"] == "missing" else \
             effects.tagged(f"`factory doctor` probe `{r['probe']}`: {r['result']}. {r['detail']}\n\nFactory-Run: {run_id}")
         try:
-            found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--search",
-                                    f'"{title}" in:title', "--json", "number,title"]))
+            # The list API reads at once; the search index lags and let a second ticket open for the same probe.
+            found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--limit", "200",
+                                    "--json", "number,title"]))
             match = next((i["number"] for i in found if i["title"] == title), None)
             if match:
-                run(["issue", "comment", str(match), "-R", repo, "--body", body])
+                if not _repeat(repo, match, body, run, now):
+                    run(["issue", "comment", str(match), "-R", repo, "--body", body])
             else:
                 label = triage_label()
                 run(["issue", "create", "-R", repo, "--title", title, "--body", body, *(["--label", label] if label else [])])

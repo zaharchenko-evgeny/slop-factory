@@ -451,8 +451,8 @@ class GitHubTicketStore:
         self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
 
     @in_ticket_repository
-    def close(self, n):
-        self.run(["issue", "close", str(n), "-R", self.repo])
+    def close(self, n, reason=None):
+        self.run(["issue", "close", str(n), "-R", self.repo, *(["--reason", reason] if reason else [])])
 
     def create_children(self, n, children, ready):
         """Per child: reuse an open issue of that title, then add each link that is missing (a retry converges)."""
@@ -1156,7 +1156,7 @@ class GitHubGateTracker(DescriptorPort):
         n = e["ticket"]
         if self._issue_once(n, ctx)["state"] != "open":  # read before the close: the stage write reads its attrs
             return False
-        self.tickets.close(n)
+        self.tickets.close(n, reason=e["reason"]) if e.get("reason") else self.tickets.close(n)
         return True
 
     def _fx_stage(self, e, ctx):
