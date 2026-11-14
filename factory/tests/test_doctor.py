@@ -295,11 +295,12 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(any(call[:2] == ["issue", "create"] for call in gh.calls))
 
     def test_missing_tool_reported_for_env(self):
-        got = run(FakeGh(), "engine", which=lambda t: None if t == "uv" else "/bin/" + t)
+        got = run(FakeGh(), "engine", which=lambda t: None if t == "uv" else "/bin/" + t, has_skill=lambda s: True)
         self.assertEqual(got["tool:uv"]["result"], "missing")
         self.assertEqual(got["tool:gh"]["result"], "ok")
         self.assertEqual(got["skill:ponytail"]["result"], "ok")  # a developer skill, only in `engine`
-        self.assertNotIn("skill:ponytail", run(FakeGh(), "team", which=lambda t: "/bin/" + t))
+        self.assertNotIn("skill:ponytail", run(FakeGh(), "team", which=lambda t: "/bin/" + t,
+                                                              has_skill=lambda s: True))
 
     def test_declared_variables_and_secrets_are_probed(self):
         data = nodes.load()
