@@ -150,6 +150,23 @@ automations, connectors, variables and secret names exist). Then run one
 representative input within the limits. Report the actual outcome, the run
 links and the remaining gaps. An accepted configuration is not a working one.
 
+## 5. Hand off the progress UI
+
+End the setup report with the packaged progress UI: a read-only browser view of the factory's tickets, workflow and
+stage ages. Give the operator this command and these instructions:
+
+```
+factory ui --team <path to the team checkout>
+```
+
+- It binds `127.0.0.1` only, opens the browser, and serves the packaged frontend and the snapshot as JSON. Add
+  `--port N` to pick the port and `--no-open` to skip the browser. Ctrl-C stops it.
+- It is read-only: it has no write endpoint, and it uses the credentials already on the machine (the `gh` login and
+  the tracker variables the factory uses) on the server only.
+- The wheel carries the built frontend; the operator needs no Node.
+- **Setup never starts the server**, in Air or locally: no setup script, startup script or deploy step runs
+  `factory ui`. The operator starts it explicitly.
+
 ## Rules
 
 - Secrets are referenced by name; never print or store their values.
