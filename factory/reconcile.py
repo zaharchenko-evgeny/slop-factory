@@ -502,8 +502,23 @@ def reconcile_main(argv):
     out, failed = {"dry_run": dry_run, "reconcile": results}, any("error" in r for r in results)
     if not spec:
         failed = ticket_passes(config, dry_run, progress, out) or failed
+    if not spec:  # the plugins' last pass (github: the reconcile heartbeat, #1234); it shows the run reached the end
+        passes, passes_failed = reconcile_passes(config, dry_run, progress, "reconcile.heartbeat")
+        failed = failed or passes_failed
+        out.update(passes)
     print(json.dumps(out))
     return 1 if failed else 0
+
+
+def reconcile_passes(config, dry_run, progress, hook):
+    """Run each plugin's passes of hook `hook`: ({name: results}, True when one failed)."""
+    import plugins
+    out, failed = {}, False
+    for passes in plugins.registry(config).hook(hook):
+        for name, (got, pass_failed) in passes(config, dry_run, progress).items():
+            out[name] = got
+            failed = failed or pass_failed
+    return out, failed
 
 
 if __name__ == "__main__":

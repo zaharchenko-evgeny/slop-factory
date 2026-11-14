@@ -34,7 +34,8 @@ def env_needs(env, nodes, resolve=config.resolve):
     """(tools, skills) the roles of the nodes in `env` need: `need_tools` of roles/<r>/setup.sh and
     roles/<r>/skills.txt."""
     roles = sorted({n["role"] for n in nodes["nodes"].values()
-                    if n.get("env") == env and n["role"] not in ("script", "human") and n.get("enabled") is not False})
+                    if n.get("env") == env and n["role"] not in ("script", "human") and n.get("enabled") is not False}
+                   | set(((nodes.get("environments") or {}).get(env) or {}).get("roles") or []))  # #1377
     tools, skills = set(BASE_TOOLS), set()
     import definition
     if definition.present(config.team_root()):  # ADR-0021: skills from factory.yaml; setup.sh only installs tools
@@ -42,7 +43,8 @@ def env_needs(env, nodes, resolve=config.resolve):
         known = defn["factory"].get("roles") or {}
         for r in roles:
             skills |= set(definition.role_skills(defn, r)) if r in known else set()
-        return sorted(tools), sorted(skills | {"factory-step"})
+        from team_setup import ENGINE_SKILLS
+        return sorted(tools), sorted(skills | set(ENGINE_SKILLS))
     for r in roles:
         setup, names = Path(resolve(f"roles/{r}/setup.sh")), Path(resolve(f"roles/{r}/skills.txt"))
         tools |= {t for line in setup.read_text().splitlines() if line.startswith("need_tools ") for t in line.split()[1:]}

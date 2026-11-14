@@ -450,6 +450,15 @@ class ApplyTest(unittest.TestCase):
         for e in plan["environments"]:
             self.assertEqual(set(e["variables"]), {"FACTORY_ENV", "FACTORY_ENV_REPOSITORY"})
 
+    def test_environment_with_roles_and_no_node_is_planned(self):  # #1377
+        def add(f):
+            f["environments"]["people"] = {**f["environments"]["team"], "roles": ["retro"]}
+        envs = {e["name"]: e for e in definition_plan(add)["environments"]}
+        self.assertNotIn("[Slop factory] people", {e["name"] for e in definition_plan()["environments"]})
+        people = envs["[Slop factory] people"]
+        self.assertEqual(people["variables"]["FACTORY_ENV"], "people")
+        self.assertEqual(people["repository"], envs["[Slop factory] team"]["repository"])
+
     def test_declared_variable_is_planned_beside_factory_env(self):
         data = nodes.load()
         data["environments"]["engine"] = {**data["environments"]["engine"], "variables": {"YOUTRACK_URL": "https://y.example"},
@@ -2245,6 +2254,25 @@ class RepositoryCopiesTest(unittest.TestCase):
         self.assertIn(f"several-writable: environments.engine: {SLOP}, {TEAM}: the air surface allows one writable "
                       "repository per environment", errs)
 
+    def test_air_allows_a_second_writable_repository_with_a_token(self):
+        for token, refused in (("TEAM_TOKEN", False), (None, True)):
+            with self.subTest(token=token):
+                f, w = adr27({"engine": [(SLOP, {"write": True}), (TEAM, {"write": True, **({"token": token} if token else {})})],
+                              "intake": [(SLOP, {})]}, {"intake": ["intake"]})
+                with tempfile.TemporaryDirectory() as tmp:
+                    shutil.copytree(HERE / "fixtures/slop", tmp, dirs_exist_ok=True)
+                    for name, edit in ((definition.FACTORY, f), (definition.WORKFLOW, w)):
+                        data = yaml.safe_load((Path(tmp) / name).read_text())
+                        edit(data)
+                        (Path(tmp) / name).write_text(yaml.safe_dump(data, sort_keys=False))
+                    before = cfg.team_root()
+                    cfg.set_team(tmp)
+                    try:
+                        errs = deploy.output_errors(nodes.load(), cfg.load())
+                    finally:
+                        cfg.set_team(before)
+                self.assertEqual(any(e.startswith("several-writable") for e in errs), refused, errs)
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -2277,3 +2305,212 @@ class TicketArgTest(unittest.TestCase):  # #1317: a YouTrack gate owns only <pro
                          "--issue <the issue number>")
         self.assertEqual(deploy.ticket_arg("--pr <the pull request number>", {"fullName": "o/app"}, self.CONFIG),
                          "--pr <the pull request number>")
+
+
+PROJECT = "7c1f9a52-3b0e-4d57-9a34-5d2f1c8e6b10"
+
+
+class ProjectTargetTest(unittest.TestCase):  # #1387: automations owned by an Air project, not a person
+    class Automations:
+        def __init__(self, listed, error=None):
+            self.listed, self.error, self.calls = listed, error, []
+
+        def call(self, tool, args):
+            self.calls.append((tool, args))
+            if tool == "list_automations":
+                return self.listed
+            if tool == "get_automation":
+                return {"automationId": args["automationId"], "name": "[F] a", "triggers": [], "projectId": PROJECT}
+            if self.error:
+                raise RuntimeError(f"{tool}: {self.error}")
+            return {"automationId": "new"}
+
+    class Cloud:
+        def __init__(self, envs):
+            self.envs, self.calls = envs, []
+
+        def call(self, tool, args):
+            self.calls.append((tool, args))
+            if tool == "list_environments":
+                return [{"id": e["id"], "name": e["name"]} for e in self.envs]
+            if tool == "get_environment":
+                return next(e for e in self.envs if e["id"] == args["id"])
+            return {"id": "new-env"}
+
+    def plan(self, project=PROJECT):
+        cfg_ = cfg.load()
+        if project:
+            cfg_ = {**cfg_, "targets": {"air": {**cfg_["targets"]["air"], "project_id": project}}}
+        return air.plan_air(nodes.load(), cfg_)
+
+    def run_deploy(self, mode, plan, listed, envs, error=None):
+        a, c = self.Automations(listed, error), self.Cloud(envs)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(air.core, "reconcile_labels", return_value=[]), \
+                mock.patch.object(air.core, "provision_labels"):
+            code = air.deploy(mode, False, plan, a, c, backend=mock.Mock(**{"get_automation.return_value": {}}))
+        return code, out.getvalue(), err.getvalue(), a, c
+
+    def test_unset_project_keeps_the_personal_plan(self):
+        plan = self.plan(None)
+        self.assertNotIn("projectId", plan)
+        self.assertTrue(all("projectId" not in a for a in plan["automations"]))
+        _, out, _, _, _ = self.run_deploy("--dry-run", {**plan, "automations": plan["automations"][:1]},
+                                          {"personal": [], "project": []}, [])
+        self.assertIn("target: personal", out)
+
+    def test_project_id_is_on_every_planned_automation(self):
+        plan = self.plan()
+        self.assertEqual(plan["projectId"], PROJECT)
+        self.assertTrue(plan["automations"])
+        self.assertTrue(all(a["projectId"] == PROJECT for a in plan["automations"]))
+
+    def test_project_id_must_be_a_uuid(self):
+        for value, bad in ((PROJECT, False), (PROJECT.upper(), False), ("", True), ("p", True), (PROJECT.replace("-", ""), True),
+                           ("{" + PROJECT + "}", True), (7, True)):
+            with self.subTest(value=value):
+                errs = definition.errors(definition_defn(value))
+                self.assertEqual(any(e.startswith("bad-project-id") for e in errs), bad, errs)
+
+    def test_read_state_keeps_only_the_projects_automations(self):
+        listed = {"personal": [{"automationId": "p1", "name": "[F] personal"}],
+                  "project": [{"automationId": "a1", "name": "[F] a", "projectId": PROJECT},
+                              {"automationId": "o1", "name": "[F] other", "projectId": "other"},
+                              {"automationId": "n1", "name": "x a", "projectId": PROJECT}]}
+        a, c = self.Automations(listed), self.Cloud([])
+        items, _ = air.read_state(a, c, "[F] ", "https://github.com/o/r", project_id=PROJECT)
+        self.assertEqual([x["id"] for x in items], ["a1"])
+        self.assertFalse(items.capped)
+        items, _ = air.read_state(a, c, "[F] ", "https://github.com/o/r")  # personal: the project list is not read
+        self.assertEqual([x["id"] for x in items], ["p1"])
+
+    def test_project_list_pages_through_the_backend(self):
+        listed = {"personal": [], "project": [{"automationId": f"i{i}", "name": f"[F] {i}", "projectId": PROJECT}
+                                              for i in range(air.LIST_CAP)]}
+
+        class Pages(air.Backend):
+            paths = []
+
+            def request(self, method, path, body=None):
+                self.paths.append(path)
+                return {"automations": [{"automationId": "i1", "name": "[F] 1", "projectId": PROJECT},
+                                        {"automationId": "z", "name": "[F] z", "projectId": "other"}], "hasMore": False}
+        backend = Pages(token="t")
+        items, _ = air.read_state(self.Automations(listed), self.Cloud([]), "[F] ", "u", backend=backend, project_id=PROJECT)
+        self.assertEqual(backend.paths, ["/automations/projects?limit=100"])
+        self.assertEqual([x["id"] for x in items], ["i1"])
+        self.assertFalse(items.capped)
+
+    def test_project_cap_counts_the_unfiltered_response(self):  # B2
+        other = [{"automationId": f"o{i}", "name": f"[F] o{i}", "projectId": "other"} for i in range(air.LIST_CAP)]
+        for listed in ({"personal": [], "project": other}, other[:60] and {"personal": other[:50], "project": other[:50]}):
+            with self.subTest(keys=list(listed)):
+                items, _ = air.read_state(self.Automations(listed), self.Cloud([]), "[F] ", "u", project_id=PROJECT)
+                self.assertEqual(list(items), [])
+                self.assertTrue(items.capped)
+        items, _ = air.read_state(self.Automations({"project": other[:5]}), self.Cloud([]), "[F] ", "u", project_id=PROJECT)
+        self.assertFalse(items.capped)
+
+    def test_read_state_keeps_only_the_projects_environments(self):  # B1
+        plan = self.plan()
+        owned = self.owned_envs(plan)
+        twin = {**owned[0], "id": "personal-twin", "projectId": None}
+        for have, ids in (([twin, *owned], {e["id"] for e in owned}), ([twin], set()),
+                          ([{**owned[0], "projectId": "other"}], set())):
+            with self.subTest(have=[e["id"] for e in have]):
+                _, envs = air.read_state(self.Automations({}), self.Cloud(have), plan["prefix"], "u", project_id=PROJECT)
+                self.assertEqual({e["id"] for e in envs}, ids)
+
+    def test_apply_never_writes_to_a_personal_environment_of_the_same_name(self):  # B1
+        plan = self.plan()
+        owned = self.owned_envs(plan)
+        twin = {**owned[0], "id": "personal-twin", "projectId": None, "vm": "other"}
+        code, _, _, a, c = self.run_deploy("--apply", plan, {"project": []}, [twin, *owned[1:]])
+        self.assertEqual(code, 1)
+        self.assertEqual([t for t, _ in a.calls if t.startswith(("create_", "update_"))], [])
+        self.assertEqual([t for t, _ in c.calls if t.startswith(("create_", "edit_"))], [])
+
+    def owned_envs(self, plan, project=PROJECT):
+        return [{"id": f"e{i}", "name": e["name"], "repository": e["repository"], "projectId": project}
+                for i, e in enumerate(plan["environments"])]
+
+    def test_apply_sends_project_id_on_create_and_update(self):
+        plan = self.plan()
+        plan = {**plan, "automations": plan["automations"][:2]}
+        existing = {"automationId": "a1", "name": plan["automations"][1]["name"], "projectId": PROJECT}
+        code, out, err, a, _ = self.run_deploy("--apply", plan, {"personal": [], "project": [existing]},
+                                               self.owned_envs(plan))
+        self.assertEqual(code, 1, err)  # the fake never converges, so the verify step reports; the writes are what count
+        self.assertIn("target: project " + PROJECT, out)
+        creates = [args for t, args in a.calls if t == "create_automation"]
+        self.assertTrue(creates)
+        self.assertTrue(all(args["projectId"] == PROJECT for args in creates))
+
+    def test_update_sends_project_id_when_an_automation_moves_to_the_project(self):
+        plan = self.plan()
+        plan = {**plan, "automations": plan["automations"][:1]}
+        existing = {"automationId": "a1", "name": plan["automations"][0]["name"], "projectId": PROJECT}
+        a, c = self.Automations({"project": [existing]}), self.Cloud(self.owned_envs(plan))
+
+        def stale(automation_id):
+            return {"automationId": automation_id, "name": existing["name"], "triggers": [], "projectId": "other"}
+        changes = [("update", "automation", existing["name"], plan["automations"][0], {"id": "a1", **stale("a1")},
+                    ["projectId"])]
+        air.apply_diff(changes, a, c, "https://github.com/o/r")
+        updated = [args for t, args in a.calls if t == "update_automation"]
+        self.assertEqual(updated, [{"projectId": PROJECT, "automationId": "a1"}])
+
+    def test_create_picks_only_an_environment_the_project_owns(self):
+        plan = self.plan()
+        plan = {**plan, "automations": plan["automations"][:1]}
+        env_name = plan["automations"][0]["environmentConfigId"]
+        owned = self.owned_envs(plan)
+        wrong = {**next(e for e in owned if e["name"] == env_name), "id": "wrong-owner", "projectId": "other"}
+        mine = next(e for e in owned if e["name"] == env_name)
+        for envs in ([wrong, *owned], [*owned, wrong]):
+            with self.subTest(order=[e["id"] for e in envs][:1]):
+                a, c = self.Automations({}), self.Cloud(envs)
+                changes = [("create", "automation", "x", plan["automations"][0], None, [])]
+                air.apply_diff(changes, a, c, "https://github.com/o/r", backend=mock.Mock(), owned_env_ids={e["id"] for e in owned})
+                created = [args for t, args in a.calls if t == "create_automation"]
+                self.assertEqual([x["environmentConfigId"] for x in created], [mine["id"]])
+
+    def test_apply_refuses_and_names_each_missing_environment(self):
+        plan = self.plan()
+        owned = self.owned_envs(plan)
+        personal = {**owned[0], "projectId": None}  # a personal environment of the same name is not the project's
+        for have, missing in (([], [e["name"] for e in plan["environments"]]),
+                              ([personal, *owned[1:]], [owned[0]["name"]])):
+            with self.subTest(have=len(have)):
+                code, out, err, a, c = self.run_deploy("--apply", plan, {"personal": [], "project": []}, have)
+                self.assertEqual(code, 1)
+                for name in missing:
+                    self.assertIn(name, err)
+                    self.assertIn(f"missing project environment {name}", out)
+                self.assertEqual([t for t, _ in a.calls if t.startswith(("create_", "update_", "delete_"))], [])
+                self.assertEqual([t for t, _ in c.calls if t.startswith(("create_", "edit_"))], [])
+        code, out, _, _, _ = self.run_deploy("--dry-run", plan, {"personal": [], "project": []}, [])
+        self.assertEqual(code, 0)  # a dry run reports and does not refuse
+        self.assertNotIn("create environment", out)
+
+    def test_air_errors_become_a_clear_message(self):
+        plan = self.plan()
+        plan = {**plan, "automations": plan["automations"][:1]}
+        for code_, text in (("AIRC-1855", "personal"), ("AIRA-619", "service account")):
+            with self.subTest(code=code_):
+                code, _, err, _, _ = self.run_deploy("--apply", plan, {"personal": [], "project": []},
+                                                     self.owned_envs(plan), error=f"400 {code_}")
+                self.assertEqual(code, 1)
+                self.assertIn(code_, err)
+                self.assertIn(text, err)
+        self.assertIsNone(air.project_error("AIRC-1855", None))
+        self.assertIsNone(air.project_error("boom", PROJECT))
+
+
+def definition_defn(project_id):
+    """A parsed definition of the slop fixture whose factory.yaml sets `targets.air.project_id`."""
+    defn = definition.load(HERE / "fixtures/slop")
+    air_ = defn["factory"].setdefault("targets", {}).setdefault("air", {})
+    air_["project_id"] = project_id
+    return defn

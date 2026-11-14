@@ -255,6 +255,16 @@ class ProjectWriteToken(unittest.TestCase):
         run(["pr", "edit", "2", "-R", "o/r", "--add-label", "x"])  # not a project repository
         self.assertEqual(calls, ["pat"] * 4 + [None] * 3)
 
+    def test_pr_create_in_a_writable_repository_uses_its_token(self):
+        """#1237: the PR of a `write: true` repository is opened (and found) with that repository's `token`."""
+        calls = []
+        run = github_tracker.ProjectWriteRun(lambda args, token=None: calls.append(token) or "", [],
+                                             {"APP_TOKEN": "app", "FACTORY_WRITE_TOKEN": "pat"}, {"o/app": "APP_TOKEN"})
+        run(["pr", "create", "-R", "o/App", "--head", "ez/1-x", "--base", "main"])
+        run(["pr", "list", "-R", "o/app", "--head", "ez/1-x"])  # a read
+        run(["pr", "create", "-R", "o/r", "--head", "ez/1-x"])  # no token: as before
+        self.assertEqual(calls, ["app", None, None])
+
     def test_link_to_a_foreign_issue_uses_the_issues_token(self):
         """#1155: linking a slop-eval-factory child to a slop-factory parent writes slop-factory but refers to the
         other repository's issue, which Air's token cannot read: `for_repository` gives it that repository's token."""

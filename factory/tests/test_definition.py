@@ -78,6 +78,42 @@ class DefinitionTest(unittest.TestCase):
         self.assertTrue(definition.present(self.root))
         self.assertEqual(self.errors(), [])
 
+    def test_environment_roles_must_be_declared(self):  # #1377
+        def change(f):
+            f["environments"]["people"] = {**f["environments"]["knowledge"], "roles": ["retro", "nobody"]}
+        self.edit("factory.yaml", change)
+        self.assertEqual([e for e in self.errors() if "environments.people" in e],
+                         ["unknown-role: environments.people.roles: nobody is not in `roles`"])
+        self.assertEqual(definition.config(definition.load(self.root))["environments"]["people"]["roles"], ["retro", "nobody"])
+        self.edit("factory.yaml", lambda f: f["environments"]["people"].update(roles="retro"))
+        self.assertIn("bad-roles: environments.people.roles: a list of role names", self.errors())
+
+    def test_environment_roles_pass_the_compiled_checks(self):  # #1377: `factory validate` checks the compiled schema too
+        import subprocess
+        self.edit("factory.yaml", lambda f: f["environments"].__setitem__(
+            "people", {**f["environments"]["knowledge"], "roles": ["retro"]}))
+        out = subprocess.run([sys.executable, str(ROOT / "cli.py"), "--team", str(self.root), "validate"],
+                             capture_output=True, text=True)
+        self.assertNotIn("unknown-key", out.stdout + out.stderr)
+        self.assertIn("factory: ok", out.stdout, out.stdout + out.stderr)
+
+    def test_field_effect_requires_a_youtrack_ticket_environment(self):
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"].update(
+            field={"effects": [{"field": {"name": "Effort", "from": "size_estimate"}}]}))
+        for adapter, rejected in [("github-issues", True), ("youtrack", False)]:
+            with self.subTest(adapter=adapter):
+                tracker = {"adapter": adapter, **({"url": "https://yt.example", "project": "PRJ"}
+                                                   if adapter == "youtrack" else {})}
+                self.edit("factory.yaml", lambda f, tracker=tracker: f["environments"]["engine"].update(
+                    tracker=tracker))
+                errors = self.errors()
+                message = "unsupported-effect: nodes.intake.field: field requires YouTrack tickets in environment engine"
+                self.assertEqual(any(e == message for e in errors), rejected, errors)
+                run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"],
+                                     capture_output=True, text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
+                self.assertEqual(run.returncode, 1 if rejected else 0, run.stdout + run.stderr)
+                self.assertIn(message if rejected else "factory: ok", run.stdout)
+
     # --- ADR-0027: repository tracker, vcs and write; node environments ----------------------------------------
     def _envs(self, f, **envs):
         """Replace the environments with `envs`: {name: [(repo, {keys})]}, keeping the engine's other settings."""
@@ -240,6 +276,21 @@ class DefinitionTest(unittest.TestCase):
                       "repository per environment", warns)
         self.assertTrue(any(w.startswith("deprecated-key: nodes.implement-small: `writes`") for w in warns), warns)
         self.assertTrue(any(w.startswith("deprecated-key: agents.") and "`access`" in w for w in warns), warns)
+
+    def test_several_writable_needs_a_token_on_each_but_the_main(self):
+        """ADR-0027 (#1237): a writable repository besides the main (first) one is pushed with its `token`."""
+        main, other = {"write": True}, {"write": True}
+        cases = [("second has a token", [(MAIN, main), (OTHER, {**other, "token": "OTHER_TOKEN"})], False),
+                 ("second has no token", [(MAIN, main), (OTHER, other)], True),
+                 ("second has an empty token", [(MAIN, main), (OTHER, {**other, "token": ""})], True),
+                 ("main has a token only", [(MAIN, {**main, "token": "MAIN_TOKEN"}), (OTHER, other)], True),
+                 ("second is read-only", [(MAIN, main), (OTHER, {})], False),
+                 ("one writable repository", [(OTHER, {}), (MAIN, main)], False)]
+        for name, repos, refused in cases:
+            with self.subTest(name):
+                self.edit("factory.yaml", lambda f: self._envs(f, engine=repos))
+                warns = [w for w in definition.warnings(definition.load(self.root)) if w.startswith("several-writable")]
+                self.assertEqual(bool(warns), refused, warns)
 
     def test_migrated_slop_definition_validates_clean(self):
         """The Slop definition in the ADR-0027 form (slop-eval-factory#92): no errors, no warnings, the copies below."""
@@ -425,6 +476,16 @@ class DefinitionTest(unittest.TestCase):
     def test_missing_owner_fails(self):
         self.edit("factory.yaml", lambda f: f.pop("owner"))
         self.assertIn("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)", self.errors())
+
+    def test_comment_tag_is_validated_and_reaches_the_config(self):
+        for value, ok in [("[eval-bot]", True), ("", True), (None, True), (3, False), ("a\nb", False), (["x"], False)]:
+            self.edit("factory.yaml", lambda f, v=value: f.update(comment_tag=v))
+            self.assertEqual(not any(e.startswith("bad-comment-tag") for e in self.errors()), ok, value)
+            got = definition.config(definition.load(self.root)).get("comment_tag", "unset")
+            if ok and value is not None:
+                self.assertEqual(got, value)
+            elif value is None:
+                self.assertEqual(got, "unset")
 
     def test_owner_reaches_the_descriptor(self):
         descriptor, _ = definition.to_project(definition.load(self.root))
@@ -1059,6 +1120,20 @@ class DefinitionTest(unittest.TestCase):
             self.assertIn("tdd", skills)
             self.assertIn("factory-step", skills)
             self.assertNotIn("retro", skills)        # retro runs in `knowledge`
+        finally:
+            config.set_team(before)
+
+    def test_doctor_reads_the_skills_of_environment_roles(self):  # #1377
+        import config
+        import doctor
+        import nodes as nodes_mod
+        self.edit("factory.yaml", lambda f: f["environments"].__setitem__(
+            "people", {**f["environments"]["knowledge"], "roles": ["developer"]}))
+        before = config._team
+        config.set_team(self.root)
+        try:
+            _, skills = doctor.env_needs("people", nodes_mod.load())
+            self.assertIn("tdd", skills)
         finally:
             config.set_team(before)
 

@@ -29,10 +29,12 @@ from factory_plugins.air import deploy as air  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
 import definition  # noqa: E402
+import plugins  # noqa: E402
 from factory_plugins.comments import node as comment_node  # noqa: E402
 from factory_plugins.github import ci_sync as gh_ci_sync, gate as gh_gate  # noqa: E402
 from gate_port import MemorySystem, TagTracker  # noqa: E402
-from ports.system import Query  # noqa: E402
+from gate_tracker import OnVcs  # noqa: E402
+from ports.system import Effect, Query  # noqa: E402
 
 CONFIG = cfg.load()
 NODES = nodes.load()
@@ -93,6 +95,25 @@ class GateTest(unittest.TestCase):
         self.assertEqual(len(comments), 1)
         self.assertIn("review", comments[0])
         self.assertEqual((tr.report["on"], tr.report["run_id"]), ("pr", "run-1"))
+
+    def test_unsupported_effect_refuses_before_writing_any_outcome_effect(self):
+        graph = {"nodes": {"intake": {"when": {}, "outcomes": {"ready": {"effects": [
+            {"label": "risk:high"}, {"review": "approve-at-head", "on": "pr"},
+            {"field": {"name": "Effort", "from": "size_estimate"}}]}}}}}
+
+        class NoField(MemorySystem):
+            effects = (Effect("label", "ticket", MemorySystem._fx_log),)
+
+        class PullRequests(MemorySystem):
+            effects = (Effect("review", "pr", MemorySystem._fx_log),)
+
+        tr = OnVcs.of(NoField({"7": {"stage": "triage"}}), PullRequests({"7": {"stage": "triage"}}))
+        with patch("gate.plugin_registry", return_value=plugins.registry({"plugins": ["youtrack"]})):
+            status, result = gate.apply("intake", "ready", {"ticket": "7", "size_estimate": "Small"}, tr, graph)
+        self.assertEqual(status, gate.NO_GO)
+        self.assertEqual(result["reason"], "unknown effect: field")
+        self.assertEqual(tr.tickets["7"].get("attrs", []), [])
+        self.assertEqual(tr.tickets["7"].get("log", []), [])
 
     def test_stale_review_plan_replays_stale_review_marker_instead_of_refiring(self):
         facts = {"stage": "in-review", "head": "abc", "pr_labels": ["factory:review-x"],
@@ -1134,6 +1155,32 @@ class TriggerTest(unittest.TestCase):
         gate.apply("implement", "blocked", {"ticket": "7", "reason": "[factory] blocked"}, tr, NODES)
         self.assertIn({"kind": "label", "ticket": "7", "value": "factory:needs-human", "on": "pr"}, effects)
         self.assertEqual([e for e in effects if e["kind"] == "assign"], [])
+
+    def test_blocked_definition_transition_keeps_needs_human_command_label(self):
+        team = ROOT / "factory/tests/fixtures/slop"
+        team_definition = definition.load(team)
+        graph = definition.nodes(team_definition)
+        self.assertTrue(any("factory:needs-human" in trigger for trigger in graph["nodes"]["notify-pr"]["triggers"]))
+        graph["nodes"]["blocker"] = {"when": {}, "outcomes": {"blocked": {"effects": [{"stage": "blocked"}]}}}
+        effects = []
+        class Capture(MemorySystem):
+            def apply(self, effect):
+                effects.append(effect.copy())
+                return super().apply(effect)
+
+        tracker = Capture({"7": {"stage": "ready", "attrs": ["factory:needs-human"],
+                                 "assignees": ["owner"]}})
+        config = cfg.load()
+        config = {**config, "tracker": {**config["tracker"],
+                                         "commands": definition.config(team_definition)["tracker"]["commands"]}}
+        with patch.object(cfg, "team_root", return_value=team), patch.object(cfg, "load", return_value=config):
+            gate.apply("blocker", "blocked", {"ticket": "7"}, tracker, graph)
+
+        self.assertIn("factory:needs-human", tracker.tickets["7"]["attrs"])
+        self.assertEqual(tracker.tickets["7"]["assignees"], ["owner"])
+        self.assertNotIn({"kind": "unlabel", "ticket": "7", "value": "factory:needs-human"}, effects)
+        self.assertIn({"kind": "unlabel", "ticket": "7", "value": "factory:implement-small"}, effects)
+        self.assertIn({"kind": "unlabel", "ticket": "7", "value": "factory:review-high", "on": "pr"}, effects)
 
     def test_resume_clears_pr_mark(self):
         effects = []

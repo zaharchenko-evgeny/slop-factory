@@ -69,12 +69,24 @@ def run_ci_sync(dry_run=False, progress=None):
 
 
 def reconcile_pass(config, dry_run, progress):
-    """The `reconcile.passes` hook: {"ci_sync": (results, failed)}; an error is a result, so the reconcile results
-    are still reported."""
+    """Run GitHub's scheduled reconcile passes; an error is a result, not a silent pass."""
     try:
-        return {"ci_sync": run_ci_sync(dry_run, progress)}
+        out = {"ci_sync": run_ci_sync(dry_run, progress)}
     except Exception as e:
-        return {"ci_sync": ([{"error": f"{type(e).__name__}: {e}"}], True)}
+        out = {"ci_sync": ([{"error": f"{type(e).__name__}: {e}"}], True)}
+    out.update(reconcile_heartbeat(config, dry_run, progress))
+    return out
+
+
+def reconcile_heartbeat(config, dry_run, progress):
+    """The heartbeat pass also runs for definition-based teams, which do not run legacy scheduled passes."""
+    try:
+        from factory_plugins.github import heartbeat
+        if not heartbeat.applies(config):
+            return {}
+        return {"reconcile_heartbeat": heartbeat.reconcile_pass(config, dry_run, progress)}
+    except Exception as e:
+        return {"reconcile_heartbeat": ([{"error": f"{type(e).__name__}: {e}"}], True)}
 
 
 def command(argv):

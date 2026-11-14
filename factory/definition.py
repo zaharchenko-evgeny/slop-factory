@@ -6,6 +6,7 @@ wrong; `settings(defn, node)` is a node's merged settings; `render(defn, node)` 
 Nothing else in the engine reads this layout yet (#669 compiles it into the config and the node graph).
 """
 import re
+import uuid
 from pathlib import Path
 
 import yaml
@@ -347,11 +348,20 @@ def _repository_warnings(defn):
     out += [f"deprecated-key: tracker.{k} (ADR-0027: each repository names its tracker)"
             for k in ("repositories", "projects") if k in (f.get("tracker") or {}) and not adopted(defn)]
     for e, spec in (f.get("environments") or {}).items():  # raw flags: no plugin code is imported here
-        writable = [str(r.get("repo")) for r in (spec or {}).get("repositories") or [] if isinstance(r, dict) and r.get("write") is True]
-        if len(writable) > 1:
+        if writable := several_writable(spec):
             out.append(f"several-writable: environments.{e}: {', '.join(writable)}: the air surface allows one "
                        f"writable repository per environment")
     return out
+
+
+def several_writable(spec):
+    """The `write: true` repositories of environment spec `spec` when it has more than one and one besides its main
+    repository (the first) has no `token` (ADR-0027: Air pushes only the main one; a `token` pushes the others);
+    else []. Raw flags: no plugin code."""
+    repos = [r for r in (spec or {}).get("repositories") or [] if isinstance(r, dict)]
+    writable = [r for r in repos if r.get("write") is True]
+    return [str(r.get("repo")) for r in writable] \
+        if len(writable) > 1 and any(not r.get("token") for r in writable if r is not repos[0]) else []
 
 
 def environment_variables(defn, env_name):
@@ -579,6 +589,13 @@ def _event_errors(defn, name, node):
     return errs
 
 
+def _is_uuid(value) -> bool:
+    try:
+        return isinstance(value, str) and str(uuid.UUID(value)) == value.lower()
+    except ValueError:
+        return False
+
+
 def errors(defn):
     f, w = defn["factory"], defn["workflow"]
     errs = []
@@ -592,6 +609,10 @@ def errors(defn):
     registry = plugins.registry(f)
     if not f.get("owner"):
         errs.append("missing-owner: factory.yaml: `owner` (the GitHub login a person-wait is assigned to)")
+    if f.get("comment_tag") is not None and (not isinstance(f["comment_tag"], str) or "\n" in f["comment_tag"]):
+        errs.append("bad-comment-tag: factory.yaml: `comment_tag` is one line of text; blank adds no tag")
+    if (pid := ((f.get("targets") or {}).get("air") or {}).get("project_id")) is not None and not _is_uuid(pid):
+        errs.append("bad-project-id: factory.yaml: `targets.air.project_id` is a UUID (the Air project's id)")
     errs += [e for n, s in skills.items() for e in _skill_spec_errors(f"skills.{n}", s)]
     for s in (f.get("defaults") or {}).get("skills") or []:
         errs += _skill_errors("defaults.skills", s, skills)
@@ -613,6 +634,11 @@ def errors(defn):
         repos = (spec or {}).get("repositories") or []
         if not repos:  # compiling needs a repository for the node output (`_primary`)
             errs.append(f"empty-environment: environments.{e}: lists no repositories")
+        env_roles = (spec or {}).get("roles") or []
+        if not isinstance(env_roles, list) or not all(isinstance(r, str) for r in env_roles):
+            errs.append(f"bad-roles: environments.{e}.roles: a list of role names")
+        else:
+            errs += [f"unknown-role: environments.{e}.roles: {r} is not in `roles`" for r in env_roles if r not in roles]
         errs += [f"removed-key: environments.{e}: {r.get('repo')}: `{k}` (ADR-0027: a repository's `write` names the "
                  "environment's writable repository)" for r in repos for k in REMOVED_REPOSITORY_KEYS if k in r]
     errs += scopes.errors(f)  # environments with their own trackers (#1069)
@@ -721,6 +747,14 @@ def errors(defn):
             guards = [k for k in oc.get("if") or {} if k not in GUARDS]
             kinds = [next((k for k in e if k != "on"), None) for e in oc.get("effects") or []]
             errs += _plugin_key_errors(registry, f"{where}.{o}", o, guards, kinds, oc.get("effects") or [])
+            if any(isinstance(effect, dict) and "field" in effect and effect.get("on") != "pr"
+                   for effect in oc.get("effects") or []):
+                for node_env in node_envs or [default_env]:
+                    if node_env in envs and any(
+                            repo["tracker"] is not None and repo["tracker"].get("adapter") != "youtrack"
+                            for repo in repositories(defn, node_env)):
+                        errs.append(f"unsupported-effect: {where}.{o}: field requires YouTrack tickets in environment {node_env}")
+                        break
             for effect in oc.get("effects") or []:
                 if isinstance(effect, dict) and ("assign" in effect or "unassign" in effect):
                     key = "assign" if "assign" in effect else "unassign"
@@ -937,6 +971,7 @@ def to_project(defn):
                             # where the gate may write in this environment (#994): what its nodes write (ADR-0024)
                             "writable": [names[r["repo"]] for r in repos if full_name(r["repo"]) in written],
                             "secret_help": help_,
+                            **({"roles": list(e["roles"])} if e.get("roles") else {}),  # #1377: used outside the workflow
                             "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"), "startup": STARTUP,
                             # ADR-0027: a repository's own tracker is a ticket place (`ticket_places`), not a #1069 project
                             **({"tracker": dict(e["tracker"])} if isinstance(e.get("tracker"), dict) and not new_model else {}),
@@ -1002,7 +1037,8 @@ def to_project(defn):
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
         "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},
-                           "mcp_connectors": list(air.get("mcp_connectors") or AIR_CONNECTORS)}},
+                           "mcp_connectors": list(air.get("mcp_connectors") or AIR_CONNECTORS),
+                           **({"project_id": air["project_id"]} if air.get("project_id") else {})}},
         "roles": roles,
         "limits": {**(wset.get("limits") or {}), **({"fix_rounds": fix_rounds} if fix_rounds else {})},
         "gates": {"auto_merge": {"enabled": bool(merge_settings.get("auto_merge", True)),
@@ -1011,6 +1047,7 @@ def to_project(defn):
                   "confirm_external_writes_scope": dset.get("confirm_external_writes_scope") or []},
         "reviews": {"trusted_bots": []},
         **({"owner": f["owner"]} if f.get("owner") else {}),
+        **({"comment_tag": f["comment_tag"]} if isinstance(f.get("comment_tag"), str) else {}),  # "" is no tag (#1366)
         **({"plugins": plugins.listed(f)} if plugins.listed(f) else {}),
         **({"surface": f["surface"]} if f.get("surface") else {}),  # where the nodes run (ADR-0026: air, local)
     }
@@ -1184,7 +1221,8 @@ def nodes(defn):
         environments[en] = {"repository": "primary" if repos and repos[0]["repo"] == primary else repos[0]["repo"].split("/")[-1],
                             "secrets": secrets, "domains": list(e.get("domains") or []), "vm": e.get("vm", "default"),
                             "startup": STARTUP,
-                            "declared": [{"name": k, **v} for k, v in environment_variables(defn, en).items()]}
+                            "declared": [{"name": k, **v} for k, v in environment_variables(defn, en).items()],
+                            **({"roles": list(e["roles"])} if e.get("roles") else {})}
     schedules, out = {}, {}
     for name, n in (w.get("nodes") or {}).items():
         a = agents[n["agent"]]

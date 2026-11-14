@@ -1545,7 +1545,7 @@ class GitHubGateTracker(DescriptorPort):
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
         defang = lambda t: str(t).replace("<!--", "<!\u200b--")  # noqa: E731  # prose never carries a marker
         lines = [defang(f"**{x['id']}** {x['file']} — {x['finding']}") for x in found]
-        summary = effects_mod.tagged(defang(e["summary"])) if e.get("summary") else effects_mod.TAG
+        summary = effects_mod.tagged(defang(e["summary"])) if e.get("summary") else effects_mod.tag_text()
         body = "\n\n".join(x for x in (summary, "\n".join(lines), marker) if x)
         if e.get("run_id"):
             body += f"\n\nFactory-Run: {e['run_id']}"

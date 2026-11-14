@@ -61,6 +61,10 @@ class GateTracker:
     def apply(self, e):
         return effects.apply(self.tracker if effects.target(e) == "ticket" else self.vcs, e)
 
+    def supports(self, e):
+        system = self.tracker if effects.target(e) == "ticket" else self.vcs
+        return effects.spec(system, e) is not None
+
 
 def overlay(facts, vcs, n):
     """`facts` with the facts `vcs` owns (its `pr_facts`) read from it, when ticket `n` has a pull request there."""
@@ -106,6 +110,11 @@ class OnVcs(GateTracker):
 
     def apply(self, e):
         return effects.apply(self.vcs, e) if self._on_vcs(e) else self.tracker.apply(e)
+
+    def supports(self, e):
+        if self._on_vcs(e):
+            return effects.spec(self.vcs, e) is not None
+        return effects.spec(self.tracker, e) is not None
 
     def __getattr__(self, name):
         if name.startswith("_") or name in ("tracker_for_env", "vcs_for_env", "env"):
