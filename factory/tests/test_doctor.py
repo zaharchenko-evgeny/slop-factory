@@ -67,6 +67,10 @@ class FakeGh:
             return json.dumps(self.views.get(int(args[2]), {"comments": []}))
         if args[:2] == ["issue", "list"]:
             return json.dumps([{"number": n, "title": t} for n, t in self.open_tickets])
+        if args[0] == "api" and "/issues?state=open" in args[-1]:
+            items = [{"number": n, "title": t} for n, t in self.open_tickets]
+            items = getattr(self, "pr_items", []) + items
+            return json.dumps([items[i:i + 100] for i in range(0, len(items), 100)] or [[]])
         if args[0] == "api" and "/actions/runs" in args[-1]:
             return json.dumps({"workflow_runs": [{"id": 7}]})
         if args[:2] == ["run", "view"]:
@@ -286,6 +290,21 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(count(gh, "comment"), 1)
         doctor.file_tickets(REPO, probe("403"), gh, "r6", now=at(9, 3))  # detail changed back, last comment over a day old
         self.assertEqual(count(gh, "comment"), 2)
+
+    def test_matching_issue_after_the_first_page_and_pull_requests(self):
+        title = "Doctor: x fails"
+        filler = [(100 + i, f"other {i}") for i in range(250)]
+        for name, tickets, pr_items, want in (
+                ("match on page 3", filler + [(7, title)], [], (0, 1)),
+                ("match on page 1", [(7, title)] + filler, [], (0, 1)),
+                ("no match", filler, [], (1, 0)),
+                ("same-titled PR ignored", filler, [{"number": 9, "title": title, "pull_request": {}}], (1, 0))):
+            with self.subTest(name=name):
+                gh = FakeGh(open_tickets=tickets)
+                gh.pr_items = pr_items
+                doctor.file_tickets(REPO, [{"probe": "x", "result": "fail", "detail": "d"}], gh, now=datetime(2026, 11, 14, tzinfo=timezone.utc))
+                n = lambda v: len([c for c in gh.calls if c[:2] == ["issue", v]])  # noqa: E731
+                self.assertEqual((n("create"), n("comment")), want)
 
     def test_a_comment_by_someone_else_does_not_silence_the_doctor(self):
         gh = FakeGh(open_tickets=[(7, "Doctor: x fails")])

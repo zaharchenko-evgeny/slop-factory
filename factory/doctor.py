@@ -172,9 +172,10 @@ def file_tickets(repo, failed, run, run_id="doctor", now=None):
             effects.tagged(f"`factory doctor` probe `{r['probe']}`: {r['result']}. {r['detail']}\n\nFactory-Run: {run_id}")
         try:
             # The list API reads at once; the search index lags and let a second ticket open for the same probe.
-            found = json.loads(run(["issue", "list", "-R", repo, "--state", "open", "--limit", "200",
-                                    "--json", "number,title"]))
-            match = next((i["number"] for i in found if i["title"] == title), None)
+            # Read every page: an older match beyond the first page would open a second ticket.
+            pages = json.loads(run(["api", "--paginate", "--slurp", f"repos/{repo}/issues?state=open&per_page=100"]))
+            match = next((i["number"] for page in pages for i in page
+                          if i.get("title") == title and "pull_request" not in i), None)
             if match:
                 if not _repeat(repo, match, body, run, now):
                     run(["issue", "comment", str(match), "-R", repo, "--body", body])
