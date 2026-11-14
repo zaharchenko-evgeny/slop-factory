@@ -2671,3 +2671,29 @@ def definition_defn(project_id):
     air_ = defn["factory"].setdefault("targets", {}).setdefault("air", {})
     air_["project_id"] = project_id
     return defn
+
+
+class ProjectEnvironmentVariablesTest(unittest.TestCase):
+    PLAN = {"prefix": "[P] ", "environments": [{"name": "[P] a", "declared": [
+        {"name": "T", "secret": True}, {"name": "O", "secret": True}]}]}
+
+    def test_a_secret_counts_as_present(self):
+        envs = [{"name": "[P] a", "id": "e1", "variables": {}, "secrets": ["T"]}]
+        self.assertEqual([v["name"] for _, v in air.missing_variables(self.PLAN, envs)], ["O"])
+
+    def test_a_project_environment_is_listed_for_a_person_not_written(self):
+        envs = [{"name": "[P] a", "id": "e1", "variables": {}, "secrets": ["T"], "projectId": "p"}]
+        cloud = mock.Mock()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            air.create_missing_variables(self.PLAN, envs, cloud)
+        cloud.call.assert_not_called()
+        self.assertEqual(out.getvalue(), "set by a person: a secret O (project environment)\n")
+
+    def test_a_personal_environment_is_still_written(self):
+        envs = [{"name": "[P] a", "id": "e1", "variables": {}, "secrets": ["T"]}]
+        cloud = mock.Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            air.create_missing_variables(self.PLAN, envs, cloud)
+        cloud.call.assert_called_once_with("edit_environment", {"id": "e1", "variables": [
+            {"key": "O", "value": air.UNSET, "isSecret": True}]})

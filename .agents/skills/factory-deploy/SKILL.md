@@ -22,11 +22,25 @@ applies the plan and changes no code.
 
 0. Precondition: `factory/gate.py` must exist on the default branch (the thin prompt runs it). If not, stop and report; do not apply.
 1. Check nodes: `factory --team <team-repo> validate` (or set `FACTORY_TEAM` and run `uv run --quiet factory/nodes.py validate`).
-2. Set the MCP server commands from `~/.pi/agent/mcp-adapter.json` (the `command` and `args` under `mcpServers`):
+2. Set the MCP server commands from `~/.pi/agent/mcp-adapter.json` (`command`, `args` and `env` under `mcpServers`).
+   Keep the `env` block: without it `jcp-mcp-bridge` signs in with another client and lists another organization's
+   automations, so the plan creates everything again. A YouTrack tracker also needs its token (`token_env`, default
+   `YOUTRACK_TOKEN`) in the shell; take it from the YouTrack server's `Authorization` header. Never print it.
 
    ```sh
-   export FACTORY_MCP_AIR_AUTOMATIONS="$(python3 -c 'import json, shlex, sys; s=json.load(open(sys.argv[1]))["mcpServers"]["air-automations"]; print(shlex.join([s["command"], *s.get("args", [])]))' ~/.pi/agent/mcp-adapter.json)"
-   export FACTORY_MCP_AIR_CLOUD="$(python3 -c 'import json, shlex, sys; s=json.load(open(sys.argv[1]))["mcpServers"]["air-cloud"]; print(shlex.join([s["command"], *s.get("args", [])]))' ~/.pi/agent/mcp-adapter.json)"
+   eval "$(python3 - <<'PY'
+   import json, os, shlex
+   s = json.load(open(os.path.expanduser("~/.pi/agent/mcp-adapter.json")))["mcpServers"]
+   def cmd(k):
+       v = s[k]; env = [f"{a}={b}" for a, b in (v.get("env") or {}).items()]
+       return shlex.join((["env", *env] if env else []) + [v["command"], *v.get("args", [])])
+   print("export FACTORY_MCP_AIR_AUTOMATIONS=" + shlex.quote(cmd("air-automations")))
+   print("export FACTORY_MCP_AIR_CLOUD=" + shlex.quote(cmd("air-cloud")))
+   yt = next((v for k, v in s.items() if k.lower() == "youtrack"), {})
+   if "Authorization" in (yt.get("headers") or {}):
+       print("export YOUTRACK_TOKEN=" + shlex.quote(yt["headers"]["Authorization"].split()[-1]))
+   PY
+   )"
    ```
 
    Dry run: `factory --team <team-repo> deploy --dry-run`. It renders the plan, lists automations and environments through the Air MCP servers over stdio, reads details for factory-prefixed records, diffs by name and prints `create|update|delete <kind> <name>` with the changed fields. The MCP commands inherit the local OAuth environment. Show the plan and review it.
@@ -60,11 +74,15 @@ with 404 `ENVIRONMENT_CONFIGURATION_NOT_FOUND` (AIRA-1629). For each planned env
 prints `create project environment <name> (copy of personal <id>)` or `(new)`. `--apply` creates them before any
 automation: a copy duplicates the personal environment of the same name and repository into the project (the Air UI's
 Change project, mode DUPLICATE: domains, variables and startup scripts come along; the personal one and its automations
-stay as they are); a new one is created with the plan's name and repository. After the apply, run the dry run again and set each secret
-it lists as `set by a person` in the project environment.
+stay as they are); a new one is created with the plan's name and repository. A copy brings the personal environment's variables and secrets. air-cloud's
+`edit_environment` refuses a project environment, so deploy does not write a declared variable that the project
+environment lacks: it prints `set by a person: <env> secret <NAME> (project environment)`. After the apply, run the dry
+run again and set each name it lists as `set by a person` in the project environment.
 
-Moving existing personal automations to a project is manual: set `project_id`, apply, then delete the old personal
-automations by hand (`--allow-delete` does not remove them: deploy no longer lists personal ones). Open a follow-up ticket to automate it.
+Moving existing personal automations to a project is partly manual: set `project_id` and apply. Right after the apply,
+pause every personal automation with the plan's prefix (air-automations `update_automation`, `paused: true`), or both
+copies wake on each event. Delete them once the project copies have run (`--allow-delete` does not remove them:
+deploy no longer lists personal ones). Open a follow-up ticket to automate it.
 
 ## Local target
 
