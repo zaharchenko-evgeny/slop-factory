@@ -137,9 +137,20 @@ def flow_triggers(node: dict) -> str:
     return " or ".join(words) or "manual invocation"
 
 
+def by_filter(by: str, bot_login: str | None) -> dict:
+    """The Air filter of a trigger's `by`: Air filters are positive matches with no NOT (docs/air-events.md), so a
+    person is `sender_type: User`, the factory is its login (or `sender_type: Bot`) and a login is itself."""
+    if by == "human":
+        return {"sender_type": "User"}
+    if by == "factory":
+        return {"sender": bot_login} if bot_login else {"sender_type": "Bot"}
+    return {"sender": by}
+
+
 def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: str | None = None,
-            repo: str | None = None, repo_tags: tuple = ()) -> dict:
-    """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations)."""
+            repo: str | None = None, repo_tags: tuple = (), bot_login: str | None = None) -> dict:
+    """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations). `k=v` words after
+    the event (`pull_request.synchronize by=human`) are the trigger's filters (docs/air-events.md)."""
     event, _, arg = str(text).partition(" ")
     arg = arg.replace("<tier>", tier or "")
     arg = arg.replace("<focus>", focus or "")
@@ -149,6 +160,9 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
             arg = f"{arg}-{repo}"
         filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
         return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
+    arg, words = definition.split_filters(f"{event} {arg}" if arg else event)
+    arg = arg.partition(" ")[2]
+    wanted = dict(w.partition("=")[::2] for w in words)
     if event == "workflow_run":  # ADR-0021 `ci: failed`: Air fires only on a failed run (AIRA-725)
         return {"triggerType": "EVENT", "source": "github", "eventType": "workflow_run.failed",
                 "filters": {"workflow_name": arg}}
@@ -156,6 +170,14 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
     filters = {"label": arg} if labeled and arg else {}
     if pr_author and event.startswith("pull_request"):
         filters["pr_author"] = pr_author
+    if "pr_author" in wanted:
+        filters["pr_author"] = wanted["pr_author"]
+    if "by" in wanted:
+        filters.update(by_filter(wanted["by"], bot_login))
+    if "state" in wanted:
+        filters["review_state"] = wanted["state"]
+    if "label" in wanted:
+        filters["label"] = wanted["label"]
     return {"triggerType": "EVENT", "source": "github", "eventType": event, "filters": filters}
 
 
@@ -321,8 +343,10 @@ def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None
         agent = (defn["factory"].get("agents") or {}).get(((defn["workflow"].get("nodes") or {}).get(name) or {}).get("agent")) or {}
         if agent.get("run"):  # ADR-0021: a step with no judgement: the agent only runs the engine command
             prefix = node_repository_prefix(main_repository, config)
+            repository_hint = (" The PR lookup uses this run's writable repository from `FACTORY_ENV_REPOSITORY`."
+                               if agent["run"] == "decide" else "")
             return (f"{who}\n\n{checkout}Run `{prefix}factory {agent['run']} --node {name} {ticket_arg(begin_arg(name, n), main_repository, config)}` once, in the "
-                    "foreground, and wait until it exits. Copy only that one number. It applies "
+                    "foreground, and wait until it exits. Copy only that one number." + repository_hint + " It applies "
                     "the outcome itself: do not run `factory begin` or `factory end`, and change nothing yourself. "
                     "Report its JSON output." + INSTALLED_FACTORY)
         text = definition.render(defn, name, (main_repository or {}).get("fullName")).strip()

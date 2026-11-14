@@ -435,7 +435,12 @@ class RecoverDefinitionTest(unittest.TestCase):
 
         def gh(args, token=None):
             calls.append(args)
-            return json.dumps([{"number": 9, "title": t} for t in open_titles]) if args[:2] == ["issue", "list"] else ""
+            found = [{"number": 9, "title": t} for t in open_titles]
+            if args[:2] == ["issue", "list"]:
+                return json.dumps(found)
+            if args[0] == "api" and "--paginate" in args:
+                return json.dumps([found])
+            return "{}" if args[:2] == ["issue", "view"] else ""
         reconcile.report_systemic(self.config, [{"ticket": 1, "node": "review-low"}], run=gh)
         create = next(c for c in calls if c[:2] == ["issue", "create"])
         self.assertEqual(create[create.index("--title") + 1], "Doctor: runs-without-outcome fails")
@@ -669,7 +674,12 @@ class ReconcileFailureTest(unittest.TestCase):
 
     def gh(self, args, token=None):
         self.calls.append(args)
-        return json.dumps([{"number": 7, "title": "Doctor: reconcile fails"}]) if args[:2] == ["issue", "list"] else ""
+        found = [{"number": 7, "title": "Doctor: reconcile fails"}]
+        if args[:2] == ["issue", "list"]:
+            return json.dumps(found)
+        if args[0] == "api" and "--paginate" in args:
+            return json.dumps([found])
+        return "{}" if args[:2] == ["issue", "view"] else ""
 
     def test_crash_opens_the_ticket_and_a_clean_run_closes_it(self):
         def boom(argv):

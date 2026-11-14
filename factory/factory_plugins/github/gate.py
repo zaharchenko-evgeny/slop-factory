@@ -98,40 +98,90 @@ def ci_checks_of(config, environ=os.environ):
     return list((env.get("ci") or {}).get("checks") or [])
 
 
-def head_checks(run, repository, sha, names=None, branch=BASE_BRANCH):
+def ci_workflow_of(config, environ=os.environ):
+    """`environments.<env>.ci.workflow` of the run's environment (FACTORY_ENV): the GitHub Actions workflow that is
+    the CI, else None."""
+    env = ((config.get("environments") or {}).get(environ.get("FACTORY_ENV") or "") or {})
+    return (env.get("ci") or {}).get("workflow") or None
+
+
+def forbidden(e):
+    """True when the `gh` failure `e` is the 403 of a token without the permission (not a rate limit)."""
+    return not isinstance(e, RateLimited) and ("403" in str(e) or "Resource not accessible" in str(e))
+
+
+def workflow_checks(run, repository, sha, workflow):
+    """[{conclusion, at}] of the latest run of the Actions workflow `workflow` at `sha`, one per job. The Actions API
+    needs no checks permission (#1424). No run yet is one pending entry."""
+    runs = [r for r in _lines(run(["api", "--paginate", f"repos/{repository}/actions/runs?head_sha={sha}&per_page=100",
+                                   "--jq", ".workflow_runs[]"])) if r.get("name") == workflow]
+    if not runs:
+        return [{"conclusion": None, "at": None, "name": None}]
+    latest = max(runs, key=lambda r: (r.get("run_number") or 0, r.get("id") or 0))
+    done = latest.get("status") == "completed"
+    jobs = _lines(run(["api", "--paginate", f"repos/{repository}/actions/runs/{latest['id']}/jobs?per_page=100",
+                       "--jq", ".jobs[]"]))
+    if not jobs:
+        return [{"conclusion": latest.get("conclusion") if done else None, "at": latest.get("updated_at"), "name": workflow}]
+    return [{"conclusion": j.get("conclusion") if done and j.get("status") == "completed" else None,
+             "at": j.get("completed_at"), "name": j.get("name"), "workflow": workflow} for j in jobs]
+
+
+def head_checks(run, repository, sha, names=None, branch=BASE_BRANCH, workflow=None):
     """[{conclusion, at}] of the project's CI at `sha`: GitHub's latest check run per name and commit status per
     context, conclusion None while one runs. The project's own checks count, whatever their workflow or app (#1207).
     Check runs of the factory's own workflows are not CI: a workflow_run wake of one runs at the PR head too.
     Only the names of `ci_names` count when there are any; a counted name with no result yet is pending.
-    A token that may not read check runs or commit statuses (HTTP 403, #1332, #1334) counts none of them when `names`
-    are given: a named check with no readable result stays pending, so it never reads green. Without `names` the
-    403 raises."""
+    A token that may not read check runs or commit statuses (HTTP 403, #1332, #1334; the Air app has neither
+    permission, #1424) counts none of them. With `workflow` (a GitHub Actions workflow), a check-runs 403 reads that
+    workflow's Actions runs instead. Else, with `names`, a named check with no readable result stays pending, so it
+    never reads green; without `names` a check-runs 403 raises. A commit-status 403 never raises: without `names`,
+    when nothing else shows a result, the CI reads `unknown`."""
     counted = ci_names(run, repository, names, branch)
 
-    def readable(read, empty):
+    def readable(read, empty, allowed):
         try:
             return read()
         except RuntimeError as e:
-            if not names or isinstance(e, RateLimited) or ("403" not in str(e) and "Resource not accessible" not in str(e)):
+            if not allowed or not forbidden(e):
                 raise
             return empty
-    raw = readable(lambda: _lines(run(["api", "--paginate", f"repos/{repository}/commits/{sha}/check-runs?per_page=100",
-                                       "--jq", ".check_runs[]"])), [])
+    runs, workflow_out = [], []
+    try:
+        raw = _lines(run(["api", "--paginate", f"repos/{repository}/commits/{sha}/check-runs?per_page=100",
+                          "--jq", ".check_runs[]"]))
+    except RuntimeError as e:
+        if not (names or workflow) or not forbidden(e):
+            raise
+        raw = []
+        if workflow:
+            workflow_out = workflow_checks(run, repository, sha, workflow)
     service = {r.get("check_suite_id") for r in _lines(run(["api", "--paginate", f"repos/{repository}/actions/runs?head_sha={sha}&per_page=100",
                                                             "--jq", ".workflow_runs[]"]))
                if (r.get("name") or "").startswith(SERVICE_WORKFLOW)} if raw else set()
     runs = [r for r in raw if (r.get("check_suite") or {}).get("id") not in service]
-    statuses = readable(lambda: json.loads(run(["api", f"repos/{repository}/commits/{sha}/status"])).get("statuses") or [], [])
+    statuses = readable(lambda: json.loads(run(["api", f"repos/{repository}/commits/{sha}/status"])).get("statuses") or [], None, True)
+    unreadable = statuses is None
+    statuses = statuses or []
     if counted is not None:
         runs = [r for r in runs if r.get("name") in counted]
         statuses = [s for s in statuses if s.get("context") in counted]
+    seen = {r.get("name") for r in runs} | {s.get("context") for s in statuses}
+    if counted is not None and workflow_out:
+        # a counted name is read from the workflow only when it is the workflow or one of its jobs; any other
+        # required name with no readable result stays pending (#1424)
+        seen |= {e.get("name") for e in workflow_out} | {workflow}
+        workflow_out = [e for e in workflow_out if e.get("name") is None or e["name"] in counted or workflow in counted]
     out = ([{"conclusion": r.get("conclusion") if r.get("status") == "completed" else None, "at": r.get("completed_at")}
             for r in runs]
            + [{"conclusion": None if s["state"] == "pending" else "success" if s["state"] == "success" else "failure",
-               "at": s.get("updated_at")} for s in statuses])
+               "at": s.get("updated_at")} for s in statuses]
+           + workflow_out)
     if counted is not None:
-        seen = {r.get("name") for r in runs} | {s.get("context") for s in statuses}
         out += [{"conclusion": None, "at": None} for _ in counted - seen]
+    out = [{k: v for k, v in e.items() if k in ("conclusion", "at")} for e in out]
+    if unreadable and not out and not names:
+        out = [{"conclusion": "unknown", "at": None}]
     return out
 
 
@@ -142,6 +192,8 @@ def head_ci(checks):
     at = max((c["at"] for c in checks if c.get("at")), default=None)
     if not done:
         return "none", at
+    if set(done) == {"unknown"}:
+        return "unknown", at
     if any(c in BAD_CI for c in done):
         return "red", at
     return ("green" if all(c in GOOD_CI for c in done) else "pending"), at
@@ -164,8 +216,8 @@ class GitHubCodeHost:
 
     live_pr_ticket = True  # a PR's ticket comes from a live lookup, never from its branch name or title
 
-    def __init__(self, repo, run=gh, ticket_repos=None, ci_checks=()):
-        self.repo, self.run, self.ci_checks = repo, run, list(ci_checks)
+    def __init__(self, repo, run=gh, ticket_repos=None, ci_checks=(), ci_workflow=None):
+        self.repo, self.run, self.ci_checks, self.ci_workflow = repo, run, list(ci_checks), ci_workflow
         self.ticket_repos = list(ticket_repos or [])  # ADR-0024: the repositories that hold tickets, the tracker first
 
     @classmethod
@@ -174,7 +226,7 @@ class GitHubCodeHost:
         tickets = tracker_repositories(c["tracker"])
         return cls((c.get("code_host") or {}).get("repository") or c["tracker"].get("repository") or tickets[0],
                    ProjectWriteRun(run, project_repositories(c), tokens=repository_tokens(c), checkouts=checked_out(c), issues_token_env=c.get("issues_token_env")), tickets,
-                   ci_checks_of(c))
+                   ci_checks_of(c), ci_workflow_of(c))
 
     @staticmethod
     def gate_tracker(c, tickets, run=gh):
@@ -220,7 +272,7 @@ class GitHubCodeHost:
 
     def head_checks(self, repository, sha):
         """[{conclusion, at}] of the CI at `sha` (`head_checks`)."""
-        return head_checks(self.run, repository, sha, self.ci_checks)
+        return head_checks(self.run, repository, sha, self.ci_checks, workflow=self.ci_workflow)
 
     def label_added_at(self, repository, number, label):
         """When `label` was last added to PR `number`, else None."""
@@ -451,8 +503,8 @@ class GitHubTicketStore:
         self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
 
     @in_ticket_repository
-    def close(self, n):
-        self.run(["issue", "close", str(n), "-R", self.repo])
+    def close(self, n, reason=None):
+        self.run(["issue", "close", str(n), "-R", self.repo, *(["--reason", reason] if reason else [])])
 
     def create_children(self, n, children, ready):
         """Per child: reuse an open issue of that title, then add each link that is missing (a retry converges)."""
@@ -585,7 +637,7 @@ class GitHubGateTracker(DescriptorPort):
             self.state_kinds = tuple(getattr(tickets, "state_kinds", self.state_kinds))
             self.command_kinds = (*getattr(tickets, "command_kinds", ("label",)), "pr_label")
             self.effects = (*type(self).effects, *getattr(tickets, "effects", ()))  # a later (kind, target) wins
-        self.ci_checks = []
+        self.ci_checks, self.ci_workflow = [], None
         self.risk_labels, self.fix_cap = risk_labels or {"low": "risk:low", "high": "risk:high"}, fix_cap
 
     @classmethod
@@ -635,7 +687,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def _with_ci(self, c):
         """`environments.<env>.ci.checks` of the run's environment: the names that count as CI."""
-        self.ci_checks = ci_checks_of(c)
+        self.ci_checks, self.ci_workflow = ci_checks_of(c), ci_workflow_of(c)
         return self
 
     def _with_writable(self, c):
@@ -674,7 +726,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def main_green(self):
         """CI at the current main head is green (`head_ci` of `head_checks`)."""
-        return head_ci(head_checks(self.run, self.repo, self._api("commits/HEAD")["sha"], self.ci_checks))[0] == "green"  # the default branch
+        return head_ci(head_checks(self.run, self.repo, self._api("commits/HEAD")["sha"], self.ci_checks, workflow=self.ci_workflow))[0] == "green"  # the default branch
 
     def sweep_tickets(self, stages, open_only=False, now=None):
         """Issue numbers whose stage label is one of `stages`: the open ones and, unless `open_only`, those closed in the
@@ -805,7 +857,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def _ci(self, sha):
         """CI at `sha`: the project's check runs and commit statuses, as `ci-sync` reads them (`head_ci`)."""
-        return head_ci(head_checks(self.run, self.pr_repo, sha, self.ci_checks))[0]
+        return head_ci(head_checks(self.run, self.pr_repo, sha, self.ci_checks, workflow=self.ci_workflow))[0]
 
     def _workflow_runs(self, sha, timeout=None):
         out = self.run(["api", "--paginate", f"repos/{self.pr_repo}/actions/runs?head_sha={sha}&per_page=100",
@@ -1156,7 +1208,7 @@ class GitHubGateTracker(DescriptorPort):
         n = e["ticket"]
         if self._issue_once(n, ctx)["state"] != "open":  # read before the close: the stage write reads its attrs
             return False
-        self.tickets.close(n)
+        self.tickets.close(n, reason=e["reason"]) if e.get("reason") else self.tickets.close(n)
         return True
 
     def _fx_stage(self, e, ctx):
