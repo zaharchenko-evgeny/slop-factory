@@ -4,6 +4,7 @@
 # dependencies = ["pyyaml>=6"]
 # ///
 """Tests for factory/factory_plugins/github/gate.py with a stubbed gh. Run: uv run factory/tests/test_gate_github.py"""
+import copy
 import json
 import os
 import re
@@ -21,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
 import project_mode  # noqa: E402
-cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"))
+cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/v2"))
 import gate  # noqa: E402
 from factory_plugins.github import gate as M_GH  # noqa: E402
 import gate_port as M_PORT  # noqa: E402
@@ -290,8 +291,60 @@ def review(author, body, commit="h1", state="COMMENTED", assoc="OWNER", at="2026
             "commit_id": commit, "state": state, "author_association": assoc, "submitted_at": at}
 
 
+REQUIRED = {"low": ["full"], "high": ["full", "structure-security"]}  # the v1 review focuses; a v2 tracker has none
+
+
+def tracker_of(*args, **kw):
+    """A tracker whose round facts read the v1 focuses: a v2 tracker has none (its reviews are the review-<risk> nodes)."""
+    t = GitHubGateTracker(*args, **kw)
+    t.required = REQUIRED
+    return t
+
+
 def tr(gh):
-    return GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh)
+    return tracker_of(REPO, STAGES, BOT, fix_cap=3, run=gh)
+
+
+def legacy_graph():
+    """The v2 graph plus the nodes `gate.sweep` and `definition.plan` still decide with: `start`, `join`, `reopen`, and
+    the `finish` and `merge` outcomes they name. A v2 team has none of them (its steps are the nodes' own triggers)."""
+    graph = copy.deepcopy(nodes.load())
+    n = graph["nodes"]
+    n["start"] = {"env": "engine", "triggers": [], "when": {"stage": "ready", "blockers": "closed"}, "role": "clerk",
+                  "tier": "luna", "output": "read-only", "outcomes": {
+                      "started": {"from": ["ready"], "effects": [{"label": "factory:implement-<tier>"}, {"stage": "in-dev"}]}}}
+    n["join"] = {"env": "engine", "triggers": [], "when": {"stage": "in-review", "ci": ["green", "red"]}, "role": "clerk",
+                 "tier": "luna", "output": "read-only", "ci-independent": True, "outcomes": {
+                     "changes": {"effects": [{"label": "factory:fix-<tier>", "on": "pr"},
+                                             {"unlabel": "factory:project-review", "on": "pr"}, {"stage": "changes-requested"}]},
+                     "approved": {"ci": ["green"], "else": "changes", "effects": [
+                         {"stage": "approved"}, {"ready-for-review": "pr"}, {"label": "factory:project-review", "on": "pr"}]},
+                     "waiting": {"from": ["in-review"], "effects": [{"join": "all-approve"}]}}}
+    n["reopen"] = {"env": "engine", "triggers": [], "when": {"stage": "approved"}, "role": "clerk", "tier": "luna",
+                   "output": "read-only", "ci-independent": True, "outcomes": {
+                       "reopened": {"from": ["approved"], "effects": [{"stage": "in-review"}]}}}
+    finish = n["finish"]["outcomes"]
+    finish["merged"] = finish["done"]
+    finish["answered"] = {"from": ["needs-answers"], "effects": [{"stage": "triage"}]}
+    finish["child-blocked"] = {"from": ["split"], "effects": [{"comment": "reason"}, {"stage": "blocked"}]}
+    finish["conflict"] = {"from": ["approved"], "effects": [{"label": "factory:update", "on": "pr"}, {"stage": "changes-requested"}]}
+    n["merge"]["outcomes"]["updated"] = {"from": ["approved"], "effects": [{"update-branch": "match-head"}]}
+    return graph
+
+
+class V1Commands:
+    """vocab with the v1 command labels (`implement-<tier>`, `fix-<tier>`, `update-<tier>`) that `join`, the run count and the
+    stale facts still read and write: a v2 team declares `implement-small`, `fix` and `update` instead."""
+    def __enter__(self):
+        import vocab
+        real = vocab._tracker()
+        extra = {"implement-<tier>": {"label": "factory:implement-<tier>"}, "fix-<tier>": {"pr_label": "factory:fix-<tier>"}, "update-<tier>": {"pr_label": "factory:update-<tier>"}}
+        self.patch = patch.object(vocab, "_tracker", lambda: {**real, "commands": {**real["commands"], **extra}})
+        self.patch.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.patch.stop()
 
 
 def eff(kind, value, **kw):
@@ -584,7 +637,7 @@ class EffectsTest(unittest.TestCase):
     def test_descriptor_states_and_commands(self):
         import project
         gh = FakeGh()
-        t = GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh,
+        t = tracker_of(REPO, STAGES, BOT, fix_cap=3, run=gh,
                               project=project.load(Path(__file__).resolve().parent / "fixtures/project"))
         self.assertTrue(t.set_state(7, "ready"))
         self.assertEqual(sorted(gh.labels), ["factory:ready", "risk:low"])
@@ -704,7 +757,7 @@ class EffectsTest(unittest.TestCase):
                     return json.dumps({**json.loads(out), "body": body, "user": {"login": BOT, "type": "Bot"},
                                        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-03T00:00:00Z"})
                 return out
-        self.assertEqual(GitHubGateTracker(REPO, STAGES, BOT, run=G()).facts(7)["agent_notes"], [notes])
+        self.assertEqual(tracker_of(REPO, STAGES, BOT, run=G()).facts(7)["agent_notes"], [notes])
 
     def test_agent_notes_secret_is_stripped(self):
         key = "ghp_" + "a1B2" * 6
@@ -763,10 +816,11 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(tr(gh).facts(7)["reviews"][0]["verdict"], "changes")
 
     def test_review_apply_adds_no_fix_label(self):
-        out = nodes.load()["nodes"]["review"]["outcomes"]
-        for o in out.values():
-            self.assertNotIn("join", [k for e in o["effects"] for k in e])
-            self.assertFalse(any("fix" in str(v) for e in o["effects"] for v in e.values()))
+        for name in ("review-low", "review-high"):
+            for outcome, o in nodes.load()["nodes"][name]["outcomes"].items():  # v2: no join; `changes` itself starts the fix
+                self.assertNotIn("join", [k for e in o["effects"] for k in e])
+                fix = any(e.get("label") == "factory:fix" for e in o["effects"])
+                self.assertEqual(fix, outcome == "changes", (name, outcome))
 
     def test_verdict_from_marker_or_state(self):
         c = "<!-- factory:review focus=full round=1 verdict=changes -->"
@@ -794,7 +848,7 @@ class EffectsTest(unittest.TestCase):
                 return json.dumps({"parents": [{"sha": "p1"}]})
             raise AssertionError(args)
         with patch("factory_plugins.github.gate.deploy_plan_at", return_value={"automations": [], "environments": [], "labels": [], "files": {}}):
-            GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
+            tracker_of(REPO, STAGES, BOT, run=run).config_change_merged(300)
         self.assertEqual(len(calls), 2)
 
     def test_on_the_fly_label_color(self):
@@ -817,7 +871,7 @@ class EffectsTest(unittest.TestCase):
         after = {"automations": [], "environments": [], "labels": ["factory:mapped", "team:unmapped"], "files": {},
                  "label_specs": {"factory:mapped": {"color": "0e8a16"}}}
         with patch("factory_plugins.github.gate.deploy_plan_at", side_effect=[before, after]):
-            GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
+            tracker_of(REPO, STAGES, BOT, run=run).config_change_merged(300)
         colors = {c[c.index("-f") + 1][5:]: c[c.index("-f") + 3][6:] for c in calls
                   if "-f" in c and c[c.index("-f") + 1].startswith("name=")}
         self.assertEqual(colors["factory:mapped"], "0e8a16")
@@ -842,7 +896,7 @@ class EffectsTest(unittest.TestCase):
         before = {"automations": [], "environments": [], "labels": [], "files": {}}
         after = {"automations": [{"name": "new"}], "environments": [], "labels": ["factory:new"], "files": {}}
         with patch("factory_plugins.github.gate.deploy_plan_at", side_effect=[before, after]):
-            GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
+            tracker_of(REPO, STAGES, BOT, run=run).config_change_merged(300)
         self.assertTrue(any("repos/o/r/labels" in c and "name=factory:new" in c and "color=ededed" not in c for c in calls))
         self.assertTrue(any(c[:2] == ["issue", "create"] and "Deploy needed" in c for c in calls))
         create = next(c for c in calls if c[:2] == ["issue", "create"])
@@ -851,7 +905,7 @@ class EffectsTest(unittest.TestCase):
         self.assertTrue(body.endswith("Factory-Run: finish:300"))
 
     def test_nodes_yaml_on_pr_reaches_the_effect(self):
-        n = nodes.load()["nodes"]["join"]["outcomes"]["changes"]["effects"][0]
+        n = nodes.load()["nodes"]["merge"]["outcomes"]["conflict"]["effects"][0]  # {"unlabel": "factory:merge", "on": "pr"}
         self.assertEqual(gate.resolve(n, {"tier": "mid"}, 7)["on"], "pr")
 
     def test_comment_trailer(self):
@@ -913,7 +967,7 @@ class EffectsTest(unittest.TestCase):
                 return ""
 
         gh = Gh(labels=("factory:split", "risk:low"), sub=sub)
-        return GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh, repositories={"primary": None, "web": "o/web"}), gh, web_log
+        return tracker_of(REPO, STAGES, BOT, fix_cap=3, run=gh, repositories={"primary": None, "web": "o/web"}), gh, web_log
 
     def test_create_children_in_the_repository_the_child_names(self):
         kids = [{"title": "Api", "body": "a"}, {"title": "Web", "body": "w", "repo": "web", "after": [1]}]
@@ -1057,7 +1111,7 @@ class EffectsTest(unittest.TestCase):
                 gh.open_issues = [{"id": 11, "number": 11, "title": "A", "body": "scope A\n\n<!-- factory:child of=7 -->",
                                    "labels": [{"name": "risk:low"}, {"name": f"{prefix}draft"}, {"name": "other:draft"},
                                               {"name": "factory:draft" if prefix == "slop:" else "slop:draft"}]}]
-                tracker = GitHubGateTracker(REPO, {n: f"{prefix}{n}" for n in STAGES}, BOT, fix_cap=3, run=gh)
+                tracker = tracker_of(REPO, {n: f"{prefix}{n}" for n in STAGES}, BOT, fix_cap=3, run=gh)
                 self.assertTrue(tracker.apply(eff("create-issues", [{"title": "A", "body": "scope A"}])))
                 deleted = [w[-1].rsplit("/labels/", 1)[1] for w in gh.writes if "DELETE" in w]
                 self.assertEqual([d for d in deleted if d.endswith(":draft")], dropped)
@@ -1174,6 +1228,9 @@ def join(gh, **kw):
 
 
 class JoinTest(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(V1Commands())
+
     def arrive(self, order, human_state, agent_body):
         """Reviews arrive one by one; alice is requested until her review. Returns the joined gh."""
         gh = FakeGh()
@@ -1226,7 +1283,7 @@ class JoinTest(unittest.TestCase):
         gh = FakeGh(reviews=[review(BOT, M), bot, review(BOT, "no marker", state="CHANGES_REQUESTED")])
         f = tr(gh).facts(7)
         self.assertEqual((f["round_verdict"], f["ignored_reviews"]), ("approve", ["other[bot]", BOT]))
-        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, trusted_bots=["other[bot]"])
+        t = tracker_of(REPO, STAGES, BOT, run=gh, trusted_bots=["other[bot]"])
         self.assertEqual(t.facts(7)["round_verdict"], "changes")
 
     def test_person_change_request_starts_fix(self):
@@ -1259,10 +1316,10 @@ class JoinTest(unittest.TestCase):
         self.assertIn("factory:fix-mid", gh.writes[0])
 
     def test_update_resolved_removes_label(self):
-        gh = FakeGh(labels=["factory:changes-requested", "risk:low", "factory:update-cheap"])
+        gh = FakeGh(labels=["factory:changes-requested", "risk:low", "factory:update"])
         code, out = gate.apply("update", "resolved", {"ticket": 7, "event": "e"}, tr(gh), nodes.load())
         self.assertEqual((code, out["applied"]), (gate.GO, True))
-        self.assertTrue(any("--remove-label" in w and "factory:update-cheap" in w for w in gh.writes))
+        self.assertTrue(any("--remove-label" in w and "factory:update" in w for w in gh.writes))
 
     def test_ready_for_review_marks_a_draft_pr_ready_once(self):  # #1261
         gh = FakeGh()
@@ -1415,7 +1472,7 @@ class JoinTest(unittest.TestCase):
                              review("alice", "looking", state="COMMENTED", at="2026-01-02T05:00:00Z")])
         gh.fix_events, gh.requested = ["2026-01-02T02:05:00Z"], []
         gh.head_date = "2026-01-02T02:50:00Z"  # the fix pushed this head after its label
-        res, _ = gate.sweep(tr(gh), nodes.load())
+        res, _ = gate.sweep(tr(gh), legacy_graph())
         self.assertEqual([(r["node"], r["outcome"]) for r in res], [("join", "waiting")])
         self.assertTrue(any("reviewers[]=alice" in " ".join(w) for w in gh.writes))
         self.assertIn("factory:in-review", gh.labels)  # nothing moved
@@ -1426,7 +1483,7 @@ class JoinTest(unittest.TestCase):
         gh = FakeGh(reviews=[bot, review(BOT, M, at="2026-01-02T04:00:00Z")])
         gh.fix_events = ["2026-01-02T02:05:00Z"]
         gh.head_date = "2026-01-02T02:50:00Z"  # the fix pushed this head after its label
-        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, trusted_bots=["rev[bot]"])
+        t = tracker_of(REPO, STAGES, BOT, run=gh, trusted_bots=["rev[bot]"])
         f = t.facts(7)
         self.assertEqual((f["round_complete"], f["waiting_reviewers"], f["round_verdict"]), (True, [], "approve"))
 
@@ -1438,13 +1495,13 @@ class JoinTest(unittest.TestCase):
                     return "\n".join([ev("factory:implement-cheap", "2026-01-01T00:00:00Z")] * 8
                                       + [ev("factory:ready", "2026-01-02T00:00:00Z"), ev("factory:implement-mid", "2026-01-02T01:00:00Z")])
                 return FakeGh.__call__(self, args)
-        f = GitHubGateTracker(REPO, STAGES, BOT, run=G(), run_cap=8).facts(7)
+        f = tracker_of(REPO, STAGES, BOT, run=G(), run_cap=8).facts(7)
         self.assertEqual(f["agent_runs"], 1)  # a person's ready starts a fresh budget
 
     def test_join_at_the_run_cap_blocks_instead_of_starting_a_fix(self):
         # review of PR #198, B1: the reviewer's own join adds the fix label, so the cap must hold there too
         gh = FakeGh(reviews=[review(BOT, C)])
-        t = GitHubGateTracker(REPO, STAGES, BOT, run=gh, run_cap=0)
+        t = tracker_of(REPO, STAGES, BOT, run=gh, run_cap=0)
         t.apply({"ticket": 7, "kind": "join", "value": "all-approve", "tier": "mid"})
         self.assertIn("factory:blocked", gh.labels)
         self.assertFalse(any("factory:fix-" in x for x in gh.labels))
@@ -1459,7 +1516,7 @@ class JoinTest(unittest.TestCase):
         self.assertIsNone(gate.join_decision(f))
         self.assertEqual(join(gh), (False, 0))
         gh.labels = ["factory:changes-requested", "risk:low"]
-        self.assertEqual(gate.check("fix", {"id": "e", "ticket": 7}, tr(gh), nodes.load(), CONFIG)[0], gate.GO)
+        self.assertEqual(gate.check("fix", {"id": "e", "ticket": 7}, tr(gh), legacy_graph(), CONFIG)[0], gate.GO)
 
 
     def test_fix_rounds_count_heads_not_reviewers(self):
@@ -1560,8 +1617,11 @@ class JoinTest(unittest.TestCase):
 
 
 class SweepTest(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(V1Commands())
+
     def run_sweep(self, gh, dry=False):
-        return gate.sweep(tr(gh), nodes.load(), dry)
+        return gate.sweep(tr(gh), legacy_graph(), dry)
 
     def test_merged_pr_walks_approved_to_done_in_one_run(self):
         gh = FakeGh(labels=["factory:approved", "risk:low"], reviews=[review(BOT, M)])
@@ -1640,7 +1700,7 @@ class SweepTest(unittest.TestCase):
         gh.blocked, gh.issue_body = [], "Blocked by: #12\n\nSecond slice"
         gh.open_issues = [{"number": 7, "state": "open", "body": gh.issue_body}]
         gh.blocker_state = "closed"
-        results, failed = gate.sweep(tr(gh), nodes.load(), closed_ticket=12)
+        results, failed = gate.sweep(tr(gh), legacy_graph(), closed_ticket=12)
         self.assertFalse(failed)
         self.assertEqual([(r["ticket"], r["outcome"]) for r in results], [(7, "started")])
         self.assertIn("factory:implement-mid", gh.labels)
@@ -1651,7 +1711,7 @@ class SweepTest(unittest.TestCase):
         self.assertEqual([(r["node"], r["outcome"]) for r in res], [("join", "approved")])
         self.assertEqual(sorted(gh.labels), ["factory:approved", "factory:project-review", "risk:low"])
         with self.assertRaises(gate.Bad):
-            gate.apply("sweep", "conflict", {"ticket": 7}, tr(gh), nodes.load())
+            gate.apply("sweep", "conflict", {"ticket": 7}, tr(gh), legacy_graph())
 
     def test_pr_state_condition(self):
         self.assertTrue(gate.holds({"pr-state": "merged"}, {"pr_state": "merged"}, {}))
@@ -1701,7 +1761,7 @@ class ResumeTest(unittest.TestCase):
         t, n = tr(gh), nodes.load()
         code, out = gate.check("intake", {"id": "e1", "ticket": 7}, t, n, CONFIG)
         self.assertEqual(code, 0, out)
-        code, out = gate.apply("intake", "proceed", {"ticket": 7, "complexity": "small", "risk": "low"}, t, n)
+        code, out = gate.apply("intake", "small-low", {"ticket": 7}, t, n)
         self.assertEqual(code, 0, out)
         self.assertEqual(sorted(x for x in gh.labels if x in STAGES.values()), ["factory:ready"])
         self.assertIn("complexity:small", gh.labels)
@@ -1720,9 +1780,9 @@ class GateTest(unittest.TestCase):
     def test_duplicate_event_caught_by_stage(self):
         gh, nd = FakeGh(labels=["factory:in-dev"]), nodes.load()
         payload = {"ticket": 7, "event": "e1"}
-        self.assertEqual(gate.apply("implement", "done", payload, tr(gh), nd)[0], gate.GO)
+        self.assertEqual(gate.apply("implement-small", "done-low", payload, tr(gh), nd)[0], gate.GO)
         writes = len(gh.writes)  # the stage change and, with CI green, the reviewer wake labels
-        code, out = gate.apply("implement", "done", payload, tr(gh), nd)
+        code, out = gate.apply("implement-small", "done-low", payload, tr(gh), nd)
         self.assertEqual((code, out["applied"]), (gate.NO_GO, False))
         self.assertEqual(len(gh.writes), writes)
 
@@ -1747,7 +1807,7 @@ class GateTest(unittest.TestCase):
             ev.write_text('{"id":"e1","ticket":7}')
             p = subprocess.run([sys.executable, str(ROOT / "factory/gate.py"), "check", "--node", "intake", "--event", str(ev),
                                 "--tracker", "github"], capture_output=True, text=True, env={**os.environ, "FACTORY_GH": str(stub),
-                                                              "FACTORY_TEAM": str(ROOT / "factory/tests/fixtures/team")})
+                                                              "FACTORY_TEAM": str(ROOT / "factory/tests/fixtures/v2")})
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertEqual(json.loads(p.stdout)["context"]["stage"], "triage")
 
@@ -1770,6 +1830,9 @@ class SweepCallCountTest(unittest.TestCase):
 
 
 class StaleFactsTest(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(V1Commands())
+
     def test_update_command_reaches_stale_planner(self):
         gh = FakeGh(labels=("factory:changes-requested", "risk:low", "factory:update-cheap"))
         gh.head_date = "2026-11-01T09:00:00Z"
@@ -1834,7 +1897,7 @@ class SeparateCodeHostTest(unittest.TestCase):
             out = gh([x.replace("repos/c/h/", f"repos/{REPO}/").replace("c/h", REPO) for x in args], timeout)
             return out.replace(f'"full_name": "{REPO}"', '"full_name": "c/h"')  # the PR branch lives in the code host
 
-        t = GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=run, pr_repo="c/h")
+        t = tracker_of(REPO, STAGES, BOT, fix_cap=3, run=run, pr_repo="c/h")
         t.facts(7)
         t.apply(eff("label", "factory:needs-human", on="pr"))
         t.apply(eff("stage", "approved"))
@@ -1893,7 +1956,7 @@ class TwoRepositoryGh(FakeGh):
 
 class TwoRepositoryFactsTest(unittest.TestCase):
     def tracker(self, gh):
-        return GitHubGateTracker(REPO, STAGES, BOT, fix_cap=3, run=gh,
+        return tracker_of(REPO, STAGES, BOT, fix_cap=3, run=gh,
                                  repositories={"primary": REPO, "other": TwoRepositoryGh.OTHER})
 
     def test_both_prs_approved_at_their_heads(self):
@@ -2013,7 +2076,7 @@ class TwoRepositoryFactsTest(unittest.TestCase):
             return run
         for conclusions, want in ((["success", "skipped"], True), (["success", "failure"], False), (["success", None], False), ([], False)):
             with self.subTest(conclusions=conclusions):
-                self.assertEqual(GitHubGateTracker(REPO, STAGES, BOT, run=gh(conclusions)).main_green(), want)
+                self.assertEqual(tracker_of(REPO, STAGES, BOT, run=gh(conclusions)).main_green(), want)
 
 
 class StoreGh(FakeGh):
@@ -2395,7 +2458,7 @@ class DeployPlanAssigneeTest(unittest.TestCase):
         after = {"automations": [{"name": "new"}], "environments": [], "labels": ["factory:new"], "files": {}}
         with patch("factory_plugins.github.gate.deploy_plan_at", side_effect=[before, after]), \
                 patch("config.owner", return_value=owner):
-            GitHubGateTracker(REPO, STAGES, BOT, run=run).config_change_merged(300)
+            tracker_of(REPO, STAGES, BOT, run=run).config_change_merged(300)
         call = next(c for c in calls if c[:2] == ["issue", "edit" if existing else "create"])
         flag = flag or ("--add-assignee" if existing else "--assignee")
         return [call[i + 1] for i, a in enumerate(call) if a == flag]

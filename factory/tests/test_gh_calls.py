@@ -45,7 +45,7 @@ BASELINE = {
     "apply join": 19,
     "apply merge": 9,
     "apply merge two repositories": 17,
-    "outcome reviewer approve": 29,
+    "outcome reviewer approve": 33,  # #1394: the v2 `review-low` approve also unlabels, labels automerge and sets the stage (was 29)
     "outcome fix done": 22,
     "sweep in-review": 54,
     "sweep approved dry": 18,
@@ -131,10 +131,10 @@ STEPS = {
     "apply merge": lambda: apply(approved(), eff("merge", "match-head", head="h1")),
     "apply merge two repositories": lambda: apply(TwoRepositoryGh(), eff("merge", "match-head", heads={"primary": "h1", "other": "h9"}),
                                                   tracker=two_repos),
-    "outcome reviewer approve": lambda: outcome(FakeGh(), "review", "approve",
+    "outcome reviewer approve": lambda: outcome(FakeGh(), "review-low", "approve",
                                                 {"focus": "full", "summary": "ok", "findings": [], "run_id": "r"}),
     "outcome fix done": lambda: outcome(FakeGh(labels=["factory:changes-requested", "risk:low", "factory:fix-mid"],
-                                               reviews=[review(BOT, C)]), "fix", "done", {"run_id": "r"}),
+                                               reviews=[review(BOT, C)]), "fix", "done-low", {"run_id": "r"}),
     "sweep in-review": lambda: sweep(in_review()),
     "sweep approved dry": lambda: sweep(approved(), dry=True),
 }

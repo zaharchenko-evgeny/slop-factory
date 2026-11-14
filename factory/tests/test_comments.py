@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 import config as cfg  # noqa: E402
 import project_mode  # noqa: E402
-cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/team"))
+cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/v2"))
 import definition  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402
@@ -130,6 +130,18 @@ class DefinitionModuleTest(unittest.TestCase):
 
 class GateModuleTest(unittest.TestCase):
     """The gate refuses the plugin's guard, effects and `ask` while the plugin is off."""
+
+    def setUp(self):  # the v2 fixture turns the plugin on: run against a copy with it off
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        shutil.copytree(FIXTURES / "v2", self.tmp / "team")
+        path = self.tmp / "team" / definition.FACTORY
+        factory = yaml.safe_load(path.read_text())
+        del factory["plugins"]
+        path.write_text(yaml.safe_dump(factory, sort_keys=False))
+        before = cfg._team
+        self.addCleanup(cfg.set_team, before)
+        cfg.set_team(self.tmp / "team")
 
     def graph(self):
         graph = copy.deepcopy(nodes.load())

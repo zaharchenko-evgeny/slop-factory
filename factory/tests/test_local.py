@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/factory_plugins/local/surface.py, the local target. Run: uv run factory/tests/test_local.py"""
 import base64
@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 import yaml
 from pathlib import Path
@@ -27,14 +28,16 @@ from factory_plugins.local import surface as local  # noqa: E402
 import nodes  # noqa: E402
 import plugins  # noqa: E402
 
-FIXTURE = ROOT / "factory/tests/fixtures/team"
+FIXTURE = ROOT / "factory/tests/fixtures/v2"
 URL = "https://github.com/zaharchenko-evgeny/slop-factory"
+ORIGINS = {"slop-factory": URL, "slop-eval-factory": "https://github.com/zaharchenko-evgeny/slop-eval-factory"}  # the fixture's repositories
+TOOLS = ("claude", "gh", "factory")  # the compiled v2 config names no harness: every role runs in claude-code
 
 
 class Machine:
     """The laptop: which CLIs are on PATH, whether `gh` is logged in, and each checkout's origin."""
 
-    def __init__(self, tools=("claude", "gh", "factory"), logged_in=True, origins=None):
+    def __init__(self, tools=TOOLS, logged_in=True, origins=None):
         self.tools, self.logged_in, self.origins, self.calls = set(tools), logged_in, origins or {}, []
 
     def which(self, name):
@@ -71,59 +74,60 @@ class LocalDeployTest(unittest.TestCase):
             code = local.deploy(list(argv), run=machine.run, which=machine.which)
         return code, out.getvalue()
 
+    def role_config(self, role, **keys):
+        """The loaded config with `keys` set on `role` (the compiled v2 config has no role `harness` or `mcp`)."""
+        real = cfg.load
+
+        def load():
+            config = real()
+            config["roles"] = {**config["roles"], role: {**config["roles"][role], **keys}}
+            return config
+        return unittest.mock.patch.object(cfg, "load", load)
+
     def test_missing_harness_is_named(self):
-        code, out = self.deploy(Machine(tools=("gh", "factory"), origins={"slop-factory": URL}))
+        code, out = self.deploy(Machine(tools=("gh", "factory"), origins=ORIGINS))
         self.assertEqual(code, 1)
         self.assertIn("missing harness: `claude` (claude-code) is not on PATH", out)
 
     def test_every_role_harness_is_checked(self):
-        path = self.team / "factory.descriptor.yaml"
-        d = yaml.safe_load(path.read_text())
-        d["roles"]["reviewer"]["harness"] = "junie"
-        path.write_text(yaml.safe_dump(d))
-        code, out = self.deploy(Machine(tools=("gh", "factory", "claude"), origins={"slop-factory": URL}))
+        with self.role_config("reviewer", harness="junie"):
+            code, out = self.deploy(Machine(origins=ORIGINS))
         self.assertEqual(code, 1)
         self.assertIn("missing harness: `junie` (junie) is not on PATH", out)
         self.assertNotIn("`claude`", out)
 
     def test_an_unknown_harness_is_missing_with_the_known_ones(self):
-        path = self.team / "factory.descriptor.yaml"
-        d = yaml.safe_load(path.read_text())
-        d["roles"]["reviewer"]["harness"] = "aider"
-        path.write_text(yaml.safe_dump(d))
-        code, out = self.deploy(Machine(origins={"slop-factory": URL}))
+        with self.role_config("reviewer", harness="aider"):
+            code, out = self.deploy(Machine(origins=ORIGINS))
         self.assertEqual(code, 1)
         self.assertIn("missing harness: unknown-agent: harness: aider: no selected plugin provides this agent", out)
 
     def test_gh_not_logged_in_refuses(self):
-        code, out = self.deploy(Machine(logged_in=False, origins={"slop-factory": URL}))
+        code, out = self.deploy(Machine(logged_in=False, origins=ORIGINS))
         self.assertEqual(code, 1)
         self.assertIn("missing gh: not logged in", out)
 
     def test_a_checkout_with_another_origin_is_missing(self):
-        code, out = self.deploy(Machine(origins={"slop-factory": "git@github.com:someone/else.git"}))
+        code, out = self.deploy(Machine(origins={**ORIGINS, "slop-factory": "git@github.com:someone/else.git"}))
         self.assertEqual(code, 1)
         self.assertIn(f"missing checkout: slop-factory at {self.base / 'slop-factory'}", out)
 
     def test_apply_records_the_laptop(self):
-        code, out = self.deploy(Machine(origins={"slop-factory": "git@github.com:zaharchenko-evgeny/slop-factory.git"}), "--apply")
+        code, out = self.deploy(Machine(origins={**ORIGINS, "slop-factory": "git@github.com:zaharchenko-evgeny/slop-factory.git"}), "--apply")
         self.assertEqual(code, 0, out)
         state = json.loads((Path(self.tmp.name) / ".factory/local.json").read_text())
         self.assertEqual((state["harnesses"], state["login"]), (["claude-code"], "alice"))
-        self.assertEqual(state["checkouts"], {"slop-factory": str(self.base / "slop-factory")})
-        self.assertIn("implement-mid", state["automations"])
+        self.assertEqual(state["checkouts"], {name: str(self.base / name) for name in ORIGINS})
+        self.assertIn("implement-medium", state["automations"])
 
     def test_role_connectors_are_warned_as_not_provided(self):
-        path = self.team / "factory.descriptor.yaml"
-        d = yaml.safe_load(path.read_text())
-        d["roles"]["developer"]["mcp"] = ["youtrack"]
-        path.write_text(yaml.safe_dump(d))
-        code, out = self.deploy(Machine(origins={"slop-factory": URL}))
+        with self.role_config("developer", mcp=["youtrack"]):
+            code, out = self.deploy(Machine(origins=ORIGINS))
         self.assertEqual(code, 0, out)
         self.assertIn("warning: role developer: MCP connectors not provided locally: youtrack", out)
 
     def test_dry_run_writes_nothing(self):
-        code, _ = self.deploy(Machine(origins={"slop-factory": URL}))
+        code, _ = self.deploy(Machine(origins=ORIGINS))
         self.assertEqual(code, 0)
         self.assertFalse((Path(self.tmp.name) / ".factory/local.json").exists())
 
@@ -155,7 +159,7 @@ class PlanLocalTest(unittest.TestCase):
             names = {p["automation"] for p in local.plan_local(nodes.load(), cfg.load())}
         finally:
             cfg.set_team(before)
-        self.assertTrue({"intake", "implement-mid", "review-full", "finish"} <= names, names)
+        self.assertTrue({"intake", "implement-medium", "review-high", "finish"} <= names, names)
 
     def test_same_repository(self):
         self.assertTrue(local.same_repository(URL, "git@github.com:zaharchenko-evgeny/slop-factory.git\n"))
@@ -245,6 +249,16 @@ class RunLocalTest(unittest.TestCase):
         cfg.set_team(FIXTURE)
         os.chdir(self.tmp.name)
         self.addCleanup(lambda: (cfg.set_team(before), os.chdir(cwd)))
+        # the compiled v2 config has no model aliases for the local target: give each tier one
+        real = cfg.load
+        load = lambda: {**real(), "targets": {**real()["targets"], "local": {"models": {t: "anthropic/claude-x" for t in ("luna", "sonnet", "sol")}}}}
+        models = unittest.mock.patch.object(cfg, "load", load)
+        models.start()
+        self.addCleanup(models.stop)
+        # no run checkouts under the workspace: the tracker's `gh` calls run through the test's runner, as on a laptop
+        env = unittest.mock.patch.dict(os.environ, {"FACTORY_WORKSPACES": self.tmp.name})
+        env.start()
+        self.addCleanup(env.stop)
         Path(".factory").mkdir()
         Path(".factory/local.json").write_text(json.dumps(
             {"harness": "claude-code", "factory": str(FIXTURE), "checkouts": {"slop-factory": str(Path(self.tmp.name))}}))
@@ -256,30 +270,30 @@ class RunLocalTest(unittest.TestCase):
         return code, [json.loads(x) for x in out.getvalue().splitlines()]
 
     def test_implement_label_runs_begin_harness_push_and_pr_then_never_again(self):
-        gh = GitHub(issues={"factory:implement-mid": [{"number": 7}]})
+        gh = GitHub(issues={"factory:implement-medium": [{"number": 7}]})
         code, out = self.run_local(gh)
-        self.assertEqual((code, out), (0, [{"ran": "implement-mid", "event": "labeled:107", "result": "pushed"}]))
+        self.assertEqual((code, out), (0, [{"ran": "implement-medium", "event": "labeled:107", "result": "pushed"}]))
         kinds = [k for k in gh.kinds() if k in ("begin", "harness", "push", "pr-create")]
         self.assertEqual(kinds, ["begin", "harness", "push", "pr-create"])
         harness = next(a for k, a in gh.calls if k == "harness")
         self.assertIn("acceptEdits", harness)
-        self.assertIn("`factory begin implement-mid --issue <the issue number>`", harness[2])  # the Air prompt
+        self.assertIn("`factory begin implement-medium --issue <the issue number>`", harness[2])  # the Air prompt
         self.assertIn(["-B", "ez/7-add-x"], [a[a.index("-B"):a.index("-B") + 2] for k, a in gh.calls if k == "checkout" and "-B" in a])
         create = next(a for k, a in gh.calls if k == "pr-create")
         self.assertEqual(create[create.index("--head") + 1], "ez/7-add-x")
-        again = GitHub(issues={"factory:implement-mid": [{"number": 7}]})
+        again = GitHub(issues={"factory:implement-medium": [{"number": 7}]})
         self.assertEqual(self.run_local(again), (0, []))
         self.assertNotIn("begin", again.kinds())
 
     def test_no_go_runs_no_harness(self):
-        gh = GitHub(issues={"factory:implement-mid": [{"number": 7}]}, begin_code=10)
+        gh = GitHub(issues={"factory:implement-medium": [{"number": 7}]}, begin_code=10)
         self.assertEqual(self.run_local(gh)[1][0]["result"], "no-go")
         self.assertNotIn("harness", gh.kinds())
 
     def test_a_review_runs_read_only_in_a_detached_worktree_and_pushes_nothing(self):
-        gh = GitHub(prs={"factory:review-full": [{"number": 5, "headRefName": "ez/7-add-x"}]})
+        gh = GitHub(prs={"factory:review-low": [{"number": 5, "headRefName": "ez/7-add-x"}]})
         code, out = self.run_local(gh)
-        self.assertEqual(out, [{"ran": "review-full", "event": "labeled:105", "result": "ran"}])
+        self.assertEqual(out, [{"ran": "review-low", "event": "labeled:105", "result": "ran"}])
         self.assertNotIn("push", gh.kinds())
         self.assertNotIn("acceptEdits", next(a for k, a in gh.calls if k == "harness"))
         self.assertTrue(all("--detach" in a for k, a in gh.calls if k == "checkout"))
@@ -308,14 +322,14 @@ class RunLocalTest(unittest.TestCase):
             self.assertEqual(argv.count("PROMPT"), 1)
 
     def test_a_failed_push_is_reported_and_opens_no_pr(self):
-        gh = GitHub(issues={"factory:implement-mid": [{"number": 7}]}, push_code=1)
+        gh = GitHub(issues={"factory:implement-medium": [{"number": 7}]}, push_code=1)
         self.assertTrue(self.run_local(gh)[1][0]["result"].startswith("push failed: rejected"))
         self.assertNotIn("pr-create", gh.kinds())
 
     def test_a_failed_begin_is_tried_again_up_to_three_runs(self):
         results = []
         for _ in range(4):
-            results += [o["result"][:12] for o in self.run_local(GitHub(issues={"factory:implement-mid": [{"number": 7}]}, begin_code=2))[1]]
+            results += [o["result"][:12] for o in self.run_local(GitHub(issues={"factory:implement-medium": [{"number": 7}]}, begin_code=2))[1]]
         self.assertEqual(results, ["begin failed"] * 3)
 
     def test_github_down_fails_the_poll_and_records_nothing(self):
@@ -327,13 +341,20 @@ class RunLocalTest(unittest.TestCase):
         old = {"number": 4, "headRefName": "ez/6-old", "headRefOid": "h0"}
         self.assertEqual(self.run_local(GitHub(merged=[old])), (0, []))
         gh = GitHub(merged=[old, {"number": 5, "headRefName": "ez/7-add-x", "headRefOid": "h1"}])
-        code, out = self.run_local(gh)
+        load = nodes.load
+
+        def scripted(path=None):  # v2's finish is a `clerk` agent (`run: decide`); the old one was a script node
+            graph = load(path)
+            graph["nodes"]["finish"]["role"] = "script"
+            return graph
+        with unittest.mock.patch.object(nodes, "load", scripted):
+            code, out = self.run_local(gh)
         self.assertEqual(out, [{"ran": "finish", "event": "merged:5", "result": "swept"}])
         self.assertNotIn("harness", gh.kinds())
 
     def test_dry_run_lists_and_records_nothing(self):
-        gh = GitHub(issues={"factory:implement-mid": [{"number": 7}]})
-        self.assertEqual(self.run_local(gh, "--dry-run")[1], [{"would_run": "implement-mid", "event": "labeled:107"}])
+        gh = GitHub(issues={"factory:implement-medium": [{"number": 7}]})
+        self.assertEqual(self.run_local(gh, "--dry-run")[1], [{"would_run": "implement-medium", "event": "labeled:107"}])
         self.assertFalse(Path(".factory/local/seen.json").exists())
         self.assertEqual([k for k in gh.kinds() if k], [])
 
@@ -345,8 +366,8 @@ class RunLocalTest(unittest.TestCase):
         self.assertIn("factory deploy --target local --apply", out.getvalue())
 
     def test_a_due_schedule_runs_once_per_minute_key(self):
-        at = datetime.datetime(2026, 1, 1, 10, 17)
-        key = "schedule:reconcile:2026-01-01T10:17"
+        at = datetime.datetime(2026, 1, 1, 10, 15)  # reconcile runs every 15 minutes
+        key = "schedule:reconcile:2026-01-01T10:15"
         code, out = self.run_local(GitHub(), at=at)
         self.assertEqual((code, [o["event"] for o in out]), (0, [key]))
         self.assertEqual(self.run_local(GitHub(), at=at), (0, []))
@@ -361,16 +382,24 @@ class RunLocalTest(unittest.TestCase):
         self.assertFalse(any(a[0] == "git" and "ls-remote" in a for _, a in gh.calls))
 
     def test_dry_run_lists_due_schedules_and_records_nothing(self):
-        out = self.run_local(GitHub(), "--dry-run", at=datetime.datetime(2026, 1, 1, 10, 17))[1]
-        self.assertEqual(out, [{"would_run": "reconcile", "event": "schedule:reconcile:2026-01-01T10:17"}])
+        out = self.run_local(GitHub(), "--dry-run", at=datetime.datetime(2026, 1, 1, 10, 15))[1]
+        self.assertEqual(out, [{"would_run": "reconcile", "event": "schedule:reconcile:2026-01-01T10:15"}])
         self.assertFalse(Path(".factory/local/seen.json").exists())
 
     def test_a_developer_worktree_gets_the_role_skills_excluded_from_git(self):
+        # the v2 fixture lists role skills in factory.yaml, not in `roles/<role>/skills.txt` (which install_skills reads)
+        team = Path(self.tmp.name) / "team"
+        shutil.copytree(FIXTURE, team)
+        (team / "roles/developer/skills.txt").write_text("pr tdd\n")
+        for skill in ("pr", "tdd"):
+            (team / "skills" / skill).mkdir(parents=True)
+            (team / "skills" / skill / "SKILL.md").write_text(f"# {skill}\n")
+        cfg.set_team(team)
         tree = Path(self.tmp.name) / "tree"
         subprocess.run(["git", "init", "-q", str(tree)], check=True)
         local.install_skills(subprocess.run, "developer", "claude-code", tree)
         local.install_skills(subprocess.run, "developer", "claude-code", tree)
-        for skill in (FIXTURE / "roles/developer/skills.txt").read_text().split():
+        for skill in (team / "roles/developer/skills.txt").read_text().split():
             self.assertTrue((tree / ".claude/skills" / skill / "SKILL.md").is_file(), skill)
         self.assertTrue((tree / ".claude/skills/factory-step/SKILL.md").is_file())
         self.assertEqual((tree / ".git/info/exclude").read_text().split().count(".claude/skills/"), 1)
@@ -454,8 +483,8 @@ class PollTest(unittest.TestCase):
                          [("labeled:107", "factory:a", 7), ("labeled:107", "factory:b", 7), ("labeled:108", "factory:c", 8)])
 
     def test_the_event_id_is_the_rest_id_decoded_from_the_node_id(self):
-        gh = GitHub(prs={"factory:review-full": [{"number": 5, "headRefName": "ez/7-add-x"}]})
-        plan = [{"triggers": self.labeled(("pull_request.labeled", "factory:review-full"))}]
+        gh = GitHub(prs={"factory:review-low": [{"number": 5, "headRefName": "ez/7-add-x"}]})
+        plan = [{"triggers": self.labeled(("pull_request.labeled", "factory:review-low"))}]
         [(eid, _, payload)] = local.poll(plan, "zaharchenko-evgeny/slop-factory", gh)
         self.assertEqual(eid, f"labeled:{graphql.rest_id(node_id(105))}")
         self.assertEqual(payload["pull_request"], {"number": 5, "head": {"ref": "ez/7-add-x"}})

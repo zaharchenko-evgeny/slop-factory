@@ -20,7 +20,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE.parent))
 import config as cfg  # noqa: E402
-cfg.set_team(HERE / "fixtures/team")
+cfg.set_team(HERE / "fixtures/v2")
 import doctor  # noqa: E402
 import nodes  # noqa: E402
 from factory_plugins.github import probes as github_probes  # noqa: E402
@@ -352,30 +352,31 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(any(call[:2] == ["issue", "create"] for call in gh.calls))
 
     def test_missing_tool_reported_for_env(self):
-        got = run(FakeGh(), "write", which=lambda t: None if t == "git" else "/bin/" + t)
-        self.assertEqual(got["tool:git"]["result"], "missing")
+        got = run(FakeGh(), "engine", which=lambda t: None if t == "uv" else "/bin/" + t, has_skill=lambda s: True)
+        self.assertEqual(got["tool:uv"]["result"], "missing")
         self.assertEqual(got["tool:gh"]["result"], "ok")
-        self.assertEqual(got["skill:ponytail"]["result"], "ok")  # a developer skill, only in `write`
-        self.assertNotIn("skill:ponytail", run(FakeGh(), "ops", which=lambda t: "/bin/" + t))
+        self.assertEqual(got["skill:ponytail"]["result"], "ok")  # a developer skill, only in `engine`
+        self.assertNotIn("skill:ponytail", run(FakeGh(), "team", which=lambda t: "/bin/" + t,
+                                                              has_skill=lambda s: True))
 
     def test_declared_variables_and_secrets_are_probed(self):
         data = nodes.load()
-        data["environments"]["write"] = {**data["environments"]["write"], "variables": {"YOUTRACK_URL": "u"},
+        data["environments"]["engine"] = {**data["environments"]["engine"], "variables": {"YOUTRACK_URL": "u"},
                                          "secrets": ["YOUTRACK_TOKEN", "OTHER"]}
-        got = {r["probe"]: r for r in doctor.run_probes(REPO, "write", data, FakeGh(), "risk:low",
+        got = {r["probe"]: r for r in doctor.run_probes(REPO, "engine", data, FakeGh(), "risk:low",
                                                         environ={"YOUTRACK_URL": "u", "OTHER": ""})}
         self.assertEqual([got[f"env:{n}"]["result"] for n in ("YOUTRACK_URL", "YOUTRACK_TOKEN", "OTHER")],
                          ["ok", "missing", "missing"])
 
     def test_declared_empty_required_variable_is_reported_by_name_not_value(self):
         data = nodes.load()
-        data["environments"]["write"] = {**data["environments"]["write"], "declared": [
+        data["environments"]["engine"] = {**data["environments"]["engine"], "declared": [
             {"name": "TEAMCITY_URL", "secret": False, "required": True, "description": "TeamCity"},
             {"name": "TEAMCITY_TOKEN", "secret": True, "required": True, "description": ""},
             {"name": "FILLED", "secret": True, "required": True, "description": ""},
             {"name": "OPTIONAL", "secret": False, "required": False, "description": ""}]}
         environ = {"TEAMCITY_URL": "unset", "FILLED": "s3cret-value", "OPTIONAL": ""}  # `unset`: deploy's placeholder (#1310)
-        results = doctor.run_probes(REPO, "write", data, FakeGh(), "risk:low", environ=environ)
+        results = doctor.run_probes(REPO, "engine", data, FakeGh(), "risk:low", environ=environ)
         got = {r["probe"]: r for r in results}
         self.assertEqual([got[f"env:{n}"]["result"] for n in ("TEAMCITY_URL", "TEAMCITY_TOKEN", "FILLED")],
                          ["missing", "missing", "ok"])
@@ -384,9 +385,9 @@ class DoctorTest(unittest.TestCase):
 
     def test_main_exits_1_for_unset_declared_secret(self):
         data = nodes.load()
-        data["environments"]["write"] = {**data["environments"]["write"], "secrets": ["YOUTRACK_TOKEN"]}
+        data["environments"]["engine"] = {**data["environments"]["engine"], "secrets": ["YOUTRACK_TOKEN"]}
         out = io.StringIO()
-        with mock.patch.dict(os.environ, {"FACTORY_ENV": "write"}), mock.patch.object(doctor.nodes_mod, "load", return_value=data), \
+        with mock.patch.dict(os.environ, {"FACTORY_ENV": "engine"}), mock.patch.object(doctor.nodes_mod, "load", return_value=data), \
                 contextlib.redirect_stdout(out):
             os.environ.pop("YOUTRACK_TOKEN", None)
             self.assertEqual(doctor.main(run=FakeGh()), 1)
@@ -395,9 +396,9 @@ class DoctorTest(unittest.TestCase):
 
     def test_no_role_needs_a_local_agent_harness(self):
         """Air runs every agent (#523): no role's need_tools names a harness CLI."""
-        for env in ("read", "write", "ops"):
+        for env in ("engine", "knowledge", "team"):
             self.assertFalse({"pi", "claude", "codex"} & set(doctor.env_needs(env, nodes.load())[0]), env)
-        self.assertIn("git", doctor.env_needs("write", nodes.load())[0])
+        self.assertIn("uv", doctor.env_needs("engine", nodes.load())[0])
 
     def test_missing_team_skill_does_not_fall_back_to_engine_template(self):
         before = cfg.team_root()

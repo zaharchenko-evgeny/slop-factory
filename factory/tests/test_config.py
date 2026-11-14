@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/config.py and the factory command. Run: uv run factory/tests/test_config.py"""
 import contextlib
 import io
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -22,12 +23,15 @@ import gate  # noqa: E402
 import nodes  # noqa: E402
 from gate_port import MemorySystem  # noqa: E402
 
-DESCRIPTOR = yaml.safe_load((ROOT / "factory/tests/fixtures/team" / config.DESCRIPTOR).read_text())
+V2 = ROOT / "factory/tests/fixtures/v2"
+DESCRIPTOR = yaml.safe_load((V2 / "factory.yaml").read_text())  # what the v2 fixture has (ADR-0021)
 
 
 def team(tmp, descriptor=None, files=None):
+    """A copy of the v2 fixture; `descriptor` replaces its factory.yaml, `files` adds or replaces files."""
     root = Path(tmp)
-    (root / config.DESCRIPTOR).write_text(yaml.safe_dump(descriptor or DESCRIPTOR))
+    shutil.copytree(V2, root, dirs_exist_ok=True)
+    (root / "factory.yaml").write_text(yaml.safe_dump(descriptor or DESCRIPTOR))
     for rel, text in (files or {}).items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(text)
@@ -43,7 +47,7 @@ class TeamRootTest(unittest.TestCase):
             root = team(tmp, files={"roles/reviewer/role.md": "# mine\n"})
             config.set_team(root)
             tracker = MemorySystem({"7": {"stage": "in-review", "head": "abc", "ci": "green", "blockers_open": 0}})
-            _, out = gate.check("review", {"id": "e1", "ticket": "7"}, tracker, nodes.load(), config.load())
+            _, out = gate.check("review-low", {"id": "e1", "ticket": "7"}, tracker, nodes.load(), config.load())
             self.assertEqual(Path(out["role_file"]), root / "roles/reviewer/role.md")
             self.assertEqual(config.resolve("roles/router/role.md"), root / "roles/router/role.md")
 
@@ -106,11 +110,7 @@ class TeamRootTest(unittest.TestCase):
             self.assertEqual((c["tracker"]["hold_label"], c["tracker"]["repository"]), ("mine", "o/r"))
 
     def test_unknown_descriptor_key_fails_validate(self):
-        nested = ({"limits": {"colour": 1}}, {"gates": {"colour": 1}}, {"knowledge": {"colour": 1}},
-                  {"targets": {"air": {"colour": 1}}}, {"roles": {"developer": {"colour": 1}}},
-                  {"roles": {"reviewer": {"modes": {"full": {"colour": 1}}}}},
-                  {"repositories": [{"name": "x", "colour": 1}]}, {"checks": [{"name": "x", "colour": 1}]})
-        for bad in ({"colour": 1}, {"tracker": {**DESCRIPTOR["tracker"], "colour": 1}}, *nested):
+        for bad in ({"tracker": {**DESCRIPTOR["tracker"], "colour": 1}},):  # the compiled config checks the tracker block only
             with tempfile.TemporaryDirectory() as tmp:
                 config.set_team(team(tmp, {**DESCRIPTOR, **bad}))
                 out = io.StringIO()
@@ -134,7 +134,7 @@ class TeamRootTest(unittest.TestCase):
         self.assertEqual(config.owner({"notify": {"github_user": "b"}}), "b")
 
     def test_validate_passes_for_this_repository(self):
-        config.set_team(ROOT / "factory/tests/fixtures/team")
+        config.set_team(ROOT / "factory/tests/fixtures/v2")
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["validate"]), 0)
         self.assertIn("factory: ok", out.getvalue())

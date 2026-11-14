@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-cfg.set_team(ROOT / "factory/tests/fixtures/team")
+cfg.set_team(ROOT / "factory/tests/fixtures/v2")
 import cli  # noqa: E402
 import retro  # noqa: E402
 
@@ -37,10 +37,10 @@ class RoutineBeginTest(unittest.TestCase):
             self.addCleanup(os.chdir, old)
             cli.STATE = Path(".factory/begin.json")
             Path("empty.json").write_text("")
-            for name in ("retro", "distill"):
+            for name in ("retro", "reconcile"):
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
-                    self.assertEqual(cli.begin([name, "empty.json"], ROOT / "factory/tests/fixtures/team"), 0)
+                    self.assertEqual(cli.begin([name, "empty.json"], ROOT / "factory/tests/fixtures/v2"), 0)
                 self.assertTrue(json.loads(out.getvalue())["go"])
                 self.assertIsNone(json.loads(out.getvalue())["ticket"])
 

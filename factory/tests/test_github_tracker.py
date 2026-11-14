@@ -19,7 +19,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import config as cfg  # noqa: E402
-cfg.set_team(Path(__file__).resolve().parent / "fixtures/team")
+cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
 from factory_plugins.github import tracker as github_tracker  # noqa: E402
 from factory_plugins.github.tracker import CountedRun, GitHubTracker, RateLimited  # noqa: E402
 

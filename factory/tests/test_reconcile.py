@@ -97,7 +97,9 @@ def ticket_repositories_tracker(staged, stages=None):
     numbers}); the caller replaces the facts and the writes."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from factory_plugins.github.gate import GitHubGateTracker
-    from test_gate import TicketReposGh
+    team = cfg._team
+    from test_gate import TicketReposGh  # importing test_gate sets its own team; keep this module's
+    cfg.set_team(team)
     return GitHubGateTracker("o/r", stages or CONFIG["tracker"]["stages"], "bot", run=TicketReposGh(staged=staged), ticket_repos=["o/r", "o/b"])
 
 
@@ -159,7 +161,7 @@ class WakeApprovedTest(unittest.TestCase):
 
 
 class ApprovalGraphTest(unittest.TestCase):
-    """`wake_approved` reads the team definition, not engine/nodes.yaml."""
+    """`wake_approved` reads the team definition, not the engine node file."""
     SLOP = Path(__file__).resolve().parent / "fixtures/slop"
 
     def graph(self, blockers, held):
@@ -516,7 +518,7 @@ class RecoverDefinitionTest(unittest.TestCase):
 
 
 class ReconcileMainBlockersTest(unittest.TestCase):
-    """`reconcile_main` hands `wake_approved` the definition's graph, whatever engine/nodes.yaml says."""
+    """`reconcile_main` hands `wake_approved` the definition's graph, whatever the engine node file says."""
     SLOP = Path(__file__).resolve().parent / "fixtures/slop"
 
     @classmethod

@@ -4,4 +4,4 @@ A bare `pytest factory/tests` in an agent run then gives CI's result, whatever F
 import os
 from pathlib import Path
 
-os.environ["FACTORY_TEAM"] = str(Path(__file__).parent / "fixtures" / "team")
+os.environ["FACTORY_TEAM"] = str(Path(__file__).parent / "fixtures" / "v2")

@@ -21,18 +21,51 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-cfg.set_team(ROOT / "factory/tests/fixtures/team")
+cfg.set_team(ROOT / "factory/tests/fixtures/v2")
 import cli  # noqa: E402
 
 cli.load_engine(cli.HERE)
+
+V2 = ROOT / "factory/tests/fixtures/v2"
+
+
+LEGACY = {  # the old descriptor team, cut down to what `factory begin` reads
+    "engine": 1, "project": {"name": "Slop factory"},
+    "repositories": [{"name": "slop-factory", "url": "https://github.com/zaharchenko-evgeny/slop-factory",
+                      "default_branch": "main", "role": "primary"}],
+    "branch_pattern": "ez/{ticket}-{slug}", "commit_prefix": "#{ticket} ",
+    "tracker": {"adapter": "github-issues", "repository": "zaharchenko-evgeny/slop-factory"},
+    "targets": {"air": {"bot_login": "jetbrains-air[bot]", "models": {
+        "cheap": "codex/gpt-6-luna", "mid": "claude/claude-sonnet-5-5[1m]", "strong": "claude/claude-sonnet-5-5[1m]",
+        "review": "codex/gpt-6-luna", "review_strong": "codex/gpt-6.1-sol"}}},
+    "models": {t: "anthropic/claude-sonnet-5-5" for t in ("cheap", "mid", "strong", "review", "review_strong")},
+    "roles": {"router": {"tier": "cheap"}, "developer": {"tier": "mid", "tier_high_risk": "strong", "fallback": "mid"},
+              "reviewer": {"tools": "read-only", "modes": {"full": {"tier": "review_strong", "fallback": "cheap"},
+                                                          "behaviour": {"tier": "review", "fallback": "cheap"},
+                                                          "structure-security": {"tier": "review_strong", "fallback": "cheap"},
+                                                          "knowledge": {"tier": "review_strong", "fallback": "cheap"}}},
+              "retro": {"tier": "cheap"}},
+}
+
+
+def legacy_team(root):
+    """An old descriptor team (`factory.descriptor.yaml`, no `factory.yaml`): only such a team runs a pull request's node
+    from `main`'s engine (ADR-0021: a definition team never does); its nodes come from the engine's old node list."""
+    import project_mode
+    import yaml
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "factory.descriptor.yaml").write_text(yaml.safe_dump(LEGACY))
+    return project_mode.link_runtime_files(root)
+
 
 PAYLOAD = {"action": "labeled", "issue": {"number": 7, "title": "Add x", "updated_at": "T1"}}
 
 
 class BeginEndTest(unittest.TestCase):
     def setUp(self):
-        cfg.set_team(ROOT / "factory/tests/fixtures/team")
-        env_patch = mock.patch.dict(os.environ, {"FACTORY_TEAM": str(ROOT / "factory/tests/fixtures/team")})
+        cfg.set_team(ROOT / "factory/tests/fixtures/v2")
+        env_patch = mock.patch.dict(os.environ, {"FACTORY_TEAM": str(ROOT / "factory/tests/fixtures/v2")})
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self.old = os.getcwd()
@@ -55,12 +88,12 @@ class BeginEndTest(unittest.TestCase):
         with mock.patch("sys.stdin", io.StringIO("")):
             code, out = self.run_cli("begin", "retro")
         self.assertEqual((code, json.loads(out)["go"], json.loads(out)["ticket"]), (0, True, None))
-        code, out = self.run_cli("end", "recorded")
+        code, out = self.run_cli("end", "nothing")
         self.assertEqual((code, json.loads(out)["applied"]), (0, True))
 
     def test_begin_exits_10_for_duplicate_event(self):
         tracker = self.tracker(seen=["issues:7:labeled:None"])
-        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        code, out = self.run_cli("begin", "implement-medium", "event.json", *tracker)
         self.assertEqual((code, json.loads(out)["reason"]), (10, "duplicate event"))
 
     def test_begin_accepts_ez_branch_from_payload(self):
@@ -72,21 +105,21 @@ class BeginEndTest(unittest.TestCase):
                                                                "pr": 300, "pr_state": "open", "round_complete": True,
                                                                "head": "abc"}}))
         with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
-            code, out = self.run_cli("begin", "fix-cheap", "event.json", "--tracker", "memory:tickets.json")
+            code, out = self.run_cli("begin", "fix", "event.json", "--tracker", "memory:tickets.json")
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(out)["ticket"], 299)
 
     def test_begin_with_issue_number_only(self):
         self.tracker()
         Path("event.json").unlink()
-        code, out = self.run_cli("begin", "implement-mid", "--issue", "7", "--tracker", "memory:tickets.json")
+        code, out = self.run_cli("begin", "implement-medium", "--issue", "7", "--tracker", "memory:tickets.json")
         self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
 
     def test_begin_takes_a_youtrack_ticket_id(self):  # #1319: a YouTrack gate owns only PROJECT-N
         self.tracker()
         Path("event.json").unlink()
-        self.run_cli("begin", "implement-mid", "--issue", "LME-7", "--tracker", "memory:tickets.json")
-        event = json.loads(Path(".factory/event/implement-mid.json").read_text())
+        self.run_cli("begin", "implement-medium", "--issue", "LME-7", "--tracker", "memory:tickets.json")
+        event = json.loads(Path(".factory/event/implement-medium.json").read_text())
         self.assertEqual(event["issue"], {"number": "LME-7"})
 
     def test_begin_issue_number_is_in_the_copys_repository(self):
@@ -96,28 +129,28 @@ class BeginEndTest(unittest.TestCase):
         Path("event.json").unlink()
         with mock.patch.dict(os.environ, {"FACTORY_ENV_REPOSITORY": "o/team"}):
             os.environ.pop("FACTORY_NODE_REPO", None)
-            self.run_cli("begin", "implement-mid", "--issue", "7", "--tracker", "memory:tickets.json")
-        event = json.loads(Path(".factory/event/implement-mid.json").read_text())
+            self.run_cli("begin", "implement-medium", "--issue", "7", "--tracker", "memory:tickets.json")
+        event = json.loads(Path(".factory/event/implement-medium.json").read_text())
         self.assertEqual(event["repository"], {"full_name": "o/team"})
 
     def test_begin_with_pr_number_only(self):
         self.tracker(stage="changes-requested", pr=300, pr_state="open", round_complete=True)
         with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
-            code, out = self.run_cli("begin", "fix-cheap", "--pr", "300", "--tracker", "memory:tickets.json")
+            code, out = self.run_cli("begin", "fix", "--pr", "300", "--tracker", "memory:tickets.json")
         self.assertEqual((code, json.loads(out)["ticket"]), (0, 7), out)
 
     def test_end_applies_handoff_for_begun_node(self):
         tracker = self.tracker()
-        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        code, out = self.run_cli("begin", "implement-medium", "event.json", *tracker)
         self.assertEqual(code, 0, out)
-        self.assertEqual(json.loads(out)["handoff_path"], ".factory/handoff/implement.json")
-        code, out = self.run_cli("end", "done")
+        self.assertEqual(json.loads(out)["handoff_path"], ".factory/handoff/implement-medium.json")
+        code, out = self.run_cli("end", "done-low")
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-review")
 
     def test_a_failing_apply_reports_the_error_on_the_ticket(self):
         tracker = self.tracker()
-        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        code, out = self.run_cli("begin", "implement-medium", "event.json", *tracker)
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(cli.STATE.read_text())["ticket"], 7)
         reports = []
@@ -127,14 +160,14 @@ class BeginEndTest(unittest.TestCase):
             return 1
         with mock.patch.object(cli, "run_gate", failing_gate), \
                 mock.patch.object(cli, "report_end_failure", lambda state, outcome, err: reports.append((state["node"], outcome, err))):
-            code, _ = self.run_cli("end", "done")
+            code, _ = self.run_cli("end", "done-low")
         self.assertEqual(code, 1)
-        self.assertEqual([(n, o) for n, o, _ in reports], [("implement", "done")])
+        self.assertEqual([(n, o) for n, o, _ in reports], [("implement-medium", "done-low")])
         self.assertIn("HTTP 403", reports[0][2])
 
     def test_a_gate_refusal_on_stdout_is_quoted_in_the_report(self):
         tracker = self.tracker()
-        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        code, out = self.run_cli("begin", "implement-medium", "event.json", *tracker)
         self.assertEqual(code, 0, out)
         reports = []
 
@@ -143,18 +176,31 @@ class BeginEndTest(unittest.TestCase):
             return 2
         with mock.patch.object(cli, "run_gate", refusing_gate), \
                 mock.patch.object(cli, "report_end_failure", lambda state, outcome, err: reports.append(err)):
-            code, out = self.run_cli("end", "done")
+            code, out = self.run_cli("end", "done-low")
         self.assertEqual(code, 2)
         self.assertEqual(reports, ["payload: missing field `message`"])
         self.assertIn("missing field", out)  # the agent still sees the gate's output (#1035)
 
+    def with_env_broken(self):
+        """The v2 fixture has no `env-broken` outcome: add the old one (a required check fails on unchanged main) to implement-medium."""
+        import nodes
+        load = nodes.load
+
+        def patched(path=None):
+            graph = load(path)
+            graph["nodes"]["implement-medium"]["outcomes"]["env-broken"] = {"effects": [
+                {"unlabel": "factory:implement-medium"}, {"park-behind-main-red": "failing_check"}, {"stage": "ready"}]}
+            return graph
+        return mock.patch.object(nodes, "load", patched)
+
     def test_end_env_broken_records_check_and_parks_ticket(self):
         tracker = self.tracker()
-        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        with self.with_env_broken():
+            code, out = self.run_cli("begin", "implement-medium", "event.json", *tracker)
+            self.assertEqual(code, 0, out)
+            code, out = self.run_cli("end", "env-broken", "--failing-check", "doc-references")
         self.assertEqual(code, 0, out)
-        code, out = self.run_cli("end", "env-broken", "--failing-check", "doc-references")
-        self.assertEqual(code, 0, out)
-        handoff = json.loads(Path(".factory/handoff/implement.json").read_text())
+        handoff = json.loads(Path(".factory/handoff/implement-medium.json").read_text())
         self.assertEqual(handoff["failing_check"], "doc-references")
         ticket = json.loads(Path("tickets.json").read_text())["7"]
         self.assertEqual(ticket["stage"], "ready")
@@ -164,16 +210,17 @@ class BeginEndTest(unittest.TestCase):
 
     def test_end_env_broken_requires_failing_check(self):
         self.tracker()
-        code, out = self.run_cli("begin", "implement-mid", "event.json", "--tracker", "memory:tickets.json")
-        self.assertEqual(code, 0, out)
-        code, out = self.run_cli("end", "env-broken")
+        with self.with_env_broken():
+            code, out = self.run_cli("begin", "implement-medium", "event.json", "--tracker", "memory:tickets.json")
+            self.assertEqual(code, 0, out)
+            code, out = self.run_cli("end", "env-broken")
         self.assertNotEqual(code, 0)
         self.assertIn("--failing-check", out)
 
     def test_begin_lists_notes_for_role(self):
         mine, theirs = {"for": "developer", "hint": "see a.py"}, {"for": "reviewer", "hint": "skip"}
         tracker = self.tracker(agent_notes=[theirs, mine, {"for": "any", "hint": "all"}])
-        code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+        code, out = self.run_cli("begin", "implement-medium", "event.json", *tracker)
         self.assertEqual(code, 0, out)
         got = json.loads(out)
         self.assertEqual([n["hint"] for n in got["agent_notes"]], ["see a.py", "all"])
@@ -186,32 +233,31 @@ class BeginEndTest(unittest.TestCase):
 
         def patched(path=None):
             graph = load(path)
-            node = graph["nodes"]["implement"]
+            node = graph["nodes"]["implement-medium"]
             node["output"] = "as-instructed"
-            node["outcomes"]["done"]["effects"].insert(0, {"label": "factory:review-low", "on": "pr"})
             return graph
         return mock.patch.object(nodes, "load", patched)
 
     def test_check_prints_the_draft_pr_command_of_an_as_instructed_implement_node(self):
         tracker = self.tracker()
         with self.as_instructed():
-            code, out = self.run_cli("begin", "implement-mid", "event.json", *tracker)
+            code, out = self.run_cli("begin", "implement-medium", "event.json", *tracker)
         self.assertEqual(code, 0, out)
         got = json.loads(out)
-        self.assertEqual(got["pr_create"]["done"], f"gh pr create --draft --head {got['branch']} --label factory:review-low "
+        self.assertEqual(got["pr_create"]["done-low"], f"gh pr create --draft --head {got['branch']} --label factory:review-low "
                                                    '--title "#7 <subject>" --body-file .factory/pr-body.md')
 
     def test_end_done_without_a_pr_is_refused_for_an_as_instructed_node(self):
         tracker = self.tracker()
         with self.as_instructed():
-            self.run_cli("begin", "implement-mid", "event.json", *tracker)
-            code, out = self.run_cli("end", "done")
+            self.run_cli("begin", "implement-medium", "event.json", *tracker)
+            code, out = self.run_cli("end", "done-low")
         self.assertEqual(code, 2, out)
         self.assertIn("no PR for the ticket's branch: open it as a draft first", out)
         self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-dev")
 
     def test_end_without_begin_is_an_error(self):
-        self.assertEqual(self.run_cli("end", "done")[0], 2)
+        self.assertEqual(self.run_cli("end", "done-low")[0], 2)
 
     def end_review(self, outcome, *opts):
         """Begin a review of ticket 7 at its head, then end it with `outcome`."""
@@ -219,7 +265,7 @@ class BeginEndTest(unittest.TestCase):
                                                            "risk": "low", "pr": 5, "focus_missing": ["full"]}}))
         Path("event.json").write_text(json.dumps({**PAYLOAD, "label": {"name": "factory:ci-green"}}))
         with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
-            code, out = self.run_cli("begin", "review-full", "event.json", "--tracker", "memory:tickets.json")
+            code, out = self.run_cli("begin", "review-high", "event.json", "--tracker", "memory:tickets.json")
             self.assertEqual(code, 0, out)
             return self.run_cli("end", outcome, *opts)
 
@@ -228,10 +274,20 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_end_done_refuses_failed_check(self):
+        """The gate refuses only an outcome named `done`; v2 names it `done-low`/`done-high` (engine gap, see #1394)."""
+        import nodes
+        load = nodes.load
+
+        def with_done(path=None):
+            graph = load(path)
+            outcomes = graph["nodes"]["implement-medium"]["outcomes"]
+            outcomes["done"] = outcomes["done-low"]
+            return graph
         tracker = self.tracker()
-        self.run_cli("begin", "implement-mid", "event.json", *tracker)
-        Path("c.json").write_text(json.dumps([{"text": "tests pass", "result": "fail"}]))
-        code, out = self.run_cli("end", "done", "--checks", "c.json")
+        with mock.patch.object(nodes, "load", with_done):
+            self.run_cli("begin", "implement-medium", "event.json", *tracker)
+            Path("c.json").write_text(json.dumps([{"text": "tests pass", "result": "fail"}]))
+            code, out = self.run_cli("end", "done", "--checks", "c.json")
         self.assertEqual(code, 2, out)
         self.assertEqual(json.loads(Path("tickets.json").read_text())["7"]["stage"], "in-dev")
 
@@ -340,15 +396,15 @@ class BeginEndTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 self.handoff("done", "--lesson", bad)
         self.tracker()
-        self.assertEqual(self.run_cli("begin", "implement-mid", "event.json", "--tracker", "memory:tickets.json")[0], 0)
-        code, out = self.run_cli("end", "done", "--lesson", "team router | text")
+        self.assertEqual(self.run_cli("begin", "implement-medium", "event.json", "--tracker", "memory:tickets.json")[0], 0)
+        code, out = self.run_cli("end", "done-low", "--lesson", "team router | text")
         self.assertEqual(code, 2, out)
         self.assertIn("malformed option", json.loads(out)["error"])
 
     def test_end_lessons_reach_gate(self):
         tracker = self.tracker()
-        self.assertEqual(self.run_cli("begin", "implement-mid", "event.json", *tracker)[0], 0)
-        code, out = self.run_cli("end", "done", "--lesson", "engine cli.py | end dropped lessons | evidence: #869")
+        self.assertEqual(self.run_cli("begin", "implement-medium", "event.json", *tracker)[0], 0)
+        code, out = self.run_cli("end", "done-low", "--lesson", "engine cli.py | end dropped lessons | evidence: #869")
         self.assertEqual(code, 0, out)
         record = json.loads(Path("tickets.json").read_text())["7"]
         comments = [json.loads(v) for k, v in record["log"] if k == "comment" and "factory:lesson" in v]
@@ -361,11 +417,15 @@ class BeginEndTest(unittest.TestCase):
         tracker = self.tracker(stage="changes-requested", ci="red", round_complete=True,
                                round_verdict="changes", ci_failure=failure)
         with mock.patch.object(cli, "from_main", return_value=str(ROOT)):
-            code, out = self.run_cli("begin", "fix-cheap", "event.json", *tracker)
+            code, out = self.run_cli("begin", "fix", "event.json", *tracker)
         self.assertEqual(code, 0, out)
         self.assertEqual(json.loads(out)["context"]["ci_failure"], failure)
 
     def test_pull_request_node_runs_main_gate_not_the_checkouts(self):
+        team = legacy_team("legacy-team")
+        self.addCleanup(cfg.set_team, V2)
+        cfg.set_team(team)
+        self.enterContext(mock.patch.dict(os.environ, {"FACTORY_TEAM": str(team.resolve())}))
         main = Path("main")
         shutil.copytree(ROOT, main, ignore=shutil.ignore_patterns(".git", ".factory", "tests"))
         (main / "factory/gate.py").write_text(
@@ -381,6 +441,10 @@ class BeginEndTest(unittest.TestCase):
         pr_gate.assert_not_called()
 
     def test_begin_main_uses_existing_main_worktree(self):
+        team = legacy_team("legacy-team")
+        self.addCleanup(cfg.set_team, V2)
+        cfg.set_team(team)
+        self.enterContext(mock.patch.dict(os.environ, {"FACTORY_TEAM": str(team.resolve())}))
         main = Path("main")
         main.mkdir()
         (main / "factory").mkdir()
@@ -393,10 +457,10 @@ class BeginEndTest(unittest.TestCase):
         self.assertEqual((code, json.loads(out)["gate"]), (0, "main"), out)
         state = json.loads(cli.STATE.read_text())
         self.assertEqual(state["engine"], str(main.resolve()))
-        self.assertEqual(state["team"], str((ROOT / "factory/tests/fixtures/team").resolve()))
+        self.assertEqual(state["team"], str(team.resolve()))
 
     def test_sweep_main_uses_team_config(self):
-        team = str((ROOT / "factory/tests/fixtures/team").resolve())
+        team = str((ROOT / "factory/tests/fixtures/v2").resolve())
         with mock.patch.object(cli, "from_main", return_value=str(ROOT)), \
                 mock.patch.object(cli, "load_engine"), \
                 mock.patch.object(cli, "run_gate", return_value=0) as run_gate:
@@ -405,7 +469,7 @@ class BeginEndTest(unittest.TestCase):
         run_gate.assert_called_once_with(str(ROOT), ["sweep", "--issue", "7"], team)
 
     def test_sweep_main_uses_factory_team_environment(self):
-        team = str((ROOT / "factory/tests/fixtures/team").resolve())
+        team = str((ROOT / "factory/tests/fixtures/v2").resolve())
         with mock.patch.dict(os.environ, {"FACTORY_TEAM": team}), \
                 mock.patch.object(cli, "from_main", return_value=str(ROOT)), \
                 mock.patch.object(cli, "load_engine"), \
@@ -491,7 +555,7 @@ class ImportTimeBoundaryTest(unittest.TestCase):
             (shared / "gate.py").write_text(
                 'import json\nif __name__ == "__main__":\n    print(json.dumps({"gate": "outer-home"}))\n')
             env = {**os.environ, "HOME": str(tmp / "isolated-home"),
-                   "FACTORY_TEAM": str(ROOT / "factory/tests/fixtures/team")}
+                   "FACTORY_TEAM": str(legacy_team(tmp / "legacy-team"))}
             with mock.patch.dict(os.environ, {"HOME": str(outer_home)}):
                 done = subprocess.run([sys.executable, str(pr / "factory/cli.py"), "begin", "fix-mid", "event.json"], cwd=pr,
                                       capture_output=True, text=True, env=env)
@@ -502,7 +566,7 @@ class ImportTimeBoundaryTest(unittest.TestCase):
 
 class EnvRolesTest(unittest.TestCase):
     def test_prints_roles_of_enabled_agent_nodes_in_the_environment(self):
-        self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/team")
+        self.addCleanup(cfg.set_team, ROOT / "factory/tests/fixtures/v2")
         fixture = ROOT / "factory/tests/fixtures/slop"
         cfg.set_team(fixture)
         for env in ("engine", "team", "intake"):  # slop-eval-factory#96 (ADR-0027)
