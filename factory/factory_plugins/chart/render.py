@@ -3,6 +3,8 @@ nodes, so they cannot drift from the factory. `block` is the generated part of `
 
 Usage: factory chart [nodes.yaml] | nodes.py chart [nodes.yaml]
 """
+import argparse
+
 import config
 import nodes as nodes_mod
 import vocab
@@ -120,5 +122,8 @@ def block(nodes):
 def main(argv):
     """Print the docs block of nodes.yaml (default: the team's nodes)."""
     argv = config.pop_team(argv)
-    print(block(nodes_mod.load(argv[0] if argv else None)), end="")
+    parser = argparse.ArgumentParser(prog="factory chart", description="Render the factory nodes chart.")
+    parser.add_argument("nodes", nargs="?", help="path to nodes.yaml")
+    args = parser.parse_args(argv)
+    print(block(nodes_mod.load(args.nodes)), end="")
     return 0

@@ -48,9 +48,11 @@ def stage_age(stage, kind, entered, now):
     """{state, seconds, entered_at, kind, warn, reason} of a ticket in `stage` (`kind`: active|waiting|final|None).
     `state` is `ok`, `warn`, `exempt` (waiting or final stage) or `unknown` (no stage, or no entry time)."""
     base = {"stage": stage, "kind": kind, "entered_at": entered, "seconds": None, "warn": False}
-    if kind in ("waiting", "final"):
-        return {**base, "state": "exempt", "reason": f"{kind} stage: no age warning"}
     when = parse_time(entered)
+    if kind in ("waiting", "final"):
+        # Exempt from warnings, but the elapsed time is still reported (the completed-window filter needs it).
+        seconds = max(0.0, (parse_time(now) - when).total_seconds()) if when else None
+        return {**base, "state": "exempt", "seconds": seconds, "reason": f"{kind} stage: no age warning"}
     if when is None:
         return {**base, "state": "unknown", "reason": "stage entry time is missing"}
     seconds = max(0.0, (parse_time(now) - when).total_seconds())

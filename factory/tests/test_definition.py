@@ -108,12 +108,21 @@ class DefinitionTest(unittest.TestCase):
                 self.edit("factory.yaml", lambda f, tracker=tracker: f["environments"]["engine"].update(
                     tracker=tracker))
                 errors = self.errors()
-                message = "unsupported-effect: nodes.intake.field: field requires YouTrack tickets in environment engine"
+                message = "unsupported-effect: nodes.intake.field: field requires a YouTrack ticket environment"
                 self.assertEqual(any(e == message for e in errors), rejected, errors)
                 run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "cli.py"), "validate"],
                                      capture_output=True, text=True, env={**os.environ, "FACTORY_TEAM": str(self.root)})
                 self.assertEqual(run.returncode, 1 if rejected else 0, run.stdout + run.stderr)
                 self.assertIn(message if rejected else "factory: ok", run.stdout)
+
+    def test_field_effect_multi_env_node_validates(self):
+        self.edit("workflow.yaml", lambda w: self._node_envs(w, "intake", "github", "youtrack"))
+        self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"].update(
+            field={"effects": [{"field": {"name": "Effort", "from": "size_estimate"}}]}))
+        self.edit("factory.yaml", lambda f: self._envs(
+            f, github=[(MAIN, {"tracker": {"adapter": "github-issues"}})],
+            youtrack=[(OTHER, {"tracker": {"adapter": "youtrack", "url": "https://yt.example", "project": "PRJ"}})]))
+        self.assertNotIn("unsupported-effect:", "\n".join(self.errors()))
 
     # --- ADR-0027: repository tracker, vcs and write; node environments ----------------------------------------
     def _envs(self, f, **envs):

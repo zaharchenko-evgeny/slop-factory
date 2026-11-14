@@ -284,24 +284,39 @@ class GateTest(unittest.TestCase):
         self.assertIn("review", comments[0])
         self.assertEqual((tr.report["on"], tr.report["run_id"]), ("pr", "run-1"))
 
-    def test_unsupported_effect_refuses_before_writing_any_outcome_effect(self):
+    def test_field_effect_skipped_on_github_ticket(self):
         graph = {"nodes": {"intake": {"when": {}, "outcomes": {"ready": {"effects": [
-            {"label": "risk:high"}, {"review": "approve-at-head", "on": "pr"},
+            {"label": "risk:high"}, {"stage": "ready"},
             {"field": {"name": "Effort", "from": "size_estimate"}}]}}}}}
 
         class NoField(MemorySystem):
-            effects = (Effect("label", "ticket", MemorySystem._fx_log),)
+            adapter = "github"
+            effects = (*(e for e in MemorySystem.effects if e.kind != "*"),
+                       Effect("label", "ticket", MemorySystem._fx_log))
 
-        class PullRequests(MemorySystem):
-            effects = (Effect("review", "pr", MemorySystem._fx_log),)
-
-        tr = OnVcs.of(NoField({"7": {"stage": "triage"}}), PullRequests({"7": {"stage": "triage"}}))
+        tr = NoField({"7": {"stage": "triage"}})
         with patch("gate.plugin_registry", return_value=plugins.registry({"plugins": ["youtrack"]})):
             status, result = gate.apply("intake", "ready", {"ticket": "7", "size_estimate": "Small"}, tr, graph)
-        self.assertEqual(status, gate.NO_GO)
-        self.assertEqual(result["reason"], "unknown effect: field")
-        self.assertEqual(tr.tickets["7"].get("attrs", []), [])
-        self.assertEqual(tr.tickets["7"].get("log", []), [])
+        self.assertEqual(status, gate.GO)
+        self.assertEqual(result["skipped"], ["field: skipped on github tracker"])
+        self.assertNotIn("field", result["written"])
+        self.assertEqual(tr.tickets["7"].get("attrs", []), ["risk:high"])
+        self.assertEqual(tr.facts("7")["stage"], "ready")
+
+    def test_field_effect_applied_on_youtrack_ticket(self):
+        graph = {"nodes": {"intake": {"when": {}, "outcomes": {"ready": {"effects": [
+            {"field": {"name": "Effort", "from": "size_estimate"}}]}}}}}
+
+        class YouTrack(MemorySystem):
+            adapter = "youtrack"
+            effects = (Effect("field", "ticket", MemorySystem._fx_log),)
+
+        tr = YouTrack({"7": {"stage": "triage"}})
+        with patch("gate.plugin_registry", return_value=plugins.registry({"plugins": ["youtrack"]})):
+            status, result = gate.apply("intake", "ready", {"ticket": "7", "size_estimate": "Small"}, tr, graph)
+        self.assertEqual(status, gate.GO)
+        self.assertEqual(result["written"], ["field"])
+        self.assertEqual(json.loads(tr.tickets["7"]["log"][0][1]), {"name": "Effort", "value": "Small"})
 
     def test_stale_review_plan_replays_stale_review_marker_instead_of_refiring(self):
         facts = {"stage": "in-review", "head": "abc", "pr_labels": ["factory:review-low"],

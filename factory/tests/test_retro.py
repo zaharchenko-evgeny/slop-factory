@@ -126,5 +126,69 @@ class CollectTest(unittest.TestCase):
                 self.assertEqual(retro.main(argv), 2)
 
 
+class ScopedCollectTest(unittest.TestCase):
+    """#1426: a multi-environment (scoped) tracker refused `_list`, so collect and facts crashed every night."""
+
+    def scoped(self):
+        import scopes
+        gh = CollectTest().tracker()[0]
+        gh.repo = "o/factory"
+
+        class Store:
+            url = "https://yt.example"
+
+            def tickets_by_stage(self, attrs, open_only=False, now=None):
+                return ["LME-1"] if attrs == ["factory:lesson"] else []
+
+            def lesson_comments(self, n):
+                return [{"id": "4-9", "url": f"{self.url}/issue/{n}#focus=Comments-4-9", "body": "<!-- factory:lesson -->\n- yt"},
+                        {"id": "4-10", "url": None, "body": "no lesson"}]
+
+        class YtGate:
+            tickets, github, repo = Store(), object(), "o/jbeval"
+
+        systems = {"team": (gh, None), "jbeval": (YtGate(), None), "intake": (YtGate(), None)}
+        envs = {"team": {"adapter": "github-issues"}, "jbeval": {"adapter": "youtrack"}, "intake": {"adapter": "youtrack"}}
+        return scopes.ScopedTracker({}, lambda config, env: systems[env], "team", envs, {}), gh
+
+    def test_scoped_tracker_refuses_private_reads(self):
+        t, _ = self.scoped()
+        with self.assertRaises(AttributeError):
+            t._list("issues")
+
+    def test_collect_reads_github_and_youtrack_lessons_through_a_scoped_tracker(self):
+        t, _ = self.scoped()
+        got = retro.collect(t, "factory:lesson")
+        self.assertEqual([c["id"] for c in got], [1, 4, 5, "4-9"])  # the two YouTrack scopes hold one lesson once
+        self.assertEqual(got[-1], {"ticket": "LME-1", "url": "https://yt.example/issue/LME-1#focus=Comments-4-9",
+                                   "id": "4-9", "body": "- yt", "tracker": "youtrack"})
+
+    def test_mark_works_through_a_scoped_tracker(self):
+        t, _ = self.scoped()
+        self.assertEqual(retro.mark(t, "factory:lesson", [1, 4, 5]), [1, 4, 5])
+        self.assertEqual([c["id"] for c in retro.collect(t, "factory:lesson")], ["4-9"])
+
+    def test_facts_read_github_issue_environments_through_a_scoped_tracker(self):
+        from factory_plugins.facts import report
+        t, gh = self.scoped()
+        gh.stages = {"done": "factory:done"}
+        gh._list = lambda path: []
+        self.assertEqual(report.facts(t, "2026-11-01T00:00:00Z")["tickets"], [])
+
+
+class YouTrackLessonCommentsTest(unittest.TestCase):
+    def test_lesson_comments_carry_id_and_link(self):
+        from factory_plugins.youtrack.store import YouTrackTicketStore
+        calls = []
+
+        def run(method, path, body=None):
+            calls.append((method, path))
+            return [{"id": "4-9", "text": "<!-- factory:lesson -->\n- a"}]
+        store = YouTrackTicketStore(run, url="https://yt.example/")
+        self.assertEqual(store.lesson_comments("LME-1"), [
+            {"id": "4-9", "url": "https://yt.example/issue/LME-1#focus=Comments-4-9", "body": "<!-- factory:lesson -->\n- a"}])
+        self.assertTrue(calls[0][1].startswith("/api/issues/LME-1/comments?fields=id,text"))
+
+
 if __name__ == "__main__":
     unittest.main()
