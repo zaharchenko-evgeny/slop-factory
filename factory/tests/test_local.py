@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml>=6"]
+# dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/factory_plugins/local/surface.py, the local target. Run: uv run factory/tests/test_local.py"""
 import base64
