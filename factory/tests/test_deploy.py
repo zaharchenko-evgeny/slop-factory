@@ -1085,6 +1085,50 @@ class ProjectPlanTest(unittest.TestCase):
         self.assertEqual({t["source"] for t in a["fix"]["triggers"]}, {"github"})
         self.assertEqual(deploy.trigger("youtrack.fieldChanged State=In Progress", None)["filters"], {"State": "In Progress"})
 
+    def test_pr_trigger_by_human_compiles_to_an_air_filter_that_skips_the_factory(self):
+        """Triggers A: `{ pr: pushed, by: human }` reaches the Air plan as a user-only filter; the bot's push does not match."""
+        def edit(w):
+            w["nodes"]["fix"]["triggers"].append({"pr": "pushed", "by": "human"})
+        a = {x["spec"]["node"]: x for x in definition_plan(edit_workflow=edit)["automations"]}
+        self.assertIn({"triggerType": "EVENT", "source": "github", "eventType": "pull_request.synchronize",
+                       "filters": {"sender_type": "User"}}, a["fix"]["triggers"])
+        self.assertFalse([t for t in a["fix"]["triggers"] if t["filters"].get("sender") == "jetbrains-air[bot]"])
+
+    def test_new_pr_events_and_filters_compile_to_the_catalog_event_types(self):
+        """Every row of docs/air-events.md: the workflow trigger, its engine event string and its Air trigger."""
+        bot = "jetbrains-air[bot]"
+        rows = [
+            ({"pr": "reopened"}, "pull_request.reopened", {}),
+            ({"pr": "ready_for_review"}, "pull_request.ready_for_review", {}),
+            ({"pr": "converted_to_draft"}, "pull_request.converted_to_draft", {}),
+            ({"pr": "closed"}, "pull_request.closed", {}),
+            ({"pr": "review_requested"}, "pull_request.review_requested", {}),
+            ({"pr": "unlabeled", "label": "wip"}, "pull_request.unlabeled", {"label": "wip"}),
+            ({"pr": "edited"}, "pull_request.edited", {}),
+            ({"pr": "review_comment"}, "pull_request_review_comment.created", {}),
+            ({"pr": "reviewed"}, "pull_request_review.submitted", {}),
+            ({"pr": "reviewed", "state": "changes_requested"}, "pull_request_review.submitted",
+             {"review_state": "changes_requested"}),
+            ({"pr": "pushed", "by": "human"}, "pull_request.synchronize", {"sender_type": "User"}),
+            ({"pr": "pushed", "by": "factory"}, "pull_request.synchronize", {"sender": bot}),
+            ({"pr": "opened", "by": "carol"}, "pull_request.opened", {"sender": "carol"}),
+            ({"pr": "opened", "pr_author": "carol"}, "pull_request.opened", {"pr_author": "carol"}),
+            ({"label": "factory:fix", "by": "human"}, "pull_request.labeled", {"label": "factory:fix", "sender_type": "User"}),
+        ]
+        for trig, event, filters in rows:
+            with self.subTest(trigger=trig):
+                def edit(w, trig=trig):
+                    w["nodes"]["fix"]["triggers"] = [trig]
+                plan = definition_plan(edit_workflow=edit)
+                got = {x["spec"]["node"]: x for x in plan["automations"]}["fix"]["triggers"]
+                self.assertEqual(got, [{"triggerType": "EVENT", "source": "github", "eventType": event,
+                                        "filters": filters}])
+
+    def test_trigger_text_filters_only_apply_to_github_events(self):
+        self.assertEqual(deploy.trigger("pull_request.synchronize by=factory", None)["filters"], {"sender_type": "Bot"})
+        self.assertEqual(deploy.trigger("pull_request.synchronize", None)["filters"], {})
+        self.assertEqual(deploy.trigger("youtrack.fieldChanged State=In Progress", None)["filters"], {"State": "In Progress"})
+
     def test_youtrack_stage_tag_is_per_repository_and_only_that_node_listens(self):
         """#896: with `tracker.repository_field`, `implement api` listens to `factory:ready-api`, `implement web` to `-web`."""
         def edit(conf):

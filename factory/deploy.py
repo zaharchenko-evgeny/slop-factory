@@ -137,9 +137,20 @@ def flow_triggers(node: dict) -> str:
     return " or ".join(words) or "manual invocation"
 
 
+def by_filter(by: str, bot_login: str | None) -> dict:
+    """The Air filter of a trigger's `by`: Air filters are positive matches with no NOT (docs/air-events.md), so a
+    person is `sender_type: User`, the factory is its login (or `sender_type: Bot`) and a login is itself."""
+    if by == "human":
+        return {"sender_type": "User"}
+    if by == "factory":
+        return {"sender": bot_login} if bot_login else {"sender_type": "Bot"}
+    return {"sender": by}
+
+
 def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: str | None = None,
-            repo: str | None = None, repo_tags: tuple = ()) -> dict:
-    """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations)."""
+            repo: str | None = None, repo_tags: tuple = (), bot_login: str | None = None) -> dict:
+    """`issues.labeled factory:ready` → an EVENT trigger of create_automation (air-automations). `k=v` words after
+    the event (`pull_request.synchronize by=human`) are the trigger's filters (docs/air-events.md)."""
     event, _, arg = str(text).partition(" ")
     arg = arg.replace("<tier>", tier or "")
     arg = arg.replace("<focus>", focus or "")
@@ -149,6 +160,9 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
             arg = f"{arg}-{repo}"
         filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
         return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
+    words = arg.split(" ") if arg else []
+    wanted = dict(w.partition("=")[::2] for w in words if "=" in w)
+    arg = " ".join(w for w in words if "=" not in w)
     if event == "workflow_run":  # ADR-0021 `ci: failed`: Air fires only on a failed run (AIRA-725)
         return {"triggerType": "EVENT", "source": "github", "eventType": "workflow_run.failed",
                 "filters": {"workflow_name": arg}}
@@ -156,6 +170,14 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
     filters = {"label": arg} if labeled and arg else {}
     if pr_author and event.startswith("pull_request"):
         filters["pr_author"] = pr_author
+    if "pr_author" in wanted:
+        filters["pr_author"] = wanted["pr_author"]
+    if "by" in wanted:
+        filters.update(by_filter(wanted["by"], bot_login))
+    if "state" in wanted:
+        filters["review_state"] = wanted["state"]
+    if "label" in wanted:
+        filters["label"] = wanted["label"]
     return {"triggerType": "EVENT", "source": "github", "eventType": event, "filters": filters}
 
 
