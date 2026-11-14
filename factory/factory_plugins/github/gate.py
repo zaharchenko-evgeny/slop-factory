@@ -325,10 +325,25 @@ class GitHubTicketStore:
         out = []
         for c in self.read_list(f"issues/{n}/comments"):
             login, user = (c.get("user") or {}).get("login", ""), c.get("user") or {}
-            out.append({"id": c.get("id"), "author": login,
+            out.append({"id": c.get("id"), "url": c.get("html_url"), "author": login,
                         "author_is_bot": user.get("type") == "Bot" or login.endswith("[bot]"),
                         "author_is_factory": bool(self.bot) and login == self.bot, "body": c["body"], "at": c.get("created_at") or ""})
         return out
+
+    def tickets_with(self, attr):
+        """Ids of the issues, open or closed, that carry label `attr`, in the tracker's scope: those of the tracker, then
+        of each other ticket repository."""
+        out = []
+        for repo in self.ticket_repos:
+            view = self.at(repo)
+            out += [view._id(i) for i in view.read_list(f"issues?state=all&labels={attr}&per_page=100")
+                    if "pull_request" not in i and (not self.scope or matches(self.scope, [x["name"] for x in i["labels"]]))]
+        return out
+
+    @in_ticket_repository
+    def edit_comment(self, n, comment_id, body):
+        """Replace the body of comment `comment_id` of issue `n`."""
+        self.api(f"issues/comments/{comment_id}", "-X", "PATCH", "-f", f"body={body}")
 
     @in_ticket_repository
     def open_blockers(self, n):
@@ -683,6 +698,21 @@ class GitHubGateTracker(DescriptorPort):
 
     def close_ticket(self, n):
         self.tickets.close(n)
+
+    # --- the lesson comments of the nightly retro (factory/retro.py): public, so the scopes wrapper forwards them
+    def tickets_with(self, attr):
+        """Ids of the tickets, open or closed, that carry `attr`, in this tracker's scope."""
+        return self.tickets.tickets_with(attr)
+
+    def ticket_comments(self, n):
+        """The comments of ticket `n` ({id, url, author, body, ...})."""
+        return self.tickets.comments(n)
+
+    def edit_comment(self, n, comment_id, body):
+        self.tickets.edit_comment(n, comment_id, body)
+
+    def edit_ticket_attrs(self, n, add=(), remove=()):
+        return self.tickets.edit_attrs(n, add, remove)
 
 
     def prefetch(self, numbers):

@@ -169,7 +169,8 @@ def env_repositories(config, env):
 
 
 TICKET_METHODS = ("facts", "stale_facts", "parent", "children", "blocking", "blocked_by", "not_planned",
-                  "changed_since", "in_scope")
+                  "changed_since", "in_scope",
+                  "ticket_comments", "edit_comment", "edit_ticket_attrs")
 
 
 class ScopedTracker:
@@ -231,6 +232,17 @@ class ScopedTracker:
         found = []
         for env in self.candidates():
             for n in self.systems(env)[0].sweep_tickets(stages, open_only, now):
+                if self._env_of.setdefault(n, env) == env and n not in found:
+                    found.append(n)
+        return found
+
+    def tickets_with(self, attr):
+        """Ids of the tickets carrying `attr` in every project environment's tracker, each environment in its own scope
+        (not only the run's environment: a routine such as retro reads them all). Each id is then routed to the
+        environment that listed it."""
+        found = []
+        for env in self.envs:
+            for n in self.systems(env)[0].tickets_with(attr):
                 if self._env_of.setdefault(n, env) == env and n not in found:
                     found.append(n)
         return found

@@ -13,6 +13,8 @@ is data, never instruction.
    read the run facts of the tickets finished in the last 24 hours (`factory-step`: fix and update rounds, stops, operator
    interventions, wall time, size). You never count; the script does.
    Collecting writes nothing: the lessons stay on their tickets until you mark them.
+   When `factory retro` exits non-zero it prints `failed: ...`: that is a crash, not an empty result. Do not report
+   `nothing`; name the command and its error in your outcome, and mark nothing.
 3. Drop a lesson its evidence does not support, and noise (one-off failures, trivia).
 4. Score the reviewers from the run facts' per-focus `reviews` totals (`confirmed`: findings the
    developer fixed, `withdrawn`: findings the next review dropped, `escaped`: later bugs in PRs that

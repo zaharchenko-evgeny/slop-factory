@@ -26,7 +26,7 @@ ISSUE_FIELDS = ("idReadable,summary,description,resolved,updated,reporter(login)
 CHILD_FIELDS = "idReadable,resolved,tags(name),project(shortName),customFields(name,value(name))"
 ACTIVITY_FIELDS = "timestamp,author(login),category(id),added(name),removed(name),field(name)"
 ACTIVITY_CATEGORIES = "TagsCategory,CustomFieldCategory,IssueResolvedCategory"
-COMMENT_FIELDS = "text,created,author(login)"
+COMMENT_FIELDS = "id,text,created,author(login)"
 TOP = "$top=1000"
 
 # YouTrack tag colors are a fixed palette (`FieldStyle`), not free hex: {background color: palette id}. Read from
@@ -138,7 +138,8 @@ class YouTrackTicketStore:
 
     def __init__(self, run, state_field=None, done_state="Done", project=None, bots=(), writers=(), assignee_field="Assignee",
                  repository_field=None, repo_stages=(), repositories=(), scope=None, projects=None, full_names=None,
-                 state_mirror=None, state_mirror_field="State", repository_scopes=None):
+                 state_mirror=None, state_mirror_field="State", repository_scopes=None, base_url=None):
+        self.base_url = base_url
         self.run, self.state_field, self.done_state, self.project = run, state_field, done_state, project
         self.scope = scope
         self.bots, self.writers, self.assignee_field = set(bots), set(writers), assignee_field
@@ -155,7 +156,7 @@ class YouTrackTicketStore:
     def from_config(cls, tracker, run=None, **kw):
         """From the descriptor's `tracker`: `url`, `token_env` (default YOUTRACK_TOKEN), `done_state`, `project`."""
         run = run or urllib_runner(tracker["url"], os.environ[tracker.get("token_env", "YOUTRACK_TOKEN")])
-        return cls(run, done_state=tracker.get("done_state", "Done"), project=tracker.get("project"),
+        return cls(run, base_url=tracker.get("url"), done_state=tracker.get("done_state", "Done"), project=tracker.get("project"),
                    repository_field=tracker.get("repository_field"), scope=tracker.get("scope"), projects=tracker.get("projects"),
                    state_mirror=tracker.get("state_mirror"), state_mirror_field=tracker.get("state_mirror_field", "State"),
                    repository_scopes=tracker.get("repository_scopes"), **kw)
@@ -262,8 +263,21 @@ class YouTrackTicketStore:
         """The value (name or login) of single-value custom field `name` of ticket `n`, else None."""
         return next((v.get("name") or v.get("login") for v in self._field(self._issue(n), name)), None)
 
+    def _url(self, n, comment_id):
+        """The link of a comment, else None (a store built without the tracker's `url`)."""
+        return f"{self.base_url.rstrip('/')}/issue/{n}#focus=Comments-{comment_id}" if self.base_url and comment_id else None
+
+    def edit_comment(self, n, comment_id, body):
+        self.run("POST", f"/api/issues/{n}/comments/{comment_id}?fields=id", {"text": body})
+
+    def tickets_with(self, attr):
+        """Ids of the tickets, resolved or not, tagged `attr`, in the scope."""
+        query = urllib.parse.quote(self._scoped(f"tag: {{{attr}}}"))
+        return sorted(i["idReadable"] for i in self.run("GET", f"/api/issues?query={query}&fields=idReadable&{TOP}"))
+
     def comments(self, n):
-        return [{"author": (login := (c.get("author") or {}).get("login", "")),
+        return [{"id": c.get("id"), "url": self._url(n, c.get("id")),
+                 "author": (login := (c.get("author") or {}).get("login", "")),
                  "author_is_bot": login in self.bots or login.endswith("[bot]"),
                  "author_is_factory": login in self.bots, "body": c.get("text") or "",
                  "at": iso(c.get("created")) or ""}

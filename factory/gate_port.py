@@ -273,7 +273,10 @@ class TicketStore(Protocol):
     def comments(self, n) -> list: ...
     """Oldest first: {author, author_is_bot, author_is_factory, body, at, id?}; `id` (an integer that grows) is what the comment
     cursor reads. `author_is_factory` is true only for the factory's own login (`targets.air.bot_login`; YouTrack `bot_logins`).
-    Callers that ask "did the factory write this?" read it, never `author_is_bot`, which is true for any bot"""
+    Callers that ask "did the factory write this?" read it, never `author_is_bot`, which is true for any bot.
+    `url` (the comment's link, else None) is optional too"""
+    def edit_comment(self, n, comment_id, body): ...  # replace a comment's body (retro marks lessons collected)
+    def tickets_with(self, attr) -> list: ...  # ids of the tickets, open or closed, holding `attr`, in the store's scope
     def add_attr(self, n, attr): ...
     def remove_attr(self, n, *attrs): ...
     def set_stage(self, n, stage, have): ...  # `stage` replaces the stage attrs `have`
