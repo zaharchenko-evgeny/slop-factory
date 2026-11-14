@@ -769,12 +769,10 @@ def errors(defn):
             errs += _plugin_key_errors(registry, f"{where}.{o}", o, guards, kinds, oc.get("effects") or [])
             if any(isinstance(effect, dict) and "field" in effect and effect.get("on") != "pr"
                    for effect in oc.get("effects") or []):
-                for node_env in node_envs or [default_env]:
-                    if node_env in envs and any(
-                            repo["tracker"] is not None and repo["tracker"].get("adapter") != "youtrack"
-                            for repo in repositories(defn, node_env)):
-                        errs.append(f"unsupported-effect: {where}.{o}: field requires YouTrack tickets in environment {node_env}")
-                        break
+                if not any(node_env in envs and any(
+                        repo["tracker"] is not None and repo["tracker"].get("adapter") == "youtrack"
+                        for repo in repositories(defn, node_env)) for node_env in node_envs or [default_env]):
+                    errs.append(f"unsupported-effect: {where}.{o}: field requires a YouTrack ticket environment")
             for effect in oc.get("effects") or []:
                 if isinstance(effect, dict) and ("assign" in effect or "unassign" in effect):
                     key = "assign" if "assign" in effect else "unassign"
