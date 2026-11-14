@@ -20,6 +20,7 @@ Usage: factory [--team DIR] <subcommand> [args]; `uv run factory/gate.py ...` wo
        factory env roles ENV                       (the roles of the enabled agent nodes that run in ENV, one per line)
        factory sweep --main ...                    (the gate's sweep from main's graph)
        factory ci-sync [--dry-run]                 (the CI labels of the project repositories' factory PRs; reconcile runs it)
+       factory ui --team DIR [--port N] [--no-open]  (the read-only progress UI on 127.0.0.1; setup never starts it)
        factory deploy --target local [--apply] | factory run --local [--once] [--dry-run]   (the local target, ADR-0017)
 """
 import argparse
@@ -511,6 +512,9 @@ def _main(argv):
         return deploy.main(rest)
     if cmd == "contracts":
         return surface_command("air", "contracts")(rest)
+    if cmd == "ui":
+        from ui.server import main as ui_main
+        return ui_main(rest)
     if cmd == "chart":
         return tool_command("chart")(rest)
     if cmd == "facts":

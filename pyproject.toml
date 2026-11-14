@@ -18,4 +18,5 @@ package-dir = { "" = "factory" }
 py-modules = ["cli", "config", "definition", "deploy", "derive", "doctor", "effects", "gate", "gate_port", "gate_tracker", "lease", "nodes", "project", "reconcile", "retro", "scopes", "tag", "team_setup", "upgrade", "vocab", "workflow"]
 
 [tool.setuptools.package-data]
+ui = ["assets/*"]
 "factory_plugins.youtrack" = ["comment-wake/*"]
