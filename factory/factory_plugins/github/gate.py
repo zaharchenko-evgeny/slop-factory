@@ -28,6 +28,7 @@ from scopes import matches
 from factory_plugins.github import graphql
 from factory_plugins.github.tracker import CountedRun, ProjectWriteRun, RateLimited, checked_out, gh, project_repositories, repository_tokens, random_color
 import derive
+import lease
 import effects as effects_mod
 from derive import clean_notes, notes_block, parse_notes, redact  # noqa: F401  (the agent notes, ADR-0026)
 from ports.records import Lazy, PrRecord, TicketRecord
@@ -435,6 +436,13 @@ class GitHubTicketStore:
         flags += [x for a in sorted(current - desired) for x in ("--remove-assignee", a)]
         self.run(["issue", "edit", str(n), "-R", self.repo, *flags])
         return True
+
+    def claim(self, n, executor):
+        """The lease is the assignee (factory/lease.py): True when it wrote; ClaimError when another executor holds it."""
+        return lease.claim(self, n, executor)
+
+    def release(self, n, executor):
+        return lease.release(self, n, executor)
 
     @in_ticket_repository
     def comment(self, n, body):
@@ -1190,6 +1198,9 @@ class GitHubGateTracker(DescriptorPort):
             raise ValueError(f"{kind}: bad target: {on}")
         return self.tickets.assign(n, (value if isinstance(value, list) else [value]) if kind == "assign" else [])
 
+    def _fx_claim(self, e, ctx):  # value: the executor; raises ClaimError when another one holds the ticket
+        return (self.tickets.claim if e["kind"] == "claim" else self.tickets.release)(e["ticket"], e["value"])
+
     def _fx_pr_assign(self, e, ctx):
         n, kind, value = e["ticket"], e["kind"], e["value"]
         changed = False
@@ -1334,6 +1345,7 @@ class GitHubGateTracker(DescriptorPort):
         Effect("label", "pr", _fx_pr_label), Effect("unlabel", "pr", _fx_pr_label),
         Effect("set-field", "ticket", _fx_set_field),
         Effect("assign", "ticket", _fx_assign), Effect("unassign", "ticket", _fx_assign),
+        Effect("claim", "ticket", _fx_claim), Effect("release", "ticket", _fx_claim),
         Effect("assign", "pr", _fx_pr_assign), Effect("unassign", "pr", _fx_pr_assign),
         Effect("comment", "ticket", _fx_comment), Effect("comment", "pr", _fx_pr_comment),
         Effect("pr-notes", "pr", _fx_pr_notes), Effect("pr-notes-sync", "pr", _fx_pr_notes),
@@ -1487,7 +1499,7 @@ class GitHubGateTracker(DescriptorPort):
         found = sorted(e.get("findings") or [], key=lambda x: x.get("severity") != "blocking")  # blocking first
         defang = lambda t: str(t).replace("<!--", "<!\u200b--")  # noqa: E731  # prose never carries a marker
         lines = [defang(f"**{x['id']}** {x['file']} — {x['finding']}") for x in found]
-        summary = effects_mod.tagged(defang(e["summary"])) if e.get("summary") else effects_mod.TAG
+        summary = effects_mod.tagged(defang(e["summary"])) if e.get("summary") else effects_mod.tag_text()
         body = "\n\n".join(x for x in (summary, "\n".join(lines), marker) if x)
         if e.get("run_id"):
             body += f"\n\nFactory-Run: {e['run_id']}"

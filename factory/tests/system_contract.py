@@ -9,11 +9,14 @@ at head `HEAD` that carries `factory:fix-mid` too. The suite then checks:
   case needs, `NO_WRITE` for a pair that never writes, and `EXEMPT` (with the reason) for one that cannot keep it;
 - the guarantees of a state store (ADR-0028): compare-and-set on the stage, an `actor` on every ticket event, the
   author flags on every comment, `find` for `stage`, `children` and `blocking`, and `event(payload)` with the canonical
-  trigger names. The lease is not here: its effect adds its test (#1271).
+  trigger names;
+- the lease (#1271): `claim` assigns the executor once, a second claim by another executor fails and writes
+  nothing, and `release` drops only the executor's own lease.
 A system that does not keep a guarantee yet lists the test in `XFAIL` with the follow-up issue; the test then must
 fail, so the list shrinks when the system is fixed.
 """
 import effects
+import lease
 from ports.system import Query, Subject
 
 
@@ -35,6 +38,8 @@ CASES = {
     ("field", "ticket"): ([], eff("field", {"name": "Effort", "value": "S"})),
     ("assign", "ticket"): ([], eff("assign", "alice")),
     ("unassign", "ticket"): ([eff("assign", "alice")], eff("unassign")),
+    ("claim", "ticket"): ([], eff("claim", "exec-a")),
+    ("release", "ticket"): ([eff("claim", "exec-a")], eff("release", "exec-a")),
     ("assign", "pr"): ([], eff("assign", "alice", on="pr")),
     ("unassign", "pr"): ([eff("assign", "alice", on="pr")], eff("unassign", on="pr")),
     ("comment", "ticket"): ([], eff("comment", "hi", run_id="r")),
@@ -157,6 +162,33 @@ class SystemContract:
             for flag in ("author_is_bot", "author_is_factory"):
                 self.assertIsInstance(c.get(flag), bool, f"comment without {flag}: {c}")
         self.assertEqual((mine[0]["author_is_bot"], mine[0]["author_is_factory"]), (True, True))
+
+    # --- the lease
+    def holders(self, s):
+        return s.read(Subject("ticket", 7)).assignees
+
+    def test_a_claim_assigns_the_executor_once(self):
+        s = self.make()
+        self.assertTrue(s.apply(eff("claim", "exec-a")))
+        self.assertEqual(self.holders(s), ["exec-a"])
+        self.assertFalse(s.apply(eff("claim", "exec-a")))
+
+    def test_a_claim_by_another_executor_fails_and_writes_nothing(self):
+        s = self.make()
+        self.assertTrue(s.apply(eff("claim", "exec-a")))
+        with self.assertRaises(lease.ClaimError):
+            s.apply(eff("claim", "exec-b"))
+        self.assertEqual(self.holders(s), ["exec-a"])
+
+    def test_a_release_drops_only_the_executors_own_lease(self):
+        s = self.make()
+        self.assertFalse(s.apply(eff("release", "exec-a")))  # nothing held
+        self.assertTrue(s.apply(eff("claim", "exec-a")))
+        self.assertFalse(s.apply(eff("release", "exec-b")))
+        self.assertEqual(self.holders(s), ["exec-a"])
+        self.assertTrue(s.apply(eff("release", "exec-a")))
+        self.assertEqual(self.holders(s), [])
+        self.assertTrue(s.apply(eff("claim", "exec-b")))
 
     def foreign_comments(self, s):
         """Put on ticket 7 a comment by a human (`alice`) and one by a bot that is not the factory (`ci[bot]`)."""

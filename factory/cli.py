@@ -320,13 +320,13 @@ def report_end_failure(state, outcome, error, run=subprocess.run):
         return
     tail = "\n".join(line for line in error.strip().splitlines()[-5:])[:1500] or "no error output"
     body = (f"{END_FAILED} node={state['node']} head={state.get('head') or 'none'} outcome={outcome}\n\n```\n{tail}\n```\n\n"
-            f"The outcome did not land; a retry on this head fails the same way until the cause is fixed.\n\n"
-            f"Factory-Run: {os.environ.get('FACTORY_NODE') or state['node']}")
+            "The outcome did not land; a retry on this head fails the same way until the cause is fixed.")
     try:
+        cfg = config.load()  # sets the comment tag
         from effects import tagged
-        body = tagged(body)
+        body = f"{tagged(body)}\n\nFactory-Run: {os.environ.get('FACTORY_NODE') or state['node']}"
         from gate_port import split_ticket
-        repo, number = split_ticket(state["ticket"], config.load()["tracker"].get("repository"))
+        repo, number = split_ticket(state["ticket"], cfg["tracker"].get("repository"))
         run(["gh", "issue", "comment", str(number), *(["-R", repo] if repo else []), "--body", body],
             capture_output=True, text=True, timeout=60)
     except Exception as e:

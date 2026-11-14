@@ -88,6 +88,12 @@ adapter that no plugin provides, scope keys of another adapter, and projects
 that share one tracker with the same scope or with no scope. Without any
 environment `tracker`, nothing changes.
 
+An outcome's `field` effect writes a custom field on a YouTrack ticket.
+`factory validate` rejects this effect when a node runs in an environment
+whose tickets are not in YouTrack. Before it writes an outcome, the gate also
+checks that each target system supports every effect. It refuses an
+unsupported effect by name and writes nothing.
+
 ### Per-environment vcs
 
 An environment can host its pull requests elsewhere with `vcs` (#1070). It
