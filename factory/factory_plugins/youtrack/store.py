@@ -138,7 +138,8 @@ class YouTrackTicketStore:
 
     def __init__(self, run, state_field=None, done_state="Done", project=None, bots=(), writers=(), assignee_field="Assignee",
                  repository_field=None, repo_stages=(), repositories=(), scope=None, projects=None, full_names=None,
-                 state_mirror=None, state_mirror_field="State", repository_scopes=None):
+                 state_mirror=None, state_mirror_field="State", repository_scopes=None, url=None):
+        self.url = (url or "").rstrip("/")  # the YouTrack base URL: the links of `lesson_comments`
         self.run, self.state_field, self.done_state, self.project = run, state_field, done_state, project
         self.scope = scope
         self.bots, self.writers, self.assignee_field = set(bots), set(writers), assignee_field
@@ -158,7 +159,7 @@ class YouTrackTicketStore:
         return cls(run, done_state=tracker.get("done_state", "Done"), project=tracker.get("project"),
                    repository_field=tracker.get("repository_field"), scope=tracker.get("scope"), projects=tracker.get("projects"),
                    state_mirror=tracker.get("state_mirror"), state_mirror_field=tracker.get("state_mirror_field", "State"),
-                   repository_scopes=tracker.get("repository_scopes"), **kw)
+                   repository_scopes=tracker.get("repository_scopes"), url=tracker.get("url"), **kw)
 
     # --- reads
     def _issue(self, n):
@@ -268,6 +269,12 @@ class YouTrackTicketStore:
                  "author_is_factory": login in self.bots, "body": c.get("text") or "",
                  "at": iso(c.get("created")) or ""}
                 for c in self.run("GET", f"/api/issues/{n}/comments?fields={COMMENT_FIELDS}&{TOP}")]
+
+    def lesson_comments(self, n):
+        """[{id, url, body}] of ticket `n`'s comments, for the nightly retro (#1426): the id and link let it cite one."""
+        return [{"id": c.get("id"), "url": f"{self.url}/issue/{n}#focus=Comments-{c.get('id')}" if self.url else None,
+                 "body": c.get("text") or ""}
+                for c in self.run("GET", f"/api/issues/{n}/comments?fields=id,text&{TOP}")]
 
     def _links(self, n, link, direction):
         return [i for l in self._issue(n).get("links") or []
