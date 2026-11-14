@@ -26,8 +26,8 @@ describe("ui_ticket_details_and_ranges", () => {
     [null, "age unknown"], [0, "<1m"], [59, "<1m"], [60, "1m"], [3599, "59m"], [3600, "1h 0m"], [3 * 3600 + 125, "3h 2m"],
     [86400, "1d 0h"], [2 * 86400 + 5 * 3600 + 59, "2d 5h"], [Number.NaN, "age unknown"],
   ])("formats %s as %s", (seconds, text) => expect(formatAge(ageOf(seconds, "active"))).toBe(text));
-  it("formats an exempt age and a missing age", () => {
-    expect(formatAge(ageOf(null, "waiting", "exempt"))).toBe("no age limit");
+  it.each(["active", "waiting", "final", null])("missing entry time reads 'age unknown' for kind %s, exempt or not", (kind) => {
+    for (const state of ["exempt", "unknown", "ok"] as const) expect(formatAge(ageOf(null, kind, state))).toBe("age unknown");
     expect(formatAge(undefined)).toBe("age unknown");
   });
 

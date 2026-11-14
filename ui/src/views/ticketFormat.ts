@@ -5,7 +5,7 @@ export const WARN_AFTER_SECONDS = 3600;
 /** "unknown" when the entry time is missing; otherwise the age as `2d 3h`, `5h 10m`, `12m` or `<1m`. */
 export function formatAge(age: StageAge | undefined): string {
   if (!age || age.seconds == null || !Number.isFinite(age.seconds)) {
-    return age?.state === "exempt" ? "no age limit" : "age unknown";
+    return "age unknown";
   }
   const m = Math.floor(age.seconds / 60);
   if (m < 1) return "<1m";
