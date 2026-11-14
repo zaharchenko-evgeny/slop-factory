@@ -1,22 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FilterBar } from "@/FilterBar";
-import { type Filters, NO_FILTERS, filterSnapshot } from "@/filters";
+import { NO_FILTERS, filterSnapshot } from "@/filters";
+import { type Theme, applyTheme, defaultStorageKey, loadPrefs, savePrefs } from "@/prefs";
 import { loadSnapshot, mergeSnapshot, type Snapshot } from "@/snapshot";
 import { registry as defaultRegistry, type ViewRegistry } from "@/views/registry";
 
 // Prototype B, full canvas: a compact header and toolbar over a full-width canvas, no permanent sidebar.
-export function App({ registry = defaultRegistry, load = loadSnapshot }: { registry?: ViewRegistry; load?: () => Promise<Snapshot> }) {
+export function App({ registry = defaultRegistry, load = loadSnapshot, storageKey = defaultStorageKey() }: { registry?: ViewRegistry; load?: () => Promise<Snapshot>; storageKey?: string }) {
+  const saved = useMemo(() => loadPrefs(storageKey), [storageKey]);
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [error, setError] = useState<string>();
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
-  const [active, setActive] = useState(registry.defaultId());
+  const [filters, setFilters] = useState(saved.filters);
+  const [active, setActive] = useState(saved.view && registry.get(saved.view) ? saved.view : registry.defaultId());
+  const [theme, setTheme] = useState<Theme>(saved.theme);;
 
   const [loading, setLoading] = useState(false);
   const [lastOk, setLastOk] = useState<Date>();
-  const [auto, setAuto] = useState(false); // manual refresh is the default
-  const [interval, setIntervalMs] = useState(60_000); // 60s when first enabled
+  const [auto, setAuto] = useState(saved.auto); // manual refresh is the default
+  const [interval, setIntervalMs] = useState(saved.interval); // 60s when first enabled
   const inflight = useRef(false);
 
   // One request at a time: a click or a tick while a request runs does nothing.
@@ -43,9 +46,13 @@ export function App({ registry = defaultRegistry, load = loadSnapshot }: { regis
     return () => clearInterval(id);
   }, [auto, interval, refresh]);
 
+  useEffect(() => { applyTheme(theme); }, [theme]);
+  useEffect(() => { savePrefs(storageKey, { view: active, filters, theme, auto, interval }); }, [storageKey, active, filters, theme, auto, interval]);
+
   const view = active ? registry.get(active) : undefined;
   return (
     <div className="flex h-screen flex-col">
+      <a href="#main" className="sr-only focus:not-sr-only focus:p-2">Skip to content</a>
       <header className="flex items-center gap-3 border-b border-border px-4 py-2">
         <h1 className="text-sm font-semibold">Factory progress</h1>
         {snapshot && <Badge>{snapshot.tickets.length} tickets</Badge>}
@@ -56,9 +63,17 @@ export function App({ registry = defaultRegistry, load = loadSnapshot }: { regis
             {v.title}
           </Button>
         ))}
-        <span data-testid="last-refresh" className="ml-auto text-xs text-muted-foreground">
+        <span data-testid="last-refresh" role="status" className="ml-auto text-xs text-muted-foreground">
           {lastOk ? `Last refreshed ${lastOk.toLocaleTimeString()}` : "Not refreshed yet"}
         </span>
+        <label className="flex items-center gap-1 text-xs">
+          Theme
+          <select aria-label="Theme" className="rounded border border-border bg-background text-xs" value={theme} onChange={(e) => setTheme(e.target.value as Theme)}>
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
         <label className="flex items-center gap-1 text-xs">
           <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
           Auto-refresh
@@ -72,7 +87,7 @@ export function App({ registry = defaultRegistry, load = loadSnapshot }: { regis
         <Button size="sm" variant="ghost" disabled={loading} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh"}</Button>
       </nav>
       {snapshot && <FilterBar snapshot={snapshot} filters={filters} onChange={setFilters} />}
-      <main className="min-h-0 flex-1 overflow-auto">
+      <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-auto">
         {error && <p role="alert" className="p-4 text-sm text-red-600">Refresh failed (showing the last data): {error}</p>}
         {snapshot?.errors?.map((e, i) => (
           <p key={i} role="alert" data-testid="source-error" className="px-4 py-1 text-sm text-red-600">

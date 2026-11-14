@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import type { Ticket } from "@/snapshot";
 import { formatAge, isAmber } from "./ticketFormat";
@@ -9,8 +10,9 @@ export function TicketCard({ ticket, showTracker, selected, onSelect }: {
   ticket: Ticket; showTracker: boolean; selected: boolean; onSelect: () => void;
 }) {
   const amber = isAmber(ticket);
+  const changed = useChanged(ticket);
   return (
-    <li data-testid="ticket-card" data-amber={amber} className="list-none">
+    <li data-testid="ticket-card" data-amber={amber} data-changed={changed} className={`list-none rounded ${changed ? "changed" : ""}`}>
       <button
         type="button"
         aria-pressed={selected}
@@ -33,4 +35,19 @@ export function TicketCard({ ticket, showTracker, selected, onSelect }: {
       </button>
     </li>
   );
+}
+
+/** True for a short time after the ticket changes while mounted; the first render is not a change. */
+function useChanged(ticket: Ticket): boolean {
+  const sig = JSON.stringify([ticket.stage, ticket.title, ticket.human, ticket.warnings, ticket.ci, ticket.prs]);
+  const prev = useRef(sig);
+  const [changed, setChanged] = useState(false);
+  useEffect(() => {
+    if (prev.current === sig) return;
+    prev.current = sig;
+    setChanged(true);
+    const id = setTimeout(() => setChanged(false), 800);
+    return () => clearTimeout(id);
+  }, [sig]);
+  return changed;
 }
