@@ -871,6 +871,38 @@ class DefinitionTest(unittest.TestCase):
         self.assertEqual(wakes["retro"], ["schedule retro"])
         self.assertEqual(wakes["human"], ["manual"])
 
+    def test_trigger_filters_reach_wakes_and_engine_events(self):
+        rows = [({"pr": "pushed", "by": "human"}, "pr pushed by=human", "pull_request.synchronize by=human"),
+                ({"pr": "reviewed", "state": "approved", "by": "factory"}, "pr reviewed by=factory state=approved",
+                 "pull_request_review.submitted by=factory state=approved"),
+                ({"pr": "closed"}, "pr closed", "pull_request.closed"),
+                ({"pr": "review_comment"}, "pr review_comment", "pull_request_review_comment.created"),
+                ({"label": "factory:fix", "by": "human"}, "command fix by=human", "pull_request.labeled factory:fix by=human")]
+        for trig, wake, event in rows:
+            with self.subTest(trigger=trig):
+                self.edit("workflow.yaml", lambda w, trig=trig: w["nodes"]["fix"].update(triggers=[trig]))
+                defn = definition.load(self.root)
+                self.assertEqual(definition.to_project(defn)[1]["nodes"]["fix"]["wakes_on"], [wake])
+                self.assertEqual(definition.nodes(defn)["nodes"]["fix"]["triggers"], [event])
+                self.assertEqual(self.errors(), [])
+
+    def test_validate_names_the_supported_events_and_filters(self):
+        rows = [({"pr": "pushd"}, "unknown-event: nodes.fix: pr: pushd: supported pr events: closed, commented"),
+                ({"ticket": "reopened"}, "unknown-event: nodes.fix: ticket: reopened: supported ticket events: closed, commented"),
+                ({"ci": "typo"}, "unknown-event: nodes.fix: ci: typo: supported ci events: failed"),
+                ({"pr": "pushed", "who": "human"}, "unknown-filter: nodes.fix: who: supported filters: by, state, pr_author, label"),
+                ({"pr": "pushed", "state": "approved"}, "unknown-filter: nodes.fix: state fits only `pr: reviewed`"),
+                ({"pr": "reviewed", "state": "done"}, "bad-filter: nodes.fix: state done: supported states: approved, changes_requested, commented"),
+                ({"pr": "pushed", "by": ""}, "bad-filter: nodes.fix: by is one word"),
+                ({"pr": "pushed", "by": "two words"}, "bad-filter: nodes.fix: by is one word"),
+                ({"ticket": "closed", "by": "human"}, "unknown-filter: nodes.fix: by does not fit `ticket`"),
+                ({"webhooks": "x"}, "unknown-trigger: nodes.fix: webhooks: supported keys: stage, label"),
+                ("pushed", "unknown-trigger: nodes.fix: 'pushed': supported: manual")]
+        for trig, want in rows:
+            with self.subTest(trigger=trig):
+                self.edit("workflow.yaml", lambda w, trig=trig: w["nodes"]["fix"].update(triggers=[trig]))
+                self.assertTrue(any(e.startswith(want) for e in self.errors()), (want, self.errors()))
+
     def test_compile_guards_and_effects(self):
         desc, wf = definition.to_project(definition.load(self.root))
         n = wf["nodes"]
