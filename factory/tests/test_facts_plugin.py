@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-cfg.set_team(ROOT / "factory/tests/fixtures/team")
+cfg.set_team(ROOT / "factory/tests/fixtures/v2")
 import cli  # noqa: E402
 from factory_plugins.facts import report as retro  # noqa: E402
 
@@ -36,7 +36,11 @@ class FactsTest(unittest.TestCase):
               label("fix-mid", "2026-11-01T03:00:00Z"), label("update-cheap", "2026-11-01T04:00:00Z")]
         issue = [label("ready", "2026-11-01T00:00:00Z"), label("ready", "2026-11-01T02:30:00Z"),
                  label("done", "2026-11-01T06:00:00Z")]
-        f = retro.ticket_facts(7, issue, pr, [], [], {BOT["login"]})
+        # the v2 fixture declares no `fix-<tier>` / `update-<tier>` command labels, so the engine counts none (#1394):
+        # give the facts the command templates a team with tiered fix and update labels declares
+        templates = {"fix-<tier>": "factory:fix-", "update-<tier>": "factory:update-"}
+        with mock.patch.object(retro.vocab, "prefix", side_effect=templates.__getitem__):
+            f = retro.ticket_facts(7, issue, pr, [], [], {BOT["login"]})
         self.assertEqual((f["fix_rounds"], f["update_rounds"], f["ready_to_done_hours"]), (3, 1, 6.0))
 
     def test_operator_interventions_follow_the_stage_prefix(self):

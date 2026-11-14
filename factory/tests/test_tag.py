@@ -93,6 +93,7 @@ class ConfiguredTagTest(unittest.TestCase):
             real = config._load  # the gate loads the config, which sets the tag: give it the setting
             gh = FakeGh()
             with patch.object(config, "_load", lambda: {**real(), **({} if setting is None else {"comment_tag": setting})}):
+                config.load()  # the gate's entry point loads the config, which sets the tag
                 tr(gh).apply(eff("review", "request-changes-at-head", focus="full", round=1, summary="Close.", findings=[], run_id="r9"))
             self.assertEqual(gh.writes[0][-1].removeprefix("body=").split("\n\n")[0], head, setting)
 

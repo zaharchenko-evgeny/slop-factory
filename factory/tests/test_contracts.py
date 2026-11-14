@@ -15,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-cfg.set_team(HERE / "fixtures/team")
+cfg.set_team(HERE / "fixtures/v2")
 from factory_plugins.air import contracts  # noqa: E402
 import gate  # noqa: E402
 

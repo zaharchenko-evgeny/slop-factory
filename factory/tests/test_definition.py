@@ -4,6 +4,7 @@
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
 """Tests for factory/definition.py (ADR-0021). Run: uv run factory/tests/test_definition.py"""
+import copy
 import json
 import os
 import shutil
@@ -1302,10 +1303,18 @@ class YouTrackRepositoryScopesTest(unittest.TestCase):
 class PlanTest(unittest.TestCase):
     """`definition.plan`: the sweep's start, merge, finish, reopen and join decisions from the node graph."""
     ON = {"enabled": True, "max_risk": "high"}
+    NON_FINAL = ["triage", "ready", "in-dev", "in-review", "changes-requested", "approved", "needs-answers", "split"]
 
     def setUp(self):
         import nodes as nodes_mod
-        self.graph = nodes_mod.load(ROOT.parent / "engine/nodes.yaml")
+        self.graph = copy.deepcopy(nodes_mod.load())
+        # `definition.plan` still names the sweep's decisions after the engine's own graph; the v2 graph has no node
+        # for them, so the test adds each one it asks for as an outcome with no `from` (any stage allows it)
+        for node, names in {"start": ["started"], "reopen": ["reopened"], "join": ["approved", "changes", "waiting"],
+                            "finish": ["merged", "conflict", "answered", "child-blocked"], "merge": ["updated"]}.items():
+            outcomes = self.graph["nodes"].setdefault(node, {"outcomes": {}})["outcomes"]
+            for name in names:  # a finish is never from a final stage
+                outcomes.setdefault(name, {"effects": [], **({"from": self.NON_FINAL} if node == "finish" else {})})
         self.base = {"ticket": 1, "pr": 5, "pr_state": "open", "head": "h1", "ci": "green", "round_complete": True,
                      "round_verdict": "approve", "round_head": "h1", "risk": "low", "blockers_open": 0,
                      "attrs": ["complexity:medium"], "pr_labels": [], "reviews": []}
