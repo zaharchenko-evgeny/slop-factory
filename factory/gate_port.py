@@ -125,7 +125,7 @@ def combine_prs(prs):
     return {**{k: v for k, v in prs[0].items() if k != "repo"}, "heads": {p["repo"]: p["head"] for p in prs},
             "prs": [{k: p[k] for k in ("repo", "pr", "head", "branch", "pr_state", "ci", "round_complete",
                                     "round_verdict", "round_head")} for p in prs],
-            "ci": next((c for c in ("red", "pending", "none") if c in cis), "green"),
+            "ci": next((c for c in ("red", "pending", "unknown", "none") if c in cis), "green"),
             "pr_state": next((s for s in ("open", "none", "closed") if s in states), "merged"),
             "mergeable": False if False in mergeable else None if None in mergeable else True,
             "conflict": any(p["conflict"] for p in prs), "behind": any(p["behind"] for p in prs),
