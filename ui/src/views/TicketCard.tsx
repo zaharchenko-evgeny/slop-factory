@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import type { Ticket } from "@/snapshot";
 import { formatAge, isAmber } from "./ticketFormat";
+import { HumanBadge } from "./HumanBadge";
 
 /** A ticket card: ID, title, repository, stage, stage age and warnings. `showTracker` tells equal short IDs of
  * different tracker instances apart. */
@@ -25,6 +26,7 @@ export function TicketCard({ ticket, showTracker, selected, onSelect }: {
         <div className="mt-1 flex flex-wrap items-center gap-1">
           <Badge>{ticket.stage}</Badge>
           <span data-testid="card-age">{formatAge(ticket.stage_age)}</span>
+          <HumanBadge human={ticket.human} />
           {amber && <Badge className="border-amber-500 text-amber-700 dark:text-amber-300">amber: over 1h</Badge>}
           {(ticket.warnings ?? []).filter((w) => w.kind !== "stage-age").map((w, i) => <Badge key={i}>{w.message}</Badge>)}
         </div>

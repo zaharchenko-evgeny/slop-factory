@@ -20,6 +20,15 @@ export function TicketDetails({ ticket, onClose }: { ticket: Ticket; onClose: ()
         <button type="button" className="ml-auto text-xs underline" onClick={onClose}>Close</button>
       </div>
       {ticket.facts_error && <p role="status" className="text-xs text-red-600">{ticket.facts_error}</p>}
+      {ticket.human?.kind && (
+        <Section title="Human attention">
+          <p data-testid="details-human">
+            {ticket.human.label ?? (ticket.human.kind === "review" ? "Needs human review" : "Needs human attention")}
+            {" · reason: "}{ticket.human.reason ?? "unknown"}
+            {" · reviewer: "}{ticket.human.reviewer ?? "unknown"}
+          </p>
+        </Section>
+      )}
       <Section title="Linked PRs">
         {prs.length === 0 ? <Missing what="Linked PR" /> : (
           <ul>{prs.map((p, i) => (
