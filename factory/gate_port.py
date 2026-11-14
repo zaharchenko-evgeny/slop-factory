@@ -125,7 +125,7 @@ def combine_prs(prs):
     return {**{k: v for k, v in prs[0].items() if k != "repo"}, "heads": {p["repo"]: p["head"] for p in prs},
             "prs": [{k: p[k] for k in ("repo", "pr", "head", "branch", "pr_state", "ci", "round_complete",
                                     "round_verdict", "round_head")} for p in prs],
-            "ci": next((c for c in ("red", "pending", "none") if c in cis), "green"),
+            "ci": next((c for c in ("red", "pending", "unknown", "none") if c in cis), "green"),
             "pr_state": next((s for s in ("open", "none", "closed") if s in states), "merged"),
             "mergeable": False if False in mergeable else None if None in mergeable else True,
             "conflict": any(p["conflict"] for p in prs), "behind": any(p["behind"] for p in prs),
@@ -281,7 +281,7 @@ class TicketStore(Protocol):
     def claim(self, n, executor) -> bool: ...  # the lease (factory/lease.py): ClaimError when another executor holds it
     def release(self, n, executor) -> bool: ...  # drop the executor's own lease
     def comment(self, n, body): ...
-    def close(self, n): ...
+    def close(self, n, reason=None): ...  # `reason`: "not planned" or "completed"
     def open_blockers(self, n) -> list: ...  # ids of the open tickets blocking `n`
     def blocking(self, n) -> list: ...  # [{number, state}] of the tickets `n` blocks
     def parent(self, n): ...  # the parent's id, else None
@@ -680,9 +680,9 @@ class MemoryTicketStore:
     def comment(self, n, body):
         self.tickets[n]["comments"].append({"author": self.actor, "author_is_bot": True, "author_is_factory": True, "body": body, "at": None})
 
-    def close(self, n, at=None):
+    def close(self, n, at=None, reason=None):
         t = self.tickets[n]
-        t["state"], t["close_reason"] = "closed", "completed"
+        t["state"], t["close_reason"] = "closed", "not_planned" if reason == "not planned" else "completed"
         t["closed_at"] = at or datetime.now(timezone.utc)
         t["events"].append({"kind": "closed", "value": None, "actor": self.actor, "at": None})
 

@@ -2,7 +2,8 @@
 
 A system declares its handlers in `effects` (factory/ports/system.py `Effect`); the core keeps the factory's rules
 here, around every handler:
-- `stage: done` closes the ticket first (a retry still finds it by its stage);
+- a `stage` to `done` or to any stage of kind `final` closes the ticket first (a retry still finds it by its stage):
+  `not-actionable` closes it as not planned, every other final stage as completed (the default);
 - a `merge` runs only when its `needs` facts hold (`refused`); a system merges one repository at a time, the
   primary last (`primary_last`), always pinned to the head the gates judged (`--match-head-commit` on GitHub);
 - remote effects (`Effect.remote`: a code-host write that can fail there) run before any tracker write (`order`);
@@ -61,12 +62,21 @@ def _call(x, system, e, ctx):
     return fn(system, e, ctx)
 
 
+def is_final(stage):
+    """Whether `stage` is `done` or a stage of kind `final` in the team's tracker settings."""
+    if stage == "done":
+        return True
+    import config
+    return (config.load()["tracker"].get("stage_kinds") or {}).get(stage) == "final"
+
+
 def apply(system, e, ctx=None):
     """Apply effect `e` on `system` under the core policies; True when it wrote."""
     ctx = {} if ctx is None else ctx
     found = registry(system)
-    if e["kind"] == "stage" and e.get("value") == "done" and ("close", "ticket") in found:
-        closed = bool(_call(found[("close", "ticket")], system, e, ctx))  # before the stage: a retry still finds it
+    if e["kind"] == "stage" and is_final(e.get("value")) and ("close", "ticket") in found:
+        reason = {"reason": "not planned"} if e["value"] == "not-actionable" else {}  # the default close is completed
+        closed = bool(_call(found[("close", "ticket")], system, {**e, **reason}, ctx))  # before the stage: a retry still finds it
         return bool(_call(found[("stage", "ticket")], system, e, ctx)) or closed
     x = spec(system, e)
     if x is None:

@@ -298,6 +298,28 @@ def eff(kind, value, **kw):
     return {"ticket": 7, "kind": kind, "value": value, **kw}
 
 
+class FinalStageCloseTest(unittest.TestCase):
+    """A stage of kind `final` closes the GitHub issue: `not-actionable` as not planned, the others as completed."""
+
+    def test_final_stage_closes_with_its_reason(self):
+        for stage, closes, reason in (("not-actionable", True, ["--reason", "not planned"]), ("done", True, []),
+                                      ("triage", False, None), ("in-review", False, None)):
+            with self.subTest(stage=stage):
+                gh = FakeGh(labels=["factory:in-review"])
+                tr(gh).apply(eff("stage", stage))
+                close = [a for a in gh.writes if a[:2] == ["issue", "close"]]
+                self.assertEqual(len(close), 1 if closes else 0)
+                if closes:
+                    self.assertEqual(close[0][5:], reason)
+                    self.assertIn(f"factory:{stage}", gh.labels)
+
+    def test_a_closed_issue_is_not_closed_again(self):
+        gh = FakeGh(labels=["factory:in-review"])
+        gh.state = "closed"
+        tr(gh).apply(eff("stage", "not-actionable"))
+        self.assertEqual([a for a in gh.writes if a[:2] == ["issue", "close"]], [])
+
+
 class FactsTest(unittest.TestCase):
     def test_prefers_open_then_merged_then_newest_pr(self):
         gh = FakeGh()
@@ -2143,6 +2165,79 @@ class RequiredChecksTest(unittest.TestCase):
         def run(args):
             raise RuntimeError("HTTP 403: Resource not accessible by integration")
         self.assertEqual(M_GH.head_ci(M_GH.head_checks(run, "o/r", "s", ["tc"]))[0], "pending")
+
+
+class ActionsCiWithoutChecksPermissionTest(unittest.TestCase):
+    """The Air app has no checks or statuses permission: Actions CI reads from the Actions API (#1424)."""
+    DENIED = "gh api: HTTP 403: Resource not accessible by integration"
+
+    @staticmethod
+    def host(workflow_runs, jobs, statuses="deny", checks="deny"):
+        def run(args):
+            path = next(x for x in args if x.startswith("repos/"))
+            if "/rules/" in path:
+                return "[]"
+            if "/check-runs" in path:
+                if checks == "deny":
+                    raise RuntimeError(ActionsCiWithoutChecksPermissionTest.DENIED)
+                return ""
+            if path.endswith("/status"):
+                if statuses == "deny":
+                    raise RuntimeError(ActionsCiWithoutChecksPermissionTest.DENIED)
+                return json.dumps({"statuses": statuses})
+            if "/jobs" in path:
+                return "\n".join(json.dumps(j) for j in jobs)
+            if "/actions/runs" in path:
+                return "\n".join(json.dumps(r) for r in workflow_runs)
+            raise AssertionError(path)
+        return run
+
+    def state(self, run, names=None, workflow="CI"):
+        return M_GH.head_ci(M_GH.head_checks(run, "o/r", "s", names, workflow=workflow))[0]
+
+    def test_table(self):
+        ok = {"id": 1, "run_number": 1, "name": "CI", "status": "completed", "conclusion": "success"}
+        for label, runs, jobs, want in [
+                ("a successful workflow run reads green", [ok], [{"status": "completed", "conclusion": "success", "completed_at": "T"}], "green"),
+                ("a failed job is red", [ok], [{"status": "completed", "conclusion": "success"}, {"status": "completed", "conclusion": "failure"}], "red"),
+                ("a running run is pending", [{**ok, "status": "in_progress", "conclusion": None}], [{"status": "in_progress", "conclusion": None}], "pending"),
+                ("no run yet is pending", [], [], "pending"),
+                ("another workflow is not the CI", [{**ok, "name": "docs"}], [], "pending"),
+                ("the latest run counts", [{**ok, "id": 1, "conclusion": "failure"}, {**ok, "id": 2, "run_number": 2}],
+                 [{"status": "completed", "conclusion": "success"}], "green"),
+                ("a run with no jobs reads its own conclusion", [ok], [], "green")]:
+            with self.subTest(label):
+                self.assertEqual(self.state(self.host(runs, jobs)), want)
+
+    def test_required_names_the_workflow_does_not_cover_stay_pending(self):
+        ok = {"id": 1, "run_number": 1, "name": "CI", "status": "completed", "conclusion": "success"}
+        job = lambda n: {"name": n, "status": "completed", "conclusion": "success"}  # noqa: E731
+        for label, names, jobs, want in [
+                ("workflow name counted alone", ["CI"], [job("build")], "green"),
+                ("workflow plus an external required name", ["CI", "external-required"], [job("build")], "pending"),
+                ("job names counted", ["build", "lint"], [job("build"), job("lint")], "green"),
+                ("job counted plus external", ["build", "external-required"], [job("build"), job("lint")], "pending"),
+                ("only external required", ["external-required"], [job("build")], "pending")]:
+            with self.subTest(label):
+                self.assertEqual(self.state(self.host([ok], jobs), names=names), want)
+
+    def test_a_status_403_without_names_reads_unknown_and_never_raises(self):
+        for label, kwargs, want in [("no workflow: check runs readable, nothing there", {"checks": "ok"}, "unknown"),
+                                    ("statuses readable and empty", {"checks": "ok", "statuses": []}, "none")]:
+            with self.subTest(label):
+                self.assertEqual(self.state(self.host([], [], **kwargs), workflow=None), want)
+
+    def test_a_check_runs_403_without_workflow_or_names_still_raises(self):
+        with self.assertRaises(RuntimeError):
+            self.state(self.host([], []), workflow=None)
+
+    def test_ci_workflow_comes_from_the_environment(self):
+        c = {"environments": {"dev": {"ci": {"workflow": "CI"}}, "other": {"ci": {}}}}
+        for env, want in [("dev", "CI"), ("other", None), ("", None), ("none", None)]:
+            self.assertEqual(M_GH.ci_workflow_of(c, {"FACTORY_ENV": env}), want)
+
+    def test_unknown_is_not_green(self):
+        self.assertEqual(M_GH.head_ci([{"conclusion": "unknown", "at": None}])[0], "unknown")
 
 
 class CiSyncCodeHostTest(unittest.TestCase):

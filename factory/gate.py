@@ -80,7 +80,7 @@ def holds(when, facts, event):
         if key == "ci":
             if isinstance(want, list):  # any of these
                 return facts["ci"] in want
-            value(want, ("green", "red", "pending", "none"))
+            value(want, ("green", "red", "pending", "unknown", "none"))
             return facts["ci"] == want
         if key == "actor":
             return event.get("actor") == want
@@ -1454,7 +1454,9 @@ def main(argv):
             print(json.dumps(out))
             return GO if out["ci"] == "green" else FAILED if out["ci"] == "red" else NO_GO
         if a.cmd == "decide":
-            ticket = a.issue or (pr_ticket(code_host, a.pr) if a.pr and code_host else None)
+            repository = os.environ.get("FACTORY_ENV_REPOSITORY")
+            event_repository = {"full_name": repository} if repository else None
+            ticket = a.issue or (pr_ticket(code_host, a.pr, event_repository) if a.pr and code_host else None)
             if not (a.node and ticket):
                 raise Bad("decide needs --node NODE and --issue TICKET or --pr PR")
             status, out = decide(a.node, ticket, tracker, nodes, dry_run=a.dry_run)

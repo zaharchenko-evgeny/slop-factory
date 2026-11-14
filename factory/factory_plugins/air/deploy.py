@@ -139,7 +139,7 @@ def plan_air(nodes: dict, config: dict) -> dict:
                     if str(t).startswith("workflow_run ") and (copy_ or {}).get("ci"):
                         t = f"workflow_run {copy_['ci']}"  # #1259: the CI of the copy's own environment
                     trig.append(core.trigger(t, None, bot if aname.startswith(core.BOT_FILTERED) else None, None,
-                                             scope["name"] if scope else None, repo_tags))
+                                             scope["name"] if scope else None, repo_tags, bot))
                     if project:
                         trig[-1] = core.scope_filter(trig[-1], trackers[project])
                     more = {**narrow.get(trig[-1].get("source"), {}),

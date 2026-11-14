@@ -12,7 +12,7 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -28,6 +28,7 @@ from factory_plugins.github import heartbeat  # noqa: E402
 from factory_plugins.youtrack import probes as youtrack_probes  # noqa: E402
 
 REPO = "o/r"
+BOT = cfg.load()["targets"]["air"]["bot_login"]
 
 
 class FakeGh:
@@ -36,6 +37,7 @@ class FakeGh:
     def __init__(self, deny=(), open_tickets=()):
         self.deny, self.calls, self.issues, self.prs, self.tokens = deny, [], {}, {}, []
         self.open_tickets = list(open_tickets)
+        self.views = {}  # issue number -> the JSON of `issue view`
 
     def __call__(self, args, token=None):
         self.calls.append(args)
@@ -46,6 +48,9 @@ class FakeGh:
         if args[:2] == ["issue", "create"]:
             n = 10 + len(self.issues)
             self.issues[n] = args[args.index("--title") + 1]
+            self.open_tickets.append((n, self.issues[n]))
+            self.views[n] = {"body": args[args.index("--body") + 1], "createdAt": "2026-11-14T08:00:00Z",
+                             "author": {"login": BOT}, "comments": []}
             return f"https://github.com/{REPO}/issues/{n}\n"
         if args[:2] == ["pr", "create"]:
             self.prs[50] = "open"
@@ -54,8 +59,18 @@ class FakeGh:
             self.prs.pop(int(args[2]))
         if args[:2] == ["issue", "delete"]:
             self.issues.pop(int(args[2]))
+        if args[:2] == ["issue", "comment"]:
+            self.views.setdefault(int(args[2]), {"comments": []})["comments"].append(
+                {"body": args[args.index("--body") + 1], "createdAt": getattr(self, "at", "2026-11-14T09:00:00Z"),
+                 "author": {"login": BOT}})
+        if args[:2] == ["issue", "view"]:
+            return json.dumps(self.views.get(int(args[2]), {"comments": []}))
         if args[:2] == ["issue", "list"]:
             return json.dumps([{"number": n, "title": t} for n, t in self.open_tickets])
+        if args[0] == "api" and "/issues?state=open" in args[-1]:
+            items = [{"number": n, "title": t} for n, t in self.open_tickets]
+            items = getattr(self, "pr_items", []) + items
+            return json.dumps([items[i:i + 100] for i in range(0, len(items), 100)] or [[]])
         if args[0] == "api" and "/actions/runs" in args[-1]:
             return json.dumps({"workflow_runs": [{"id": 7}]})
         if args[:2] == ["run", "view"]:
@@ -257,6 +272,48 @@ class DoctorTest(unittest.TestCase):
         doctor.file_tickets(REPO, failed, gh)
         self.assertEqual([c[:3] for c in gh.calls if c[:2] in (["issue", "create"], ["issue", "comment"])], [["issue", "comment", "7"]])
 
+    def test_same_probe_twice_gives_one_issue_and_repeats_stay_quiet(self):
+        at = lambda h, d=0: datetime(2026, 11, 14 + d, h, tzinfo=timezone.utc)  # noqa: E731
+        probe = lambda detail: [{"probe": "read:commit-statuses", "result": "fail", "detail": detail}]  # noqa: E731
+        count = lambda gh, verb: len([c for c in gh.calls if c[:2] == ["issue", verb]])  # noqa: E731
+        gh = FakeGh()
+        doctor.file_tickets(REPO, probe("403"), gh, "r0", now=at(8))
+        doctor.file_tickets(REPO, probe("403"), gh, "r1", now=at(9))   # same probe, same detail
+        doctor.file_tickets(REPO, probe("403"), gh, "r2", now=at(10))
+        self.assertEqual((count(gh, "create"), count(gh, "comment")), (1, 0))
+        doctor.file_tickets(REPO, probe("500"), gh, "r3", now=at(11))  # new detail, but the last report is under a day old
+        self.assertEqual(count(gh, "comment"), 0)
+        gh.at = "2026-11-15T09:00:00Z"
+        doctor.file_tickets(REPO, probe("500"), gh, "r4", now=at(9, 1))  # new detail, a day later
+        self.assertEqual((count(gh, "create"), count(gh, "comment")), (1, 1))
+        doctor.file_tickets(REPO, probe("500"), gh, "r5", now=at(9, 3))  # same detail as the last comment
+        self.assertEqual(count(gh, "comment"), 1)
+        doctor.file_tickets(REPO, probe("403"), gh, "r6", now=at(9, 3))  # detail changed back, last comment over a day old
+        self.assertEqual(count(gh, "comment"), 2)
+
+    def test_matching_issue_after_the_first_page_and_pull_requests(self):
+        title = "Doctor: x fails"
+        filler = [(100 + i, f"other {i}") for i in range(250)]
+        for name, tickets, pr_items, want in (
+                ("match on page 3", filler + [(7, title)], [], (0, 1)),
+                ("match on page 1", [(7, title)] + filler, [], (0, 1)),
+                ("no match", filler, [], (1, 0)),
+                ("same-titled PR ignored", filler, [{"number": 9, "title": title, "pull_request": {}}], (1, 0))):
+            with self.subTest(name=name):
+                gh = FakeGh(open_tickets=tickets)
+                gh.pr_items = pr_items
+                doctor.file_tickets(REPO, [{"probe": "x", "result": "fail", "detail": "d"}], gh, now=datetime(2026, 11, 14, tzinfo=timezone.utc))
+                n = lambda v: len([c for c in gh.calls if c[:2] == ["issue", v]])  # noqa: E731
+                self.assertEqual((n("create"), n("comment")), want)
+
+    def test_a_comment_by_someone_else_does_not_silence_the_doctor(self):
+        gh = FakeGh(open_tickets=[(7, "Doctor: x fails")])
+        gh.views[7] = {"body": "a person wrote this", "createdAt": "2026-11-14T08:00:00Z", "author": {"login": "alice"},
+                       "comments": [{"body": "[factory]\n`factory doctor` probe `x`: fail. d", "author": {"login": "alice"},
+                                     "createdAt": "2026-11-14T08:30:00Z"}]}
+        doctor.file_tickets(REPO, [{"probe": "x", "result": "fail", "detail": "d"}], gh, now=datetime(2026, 11, 14, 9, tzinfo=timezone.utc))
+        self.assertEqual(len([c for c in gh.calls if c[:2] == ["issue", "comment"]]), 1)
+
     def test_new_ticket_starts_in_triage_and_a_passing_probe_closes_it(self):
         gh = FakeGh()
         doctor.file_tickets(REPO, [{"probe": "reconcile", "result": "fail", "detail": "boom"}], gh)
@@ -447,3 +504,22 @@ class SkillInstalledTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MissingPermissionTest(unittest.TestCase):
+    """The doctor names the missing app permission once (#1424)."""
+
+    def test_table(self):
+        from factory_plugins.github import probes
+        d = "HTTP 403: Resource not accessible by integration"
+        for label, results, want in [
+                ("both denied: named once", [("read:check-runs", "denied", d), ("read:commit-statuses", "denied", d)], 2),
+                ("one denied", [("read:check-runs", "denied", d)], 1),
+                ("a non-403 denial is left alone", [("read:check-runs", "denied", "HTTP 500")], 0),
+                ("ok", [("read:check-runs", "ok", "")], 0)]:
+            with self.subTest(label):
+                rs = [{"probe": p, "result": r, "detail": x} for p, r, x in results]
+                probes.missing_permission(rs)
+                self.assertEqual(sum("lacks" in r["detail"] for r in rs), 1 if want else 0)
+                if want == 2:
+                    self.assertIn("`checks: read` and `statuses: read`", rs[0]["detail"])

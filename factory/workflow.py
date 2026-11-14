@@ -24,6 +24,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
+import definition  # noqa: E402
 import plugins  # noqa: E402  (ADR-0026: a plugin's effects; definition.errors refuses them while it is off)
 import project as project_mod  # noqa: E402
 
@@ -38,8 +39,17 @@ PLACEHOLDERS = ("<tier>", "<focus>")
 EVENTS = {"manual": "manual", "pr pushed": "pull_request.synchronize", "pr opened": "pull_request.opened",
           "pr commented": "issue_comment.created",
           "pr reviewed": "pull_request_review.submitted", "ticket closed": "issues.closed",
-          "ticket commented": "issues.comment", "ticket unlabeled": "issues.unlabeled"}
+          "ticket commented": "issues.comment", "ticket unlabeled": "issues.unlabeled",
+          "pr reopened": "pull_request.reopened", "pr ready_for_review": "pull_request.ready_for_review",
+          "pr converted_to_draft": "pull_request.converted_to_draft", "pr closed": "pull_request.closed",
+          "pr review_requested": "pull_request.review_requested", "pr unlabeled": "pull_request.unlabeled",
+          "pr edited": "pull_request.edited", "pr review_comment": "pull_request_review_comment.created"}
 PR_STATE_NAMES = {"merged": "pr-merged", "open": "pr-open"}
+
+
+def split_filters(text):
+    """`pr pushed by=human` -> `("pr pushed", ["by=human"])`; the label of a label event stays (definition.split_filters)."""
+    return definition.split_filters(text)
 
 
 def _defaults():
@@ -120,7 +130,8 @@ def validate(project, wf):
         if not isinstance(n, dict):
             continue
         for wake in n.get("wakes_on") or []:
-            verb, _, arg = str(wake).partition(" ")
+            wake, filters = split_filters(wake)
+            verb, _, arg = wake.partition(" ")
             if wake in EVENTS or verb == "run":
                 continue
             if verb == "state":
@@ -182,6 +193,9 @@ def migrate(nodes, descriptor):
         return label.split(":", 1)[-1]
 
     def wake(trigger):
+        trigger, filters = split_filters(trigger)
+        if filters:
+            return " ".join([wake(trigger), *filters])
         if trigger in by_event:
             return by_event[trigger]
         event, _, arg = trigger.partition(" ")
