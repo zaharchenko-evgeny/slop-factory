@@ -11,8 +11,8 @@ const snap = (tickets: Ticket[], extra: Partial<Snapshot> = {}): Snapshot => ({
   generated_at: "t", workflow: { stages: [{ id: "dev" }] }, tickets, sources: [], errors: [],
   attention: { human_review: 0, human_attention: 0 }, ...extra,
 });
-const A = mk({ id: "1", title: "Alpha", environments: ["a"] });
-const B = mk({ id: "2", title: "Beta", environments: ["b"] });
+const A = mk({ id: "1", title: "Alpha", tracker: "a", environments: ["env-x"] });
+const B = mk({ id: "2", title: "Beta", tracker: "b", environments: ["env-y"] });
 
 const deferred = () => {
   let resolve!: (s: Snapshot) => void; let reject!: (e: Error) => void;
@@ -97,7 +97,7 @@ describe("ui_refresh_and_failures", () => {
   it("shows source errors and applies the sources that succeeded", async () => {
     const load = vi.fn()
       .mockResolvedValueOnce(snap([A, B], { sources: [{ id: "a", ok: true }, { id: "b", ok: true }] }))
-      .mockResolvedValueOnce(snap([mk({ id: "1", title: "Alpha v2", environments: ["a"] })], {
+      .mockResolvedValueOnce(snap([mk({ id: "1", title: "Alpha v2", tracker: "a", environments: ["env-x"] })], {
         sources: [{ id: "a", ok: true }, { id: "b", ok: false }], errors: [{ source: "b", message: "b is down" }],
       }));
     mount(load);
@@ -135,7 +135,8 @@ describe("mergeSnapshot", () => {
     ["source failed by sources flag", snap([A, B]), snap([A], { sources: [{ id: "b", ok: false }] }), ["1", "2"]],
     ["source failed by error only", snap([A, B]), snap([A], { errors: [{ source: "b", message: "x" }] }), ["1", "2"]],
     ["ticket error", snap([A, B]), snap([A], { errors: [{ source: "b", ticket: "2", message: "x" }] }), ["1", "2"]],
-    ["ticket without environments is dropped", snap([mk({ id: "9" })]), snap([], { errors: [{ source: "b", message: "x" }] }), []],
+    ["ticket without tracker is dropped", snap([mk({ id: "9" })]), snap([], { errors: [{ source: "b", message: "x" }] }), []],
+    ["environment name equal to failed source id does not keep a ticket", snap([mk({ id: "8", tracker: "a", environments: ["b"] })]), snap([], { sources: [{ id: "b", ok: false }] }), []],
     ["error without source", snap([A]), snap([], { errors: [{ source: null, message: "x" }] }), []],
   ];
   for (const [name, prev, next, keys] of cases)

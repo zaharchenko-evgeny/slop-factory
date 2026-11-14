@@ -49,7 +49,7 @@ export function mergeSnapshot(prev: Snapshot | undefined, next: Snapshot): Snaps
   const failedTickets = new Set((next.errors ?? []).filter((e) => e.ticket).map((e) => e.ticket));
   const have = new Set(next.tickets.map((t) => t.key));
   const stale = prev.tickets.filter(
-    (t) => !have.has(t.key) && ((t.environments ?? []).some((e) => failed.has(e)) || failedTickets.has(t.key) || failedTickets.has(t.id)),
+    (t) => !have.has(t.key) && ((t.tracker !== undefined && failed.has(t.tracker)) || failedTickets.has(t.key) || failedTickets.has(t.id)),
   );
   return stale.length ? { ...next, tickets: [...next.tickets, ...stale] } : next;
 }
