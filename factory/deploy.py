@@ -308,7 +308,7 @@ def begin_arg(node: str, n: dict) -> str:
         return ""
     if any(str(t).startswith("webhook ") for t in n["triggers"]):
         return "--issue <the `issue` field of the trigger payload>"
-    events = [str(t) for t in n["triggers"] if str(t) != "manual"]
+    events = [str(t) for t in n["triggers"] if str(t) != "manual" and not str(t).startswith("schedule ")]
     numberless = [t.startswith(NUMBERLESS_EVENTS) for t in events]  # a push or a branch CI run has no ticket or PR
     if events and all(numberless):
         return ""

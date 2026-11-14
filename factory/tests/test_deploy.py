@@ -1335,6 +1335,9 @@ class PlanTest(unittest.TestCase):
             ([{"ci": "checks_green"}], lambda p: "factory begin fix`" in p),
             ([{"ci": "green"}], lambda p: "factory begin fix`" in p),
             ([{"push": "main"}, {"ci": "green"}], lambda p: "factory begin fix`" in p),
+            ([{"push": "main"}, {"schedule": "daily"}], lambda p: "factory begin fix`" in p),
+            ([{"ci": "green"}, {"schedule": "daily"}], lambda p: "factory begin fix`" in p),
+            ([{"ci": "checks_green"}, {"schedule": "daily"}], lambda p: "factory begin fix`" in p),
             ([{"ci": "failed"}], lambda p: "--pr <the pull request number>" in p and "no number at all" not in p),
         ]
         for trigs, ok in rows:
