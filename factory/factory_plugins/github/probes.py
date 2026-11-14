@@ -26,6 +26,22 @@ def probes(settings, env, run, *, repo, risk_label, run_id="doctor", environ=os.
     return results + project_write_probes(settings, env, run, environ)
 
 
+PERMISSION = {"read:check-runs": "checks", "read:commit-statuses": "statuses"}
+
+
+def missing_permission(results):
+    """Name the app permission once when the check-run or commit-status read is denied (403, #1424): the gate then
+    reads GitHub Actions CI from the Actions API (`ci.workflow`) and a commit status reads `unknown`."""
+    lost = [r for r in results if r["probe"] in PERMISSION and r["result"] == "denied"
+            and ("403" in r["detail"] or "not accessible" in r["detail"])]
+    for r in lost[1:]:
+        r["detail"] = "same missing app permission as above"
+    if lost:
+        names = " and ".join(f"`{PERMISSION[r['probe']]}: read`" for r in lost)
+        lost[0]["detail"] = (f"the GitHub app lacks {names}; set `ci.workflow` for Actions CI "
+                             f"(read from the Actions API); a commit status reads unknown. {lost[0]['detail']}")[:400]
+
+
 def run_log(api, run, repo):
     """Fetch the log of the latest successful workflow run (a run list alone does not need the logs permission)."""
     runs = json.loads(api(f"repos/{repo}/actions/runs?per_page=1&status=success"))["workflow_runs"]
@@ -64,8 +80,9 @@ def repo_probes(repo, run, risk_label, run_id="doctor"):
         probe(results, "write:update-branch", lambda: api("-X", "PUT", f"repos/{repo}/pulls/{pr}/update-branch"))
         probe(results, "read:actions-run-logs", lambda: run_log(api, run, repo))
         probe(results, "read:check-runs", lambda: api(f"repos/{repo}/commits/{sha}/check-runs"))
-        probe(results, "read:branch-rules", lambda: api(f"repos/{repo}/rules/branches/main"))
         probe(results, "read:commit-statuses", lambda: api(f"repos/{repo}/commits/{sha}/status"))
+        missing_permission(results)
+        probe(results, "read:branch-rules", lambda: api(f"repos/{repo}/rules/branches/main"))
         probe(results, "read:timeline", lambda: api(f"repos/{repo}/issues/{issue}/timeline"))
     except Exception as e:
         results.append({"probe": "setup", "result": "denied", "detail": str(e)[:200]})

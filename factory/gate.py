@@ -80,7 +80,7 @@ def holds(when, facts, event):
         if key == "ci":
             if isinstance(want, list):  # any of these
                 return facts["ci"] in want
-            value(want, ("green", "red", "pending", "none"))
+            value(want, ("green", "red", "pending", "unknown", "none"))
             return facts["ci"] == want
         if key == "actor":
             return event.get("actor") == want
