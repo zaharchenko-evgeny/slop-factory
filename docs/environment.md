@@ -1,6 +1,6 @@
 # Environment variables
 
-One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails when a `FACTORY_*` name in `factory/*.py` or `engine/template-v1/` has no row here.
+One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails when a `FACTORY_*` name in `factory/*.py` has no row here.
 
 | Variable | Set by | Read in | Required |
 |---|---|---|---|
@@ -8,8 +8,8 @@ One row per variable. Tests exclude `factory/tests/`; `test_readme.py` fails whe
 | `FACTORY_NODE` | Air deploy: only in the environment of a node with custom MCP servers | `factory/team_setup.py` | optional; the node whose custom MCP servers `factory setup` writes to `.mcp.json`; unset: no file |
 | `FACTORY_ENV_REPOSITORY` | Air deploy: the main repository of the environment's copies (#1112: a copy in another repository runs in that repository's variant) | `factory/factory_plugins/github/tracker.py` (Air's token writes it), `factory/cli.py` (`factory begin --issue` reads the issue there) | set in every Air run |
 | `FACTORY_NODE_REPO` | `factory setup` (from the checkout's `origin`: the main repository of the automation copy, ADR-0024) | setup scripts (`environments/*/setup.sh`, `roles/*/setup.sh`); `factory begin` (exit 10 for a ticket of another repository) | optional; unset without an `origin` |
-| `FACTORY_TEAM` | the startup wrapper of `factory` (internal) | `factory/config.py`, `factory/cli.py`, `factory/factory_plugins/local/surface.py`, `engine/template-v1/roles/` | optional; defaults to the `factory-team` directory in the home directory when it exists, else the working directory |
-| `FACTORY_ENGINE_DIR` | tests and development | `engine/template-v1/.air/cloud/startup.sh` | optional; an engine checkout whose `factory-step` skill the startup script installs; defaults to the `factory-main` directory in the home directory |
+| `FACTORY_TEAM` | the startup wrapper of `factory` (internal) | `factory/config.py`, `factory/cli.py`, `factory/factory_plugins/local/surface.py` | optional; defaults to the `factory-team` directory in the home directory when it exists, else the working directory |
+| `FACTORY_ENGINE_DIR` | tests and development | `.air/cloud/startup.sh` of the team repository | optional; an engine checkout whose `factory-step` skill the startup script installs; defaults to the `factory-main` directory in the home directory |
 | `FACTORY_ENGINE` | tests and development | `factory/config.py` | optional; defaults to this checkout |
 | `FACTORY_WRITE_TOKEN` | a person, in Air: an optional secret of an environment; `factory deploy` no longer adds it (#983) | `factory/factory_plugins/github/tracker.py` (the GH_TOKEN of a write to a `role: project` repository), `factory/factory_plugins/github/probes.py` | optional; unused when unset |
 | `token` (a repository key in `environments.<env>.repositories[]`; e.g. `FACTORY_ISSUES_TOKEN`) | a person, in Air: the secret it names, with Issues read/write on that repository; `factory deploy` adds it to the environment | `factory/factory_plugins/github/tracker.py` (the GH_TOKEN of the gate's issue, label and comment writes to that repository, before `FACTORY_WRITE_TOKEN`), `factory/factory_plugins/github/probes.py` (`write:label:<repo>`, `push:branch:<repo>` for `write: true`), `factory/team_setup.py` (the git credential of a `write: true` checkout), `factory/factory_plugins/air/deploy.py` (by name) | required for a repository that holds tickets and is not the environment's own (`factory validate`) |

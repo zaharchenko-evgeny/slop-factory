@@ -21,8 +21,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-import project_mode  # noqa: E402
-cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/v2"))
+cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
 import gate  # noqa: E402
 from factory_plugins.github import gate as M_GH  # noqa: E402
 import gate_port as M_PORT  # noqa: E402
@@ -635,10 +634,12 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(self.twice(gh, eff("unlabel", "factory:fix-mid")), (True, 2, False, 2))
 
     def test_descriptor_states_and_commands(self):
-        import project
         gh = FakeGh()
-        t = tracker_of(REPO, STAGES, BOT, fix_cap=3, run=gh,
-                              project=project.load(Path(__file__).resolve().parent / "fixtures/project"))
+        t = tracker_of(REPO, STAGES, BOT, fix_cap=3, run=gh, project={
+            "states": {"ready": {"kind": "active", "store": {"label": "factory:ready"}},
+                       "needs-review": {"kind": "active", "store": {"field": {"name": "Status", "value": "Review"}}}},
+            "commands": {"review": {"store": {"label": "factory:review"}}, "pr-review": {"store": {"pr_label": "factory:pr-review"}},
+                         "close": {"store": {"tag": "close"}}}})
         self.assertTrue(t.set_state(7, "ready"))
         self.assertEqual(sorted(gh.labels), ["factory:ready", "risk:low"])
         self.assertTrue(t.add_command(7, "review"))

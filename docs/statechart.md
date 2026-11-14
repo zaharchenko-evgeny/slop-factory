@@ -288,7 +288,7 @@ Each slice is a factory ticket under #100 and ends in a state that can be checke
 
 ## Node chart
 
-Generated from `engine/nodes.yaml` by `uv run factory/nodes.py chart` (ADR-0014; the chart plugin, `factory/factory_plugins/chart/`, ADR-0026); a test fails when it is stale. Rounded boxes are stages (the label `factory:<stage>`). Boxes are automation nodes, each with the labels or events that start it. Dashed nodes and edges are planned, with their ticket. Edge text is the outcome and the labels it adds.
+Generated from the team workflow by `uv run factory/nodes.py chart` (ADR-0014; the chart plugin, `factory/factory_plugins/chart/`, ADR-0026); a test fails when it is stale. Rounded boxes are stages (the label `factory:<stage>`). Boxes are automation nodes, each with the labels or events that start it. Dashed nodes and edges are planned, with their ticket. Edge text is the outcome and the labels it adds.
 
 <!-- nodes-chart -->
 ```mermaid
@@ -439,7 +439,7 @@ flowchart LR
 ## Status of problems 1-30 in the gate
 
 `factory/gate.py` (ADR-0014 nodes) replaces `begin`/`end`. *check* = `gate.py check`, *apply* = `gate.py apply`,
-*node* = a node in `engine/nodes.yaml`, *sweep* = the `sweep` node, *adapter* = the tracker adapter (#172),
+*node* = a node in the team workflow, *sweep* = the `sweep` node, *adapter* = the tracker adapter (#172),
 *join* = the join slice (#173), *rounds* = bounded rounds (#155).
 
 | # | Status | Where |

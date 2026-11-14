@@ -1228,7 +1228,7 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
 
 
 # --- The shapes the gate reads, straight from the definition -------------------------------------
-# `nodes(defn)` is engine/nodes.yaml's shape: triggers as event strings, `when.stage`, stage and label effects.
+# `nodes(defn)` is the shape of a nodes file: triggers as event strings, `when.stage`, stage and label effects.
 EVENTS = {("pr", "reviewed"): "pull_request_review.submitted", ("pr", "pushed"): "pull_request.synchronize",
           ("pr", "opened"): "pull_request.opened", ("pr", "merged"): "pull_request.merged",
           ("pr", "commented"): "issue_comment.created", ("ticket", "closed"): "issues.closed",

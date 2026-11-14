@@ -321,7 +321,7 @@ def engine_probes(settings, tracker=None, dry_run=deploy_run, now=None):
 def main(argv=None, run=None):
     env = os.environ.get("FACTORY_ENV")
     if env not in (nodes_mod.load().get("environments") or {}):
-        print(json.dumps({"error": "FACTORY_ENV must name an environment of nodes.yaml"}))
+        print(json.dumps({"error": "FACTORY_ENV must name an environment of the team definition"}))
         return 2
     settings = config.load()
     run = run or issue_run(settings)  # the doctor files its tickets where the tracker's plugin says

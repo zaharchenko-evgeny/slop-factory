@@ -61,9 +61,7 @@ ISSUE = re.compile(r"(?<![\w/])#(\d+)\b")
 def docs(root=ROOT):
     paths = [root / "README.md", root / "AGENTS.md"]
     paths += sorted((root / "docs").glob("**/*.md"))
-    paths += sorted((root / "engine/template-v1" / "roles").glob("**/*.md"))
     return [p for p in paths if p.is_file() and "docs/adr/" not in p.relative_to(root).as_posix()
-            and "engine/template-v1/" not in p.relative_to(root).as_posix()
             and "knowledge/" not in p.relative_to(root).as_posix()]
 
 

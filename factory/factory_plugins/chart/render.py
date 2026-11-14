@@ -1,7 +1,7 @@
 """The stage statechart of a factory's nodes (ADR-0014): a Mermaid flowchart and a node table, derived from the
 nodes, so they cannot drift from the factory. `block` is the generated part of `docs/statechart*.md`.
 
-Usage: factory chart [nodes.yaml] | nodes.py chart [nodes.yaml]
+Usage: factory chart [nodes file] | nodes.py chart [nodes file]
 """
 import argparse
 
@@ -54,7 +54,7 @@ def _id(x):
 
 def chart(nodes):
     """Mermaid flowchart of the whole factory: stages (rounded), automation nodes (boxes with what starts
-    them), planned nodes and edges dashed. Derived from nodes.yaml, so it cannot drift from the factory."""
+    them), planned nodes and edges dashed. Derived from the nodes, so it cannot drift from the factory."""
     scheds, lines = nodes.get("schedules") or {}, ["flowchart LR"]
     lines += ["    classDef stage fill:#eef,stroke:#669", "    classDef node fill:#fff,stroke:#333",
               "    classDef planned fill:#fafafa,stroke:#999,stroke-dasharray:5 5,color:#666",
@@ -126,10 +126,10 @@ def block(nodes):
 
 
 def main(argv):
-    """Print the docs block of nodes.yaml (default: the team's nodes)."""
+    """Print the docs block of the nodes (default: the team's nodes)."""
     argv = config.pop_team(argv)
     parser = argparse.ArgumentParser(prog="factory chart", description="Render the factory nodes chart.")
-    parser.add_argument("nodes", nargs="?", help="path to nodes.yaml")
+    parser.add_argument("nodes", nargs="?", help="path to a nodes file")
     args = parser.parse_args(argv)
     print(block(nodes_mod.load(args.nodes)), end="")
     return 0

@@ -6,6 +6,7 @@
 """Tests for the descriptor-backed tracker port (factory/gate_port.py DescriptorPort) against the fixture project.
 Run: uv run factory/tests/test_project_ports.py"""
 import ast
+import copy
 import json
 import re
 import sys
@@ -21,13 +22,26 @@ from gate_port import MemorySystem, UnsupportedStore  # noqa: E402
 from test_youtrack_tracker import FakeYouTrack  # noqa: E402
 from factory_plugins.youtrack.store import YouTrackTicketStore  # noqa: E402
 
-FIXTURE = ROOT / "tests/fixtures/project"
+PROJECT = {  # the states and commands of a project descriptor, one of each store kind
+    "states": {
+        "draft": {"kind": "waiting", "store": {"label": "factory:draft"}},
+        "ready": {"kind": "active", "store": {"label": "factory:ready"}},
+        "needs-review": {"kind": "active", "store": {"field": {"name": "Status", "value": "Review"}}},
+        "pr-approved": {"kind": "active", "store": {"pr": "approved"}},
+        "pr-merged": {"kind": "final", "store": {"pr": "merged"}},
+    },
+    "commands": {
+        "review": {"store": {"label": "factory:review"}},
+        "pr-review": {"store": {"pr_label": "factory:pr-review"}},
+        "close": {"store": {"tag": "close"}},
+    },
+}
 YOUTRACK = ROOT / "tests/fixtures/project-youtrack"
 ISSUE = json.loads((YOUTRACK / "issue.json").read_text())
 
 
 def tracker(**ticket):
-    return MemorySystem({7: {"stage": "draft", **ticket}}, project=project.load(FIXTURE))
+    return MemorySystem({7: {"stage": "draft", **ticket}}, project=copy.deepcopy(PROJECT))
 
 
 class ProjectPortsTest(unittest.TestCase):
@@ -64,7 +78,7 @@ class ProjectPortsTest(unittest.TestCase):
             t.add_command(7, "deploy")
 
     def test_tag_stores_are_labels_on_a_label_tracker(self):  # #1298: GitHub issues beside YouTrack tickets
-        descriptor = project.load(FIXTURE)
+        descriptor = copy.deepcopy(PROJECT)
         descriptor["states"]["ready"] = {"kind": "active", "store": {"tag": "factory:ready"}}
         descriptor["commands"]["implement-<tier>"] = {"store": {"tag": "factory:implement-<tier>"}}
         t = MemorySystem({7: {"stage": "draft"}}, project=descriptor)
@@ -102,7 +116,7 @@ class ProjectPortsTest(unittest.TestCase):
         self.assertEqual(sorted(x["name"] for x in fake.issue["tags"]), ["close", "risk:low"])
 
     def test_command_templates_fill_their_placeholder(self):
-        descriptor = project.load(FIXTURE)
+        descriptor = copy.deepcopy(PROJECT)
         descriptor["commands"]["implement-<tier>"] = {"store": {"label": "factory:implement-<tier>"}}
         t = MemorySystem({7: {"stage": "ready"}}, project=descriptor)
         self.assertTrue(t.add_command(7, "implement-mid"))

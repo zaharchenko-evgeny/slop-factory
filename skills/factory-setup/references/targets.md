@@ -18,8 +18,7 @@ Selected by the target the team deploys to; the Air models come from `models` in
 - Config: Air models and environment settings from the team's project or
   factory descriptor.
 - Tools: the air-automations and air-cloud MCPs.
-- Descriptor-based node workflows use `engine/nodes.yaml`; project-mode teams
-  supply their own workflow file.
+- Every team supplies its own workflow file (`workflow.yaml`, ADR-0021).
 - Runtime roles, skills and `.air/cloud/startup.sh` come from the team
   repository. The engine is installed separately and is not a runtime fallback.
 - Repository roles (ADR-0017): a project automation's main repository is the

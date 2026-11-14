@@ -1,4 +1,4 @@
-"""Project descriptor loading and validation."""
+"""Project descriptor loading and validation (a compiled team definition, ADR-0021, or a `factory.project.yaml`)."""
 import json
 import re
 from pathlib import Path

@@ -2,28 +2,21 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Vendored skills (ADR-0008). `skills.lock` (JSON) pins each skill; `engine/template-v1/skills/<name>/` holds the copy.
+"""Pinned skills (ADR-0008). `skills.lock` (JSON) pins each skill by source, commit or version, and tree hash.
 
-  vendor-skills.py --check      fail when a copy differs from its hash or a skills.txt name has no copy
-  vendor-skills.py              refresh every copy from its pinned source, then verify the hash
-  vendor-skills.py --rehash     record the current hashes in the lock (after a deliberate change)
-
-An entry with `"vendored": false` has no copy in the repository: `fetch_pinned(name)` fetches it at its pin
-when a step needs it and checks the same hash.
+The engine keeps no copy of a skill: `fetch_pinned(name, dest)` fetches it at its pin when a step needs it
+and checks the hash.
 """
 import hashlib
 import json
-import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCK = ROOT / "skills.lock"
 if not LOCK.is_file():  # installed: skills.lock sits beside this file
     LOCK = Path(__file__).resolve().parent / "skills.lock"
-VENDOR = ROOT / "engine/template-v1" / "skills"
 
 
 def tree_hash(d):
@@ -35,28 +28,6 @@ def tree_hash(d):
 
 def load():
     return json.loads(LOCK.read_text())["skills"]
-
-
-def check(root=ROOT):
-    lock = json.loads((root / "skills.lock").read_text())["skills"]
-    vendor = root / "engine/template-v1" / "skills"
-    errors = []
-    for name, e in lock.items():
-        d = vendor / name
-        if e.get("vendored") is False:
-            if d.exists():
-                errors.append(f"{name}: is pinned as not vendored, but {d.relative_to(root)} exists")
-        elif not (d / "SKILL.md").is_file():
-            errors.append(f"{name}: no vendored copy")
-        elif tree_hash(d) != e["sha256"]:
-            errors.append(f"{name}: differs from the hash in skills.lock")
-    for f in sorted((root / "engine/template-v1" / "roles").glob("*/skills.txt")):
-        for name in f.read_text().split():
-            if name not in lock:
-                errors.append(f"{f.parent.name}: skill {name} is not in skills.lock")
-            elif not (vendor / name / "SKILL.md").is_file():
-                errors.append(f"{f.parent.name}: skill {name} has no vendored directory")
-    return errors
 
 
 def fetch(e, tmp):
@@ -84,35 +55,6 @@ def fetch_pinned(name, dest):
     return src
 
 
-def refresh():
-    for name, e in load().items():
-        if e.get("vendored") is False:
-            continue
-        with tempfile.TemporaryDirectory() as tmp:
-            src = fetch(e, tmp)
-            shutil.rmtree(VENDOR / name, ignore_errors=True)
-            shutil.copytree(src, VENDOR / name)
-
-
-def rehash():
-    data = json.loads(LOCK.read_text())
-    for name, e in data["skills"].items():
-        if e.get("vendored") is False:
-            continue
-        e["sha256"] = tree_hash(VENDOR / name)
-    LOCK.write_text(json.dumps(data, indent=2) + "\n")
-
-
-def main(argv):
-    if "--rehash" in argv:
-        return rehash() or 0
-    if "--check" not in argv:
-        refresh()
-    errors = check()
-    for m in errors:
-        print(m, file=sys.stderr)
-    return 1 if errors else 0
-
-
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    print(__doc__)
+    sys.exit(2)

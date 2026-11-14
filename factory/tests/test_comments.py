@@ -20,8 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 import config as cfg  # noqa: E402
-import project_mode  # noqa: E402
-cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/v2"))
+cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
 import definition  # noqa: E402
 import gate  # noqa: E402
 import nodes  # noqa: E402

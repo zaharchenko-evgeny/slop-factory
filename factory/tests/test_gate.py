@@ -23,8 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 sys.path.insert(0, str(ROOT / "factory/tests"))
 import config as cfg  # noqa: E402
-import project_mode  # noqa: E402
-cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/v2"))
+cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
 import deploy  # noqa: E402
 from factory_plugins.air import deploy as air  # noqa: E402
 import gate  # noqa: E402
