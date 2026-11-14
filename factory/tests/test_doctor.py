@@ -504,3 +504,22 @@ class SkillInstalledTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MissingPermissionTest(unittest.TestCase):
+    """The doctor names the missing app permission once (#1424)."""
+
+    def test_table(self):
+        from factory_plugins.github import probes
+        d = "HTTP 403: Resource not accessible by integration"
+        for label, results, want in [
+                ("both denied: named once", [("read:check-runs", "denied", d), ("read:commit-statuses", "denied", d)], 2),
+                ("one denied", [("read:check-runs", "denied", d)], 1),
+                ("a non-403 denial is left alone", [("read:check-runs", "denied", "HTTP 500")], 0),
+                ("ok", [("read:check-runs", "ok", "")], 0)]:
+            with self.subTest(label):
+                rs = [{"probe": p, "result": r, "detail": x} for p, r, x in results]
+                probes.missing_permission(rs)
+                self.assertEqual(sum("lacks" in r["detail"] for r in rs), 1 if want else 0)
+                if want == 2:
+                    self.assertIn("`checks: read` and `statuses: read`", rs[0]["detail"])

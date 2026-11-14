@@ -22,12 +22,18 @@ def trigger_text(t, n, schedules):
     names = {"issues.labeled": "issue +", "pull_request.labeled": "PR +", "pull_request.merged": "PR merged", "issues.closed": "issue closed", "issues.unlabeled": "issue label removed",
              "pull_request.synchronize": "PR push", "pull_request.opened": "PR opened",
              "issue_comment.created": "comment on a PR",
-             "pull_request_review.submitted": "PR review submitted", "workflow_run": "run of ", "manual": "a person"}
+             "pull_request_review.submitted": "PR review submitted", "workflow_run": "run of ", "manual": "a person",
+             "pull_request.reopened": "PR reopened", "pull_request.ready_for_review": "PR ready for review",
+             "pull_request.converted_to_draft": "PR converted to draft", "pull_request.closed": "PR closed unmerged",
+             "pull_request.review_requested": "PR review requested", "pull_request.unlabeled": "PR label removed",
+             "pull_request.edited": "PR edited", "pull_request_review_comment.created": "PR review comment"}
     if event == "webhook":
         return f"webhook {label}"
     if event == "schedule":
         return f"cron {schedules.get(label, {}).get('cron', label)}"
-    return names.get(event, event) + label
+    words = label.split(" ") if label else []
+    filters = "".join(f" ({w.replace('=', ' ')})" for w in words if "=" in w)  # `by=human` -> `(by human)`
+    return names.get(event, event) + " ".join(w for w in words if "=" not in w) + filters
 
 
 def writes(outcome, n):
