@@ -8,7 +8,6 @@ A marker `<!-- factory:review focus=<f> round=<n> verdict=approve|changes -->` c
 """
 import contextlib
 import copy
-import fcntl
 import hashlib
 import json
 import os
@@ -450,10 +449,6 @@ class GitHubTicketStore:
     @in_ticket_repository
     def comment(self, n, body):
         self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
-
-    @in_ticket_repository
-    def delete_comment(self, n, comment_id):
-        self.run(["api", "-X", "DELETE", f"repos/{self.repo}/issues/comments/{comment_id}"])
 
     @in_ticket_repository
     def close(self, n):
@@ -1223,8 +1218,9 @@ class GitHubGateTracker(DescriptorPort):
 
     def _fx_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
-        with self._once_lock(e):
-            if any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"]) for c in self.tickets.comments(n)):
+        with self._once_claim(e, n) as mine:
+            if not mine or any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"])
+                               for c in self.tickets.comments(n)):
                 return False
             self.tickets.comment(n, body + self._block(e) + self._once_line(e))
         return True
@@ -1237,22 +1233,36 @@ class GitHubGateTracker(DescriptorPort):
     def _once_line(e):
         return f"\n\n{e['once']}" if e.get("once") else ""
 
-    @staticmethod
+    ONCE_REF = "refs/factory/once"
+
     @contextlib.contextmanager
-    def _once_lock(e):
-        """#1373: the check and the write are two remote calls. Runs on one host that end together take this lock
-        (an flock on a file named by the marker), so the second one reads the first one's comment before it writes.
-        Runs on other hosts are not serialized: GitHub has no atomic claim for a comment."""
+    def _once_claim(self, e, n):
+        """#1373: runs of one node that end at one head on separate Air hosts each read the comments before another
+        wrote. The claim is a ref named by the marker and the ticket, created atomically (GitHub refuses a second
+        create with 422), so one run at a time reads the comments and writes; the next holder then reads the
+        first one's comment and skips. Yields False while another run holds it: write nothing. A host that cannot
+        create refs (no contents write) writes unclaimed, as before #1373. A crashed run leaves the ref; a person
+        deletes it."""
         if not e.get("once"):
-            yield
+            yield True
             return
-        name = hashlib.sha256(e["once"].encode()).hexdigest()[:32]
-        with open(os.path.join(tempfile.gettempdir(), f"factory-once-{name}.lock"), "w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
+        key = f"{self.repo}#{n} {e['once']}"
+        ref = f"{self.ONCE_REF}/{hashlib.sha256(key.encode()).hexdigest()[:32]}"
+        head = re.search(r"head=(\S+) -->", e["once"])
+        try:
+            self.run(["api", "-X", "POST", f"repos/{self.pr_repo}/git/refs", "-f", f"ref={ref}",
+                      "-f", f"sha={head.group(1) if head else ''}"])
+        except RuntimeError as err:
+            if "Reference already exists" in str(err):
+                yield False  # another run holds the claim
+                return
+            print(f"factory: once claim {ref} not taken ({err}); writing unclaimed", file=sys.stderr)
+            yield True
+            return
+        try:
+            yield True
+        finally:
+            self.run(["api", "-X", "DELETE", f"repos/{self.pr_repo}/git/{ref}"])
 
     def _fx_pr_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
@@ -1262,9 +1272,9 @@ class GitHubGateTracker(DescriptorPort):
             pr = self._pr(n)
         if pr is None:
             raise RuntimeError(f"comment: no PR for ticket {n}")
-        with self._once_lock(e):
-            if any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"])
-                   for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
+        with self._once_claim(e, n) as mine:
+            if not mine or any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"])
+                               for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):
                 return False
             self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body",
                       body + self._block(e) + self._once_line(e)])
