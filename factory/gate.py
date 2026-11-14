@@ -884,6 +884,7 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
     if any("set-field" in e and e["set-field"] == "risk" for e in out.get("effects") or []):
         payload = {"risk": tracker.facts(ticket)["risk"], **payload}  # the gate's fact: the ticket's risk label
     effects = [resolve(e, payload, ticket) for e in out.get("effects") or []]  # validates the payload first
+    declared = [e for e in effects if e["kind"] == "comment"]  # the comments the node declares (not a plugin's)
     # ADR-0026: the effects, `on:` targets and outcome a plugin owns; the config is read only when there are some
     owns = plugins.owner(outcome, "outcome")
     used = {(outcome, owns)} | {(e["kind"], plugins.owner(e["kind"], "effect")) for e in effects
@@ -904,6 +905,8 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
             if e["kind"] in ("review", "comment"):
                 e["notes"] = notes
     facts = tracker.facts(ticket)
+    for e in declared if facts.get("head") else []:  # #1373: runs of one node at one head write each comment once
+        e["once"] = effects_mod.once_marker(name, outcome, facts["head"])
     if scope := later_review_scope(effects, payload, facts, focus, tracker, ticket):
         raise Bad(scope)
     comment_after = []  # what a plugin's effects must write after the stage change (the comment node's reply)
