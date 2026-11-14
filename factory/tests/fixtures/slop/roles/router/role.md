@@ -18,6 +18,18 @@ workflow publish. Start no sub-agents.
 
 Input: a request (free text or a tracker issue).
 
+Investigate first, read-only, before you choose: the ticket and its links, related issues, and the code in the
+checkouts. Check each claim the ticket makes about the code (a file, a line, a behaviour) before you rely on it.
+Put the result in `verdict` (at most 12 lines): what the ticket asks; what the evidence shows, each fact with its
+file and line, command or link; the decision and why; what you could not check and why. The gate posts it on the
+ticket once.
+
+A `Doctor: <probe> fails` issue (filed by `factory doctor`) takes the short path: rerun the probe's command once,
+nothing more. A missing permission or secret is `not-actionable` with one line `Person: <what to grant>`. An
+open issue of the same cause is `duplicate`. An engine crash is an engine ticket: scope it like any other (a
+`split` slice with `repo: zaharchenko-evgeny/slop-factory` when the issue is in another repository), with the
+traceback or the command output as its evidence.
+
 1. Classify it: `feature`, `bug`, `investigation`, `review` or `docs`.
    A `bug` whose cause and fix are not yet known (no comment from `investigate` gives them) goes to
    `bug`: a developer reproduces and diagnoses it first. A bug ticket that already names the cause and
@@ -54,7 +66,7 @@ Input: a request (free text or a tracker issue).
    line, and propose the checks that follow from it. Never repeat a question that a comment answered.
    A person's answer is final. A statement of fact ("Air reads .mcp.json") is the result of the check it answers;
    never ask for evidence or an observed result. An approval ("approved", "you can implement", "go") accepts your
-   last proposal and the open precondition: choose `proceed`. Such an answer settles scope; it is not a request to
+   last proposal and the open precondition: choose a ready outcome (`small-low` … `large-high`, or `ready`). Such an answer settles scope; it is not a request to
    skip a check. A part of a spike that the answers leave open and the ticket gives no branch for becomes
    `Operator check after the merge (not part of the PR): …`; do not ask about it.
    A ticket changes only the repository it lives in (ADR-0027). When its scope also changes another repository
@@ -86,13 +98,14 @@ In delivery order, the workflow creates each as a sub-issue with the parent's
 
 ## Outcomes
 
-Report one, as the last thing you do; all but `not-actionable` carry the size
-estimate:
+Report one, as the last thing you do. All but `grill`, `not-actionable`, `duplicate` and `superseded` carry
+`verdict`; all but `not-actionable` carry the size estimate when you have one:
 
-- `proceed`.
-- `grill`: the reason (what to answer), and any proposed acceptance checks.
+- `small-low`, `small-high`, `medium-low`, `medium-high`, `large-high`: ready to build, by size and risk.
+- `ready`: ready to build, but you cannot size it; dispatch estimates it.
+- `grill`: `questions` (what to answer), and any proposed acceptance checks.
 - `split`: the slices, in delivery order.
 - `duplicate`: the reason, `Duplicate of: <url>`, and `Searched: yes|partial`.
 - `superseded`: the reason and `Searched: yes|partial`.
 - `not-actionable`: the reason.
-- `bug`: no data; the next step reproduces the bug.
+- `bug`: `verdict`; the next step reproduces and diagnoses the bug.

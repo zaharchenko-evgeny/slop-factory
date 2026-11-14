@@ -1353,7 +1353,7 @@ class PlanTest(unittest.TestCase):
             self.assertEqual(len(a["triggerVcs"]), len(a["triggers"]), a["name"])
         spec = self.by["[Slop factory] implement-medium slop-factory"]["spec"]
         self.assertEqual((spec["node"], spec["tier"], spec["engine"]), ("implement-medium", "sonnet", cfg.load()["engine"]))
-        self.assertEqual(set(spec["outcomes"]), {"done-low", "done-high", "error", "blocked"})
+        self.assertEqual(set(spec["outcomes"]), {"done-low", "done-high", "error", "blocked", "env-broken", "triage"})
         for a in self.plan["automations"]:  # a spec names no other node's: no sweep spec, tiers or focuses
             self.assertFalse({"runs", "tiers", "else_tier", "agent", "persona", "mentions"} & set(a["spec"]), a["name"])
 
