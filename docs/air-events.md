@@ -23,7 +23,7 @@ Air filters are exact or substring matches, ANDed. There is no OR, no NOT and no
 | `push: <branch>` | `branch` | `push` | assumed |
 | (CI) | `workflow_name` | `workflow_run.failed`, `workflow_run.completed` | in use, assumed |
 | (CI green) | `conclusion: success` | `workflow_run.completed`, `check_suite.completed` | assumed |
-| (YouTrack) | `tagAdded`, or a field name and value | `issueUpdated` | in use |
+| (YouTrack) | `tagAdded`, `tagRemoved`, or a field name and value | `issueUpdated` | `tagAdded` and field: in use; `tagRemoved`: assumed |
 
 `by: human` needs a positive filter because Air has no NOT. It matches the GitHub `sender.type` of `User`, so a push
 or a comment by the factory's bot does not fire it. If Air does not expose `sender` or `sender_type`, Air refuses the trigger
@@ -68,8 +68,22 @@ also fires for a merged PR is not probed; a node that must skip merged PRs check
 
 ## YouTrack events
 
-Air has one YouTrack event, `issueUpdated`. A `tagAdded` filter or a field name and value narrows it. Field values are
-case-sensitive. A YouTrack trigger takes no PR events, no `by` and no `state`.
+A ticket trigger of a team whose tickets live in YouTrack compiles to a YouTrack trigger. `factory deploy plan` prints it.
+Field names and values are case-sensitive. A YouTrack trigger takes no PR events, no `by` and no `state`.
+
+| Workflow trigger | Air `eventType` and filters | Status |
+| --- | --- | --- |
+| `{ label: <tag> }`, `{ stage: <s> }` | `issueUpdated`, `tagAdded: <tag>` | in use |
+| `{ ticket: unlabeled, label: <tag> }` | `issueUpdated`, `tagRemoved: <tag>` | assumed |
+| `{ ticket: unlabeled }` | `issueUpdated`, no filter | assumed |
+| `{ field: { name: State, value: Fixed } }` | `issueUpdated`, `State: Fixed` | in use |
+| `{ ticket: opened }` | `issueCreated` | assumed |
+| `{ ticket: commented }` | `commentAdded` | assumed |
+| `{ ticket: resolved }` | `issueResolved` | assumed |
+
+`field` takes `name` and `value`, both required. The supported names are `State`, `Assignee`, `Priority` and `Subsystem`.
+`{ ticket: resolved }` and `field` need tickets in YouTrack: on a GitHub Issues team `factory validate` fails with
+`unsupported-trigger`. `ticket: closed` and `ticket: assigned` stay GitHub events. Check an assumed row on the first apply.
 
 ## Events Air does not deliver
 
@@ -84,7 +98,8 @@ case-sensitive. A YouTrack trigger takes no PR events, no `by` and no `state`.
 ## Validation
 
 `factory validate` fails on an unknown trigger key, event or filter, and on a filter that does not fit its event
-(`state` only fits `pr: reviewed`). The message names the supported values, for example
+(`state` only fits `pr: reviewed`), and on a `field` with an unsupported name
+or a missing value. The message names the supported values, for example
 `unknown-event: nodes.x: pr: pushd: supported pr events: pr closed, ...`.
 
 ## Numberless events
