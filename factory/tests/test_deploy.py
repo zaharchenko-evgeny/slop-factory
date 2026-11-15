@@ -2568,6 +2568,9 @@ class ProjectTargetTest(unittest.TestCase):  # #1387: automations owned by an Ai
             self.calls.append(("create", p["name"]))
             self.envs.append({"id": f"new-{len(self.envs)}", "name": p["name"], "projectId": project_id})
 
+        def add_variables(self, environment_id, variables):
+            self.calls.append(("add_variables", environment_id, variables))
+
     def personal_envs(self, plan):
         return [{"id": f"p{i}", "name": e["name"], "repository": e["repository"], "projectId": None}
                 for i, e in enumerate(plan["environments"])]
@@ -2650,6 +2653,46 @@ class ProjectTargetTest(unittest.TestCase):  # #1387: automations owned by an Ai
             ("POST", "/env-configs/p1/ownership-change/preview", {"targetProjectId": PROJECT, "requestedMode": "DUPLICATE"}),
             ("POST", "/env-configs/p1/ownership-change", {"targetProjectId": PROJECT, "requestedMode": "DUPLICATE",
                                                           "previewToken": "tok"})])
+
+    def test_missing_project_environment_variable_uses_env_backend(self):
+        plan = {"prefix": "[F] ", "environments": [{"name": "[F] read", "declared": [
+            {"name": "TOKEN", "secret": True, "description": "token"}]}]}
+        envs = [{"id": "e1", "name": "[F] read", "projectId": PROJECT}]
+        cloud, backend = mock.Mock(), self.EnvBackend(envs)
+        air.create_missing_variables(plan, envs, cloud, env_backend=backend)
+        self.assertEqual(backend.calls, [("add_variables", "e1", [
+            {"key": "TOKEN", "value": "unset", "isSecret": True, "description": "token"}])])
+        cloud.call.assert_not_called()
+
+    def test_dry_run_does_not_create_project_secret_already_set_in_air(self):
+        plan = self.plan()
+        plan["environments"][0]["declared"] = [{"name": "YOUTRACK_TOKEN", "secret": True}]
+        project_envs = self.owned_envs(plan)
+        project_envs[0]["secrets"] = ["YOUTRACK_TOKEN"]
+        code, out, _, _, _, _ = self.run_project_deploy("--dry-run", plan, [], project_envs)
+        self.assertEqual(code, 0)
+        self.assertNotIn("create variable YOUTRACK_TOKEN", out)
+
+    def test_env_backend_updates_project_environment_variables(self):
+        class Rest(air.EnvBackend):
+            paths = []
+
+            def request(self, method, path, body=None):
+                self.paths.append((method, path, body))
+
+        rest = Rest(token="t")
+        rest.add_variables("e/1", [{"key": "TOKEN", "value": "unset", "isSecret": True}])
+        self.assertEqual(rest.paths, [("PUT", "/env-configs/e%2F1", {
+            "variables": [{"key": "TOKEN", "value": "unset", "isSecret": True}]})])
+
+    def test_env_backend_reports_an_unknown_update_endpoint(self):
+        for status in (404, 405):
+            with self.subTest(status=status):
+                rest = air.EnvBackend(token="t")
+                rest.request = mock.Mock(side_effect=urllib.error.HTTPError(
+                    "https://example.test/env-configs/e1", status, "unknown endpoint", {}, None))
+                with self.assertRaisesRegex(RuntimeError, "env-config update endpoint is unavailable"):
+                    rest.add_variables("e1", [{"key": "TOKEN", "value": "unset"}])
 
     def test_air_errors_become_a_clear_message(self):
         plan = self.plan()

@@ -390,6 +390,17 @@ class EnvBackend(Backend):
         return self.request("POST", "/env-configs", {"name": p["name"], "repositoryUrl": p["repository"],
                                                      "orgProjectId": project_id})
 
+    def add_variables(self, environment_id: str, variables: list[dict]) -> None:
+        """Add variables to a project environment through the env-config REST API used by Air's web UI."""
+        path = f"/env-configs/{urllib.parse.quote(environment_id, safe='')}"
+        try:
+            self.request("PUT", path, {"variables": variables})
+        except urllib.error.HTTPError as error:
+            if error.code in (404, 405):
+                raise RuntimeError(f"cannot edit project environment {environment_id}: "
+                                   "the Air env-config update endpoint is unavailable") from error
+            raise
+
 
 def project_environment_sources(plan: dict, missing: list[str], personal: list[dict]) -> dict[str, dict | None]:
     """{missing project environment name: the personal environment of that name and repository it is copied from, or
@@ -701,7 +712,7 @@ def missing_variables(plan: dict, envs: list[dict]) -> list[tuple[dict, dict]]:
     out = []
     for e in plan["environments"]:
         live = have.get(e["name"]) or {}
-        keys = set(live.get("variable_keys") or live.get("variables") or {})
+        keys = set(live.get("variable_keys") or live.get("variables") or {}) | set(live.get("secrets") or [])
         out += [(e, v) for v in e.get("declared") or [] if v["name"] not in keys]
     return out
 
@@ -709,7 +720,8 @@ def missing_variables(plan: dict, envs: list[dict]) -> list[tuple[dict, dict]]:
 UNSET = "unset"  # Air refuses an empty value; doctor reports this placeholder as missing
 
 
-def create_missing_variables(plan: dict, envs: list[dict], cloud: Mcp, dry_run: bool = False) -> None:
+def create_missing_variables(plan: dict, envs: list[dict], cloud: Mcp, dry_run: bool = False,
+                             env_backend: EnvBackend | None = None) -> None:
     """List (`--dry-run`) or create each declared variable that its environment lacks, with the value `unset`
     (`isSecret` for a secret one). A variable that exists is never listed, so a value a person set stays."""
     ids = {x["name"]: x["id"] for x in envs}
@@ -720,9 +732,14 @@ def create_missing_variables(plan: dict, envs: list[dict], cloud: Mcp, dry_run: 
         for v in declared:
             print(f"create variable {v['name']} ({UNSET}{', secret' if v['secret'] else ''}) in {name[len(plan['prefix']):]}")
         if not dry_run and name in ids:
-            cloud.call("edit_environment", {"id": ids[name], "variables": [
-                {"key": v["name"], "value": UNSET, **({"isSecret": True} if v["secret"] else {}),
-                 **({"description": v["description"]} if v.get("description") else {})} for v in declared]})
+            variables = [{"key": v["name"], "value": UNSET, **({"isSecret": True} if v["secret"] else {}),
+                          **({"description": v["description"]} if v.get("description") else {})} for v in declared]
+            if next((e.get("projectId") for e in envs if e["name"] == name), None):
+                if env_backend is None:
+                    raise RuntimeError(f"cannot edit project environment {name}: EnvBackend is required")
+                env_backend.add_variables(ids[name], variables)
+            else:
+                cloud.call("edit_environment", {"id": ids[name], "variables": variables})
 
 
 def extra_variables(plan: dict, envs: list[dict]) -> list[str]:
@@ -814,7 +831,7 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
               f"then rerun.", file=sys.stderr)
         return 1
     if mode == "--dry-run":
-        create_missing_variables(plan, state[1], cloud, dry_run=True)
+        create_missing_variables(plan, state[1], cloud, dry_run=True, env_backend=env_backend)
     if sources and mode == "--apply":  # before any automation: each one links to its environment by id
         create_project_environments(plan, sources, env_backend)
         state = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
@@ -876,7 +893,11 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
             print(f"verify failed: {action} {kind} {name} still differs", file=sys.stderr)
         if left:
             return 1
-    create_missing_variables(plan, state[1], cloud)  # after the environments exist: their ids are in `state`
+    try:
+        create_missing_variables(plan, state[1], cloud, env_backend=env_backend)  # after environments exist
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     for x in (x for x in state[0] if match is None or match("automation", x["name"])):  # a person registers each webhook with its sender; also on an unchanged plan
         for w in x["webhooks"]:
             print(f"webhook {x['name']}: trigger {w['id']}" + (f" {w['url']}" if w["url"] else ""))
