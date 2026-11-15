@@ -350,6 +350,65 @@ class Backend:
         self._settled(lambda: self.request("POST", "/automations", body), attempts, pause)
 
 
+class EnvBackend(Backend):
+    """Project-owned environments through the air-backend REST API that the Air web UI uses: air-cloud's MCP sees
+    personal environments only and `create_environment` has no project field."""
+
+    API_BASE_URL = "https://api.jetbrains.cloud/air-backend"
+    AUDIENCE = "air-backend"
+
+    def token(self) -> str:
+        if self._token is None:
+            env = os.environ.copy()
+            env.update({"JCP_MCP_API_URL": "https://api.jetbrains.cloud", "JCP_MCP_CLIENT_ID": "pi-lot",
+                        "JCP_MCP_REDIRECT_PATH": "/space/auth",
+                        "JCP_MCP_CONFIG_DIR": str(Path.home() / ".config/jcp-mcp-bridge-pilot")})
+            result = self.run(["jcp-mcp-bridge", "token", "--env", "prod", "--audience", self.AUDIENCE],
+                              check=True, capture_output=True, text=True, env=env)
+            self._token = result.stdout.strip().split("\n")[-1].strip()
+            if not self._token:
+                raise RuntimeError("jcp-mcp-bridge returned an empty Air backend token")
+        return self._token
+
+    def project_environments(self, project_id: str, prefix: str) -> list[dict]:
+        """The project's environments whose name starts with `prefix`, in the plan's shape, each with `projectId`."""
+        q = urllib.parse.quote(project_id, safe="")
+        listed = _items(self.request("GET", f"/env-configs?orgProjectId={q}") or [])
+        return [{**environment_detail(self.request("GET", f"/env-configs/{urllib.parse.quote(x['id'], safe='')}")),
+                 "projectId": project_id} for x in listed if x["name"].startswith(prefix)]
+
+    def duplicate(self, source_id: str, project_id: str) -> dict:
+        """Copy a personal environment into the project (the UI's Change project, mode DUPLICATE): the copy keeps the
+        source's repository, domains, variables and startup scripts; the source and its automations stay as they are."""
+        path = f"/env-configs/{urllib.parse.quote(source_id, safe='')}/ownership-change"
+        preview = self.request("POST", f"{path}/preview", {"targetProjectId": project_id, "requestedMode": "DUPLICATE"})
+        return self.request("POST", path, {"targetProjectId": project_id, "requestedMode": "DUPLICATE",
+                                           "previewToken": preview["previewToken"]})
+
+    def create(self, p: dict, project_id: str) -> dict:
+        """A new project environment for a planned one that has no personal source; deploy sets its variables after."""
+        return self.request("POST", "/env-configs", {"name": p["name"], "repositoryUrl": p["repository"],
+                                                     "orgProjectId": project_id})
+
+
+def project_environment_sources(plan: dict, missing: list[str], personal: list[dict]) -> dict[str, dict | None]:
+    """{missing project environment name: the personal environment of that name and repository it is copied from, or
+    None (created new)}."""
+    repos = {e["name"]: e["repository"] for e in plan["environments"]}
+    return {name: next((x for x in personal if x["name"] == name and not x.get("projectId")
+                        and same_repository(env_url(x), repos[name])), None) for name in missing}
+
+
+def create_project_environments(plan: dict, sources: dict, env_backend: EnvBackend) -> None:
+    by_name = {e["name"]: e for e in plan["environments"]}
+    for name, source in sources.items():
+        if source:
+            env_backend.duplicate(source["id"], plan["projectId"])
+        else:
+            env_backend.create(by_name[name], plan["projectId"])
+        print(f"created project environment {name}" + (f" (copy of personal {source['id']})" if source else ""))
+
+
 def _items(res) -> list[dict]:
     return res if isinstance(res, list) else next(v for v in res.values() if isinstance(v, list))
 
@@ -400,8 +459,10 @@ def environment_detail(x: dict) -> dict:
     if isinstance(x.get("variables"), list):
         x["variable_keys"] = [v["key"] for v in x["variables"]]  # secret ones too: deploy never overwrites one
         x["variables"] = {v["key"]: v["value"] for v in x["variables"] if not v.get("isSecret")}
-    if "personalSecrets" in x:
-        x["secrets"] = [s.get("key") or s["name"] for s in x.pop("personalSecrets")]  # Air lists them by `key`
+    if "personalSecrets" in x and not x.get("secrets"):
+        x["secrets"] = x.pop("personalSecrets")
+    if isinstance(x.get("secrets"), list):  # MCP lists personal ones, REST (air-backend) every one, as records
+        x["secrets"] = [s if isinstance(s, str) else s.get("key") or s["name"] for s in x["secrets"]]
     return x
 
 
@@ -483,8 +544,10 @@ def list_envs(cloud: Mcp, repository_urls) -> list[dict]:
 
 
 def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, backend=None,
-               additional_names=(), project_id: str | None = None) -> tuple[list[dict], list[dict]]:
-    """`project_id` (#1387): read the automations of that project, and only those, in place of the personal ones."""
+               additional_names=(), project_id: str | None = None,
+               env_backend: "EnvBackend | None" = None) -> tuple[list[dict], list[dict]]:
+    """`project_id` (#1387): read the automations of that project, and only those, in place of the personal ones.
+    With `env_backend` too, the environments are the project's, read through air-backend REST."""
     if project_id:
         listed = automations.call("list_automations", {})
         every = [x for v in ([listed] if isinstance(listed, list) else listed.values()) if isinstance(v, list) for x in v]
@@ -506,6 +569,8 @@ def read_state(automations: Mcp, cloud: Mcp, prefix: str, repository_url, *, bac
             if item["name"] in additional_names:
                 record = backend.get_automation(item["id"])
                 item["additionalRepositories"] = record.get("additionalRepositories") or []
+    if project_id and env_backend:
+        return automation_items, env_backend.project_environments(project_id, prefix)
     env_items = list_envs(cloud, repository_url)
     env_items = [environment_detail(cloud.call("get_environment", {"id": x["id"]}))
                  for x in env_items if x["name"].startswith(prefix)]
@@ -561,12 +626,13 @@ def project_error(message: str, project_id: str | None) -> str | None:
 
 
 def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", *, backend=None,
-               env_repositories=None, owned_env_ids=None) -> None:
+               env_repositories=None, owned_env_ids=None, project_env_ids: dict | None = None) -> None:
     """Environments before automations on create, update and replace, after them on delete. A replaced environment
     is created under its new repository; the old one is renamed `retired <name>` first (Air names are unique) and left
     for a person to delete in the Air UI, since the Air MCP has no environment delete.
     `env_repositories` ({environment name: planned repository URL}) picks the right one of two same-named environments.
-    `owned_env_ids` (#1387, a project target): only these environment ids can be picked for an automation."""
+    `owned_env_ids` (#1387, a project target): only these environment ids can be picked for an automation.
+    `project_env_ids` ({name: id} of the project's environments, read through air-backend): the ids automations use."""
     order = {"create": 0, "update": 0, "replace": 0, "delete": 1}
     env_repositories = env_repositories or {}
     env_ids, retired = None, []
@@ -581,7 +647,7 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
                   file=sys.stderr)
             continue
         if p and kind == "automation":  # the environment id exists only after its create
-            env_ids = env_ids or {e["name"]: e["id"] for e in list_envs(cloud, repo_url)
+            env_ids = env_ids or project_env_ids or {e["name"]: e["id"] for e in list_envs(cloud, repo_url)
                                   if e["id"] not in retired and (owned_env_ids is None or e["id"] in owned_env_ids)
                                   and (env_url(e) is None or e["name"] not in env_repositories
                                                                  or same_repository(env_url(e), env_repositories[e["name"]]))}
@@ -676,7 +742,7 @@ def repository_urls(plan: dict) -> list[str]:
 
 
 def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: Mcp, *, backend=None, run=None, yt_run=None,
-           config=None, only: list[str] | None = None) -> int:
+           config=None, only: list[str] | None = None, env_backend: EnvBackend | None = None) -> int:
     """Write only to Air, to repository labels (through `run`, a `gh` runner) and to the tracker's own setup (through
     `yt_run` for YouTrack): deploy never creates, edits or closes a tracker ticket. `config` selects the plugins that
     provision the labels (github when None) and the tracker setup (every plugin's, for what the plan names, when None).
@@ -687,11 +753,17 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     additional_names = {a["name"] for a in plan["automations"] if "additionalRepositories" in a}
     backend = backend or (Backend() if additional_names else None)  # main passes one: a capped list pages through it
     project_id = plan.get("projectId")
+    env_backend = env_backend if project_id else None
     state = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
-                       additional_names=additional_names, project_id=project_id)
+                       additional_names=additional_names, project_id=project_id, env_backend=env_backend)
     capped = getattr(state[0], "capped", False)
     changes = diff(plan, *state, capped)
     missing_envs = missing_project_environments(plan, state[1])
+    sources = {}
+    if env_backend and missing_envs:  # copy each from its personal namesake, or create it new, in the project
+        personal = [environment_detail(cloud.call("get_environment", {"id": x["id"]}))
+                    for x in list_envs(cloud, repo_urls) if x["name"] in missing_envs]
+        sources, missing_envs = project_environment_sources(plan, missing_envs, personal), []
     if project_id:  # an environment is never created for a project: a person does it
         changes = [c for c in changes if not (c[1] == "environment" and c[0] in ("create", "replace"))]
     match, others = None, 0
@@ -708,16 +780,19 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         others, changes = len(changes) - len(kept), kept
         print(f"partial: {', '.join(only)}")
         plan = {**plan, "environments": [e for e in plan["environments"] if match("environment", e["name"], e)]}
+        sources = {n: s for n, s in sources.items() if n in {e["name"] for e in plan["environments"]}}
     print(f"target: project {project_id}" if project_id else "target: personal")
     for action, kind, name, _, _, changed in changes:
         if action == "unknown":
             print(f"unknown {kind} {name} (list capped at {LIST_CAP})")
         else:
             print(f"{action} {kind} {name}" + (f" ({', '.join(changed)})" if changed else ""))
-    if not changes:
+    if not changes and not sources:
         print("unchanged")
     for name in missing_envs:
         print(f"missing project environment {name}: create it in project {project_id} by hand")
+    for name, source in sources.items():
+        print(f"create project environment {name}" + (f" (copy of personal {source['id']})" if source else " (new)"))
     if only and others and mode == "--dry-run":
         print(f"not deployed: {others} other changes")
     if capped and not any(c[0] == "unknown" for c in changes):
@@ -740,6 +815,15 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         return 1
     if mode == "--dry-run":
         create_missing_variables(plan, state[1], cloud, dry_run=True)
+    if sources and mode == "--apply":  # before any automation: each one links to its environment by id
+        create_project_environments(plan, sources, env_backend)
+        state = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
+                           additional_names=additional_names, project_id=project_id, env_backend=env_backend)
+        if still := missing_project_environments(plan, state[1]):
+            print(f"error: project {project_id} still lacks {', '.join(still)} after creating it", file=sys.stderr)
+            return 1
+        changes = [c for c in diff(plan, *state, getattr(state[0], "capped", False))
+                   if not (c[1] == "environment" and c[0] in ("create", "replace")) and (match is None or match(c[1], c[2], c[3]))]
     label_changes = core.reconcile_labels(plan, run, config)
     if only:  # a partial deploy never removes
         label_changes = [c for c in label_changes if c[0] != "remove"]
@@ -776,14 +860,15 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
     if changes:
         try:
             apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories,
-                       owned_env_ids={x["id"] for x in state[1]} if project_id else None)
+                       owned_env_ids={x["id"] for x in state[1]} if project_id else None,
+                       project_env_ids={x["name"]: x["id"] for x in state[1]} if env_backend else None)
         except RuntimeError as e:
             if reason := project_error(str(e), project_id):
                 print(f"error: {reason}", file=sys.stderr)
                 return 1
             raise
         after = read_state(automations, cloud, plan["prefix"], repo_urls, backend=backend,
-                           additional_names=additional_names, project_id=project_id)
+                           additional_names=additional_names, project_id=project_id, env_backend=env_backend)
         state = after
         left = [c for c in diff(plan, *after, getattr(after[0], "capped", False))
                 if not (c[1] == "environment" and (c[0] == "delete" or (project_id and c[0] in ("create", "replace")))) and (match is None or match(c[1], c[2], c[3]))]
@@ -833,7 +918,7 @@ def main(argv: list[str]) -> int:
             plan = {**plan_air(nodes_mod.load(), config), "renames": renames}
             run = next((hook(config) for hook in plugins.registry(config).hook("deploy.run")), None)
             code = deploy(argv[0], "--allow-delete" in argv, plan, *servers, backend=Backend(), run=run, config=config,
-                          only=only)
+                          only=only, env_backend=EnvBackend() if plan.get("projectId") else None)
             if code:
                 return code
             return core.sync_wake_files(config, run, argv[0] == "--apply")

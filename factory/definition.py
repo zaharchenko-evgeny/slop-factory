@@ -726,7 +726,7 @@ def errors(defn):
                 if trigger == "manual" or isinstance(trigger, dict) and ("schedule" in trigger or "webhook" in trigger):
                     continue
                 pr_label = trigger.get("label") if isinstance(trigger, dict) else None
-                code_event = isinstance(trigger, dict) and trigger_parts(trigger)[0] in ("pr", "ci")
+                code_event = isinstance(trigger, dict) and trigger_parts(trigger)[0] in ("pr", "ci", "push")
                 pr_event = code_event or isinstance(trigger, dict) and pr_label in pr_labels
                 source_repos = pr_labels.get(pr_label)
                 if (source_repos and main_name not in source_repos) or (not pr_event and deaf_tracker(env, main_name)) \
@@ -758,7 +758,10 @@ def errors(defn):
         outcomes = n.get("outcomes") or {}
         if not outcomes:
             errs.append(f"no-outcome: {where}")
-        routine = bool(n.get("triggers")) and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"])
+        routine = all_numberless(n.get("triggers"))
+        if not routine and any(numberless_trigger(t) for t in n.get("triggers") or []):
+            errs.append(f"mixed-triggers: {where}: a push or CI-green trigger has no ticket or PR number; "
+                        "do not mix it with triggers that have one")
         for o, oc in outcomes.items():
             oc = oc or {}
             if routine and oc.get("effects"):  # ADR-0015: `apply_routine` applies no effects
@@ -876,12 +879,17 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "ready_for_review"): "pr ready_for_review", ("pr", "converted_to_draft"): "pr converted_to_draft",
                  ("pr", "closed"): "pr closed", ("pr", "review_requested"): "pr review_requested",
                  ("pr", "unlabeled"): "pr unlabeled", ("pr", "edited"): "pr edited",
-                 ("pr", "review_comment"): "pr review_comment"}
+                 ("pr", "review_comment"): "pr review_comment", ("ticket", "opened"): "ticket opened",
+                 ("ticket", "reopened"): "ticket reopened", ("ticket", "unlabeled"): "ticket unlabeled",
+                 ("ticket", "assigned"): "ticket assigned"}
+# `ci: <value>` is not in TRIGGER_WAKES: its wake names the environment's CI workflow (`_wake`). `failed` is a failed
+# workflow run; `green` a completed workflow run that passed; `checks_green` a completed check suite that passed.
+CI_EVENTS = ("failed", "green", "checks_green")
 # Filters beside the one main key of a trigger (`{pr: pushed, by: human}`): `by` is `human`, `factory` or a login; `state`
 # is the review state of `pr: reviewed`; `pr_author` and `label` narrow the PR events. `docs/air-events.md` lists them.
 TRIGGER_FILTERS = ("by", "state", "pr_author", "label")
 REVIEW_STATES = ("approved", "changes_requested", "commented")
-FILTERED_ON = {"by": ("pr", "label"), "state": ("pr",), "pr_author": ("pr", "label"), "label": ("pr", "ticket")}  # main keys a filter fits
+FILTERED_ON = {"by": ("pr", "label", "push"), "state": ("pr",), "pr_author": ("pr", "label"), "label": ("pr", "ticket")}  # main keys a filter fits
 
 
 def trigger_parts(t):
@@ -911,6 +919,19 @@ def _filter_tokens(filters):
     return "".join(f" {k}={filters[k]}" for k in TRIGGER_FILTERS if k in filters)
 
 
+def numberless_trigger(t):
+    """A trigger whose event has no ticket or PR number: a push, or a CI run that passed on any branch (#1438)."""
+    if not isinstance(t, dict) or not t:
+        return False
+    main, value, _ = trigger_parts(t)
+    return main == "push" or (main == "ci" and value in ("green", "checks_green"))
+
+
+def all_numberless(triggers):
+    """True when every trigger has no number (or is a schedule): the node is a routine, outside any ticket."""
+    return bool(triggers) and all(isinstance(t, dict) and ("schedule" in t or numberless_trigger(t)) for t in triggers)
+
+
 def trigger_errors(where, t):
     """`unknown-trigger` and `unknown-filter` errors of one node trigger; each names what is supported."""
     if t == "manual":
@@ -921,8 +942,10 @@ def trigger_errors(where, t):
     if main not in MAIN_KEYS:
         return [f"unknown-trigger: {where}: {main}: supported keys: {', '.join(MAIN_KEYS)}"]
     errs = []
-    if main == "ci" and value != "failed":
-        errs.append(f"unknown-event: {where}: ci: {value}: supported ci events: failed")
+    if main == "ci" and value not in CI_EVENTS:
+        errs.append(f"unknown-event: {where}: ci: {value}: supported ci events: {', '.join(CI_EVENTS)}")
+    if main == "push" and (not isinstance(value, str) or not value or " " in value):
+        errs.append(f"bad-filter: {where}: push takes one branch name, got {value!r}")
     if main in ("pr", "ticket") and (main, value) not in TRIGGER_WAKES:
         names = sorted(v for k, v in TRIGGER_WAKES if k == main)
         errs.append(f"unknown-event: {where}: {main}: {value}: supported {main} events: {', '.join(names)}")
@@ -940,7 +963,7 @@ def trigger_errors(where, t):
     return errs
 
 
-MAIN_KEYS = ("stage", "label", "schedule", "webhook", "ci", "pr", "ticket")
+MAIN_KEYS = ("stage", "label", "schedule", "webhook", "ci", "pr", "ticket", "push")
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
            "request-reviewers", "park-behind-main-red", "assign", "unassign", "ready-for-review")  # and the plugins' effects
 
@@ -1160,7 +1183,10 @@ def _wake(t, name, prefix, schedules, env):
     if k == "webhook":
         return f"webhook {v}"
     if k == "ci":
-        return f"run {(env.get('ci') or {}).get('workflow', 'quality-gates')}"
+        workflow = (env.get('ci') or {}).get('workflow', 'quality-gates')
+        return {"failed": f"run {workflow}", "green": f"run-green {workflow}", "checks_green": "ci checks_green"}[v]
+    if k == "push":
+        return f"push {v}{_filter_tokens(filters)}"
     return TRIGGER_WAKES[(k, v)] + _filter_tokens(filters)
 
 
@@ -1195,7 +1221,7 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
         out["output"] = n.get("output", "read-only")
     if pr_woken and "ci" not in when:
         out["ci-independent"] = True
-    if n.get("triggers") and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"]):
+    if all_numberless(n.get("triggers")):
         out["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
     if n.get("enabled") is False:
         out["enabled"] = False
@@ -1236,7 +1262,9 @@ EVENTS = {("pr", "reviewed"): "pull_request_review.submitted", ("pr", "pushed"):
           ("pr", "ready_for_review"): "pull_request.ready_for_review",
           ("pr", "converted_to_draft"): "pull_request.converted_to_draft", ("pr", "closed"): "pull_request.closed",
           ("pr", "review_requested"): "pull_request.review_requested", ("pr", "unlabeled"): "pull_request.unlabeled",
-          ("pr", "edited"): "pull_request.edited", ("pr", "review_comment"): "pull_request_review_comment.created"}
+          ("pr", "edited"): "pull_request.edited", ("pr", "review_comment"): "pull_request_review_comment.created",
+          ("ticket", "opened"): "issues.opened", ("ticket", "reopened"): "issues.reopened",
+          ("ticket", "unlabeled"): "issues.unlabeled", ("ticket", "assigned"): "issues.assigned"}
 
 
 def _trigger(t, name, prefix, on_pr, schedules, env):
@@ -1255,7 +1283,11 @@ def _trigger(t, name, prefix, on_pr, schedules, env):
     if k == "webhook":
         return f"webhook {v}"
     if k == "ci":
-        return f"workflow_run {(env.get('ci') or {}).get('workflow', 'quality-gates')}"
+        workflow = (env.get('ci') or {}).get('workflow', 'quality-gates')
+        return {"failed": f"workflow_run {workflow}", "green": f"workflow_run.completed {workflow}",
+                "checks_green": "check_suite.completed"}[v]
+    if k == "push":
+        return f"push {v}{_filter_tokens(filters)}"
     return EVENTS[(k, v)] + _filter_tokens(filters)
 
 
@@ -1331,7 +1363,7 @@ def nodes(defn):
                        for t in n.get("triggers") or [])
         if pr_woken and "ci" not in node["when"]:
             node["ci-independent"] = True
-        if n.get("triggers") and all(isinstance(t, dict) and "schedule" in t for t in n["triggers"]):
+        if all_numberless(n.get("triggers")):
             node["routine"] = True  # outside any ticket: `factory begin` needs no trigger payload
         if n.get("enabled") is False:
             node["enabled"] = False

@@ -49,16 +49,19 @@ team's `factory.yaml` to the project's UUID (a bad value fails `factory validate
 personal behaviour. Every planned automation then carries `projectId`, and deploy reads and diffs only that project's
 automations. The dry run prints `target: project <id>` or `target: personal`.
 
-Three preconditions, all checked by a person before the first apply:
+Two preconditions, both checked by a person before the first apply:
 
 1. The Air organization is a team organization. A personal organization rejects `projectId` (AIRC-1855); apply stops with that reason.
 2. The project already has its service account (AIRA-619); apply stops with that reason when it has none.
-3. Every planned environment already exists in the project. The Air MCP and REST API cannot create a project-owned
-   environment (`create_environment` has no project field), and an automation linked to a personal environment fails
-   every run with 404 `ENVIRONMENT_CONFIGURATION_NOT_FOUND` (AIRA-1629). The dry run prints
-   `missing project environment <name>` for each one the project lacks. `--apply` then refuses and writes nothing. Create
-   each environment in the project in the Air UI (same name as the plan), then rerun. Deploy takes an environment as the
-   project's when its record has `projectId` equal to `project_id`.
+
+Deploy reads the project's environments through the air-backend REST API (`/env-configs?orgProjectId=<id>`), because
+the air-cloud MCP sees personal environments only and an automation linked to a personal environment fails every run
+with 404 `ENVIRONMENT_CONFIGURATION_NOT_FOUND` (AIRA-1629). For each planned environment the project lacks, the dry run
+prints `create project environment <name> (copy of personal <id>)` or `(new)`. `--apply` creates them before any
+automation: a copy duplicates the personal environment of the same name and repository into the project (the Air UI's
+Change project, mode DUPLICATE: domains, variables and startup scripts come along; the personal one and its automations
+stay as they are); a new one is created with the plan's name and repository. After the apply, run the dry run again and set each secret
+it lists as `set by a person` in the project environment.
 
 Moving existing personal automations to a project is manual: set `project_id`, apply, then delete the old personal
 automations by hand (`--allow-delete` does not remove them: deploy no longer lists personal ones). Open a follow-up ticket to automate it.
