@@ -559,7 +559,7 @@ class ApplyTest(unittest.TestCase):
         self.assertIn("remove by hand in Air: environment [F] gone", err.getvalue())
         self.assertEqual(code, 0)
 
-    def test_team_repository_automation_runs_from_the_tracker_checkout(self):
+    def test_team_repository_automation_uses_its_environment_tracker(self):
         slop, before = HERE / "fixtures/slop", cfg.team_root()
         try:
             cfg.set_team(slop)
@@ -569,7 +569,7 @@ class ApplyTest(unittest.TestCase):
         ops = [a for a in plan["automations"] if a["repository"]["fullName"].endswith("/slop-eval-factory")]
         self.assertTrue(ops)
         for a in ops:
-            self.assertIn("Run every command from `/workspaces/slop-factory`", a["prompt"], a["name"])
+            self.assertNotIn("## Working directory", a["prompt"], a["name"])
 
     def test_ci_result_labels_wake_on_the_pull_request(self):
         """#790: ci-sync adds factory:ci-red to the PR, so the ci-failed wake is pull_request.labeled."""
@@ -1468,6 +1468,13 @@ class DefinitionPlanTest(unittest.TestCase):
         intake = self.by["[Slop factory] intake"]["prompt"]
         self.assertIn("Split it above 400 changed lines or\n3 repositories.", intake)
         self.assertIn("- factory-step: `~/.agents/skills/factory-step/SKILL.md`\n- to-tickets:", intake)
+
+    def test_prompt_checkout_uses_its_environment_tracker(self):
+        team = [a for a in self.plan["automations"] if a["environmentConfigId"].startswith("[Slop factory] team")]
+        self.assertTrue(team)
+        self.assertTrue(all("## Working directory" not in a["prompt"] for a in team))
+        project = deploy.checkout_instructions({"fullName": "o/team"}, ProjectCheckoutBootstrapTest.CONFIG, "o/app")
+        self.assertIn("## Working directory", project)
 
     def test_no_node_waits_for_a_ci_event(self):
         events = {t.get("eventType") for a in self.plan["automations"] for t in a["triggers"]}

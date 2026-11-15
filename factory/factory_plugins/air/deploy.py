@@ -82,6 +82,15 @@ def definition_copies(defn: dict, name: str, n: dict, config: dict) -> list[dict
     return out
 
 
+def environment_tracker_repository(defn: dict, env: str) -> str | None:
+    """The GitHub repository that holds tickets for the automation's environment, if it has one."""
+    for item in definition.repositories(defn, env):
+        if item["tracker"]:
+            contract = definition.contract(defn, "tracker", item["tracker"])
+            return contract.home(item["tracker"], item["repo"]) if contract else item["repo"]
+    return None
+
+
 def plan_air(nodes: dict, config: dict) -> dict:
     air = config["targets"]["air"]["models"]
     repos = {r["name"]: r for r in config["repositories"]}
@@ -169,7 +178,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "repository": automation_repository,
                 "environmentConfigId": f"{prefix}{env}{env_suffix}",
                 "mcpConnectors": core.mcp_connectors(n, config, None),
-                "prompt": core.agent_prompt(name, n, config, aname, None, automation_repository, tier),
+                "prompt": core.agent_prompt(name, n, config, aname, None, automation_repository, tier,
+                                            environment_tracker_repository(defn, env) if adopted else None),
             }
             if copy_:
                 if copy_["repo"].get("default_branch", "main") != "main":  # Air checks out `main` unless told (#1259)
