@@ -1127,6 +1127,15 @@ class ProjectPlanTest(unittest.TestCase):
             ({"pr": "pushed", "by": "factory"}, "pull_request.synchronize", {"sender": bot}),
             ({"pr": "opened", "by": "carol"}, "pull_request.opened", {"sender": "carol"}),
             ({"pr": "opened", "pr_author": "carol"}, "pull_request.opened", {"pr_author": "carol"}),
+            ({"ticket": "opened"}, "issues.opened", {}),
+            ({"ticket": "reopened"}, "issues.reopened", {}),
+            ({"ticket": "unlabeled", "label": "wip"}, "issues.unlabeled", {"label": "wip"}),
+            ({"ticket": "assigned"}, "issues.assigned", {}),
+            ({"push": "main"}, "push", {"branch": "main"}),
+            ({"push": "release", "by": "human"}, "push", {"branch": "release", "sender_type": "User"}),
+            ({"ci": "green"}, "workflow_run.completed", {"workflow_name": "quality-gates", "conclusion": "success"}),
+            ({"ci": "checks_green"}, "check_suite.completed", {"conclusion": "success"}),
+            ({"ci": "failed"}, "workflow_run.failed", {"workflow_name": "quality-gates"}),
             ({"label": "factory:fix", "by": "human"}, "pull_request.labeled", {"label": "factory:fix", "sender_type": "User"}),
         ]
         for trig, event, filters in rows:
@@ -1318,6 +1327,26 @@ class PlanTest(unittest.TestCase):
         self.assertIn("- `error`: the work needs the next tier", prompt)
         self.assertIn("- tdd: ", prompt)
         self.assertNotIn("handoff_path", prompt)
+
+    def test_numberless_events_begin_without_a_required_number(self):
+        """#1438 B1: a push or a CI run on a branch has no ticket or PR number; the prompt must not demand one."""
+        rows = [
+            ([{"push": "main"}], lambda p: "factory begin fix`" in p and "<the" not in p.split("## How you start")[1]),
+            ([{"ci": "checks_green"}], lambda p: "factory begin fix`" in p),
+            ([{"ci": "green"}], lambda p: "factory begin fix`" in p),
+            ([{"push": "main"}, {"ci": "green"}], lambda p: "factory begin fix`" in p),
+            ([{"push": "main"}, {"schedule": "daily"}], lambda p: "factory begin fix`" in p),
+            ([{"ci": "green"}, {"schedule": "daily"}], lambda p: "factory begin fix`" in p),
+            ([{"ci": "checks_green"}, {"schedule": "daily"}], lambda p: "factory begin fix`" in p),
+            ([{"ci": "failed"}], lambda p: "--pr <the pull request number>" in p and "no number at all" not in p),
+        ]
+        for trigs, ok in rows:
+            with self.subTest(triggers=trigs):
+                def edit(w, trigs=trigs):
+                    w["nodes"]["fix"]["triggers"] = trigs
+                plan = definition_plan(edit_workflow=edit)
+                prompt = {x["spec"]["node"]: x for x in plan["automations"]}["fix"]["prompt"]
+                self.assertTrue(ok(prompt), prompt[-700:])
 
     def test_a_node_begins_with_what_wakes_it(self):
         self.assertIn("`factory begin fix --pr <the pull request number>`", self.by["[Slop factory] fix slop-factory"]["prompt"])

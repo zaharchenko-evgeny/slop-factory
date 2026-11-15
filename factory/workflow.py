@@ -43,7 +43,9 @@ EVENTS = {"manual": "manual", "pr pushed": "pull_request.synchronize", "pr opene
           "pr reopened": "pull_request.reopened", "pr ready_for_review": "pull_request.ready_for_review",
           "pr converted_to_draft": "pull_request.converted_to_draft", "pr closed": "pull_request.closed",
           "pr review_requested": "pull_request.review_requested", "pr unlabeled": "pull_request.unlabeled",
-          "pr edited": "pull_request.edited", "pr review_comment": "pull_request_review_comment.created"}
+          "pr edited": "pull_request.edited", "pr review_comment": "pull_request_review_comment.created",
+          "ticket opened": "issues.opened", "ticket reopened": "issues.reopened", "ticket assigned": "issues.assigned",
+          "ci checks_green": "check_suite.completed"}
 PR_STATE_NAMES = {"merged": "pr-merged", "open": "pr-open"}
 
 
@@ -132,7 +134,7 @@ def validate(project, wf):
         for wake in n.get("wakes_on") or []:
             wake, filters = split_filters(wake)
             verb, _, arg = wake.partition(" ")
-            if wake in EVENTS or verb == "run":
+            if wake in EVENTS or verb in ("run", "run-green", "push"):
                 continue
             if verb == "state":
                 state(f"{name}.wakes_on", arg)
@@ -203,6 +205,10 @@ def migrate(nodes, descriptor):
             return trigger
         if event == "workflow_run":
             return f"run {arg}"
+        if event == "workflow_run.completed":
+            return f"run-green {arg}"
+        if event == "push":
+            return trigger
         if event == "pull_request.merged":
             return f"state {pr_state('merged')}"
         if event == "issues.labeled" and arg in by_stage_label:
