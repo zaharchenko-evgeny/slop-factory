@@ -75,10 +75,6 @@ limits:
     - docs/statechart-proposed.md
     - skills/factory-setup/templates/**
     - skills/vendor/**
-    - engine/template-v1/roles/**
-    - engine/template-v1/skills/**
-    - engine/template-v1/workflows/delivery.md
-    - engine/template-v1/workflows/delivery.yaml
 # Label colors (GitHub hex) the deploy and the gate give a label by its role, not by its name, so a team's renamed or
 # added labels still get one. `stages` is keyed by the stage name in `tracker.stages`, then `stage_kinds` by
 # `tracker.stage_kinds`. A team overrides single labels under `overrides` (`{factory:blocked: "000000"}`); a label

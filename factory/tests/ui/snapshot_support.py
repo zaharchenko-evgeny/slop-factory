@@ -19,7 +19,7 @@ WRITES = {"apply", "claim", "release", "comment", "close", "assign", "add_attr",
 
 @contextlib.contextmanager
 def team(name):
-    """The loaded (config, nodes) of fixture team `name` (`team`: the old layout; `v2`, `slop`: factory.yaml)."""
+    """The loaded (config, nodes) of fixture team `name` (`v2`, `slop`: factory.yaml)."""
     before = cfg._team
     cfg.set_team(FIXTURES / name)
     try:

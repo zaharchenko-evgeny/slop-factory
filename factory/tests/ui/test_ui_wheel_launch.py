@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-FIXTURE = ROOT / "factory/tests/fixtures/team"
+FIXTURE = ROOT / "factory/tests/fixtures/v2"
 SECRET = "ghp_wheelLaunchSecret0123456789"
 
 

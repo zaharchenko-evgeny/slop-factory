@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 SKILL = ROOT / "skills/factory-setup/SKILL.md"
-SETUP_ROOTS = [ROOT / "skills/factory-setup/template", ROOT / "engine/template-v1", ROOT / "factory/tests/fixtures"]
+SETUP_ROOTS = [ROOT / "skills/factory-setup/template", ROOT / "factory/tests/fixtures"]
 LAUNCH = re.compile(r"\bfactory\s+ui\b")
 
 

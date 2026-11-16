@@ -348,15 +348,8 @@ def validate():
                     deploy.output_errors(nodes.load(), config.load())]
         print("\n".join([*errs, *(f"warning: {w}" for w in definition.warnings(defn)), *([] if errs else ["factory: ok"])]))
         return 1 if errs else 0
-    root = config.team_root()
-    if not any((root / f).is_file() for f in (config.DESCRIPTOR, config.PROJECT_DESCRIPTOR)):  # #1248: a report, not a crash
-        print(f"factory: no factory definition at {root} (factory.yaml and workflow.yaml)")
-        return 1
-    errs = config.validate()
-    if not errs:
-        errs = nodes.validate(nodes.load(), config.load()) or deploy.output_errors(nodes.load(), config.load())
-    print("\n".join(errs) or "factory: ok")
-    return 1 if errs else 0
+    print(f"factory: no factory definition at {config.team_root()} (factory.yaml and workflow.yaml)")  # #1248: a report, not a crash
+    return 1
 
 
 def check_workflow(argv):
@@ -530,9 +523,6 @@ def _main(argv):
     if cmd == "migrate" and rest[:1] == ["project"]:
         from workflow import project_main
         return project_main(rest[1:])
-    if cmd == "upgrade":
-        from upgrade import main as upgrade_main
-        return upgrade_main(rest)
     if cmd == "check-workflow" and len(rest) <= 1:
         return check_workflow(rest)
     if cmd == "validate" and not rest:

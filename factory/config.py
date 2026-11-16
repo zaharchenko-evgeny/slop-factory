@@ -1,8 +1,7 @@
-"""The one config loader (ADR-0015): engine defaults overridden by the team descriptor.
+"""The one config loader (ADR-0015): engine defaults overridden by the team definition (ADR-0021).
 
 ENGINE_ROOT holds the engine and its template; TEAM_ROOT holds all runtime roles, skills, and project configuration.
 """
-import json
 import os
 import sys
 from pathlib import Path
@@ -11,9 +10,8 @@ import yaml
 
 import plugins
 
-DESCRIPTOR = "factory.descriptor.yaml"
-PROJECT_DESCRIPTOR = "factory.project.yaml"
-NODES = "engine/nodes.yaml"
+PROJECT_DESCRIPTOR = "factory.project.yaml"  # the name the compiled project view reports its errors under
+DEFAULTS = "engine/defaults.yaml"
 _HERE = Path(__file__).resolve().parents[1]
 
 
@@ -21,16 +19,16 @@ def _find_engine():
     """FACTORY_ENGINE, else this checkout, else the assets an installed tool ships under its prefix."""
     if os.environ.get("FACTORY_ENGINE"):
         return Path(os.environ["FACTORY_ENGINE"])
-    if (_HERE / NODES).exists():
+    if (_HERE / DEFAULTS).exists():
         return _HERE
     installed = Path(sys.prefix) / "share/factory-engine"
     if installed.exists():
         return installed
     try:  # an overlay install (`uv run --with <wheel>`): the data files sit beside the package, not under sys.prefix
         from importlib import metadata
-        hit = next((f for f in metadata.files("slop-factory") or [] if str(f).endswith("share/factory-engine/" + NODES)), None)
+        hit = next((f for f in metadata.files("slop-factory") or [] if str(f).endswith("share/factory-engine/" + DEFAULTS)), None)
         if hit:
-            return Path(hit.locate()).resolve().parents[len(Path(NODES).parts) - 1]
+            return Path(hit.locate()).resolve().parents[len(Path(DEFAULTS).parts) - 1]
     except metadata.PackageNotFoundError:
         pass
     return _HERE
@@ -54,8 +52,7 @@ def team_root():
     if home.is_dir():
         return home.resolve()
     cwd = Path.cwd()
-    if any((d / f).exists() for d in (cwd, ENGINE_ROOT) for f in (PROJECT_DESCRIPTOR, DESCRIPTOR)) \
-            or all((cwd / f).is_file() for f in ("factory.yaml", "workflow.yaml")):  # ADR-0021
+    if all((cwd / f).is_file() for f in ("factory.yaml", "workflow.yaml")):  # ADR-0021
         return cwd.resolve()
     raise SystemExit("factory: no team repository (set FACTORY_TEAM or run the installed factory)")
 
@@ -88,22 +85,12 @@ def pop_team(argv):
     return argv
 
 
-def is_project(root=None):
-    """A project team: `factory.yaml` + `workflow.yaml` (ADR-0021)."""
-    root = Path(root or team_root())
-    return all((root / f).is_file() for f in ("factory.yaml", "workflow.yaml"))
-
-
 def merge(defaults, descriptor):
     """The descriptor overrides the defaults key by key, one level deep."""
     out = dict(defaults)
     for k, v in descriptor.items():
         out[k] = {**out[k], **v} if isinstance(out.get(k), dict) and isinstance(v, dict) else v
     return out
-
-
-def descriptor():
-    return yaml.safe_load((team_root() / DESCRIPTOR).read_text()) or {}
 
 
 def load():
@@ -117,12 +104,9 @@ def _load():
     root = team_root()
     defaults = yaml.safe_load((engine_root() / "engine/defaults.yaml").read_text()) or {}
     import definition
-    if definition.present(root):
-        return merge(defaults, definition.config(definition.load(root)))
-    if (root / PROJECT_DESCRIPTOR).is_file() and not (root / DESCRIPTOR).is_file():
-        raise SystemExit(f"factory: {root / PROJECT_DESCRIPTOR} is the old project layout; the engine reads "
-                         "factory.yaml + workflow.yaml (ADR-0021)")
-    return merge(defaults, descriptor())
+    if not definition.present(root):
+        raise SystemExit(f"factory: no factory definition at {root} (factory.yaml and workflow.yaml, ADR-0021)")
+    return merge(defaults, definition.config(definition.load(root)))
 
 
 def owner(cfg=None):
@@ -227,11 +211,6 @@ def mcp_errors(roles, connectors, nodes):
 
 
 def validate():
-    """Error lines for the team descriptor against engine/descriptor.schema.json."""
-    if is_project():
-        import project
-        return project.validate(team_root())
-    schema = json.loads((engine_root() / "engine/descriptor.schema.json").read_text())
-    errs = []
-    _check(schema, descriptor(), DESCRIPTOR, errs)
-    return errs + tracker_errors(descriptor(), DESCRIPTOR)
+    """Error lines for the team's compiled definition."""
+    import project
+    return project.validate(team_root())

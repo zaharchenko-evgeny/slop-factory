@@ -25,7 +25,7 @@ class ReadmeTest(unittest.TestCase):
                 self.assertIn(f"`{command}`", README)
 
     def test_environment_doc_has_a_row_for_every_variable(self):
-        sources = [p for p in [*(ROOT / "factory").glob("*.py"), *(ROOT / "engine/template-v1").rglob("*")] if p.is_file()]
+        sources = [p for p in list((ROOT / "factory").glob("*.py")) if p.is_file()]
         names = {n for p in sources for n in re.findall(r"FACTORY_[A-Z_]+", p.read_text())}
         doc = (ROOT / "docs/environment.md").read_text()
         for name in sorted(names):

@@ -5,15 +5,15 @@ description: Run one factory node by hand on a GitHub ticket or PR — the gate 
 
 # Factory delivery (one node by hand)
 
-On Air each node is a `[factory:<node>]` automation (`engine/nodes.yaml`,
+On Air each node is a `[factory:<node>]` automation (the team's workflow,
 [ADR-0014](../../../docs/adr/0014-node-model.md)). This skill does the same
 steps yourself, for one node and one ticket. The gate alone changes labels,
 posts reviews and comments, and moves the stage; you never do.
 
-Read first: the team's `factory.project.yaml` or `factory.descriptor.yaml`, its
-workflow, and `AGENTS.md`. Set `FACTORY_TEAM` to the team repository checkout,
+Read first: the team's `factory.yaml`, its
+`workflow.yaml`, and `AGENTS.md`. Set `FACTORY_TEAM` to the team repository checkout,
 or pass its directory with `factory --team <team-repo>`. For local validation
-in this engine checkout, use `factory/tests/fixtures/team` as the team directory.
+in this engine checkout, use `factory/tests/fixtures/v2` as the team directory.
 
 ## Run
 

@@ -5,11 +5,11 @@ description: "Deploy the factory nodes to Air Cloud: render the plan with deploy
 
 # Factory deploy (Air target)
 
-Read first: the team repository's `factory.project.yaml` or `factory.descriptor.yaml`,
-its workflow, `engine/nodes.yaml`, and `docs/targets.md`. Set `FACTORY_TEAM` to the team
+Read first: the team repository's `factory.yaml`,
+its `workflow.yaml`, and `docs/targets.md`. Set `FACTORY_TEAM` to the team
 repository checkout, or pass it as `--team <team-repo>` to each `factory`
 command. Run from the engine checkout; for local validation in this repository,
-use `factory/tests/fixtures/team` as the team directory. Whoever runs this
+use `factory/tests/fixtures/v2` as the team directory. Whoever runs this
 applies the plan and changes no code.
 
 ## Rules
