@@ -88,11 +88,31 @@ class ContractGh(FakeGh):
     def __init__(self, **kw):
         super().__init__(labels=LABELS, **kw)
         self.pr_comments, self.pr_body, self.draft = [], "", True  # the PR opens as a draft (#1261)
+        self.issue_events = []  # what GitHub records of ticket 7: the label changes, each with its actor
+        self.blocks = []  # (blocker, blocked) issue numbers of the blocked-by links written
+
+    def sub_number(self, issue):
+        """The number the sub-issue listing gives the created issue `issue` (its place among the sub-issues, from 1)."""
+        return self.sub.index(next(i["title"] for i in self.open_issues if i["number"] == issue)) + 1
 
     def __call__(self, args, timeout=None):
         a = next((x for x in args if x.startswith("repos/")), "")
         post = args[:3] == ["api", "-X", "POST"]
         at = "2026-01-03T00:00:00Z"
+        if args[:3] == ["issue", "edit", "7"]:
+            for flg, label in zip(args[5:], args[6:]):
+                if flg in ("--add-label", "--remove-label"):
+                    self.issue_events.append({"event": "labeled" if flg == "--add-label" else "unlabeled",
+                                              "label": {"name": label}, "actor": {"login": BOT}, "created_at": at})
+        if post and "/issues/" in a and a.endswith("/dependencies/blocked_by") and "/issues/7/" not in a:
+            self.writes.append(args)
+            self.blocks.append((int(flag(args, "issue_id")), int(a.split("/issues/")[1].split("/")[0])))
+            return ""
+        if a.endswith("/dependencies/blocking") and "/issues/7/" not in a:
+            n = int(a.split("/issues/")[1].split("/")[0])
+            return G.recorded(a, [{"number": b, "state": "open", "labels": [],
+                                         "repository_url": f"https://api.github.com/repos/{REPO}"} for blocker, b in
+                                           ((self.sub_number(x), self.sub_number(y)) for x, y in self.blocks) if blocker == n])
         if post and a.endswith("/pulls/5/reviews"):
             self.writes.append(args)
             self.reviews.append(review(BOT, flag(args, "body"), commit=flag(args, "commit_id"), at=at))
@@ -154,13 +174,6 @@ class GitHubContractTest(SystemContract, unittest.TestCase):
         ("pr-notes-sync", "pr"): lambda s: s.gh.comments.append(
             {"body": f"[factory]\n{gate_github.NOTES_PARKED}\n\n{derive.notes_block({'for': 'fixer', 'hint': 'h'})}",
              "user": {"login": BOT, "type": "Bot"}, "created_at": "2026-01-02T00:00:00Z"}),
-    }
-    XFAIL = {
-        "test_a_stage_effect_that_expects_another_stage_writes_nothing": "#1280: the stage effect ignores `expect`",
-        "test_a_ticket_event_names_its_actor": "#1280: the stub keeps no events of what the tracker writes",
-        "test_find_blocking_lists_the_tickets_a_ticket_blocks": "#1280: find has no `blocking` query",
-        "test_event_keeps_the_canonical_trigger_name": "#1280: event reads raw webhook payloads",
-        "test_event_without_a_ticket_is_none": "#1280: event reads raw webhook payloads",
     }
     NO_WRITE = {("seen", "ticket"): "GitHub keeps no seen list: a duplicate event fails its node's conditions",
                 ("mirror-stage", "pr"): "the stub gives the ticket and its PR one label list, so they already agree; "
@@ -306,8 +319,6 @@ class YouTrackContractTest(SystemContract, unittest.TestCase):
         "test_a_stage_effect_that_expects_the_current_stage_moves_it": "#1281: the stage effect ignores `expect`",
         "test_find_stage_lists_the_tickets_in_a_stage": "#1281: find stage reads no stage of the stub's tickets",
         "test_find_blocking_lists_the_tickets_a_ticket_blocks": "#1281: find has no `blocking` query",
-        "test_event_keeps_the_canonical_trigger_name": "#1281: event reads raw webhook payloads",
-        "test_event_without_a_ticket_is_none": "#1281: event reads raw webhook payloads",
     }
     setUp = GitHubContractTest.setUp
     relate = GitHubContractTest.relate
