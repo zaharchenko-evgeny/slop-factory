@@ -997,7 +997,7 @@ class GitHubGateTracker(DescriptorPort):
         raise ValueError(f"read: unknown subject {subject.kind}")
 
     def find(self, query):
-        """`children`: the sub-tickets of `query.of`; `stage`: the tickets holding one of the stages `query.values`;
+        """`children`: the sub-tickets of `query.of`; `blocking`: the tickets `query.of` blocks; `stage`: the tickets holding one of the stages `query.values`;
         `labeled`, `prs`, `closed`: the local surface's poll of this repository (`_labeled`, `_recent_prs`,
         `_recently_closed`)."""
         if query.kind == "children":
@@ -1007,6 +1007,8 @@ class GitHubGateTracker(DescriptorPort):
                 self.tickets.tickets_by_stage([self.stages[st] for st in query.values if st in self.stages],
                                              query.open_only, closed_hours=query.closed_hours,
                                              updated_hours=query.updated_hours)
+        if query.kind == "blocking":
+            return self.tickets.blocking(query.of)
         if query.kind == "labeled":
             return self._labeled(query.values)
         if query.kind == "prs":
@@ -1014,6 +1016,13 @@ class GitHubGateTracker(DescriptorPort):
         if query.kind == "closed":
             return self._recently_closed()
         raise ValueError(f"find: unknown query {query.kind}")
+
+    def event(self, payload):
+        """The Event of a ticket trigger payload `{ticket, event_name}`, read by the ticket store (ADR-0028);
+        a store that maps no payload (GitHub issues, #1280) raises."""
+        if not hasattr(self.tickets, "event"):
+            raise NotImplementedError(f"{type(self.tickets).__name__} maps no trigger payload to an event")
+        return self.tickets.event(payload)
 
     def _lines(self, *args):
         return [json.loads(x) for x in self.run(list(args)).splitlines() if x.strip()]

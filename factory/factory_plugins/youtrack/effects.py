@@ -19,10 +19,13 @@ def _issue_once(system, n, ctx):
 
 
 def stage(system, e, ctx):
-    """The stage tag (or state field value) replaces the other stage attrs; a ticket whose repository field names
+    """The stage tag (or state field value) replaces the other stage attrs; with `expect`, only a ticket that holds
+    that stage moves (else nothing is written and the effect returns False); a ticket whose repository field names
     no repository to wake is blocked, with a comment that says why, and waits for a person."""
     n, value = e["ticket"], e["value"]
     want, have = system.stages[value], [x for x in _issue_once(system, n, ctx)["attrs"] if x in system.stages.values()]
+    if e.get("expect") is not None and have != [system.stages.get(e["expect"])]:  # compare-and-set (ADR-0028): it moved
+        return False
     try:
         wrote = have != [want] and system.tickets.set_stage(n, want, have)
     except MissingRepository as err:
