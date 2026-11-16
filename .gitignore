@@ -7,6 +7,7 @@
 # Python bytecode
 __pycache__/
 build/
+dist/
 *.egg-info/
 # Run artefacts an agent may write at the checkout root
 /addressed.json
