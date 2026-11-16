@@ -47,10 +47,8 @@ Option 2.
      written from its checkout's directory with Air's token (#1246), and the
      environment's own repository (`FACTORY_ENV_REPOSITORY`) always with Air's
      token. Deploy adds each `token` secret to its environment. This replaces
-     the removed `token_env` key. The tracker-wide `issues_token_env` setting
-     keeps its old meaning until it is removed: the token of a repository the
-     run does not check out, and of a link between two repositories. `factory
-     validate` warns about it (`deprecated-key`).
+     the removed `token_env` key and the removed tracker-wide setting
+     (#1253): `factory validate` rejects it and names `token:`.
 
    The blocks layer as top-level `tracker`/`vcs`, then the environment's, then
    the repository's own. A narrower block with another adapter keeps only the
@@ -95,8 +93,8 @@ Option 2.
    - Deprecated (warnings) until the team migrates (slop-eval-factory#92),
      then removed: node `listens` and `writes`, agent `access`,
      `tracker.repositories` and `tracker.projects`.
-   - Already gone: environment `main` and `token_env`. Deprecated: the
-     `issues_token_env` setting (`token` on a repository replaces it).
+   - Already gone: environment `main` and `token_env`. Removed in #1253: the
+     tracker-wide token setting (`token` on a repository replaces it).
    - The #1069 default-environment fan-out goes in #1134.
 
 ## Checks (`factory validate`)

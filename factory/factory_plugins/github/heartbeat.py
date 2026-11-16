@@ -59,7 +59,7 @@ def reconcile_pass(config, dry_run, progress, *, run=None, environ=os.environ, n
         else:
             args = ["api", f"repos/{repo}/issues/{issue}/comments", "-f", f"body={body}"]
         writer = ProjectWriteRun(run, [*project_repositories(config), repo], environ, repository_tokens(config, environ),
-                                 checked_out(config, environ), config.get("issues_token_env"))
+                                 checked_out(config, environ))
         writer(args)
     if progress:
         progress(result)

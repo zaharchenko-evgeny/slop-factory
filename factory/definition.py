@@ -659,6 +659,9 @@ def errors(defn):
             errs += [f"unknown-role: environments.{e}.roles: {r} is not in `roles`" for r in env_roles if r not in roles]
         errs += [f"removed-key: environments.{e}: {r.get('repo')}: `{k}` (ADR-0027: a repository's `write` names the "
                  "environment's writable repository)" for r in repos for k in REMOVED_REPOSITORY_KEYS if k in r]
+    if "issues_token_env" in ((f.get("defaults") or {}).get("settings") or {}):
+        errs.append("removed-key: defaults.settings.issues_token_env: declare `token: <SECRET_NAME>` on each environment "
+                    "repository the gate writes with it (ADR-0027)")
     errs += scopes.errors(f)  # environments with their own trackers (#1069)
     if "label_prefix" in (f.get("tracker") or {}) and not (
             isinstance(f["tracker"]["label_prefix"], str) and f["tracker"]["label_prefix"]):
@@ -864,10 +867,7 @@ def warnings(defn):
     off = [plugins.refusal(f"agents.{a}", k, owner) for a, spec in (defn["factory"].get("agents") or {}).items()
            for k in spec or {} if (spec or {})[k] and (owner := plugins.owner(k, "agent")) and not registry.is_on(owner)]
     more = [w for check in registry.hook("definition.warnings") for w in check(defn)]
-    legacy = ["deprecated-key: defaults.settings.issues_token_env: declare `token: <SECRET_NAME>` on each environment "
-              "repository the gate writes with it (ADR-0027)"] \
-        if ((defn["factory"].get("defaults") or {}).get("settings") or {}).get("issues_token_env") else []
-    return legacy + [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
+    return [f"unwatched-label: {label}: no node triggers on it" for label in sorted(added)
             if label.startswith(prefix) and label not in triggered] + off + more + _repository_warnings(defn)
 
 
@@ -1166,7 +1166,6 @@ def to_project(defn):
         "workflow": WORKFLOW,
         "states": states,
         "commands": commands,
-        **({"issues_token_env": dset["issues_token_env"]} if dset.get("issues_token_env") else {}),  # deprecated (#1236)
         "branch_pattern": dset.get("branch_pattern"),
         "commit_prefix": dset.get("commit_prefix"),
         "targets": {"air": {"bot_login": dset.get("bot_login"), "models": {a: _model_id(models, a) for a in models},
