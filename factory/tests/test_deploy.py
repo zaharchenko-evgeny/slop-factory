@@ -560,16 +560,30 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(code, 0)
 
     def test_team_repository_automation_runs_from_the_tracker_checkout(self):
-        slop, before = HERE / "fixtures/slop", cfg.team_root()
-        try:
-            cfg.set_team(slop)
-            plan = air.plan_air(nodes.load(), cfg.load())
-        finally:
-            cfg.set_team(before)
-        ops = [a for a in plan["automations"] if a["repository"]["fullName"].endswith("/slop-eval-factory")]
-        self.assertTrue(ops)
-        for a in ops:
-            self.assertIn("Run every command from `/workspaces/slop-factory`", a["prompt"], a["name"])
+        """Slop's `team` environment leaves its tracker to the default: its nodes still read the factory's tickets."""
+        for declared, expected in ((False, True), (True, False)):
+            with self.subTest(declared_team_tracker=declared), tempfile.TemporaryDirectory() as tmp:
+                team = Path(tmp) / "team"
+                shutil.copytree(HERE / "fixtures/slop", team)
+                if declared:  # offline-eval-factory: the team repository declares itself the tracker
+                    path = team / "factory.yaml"
+                    text = path.read_text()
+                    old = "      - { repo: zaharchenko-evgeny/slop-eval-factory, write: true }\n"
+                    self.assertEqual(text.count(old), 1)
+                    path.write_text(text.replace(old, "      - { repo: zaharchenko-evgeny/slop-eval-factory, write: true,"
+                                                      " tracker: { adapter: github-issues } }\n"))
+                before = cfg.team_root()
+                try:
+                    cfg.set_team(team)
+                    plan = air.plan_air(nodes.load(), cfg.load())
+                finally:
+                    cfg.set_team(before)
+                ops = [a for a in plan["automations"] if a["repository"]["fullName"].endswith("/slop-eval-factory")
+                       and a["environmentConfigId"].endswith(" team")]
+                self.assertTrue(ops)
+                for a in ops:
+                    self.assertEqual("Run every command from `/workspaces/slop-factory`" in a["prompt"], expected, a["name"])
+                    self.assertEqual("## Working directory" in a["prompt"], expected, a["name"])
 
     def test_ci_result_labels_wake_on_the_pull_request(self):
         """#790: ci-sync adds factory:ci-red to the PR, so the ci-failed wake is pull_request.labeled."""
@@ -1525,6 +1539,14 @@ class DefinitionPlanTest(unittest.TestCase):
         intake = self.by["[Slop factory] intake"]["prompt"]
         self.assertIn("Split it above 400 changed lines or\n3 repositories.", intake)
         self.assertIn("- factory-step: `~/.agents/skills/factory-step/SKILL.md`\n- to-tickets:", intake)
+
+    def test_prompt_checkout_uses_its_environment_tracker(self):
+        team = [a for a in self.plan["automations"] if a["environmentConfigId"].startswith("[Slop factory] team")]
+        self.assertTrue(team)
+        self.assertTrue(all("## Working directory" not in a["prompt"] for a in team))
+        project = deploy.checkout_instructions({"fullName": "o/team"}, {"repositories": [{"role": "primary", "url": "https://github.com/o/team"}],
+                                                                  "team_repository": "https://github.com/o/team"}, "o/app")
+        self.assertIn("## Working directory", project)
 
     def test_no_node_waits_for_a_ci_event(self):
         events = {t.get("eventType") for a in self.plan["automations"] for t in a["triggers"]}

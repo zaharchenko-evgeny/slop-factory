@@ -82,6 +82,19 @@ def definition_copies(defn: dict, name: str, n: dict, config: dict) -> list[dict
     return out
 
 
+def environment_tracker_repository(defn: dict, env: str) -> str | None:
+    """The GitHub repository an environment declares for its tickets, if it does. Only an explicit `tracker` on the
+    environment or on a repository counts: an environment that leaves it to the default keeps the factory's tracker, so
+    a node that reads the factory's tickets (Slop's `reconcile`) still runs from that tracker's checkout."""
+    declared = ((defn["factory"].get("environments") or {}).get(env)) or {}
+    for item, raw in zip(definition.repositories(defn, env),
+                         [r for r in declared.get("repositories") or [] if isinstance(r, dict) and r.get("repo")]):
+        if item["tracker"] and (raw.get("tracker") or declared.get("tracker")):
+            contract = definition.contract(defn, "tracker", item["tracker"])
+            return contract.home(item["tracker"], item["repo"]) if contract else item["repo"]
+    return None
+
+
 def plan_air(nodes: dict, config: dict) -> dict:
     air = config["targets"]["air"]["models"]
     repos = {r["name"]: r for r in config["repositories"]}
@@ -169,7 +182,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "repository": automation_repository,
                 "environmentConfigId": f"{prefix}{env}{env_suffix}",
                 "mcpConnectors": core.mcp_connectors(n, config, None),
-                "prompt": core.agent_prompt(name, n, config, aname, None, automation_repository, tier),
+                "prompt": core.agent_prompt(name, n, config, aname, None, automation_repository, tier,
+                                            environment_tracker_repository(defn, env) if adopted else None),
             }
             if copy_:
                 if copy_["repo"].get("default_branch", "main") != "main":  # Air checks out `main` unless told (#1259)
