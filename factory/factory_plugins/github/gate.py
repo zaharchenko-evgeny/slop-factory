@@ -1113,12 +1113,11 @@ class GitHubGateTracker(DescriptorPort):
         commit_date = read_field("commit_date", lambda: self._api(
             f"commits/{head}", repo=self.pr_repo)["commit"]["committer"]["date"], "")
         requested_reviewers = [u["login"] for u in pr.get("requested_reviewers") or []]
-        requested_reviewers.extend(f"team:{team['slug']}" for team in pr.get("requested_teams") or []
-                                   if team.get("slug"))
+        requested_teams = [team["slug"] for team in pr.get("requested_teams") or [] if team.get("slug")]
         return PrRecord(name, pr["number"], head, base=pr["base"]["ref"], branch=pr["head"]["ref"], state=pr.get("state"),
                         merged=bool(pr.get("merged")), mergeable=pr.get("mergeable"),
                         labels=[x["name"] for x in pr.get("labels", [])],
-                        requested_reviewers=requested_reviewers,
+                        requested_reviewers=requested_reviewers, requested_teams=requested_teams,
                         body=pr.get("body"), author=user.get("login", ""), author_type=user.get("type", ""),
                         updated_at=pr.get("updated_at"), reviews=reviews, comments=comments,
                         events=events, ci=ci, commit_date=commit_date,

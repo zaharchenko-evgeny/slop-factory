@@ -161,16 +161,12 @@ def test_real_definition_compiler_outputs_project_through_loader():
 
 
 def test_real_nodes_with_list_stage_and_ci_conditions_do_not_raise():
-    config.set_team(ROOT / "factory/tests/fixtures/team")
-    try:
-        compiled = nodes_mod.load()["nodes"]
-        ci_node = compiled["review"]
-        result = project_eligibility("review", ci_node, {}, [])
-        assert result["eligibility"] == "unknown"
-        assert any(condition["key"] == "ci" and condition["result"] == "unknown"
-                   for condition in result["conditions"])
-    finally:
-        config.set_team(None)
+    # v2 workflows read CI from ci-sync labels, so no real node keeps a `ci` guard: check one by hand.
+    ci_node = {"triggers": ["pull_request.labeled"], "when": {"stage": ["in-review"], "ci": "green"}}
+    result = project_eligibility("review", ci_node, {}, [])
+    assert result["eligibility"] == "unknown"
+    assert any(condition["key"] == "ci" and condition["result"] == "unknown"
+               for condition in result["conditions"])
 
     config.set_team(ROOT / "factory/tests/fixtures/slop")
     try:

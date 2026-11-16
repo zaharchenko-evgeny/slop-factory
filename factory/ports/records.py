@@ -67,6 +67,7 @@ class PrRecord:
     mergeable: bool | None = None
     labels: list = field(default_factory=list)
     requested_reviewers: list = field(default_factory=list)
+    requested_teams: list = field(default_factory=list)  # team slugs; shown by the UI, never a gate reviewer to wait for
     body: str = ""
     author: str = ""
     author_type: str = ""

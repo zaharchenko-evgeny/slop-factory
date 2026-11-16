@@ -64,7 +64,8 @@ def test_partial_read_keeps_human_and_team_review_requests_when_ci_fails(monkeyp
 
     record = tracker._pr_record(PR, "project", frozenset({"partial"}))
 
-    assert record.requested_reviewers == ["alice", "factory[bot]", "team:design"]
+    assert record.requested_reviewers == ["alice", "factory[bot]"]
+    assert record.requested_teams == ["design"]
     assert record.ci == "unknown"
     assert record.unavailable == ("ci",)
     assert record.state == "open"
@@ -86,7 +87,8 @@ def test_partial_read_isolates_each_unavailable_field(monkeypatch, field, expect
 
     assert getattr(record, field) == expected
     assert record.unavailable == (field,)
-    assert record.requested_reviewers == ["alice", "factory[bot]", "team:design"]
+    assert record.requested_reviewers == ["alice", "factory[bot]"]
+    assert record.requested_teams == ["design"]
 
 
 @pytest.mark.parametrize("field", ["behind", "comments", "reviews", "events", "ci", "commit_date"])

@@ -182,6 +182,7 @@ def attention(ticket, prs, config, graph, facts, url, pr_evidence_complete=True)
         bots = set((config.get('reviews') or {}).get('trusted_bots') or []) | \
                set((config.get('tracker') or {}).get('bot_logins') or [])
         requested = [p for p in pr.requested_reviewers if p not in bots and not p.endswith('[bot]')]
+        requested += [f'team:{t}' for t in pr.requested_teams]
         if requested:
             return {'kind': 'review', 'reason': 'Outstanding requested human review',
                     'reviewers': requested, 'url': pr_url or url}
@@ -347,7 +348,7 @@ def project_ticket(source, tracker, record, config, graph, events, now):
               'evidenceErrors': list(errors),
               'prs': [{'number': str(p.number), 'url': link, 'repository': p.repo, 'head': p.head,
                        'state': 'merged' if p.merged else p.state, 'ci': p.ci,
-                       'requestedReviewers': list(p.requested_reviewers)} for p, link in prs],
+                       'requestedReviewers': [*p.requested_reviewers, *(f'team:{t}' for t in p.requested_teams)]} for p, link in prs],
               'blockers': [str(x) for x in record.blockers_open], 'history': history, 'nodes': projections}
     return result, errors
 

@@ -246,7 +246,7 @@ class YouTrackTicketStore:
             elif category == "TagsCategory" or (category == "CustomFieldCategory" and self.state_field
                                                 and (a.get("field") or {}).get("name") == self.state_field):
                 for kind, key in (("unlabeled", "removed"), ("labeled", "added")):
-                    out += [{"kind": kind, "value": next((st for st in self.repo_stages if x["name"] == f"{st}-{self._repo(self._issue(n))}"), x["name"]), **base} for x in a.get(key) or []]
+                    out += [{"kind": kind, "value": x["name"], **base} for x in a.get(key) or []]
         return out
 
     def last_field_change(self, n, name):
@@ -300,7 +300,7 @@ class YouTrackTicketStore:
         if not attrs:
             return []
         attrs = [x for a in attrs for x in ([f"{a}-{r}" for r in self.repositories] if a in self.repo_stages else [a])]
-        query = " or ".join(f"{self.state_field or 'tag'}: {{{a}}}" for a in attrs)
+        query = " or ".join(f"tag: {{{a}}}" for a in attrs)
         if open_only:
             query = f"({query}) and #Unresolved"
         elif updated_hours is not None:
@@ -317,9 +317,11 @@ class YouTrackTicketStore:
         for number in self.tickets_by_stage(sorted(labels), open_only=True):
             attrs = self.issue(number)["attrs"]
             events = self.events(number)
+            tags = {label: {label, *(f"{label}-{r}" for r in self.repositories)} if label in self.repo_stages else {label}
+                    for label in labels}  # a per-repository stage tag `<stage>-<repo>` is read back as `<stage>`
             for label in sorted(labels & set(attrs)):
                 event = next((e.get("at") for e in reversed(events)
-                              if e.get("kind") == "labeled" and e.get("value") == label), None)
+                              if e.get("kind") == "labeled" and e.get("value") in tags[label]), None)
                 if event:
                     found.append({"number": number, "pr": False, "branch": None, "label": label, "event": event})
         return found
