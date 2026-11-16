@@ -82,6 +82,19 @@ def definition_copies(defn: dict, name: str, n: dict, config: dict) -> list[dict
     return out
 
 
+def environment_tracker_repository(defn: dict, env: str) -> str | None:
+    """The GitHub repository an environment declares for its tickets, if it does. Only an explicit `tracker` on the
+    environment or on a repository counts: an environment that leaves it to the default keeps the factory's tracker, so
+    a node that reads the factory's tickets (Slop's `reconcile`) still runs from that tracker's checkout."""
+    declared = ((defn["factory"].get("environments") or {}).get(env)) or {}
+    for item, raw in zip(definition.repositories(defn, env),
+                         [r for r in declared.get("repositories") or [] if isinstance(r, dict) and r.get("repo")]):
+        if item["tracker"] and (raw.get("tracker") or declared.get("tracker")):
+            contract = definition.contract(defn, "tracker", item["tracker"])
+            return contract.home(item["tracker"], item["repo"]) if contract else item["repo"]
+    return None
+
+
 def plan_air(nodes: dict, config: dict) -> dict:
     air = config["targets"]["air"]["models"]
     repos = {r["name"]: r for r in config["repositories"]}
@@ -169,7 +182,8 @@ def plan_air(nodes: dict, config: dict) -> dict:
                 "repository": automation_repository,
                 "environmentConfigId": f"{prefix}{env}{env_suffix}",
                 "mcpConnectors": core.mcp_connectors(n, config, None),
-                "prompt": core.agent_prompt(name, n, config, aname, None, automation_repository, tier),
+                "prompt": core.agent_prompt(name, n, config, aname, None, automation_repository, tier,
+                                            environment_tracker_repository(defn, env) if adopted else None),
             }
             if copy_:
                 if copy_["repo"].get("default_branch", "main") != "main":  # Air checks out `main` unless told (#1259)
@@ -701,7 +715,7 @@ def missing_variables(plan: dict, envs: list[dict]) -> list[tuple[dict, dict]]:
     out = []
     for e in plan["environments"]:
         live = have.get(e["name"]) or {}
-        keys = set(live.get("variable_keys") or live.get("variables") or {})
+        keys = set(live.get("variable_keys") or live.get("variables") or {}) | set(live.get("secrets") or [])
         out += [(e, v) for v in e.get("declared") or [] if v["name"] not in keys]
     return out
 
@@ -713,13 +727,18 @@ def create_missing_variables(plan: dict, envs: list[dict], cloud: Mcp, dry_run: 
     """List (`--dry-run`) or create each declared variable that its environment lacks, with the value `unset`
     (`isSecret` for a secret one). A variable that exists is never listed, so a value a person set stays."""
     ids = {x["name"]: x["id"] for x in envs}
+    in_project = {x["name"] for x in envs if x.get("projectId")}  # air-cloud's edit_environment refuses these
     by_env = {}
     for e, v in missing_variables(plan, envs):
         by_env.setdefault(e["name"], []).append(v)
     for name, declared in by_env.items():
+        short = name[len(plan['prefix']):]
         for v in declared:
-            print(f"create variable {v['name']} ({UNSET}{', secret' if v['secret'] else ''}) in {name[len(plan['prefix']):]}")
-        if not dry_run and name in ids:
+            if name in in_project:
+                print(f"set by a person: {short} {'secret' if v['secret'] else 'variable'} {v['name']} (project environment)")
+            else:
+                print(f"create variable {v['name']} ({UNSET}{', secret' if v['secret'] else ''}) in {short}")
+        if not dry_run and name in ids and name not in in_project:
             cloud.call("edit_environment", {"id": ids[name], "variables": [
                 {"key": v["name"], "value": UNSET, **({"isSecret": True} if v["secret"] else {}),
                  **({"description": v["description"]} if v.get("description") else {})} for v in declared]})

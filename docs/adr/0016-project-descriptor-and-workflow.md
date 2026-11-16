@@ -1,6 +1,8 @@
 # ADR-0016: A project descriptor and a workflow per factory project
 
-Status: proposed, decided by the operator on 3 November 2026. Builds on ADR-0014
+Status: superseded by ADR-0021 (the team definition is `factory.yaml`, `workflow.yaml` and `roles/`).
+
+Earlier status: proposed, decided by the operator on 3 November 2026. Builds on ADR-0014
 (the node model) and ADR-0015 (the engine package and team descriptor). It
 supersedes the parts of ADR-0014 and ADR-0015 that define `workflows/nodes.yaml`
 as the project workflow and `factory.descriptor.yaml` as the project's

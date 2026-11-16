@@ -174,7 +174,7 @@ PR_FACTS = {"open": lambda f: f.get("pr_state") == "open", "merged": lambda f: f
 
 
 class DescriptorPort:
-    """States and commands by name, through the `store` each has in factory.project.yaml (ADR-0016). A tracker
+    """States and commands by name, through the `store` each has in the compiled project descriptor (ADR-0016). A tracker
     mixes it in and sets `project`; reads go through its `facts`, writes through its `apply`."""
     project = None
     state_kinds = ("label",)  # the store kinds this tracker holds states (ticket side) and commands in
@@ -182,7 +182,7 @@ class DescriptorPort:
 
     def _entries(self, section):
         if not isinstance(self.project, dict):
-            raise ValueError("no project descriptor: the tracker reads states and commands from factory.project.yaml")
+            raise ValueError("no project descriptor: the tracker reads states and commands from the compiled project descriptor")
         return self.project.get(section) or {}
 
     def _as_label(self, kind, kinds):

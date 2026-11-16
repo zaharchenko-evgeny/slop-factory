@@ -1,6 +1,8 @@
 # ADR-0020: Agents are named role and model bundles that nodes declare
 
-Status: accepted, requested by #589 (slice 1 of 4: the model and the mention
+Status: superseded by ADR-0021 (the team definition is `factory.yaml`, `workflow.yaml` and `roles/`).
+
+Earlier status: accepted, requested by #589 (slice 1 of 4: the model and the mention
 allowlist). Builds on ADR-0014 (nodes) and ADR-0016 (project descriptor and
 workflow).
 

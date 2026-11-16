@@ -1,2 +1,0 @@
-retro
-domain-modeling

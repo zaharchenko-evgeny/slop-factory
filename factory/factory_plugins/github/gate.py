@@ -622,7 +622,7 @@ class GitHubGateTracker(DescriptorPort):
         else:  # review focuses by risk: `reviews.required` of the team's factory.yaml over the engine's defaults
             engine = yaml.safe_load((config.engine_root() / "engine/defaults.yaml").read_text())["reviews"]["required"]
             self.required = {**engine, **(config.load()["reviews"].get("required") or {}), **(required or {})}  # per risk: a partial override keeps the other risk
-        self.project = project  # factory.project.yaml: the stores of states and commands (DescriptorPort)
+        self.project = project  # the compiled project descriptor: the stores of states and commands (DescriptorPort)
         self.pr_repo = pr_repo or repo  # the code host: pull requests, CI, commits, merges
         # {name: owner/repo} of the descriptor's repositories, the primary first; the primary is the code host
         self.repositories = dict(repositories or {"primary": None})
@@ -1408,6 +1408,20 @@ class GitHubGateTracker(DescriptorPort):
         self.run(["pr", "ready", str(pr["number"]), "-R", self.pr_repo])
         return True
 
+    def _fx_mirror_stage(self, e, ctx):
+        """Copy the ticket's stage label and `needs-human` onto its PR; drop any other stage label there. Only
+        these labels: `risk:*`, `complexity:*`, `tier:*` and CI labels stay as they are. No PR: no write."""
+        pr = self._pr(e["ticket"])
+        if pr is None:
+            return False
+        stages, human = set(self.stages.values()), vocab.needs_human()
+        have = set(self._issue_once(e["ticket"], ctx)["attrs"])
+        now = set(self._labels(pr["number"], repo=self.pr_repo))
+        want = (have & stages) | ({human} & have)
+        add = sorted(want - now)
+        remove = sorted(((stages | {human}) & now) - want)
+        return bool(add or remove) and self._edit(pr["number"], add, remove, on="pr")
+
     def _fx_request_reviewers(self, e, ctx):
         """`request-reviewers: changes` asks again who requested changes; logins (static, or the outcome's
         `{field: <name>}`) are asked once each."""
@@ -1490,6 +1504,7 @@ class GitHubGateTracker(DescriptorPort):
         Effect("react", "ticket", _fx_react), Effect("react", "pr", _fx_react),
         Effect("review", "pr", _fx_review, remote=True), Effect("request-reviewers", "pr", _fx_request_reviewers),
         Effect("ready-for-review", "pr", _fx_ready_for_review, remote=True),
+        Effect("mirror-stage", "pr", _fx_mirror_stage),
         Effect("create-issues", "ticket", _fx_create_issues), Effect("park-behind-main-red", "ticket", _fx_park),
         Effect("merge", "pr", _fx_merge, remote=True), Effect("update-branch", "pr", _fx_update_branch, remote=True),
     )

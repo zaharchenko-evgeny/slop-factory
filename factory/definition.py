@@ -990,7 +990,7 @@ def trigger_errors(where, t):
 MAIN_KEYS = ("stage", "label", "schedule", "webhook", "ci", "pr", "ticket", "push", "field")
 FIELD_NAMES = ("State", "Assignee", "Priority", "Subsystem")  # `field: {name, value}` (YouTrack only); docs/air-events.md
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red", "assign", "unassign", "ready-for-review")  # and the plugins' effects
+           "request-reviewers", "park-behind-main-red", "assign", "unassign", "ready-for-review", "mirror-stage")  # and the plugins' effects
 
 
 def _name(label, prefix):
@@ -1281,7 +1281,7 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
 
 
 # --- The shapes the gate reads, straight from the definition -------------------------------------
-# `nodes(defn)` is engine/nodes.yaml's shape: triggers as event strings, `when.stage`, stage and label effects.
+# `nodes(defn)` is the shape of a nodes file: triggers as event strings, `when.stage`, stage and label effects.
 EVENTS = {("pr", "reviewed"): "pull_request_review.submitted", ("pr", "pushed"): "pull_request.synchronize",
           ("pr", "opened"): "pull_request.opened", ("pr", "merged"): "pull_request.merged",
           ("pr", "commented"): "issue_comment.created", ("ticket", "closed"): "issues.closed",

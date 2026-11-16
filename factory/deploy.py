@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
-"""The target-neutral deploy plan of the nodes of engine/nodes.yaml (ADR-0014): each node's spec, prompts and
+"""The target-neutral deploy plan of the nodes of the team definition (ADR-0014): each node's spec, prompts and
 triggers, its model tier, and the labels the trackers must carry. A surface plugin (ADR-0026) turns it
 into its own shape: `air` (factory_plugins/air/deploy.py: the Air automations and environments, their diff and
 apply), `local` (factory_plugins/local/surface.py).
@@ -52,8 +52,8 @@ OUTCOME_WORDS = {
 }
 
 
-# --- `factory begin` (cli.py) compiles one automation from the node graph, tiers and focuses included; the old
-# layout's graphs (engine/nodes.yaml) need them until #682 deletes that layout. The plan below never reads them.
+# --- `factory begin` (cli.py) compiles one automation from the node graph, tiers and focuses included.
+# The plan below never reads them.
 def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | None, nodes: dict, top: bool = True) -> dict:
     """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
     spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
@@ -245,14 +245,14 @@ def additional_repositories(main_repository: dict, team: dict, config: dict) -> 
     return projects if team_is_project(team, config) else projects + [{"repository": repository(team), "branch": "main"}]
 
 
-def checkout_instructions(main_repository: dict | None, config: dict) -> str:
+def checkout_instructions(main_repository: dict | None, config: dict, tracker_repository: str | None = None) -> str:
     primary = next(r for r in config["repositories"] if r.get("role") == "primary")
     team = {"url": config.get("team_repository") or primary["url"]}
     if not main_repository:
         return ""
     if main_repository["fullName"] == repository(team)["fullName"]:
         # Air's gh picks its token from the working directory's origin: the tracker's checkout reaches the tracker.
-        tracker = (config.get("tracker") or {}).get("repository") or repository(primary)["fullName"]
+        tracker = tracker_repository or (config.get("tracker") or {}).get("repository") or repository(primary)["fullName"]
         if tracker == main_repository["fullName"]:
             return ""
         return (f"## Working directory\n\nRun every command from `/workspaces/{tracker.rsplit('/', 1)[-1]}`: "
@@ -348,11 +348,12 @@ def mcp_connectors(n: dict, config: dict, focus: str | None) -> list[str]:
 
 
 def agent_prompt(name: str, n: dict, config: dict, aname: str, focus: str | None,
-                 main_repository: dict | None = None, tier: str | None = None) -> str:
+                 main_repository: dict | None = None, tier: str | None = None,
+                 tracker_repository: str | None = None) -> str:
     role = n["role"]
     servers = mcp_connectors(n, config, focus)
     who = f"You are the {role} of {project_name(config)}" + (f" ({focus} focus)" if focus else "") + "."
-    checkout = checkout_instructions(main_repository, config)
+    checkout = checkout_instructions(main_repository, config, tracker_repository)
     import definition
     if definition.present(config_mod.team_root()):  # ADR-0021: the node's role body, rendered with its settings
         defn = definition.load(config_mod.team_root())

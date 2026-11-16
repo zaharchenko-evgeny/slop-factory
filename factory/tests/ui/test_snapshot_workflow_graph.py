@@ -38,7 +38,7 @@ def transitions(nodes):
 
 class RealFormats(unittest.TestCase):
     def test_every_format_has_exactly_the_compilers_transitions(self):
-        for fixture in ("team", "v2", "slop"):  # the old layout, a v2 factory.yaml, a full project
+        for fixture in ("v2", "slop"):  # a v2 factory.yaml, a full project
             with self.subTest(fixture), s.team(fixture) as (config, nodes):
                 g = graph.build(nodes, config)
                 got = {(e["source"], e["target"], e["node"], e["outcome"]) for e in g["edges"] if e["kind"] == "transition"}
@@ -53,13 +53,6 @@ class RealFormats(unittest.TestCase):
             self.assertEqual(background, {"retro", "reconcile", "doctor-engine", "doctor-team"})
             reconcile = next(n for n in g["nodes"] if n["id"] == "reconcile")
             self.assertEqual(reconcile["triggers"][0]["cron"], nodes["schedules"]["reconcile"]["cron"])
-
-    def test_old_layout_keeps_its_shared_stage_nodes(self):
-        with s.team("team") as (config, nodes):
-            g = graph.build(nodes, config)
-            sharing = [n["id"] for n in g["nodes"] if n["stages"] == ["in-review"]]
-            self.assertGreaterEqual(len(sharing), 2)  # review and join read one stage
-            self.assertTrue(g["loops"] and "in-dev" in g["loops"][0])
 
 
 class CustomNames(unittest.TestCase):

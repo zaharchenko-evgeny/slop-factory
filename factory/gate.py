@@ -8,7 +8,7 @@
 Usage: gate.py check --node N --event FILE [--tracker github|memory:FILE]
        gate.py apply --node N --outcome O --payload FILE [--tracker github|memory:FILE]
        gate.py apply --node N --handoff FILE [--event FILE]   (outcome and payload derived from the handoff)
-       --spec FILE (check, apply, sweep): the node spec of the automation (deploy plan); no engine/nodes.yaml is read
+       --spec FILE (check, apply, sweep): the node spec of the automation (deploy plan); no nodes file is read
        gate.py sweep [--tracker github] [--dry-run] [--stale] [--event FILE | --issue N] (no agent: lists the tickets itself,
                                                                  one stage per ticket;
                                                                  --stale also re-fires nodes whose run died silently)

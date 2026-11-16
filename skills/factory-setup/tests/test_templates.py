@@ -224,13 +224,9 @@ class Templates(unittest.TestCase):
         self.assertIn("factory-deploy", readme)
 
     def test_statechart_skill_is_pinned_and_fetched_not_vendored(self):
-        spec = importlib.util.spec_from_file_location("vendor_skills", ROOT / "scripts/vendor-skills.py")
-        vs = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(vs)
-        pin = vs.load()["statechart"]
+        pin = statechart.PIN
         self.assertEqual((pin["source"], pin["commit"], pin["path"]),
                          ("cursor/plugins", "519d36aa9895", "pstack/skills/statechart"))
-        self.assertEqual(vs.check(), [])
         self.assertFalse((ROOT / "engine/template-v1/skills/statechart").exists())
         with tempfile.TemporaryDirectory() as tmp:  # the fetched folder matches the pin's sha256
             self.assertTrue((statechart.skill_dir(tmp) / "SKILL.md").is_file())

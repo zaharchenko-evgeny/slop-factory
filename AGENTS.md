@@ -38,7 +38,7 @@ change, whether you are a person, a pi session or a factory role.
    linked sub-issues only when it spans more than 3 repositories or holds
    independent changes. Deliver the first slice.
 4. **Deliver through the factory.** The factory is the node list in
-   [engine/nodes.yaml](engine/nodes.yaml) ([ADR-0014](docs/adr/0014-node-model.md)),
+   the `workflow.yaml` of the team repository ([ADR-0014](docs/adr/0014-node-model.md)),
    deployed as `[factory:<node>]` Air automations by the `factory-deploy` skill.
    Each automation's agent runs `factory begin`, does its role's work,
    and reports one outcome with `factory end` (the `factory-step` skill). The gate alone changes labels, posts
@@ -69,12 +69,12 @@ change, whether you are a person, a pi session or a factory role.
    Identify the ticket that will fix a process gap (or open a new ticket); do
    not fix the factory inside an unrelated ticket.
 
-Models: Air tiers come from `targets.air.models` in the team repository’s `factory.descriptor.yaml`.
+Models: Air models come from `models` in the team repository’s `factory.yaml`.
 
 ## Tracker and git
 
 - Tracker: GitHub Issues in this repository. Stages are `factory:*` labels
-  (see the team repository’s `factory.descriptor.yaml`).
+  (see `tracker` in the team repository’s `factory.yaml`).
 - To list every open ticket waiting for a person, use `is:open label:factory:needs-human`.
 - Branch: `ez/<issue>-<slug>` from `main`. Commit subject starts with
   `#<issue> `. One PR per issue, linked with `Closes #<issue>` only when the PR
@@ -83,7 +83,7 @@ Models: Air tiers come from `targets.air.models` in the team repository’s `fac
 
 ## Writes outside the repository
 
-- While `gates.confirm_external_writes` is `true` in the team repository’s `factory.descriptor.yaml`, show the
+- While `confirm_external_writes` is `true` in `defaults.settings` of the team repository’s `factory.yaml`, show the
   exact text of every write listed in `gates.confirm_external_writes_scope`
   (today: none) and wait for the user's approval before publishing. A factory
   run may push the ticket's own `ez/<issue>-*` branch without asking. Issue and
@@ -95,9 +95,9 @@ Models: Air tiers come from `targets.air.models` in the team repository’s `fac
 ## Files
 
 - Roles and workflows never name a repository, tracker project, model or
-  harness. Put those in the team repository’s `factory.descriptor.yaml`.
+  harness. Put those in the team repository’s `factory.yaml`.
 - `docs/design.md` and the ADRs change only with an issue that asks for it.
-- Keep `engine/template-v1/roles/*/setup.sh` and `skills/factory-setup/template/roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
+- Keep `skills/factory-setup/template/roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
   ShellCheck.
 - Run artefacts live in `.factory/` (git-ignored). Never commit them.
 - Slop factory's definition lives in `slop-eval-factory` (its `factory.yaml`,

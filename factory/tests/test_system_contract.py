@@ -162,7 +162,9 @@ class GitHubContractTest(SystemContract, unittest.TestCase):
         "test_event_keeps_the_canonical_trigger_name": "#1280: event reads raw webhook payloads",
         "test_event_without_a_ticket_is_none": "#1280: event reads raw webhook payloads",
     }
-    NO_WRITE = {("seen", "ticket"): "GitHub keeps no seen list: a duplicate event fails its node's conditions"}
+    NO_WRITE = {("seen", "ticket"): "GitHub keeps no seen list: a duplicate event fails its node's conditions",
+                ("mirror-stage", "pr"): "the stub gives the ticket and its PR one label list, so they already agree; "
+                                        "test_gate_github covers the write"}
     EXEMPT = {
         ("react", "ticket"): "the reactions API keeps one per user and answers the existing one: the handler reports it",
         ("react", "pr"): "as react on the ticket",

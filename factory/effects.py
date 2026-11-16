@@ -24,7 +24,7 @@ import derive
 from tag import current as tag_text, has_tag, same_text, tagged, untag  # noqa: F401  (re-exported: one tag helper, #1365)
 
 # The target of an effect without `on:`: the kinds that write a pull request act on the ticket's PR.
-PR_KINDS = ("review", "request-reviewers", "merge", "update-branch", "pr-notes", "pr-notes-sync", "ready-for-review")
+PR_KINDS = ("review", "request-reviewers", "merge", "update-branch", "pr-notes", "pr-notes-sync", "ready-for-review", "mirror-stage")
 ANY = "*"  # a system's catch-all kind (the in-memory system logs any effect)
 # The remote kinds of a system that declares no `effects` (a test double, a tracker not yet on the registry).
 REMOTE = ("review", "merge", "update-branch")

@@ -21,8 +21,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "factory"))
 import config as cfg  # noqa: E402
-import project_mode  # noqa: E402
-cfg.set_team(project_mode.team(Path(__file__).resolve().parent / "fixtures/v2"))
+cfg.set_team(Path(__file__).resolve().parent / "fixtures/v2")
 import gate  # noqa: E402
 from factory_plugins.github import gate as M_GH  # noqa: E402
 import gate_port as M_PORT  # noqa: E402
@@ -635,10 +634,12 @@ class EffectsTest(unittest.TestCase):
         self.assertEqual(self.twice(gh, eff("unlabel", "factory:fix-mid")), (True, 2, False, 2))
 
     def test_descriptor_states_and_commands(self):
-        import project
         gh = FakeGh()
-        t = tracker_of(REPO, STAGES, BOT, fix_cap=3, run=gh,
-                              project=project.load(Path(__file__).resolve().parent / "fixtures/project"))
+        t = tracker_of(REPO, STAGES, BOT, fix_cap=3, run=gh, project={
+            "states": {"ready": {"kind": "active", "store": {"label": "factory:ready"}},
+                       "needs-review": {"kind": "active", "store": {"field": {"name": "Status", "value": "Review"}}}},
+            "commands": {"review": {"store": {"label": "factory:review"}}, "pr-review": {"store": {"pr_label": "factory:pr-review"}},
+                         "close": {"store": {"tag": "close"}}}})
         self.assertTrue(t.set_state(7, "ready"))
         self.assertEqual(sorted(gh.labels), ["factory:ready", "risk:low"])
         self.assertTrue(t.add_command(7, "review"))
@@ -1329,6 +1330,48 @@ class JoinTest(unittest.TestCase):
         gh.draft = False  # GitHub now reports it ready
         self.assertFalse(tr(gh).apply({"ticket": 7, "kind": "ready-for-review", "value": None}))
         self.assertEqual(len([w for w in gh.writes if w[:2] == ["pr", "ready"]]), 1)
+
+    def test_mirror_stage_copies_stage_and_needs_human_to_the_pr_only(self):
+        class Split(FakeGh):  # PR 5 keeps its own labels, apart from ticket 7
+            pr = []
+
+            def __call__(self, args, timeout=None):
+                a = " ".join(args)
+                if "PATCH" not in args and a.endswith("issues/5"):
+                    return json.dumps({"labels": [{"name": x} for x in self.pr], "state": "open", "body": "",
+                                       "assignees": [], "user": {"login": "author"}})
+                if args[:3] == ["pr", "edit", "5"]:
+                    self.writes.append(args)
+                    it = iter(args[5:])
+                    for flag, v in zip(it, it):
+                        self.pr.append(v) if flag == "--add-label" else self.pr.remove(v)
+                    return ""
+                return super().__call__(args, timeout)
+
+        human = "factory:needs-human"
+        rows = [  # ticket labels, PR labels, PR labels after
+            (["factory:in-review", "risk:low"], ["factory:in-dev", "risk:high"], ["factory:in-review", "risk:high"]),
+            (["factory:in-review", human, "tier:mid", "complexity:small"], ["factory:in-review"], ["factory:in-review", human]),
+            (["factory:in-review"], ["factory:in-review", human, "ci-green"], ["factory:in-review", "ci-green"]),
+            (["factory:in-review", "risk:low"], ["factory:in-review"], ["factory:in-review"]),  # nothing differs
+        ]
+        for ticket, before, after in rows:
+            with self.subTest(ticket=ticket, before=before):
+                gh = Split(labels=ticket)
+                gh.pr = list(before)
+                changed = tr(gh).apply({"ticket": 7, "kind": "mirror-stage", "value": None})
+                self.assertEqual((sorted(gh.pr), changed), (sorted(after), sorted(before) != sorted(after)))
+                self.assertFalse(tr(gh).apply({"ticket": 7, "kind": "mirror-stage", "value": None}))  # a retry converges
+
+    def test_mirror_stage_without_a_pr_writes_nothing(self):
+        class NoPr(FakeGh):
+            def __call__(self, args, timeout=None):
+                if "pulls?state=all" in " ".join(args):
+                    return ""
+                return super().__call__(args, timeout)
+        gh = NoPr()
+        self.assertFalse(tr(gh).apply({"ticket": 7, "kind": "mirror-stage", "value": None}))
+        self.assertEqual([w for w in gh.writes if w[0] in ("pr", "issue")], [])
 
     def test_ready_for_review_is_a_no_op_on_a_ready_pr(self):
         gh = FakeGh()
