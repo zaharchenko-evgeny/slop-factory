@@ -83,9 +83,13 @@ def definition_copies(defn: dict, name: str, n: dict, config: dict) -> list[dict
 
 
 def environment_tracker_repository(defn: dict, env: str) -> str | None:
-    """The GitHub repository that holds tickets for the automation's environment, if it has one."""
-    for item in definition.repositories(defn, env):
-        if item["tracker"]:
+    """The GitHub repository an environment declares for its tickets, if it does. Only an explicit `tracker` on the
+    environment or on a repository counts: an environment that leaves it to the default keeps the factory's tracker, so
+    a node that reads the factory's tickets (Slop's `reconcile`) still runs from that tracker's checkout."""
+    declared = ((defn["factory"].get("environments") or {}).get(env)) or {}
+    for item, raw in zip(definition.repositories(defn, env),
+                         [r for r in declared.get("repositories") or [] if isinstance(r, dict) and r.get("repo")]):
+        if item["tracker"] and (raw.get("tracker") or declared.get("tracker")):
             contract = definition.contract(defn, "tracker", item["tracker"])
             return contract.home(item["tracker"], item["repo"]) if contract else item["repo"]
     return None
