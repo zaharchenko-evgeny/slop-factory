@@ -811,17 +811,15 @@ class DefinitionTest(unittest.TestCase):
                 else:
                     self.assertEqual(errs, [])
 
-    def test_issues_token_env_is_deprecated_and_still_compiled(self):
-        """#1236: until the team declares `token:`, `issues_token_env` keeps its old meaning, with a warning."""
+    def test_issues_token_env_is_removed(self):
+        """#1253: `defaults.settings.issues_token_env` is an error that names `token:`, and is not compiled."""
         def change(f):
             self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {})])
             f["defaults"].setdefault("settings", {})["issues_token_env"] = "OLD"
         self.edit("factory.yaml", change)
-        defn = definition.load(self.root)
-        project = definition.to_project(defn)[0]
-        self.assertEqual(project["issues_token_env"], "OLD")
-        self.assertNotIn("tokens", project["environments"]["engine"])  # never a declared token: checkouts keep Air's
-        self.assertTrue(any(w.startswith("deprecated-key: defaults.settings.issues_token_env") for w in definition.warnings(defn)))
+        errs = [e for e in self.errors() if "issues_token_env" in e]
+        self.assertEqual(len(errs), 1, errs)
+        self.assertTrue(errs[0].startswith("removed-key: defaults.settings.issues_token_env") and "`token:" in errs[0], errs)
 
     def test_compile_lists_each_repository_token(self):
         self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True}), (OTHER, {"token": "T"})]))
