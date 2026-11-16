@@ -1,8 +1,15 @@
-import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
-import { App } from "./App";
-import "./index.css";
-import { registerBuiltinViews } from "./views/builtin";
+import '@fontsource-variable/geist'
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import App from './App'
+import '@xyflow/react/dist/style.css'
+import './index.css'
 
-registerBuiltinViews();
-createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
+const rootElement = document.getElementById('root')
+if (rootElement === null) throw new Error('Missing application root element')
+
+createRoot(rootElement).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)

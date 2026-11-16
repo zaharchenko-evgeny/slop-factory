@@ -1,102 +1,469 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { FilterBar } from "@/FilterBar";
-import { NO_FILTERS, filterSnapshot } from "@/filters";
-import { type Theme, applyTheme, defaultStorageKey, loadPrefs, savePrefs } from "@/prefs";
-import { loadSnapshot, mergeSnapshot, type Snapshot } from "@/snapshot";
-import { registry as defaultRegistry, type ViewRegistry } from "@/views/registry";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  AlertCircle,
+  AlertTriangle,
+  ArrowDownToLine,
+  ArrowRight,
+  ChevronRight,
+  Clock3,
+  GitPullRequest,
+  LoaderCircle,
+  Moon,
+  RefreshCw,
+  Search,
+  Settings2,
+  Sun,
+  UserRoundCheck,
+  Workflow,
+} from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import './views/builtins'
+import { useProgressViews } from './views/registry'
 
-// Prototype B, full canvas: a compact header and toolbar over a full-width canvas, no permanent sidebar.
-export function App({ registry = defaultRegistry, load = loadSnapshot, storageKey = defaultStorageKey() }: { registry?: ViewRegistry; load?: () => Promise<Snapshot>; storageKey?: string }) {
-  const saved = useMemo(() => loadPrefs(storageKey), [storageKey]);
-  const [snapshot, setSnapshot] = useState<Snapshot>();
-  const [error, setError] = useState<string>();
-  const [filters, setFilters] = useState(saved.filters);
-  const [active, setActive] = useState(saved.view && registry.get(saved.view) ? saved.view : registry.defaultId());
-  const [theme, setTheme] = useState<Theme>(saved.theme);;
+const TicketDetails = lazy(async () => {
+  const module = await import('@/components/TicketDetails')
+  return { default: module.TicketDetails }
+})
+import { type Snapshot, type Ticket } from './model'
+import { Progress } from '@/components/ui/progress'
+import {
+  refreshSnapshot as loadUpdatedSnapshot,
+  refreshSourceLabel,
+  summarizeRefresh,
+  type RefreshStatus,
+  type SnapshotScope,
+} from './refresh'
+import {
+  defaultPreferences,
+  filteredTickets,
+  formatTimestamp,
+  loadPreferences,
+  savePreferences,
+  ticketNeedsReview,
+  ticketsForAttention,
+  visibilitySchema,
+  type Filters,
+  type Preferences,
+} from './preferences'
 
-  const [loading, setLoading] = useState(false);
-  const [lastOk, setLastOk] = useState<Date>();
-  const [auto, setAuto] = useState(saved.auto); // manual refresh is the default
-  const [interval, setIntervalMs] = useState(saved.interval); // 60s when first enabled
-  const inflight = useRef(false);
-
-  // One request at a time: a click or a tick while a request runs does nothing.
-  const refresh = useCallback(async () => {
-    if (inflight.current) return;
-    inflight.current = true;
-    setLoading(true);
-    try {
-      const s = await load();
-      setSnapshot((prev) => mergeSnapshot(prev, s)); // stale data stays on a failure
-      setError(undefined);
-      setLastOk(new Date());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      inflight.current = false;
-      setLoading(false);
-    }
-  }, [load]);
-  useEffect(() => { void refresh(); }, [refresh]);
-  useEffect(() => {
-    if (!auto) return;
-    const id = setInterval(() => void refresh(), interval);
-    return () => clearInterval(id);
-  }, [auto, interval, refresh]);
-
-  useEffect(() => { applyTheme(theme); }, [theme]);
-  useEffect(() => { savePrefs(storageKey, { view: active, filters, theme, auto, interval }); }, [storageKey, active, filters, theme, auto, interval]);
-
-  const view = active ? registry.get(active) : undefined;
-  return (
-    <div className="flex h-screen flex-col">
-      <a href="#main" className="sr-only focus:not-sr-only focus:p-2">Skip to content</a>
-      <header className="flex items-center gap-3 border-b border-border px-4 py-2">
-        <h1 className="text-sm font-semibold">Factory progress</h1>
-        {snapshot && <Badge>{snapshot.tickets.length} tickets</Badge>}
-      </header>
-      <nav aria-label="Views" className="flex items-center gap-1 border-b border-border px-4 py-1">
-        {registry.list().map((v) => (
-          <Button key={v.id} size="sm" variant={v.id === active ? "default" : "ghost"} aria-pressed={v.id === active} onClick={() => setActive(v.id)}>
-            {v.title}
-          </Button>
-        ))}
-        <span data-testid="last-refresh" role="status" className="ml-auto text-xs text-muted-foreground">
-          {lastOk ? `Last refreshed ${lastOk.toLocaleTimeString()}` : "Not refreshed yet"}
-        </span>
-        <label className="flex items-center gap-1 text-xs">
-          Theme
-          <select aria-label="Theme" className="rounded border border-border bg-background text-xs" value={theme} onChange={(e) => setTheme(e.target.value as Theme)}>
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
-        <label className="flex items-center gap-1 text-xs">
-          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-          Auto-refresh
-        </label>
-        <select aria-label="Refresh interval" className="rounded border border-border bg-background text-xs" value={interval} onChange={(e) => setIntervalMs(Number(e.target.value))}>
-          <option value={15_000}>15s</option>
-          <option value={30_000}>30s</option>
-          <option value={60_000}>1m</option>
-          <option value={300_000}>5m</option>
-        </select>
-        <Button size="sm" variant="ghost" disabled={loading} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh"}</Button>
-      </nav>
-      {snapshot && <FilterBar snapshot={snapshot} filters={filters} onChange={setFilters} />}
-      <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-auto">
-        {error && <p role="alert" className="p-4 text-sm text-red-600">Refresh failed (showing the last data): {error}</p>}
-        {snapshot?.errors?.map((e, i) => (
-          <p key={i} role="alert" data-testid="source-error" className="px-4 py-1 text-sm text-red-600">
-            {e.source ?? "snapshot"}{e.ticket ? ` ${e.ticket}` : ""}: {e.message}
-          </p>
-        ))}
-        {!snapshot && !error && <p className="p-4 text-sm text-muted-foreground">Loading…</p>}
-        {snapshot && view && <view.component snapshot={filterSnapshot(snapshot, filters)} />}
-      </main>
-    </div>
-  );
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return 'The snapshot could not be loaded.'
 }
+
+type RefreshChoice = Preferences['refreshSeconds'] | 'off'
+
+function parseRefreshInterval(value: string): RefreshChoice | null {
+  switch (value) {
+    case 'off': return 'off'
+    case '15': return 15
+    case '30': return 30
+    case '60': return 60
+    case '300': return 300
+    default: return null
+  }
+}
+
+function App() {
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
+  const [olderSnapshot, setOlderSnapshot] = useState<Snapshot | null>(null)
+  const [viewingOlder, setViewingOlder] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [fetching, setFetching] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [olderError, setOlderError] = useState<string | null>(null)
+  const [olderLoading, setOlderLoading] = useState(false)
+  const [refreshStatuses, setRefreshStatuses] = useState<Record<SnapshotScope, RefreshStatus | null>>({ latest: null, older: null })
+  const [busyScopes, setBusyScopes] = useState<ReadonlySet<SnapshotScope>>(() => new Set())
+  const [preferences, setPreferences] = useState<Preferences>(defaultPreferences)
+  const [loadedFactoryId, setLoadedFactoryId] = useState<string | null>(null)
+  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null)
+  const inFlight = useRef(new Map<SnapshotScope, { key: symbol; promise: Promise<boolean> }>())
+  const controllers = useRef(new Map<SnapshotScope, AbortController>())
+  const alive = useRef(true)
+  const registeredViews = useProgressViews()
+
+  const refreshSnapshot = useCallback(async (older: boolean) => {
+    const scope: SnapshotScope = older ? 'older' : 'latest'
+    const existing = inFlight.current.get(scope)
+    if (existing !== undefined) return existing.promise
+
+    const controller = new AbortController()
+    const key = Symbol(scope)
+    controllers.current.set(scope, controller)
+    const request = async (): Promise<boolean> => {
+      setBusyScopes((current) => new Set(current).add(scope))
+      setFetching(true)
+      if (older) {
+        setOlderLoading(true)
+        setOlderError(null)
+      } else {
+        setLoadError(null)
+      }
+      try {
+        await loadUpdatedSnapshot({
+          scope,
+          signal: controller.signal,
+          onSnapshot: (nextSnapshot) => {
+            if (!alive.current || controller.signal.aborted) return
+            if (older) setOlderSnapshot(nextSnapshot)
+            else setSnapshot(nextSnapshot)
+          },
+          onProgress: (refresh) => {
+            if (alive.current && !controller.signal.aborted) setRefreshStatuses((current) => ({ ...current, [scope]: refresh }))
+          },
+        })
+        if (!alive.current || controller.signal.aborted || inFlight.current.get(scope)?.key !== key) return false
+        if (older) setOlderError(null)
+        else setLoadError(null)
+        return true
+      } catch (error: unknown) {
+        if (!alive.current || controller.signal.aborted || inFlight.current.get(scope)?.key !== key) return false
+        const message = errorMessage(error)
+        if (older) setOlderError(message)
+        else setLoadError(message)
+        return false
+      } finally {
+        const isCurrent = inFlight.current.get(scope)?.key === key
+        if (isCurrent) inFlight.current.delete(scope)
+        if (controllers.current.get(scope) === controller) controllers.current.delete(scope)
+        if (alive.current && isCurrent) {
+          setBusyScopes((current) => {
+            const next = new Set(current)
+            next.delete(scope)
+            return next
+          })
+          setFetching(inFlight.current.size > 0)
+          setLoading(inFlight.current.has('latest'))
+          if (older) setOlderLoading(false)
+        }
+      }
+    }
+    const promise = request()
+    inFlight.current.set(scope, { key, promise })
+    return promise
+  }, [])
+
+  const displaySnapshot = viewingOlder && olderSnapshot !== null ? olderSnapshot : snapshot
+  const refreshVisibleSnapshot = useCallback(() => refreshSnapshot(viewingOlder), [refreshSnapshot, viewingOlder])
+
+  useEffect(() => {
+    alive.current = true
+    void refreshSnapshot(false)
+    return () => {
+      alive.current = false
+      controllers.current.forEach((controller) => controller.abort())
+      controllers.current.clear()
+      inFlight.current.clear()
+    }
+  }, [refreshSnapshot])
+
+  useEffect(() => {
+    if (snapshot === null) return
+    const stored = loadPreferences(snapshot.factory.id)
+    setPreferences(stored)
+    setLoadedFactoryId(snapshot.factory.id)
+  }, [snapshot?.factory.id])
+
+  useEffect(() => {
+    if (snapshot === null || loadedFactoryId !== snapshot.factory.id) return
+    savePreferences(snapshot.factory.id, preferences)
+  }, [loadedFactoryId, preferences, snapshot])
+
+  useEffect(() => {
+    if (registeredViews.some((view) => view.id === preferences.view) || registeredViews[0] === undefined) return
+    setPreferences((current) => ({ ...current, view: registeredViews[0].id }))
+  }, [preferences.view, registeredViews])
+
+  useEffect(() => {
+    if (!preferences.autoRefresh) return
+    const timer = window.setInterval(() => { void refreshVisibleSnapshot() }, preferences.refreshSeconds * 1000)
+    return () => window.clearInterval(timer)
+  }, [preferences.autoRefresh, preferences.refreshSeconds, refreshVisibleSnapshot])
+
+  useEffect(() => {
+    if (preferences.theme === 'system') delete document.documentElement.dataset.theme
+    else document.documentElement.dataset.theme = preferences.theme
+  }, [preferences.theme])
+
+  useEffect(() => {
+    if (snapshot === null || preferences.selectedKey === null) {
+      setSelectedTicket(null)
+      return
+    }
+    const selected = displaySnapshot?.tickets.find((ticket) => ticket.key === preferences.selectedKey) ?? null
+    setSelectedTicket(selected)
+  }, [preferences.selectedKey, displaySnapshot])
+
+  const visibleTickets = useMemo(() => displaySnapshot === null ? [] : filteredTickets(displaySnapshot, preferences.filters), [displaySnapshot, preferences.filters])
+  const filteredWithoutReview = useMemo(() => {
+    if (displaySnapshot === null) return []
+    return ticketsForAttention(displaySnapshot, preferences.filters)
+  }, [displaySnapshot, preferences.filters])
+  const reviews = filteredWithoutReview.filter(ticketNeedsReview)
+  const attention = filteredWithoutReview.filter((ticket) => ticket.attention.kind === 'attention')
+  const repositories = useMemo(() => displaySnapshot === null ? [] : [...new Set(displaySnapshot.tickets.map((ticket) => ticket.repository))].sort(), [displaySnapshot])
+  const environments = useMemo(() => displaySnapshot === null ? [] : [...new Set(displaySnapshot.tickets.flatMap((ticket) => ticket.environments))].sort(), [displaySnapshot])
+  const activeView = registeredViews.find((view) => view.id === preferences.view) ?? registeredViews[0]
+  const activeRefreshScopes = [...busyScopes]
+
+  const updateFilters = (change: Partial<Filters>) => {
+    setPreferences((current) => ({ ...current, filters: { ...current.filters, ...change } }))
+  }
+  const selectTicket = (ticket: Ticket) => {
+    setSelectedTicket(ticket)
+    setPreferences((current) => ({ ...current, selectedKey: ticket.key }))
+  }
+  const clearFilters = () => setPreferences((current) => ({ ...current, filters: { ...defaultPreferences.filters } }))
+  const setAutoRefresh = (enabled: boolean) => setPreferences((current) => ({
+    ...current,
+    autoRefresh: enabled,
+    refreshSeconds: enabled ? 60 : current.refreshSeconds,
+  }))
+  const chooseRefreshInterval = (value: string) => {
+    const interval = parseRefreshInterval(value)
+    if (interval === null) return
+    if (interval === 'off') {
+      setPreferences((current) => ({ ...current, autoRefresh: false }))
+      return
+    }
+    setPreferences((current) => ({ ...current, autoRefresh: true, refreshSeconds: interval }))
+  }
+
+  const loadOlder = async () => {
+    if (olderSnapshot === null) {
+      const loaded = await refreshSnapshot(true)
+      if (!loaded) return
+    }
+    setViewingOlder(true)
+  }
+
+  if ((loading || fetching) && snapshot === null) return <LoadingState status={refreshStatuses.latest} />
+  if (snapshot === null) return <InitialError message={loadError ?? 'The snapshot could not be loaded.'} onRetry={() => { void refreshSnapshot(false) }} busy={fetching} />
+  if (displaySnapshot === null) return <LoadingState status={refreshStatuses.older} />
+
+  const activeSourceFailures = displaySnapshot.sources.filter((source) => !source.ok)
+  const refreshIsBusy = activeRefreshScopes.length > 0
+  const warningCount = visibleTickets.filter((ticket) => ticket.warning).length
+  const filters = preferences.filters
+  const hasFilters = filters.query !== '' || filters.repository !== 'all' || filters.environment !== 'all' || filters.stage !== 'all' || filters.warningOnly || filters.reviewOnly || filters.visibility !== 'all'
+  const lastUpdated = formatTimestamp(displaySnapshot.generatedAt)
+
+  return (
+    <TooltipProvider>
+      <div className="app-shell" data-theme={preferences.theme === 'system' ? undefined : preferences.theme}>
+        <header className="topbar">
+          <div className="brand-lockup">
+            <span className="brand-icon"><Workflow size={17} strokeWidth={2.2} /></span>
+            <div className="brand-copy"><strong>Factory progress</strong><span>Read-only workflow map</span></div>
+          </div>
+          <div className="topbar-right">
+            <span className={`connection-state ${displaySnapshot.stale || activeSourceFailures.length ? 'connection-warn' : ''}`}>
+              <span className="connection-dot" />
+              {displaySnapshot.stale || activeSourceFailures.length ? 'Snapshot has stale sources' : 'Snapshot current'}
+            </span>
+            <span className="topbar-divider" />
+            <span className="updated-time">Updated {lastUpdated}</span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button className="icon-button" variant="outline" size="icon" aria-label="Refresh displayed snapshot" disabled={fetching} onClick={() => { void refreshVisibleSnapshot() }}>
+                  <RefreshCw size={15} className={fetching ? 'spin' : ''} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Refresh displayed snapshot</TooltipContent>
+            </Tooltip>
+            <label className="auto-refresh-toggle" htmlFor="auto-refresh-switch"><Switch id="auto-refresh-switch" checked={preferences.autoRefresh} onCheckedChange={setAutoRefresh} /><span>Auto</span></label>
+            <Select value={preferences.autoRefresh ? String(preferences.refreshSeconds) : 'off'} onValueChange={chooseRefreshInterval}>
+              <SelectTrigger aria-label="Automatic refresh interval" className="select-trigger refresh-select"><SelectValue /></SelectTrigger>
+              <SelectContent align="end">
+                <SelectItem value="off">Off</SelectItem><SelectItem value="15">Every 15 sec</SelectItem><SelectItem value="30">Every 30 sec</SelectItem><SelectItem value="60">Every minute</SelectItem><SelectItem value="300">Every 5 min</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={preferences.theme} onValueChange={(value) => {
+              if (value === 'system' || value === 'light' || value === 'dark') setPreferences((current) => ({ ...current, theme: value }))
+            }}>
+              <SelectTrigger aria-label="Color theme" className="theme-select"><SelectValue /></SelectTrigger>
+              <SelectContent align="end">
+                <SelectItem value="system"><span className="select-with-icon"><Settings2 size={14} /> System</span></SelectItem>
+                <SelectItem value="light"><span className="select-with-icon"><Sun size={14} /> Light</span></SelectItem>
+                <SelectItem value="dark"><span className="select-with-icon"><Moon size={14} /> Dark</span></SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </header>
+
+        <main className="workspace">
+          <section className="workspace-heading">
+            <div className="heading-copy">
+              <div className="factory-overline"><span className="overline-mark" /> WORKSPACE <ArrowRight size={12} /> <span>{displaySnapshot.factory.name}</span></div>
+              <h1>Factory map</h1>
+              <p>Workflow, execution rules, and tickets in one view.</p>
+            </div>
+            <div className="snapshot-meta">
+              <span><Clock3 size={13} /> Last successful sync <strong>{formatTimestamp(displaySnapshot.lastSuccessAt)}</strong></span>
+              {viewingOlder && <Badge variant="outline" className="older-badge"><Clock3 size={12} /> Older snapshot</Badge>}
+            </div>
+          </section>
+
+          {activeRefreshScopes.map((scope) => {
+            const status = refreshStatuses[scope]
+            if (status === null) return null
+            const title = scope === 'older'
+              ? (viewingOlder ? 'Updating older snapshot' : 'Loading older snapshot')
+              : 'Updating snapshot'
+            return <RefreshProgressPanel key={scope} title={title} status={status} previousSources={displaySnapshot.sources} previousSnapshotStale={displaySnapshot.stale} compact />
+          })}
+
+          {!refreshIsBusy && (displaySnapshot.stale || activeSourceFailures.length > 0) && (
+            <details className="source-warning-details">
+              <summary>
+                <ChevronRight className="details-chevron" size={12} aria-hidden="true" />
+                <AlertTriangle size={13} aria-hidden="true" />
+                <span>{activeSourceFailures.length > 0 ? `${activeSourceFailures.length} ${activeSourceFailures.length === 1 ? 'source warning' : 'source warnings'} · Some data may be stale` : 'Some data may be stale'}</span>
+              </summary>
+              {activeSourceFailures.length > 0
+                ? <ul>{activeSourceFailures.map((source) => <li key={source.id}><strong>{source.name}</strong><span>{source.error ?? 'Refresh failed; source details are unavailable.'}</span></li>)}</ul>
+                : <p>The snapshot is marked stale, but no source error details are available.</p>}
+            </details>
+          )}
+          {(viewingOlder ? olderError : loadError) && <div className="refresh-error" role="status"><AlertCircle size={14} /><span>{viewingOlder ? 'Older snapshot refresh failed.' : 'Latest refresh failed.'} Showing the previous snapshot: {viewingOlder ? olderError : loadError}</span><Button variant="ghost" onClick={() => { void refreshVisibleSnapshot() }}>Retry</Button></div>}
+
+          {reviews.length + attention.length > 0 && (
+            <section className="attention-strip" aria-label="Human attention">
+              {reviews.length > 0 && <div className="attention-stat review-stat"><span className="attention-symbol"><UserRoundCheck size={15} /></span><span><strong>{reviews.length}</strong> {reviews.length === 1 ? 'review needs' : 'reviews need'} a person</span><Button variant="ghost" className={`attention-action ${preferences.filters.reviewOnly ? 'attention-action-active' : ''}`} onClick={() => updateFilters({ reviewOnly: !preferences.filters.reviewOnly })}>{preferences.filters.reviewOnly ? 'Show all tickets' : 'Show reviews'}</Button></div>}
+              {attention.length > 0 && <div className="attention-stat"><span className="attention-symbol generic"><AlertCircle size={15} /></span><span><strong>{attention.length}</strong> {attention.length === 1 ? 'ticket needs' : 'tickets need'} attention</span></div>}
+            </section>
+          )}
+
+          <section className="summary-strip" aria-label="Filtered snapshot summary">
+            <div><span className="summary-number">{visibleTickets.length}</span><span>{visibleTickets.length === 1 ? 'ticket' : 'tickets'}</span><span className="summary-caption">matching filters</span></div>
+            <span className="summary-divider" />
+            <div><span className="summary-number warning-number">{warningCount}</span><span>{warningCount === 1 ? 'age warning' : 'age warnings'}</span></div>
+            <span className="summary-divider" />
+            <div><span className="summary-number review-number">{reviews.length}</span><span>{reviews.length === 1 ? 'review needed' : 'reviews needed'}</span></div>
+            <div className="summary-right"><span>{displaySnapshot.tickets.length} in snapshot</span><span className="summary-dot">·</span><span>{displaySnapshot.stages.length} stages</span></div>
+          </section>
+
+          <section className="toolbar" aria-label="Ticket filters and view controls">
+            <Tabs value={activeView?.id ?? ''} onValueChange={(value) => {
+              if (registeredViews.some((view) => view.id === value)) setPreferences((current) => ({ ...current, view: value }))
+            }} className="view-tabs">
+              <TabsList>{registeredViews.map((view) => <TabsTrigger key={view.id} value={view.id}>{view.icon && <view.icon size={14} />}{view.label}</TabsTrigger>)}</TabsList>
+            </Tabs>
+            <span className="toolbar-rule" />
+            <label className="search-control"><Search size={15} /><Input type="search" value={preferences.filters.query} placeholder="Search tickets" aria-label="Search tickets" onChange={(event) => updateFilters({ query: event.target.value })} /></label>
+            <Select value={preferences.filters.repository} onValueChange={(value) => updateFilters({ repository: value })}>
+              <SelectTrigger aria-label="Filter by repository" className="filter-select"><SelectValue placeholder="All repositories" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All repositories</SelectItem>{repositories.map((repository) => <SelectItem key={repository} value={repository}>{repository}</SelectItem>)}</SelectContent>
+            </Select>
+            <Select value={preferences.filters.environment} onValueChange={(value) => updateFilters({ environment: value })}>
+              <SelectTrigger aria-label="Filter by environment" className="filter-select"><SelectValue placeholder="All environments" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All environments</SelectItem>{environments.map((environment) => <SelectItem key={environment} value={environment}>{environment}</SelectItem>)}</SelectContent>
+            </Select>
+            <Select value={preferences.filters.stage} onValueChange={(value) => updateFilters({ stage: value })}>
+              <SelectTrigger aria-label="Filter by stage" className="filter-select stage-filter"><SelectValue placeholder="All stages" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All stages</SelectItem>{displaySnapshot.stages.map((stage) => <SelectItem key={stage.id} value={stage.id}>{stage.name}</SelectItem>)}</SelectContent>
+            </Select>
+            <Select value={preferences.filters.visibility} onValueChange={(value) => {
+              const visibility = visibilitySchema.safeParse(value)
+              if (visibility.success) updateFilters({ visibility: visibility.data })
+            }}>
+              <SelectTrigger aria-label="Ticket visibility" className="filter-select visibility-filter"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All tickets</SelectItem><SelectItem value="unfinished">Unfinished</SelectItem><SelectItem value="active">Active only</SelectItem></SelectContent>
+            </Select>
+            <Button variant={preferences.filters.warningOnly ? 'secondary' : 'outline'} className={`filter-button ${preferences.filters.warningOnly ? 'warning-filter-active' : ''}`} aria-pressed={preferences.filters.warningOnly} onClick={() => updateFilters({ warningOnly: !preferences.filters.warningOnly })}><AlertTriangle size={14} /> Warnings</Button>
+            <Button variant={preferences.filters.reviewOnly ? 'secondary' : 'outline'} className={`filter-button review-filter ${preferences.filters.reviewOnly ? 'review-filter-active' : ''}`} aria-pressed={preferences.filters.reviewOnly} onClick={() => updateFilters({ reviewOnly: !preferences.filters.reviewOnly })}><UserRoundCheck size={14} /> Review</Button>
+            {hasFilters && <Button variant="ghost" className="clear-filters" onClick={clearFilters}>Clear</Button>}
+            {olderSnapshot !== null
+              ? <Button variant={viewingOlder ? 'secondary' : 'outline'} className="older-toggle" onClick={() => setViewingOlder((current) => !current)}><Clock3 size={14} />{viewingOlder ? 'Latest snapshot' : 'Older snapshot'}</Button>
+              : <Button variant="outline" className="older-toggle" disabled={olderLoading || fetching} onClick={() => { void loadOlder() }}>{olderLoading ? <LoaderCircle size={14} className="spin" /> : <ArrowDownToLine size={14} />}{olderLoading ? 'Loading…' : 'Load older'}</Button>}
+          </section>
+          {olderError && <div className="inline-error" role="alert"><AlertCircle size={14} /> Older snapshot could not be loaded: {olderError} <Button variant="ghost" onClick={() => { void loadOlder() }}>Retry</Button></div>}
+
+          <section className="view-heading-row">
+            <div><h2>{activeView?.label ?? 'Progress view'}</h2><p>{activeView?.description ?? 'Select a registered progress view.'}</p></div>
+            <div className="view-count"><span>{visibleTickets.length}</span> visible</div>
+          </section>
+
+          {visibleTickets.length === 0
+            ? <EmptyState hasFilters={hasFilters} onClear={clearFilters} />
+            : activeView
+              ? <activeView.component snapshot={displaySnapshot} tickets={visibleTickets} onSelectTicket={selectTicket} selectedKey={preferences.selectedKey} />
+              : <div className="empty-state"><strong>No progress views registered</strong></div>}
+
+          <footer className="workspace-footer"><span><span className="footer-status" /> Read-only snapshot</span><span>{displaySnapshot.sources.length} sources <span className="footer-separator">·</span> Generated {lastUpdated}</span></footer>
+        </main>
+        <Suspense fallback={null}>
+          <TicketDetails snapshot={displaySnapshot} ticket={selectedTicket} onClose={() => {
+            setSelectedTicket(null)
+            setPreferences((current) => ({ ...current, selectedKey: null }))
+          }} />
+        </Suspense>
+      </div>
+    </TooltipProvider>
+  )
+}
+
+function RefreshProgressPanel({ title, status, previousSources = [], previousSnapshotStale = false, compact = false }: { title: string; status: RefreshStatus | null; previousSources?: Snapshot['sources']; previousSnapshotStale?: boolean; compact?: boolean }) {
+  const sources = status?.sources ?? []
+  const summary = summarizeRefresh(sources)
+  const message = status?.state === 'queued' ? 'Waiting for current refresh' : summary.label
+  const currentWarnings = sources.filter((source) => source.errorCount > 0)
+  const previousWarnings = previousSources.filter((source) => !source.ok)
+  const warningSourceIds = new Set([...currentWarnings.map((source) => source.id), ...previousWarnings.map((source) => source.id)])
+  const warningLabel = warningSourceIds.size > 0
+    ? `${warningSourceIds.size} ${warningSourceIds.size === 1 ? 'source warning' : 'source warnings'}`
+    : previousSnapshotStale ? 'Stale' : null
+  return (
+    <section className={`refresh-progress ${compact ? 'refresh-progress-compact' : ''}`} aria-label={title}>
+      <div className="refresh-progress-content">
+        <div className="refresh-progress-heading">
+          <div className="refresh-progress-status" role="status" aria-live="polite"><strong>{title}</strong><span>{message}</span></div>
+          <details className="refresh-details">
+            <summary><ChevronRight className="details-chevron" size={12} aria-hidden="true" /><span>Details</span>{warningLabel !== null && <span className="refresh-warning-count"><AlertTriangle size={12} aria-hidden="true" />{warningLabel}</span>}</summary>
+            <div className="refresh-details-content">
+              {sources.length > 0
+                ? <ul className="refresh-source-list">{sources.map((source) => {
+                  const label = refreshSourceLabel(source)
+                  const warningCount = source.errorCount > 0 && source.phase !== 'complete'
+                    ? ` · ${source.errorCount} ${source.errorCount === 1 ? 'warning' : 'warnings'}`
+                    : ''
+                  return <li key={source.id}><span className="refresh-source-name">{source.name}</span><span className={source.errorCount > 0 ? 'refresh-source-warning' : ''}>{label}{warningCount}</span></li>
+                })}</ul>
+                : <p>Source details are not available yet.</p>}
+              {previousWarnings.length > 0 && <section className="refresh-previous-warnings"><strong>Previous snapshot warnings</strong><ul>{previousWarnings.map((source) => <li key={source.id}><span className="refresh-source-name">{source.name}</span><span>{source.error ?? 'Refresh failed; source details are unavailable.'}</span></li>)}</ul></section>}
+              {previousSnapshotStale && previousWarnings.length === 0 && <p>Previous snapshot is marked stale, but no source error details are available.</p>}
+            </div>
+          </details>
+        </div>
+        <Progress value={summary.percent} aria-label={`${title} source progress`} aria-valuetext={summary.label} />
+      </div>
+    </section>
+  )
+}
+
+function LoadingState({ status }: { status: RefreshStatus | null }) {
+  return (
+    <main className="loading-screen" aria-busy="true">
+      <span className="loading-mark"><Workflow size={20} /></span>
+      <strong>Loading factory snapshot</strong>
+      <RefreshProgressPanel title="Reading factory data" status={status} />
+    </main>
+  )
+}
+
+function InitialError({ message, onRetry, busy }: { message: string; onRetry: () => void; busy: boolean }) {
+  return <main className="error-screen"><span className="error-icon"><AlertCircle size={21} /></span><h1>Snapshot unavailable</h1><p>{message}</p><Button onClick={onRetry} disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />} Try again</Button></main>
+}
+
+function EmptyState({ hasFilters, onClear }: { hasFilters: boolean; onClear: () => void }) {
+  return <section className="empty-state"><span className="empty-icon">{hasFilters ? <Search size={19} /> : <GitPullRequest size={20} />}</span><strong>{hasFilters ? 'No tickets match these filters' : 'No tickets in this snapshot'}</strong><p>{hasFilters ? 'Change or clear a filter to see more tickets.' : 'The sources did not report any tickets for this factory.'}</p>{hasFilters && <Button variant="outline" onClick={onClear}>Clear filters</Button>}</section>
+}
+
+export default App

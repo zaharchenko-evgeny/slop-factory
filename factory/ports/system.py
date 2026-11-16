@@ -63,6 +63,8 @@ class Query:
     values: tuple = ()
     open_only: bool = False
     scope: dict | None = field(default=None, hash=False)
+    closed_hours: int | None = 48  # stage queries: None includes all closed tickets; gate default stays 48h
+    updated_hours: int | None = None  # optional window for recent changes to closed tickets
 
 
 @dataclass(frozen=True)
