@@ -701,7 +701,7 @@ def missing_variables(plan: dict, envs: list[dict]) -> list[tuple[dict, dict]]:
     out = []
     for e in plan["environments"]:
         live = have.get(e["name"]) or {}
-        keys = set(live.get("variable_keys") or live.get("variables") or {})
+        keys = set(live.get("variable_keys") or live.get("variables") or {}) | set(live.get("secrets") or [])
         out += [(e, v) for v in e.get("declared") or [] if v["name"] not in keys]
     return out
 
@@ -713,13 +713,18 @@ def create_missing_variables(plan: dict, envs: list[dict], cloud: Mcp, dry_run: 
     """List (`--dry-run`) or create each declared variable that its environment lacks, with the value `unset`
     (`isSecret` for a secret one). A variable that exists is never listed, so a value a person set stays."""
     ids = {x["name"]: x["id"] for x in envs}
+    in_project = {x["name"] for x in envs if x.get("projectId")}  # air-cloud's edit_environment refuses these
     by_env = {}
     for e, v in missing_variables(plan, envs):
         by_env.setdefault(e["name"], []).append(v)
     for name, declared in by_env.items():
+        short = name[len(plan['prefix']):]
         for v in declared:
-            print(f"create variable {v['name']} ({UNSET}{', secret' if v['secret'] else ''}) in {name[len(plan['prefix']):]}")
-        if not dry_run and name in ids:
+            if name in in_project:
+                print(f"set by a person: {short} {'secret' if v['secret'] else 'variable'} {v['name']} (project environment)")
+            else:
+                print(f"create variable {v['name']} ({UNSET}{', secret' if v['secret'] else ''}) in {short}")
+        if not dry_run and name in ids and name not in in_project:
             cloud.call("edit_environment", {"id": ids[name], "variables": [
                 {"key": v["name"], "value": UNSET, **({"isSecret": True} if v["secret"] else {}),
                  **({"description": v["description"]} if v.get("description") else {})} for v in declared]})
