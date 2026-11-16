@@ -47,6 +47,9 @@ ALLOW = {
     "roles/", "roles/_common.md", "roles/approver/role.md", "policies/", "judgments/", "policies/auto-approve.rego",
     "judgments/auto-approve.yaml", "workflows/delivery.md", ".air/cloud/startup.sh",
     "AGENTS.md:ez/<issue>-*", "AGENTS.md:roles/*/setup.sh",
+    # The progress UI server's routes and the frontend's npm output, not files of this checkout.
+    "docs/progress-ui.md:ui/node_modules/", "docs/progress-ui.md:/api/snapshot?refresh=1", "docs/progress-ui.md:/api/status",
+    "docs/progress-ui.md:/api/snapshot",
     "docs/design.md:roles/<role>/", "docs/plan.md:roles/{router,developer,reviewer}/",
     "docs/recipes/auto-approve.md:conftest test --policy policies summary.json",
     "docs/statechart-proposed.md:#669", "docs/statechart-proposed.md:#333", "docs/statechart-proposed.md:#999",

@@ -19,6 +19,7 @@ def engine_files():
     # `factory check-workflow` runs statechart.py, which carries the statechart skill's pin.
     # Keep every data file here: a `[tool.setuptools.data-files]` table in pyproject.toml replaces this list.
     out.append(("share/factory", ["skills/factory-setup/statechart.py"]))
+    out.append(("share/factory-engine/docs", ["docs/progress-ui.md"]))
     return out
 
 

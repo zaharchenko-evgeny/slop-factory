@@ -3,3 +3,5 @@ dfd160c9326d01ca070913c86655b7361db7dad5:factory/tests/test_contracts.py:generic
 # npm cache key name in an earlier #556 commit (not a secret); the current workflow uses a different key.
 5ac7438da9231ebfb8aa1673a1493b9995c909c5:.github/workflows/quality-gates.yml:generic-api-key:66
 5ac7438da9231ebfb8aa1673a1493b9995c909c5:.github/workflows/quality-gates.yml:generic-api-key:205
+# Synthetic URL in an earlier #1370 progress UI test; the current test builds it at runtime.
+c7da2ccc14035ab797551bf07e3b7ac8c6f77acd:ui/tests/progress.test.ts:generic-credential-uri:139

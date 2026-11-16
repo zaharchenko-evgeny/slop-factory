@@ -7,9 +7,13 @@
 # Python bytecode
 __pycache__/
 build/
+dist/
 *.egg-info/
 # Run artefacts an agent may write at the checkout root
 /addressed.json
 /checks.json
 /findings.json
 /notes.json
+# Progress UI development dependencies and incremental compiler state
+/ui/node_modules/
+/ui/*.tsbuildinfo

@@ -54,8 +54,9 @@ class PrRecord:
     """A ticket's pull request in one of its repositories (`repo`: the descriptor's name for it).
     `reviews`: {author, state, commit_id, focus, round, rereview, outcome, verdict, agent, assoc, submitted_at, bot,
     findings, body}; `comments`: {id, author, author_type, body, at}; `events` like a ticket's; `ci`
-    green|red|pending|none at `head`; `commit_date` the head commit's committer date; `can_write` login -> write
-    access to the repository; `clean_advance` sha -> whether `head` only merged the base into it since `sha`."""
+    green|red|pending|none|unknown at `head`; `commit_date` the head commit's committer date; `can_write` login -> write
+    access to the repository; `clean_advance` sha -> whether `head` only merged the base into it since `sha`;
+    `unavailable` names failed optional reads in a partial snapshot."""
     repo: str
     number: int
     head: str
@@ -66,6 +67,7 @@ class PrRecord:
     mergeable: bool | None = None
     labels: list = field(default_factory=list)
     requested_reviewers: list = field(default_factory=list)
+    requested_teams: list = field(default_factory=list)  # team slugs; shown by the UI, never a gate reviewer to wait for
     body: str = ""
     author: str = ""
     author_type: str = ""
@@ -79,6 +81,7 @@ class PrRecord:
     clean_advance: Mapping = field(default_factory=dict)
     behind: bool | None = None  # want "behind": the base has commits the head lacks
     ci_failure: dict | None = None  # want "ci_failure": the first failed step at the head
+    unavailable: tuple = ()  # partial reads that failed; absent evidence must not become a negative fact
 
 
 @dataclass
