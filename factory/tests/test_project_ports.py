@@ -168,11 +168,11 @@ class UserDescriptorIsNotRead(unittest.TestCase):
     def test_team_without_definition_reports_one_error_and_ignores_the_file(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(project.validate(tmp)[0].split(":")[0], "factory.project.yaml")
+            self.assertEqual(project.validate(tmp)[0].split(":")[0], "project")
             (Path(tmp) / "factory.project.yaml").write_text((YOUTRACK / "factory.project.yaml").read_text())
             errors = project.validate(tmp)
             self.assertEqual(len(errors), 1)
-            self.assertIn("no factory definition", errors[0])
+            self.assertIn("no factory.yaml and workflow.yaml", errors[0])
             with self.assertRaises(ValueError):
                 project.load(tmp)
 

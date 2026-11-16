@@ -108,7 +108,7 @@ per repository. `render.py` derives the `tracker` block from them and from
 that run in it.
 
 Before it writes any file, `render.py` checks the rendered `workflow.yaml` with the pinned `statechart` skill
-(`skills.lock`, fetched at its pin with the sha256 check; the step stops when the fetch fails): `statechart.py` turns the stages and node outcomes into a
+(`PIN` in `statechart.py`, fetched at its pin with the sha256 check; the step stops when the fetch fails): `statechart.py` turns the stages and node outcomes into a
 TLA+ spec and runs TLC. It needs Node 22.18+ and Java 11+. The rules are one stage label per ticket
 (`OneStageLabel`), a moving node for every non-final and non-waiting stage (`MovingNode`), no deadlock outside final and
 waiting stages (`NoDeadlock`) and `done` reachable from `triage` (`DoneReachable`). A broken rule stops the run.

@@ -10,8 +10,8 @@ import yaml
 
 import plugins
 
-PROJECT_DESCRIPTOR = "factory.project.yaml"  # the name the compiled project view reports its errors under
 DEFAULTS = "engine/defaults.yaml"
+NODES = "engine/nodes.yaml"
 _HERE = Path(__file__).resolve().parents[1]
 
 

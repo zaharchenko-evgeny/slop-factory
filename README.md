@@ -17,7 +17,7 @@ pushes the tag; the tag is not created by this change.
 ## Use
 
 `factory --help` lists the available commands. The subcommands are `begin`,
-`end`, `check`, `apply`, `sweep`, `deploy`, `contracts`, `chart`, `validate`, `setup`, `migrate`, `upgrade`, and `doctor`.
+`end`, `check`, `apply`, `sweep`, `deploy`, `contracts`, `chart`, `validate`, `setup`, `migrate`, and `doctor`.
 `begin` starts a node and prints its handoff path; `end` applies the completed
 handoff. `check` and `apply` operate the gate, while `sweep` runs its event
 processing. `deploy` creates Air automations, `chart` renders the workflow (the chart plugin, on whenever the command runs),
