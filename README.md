@@ -42,8 +42,7 @@ engine plugins to turn on: `comments` turns on mentions, agent asks and the comm
 The engine compiles a team's definition into a project descriptor and a workflow
 (ADR-0016, ADR-0021; checked against `engine/project.schema.json` and `engine/workflow.schema.json`).
 States and commands name their tracker store; the workflow names only states and commands.
-`repositories[]` marks exactly one repository
-`role: primary` and the others `role: project`; `targets` takes `air` and
+Each environment of `factory.yaml` lists its `repositories` (`repo`, `write`, `tracker`, `vcs`; ADR-0027); `targets` takes `air` and
 `local` (ADR-0017). A new team starts from the factory-setup skill's
 [`skills/factory-setup/template/`](skills/factory-setup/template/README.md), in the layout of ADR-0021
 (`factory.yaml`, `workflow.yaml`, `roles/`).

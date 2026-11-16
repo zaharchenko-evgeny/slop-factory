@@ -69,12 +69,12 @@ change, whether you are a person, a pi session or a factory role.
    Identify the ticket that will fix a process gap (or open a new ticket); do
    not fix the factory inside an unrelated ticket.
 
-Models: Air tiers come from `targets.air.models` in the team repository’s `factory.descriptor.yaml`.
+Models: Air models come from `models` in the team repository’s `factory.yaml`.
 
 ## Tracker and git
 
 - Tracker: GitHub Issues in this repository. Stages are `factory:*` labels
-  (see the team repository’s `factory.descriptor.yaml`).
+  (see `tracker` in the team repository’s `factory.yaml`).
 - To list every open ticket waiting for a person, use `is:open label:factory:needs-human`.
 - Branch: `ez/<issue>-<slug>` from `main`. Commit subject starts with
   `#<issue> `. One PR per issue, linked with `Closes #<issue>` only when the PR
@@ -83,7 +83,7 @@ Models: Air tiers come from `targets.air.models` in the team repository’s `fac
 
 ## Writes outside the repository
 
-- While `gates.confirm_external_writes` is `true` in the team repository’s `factory.descriptor.yaml`, show the
+- While `confirm_external_writes` is `true` in `defaults.settings` of the team repository’s `factory.yaml`, show the
   exact text of every write listed in `gates.confirm_external_writes_scope`
   (today: none) and wait for the user's approval before publishing. A factory
   run may push the ticket's own `ez/<issue>-*` branch without asking. Issue and
@@ -95,7 +95,7 @@ Models: Air tiers come from `targets.air.models` in the team repository’s `fac
 ## Files
 
 - Roles and workflows never name a repository, tracker project, model or
-  harness. Put those in the team repository’s `factory.descriptor.yaml`.
+  harness. Put those in the team repository’s `factory.yaml`.
 - `docs/design.md` and the ADRs change only with an issue that asks for it.
 - Keep `skills/factory-setup/template/roles/*/setup.sh` POSIX-friendly bash that passes `bash -n` and
   ShellCheck.
