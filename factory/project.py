@@ -1,4 +1,4 @@
-"""Project descriptor loading and validation."""
+"""Project descriptor loading and validation (the view compiled from a team definition, ADR-0021)."""
 import json
 import re
 from pathlib import Path
@@ -22,13 +22,18 @@ def _read(team_root):
     return definition.to_project(definition.load(team_root))[0]
 
 
+def merged(descriptor):
+    """The descriptor merged over engine/defaults.yaml."""
+    defaults = yaml.safe_load((config.engine_root() / "engine/defaults.yaml").read_text()) or {}
+    return config.merge(defaults, descriptor)
+
+
 def load(team_root):
-    """Return the validated descriptor merged over engine/defaults.yaml; errors name the path and key."""
+    """Return the validated compiled view merged over engine/defaults.yaml; errors name the path and key."""
     errors = validate(team_root)
     if errors:
         raise ValueError("; ".join(errors))
-    defaults = yaml.safe_load((config.engine_root() / "engine/defaults.yaml").read_text()) or {}
-    return config.merge(defaults, _read(team_root))
+    return merged(_read(team_root))
 
 
 def store_kind(store):
@@ -50,12 +55,16 @@ def _repo_key(url):
 
 
 def validate(team_root):
-    """Return errors for the project descriptor compiled from a team definition."""
-    root = Path(team_root)
+    """Return errors for the view compiled from the team definition."""
     try:
-        descriptor = _read(root)
+        descriptor = _read(Path(team_root))
     except (OSError, yaml.YAMLError) as exc:
         return [f"{LABEL}: {exc}"]
+    return check(descriptor)
+
+
+def check(descriptor):
+    """Return errors for a compiled project view."""
     schema = json.loads((config.engine_root() / "engine/project.schema.json").read_text())
     errors = []
     config._check(schema, descriptor, LABEL, errors)

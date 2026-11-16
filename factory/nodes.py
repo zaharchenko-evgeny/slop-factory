@@ -3,9 +3,9 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6"]
 # ///
-"""Validate engine/nodes.yaml (ADR-0014); `chart` prints its stage chart through the chart plugin (ADR-0026).
+"""Validate the nodes of the team definition (ADR-0014, ADR-0021); `chart` prints its stage chart through the chart plugin (ADR-0026).
 
-Usage: nodes.py validate [nodes.yaml] | nodes.py chart [nodes.yaml]
+Usage: nodes.py validate [nodes file] | nodes.py chart [nodes file]
 Each error line starts with a name: no-trigger, bad-condition, unknown-effect, unknown-role,
 unknown-tier, unknown-environment, unknown-stage, unknown-schedule, bad-output, unreachable-stage, unused-stage.
 """
@@ -28,11 +28,13 @@ NO_ROLE = {"script", "human"}
 
 
 def load(path=None):
-    """nodes.yaml, or the nodes of the team's definition (ADR-0021)."""
+    """A nodes file at `path`, or the nodes of the team's definition (ADR-0021)."""
     import definition
-    if path is None and definition.present(config.team_root()):
+    if path is None:
+        if not definition.present(config.team_root()):
+            raise SystemExit(f"factory: no factory definition at {config.team_root()} (factory.yaml and workflow.yaml)")
         return definition.nodes(definition.load(config.team_root()))
-    return yaml.safe_load(Path(path or (config.engine_root() / config.NODES)).read_text())
+    return yaml.safe_load(Path(path).read_text())
 
 
 def effect_stage(outcome):
@@ -168,7 +170,7 @@ def main(argv):
         return plugins.registry({}, use=(("tool", "chart"),)).command("chart")(argv[1:])
     nodes = load(argv[1] if len(argv) > 1 else None)
     errs = validate(nodes, config.load())
-    print("\n".join(errs) or "nodes.yaml: ok")
+    print("\n".join(errs) or "nodes: ok")
     return 1 if errs else 0
 
 

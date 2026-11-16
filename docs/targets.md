@@ -1,6 +1,6 @@
 # Targets: how the factory runs on Air Cloud
 
-The factory is the node list in `engine/nodes.yaml`
+The factory is the node list of the team's workflow
 ([ADR-0014](adr/0014-node-model.md)). Each node is deployed as a `[factory:<node>]`
 Air automation by the `factory-deploy` skill. A node starts on a label or a pull
 request event, a schedule or an Air webhook; its agent runs `gate.py check`, does its role's

@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["pyyaml>=6", "jinja2>=3"]
 # ///
-"""The target-neutral deploy plan of the nodes of engine/nodes.yaml (ADR-0014): each node's spec, prompts and
+"""The target-neutral deploy plan of the nodes of the team definition (ADR-0014): each node's spec, prompts and
 triggers, its model tier, and the labels the trackers must carry. A surface plugin (ADR-0026) turns it
 into its own shape: `air` (factory_plugins/air/deploy.py: the Air automations and environments, their diff and
 apply), `local` (factory_plugins/local/surface.py).
@@ -52,8 +52,8 @@ OUTCOME_WORDS = {
 }
 
 
-# --- `factory begin` (cli.py) compiles one automation from the node graph, tiers and focuses included; the old
-# layout's graphs (engine/nodes.yaml) need them until #682 deletes that layout. The plan below never reads them.
+# --- `factory begin` (cli.py) compiles one automation from the node graph, tiers and focuses included.
+# The plan below never reads them.
 def node_spec(name: str, n: dict, config: dict, tier: str | None, focus: str | None, nodes: dict, top: bool = True) -> dict:
     """What one automation's run needs from the node graph (ADR-0015): the node, its condition, its outcomes."""
     spec = {"engine": config.get("engine"), "node": name, "role": n["role"], "tier": tier, "focus": focus,
@@ -156,11 +156,16 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
     arg = arg.replace("<tier>", tier or "")
     arg = arg.replace("<focus>", focus or "")
     if event.startswith("youtrack."):  # the filter value is case-sensitive: pass it through unchanged
-        name, _, value = arg.partition("=")
+        kind = event.partition(".")[2]
         if repo and arg in repo_tags:  # a per-repository stage tag: only this repository's node listens to it
             arg = f"{arg}-{repo}"
-        filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
-        return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
+        if kind in ("tagAdded", "tagRemoved"):
+            return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated",
+                    "filters": {kind: arg} if arg else {}}
+        if kind == "fieldChanged":
+            name, _, value = arg.partition("=")
+            return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": {name: value}}
+        return {"triggerType": "EVENT", "source": "youtrack", "eventType": kind, "filters": {}}
     arg, words = definition.split_filters(f"{event} {arg}" if arg else event)
     arg = arg.partition(" ")[2]
     wanted = dict(w.partition("=")[::2] for w in words)

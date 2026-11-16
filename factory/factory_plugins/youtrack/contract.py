@@ -2,6 +2,9 @@
 value, as a repository's tracker. Its events reach any automation; the trigger filters on the project and scope."""
 
 
+TICKET_EVENTS = {"issues.opened": "issueCreated", "issues.comment": "commentAdded", "issues.resolved": "issueResolved"}
+
+
 class YouTrack:
     """`tracker: {adapter: youtrack, project: KEY[, url][, scope: {field, value[, type]}]}`."""
     LOCAL_KEYS = ("scope",)
@@ -19,9 +22,14 @@ class YouTrack:
 
     @staticmethod
     def event(trigger):
-        """A ticket label wake is a tag on YouTrack; a PR, CI or schedule event stays the vcs's."""
+        """A ticket wake is a YouTrack event (docs/air-events.md); a PR, CI or schedule event stays the vcs's."""
         event, _, arg = str(trigger).partition(" ")
-        return f"youtrack.tagAdded {arg}" if event == "issues.labeled" else trigger
+        if event == "issues.labeled":
+            return f"youtrack.tagAdded {arg}"
+        if event == "issues.unlabeled":
+            return f"youtrack.tagRemoved {arg.removeprefix('label=')}".strip()
+        kind = TICKET_EVENTS.get(event)
+        return f"youtrack.{kind}" if kind else trigger
 
     @staticmethod
     def filters(block):

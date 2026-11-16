@@ -28,7 +28,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      FACTORY_TEAM: factory/tests/fixtures/team
+      FACTORY_TEAM: factory/tests/fixtures/v2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { fetch-depth: 0, persist-credentials: false }
@@ -187,7 +187,7 @@ jobs:
       - name: Mutate the changed lines
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          FACTORY_TEAM: factory/tests/fixtures/team
+          FACTORY_TEAM: factory/tests/fixtures/v2
         run: |
           survivors=$(uv run --quiet python scripts/mutation-diff.py --base "$BASE_SHA") ||
             { echo "::warning title=mutation::scripts/mutation-diff.py failed: no mutation result"; exit 0; }

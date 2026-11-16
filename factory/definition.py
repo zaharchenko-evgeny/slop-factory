@@ -753,6 +753,8 @@ def errors(defn):
             errs.append(f"external-review: {where}: set {', '.join(EXTERNAL_REVIEW)} together")
         for t in n.get("triggers") or []:
             errs += trigger_errors(f"nodes.{name}", t)
+            if not trigger_errors(f"nodes.{name}", t) and youtrack_only(t) and not youtrack_tickets(defn):
+                errs.append(f"unsupported-trigger: {where}: {youtrack_only(t)} needs tickets in YouTrack (`tracker: {{adapter: youtrack}}`)")
             if isinstance(t, dict) and "webhook" in t and t["webhook"] not in hooks:
                 errs.append(f"unknown-webhook: {where}: {t['webhook']}")
         outcomes = n.get("outcomes") or {}
@@ -881,7 +883,7 @@ TRIGGER_WAKES = {("pr", "reviewed"): "pr reviewed", ("pr", "pushed"): "pr pushed
                  ("pr", "unlabeled"): "pr unlabeled", ("pr", "edited"): "pr edited",
                  ("pr", "review_comment"): "pr review_comment", ("ticket", "opened"): "ticket opened",
                  ("ticket", "reopened"): "ticket reopened", ("ticket", "unlabeled"): "ticket unlabeled",
-                 ("ticket", "assigned"): "ticket assigned"}
+                 ("ticket", "assigned"): "ticket assigned", ("ticket", "resolved"): "ticket resolved"}
 # `ci: <value>` is not in TRIGGER_WAKES: its wake names the environment's CI workflow (`_wake`). `failed` is a failed
 # workflow run; `green` a completed workflow run that passed; `checks_green` a completed check suite that passed.
 CI_EVENTS = ("failed", "green", "checks_green")
@@ -932,6 +934,26 @@ def all_numberless(triggers):
     return bool(triggers) and all(isinstance(t, dict) and ("schedule" in t or numberless_trigger(t)) for t in triggers)
 
 
+def _field_errors(where, value):
+    """`field: {name: <field>, value: <value>}`: both keys, nothing else, and a supported field name."""
+    if not isinstance(value, dict) or set(value) != {"name", "value"}:
+        return [f"bad-filter: {where}: field is {{name: <field>, value: <value>}}, got {value!r}"]
+    name, val = value["name"], value["value"]
+    if name not in FIELD_NAMES:
+        return [f"unknown-event: {where}: field: {name!r}: supported fields: {', '.join(FIELD_NAMES)}"]
+    if not isinstance(val, str) or not val:
+        return [f"bad-filter: {where}: field {name} needs a non-empty value, got {val!r}"]
+    return []
+
+
+def youtrack_only(t):
+    """The trigger text when only a YouTrack ticket can fire it (a field change, `ticket: resolved`), else None."""
+    if not isinstance(t, dict) or not t:
+        return None
+    main, value, _ = trigger_parts(t)
+    return main if main == "field" else f"ticket: {value}" if (main, value) == ("ticket", "resolved") else None
+
+
 def trigger_errors(where, t):
     """`unknown-trigger` and `unknown-filter` errors of one node trigger; each names what is supported."""
     if t == "manual":
@@ -946,6 +968,8 @@ def trigger_errors(where, t):
         errs.append(f"unknown-event: {where}: ci: {value}: supported ci events: {', '.join(CI_EVENTS)}")
     if main == "push" and (not isinstance(value, str) or not value or " " in value):
         errs.append(f"bad-filter: {where}: push takes one branch name, got {value!r}")
+    if main == "field":
+        errs += _field_errors(where, value)
     if main in ("pr", "ticket") and (main, value) not in TRIGGER_WAKES:
         names = sorted(v for k, v in TRIGGER_WAKES if k == main)
         errs.append(f"unknown-event: {where}: {main}: {value}: supported {main} events: {', '.join(names)}")
@@ -963,7 +987,8 @@ def trigger_errors(where, t):
     return errs
 
 
-MAIN_KEYS = ("stage", "label", "schedule", "webhook", "ci", "pr", "ticket", "push")
+MAIN_KEYS = ("stage", "label", "schedule", "webhook", "ci", "pr", "ticket", "push", "field")
+FIELD_NAMES = ("State", "Assignee", "Priority", "Subsystem")  # `field: {name, value}` (YouTrack only); docs/air-events.md
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
            "request-reviewers", "park-behind-main-red", "assign", "unassign", "ready-for-review")  # and the plugins' effects
 
@@ -1187,6 +1212,8 @@ def _wake(t, name, prefix, schedules, env):
         return {"failed": f"run {workflow}", "green": f"run-green {workflow}", "checks_green": "ci checks_green"}[v]
     if k == "push":
         return f"push {v}{_filter_tokens(filters)}"
+    if k == "field":
+        return f"field {v['name']}={v['value']}"
     return TRIGGER_WAKES[(k, v)] + _filter_tokens(filters)
 
 
@@ -1254,7 +1281,7 @@ def _node(name, n, agents, role_of, prefix, schedules, envs, default_env, all_st
 
 
 # --- The shapes the gate reads, straight from the definition -------------------------------------
-# `nodes(defn)` is engine/nodes.yaml's shape: triggers as event strings, `when.stage`, stage and label effects.
+# `nodes(defn)` is the shape of a nodes file: triggers as event strings, `when.stage`, stage and label effects.
 EVENTS = {("pr", "reviewed"): "pull_request_review.submitted", ("pr", "pushed"): "pull_request.synchronize",
           ("pr", "opened"): "pull_request.opened", ("pr", "merged"): "pull_request.merged",
           ("pr", "commented"): "issue_comment.created", ("ticket", "closed"): "issues.closed",
@@ -1264,7 +1291,8 @@ EVENTS = {("pr", "reviewed"): "pull_request_review.submitted", ("pr", "pushed"):
           ("pr", "review_requested"): "pull_request.review_requested", ("pr", "unlabeled"): "pull_request.unlabeled",
           ("pr", "edited"): "pull_request.edited", ("pr", "review_comment"): "pull_request_review_comment.created",
           ("ticket", "opened"): "issues.opened", ("ticket", "reopened"): "issues.reopened",
-          ("ticket", "unlabeled"): "issues.unlabeled", ("ticket", "assigned"): "issues.assigned"}
+          ("ticket", "unlabeled"): "issues.unlabeled", ("ticket", "assigned"): "issues.assigned",
+          ("ticket", "resolved"): "issues.resolved"}
 
 
 def _trigger(t, name, prefix, on_pr, schedules, env):
@@ -1288,6 +1316,8 @@ def _trigger(t, name, prefix, on_pr, schedules, env):
                 "checks_green": "check_suite.completed"}[v]
     if k == "push":
         return f"push {v}{_filter_tokens(filters)}"
+    if k == "field":
+        return f"youtrack.fieldChanged {v['name']}={v['value']}"
     return EVENTS[(k, v)] + _filter_tokens(filters)
 
 
