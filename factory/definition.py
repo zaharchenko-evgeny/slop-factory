@@ -990,7 +990,7 @@ def trigger_errors(where, t):
 MAIN_KEYS = ("stage", "label", "schedule", "webhook", "ci", "pr", "ticket", "push", "field")
 FIELD_NAMES = ("State", "Assignee", "Priority", "Subsystem")  # `field: {name, value}` (YouTrack only); docs/air-events.md
 EFFECTS = ("stage", "label", "unlabel", "comment", "review", "merge", "update-branch", "create-issues",
-           "request-reviewers", "park-behind-main-red", "assign", "unassign", "ready-for-review")  # and the plugins' effects
+           "request-reviewers", "park-behind-main-red", "assign", "unassign", "ready-for-review", "mirror-stage")  # and the plugins' effects
 
 
 def _name(label, prefix):
