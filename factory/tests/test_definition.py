@@ -921,6 +921,52 @@ class DefinitionTest(unittest.TestCase):
                 self.edit("workflow.yaml", lambda w, trig=trig: w["nodes"]["fix"].update(triggers=[trig]))
                 self.assertTrue(any(e.startswith(want) for e in self.errors()), (want, self.errors()))
 
+    def test_youtrack_triggers_reach_wakes_and_engine_events(self):
+        rows = [({"ticket": "resolved"}, "ticket resolved", "issues.resolved"),
+                ({"field": {"name": "State", "value": "In Progress"}}, "field State=In Progress",
+                 "youtrack.fieldChanged State=In Progress")]
+        for trig, wake, event in rows:
+            with self.subTest(trigger=trig):
+                self.edit("factory.yaml", lambda f: f.update(tracker={"adapter": "youtrack", "url": "https://yt", "project": "LME"}))
+                self.edit("workflow.yaml", lambda w, trig=trig: w["nodes"]["fix"].update(triggers=[trig]))
+                defn = definition.load(self.root)
+                self.assertEqual(definition.to_project(defn)[1]["nodes"]["fix"]["wakes_on"], [wake])
+                self.assertEqual(definition.nodes(defn)["nodes"]["fix"]["triggers"], [event])
+
+    def test_youtrack_triggers_are_validated(self):
+        """#1439: the YouTrack events and the field filter name their supported values; a GitHub-ticket team refuses them."""
+        field = lambda name, value: {"field": {"name": name, "value": value}}
+        rows = [(field("State", "Fixed"), "yt", []),
+                (field("Subsystem", "Core"), "yt", []),
+                ({"ticket": "resolved"}, "yt", []),
+                ({"ticket": "commented"}, "yt", []),
+                (field("Colour", "red"), "yt", ["unknown-event: nodes.fix: field: 'Colour': supported fields: State, Assignee, Priority, Subsystem"]),
+                (field("State", ""), "yt", ["bad-filter: nodes.fix: field State needs a non-empty value"]),
+                (field("State", None), "yt", ["bad-filter: nodes.fix: field State needs a non-empty value"]),
+                ({"field": "State"}, "yt", ["bad-filter: nodes.fix: field is {name: <field>, value: <value>}"]),
+                ({"field": {"name": "State"}}, "yt", ["bad-filter: nodes.fix: field is {name: <field>, value: <value>}"]),
+                ({"field": {"name": "State", "value": "x", "by": "y"}}, "yt", ["bad-filter: nodes.fix: field is"]),
+                ({**field("State", "Fixed"), "by": "human"}, "yt", ["unknown-filter: nodes.fix: by does not fit `field`"]),
+                ({"ticket": "resolved", "by": "human"}, "yt", ["unknown-filter: nodes.fix: by does not fit `ticket`"]),
+                ({"ticket": "typo"}, "yt", ["unknown-event: nodes.fix: ticket: typo: supported ticket events:"]),
+                (field("State", "Fixed"), "github", ["unsupported-trigger: nodes.fix: field needs tickets in YouTrack"]),
+                ({"ticket": "resolved"}, "github", ["unsupported-trigger: nodes.fix: ticket: resolved needs tickets in YouTrack"]),
+                ({"ticket": "commented"}, "github", [])]
+        for trig, tracker, want in rows:
+            with self.subTest(trigger=trig, tracker=tracker):
+                def make(f, tracker=tracker):
+                    f.update(tracker={"adapter": "youtrack", "url": "https://yt", "project": "LME"} if tracker == "yt"
+                             else {"adapter": "github-issues", "repository": "zaharchenko-evgeny/slop-factory", "label_prefix": "factory:"})
+                self.edit("factory.yaml", make)
+                self.edit("workflow.yaml", lambda w, trig=trig: w["nodes"]["fix"].update(triggers=[trig]))
+                errs = [e for e in self.errors() if e.split(":")[0] in ("unknown-event", "unknown-filter", "unknown-trigger",
+                                                                          "bad-filter", "unsupported-trigger")]
+                if want:
+                    for w in want:
+                        self.assertTrue(any(e.startswith(w) for e in errs), (w, errs))
+                else:
+                    self.assertEqual(errs, [])
+
     def test_numberless_triggers_make_a_routine_and_do_not_mix(self):
         """#1438 B1: a push or CI-green node starts like a schedule, with no ticket or PR number."""
         rows = [([{"push": "main"}], True, False), ([{"ci": "green"}], True, False), ([{"ci": "checks_green"}], True, False),

@@ -1147,6 +1147,34 @@ class ProjectPlanTest(unittest.TestCase):
                 self.assertEqual(got, [{"triggerType": "EVENT", "source": "github", "eventType": event,
                                         "filters": filters}])
 
+    def test_youtrack_events_compile_to_the_catalog_triggers(self):
+        """#1439: each YouTrack ticket event of docs/air-events.md reaches the Air plan as its YouTrack trigger."""
+        issue_updated = lambda filters: {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated",
+                                         "filters": filters}
+        own = lambda event: {"triggerType": "EVENT", "source": "youtrack", "eventType": event, "filters": {}}
+        rows = [({"ticket": "commented"}, own("commentAdded")),
+                ({"ticket": "opened"}, own("issueCreated")),
+                ({"ticket": "resolved"}, own("issueResolved")),
+                ({"ticket": "unlabeled", "label": "wip"}, issue_updated({"tagRemoved": "wip"})),
+                ({"ticket": "unlabeled"}, issue_updated({})),
+                ({"label": "needs-info"}, issue_updated({"tagAdded": "needs-info"})),
+                ({"field": {"name": "State", "value": "Fixed"}}, issue_updated({"State": "Fixed"})),
+                ({"field": {"name": "State", "value": "In Progress"}}, issue_updated({"State": "In Progress"})),
+                ({"field": {"name": "Assignee", "value": "alice"}}, issue_updated({"Assignee": "alice"})),
+                ({"field": {"name": "Priority", "value": "Critical"}}, issue_updated({"Priority": "Critical"})),
+                ({"field": {"name": "Subsystem", "value": "Core"}}, issue_updated({"Subsystem": "Core"}))]
+        for trig, want in rows:
+            with self.subTest(trigger=trig):
+                def edit_factory(f):
+                    f.update(tracker={"adapter": "youtrack", "url": "https://y.example", "project": "LME"})
+                def edit(w, trig=trig):
+                    w["nodes"]["fix"]["triggers"] = [trig]
+                plan = definition_plan(edit_factory=edit_factory, edit_workflow=edit)
+                got = [t for t in {x["spec"]["node"]: x for x in plan["automations"]}["fix"]["triggers"]
+                       if t["source"] == "youtrack"]
+                self.assertEqual([{**t, "filters": {k: v for k, v in t["filters"].items() if k != "projectShortName"}}
+                                  for t in got], [want])
+
     def test_trigger_text_filters_only_apply_to_github_events(self):
         self.assertEqual(deploy.trigger("pull_request.synchronize by=factory", None)["filters"], {"sender_type": "Bot"})
         self.assertEqual(deploy.trigger("pull_request.synchronize", None)["filters"], {})

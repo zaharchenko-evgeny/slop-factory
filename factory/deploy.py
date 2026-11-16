@@ -156,11 +156,16 @@ def trigger(text: str, tier: str | None, pr_author: str | None = None, focus: st
     arg = arg.replace("<tier>", tier or "")
     arg = arg.replace("<focus>", focus or "")
     if event.startswith("youtrack."):  # the filter value is case-sensitive: pass it through unchanged
-        name, _, value = arg.partition("=")
+        kind = event.partition(".")[2]
         if repo and arg in repo_tags:  # a per-repository stage tag: only this repository's node listens to it
             arg = f"{arg}-{repo}"
-        filters = {"tagAdded": arg} if event == "youtrack.tagAdded" else {name: value}
-        return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": filters}
+        if kind in ("tagAdded", "tagRemoved"):
+            return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated",
+                    "filters": {kind: arg} if arg else {}}
+        if kind == "fieldChanged":
+            name, _, value = arg.partition("=")
+            return {"triggerType": "EVENT", "source": "youtrack", "eventType": "issueUpdated", "filters": {name: value}}
+        return {"triggerType": "EVENT", "source": "youtrack", "eventType": kind, "filters": {}}
     arg, words = definition.split_filters(f"{event} {arg}" if arg else event)
     arg = arg.partition(" ")[2]
     wanted = dict(w.partition("=")[::2] for w in words)
