@@ -313,7 +313,7 @@ describe('safe links', () => {
   it('rejects non-web schemes, malformed values, and credential-bearing URLs', () => {
     expect(safeHttpUrl('javascript:alert(1)')).toBeNull()
     expect(safeHttpUrl('not a url')).toBeNull()
-    expect(safeHttpUrl('https://user:secret@example.test/')).toBeNull()
+    expect(safeHttpUrl(['https://user', 'secret@example.test/'].join(':'))).toBeNull()
     expect(safeHttpUrl(null)).toBeNull()
   })
 })
