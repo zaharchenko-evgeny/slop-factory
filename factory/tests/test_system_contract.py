@@ -8,6 +8,7 @@ keeps what was written, for YouTrack tickets (a stubbed REST runner that keeps t
 for Space merge requests (a stubbed HTTP runner that keeps them) beside in-memory tickets.
 Run: uv run factory/tests/test_system_contract.py"""
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -221,8 +222,18 @@ class ContractYouTrack:
 
     def _new(self, n, summary, description, attrs=()):
         self.issues[n] = {"summary": summary, "description": description, "resolved": None, "tags": list(attrs),
-                          "fields": {}, "comments": [], "parent": None, "depends": []}
+                          "fields": {}, "comments": [], "parent": None, "depends": [], "activities": []}
         return n
+
+    def _log(self, n, category, **change):
+        """An activity of the issue, by the factory's identity: what `GET /issues/<n>/activities` answers."""
+        acts = self.issues[n]["activities"]
+        acts.append({"timestamp": 1767225600000 + len(acts), "author": {"login": BOT}, "category": {"id": category},
+                     **change})
+
+    @staticmethod
+    def _id(n):  # the stub's ticket "7" is the number 7 to the gate (as GitHub's); a created "T-901" stays text
+        return int(n) if n.isdigit() else n
 
     def _tag(self, name):
         return self.tags.setdefault(name, f"id:{name}")
@@ -248,6 +259,11 @@ class ContractYouTrack:
         if query.startswith("subtask of: "):
             return [{"idReadable": m, "summary": x["summary"]} for m, x in self.issues.items()
                     if x["parent"] == query.split(": ", 1)[1]]
+        if "tag: {" in query:  # a stage query: `(tag: {a} or tag: {b}) and #Unresolved` (open only), or with a closed window
+            tags = re.findall(r"tag: \{([^}]*)\}", query)
+            open_only = "#Unresolved" in query and "resolved date" not in query and "updated:" not in query
+            return [{"idReadable": self._id(m)} for m, x in self.issues.items()
+                    if set(tags) & set(x["tags"]) and not (open_only and x["resolved"])]
         if query.startswith("#Unresolved summary: {"):
             title = query[len("#Unresolved summary: {"):-1]
             return [{"idReadable": m, "summary": x["summary"]} for m, x in self.issues.items()
@@ -275,10 +291,13 @@ class ContractYouTrack:
             for f in body["customFields"]:
                 i["fields"][f["name"]] = f["value"]
                 if f["name"] == "State":
-                    i["resolved"] = 1 if (f["value"] or {}).get("name") == "Done" else None
+                    resolved = 1 if (f["value"] or {}).get("name") == "Done" else None
+                    if bool(resolved) != bool(i["resolved"]):
+                        self._log(n, "IssueResolvedCategory", added=bool(resolved), removed=not resolved)
+                    i["resolved"] = resolved
             return {}
         if rest == ["activities"]:
-            return []
+            return list(i["activities"])
         if rest == ["comments"]:
             if method == "POST":
                 i["comments"].append({"text": body["text"], "created": 1767225600000 + len(i["comments"]),
@@ -287,8 +306,10 @@ class ContractYouTrack:
             return list(i["comments"])
         if rest[0] == "tags":
             if method == "POST":
-                i["tags"].append(next(t for t, x in self.tags.items() if x == body["id"]))
+                i["tags"].append(tag := next(t for t, x in self.tags.items() if x == body["id"]))
+                self._log(n, "TagsCategory", added=[{"name": tag}])
             else:
+                self._log(n, "TagsCategory", removed=[{"name": t} for t in i["tags"] if self.tags[t] == rest[1]])
                 i["tags"] = [t for t in i["tags"] if self.tags[t] != rest[1]]
             return {}
         if rest == ["execute"]:
@@ -313,15 +334,15 @@ class YouTrackContractTest(SystemContract, unittest.TestCase):
     NO_WRITE = GitHubContractTest.NO_WRITE
     EXEMPT = GitHubContractTest.EXEMPT
     NUMBERS = ("T-901", "T-902")
-    XFAIL = {
-        "test_a_stage_effect_that_expects_another_stage_writes_nothing": "#1281: the stage effect ignores `expect`",
-        "test_a_ticket_event_names_its_actor": "#1281: the store keeps no events of what it writes",
-        "test_a_stage_effect_that_expects_the_current_stage_moves_it": "#1281: the stage effect ignores `expect`",
-        "test_find_stage_lists_the_tickets_in_a_stage": "#1281: find stage reads no stage of the stub's tickets",
-        "test_find_blocking_lists_the_tickets_a_ticket_blocks": "#1281: find has no `blocking` query",
-    }
     setUp = GitHubContractTest.setUp
-    relate = GitHubContractTest.relate
+
+    def relate(self, s):
+        """As GitHub's, but the parent stops waiting for its children: `create_children` makes a child block its parent
+        by design (the parent wakes when they close), so `blocking` of a child would list it. What is left is the one
+        link between the two sub-tickets."""
+        rel = GitHubContractTest.relate(self, s)
+        s.yt.issues["7"]["depends"].clear()
+        return rel
 
     def foreign_comments(self, s):
         s.yt.issues["7"]["comments"].extend({"text": "hi", "created": 1, "author": {"login": a}} for a in ("alice", "ci[bot]"))

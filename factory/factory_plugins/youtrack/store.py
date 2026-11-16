@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 import effects
 import lease
 from gate_port import CLOSED_HOURS, child_links, child_order
-from ports.system import Effect
+from ports.system import Effect, Event
 from scopes import matches
 
 ISSUE_FIELDS = ("idReadable,summary,description,resolved,updated,reporter(login),tags(id,name),project(shortName),"
@@ -248,6 +248,14 @@ class YouTrackTicketStore:
                 for kind, key in (("unlabeled", "removed"), ("labeled", "added")):
                     out += [{"kind": kind, "value": x["name"], **base} for x in a.get(key) or []]
         return out
+
+    def event(self, payload):
+        """The Event of a ticket trigger payload `{ticket, event_name}`: its kind is the canonical trigger name
+        (`issues.labeled`, ...). None when the payload names no ticket or no event."""
+        ticket, name = payload.get("ticket"), payload.get("event_name")
+        if ticket in (None, "") or not isinstance(name, str) or not name:
+            return None
+        return Event(ticket, name, name.partition(".")[2] or None, raw=payload)
 
     def last_field_change(self, n, name):
         """(value, login) of the latest change of custom field `name` on ticket `n`, else (None, None)."""

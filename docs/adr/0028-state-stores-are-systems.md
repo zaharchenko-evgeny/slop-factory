@@ -42,6 +42,6 @@ step per event stay as they are.
 - `MemorySystem` and `TagTracker` keep every guarantee. They gained `expect` on `stage`, ticket events with an
   actor, `close` that closes the ticket, and the `blocking` query.
 - A system that fails a test lists it in `XFAIL` in its test class, with the follow-up issue. The test must fail,
-  so the entry goes when the system is fixed. GitHub: #1280. YouTrack: #1281. Space keeps its tickets in
+  so the entry goes when the system is fixed. GitHub: #1280. YouTrack keeps every guarantee (#1281). Space keeps its tickets in
   memory and passes what `MemorySystem` passes.
 - No markdown or SQLite adapter is added here. No surface changes.
