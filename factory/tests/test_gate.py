@@ -987,6 +987,9 @@ class CliAndValidate(unittest.TestCase):
         self.assertEqual(gate.ticket_from_ref(branch), "INFRA-123")
         self.assertEqual(gate.ticket_from_ref("INFRA-123: Add the thing"), "INFRA-123")
         self.assertEqual((gate.ticket_from_ref("ez/7-x"), gate.ticket_from_ref("42-fix"), gate.ticket_from_ref("main")), (7, None, None))
+        # #1480: a branch_pattern with path segments under ez/
+        self.assertEqual((gate.ticket_from_ref("ez/factory/190-notify"), gate.ticket_from_ref("refs/heads/ez/factory/LME-7-x"),
+                          gate.ticket_from_ref("ez/factory/notes")), (190, "LME-7", None))
         ev = gate.from_trigger({"eventType": "pull_request.opened", "data": {"action": "opened", "pull_request": {"number": 9}}}, Host())
         self.assertEqual(ev["ticket"], "INFRA-123")
         self.assertEqual(tracker.facts("INFRA-123")["stage"], "in-dev")
