@@ -25,7 +25,7 @@ and template examples. It does not own Slop factory runtime files.
 - `engine/` and `factory/` — the engine, whose node graph is compiled from the team's definition (ADR-0021).
 - `skills/factory-setup/template/` — the example definition used by setup, never a runtime fallback.
 
-Slop factory runtime files (`factory.project.yaml`, roles, skills and workflow)
+Slop factory runtime files (`factory.yaml`, `workflow.yaml`, `roles/` and skills)
 live in `slop-eval-factory`.
 
 The approver's rules, `policies/` and `judgments/`, are team content: the
@@ -33,8 +33,7 @@ factory reads them from the team repository's root (`$FACTORY_TEAM`), for
 Slop factory `slop-eval-factory` (#419).
 
 Roles and workflows never name a repository, tracker project, Air project,
-model or agent harness. The team repository's `factory.project.yaml` or
-`factory.descriptor.yaml` supplies these values.
+model or agent harness. The team repository's `factory.yaml` supplies these values.
 
 This repository uses GitHub Issues as its tracker: commits start with
 `#<issue>`, branches use `ez/<issue>-<slug>`.
@@ -77,7 +76,7 @@ those skills and the role's tools). Models and harnesses come from
 ## 4a. Agents (ADR-0020)
 
 An agent is a named bundle of a role and its model fields, declared under
-`agents:` in `factory.project.yaml` and named on workflow nodes with
+`agents:` in `factory.yaml` and named on workflow nodes with
 `agent: <id>` ([0020-agents](adr/0020-agents.md)). The role says what to do,
 the node says when, the agent says who. Its `persona` is the handle in
 `@factory:<persona>`; the same `dev` implements, fixes and updates. A node
@@ -182,13 +181,13 @@ per repository.
   `environments` it runs in, and deploy makes one copy per environment and
   repository it listens to. Work across repositories is split into one ticket
   per repository, linked by blocked-by.
-- Repository roles (ADR-0017): `factory.project.yaml` marks exactly one
-  repository `role: primary`; the others are `role: project`. An Air project
+- Repository roles (ADR-0017): a `factory.yaml` environment lists its
+  repositories as `{repo, write, tracker, vcs}` (ADR-0027). An Air
   automation checks out the project repositories and the factory repository
   (read-only); its main repository is where its events happen (ADR-0027, which
   supersedes ADR-0024 and in part ADR-0017). Retro, distill, the knowledge review and the ops nodes run in
   the factory repository.
-- The team repository may also be listed as a `role: project` repository, so
+- The team repository may also be listed as a repository of an environment, so
   the factory delivers tickets that change it (ADR-0019,
   [0019-team-repository-is-a-project](adr/0019-team-repository-is-a-project.md)).
   Agents read team files from a pristine copy of its default branch, never

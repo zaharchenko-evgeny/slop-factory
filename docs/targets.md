@@ -16,7 +16,7 @@ by hand, see the `factory-delivery` skill.
 
 | Concern | Air |
 | --- | --- |
-| Harness | `claude-code` or `codex` with the models Air provides (`targets.air.models` in `factory.descriptor.yaml`) |
+| Harness | `claude-code` or `codex` with the models Air provides (`models` in `factory.yaml`) |
 | Secrets | Project environment secrets, names only: `GITHUB_TOKEN`, decisions-kit auth |
 | Tools | Installed by the settings repository's `.air/cloud/startup.sh`: `uv`, `gh`, `conftest`, `decide` |
 | Overlap | Duplicate trigger firings are expected; the gate refuses a stale or duplicate event (exit 10) |
@@ -26,8 +26,8 @@ by hand, see the `factory-delivery` skill.
 
 | Automation | Main repository | Additional repositories |
 | --- | --- | --- |
-| Project nodes (intake, review, implement, fix, join, merge, finish, …) | the `role: primary` repository | every other descriptor repository at its `default_branch`, then the factory repository at `main` (read-only) |
-| Retro, distill, knowledge review, ops nodes (notify, reconcile, doctor-ops) | the factory repository | every project repository in the descriptor, at its `default_branch` |
+| Project nodes (intake, review, implement, fix, join, merge, finish, …) | the environment's own repository | every other repository of the environment at its `default_branch`, then the factory repository at `main` (read-only) |
+| Retro, distill, knowledge review, ops nodes (notify, reconcile, doctor-ops) | the factory repository | every repository of the environments, at its `default_branch` |
 
 The prompt's "Project checkout" section names each checkout under `/workspaces/<name>`.
 The Air surface (`factory/factory_plugins/air/deploy.py`) writes `additionalRepositories` through the Air REST API (`Backend.set_additional`), because
@@ -35,8 +35,7 @@ the automations MCP does not expose it.
 
 ### Delivering to the team repository (ADR-0019)
 
-To change the team repository through the factory, list it in `repositories` with `role: project`; any other role
-is a `factory validate` error. It is then one project checkout like any other: write nodes change it on branch
+To change the team repository through the factory, list it in the `repositories` of an environment in `factory.yaml`. It is then one project checkout like any other: write nodes change it on branch
 `ez/<issue>-<slug>`, and it gets no read-only entry in `additionalRepositories`. The factory still reads its roles
 and skills from the `factory-team` directory in `$HOME`, a `git worktree` of the checkout's `origin/<default branch>` that the
 team's startup script creates (the template's `.air/cloud/startup.sh` shows how), and never from the checkout.
@@ -157,14 +156,14 @@ YouTrack under Project settings → Workflows.
 
 ## Local target (ADR-0017)
 
-The same nodes run on a laptop with no Air account. `targets.local` in `factory.project.yaml` takes
+The same nodes run on a laptop with no Air account. `targets.local` of the compiled project (ADR-0021) takes
 `harness` (`claude-code`, `codex`, `junie` or `pi`), `models` (tier to model), `poll_seconds` and `workspace`
 (default: the directory that holds the factory repository checkout). A role or reviewer mode may set its own
 `harness` (`roles.<role>.harness`, `roles.<role>.modes.<focus>.harness`). Harnesses and `targets.local.models`
 apply to this target only: on Air the platform runs every agent with `targets.air.models` (ADR-0018).
 
 - `factory --team <factory repo> deploy --target local` checks the harness CLI on `PATH`, a `gh` login, the
-  factory repository checkout, and a checkout of every descriptor repository at `<workspace>/<name>` whose
+  factory repository checkout, and a checkout of every repository of the environments at `<workspace>/<name>` whose
   `origin` is that repository. It names each missing item and exits 1. `--apply` writes `.factory/local.json`
   (harness, login, checkouts, the automations the loop serves).
 - `factory run --local [--once] [--dry-run]` does Air's part and nothing else. It polls GitHub for the events
