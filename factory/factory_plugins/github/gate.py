@@ -996,12 +996,25 @@ class GitHubGateTracker(DescriptorPort):
             return view._pr_record(pr, subject.repo, want) if pr else None
         raise ValueError(f"read: unknown subject {subject.kind}")
 
+    def event(self, payload):
+        """The Event of a trigger payload `{ticket, event_name?, action?, pr?, repository?}` (`event_name` is the canonical
+        trigger name, `issues.labeled`); without a ticket, the ticket of the PR `pr` from its live head ref, else None."""
+        ticket = payload.get("ticket")
+        if ticket is None and payload.get("pr") is not None:
+            ticket = GitHubCodeHost(self.pr_repo, self.run, self.ticket_repos).ticket_for_pr(payload["pr"], payload.get("repository"))
+        if ticket is None:
+            return None
+        return Event(ticket, payload.get("event_name") or "event", payload.get("action"), payload.get("pr"),
+                     payload.get("repository"), payload)
+
     def find(self, query):
-        """`children`: the sub-tickets of `query.of`; `stage`: the tickets holding one of the stages `query.values`;
+        """`children`: the sub-tickets of `query.of`; `blocking`: the tickets `query.of` blocks; `stage`: the tickets holding one of the stages `query.values`;
         `labeled`, `prs`, `closed`: the local surface's poll of this repository (`_labeled`, `_recent_prs`,
         `_recently_closed`)."""
         if query.kind == "children":
             return self.tickets.children(query.of)
+        if query.kind == "blocking":
+            return self.tickets.blocking(query.of)
         if query.kind == "stage":
             return self.sweep_tickets(query.values, query.open_only) if query.closed_hours == 48 and query.updated_hours is None else \
                 self.tickets.tickets_by_stage([self.stages[st] for st in query.values if st in self.stages],
@@ -1245,6 +1258,8 @@ class GitHubGateTracker(DescriptorPort):
     def _fx_stage(self, e, ctx):
         n, value = e["ticket"], e["value"]
         want, have = self.stages[value], [x for x in self._issue_once(n, ctx)["attrs"] if x in self.stages.values()]
+        if e.get("expect") is not None and have != [self.stages.get(e["expect"])]:  # compare-and-set: the stage moved
+            return False
         return have != [want] and self.tickets.set_stage(n, want, have)
 
     @staticmethod
