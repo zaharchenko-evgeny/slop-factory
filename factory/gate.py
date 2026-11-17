@@ -164,7 +164,7 @@ def from_trigger(d, code_host=None):
         ticket = ev["ticket"] or (code_host.ticket_for_pr(ev["number"], ev["repository"])
                                   if code_host and ev["repository"] else None)
         if ticket is None:
-            raise NoTicket(f"{ev['kind'].replace('_', ' ')} {ev['number']} is not on an ez/<n>- branch")
+            raise NoTicket(f"{ev['kind'].replace('_', ' ')} {ev['number']} is not on a factory branch")
         return {"id": f"{ev['kind']}:{ticket}:{ev['action']}", "ticket": ticket, "event_name": "pull_request",
                 "action": ev["action"]}
     if not any(isinstance(d.get(key), dict) for key in ("pull_request", "issue", "review")):
@@ -188,7 +188,7 @@ def from_trigger(d, code_host=None):
         if ticket is None and not live_pr_ticket(code_host):  # a live lookup is the only source for GitHub
             ticket = ticket_from_ref(((pr or {}).get("head") or {}).get("ref")) or ticket_from_ref((pr or {}).get("title"))
         if ticket is None:
-            raise NoTicket(f"PR #{number} is not on an ez/<n>- branch")
+            raise NoTicket(f"PR #{number} is not on a factory branch")
     else:
         repository = (d.get("repository") or {}).get("full_name") if isinstance(d.get("repository"), dict) else None
         ref = getattr(code_host, "ticket_ref", None)  # ADR-0024: an issue of another ticket repository

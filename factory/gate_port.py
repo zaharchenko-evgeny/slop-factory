@@ -20,9 +20,10 @@ CLOSED_HOURS = 48  # a ticket closed on merge while its finish run was lost (#56
 
 
 def ticket_from_ref(ref):
-    """The ticket id of a branch `ez/<ticket>-<slug>` or a PR title starting `<ticket> `: digits give an int
+    """The ticket id of a factory branch `ez/<ticket>-<slug>` (path segments may follow `ez/`, as in a
+    `branch_pattern` of `ez/factory/{ticket}-{slug}`, #1480) or a PR title starting `<ticket> `: digits give an int
     (GitHub issue), an opaque id such as `INFRA-123` stays a string. None when `ref` names no ticket."""
-    m = re.match(r"(?:refs/heads/)?ez/([A-Za-z][A-Za-z0-9]*-\d+|\d+)-", ref or "") or re.match(r"#?([A-Za-z][A-Za-z0-9]*-\d+|\d+)(?=[ :])", ref or "")
+    m = re.match(r"(?:refs/heads/)?ez/(?:[\w.-]+/)*([A-Za-z][A-Za-z0-9]*-\d+|\d+)-", ref or "") or re.match(r"#?([A-Za-z][A-Za-z0-9]*-\d+|\d+)(?=[ :])", ref or "")
     return None if not m else int(m[1]) if m[1].isdigit() else m[1]
 
 

@@ -1,7 +1,7 @@
 """The GitHub adapter behind the gate's Tracker port (factory/gate_port.py).
 
 Facts are read from GitHub on every call and nothing is stored (ADR-0014): no `seen` list, the stage
-label and the marked reviews at the head are the state. The PR is found from the branch `ez/<n>-*`.
+label and the marked reviews at the head are the state. The PR is found from its factory branch (`ticket_from_ref`).
 A marker `<!-- factory:review focus=<f> round=<n> verdict=approve|changes -->` counts only on a review by `bot_login`
 (agent reviews are COMMENT reviews: the author cannot approve its own PR; the verdict is in the marker)
 (`targets.air.bot_login`; `gh api user` answers 403 inside an Air run, so it is never called).
@@ -264,7 +264,7 @@ class GitHubCodeHost:
         return [json.loads(x) for x in self.run(["api", "--paginate", path, "--jq", ".[]"]).splitlines() if x.strip()]
 
     def factory_prs(self, repository):
-        """[{number, head, labels}] of the open PRs from a factory branch `ez/<ticket>-*` of `repository`, never a fork's."""
+        """[{number, head, labels}] of the open PRs from a factory branch (`ticket_from_ref`) of `repository`, never a fork's."""
         return [{"number": p["number"], "head": p["head"]["sha"], "labels": [x["name"] for x in p.get("labels") or []]}
                 for p in self._list(f"repos/{repository}/pulls?state=open&per_page=100")
                 if ticket_from_ref(p["head"]["ref"]) is not None
@@ -284,6 +284,13 @@ class GitHubCodeHost:
         for flag, labels in (("--remove-label", remove), ("--add-label", add)):
             if labels:
                 self.run(["pr", "edit", str(number), "-R", repository, *[x for label in labels for x in (flag, label)]])
+
+
+def _on_branch_of(pr, n):
+    """Whether PR `pr` (a REST body) is on a factory branch of ticket number `n`: `ez/<n>-*`, or a `branch_pattern`
+    with path segments such as `ez/factory/<n>-*` (#1480)."""
+    ticket = ticket_from_ref((pr.get("head") or {}).get("ref"))
+    return ticket is not None and str(ticket) == str(n)
 
 
 def normalise_events(raw):
@@ -835,7 +842,7 @@ class GitHubGateTracker(DescriptorPort):
 
     def _pr(self, n):
         """The ticket's PR from its branch: the open one, else the newest. None without a PR."""
-        prs = [p for p in self._list("pulls?state=all&per_page=100", repo=self.pr_repo) if p["head"]["ref"].startswith(f"ez/{n}-")
+        prs = [p for p in self._list("pulls?state=all&per_page=100", repo=self.pr_repo) if _on_branch_of(p, n)
                and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.pr_repo.lower()]  # never a fork's PR
         prs.sort(key=lambda p: (p["state"] == "open", p.get("merged_at") is not None, p["number"]))
         if not prs:
@@ -851,7 +858,7 @@ class GitHubGateTracker(DescriptorPort):
     def _prs(self, n, open_only=False):
         """The ticket's PRs from its branch; cleanup also includes closed PRs."""
         prs = [p for p in self._list("pulls?state=all&per_page=100", repo=self.pr_repo)
-               if p["head"]["ref"].startswith(f"ez/{n}-")
+               if _on_branch_of(p, n)
                and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == self.pr_repo.lower()
                and (not open_only or p["state"] == "open")]
         return sorted(prs, key=lambda p: p["number"])
