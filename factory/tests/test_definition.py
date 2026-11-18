@@ -176,6 +176,16 @@ class DefinitionTest(unittest.TestCase):
                          [("intake", MAIN, False), ("intake", OTHER, False)])  # read-only: every ticket place
         self.assertEqual(definition._repository_errors(defn), [])
 
+    def test_copies_match_a_lowercased_home_to_the_definition_spelling(self):
+        """#1501: a github-issues home lowercases the repository (`JetBrains/offline-eval-factory`); the copy keeps
+        the definition's spelling and its `write`, so a repository does not go read-only after an owner renames."""
+        self.edit("factory.yaml", lambda f: self._envs(
+            f, engine=[("JetBrains/offline-eval-factory", {"write": True}), (OTHER, {"token": "T"})]))
+        self.edit("workflow.yaml", lambda w: self._node_envs(w, "implement-small", "engine"))
+        (c,) = definition.copies(definition.load(self.root), "implement-small")
+        self.assertEqual((c["main"], c["write"], c["additional"]),
+                         ("JetBrains/offline-eval-factory", True, [OTHER]))
+
     def test_schedule_copies_once_per_environment(self):
         self.edit("factory.yaml", lambda f: self._envs(f, engine=[(MAIN, {"write": True})], team=[(MAIN, {}), (OTHER, {})]))
         self.edit("workflow.yaml", lambda w: self._node_envs(w, "reconcile", "engine", "team"))
