@@ -388,6 +388,14 @@ class FactsTest(unittest.TestCase):
         gh.pr_details[12] = {"merged": False, "state": "open"}
         self.assertEqual(tr(gh).facts(7)["pr"], 12)
 
+    def test_finds_the_pr_on_a_branch_pattern_with_path_segments(self):  # #1480: ez/factory/{ticket}-{slug}
+        gh = FakeGh()
+        gh.no_default_pull = True
+        gh.extra_pulls = [{"number": 20, "state": "open", "merged_at": None, "head": {"ref": "ez/factory/7-x", "repo": {"full_name": REPO}}},
+                          {"number": 21, "state": "open", "merged_at": None, "head": {"ref": "ez/factory/70-x", "repo": {"full_name": REPO}}}]
+        gh.pr_details = {20: {"merged": False, "state": "open"}, 21: {"merged": False, "state": "open"}}
+        self.assertEqual(tr(gh).facts(7)["pr"], 20)
+
     def test_sweep_tickets_searches_open_and_recently_closed_tickets_once_each(self):
         gh, calls = FakeGh(labels=["factory:changes-requested"]), []
         t = tr(lambda args, timeout=None: (calls.append(args), gh(args, timeout))[1])
