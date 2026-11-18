@@ -543,10 +543,10 @@ def label_plan(nodes: dict, config: dict, tickets=()) -> dict[str, list[str]]:
         out.setdefault(repository(r)["fullName"], [])
     if doctor_repo:
         existing = next((r for r in out if r.lower() == doctor_repo.lower()), None)
-        if not existing or not out[existing]:
-            risks = (t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values()
-            triage = (t.get("stages") or {}).get("triage") or vocab.stage("triage")
-            out[existing or doctor_repo] = sorted({triage, *risks})
+        risks = (t.get("risk_labels") or {"low": "risk:low", "high": "risk:high"}).values()
+        triage = (t.get("stages") or {}).get("triage") or vocab.stage("triage")
+        key = existing or doctor_repo
+        out[key] = sorted({*out.get(key, []), triage, *risks})
     return {r: sorted(set(ls)) for r, ls in out.items()}
 
 

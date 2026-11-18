@@ -2035,6 +2035,21 @@ class LabelPlanTest(unittest.TestCase):
         self.assertNotIn(("remove", "JetBrains/jbeval", "factory:triage"), [change[:3] for change in changes])
         self.assertNotIn(("remove", "JetBrains/jbeval", "risk:low"), [change[:3] for change in changes])
 
+    def test_doctor_fallback_repository_keeps_pr_labels_too(self):
+        before = cfg.team_root()
+        cfg.set_team(HERE / "fixtures/slop")
+        try:
+            conf = copy.deepcopy(cfg.load())
+        finally:
+            cfg.set_team(before)
+        conf["tracker"]["adapter"] = "youtrack"
+        conf["tracker"].pop("repository", None)
+        conf["vcs"] = {"repository": "JetBrains/jbeval"}
+        conf["repositories"] = [*conf.get("repositories", []), {"url": "https://github.com/JetBrains/jbeval"}]
+        with mock.patch.dict(os.environ, {"FACTORY_ENV": ""}):
+            planned = deploy.label_plan(nodes.load(), conf, tickets=["JetBrains/jbeval"])
+        self.assertLessEqual({"factory:triage", "risk:low", "risk:high"}, set(planned["JetBrains/jbeval"]))
+
     def test_reconcile_removes_labels_from_a_repository_no_longer_holding_tickets(self):
         plan = self.plan()
         have = {"factory:ready": ("c2e0c6", ""), "factory:hold": ("ededed", ""), "bug": ("ff0000", "")}
