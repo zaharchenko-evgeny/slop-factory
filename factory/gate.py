@@ -39,7 +39,7 @@ import nodes as nodes_mod  # noqa: E402
 from derive import clean_notes, review_at_head  # noqa: E402
 import effects as effects_mod  # noqa: E402
 from gate_tracker import OnVcs, hosts_prs, overlay  # noqa: E402
-from gate_port import REF, MemorySystem, number_of, split_ticket, ticket_from_ref  # noqa: E402
+from gate_port import REF, MemorySystem, number_of, split_ticket, ticket_from_pr, ticket_from_ref  # noqa: E402
 import vocab  # noqa: E402
 import definition  # noqa: E402
 import plugins  # noqa: E402  (ADR-0026: a plugin's code is imported when the core calls it)
@@ -186,7 +186,7 @@ def from_trigger(d, code_host=None):
     if is_pr:
         ticket = pr_ticket(code_host, number, d.get("repository")) if code_host else None
         if ticket is None and not live_pr_ticket(code_host):  # a live lookup is the only source for GitHub
-            ticket = ticket_from_ref(((pr or {}).get("head") or {}).get("ref")) or ticket_from_ref((pr or {}).get("title"))
+            ticket = ticket_from_pr(pr)
         if ticket is None:
             raise NoTicket(f"PR #{number} is not on a factory branch")
     else:

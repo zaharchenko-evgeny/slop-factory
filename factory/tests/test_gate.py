@@ -976,6 +976,18 @@ class YouTrackGateTest(unittest.TestCase):
                                          run=lambda *a, **k: "", project=descriptor, tickets=store)
 
 class CliAndValidate(unittest.TestCase):
+    def test_ticket_from_pr_body(self):  # #1502: branch first, then title, then a closing keyword of the body
+        from gate_port import ticket_from_pr
+        other = {"head": {"ref": "feature/x"}}
+        cases = [({**other, "body": "Closes #198"}, 198), ({**other, "body": "closes: #198\nmore"}, 198),
+                 ({**other, "body": "Summary\n\nFixes #7 and Resolved #8"}, 7), ({**other, "body": "RESOLVES #5"}, 5),
+                 ({**other, "body": "See #12"}, None), ({**other, "body": "Closes #"}, None), ({**other, "body": "unfixes #3"}, None),
+                 ({**other, "body": ""}, None), ({**other, "body": None}, None), (other, None), ({}, None), (None, None),
+                 ({"head": {"ref": "ez/factory/9-x"}, "body": "Closes #198"}, 9),
+                 ({**other, "title": "42 fix", "body": "Closes #198"}, 42), ({**other, "title": "no", "body": "Closes #198"}, 198)]
+        for pr, want in cases:
+            self.assertEqual(ticket_from_pr(pr), want, pr)
+
     def test_opaque_ticket_id_in_branch_and_title(self):
         class Host:  # the code host knows PRs, the tracker knows tickets
             def ticket_for_pr(self, number):
