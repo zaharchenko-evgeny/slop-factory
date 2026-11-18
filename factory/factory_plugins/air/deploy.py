@@ -400,6 +400,31 @@ class EnvBackend(Backend):
         return self.request("POST", "/env-configs", {"name": p["name"], "repositoryUrl": p["repository"],
                                                      "orgProjectId": project_id})
 
+    def update(self, environment_id: str, project_id: str, fields: dict) -> None:
+        """Sparse UI update: variables are upserts; omitted settings and secret references stay in Air.
+        Never round-trip masked secret values or write a runtime variable over an existing secret."""
+        path = f"/env-configs/{urllib.parse.quote(environment_id, safe='')}"
+        current = self.request("GET", path)
+        if current.get("orgProjectId") != project_id:
+            raise RuntimeError(f"environment {environment_id} no longer belongs to project {project_id}")
+        if unknown := set(fields) - {"name", "domains", "variables", "vm"}:
+            raise RuntimeError(f"unsupported project environment fields: {', '.join(sorted(unknown))}")
+        body = {target: fields[source] for source, target in (("name", "name"), ("vm", "instanceTypeKey"))
+                if source in fields}
+        if "domains" in fields:
+            live = current.get("allowedDomains") or []
+            body["allowedDomains"] = live + [d for d in fields["domains"] or [] if d not in live]
+        if "variables" in fields:
+            secrets = {v["key"] for v in current.get("variables") or [] if v.get("isSecret")}
+            for key in ("secrets", "personalSecrets", "externalSecrets"):
+                secrets.update(s if isinstance(s, str) else s.get("key") or s["name"]
+                               for s in current.get(key) or [])
+            if collisions := secrets & fields["variables"].keys():
+                raise RuntimeError("runtime variables conflict with existing secrets: " + ", ".join(sorted(collisions)))
+            body["variables"] = [{"key": key, "value": value} for key, value in fields["variables"].items()]
+        if body:
+            self.request("PUT", path, body)
+
 
 def project_environment_sources(plan: dict, missing: list[str], personal: list[dict]) -> dict[str, dict | None]:
     """{missing project environment name: the personal environment of that name and repository it is copied from, or
@@ -636,7 +661,8 @@ def project_error(message: str, project_id: str | None) -> str | None:
 
 
 def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", *, backend=None,
-               env_repositories=None, owned_env_ids=None, project_env_ids: dict | None = None) -> None:
+               env_repositories=None, owned_env_ids=None, project_env_ids: dict | None = None,
+               env_backend: EnvBackend | None = None) -> None:
     """Environments before automations on create, update and replace, after them on delete. A replaced environment
     is created under its new repository; the old one is renamed `retired <name>` first (Air names are unique) and left
     for a person to delete in the Air UI, since the Air MCP has no environment delete.
@@ -667,6 +693,11 @@ def apply_diff(changes: list[tuple], automations: Mcp, cloud: Mcp, repo_url="", 
             # triggers and triggerVcs pair by position: update_automation takes both or neither
             pair = {"triggers", "triggerVcs"} if kind == "automation" and {"triggers", "triggerVcs"} & set(changed) else set()
             p = {k: v for k, v in p.items() if k in changed or k in pair}
+        if kind == "environment" and action == "update" and x.get("projectId"):
+            if env_backend is None:
+                raise RuntimeError("Air environment backend is required to update project environments")
+            env_backend.update(x["id"], x["projectId"], p)
+            continue
         if kind == "environment" and isinstance(p.get("variables"), dict):
             p["variables"] = [{"key": key, "value": value} for key, value in p["variables"].items()]
         if kind == "environment" and action == "update" and "domains" in p:  # edit_environment takes `allowedDomains`
@@ -876,7 +907,8 @@ def deploy(mode: str, allow_delete: bool, plan: dict, automations: Mcp, cloud: M
         try:
             apply_diff(changes, automations, cloud, repo_urls, backend=backend, env_repositories=env_repositories,
                        owned_env_ids={x["id"] for x in state[1]} if project_id else None,
-                       project_env_ids={x["name"]: x["id"] for x in state[1]} if env_backend else None)
+                       project_env_ids={x["name"]: x["id"] for x in state[1]} if env_backend else None,
+                       env_backend=env_backend)
         except RuntimeError as e:
             if reason := project_error(str(e), project_id):
                 print(f"error: {reason}", file=sys.stderr)

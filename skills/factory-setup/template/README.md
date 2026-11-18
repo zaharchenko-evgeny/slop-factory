@@ -12,8 +12,11 @@ Check a change with `factory validate --team .`.
 
 ## Deploy
 
-The engine pin in `factory.yaml` also pins the `factory-deploy` skill. Use it to
-check the definition and preview the Air plan. Review the plan before applying it.
+The renderer resolves the selected engine revision to a full commit and derives
+the deploy-skill source and checksum from that commit. Air deploy instructions
+are in `.agents/skills/factory-deploy/SKILL.md` at the pinned engine commit in
+`factory.yaml`. Use that skill to check the definition and preview the Air
+plan. Review the plan before applying it.
 
 ## Progress browser
 

@@ -10,17 +10,26 @@ once per item (an empty list drops the line). `CODE_REPOSITORIES` is such a list
 `TRACKER_PROJECTS` ({YouTrack project: owner/repo}) make the tracker YouTrack. Jinja's `{{ name }}` (lowercase,
 with spaces) in role bodies is not a placeholder: setup renders it. A placeholder without an answer is an error.
 """
+import functools
 import json
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
 
 SKILL = Path(__file__).resolve().parent
+ENGINE_ROOT = SKILL.parents[1]
+sys.path.insert(0, str(ENGINE_ROOT / "factory"))
+import team_setup  # noqa: E402
+
 T = SKILL / "templates"
 PROJECT_T = SKILL / "template"
-PH = re.compile(r"\{\{([A-Z_]+)\}\}")
+PH = re.compile(r"\{\{([A-Z_][A-Z_0-9]*)\}\}")
+ENGINE_URL = re.compile(r"git\+https://github\.com/([^/]+/[^/@]+)@(.+)")
+GIT_COMMIT = re.compile(r"[0-9a-f]{40,64}")
 
 
 def fill(text, a):
@@ -95,15 +104,34 @@ def repositories_section(files):
         + "".join(f"- `{r}`: {', '.join(f'`{n}`' for n in names) or 'none'}\n" for r, names in by_repo.items())
 
 
+@functools.lru_cache(maxsize=32)
+def engine_pin(engine):
+    """Resolve an ENGINE GitHub URL to one immutable engine and deploy-skill pin."""
+    match = ENGINE_URL.fullmatch(engine)
+    if not match:
+        raise ValueError("ENGINE must be a GitHub URL in the form git+https://github.com/owner/repo@revision")
+    repository, revision = match.groups()
+    spec = {"source": f"github:{repository}@{revision}", "path": ".agents/skills/factory-deploy"}
+    with tempfile.TemporaryDirectory() as tmp:
+        skill = Path(team_setup.fetch(spec, tmp))
+        if not (skill / "SKILL.md").is_file():
+            raise FileNotFoundError(f"ENGINE repository does not contain {spec['path']}/SKILL.md")
+        result = subprocess.run(["git", "-C", str(skill), "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
+        commit = result.stdout.strip()
+        if not GIT_COMMIT.fullmatch(commit):
+            raise ValueError(f"ENGINE resolved to an invalid Git commit: {commit!r}")
+        return (f"git+https://github.com/{repository}@{commit}", f"github:{repository}@{commit}",
+                team_setup.tree_hash(skill))
+
+
 def render_project(a):
     """{relative path: text} of a new team's definition (`template/`)."""
     engine = a["ENGINE"]
-    match = re.fullmatch(r"git\+https://github\.com/([^/]+/[^/@]+)@(.+)", engine)
-    if not match:
-        raise ValueError("ENGINE must be a pinned GitHub URL to include factory-deploy")
     if not a["CODE_REPOSITORIES"]:
         raise ValueError("CODE_REPOSITORIES needs at least one repository")
-    files = _render(PROJECT_T, {**a, "ENGINE_SKILL_SOURCE": f"github:{match[1]}@{match[2]}", "TRACKER": tracker_block(a),
+    pinned_engine, skill_source, skill_hash = engine_pin(engine)
+    files = _render(PROJECT_T, {**a, "ENGINE": pinned_engine, "ENGINE_SKILL_SOURCE": skill_source,
+                                      "ENGINE_SKILL_SHA256": skill_hash, "TRACKER": tracker_block(a),
                                       "CODE_HOST": code_host_block(a)})
     return {**files, "README.md": files["README.md"].rstrip("\n") + "\n" + repositories_section(files)}
 
@@ -119,8 +147,8 @@ def with_chart(files):
     return {**files, "README.md": files["README.md"].rstrip("\n") + f"\n\n## Workflow state chart\n\n```mermaid\n{chart.rstrip()}\n```\n"}
 
 
-if __name__ == "__main__":
-    args = sys.argv[1:]
+def main(args=None):
+    args = sys.argv[1:] if args is None else args
     extras = args[:1] == ["--extras"]
     answers = json.loads(Path(args[extras]).read_text())
     for rel, text in (render if extras else lambda a: with_chart(render_project(a)))(answers).items():
@@ -129,3 +157,7 @@ if __name__ == "__main__":
         dest.write_text(text)
         if rel.endswith(".sh"):
             dest.chmod(0o755)
+
+
+if __name__ == "__main__":
+    main()
