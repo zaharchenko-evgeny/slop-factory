@@ -210,8 +210,8 @@ def copies(defn, name):
     """The deploy copies of node `name` (ADR-0027): per environment, one per repository it listens to (the writable
     ones, else every repository with a tracker); a node with no event trigger has one per environment. Each copy is
     `{env, repo, main, place, write, tracker, vcs, additional}`: `main` is the checkout whose events it hears (the
-    tracker's `home`, else the repository; for a schedule the writable repository, else the first), `write` whether it
-    may push there, `additional` the environment's other repositories."""
+    tracker's home in the definition's spelling, else the repository; for a schedule the writable repository, else the
+    first), `write` whether it may push there, `additional` the environment's other repositories."""
     node = ((defn["workflow"].get("nodes") or {}).get(name)) or {}
     event, out = _has_event_trigger(node), []
     for env in node_environments(defn, name):
@@ -221,12 +221,16 @@ def copies(defn, name):
         writable = [r for r in repos if r["write"]]
         for r in (writable or [r for r in repos if r["tracker"]]) if event else [None]:
             c = contract(defn, "tracker", r["tracker"]) if r and r["tracker"] else None
-            main = (writable or repos)[0]["repo"] if r is None else (c and c.home(r["tracker"], r["repo"])) or r["repo"]
+            # #1501: a tracker home spells its repository in lowercase (a github-issues home); match it back to the
+            # definition's own spelling, so a copy of a mixed-case repository keeps its `write` and its checkouts.
+            home = ((c and c.home(r["tracker"], r["repo"])) or "") if r else ""
+            main = (writable or repos)[0]["repo"] if r is None else next(
+                (x["repo"] for x in repos if x["repo"].lower() == home.lower()), home or r["repo"])
             out.append({"env": env, "repo": r and r["repo"], "main": main,
                         "place": c.place(r["tracker"], r["repo"]) if c else None,
-                        "write": any(w["repo"] == main for w in writable),
+                        "write": any(w["repo"].lower() == main.lower() for w in writable),
                         "tracker": r and r["tracker"], "vcs": r and r["vcs"],
-                        "additional": [x["repo"] for x in repos if x["repo"] != main]})
+                        "additional": [x["repo"] for x in repos if x["repo"].lower() != main.lower()]})
     return out
 
 
