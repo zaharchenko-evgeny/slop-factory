@@ -1,7 +1,7 @@
 # {{PROJECT_NAME}} factory (ADR-0021). This file lists what the factory has: tracker, models, skills,
 # roles, agents, environments, webhooks (none by default). workflow.yaml says how they connect and run.
 name: {{PROJECT_NAME}}
-engine: "{{ENGINE}}"              # what the Air startup script installs (uv tool install)
+engine: "{{ENGINE}}"              # immutable commit resolved from the ENGINE interview answer
 owner: {{GITHUB_USER}}            # optional fallback person: the GitHub login a wait goes to when none is found from the ticket
 # comment_tag: "[factory]"       # the tag line of every comment, review and PR body; unset is "[factory]", "" adds none
 tracker:
@@ -68,7 +68,7 @@ skills:
   factory-deploy:
     source: "{{ENGINE_SKILL_SOURCE}}"
     path: .agents/skills/factory-deploy
-    sha256: bd997445b6b34390926afd9cb2e4af665b773c46233a2ec5e5ec08ed2e6502bb
+    sha256: "{{ENGINE_SKILL_SHA256}}" # derived from this engine commit by render.py
   pr: { path: skills/pr }
   merge-risk: { path: skills/merge-risk }
   walkthrough: { path: skills/walkthrough }

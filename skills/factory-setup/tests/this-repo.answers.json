@@ -14,5 +14,5 @@
   "BRANCH_PATTERN": "ez/{ticket}-{slug}",
   "COMMIT_PREFIX": "#{ticket} ",
   "CI_WORKFLOW": "quality-gates",
-  "MODEL_POLICY": "Models: Air tiers come from `targets.air.models` in the team repository’s `factory.descriptor.yaml`."
+  "MODEL_POLICY": "Models: Air models come from `models` in the team repository’s `factory.yaml`."
 }

@@ -20,7 +20,7 @@ applies the plan and changes no code.
 
 ## Steps
 
-0. Precondition: `factory/gate.py` must exist on the default branch (the thin prompt runs it). If not, stop and report; do not apply.
+0. Precondition: the team's default branch must contain `factory.yaml` and `workflow.yaml`. Check that its Air startup installs the engine pinned in `factory.yaml` and runs `factory setup` for the planned environments. If either condition fails, stop and report; do not apply.
 1. Check nodes: `factory --team <team-repo> validate` (or set `FACTORY_TEAM` and run `uv run --quiet factory/nodes.py validate`).
 2. Set the MCP server commands from `~/.pi/agent/mcp-adapter.json` (`command`, `args` and `env` under `mcpServers`).
    Keep the `env` block: without it `jcp-mcp-bridge` signs in with another client and lists another organization's
@@ -44,11 +44,12 @@ applies the plan and changes no code.
    ```
 
    Dry run: `factory --team <team-repo> deploy --dry-run`. It renders the plan, lists automations and environments through the Air MCP servers over stdio, reads details for factory-prefixed records, diffs by name and prints `create|update|delete <kind> <name>` with the changed fields. The MCP commands inherit the local OAuth environment. Show the plan and review it.
-3. Apply after the user approves the dry run: `factory --team <team-repo> deploy --apply` (add `--allow-delete` only when the dry run lists deletes the user approved). It writes environments before automations on create and update, updates in place with `name`, then re-lists and fails if anything still differs. Deploy writes only to Air and the rendered workflow files: it never creates, edits, labels or closes a tracker ticket. After a verified apply, close the open `Deploy needed` issue yourself. To rename an automation or environment, pass `--rename 'OLD NAME=NEW NAME'` (repeatable) to both the dry run and the apply: the item keeps its id instead of becoming a create plus a delete.
-   Partial deploy: for a change limited to one node or environment, pass `--only <selector>` (repeatable) to both the dry run and the apply. A selector is `node:<node>` (every automation of that node), `env:<environment>` (that environment and its automations) or a name glob such as `'[Offline eval] notify *'`. Only matching items are written, deleted (still needs `--allow-delete`) and verified. Labels and tracker tags are created and updated, never removed. A selector that matches nothing exits 2. The dry run prints `partial: <selectors>` and `not deployed: N other changes`; run a full `--dry-run` afterwards to see what is still undeployed.
-4. Create missing labels from the plan's `labels[]` (`gh label create <name>`); a missing label fails every handoff that adds it.
+3. Apply after the user approves the dry run: `factory --team <team-repo> deploy --apply` (add `--allow-delete` only when the dry run lists deletes the user approved). It writes environments before automations on create and update, updates in place with `name`, then re-lists and fails if anything still differs. Deploy also provisions planned repository labels and, when enabled, the YouTrack comment workflow. It never creates, edits or closes a tracker ticket. After a verified apply, close the open `Deploy needed` issue yourself. To rename an automation or environment, pass `--rename 'OLD NAME=NEW NAME'` (repeatable) to both the dry run and the apply: the item keeps its id instead of becoming a create plus a delete.
+   Partial deploy: for a change limited to one node or environment, pass `--only <selector>` (repeatable) to both the dry run and the apply. A selector is `node:<node>` (every automation of that node), `env:<environment>` (that environment and its automations) or a name glob such as `'[Offline eval] notify *'`. Only matching items are written and verified. `--only` suppresses label and tracker-tag removals. Creates and updates can still affect all planned repository labels, so review the full plan. A selector that matches nothing exits 2. The dry run prints `partial: <selectors>` and `not deployed: N other changes`; run a full `--dry-run` afterwards to see what is still undeployed.
+   A full deploy can remove factory-owned labels and tracker tags when the dry run lists those deletes and the user approves `--allow-delete`.
+4. Confirm the deploy output shows that all planned labels exist. Deploy provisions the labels in the plan.
 5. Run `factory --team <team-repo> deploy --dry-run` again: it must print `unchanged`.
-6. Run each `[Slop factory] doctor*` automation once (air-automations MCP) and report its probe lines. A failed probe has opened or updated its `Doctor: <probe> fails` ticket.
+6. Run each existing planned `<prefix> doctor*` automation once (air-automations MCP) and report its probe lines. Use the prefix from the plan. A failed probe has opened or updated its `Doctor: <probe> fails` ticket.
 
 For a YouTrack tracker with the comments plugin on, the dry run also lists the comment-wake workflow upload. Apply runs the supported
 `@jetbrains/youtrack-scripting` CLI with the configured token environment variable. Attach the uploaded workflow to
@@ -74,10 +75,15 @@ with 404 `ENVIRONMENT_CONFIGURATION_NOT_FOUND` (AIRA-1629). For each planned env
 prints `create project environment <name> (copy of personal <id>)` or `(new)`. `--apply` creates them before any
 automation: a copy duplicates the personal environment of the same name and repository into the project (the Air UI's
 Change project, mode DUPLICATE: domains, variables and startup scripts come along; the personal one and its automations
-stay as they are); a new one is created with the plan's name and repository. A copy brings the personal environment's variables and secrets. air-cloud's
-`edit_environment` refuses a project environment, so deploy does not write a declared variable that the project
-environment lacks: it prints `set by a person: <env> secret <NAME> (project environment)`. After the apply, run the dry
-run again and set each name it lists as `set by a person` in the project environment.
+stay as they are); a new one is created with the plan's name and repository. A copy brings the personal environment's variables and secrets.
+
+During a normal deploy, the engine updates project environments through the Air backend REST API `PUT /env-configs/{id}`.
+It does not call the air-cloud MCP's `edit_environment`, which refuses project environments. The engine sends sparse
+edits only for approved `name`, `vm`, `domains`, and declared non-secret runtime values. It omits startup scripts,
+repositories, settings, and secret references so the project keeps them. The engine refuses secret-key collisions before
+it sends the REST update. Missing declared project variables and secrets remain a manual step; `create_missing_variables`
+does not write secret values. After apply, run the dry run again and tell the person which names still need setup. Never
+report that deploy wrote a secret.
 
 Moving existing personal automations to a project is partly manual: set `project_id` and apply. Right after the apply,
 pause every personal automation with the plan's prefix (air-automations `update_automation`, `paused: true`), or both

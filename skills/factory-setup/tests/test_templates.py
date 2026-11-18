@@ -27,6 +27,8 @@ import statechart  # noqa: E402
 ANSWERS = json.loads((HERE / "this-repo.answers.json").read_text())
 # Values that identify this project; none may appear in a template.
 PROJECT = ["offline-eval", "zaharchenko", "Offline Evaluation", "hetzner", "Qwen", "claude-", "ez/", "slop", "Slop"]
+TEST_COMMIT = "a" * 40
+TEST_SKILL_HASH = "b" * 64
 
 
 # A workflow whose `review` stage has no node that moves out of it.
@@ -59,6 +61,14 @@ def _ok(stdout):
 
 
 class Templates(unittest.TestCase):
+    def setUp(self):
+        from unittest import mock
+        self.engine_pin = mock.patch.object(render, "engine_pin", return_value=(
+            f"git+https://github.com/zaharchenko-evgeny/slop-factory@{TEST_COMMIT}",
+            f"github:zaharchenko-evgeny/slop-factory@{TEST_COMMIT}", TEST_SKILL_HASH))
+        self.engine_pin.start()
+        self.addCleanup(self.engine_pin.stop)
+
     def test_agents_section_reproduces_this_repository(self):
         text = render.render(ANSWERS)["AGENTS.workflow.md"]
         cur = (ROOT / "AGENTS.md").read_text()
@@ -79,6 +89,7 @@ class Templates(unittest.TestCase):
         doc = (SKILL / "SKILL.md").read_text()
         used = {m for f in [*files(render.T), *files(render.PROJECT_T)] for m in render.PH.findall(f.read_text())}
         used.discard("ENGINE_SKILL_SOURCE")  # render.py derives this from ENGINE
+        used.discard("ENGINE_SKILL_SHA256")
         used.discard("CODE_HOST")  # derived from CODE_REPOSITORIES and the optional YouTrack answers
         used.discard("TRACKER")
         for name in used:
@@ -135,9 +146,10 @@ class Templates(unittest.TestCase):
             self.assertEqual([w for w in definition.warnings(defn) if not w.startswith("deprecated-key:")], [])  # until #1134
             self.assertEqual(defn["factory"]["tracker"]["repository"], "zaharchenko-evgeny/slop-factory")
             pin = defn["factory"]["skills"]["factory-deploy"]
-            self.assertEqual(pin["source"], "github:zaharchenko-evgeny/slop-factory@main")
+            self.assertEqual(pin["source"], f"github:zaharchenko-evgeny/slop-factory@{TEST_COMMIT}")
             self.assertEqual(pin["path"], ".agents/skills/factory-deploy")
-            self.assertEqual(pin["sha256"], "bd997445b6b34390926afd9cb2e4af665b773c46233a2ec5e5ec08ed2e6502bb")
+            self.assertEqual(pin["sha256"], TEST_SKILL_HASH)
+            self.assertEqual(defn["factory"]["engine"], f"git+https://github.com/zaharchenko-evgeny/slop-factory@{TEST_COMMIT}")
             run = subprocess.run(["factory", "validate", "--team", tmp], capture_output=True, text=True)
             self.assertEqual(_ok(run.stdout), "factory: ok", run.stderr)
 
@@ -251,14 +263,103 @@ class Templates(unittest.TestCase):
         readme = render.with_chart(render.render_project(ANSWERS))["README.md"]
         self.assertRegex(readme, r"```mermaid\n(?:.*\n)*?stateDiagram")
 
+class EnginePin(unittest.TestCase):
+    def setUp(self):
+        render.engine_pin.cache_clear()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name) / "engine"
+        self.repo.mkdir()
+        subprocess.run(["git", "init", "--quiet", "--initial-branch=main", str(self.repo)], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "config", "user.name", "Renderer tests"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "config", "user.email", "renderer@example.test"], check=True)
+        self.skill = self.repo / ".agents/skills/factory-deploy"
+        self.skill.mkdir(parents=True)
+        (self.skill / "SKILL.md").write_text("---\nname: factory-deploy\n---\nfirst revision\n")
+        self.commit_a = self.commit()
+        (self.skill / "SKILL.md").write_text("---\nname: factory-deploy\n---\nsecond revision\n")
+        self.commit_b = self.commit()
+
+    def commit(self):
+        subprocess.run(["git", "-C", str(self.repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "--quiet", "-m", "update skill"], check=True)
+        return subprocess.run(["git", "-C", str(self.repo), "rev-parse", "HEAD"], capture_output=True,
+                              text=True, check=True).stdout.strip()
+
+    def fake_fetch(self, calls, hashes):
+        def fetch(spec, tmp):
+            calls.append(spec["source"])
+            revision = spec["source"].rsplit("@", 1)[1]
+            checkout = Path(tmp) / "checkout"
+            subprocess.run(["git", "clone", "--quiet", str(self.repo), str(checkout)], check=True)
+            subprocess.run(["git", "-C", str(checkout), "checkout", "--quiet", revision], check=True)
+            skill = checkout / spec["path"]
+            resolved = subprocess.run(["git", "-C", str(checkout), "rev-parse", "HEAD"], capture_output=True,
+                                      text=True, check=True).stdout.strip()
+            hashes[resolved] = render.team_setup.tree_hash(skill)
+            return skill
+        return fetch
+
+    def test_renderer_pins_engine_and_skill_to_resolved_commit_and_hash(self):
+        from unittest import mock
+        calls, hashes = [], {}
+        answers = {**ANSWERS, "ENGINE": "git+https://github.com/test/engine@main"}
+        with mock.patch.object(render.team_setup, "fetch", self.fake_fetch(calls, hashes)):
+            files = render.render_project(answers)
+            rendered = yaml.safe_load(files["factory.yaml"])
+            self.assertEqual(rendered["engine"], f"git+https://github.com/test/engine@{self.commit_b}")
+            skill = rendered["skills"]["factory-deploy"]
+            self.assertEqual(skill["source"], f"github:test/engine@{self.commit_b}")
+            self.assertEqual(skill["sha256"], hashes[self.commit_b])
+            render.render_project(answers)
+        self.assertEqual(calls, ["github:test/engine@main"])
+
+    def test_selected_revision_changes_derived_skill_hash(self):
+        from unittest import mock
+        calls, hashes = [], {}
+        with mock.patch.object(render.team_setup, "fetch", self.fake_fetch(calls, hashes)):
+            first = render.engine_pin(f"git+https://github.com/test/engine@{self.commit_a}")
+            second = render.engine_pin(f"git+https://github.com/test/engine@{self.commit_b}")
+        self.assertEqual(first[0], f"git+https://github.com/test/engine@{self.commit_a}")
+        self.assertEqual(second[0], f"git+https://github.com/test/engine@{self.commit_b}")
+        self.assertEqual(first[2], hashes[self.commit_a])
+        self.assertEqual(second[2], hashes[self.commit_b])
+        self.assertNotEqual(first[2], second[2])
+        self.assertEqual(calls, [f"github:test/engine@{self.commit_a}", f"github:test/engine@{self.commit_b}"])
+
+    def test_fetch_and_missing_skill_errors_leave_output_empty(self):
+        from unittest import mock
+        answers_path = Path(self.tmp.name) / "answers.json"
+        answers_path.write_text(json.dumps({**ANSWERS, "ENGINE": "git+https://github.com/test/engine@main"}))
+        out = Path(self.tmp.name) / "out"
+        out.mkdir()
+        for fetch_error, missing_folder in ((RuntimeError("fetch failed"), False), (None, True)):
+            render.engine_pin.cache_clear()
+            with mock.patch.object(render.team_setup, "fetch", side_effect=fetch_error,
+                                   return_value=Path(self.tmp.name) if missing_folder else None):
+                with self.assertRaises(FileNotFoundError if missing_folder else RuntimeError):
+                    render.main([str(answers_path), str(out)])
+            self.assertEqual(list(out.iterdir()), [])
+
     def test_cli_writes_a_valid_team(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            subprocess.run([sys.executable, str(SKILL / "render.py"), str(HERE / "this-repo.answers.json"), tmp], check=True)
-            self.assertTrue(os.access(Path(tmp) / ".air/cloud/startup.sh", os.X_OK))
-            self.assertIn("stateDiagram", (Path(tmp) / "README.md").read_text())
-            run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "factory/cli.py"), "validate"], capture_output=True,
-                                 text=True, env={**os.environ, "FACTORY_TEAM": tmp})
-            self.assertEqual(_ok(run.stdout), "factory: ok", run.stderr)
+        answers_path = Path(self.tmp.name) / "answers.json"
+        answers_path.write_text(json.dumps({**ANSWERS, "ENGINE": "git+https://github.com/test/engine@main"}))
+        out = Path(self.tmp.name) / "out"
+        env = {
+            **os.environ,
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": f"url.file://{self.repo.as_posix()}.insteadOf",
+            "GIT_CONFIG_VALUE_0": "https://github.com/test/engine.git",
+        }
+        subprocess.run([sys.executable, str(SKILL / "render.py"), str(answers_path), str(out)], check=True, env=env)
+        self.assertTrue(os.access(out / ".air/cloud/startup.sh", os.X_OK))
+        self.assertIn("stateDiagram", (out / "README.md").read_text())
+        rendered = yaml.safe_load((out / "factory.yaml").read_text())
+        self.assertEqual(rendered["engine"], f"git+https://github.com/test/engine@{self.commit_b}")
+        self.assertEqual(rendered["skills"]["factory-deploy"]["sha256"], render.team_setup.tree_hash(self.skill))
+        run = subprocess.run(["uv", "run", "--quiet", str(ROOT / "factory/cli.py"), "validate"], capture_output=True,
+                             text=True, env={**os.environ, "FACTORY_TEAM": str(out)})
+        self.assertEqual(_ok(run.stdout), "factory: ok", run.stderr)
 
 
 

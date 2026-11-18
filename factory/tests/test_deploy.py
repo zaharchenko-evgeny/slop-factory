@@ -2022,6 +2022,18 @@ class LabelPlanTest(unittest.TestCase):
         self.assertEqual([a for a, r, *_ in got if r == self.TRACKER].count("remove"), 0)
         self.assertIn(("create", self.TRACKER, "factory:map"), [x[:3] for x in got])
 
+    def test_scoped_deploy_suppresses_removal_of_read_only_source_labels(self):
+        plan = self.plan()
+        run = fake_labels({self.TRACKER: {}, self.WEB: {"factory:ready": ("c2e0c6", "")},
+                           self.DOCS: {}, self.TEAM: {}})
+        selector = "env:" + plan["environments"][0]["name"][len(plan["prefix"]):]
+        for only, removes in ((None, True), ([selector], False)):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), mock.patch.object(air, "read_state", return_value=([], [])):
+                self.assertEqual(air.deploy("--dry-run", False, plan, None, None, run=run, only=only), 0)
+            self.assertEqual(f"remove label factory:ready in {self.WEB}" in output.getvalue(), removes)
+        self.assertEqual(run.writes, [])
+
 
 class FakeTags:
     """A YouTrack runner over a tag inventory {name: id}; records writes."""
@@ -2411,9 +2423,6 @@ class RepositoryCopiesTest(unittest.TestCase):
                         cfg.set_team(before)
                 self.assertEqual(any(e.startswith("several-writable") for e in errs), refused, errs)
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class ProjectCheckoutBootstrapTest(unittest.TestCase):  # #1315: Air runs only the main checkout's startup script
     CONFIG = {"repositories": [{"role": "primary", "url": "https://github.com/o/team"},
@@ -2752,6 +2761,117 @@ def definition_defn(project_id):
     return defn
 
 
+class ProjectEnvironmentUpdateTest(unittest.TestCase):
+    class Rest(air.EnvBackend):
+        def __init__(self, records):
+            self.records = {key: {"id": key, **copy.deepcopy(record)} for key, record in records.items()}
+            self.calls = []
+
+        def request(self, method, path, body=None):
+            self.calls.append((method, path, copy.deepcopy(body)))
+            if path.startswith("/env-configs?"):
+                project = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)["orgProjectId"][0]
+                return [{"id": k, "name": v["name"]} for k, v in self.records.items() if v["orgProjectId"] == project]
+            record = self.records[urllib.parse.unquote(path.removeprefix("/env-configs/"))]
+            if method == "PUT":  # Air upserts variables; removal has its own DELETE /variables endpoint.
+                fields = copy.deepcopy(body)
+                if "variables" in fields:
+                    values = {v["key"]: v for v in record["variables"]}
+                    values.update({v["key"]: v for v in fields.pop("variables")})
+                    record["variables"] = list(values.values())
+                record.update(fields)
+            return copy.deepcopy(record)
+
+    def setUp(self):
+        self.record = {"name": "[P] delivery", "orgProjectId": PROJECT,
+                       "serviceHost": "github.com", "organization": "o", "repositoryName": "r",
+                       "allowedDomains": ["existing.example"], "networkAccess": "RESTRICTED",
+                       "predefinedDomainLists": ["WELL_KNOWN"], "instanceTypeKey": "default",
+                       "variables": [{"key": "EXTRA", "value": "keep"},
+                                     {"key": "TOKEN", "value": "masked-secret", "isSecret": True}],
+                       "secrets": [{"key": "TOKEN", "value": "masked-secret", "isSecret": True}],
+                       "personalSecrets": [{"key": "PERSONAL", "secretVersion": 4}],
+                       "externalSecrets": [{"key": "VAULT", "externalSecretReference": {"connectionId": "vault"}}],
+                       "repositoryStartupScripts": [{"url": "https://github.com/o/r", "startupScriptPath": "boot.sh"}],
+                       "additionalRepositories": [{"url": "https://github.com/o/context"}], "shallowClone": False}
+        self.rest = self.Rest({"e1": self.record,
+                               "personal": {**self.record, "orgProjectId": None},
+                               "foreign": {**self.record, "orgProjectId": "other"},
+                               "unowned-prefix": {**self.record, "name": "Other delivery"}})
+        self.plan = {"prefix": "[P] ", "projectId": PROJECT, "automations": [], "environments": [
+            {"name": "[P] delivery", "repository": "https://github.com/o/r", "vm": "default",
+             "domains": ["new.example"], "variables": {"FACTORY_ENV": "configured-runtime-value"}}]}
+        self.cloud, self.automations = mock.Mock(), ProjectTargetTest.Automations({})
+
+    def run_deploy(self, mode, **kwargs):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                mock.patch.object(air.core, "reconcile_labels", return_value=[]), \
+                mock.patch.object(air.core, "provision_labels"):
+            code = air.deploy(mode, False, self.plan, self.automations, self.cloud,
+                              env_backend=self.rest, **kwargs)
+        return code, out.getvalue() + err.getvalue()
+
+    def test_project_update_converges_without_mcp_or_secret_round_trip(self):
+        self.assertEqual(self.run_deploy("--dry-run")[0], 0)
+        self.assertFalse(any(method == "PUT" for method, *_ in self.rest.calls))
+        code, output = self.run_deploy("--apply")
+        self.assertEqual(code, 0, output)
+        writes = [c for c in self.rest.calls if c[0] == "PUT"]
+        self.assertEqual(writes, [("PUT", "/env-configs/e1", {"allowedDomains": ["existing.example", "new.example"],
+                                                          "variables": [{"key": "FACTORY_ENV", "value": "configured-runtime-value"}]})])
+        self.cloud.call.assert_not_called()
+        updated = self.rest.records["e1"]
+        for field in set(self.record) - {"allowedDomains", "variables"}:
+            self.assertEqual(updated[field], self.record[field], field)
+        self.assertEqual(updated["variables"][:2], self.record["variables"])
+        for key in ("personal", "foreign", "unowned-prefix"):
+            self.assertEqual(self.rest.records[key]["allowedDomains"], ["existing.example"])
+        self.assertNotIn("masked-secret", output)
+        self.assertNotIn("configured-runtime-value", output)
+        code, output = self.run_deploy("--dry-run")
+        self.assertEqual(code, 0, output)
+        self.assertIn("unchanged", output)
+
+    def test_only_updates_the_selected_project_environment(self):
+        self.rest.records["e2"] = {**copy.deepcopy(self.record), "id": "e2", "name": "[P] mate"}
+        self.plan["environments"].append({**self.plan["environments"][0], "name": "[P] mate"})
+        code, output = self.run_deploy("--apply", only=["env:delivery"])
+        self.assertEqual(code, 0, output)
+        self.assertEqual([path for method, path, _ in self.rest.calls if method == "PUT"], ["/env-configs/e1"])
+        self.assertEqual(self.rest.records["e2"]["allowedDomains"], ["existing.example"])
+
+    def test_rechecks_ownership_before_updating(self):
+        for project in (None, "other"):
+            with self.subTest(project=project):
+                self.rest.records["e1"]["orgProjectId"] = project
+                with self.assertRaisesRegex(RuntimeError, "no longer belongs"):
+                    self.rest.update("e1", PROJECT, {"name": "[P] renamed"})
+        self.assertFalse(any(method == "PUT" for method, *_ in self.rest.calls))
+
+    def test_runtime_variables_cannot_replace_any_existing_secret(self):
+        for field, key in (("variables", "TOKEN"), ("secrets", "TOKEN"),
+                           ("personalSecrets", "PERSONAL"), ("externalSecrets", "VAULT")):
+            record = self.rest.records["e1"]
+            for other in ("variables", "secrets", "personalSecrets", "externalSecrets"):
+                record[other] = copy.deepcopy(self.record[other]) if other == field else []
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, "conflict with existing secrets"):
+                self.rest.update("e1", PROJECT, {"variables": {key: "do-not-write"}})
+        self.assertFalse(any(method == "PUT" for method, *_ in self.rest.calls))
+
+    def test_rename_and_vm_use_the_rest_field_names(self):
+        self.rest.update("e1", PROJECT, {"name": "[P] renamed", "vm": "large"})
+        self.assertEqual(self.rest.calls[-1], ("PUT", "/env-configs/e1", {"name": "[P] renamed", "instanceTypeKey": "large"}))
+
+    def test_missing_backend_refuses_project_update_without_mcp(self):
+        planned = self.plan["environments"][0]
+        current = {"id": "e1", "projectId": PROJECT}
+        with self.assertRaisesRegex(RuntimeError, "environment backend is required"):
+            air.apply_diff([("update", "environment", planned["name"], planned, current, ["domains"])],
+                           self.automations, self.cloud)
+        self.cloud.call.assert_not_called()
+
+
 class ProjectEnvironmentVariablesTest(unittest.TestCase):
     PLAN = {"prefix": "[P] ", "environments": [{"name": "[P] a", "declared": [
         {"name": "T", "secret": True}, {"name": "O", "secret": True}]}]}
@@ -2776,3 +2896,7 @@ class ProjectEnvironmentVariablesTest(unittest.TestCase):
             air.create_missing_variables(self.PLAN, envs, cloud)
         cloud.call.assert_called_once_with("edit_environment", {"id": "e1", "variables": [
             {"key": "O", "value": air.UNSET, "isSecret": True}]})
+
+
+if __name__ == "__main__":
+    unittest.main()

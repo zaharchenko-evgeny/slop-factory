@@ -102,6 +102,13 @@ for a ticket; the engine's `factory-troubleshoot` skill, which `factory setup` i
 without showing the diff. Then apply the interview's choices to the generated
 files and run `factory validate --team OUT_DIR`.
 
+`ENGINE` may name a branch or tag. The renderer fetches it, resolves the full
+Git commit, and writes that immutable commit to `factory.yaml`. It also derives
+the `factory-deploy` skill source and `ENGINE_SKILL_SHA256` from the same commit.
+The engine repository must contain `.agents/skills/factory-deploy/SKILL.md`.
+Fetch or missing-file errors stop rendering before it writes output. `--extras`
+renders interview extras without fetching the engine.
+
 Optional answers (not placeholders): `TRACKER_URL` and `TRACKER_PROJECTS`
 (`{<project>: <owner/repo>}`) make the tracker YouTrack with one linked project
 per repository. `render.py` derives the `tracker` block from them and from
@@ -122,8 +129,8 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 | Placeholder | Meaning | Used in |
 | --- | --- | --- |
 | `PROJECT_NAME` | Project name | `factory.yaml`, `workflow.yaml`, `README.md` |
-| `ENGINE` | The engine package the team pins, as `uv tool install` takes it | `factory.yaml` |
-| `ENGINE_SKILL_SOURCE` | Derived from `ENGINE`; the GitHub source for the pinned engine's `factory-deploy` skill | `factory.yaml` |
+| `ENGINE` | GitHub engine URL in `git+https://github.com/owner/repo@revision` form; the renderer resolves it to a full commit | `factory.yaml` |
+| `ENGINE_SKILL_SOURCE`, `ENGINE_SKILL_SHA256` | Derived from the resolved `ENGINE` commit; the source and tree hash of its `factory-deploy` skill | `factory.yaml` |
 | `CODE_REPOSITORIES` | List of `owner/repo`, one per code repository; a line holding it repeats once per item. The first is the tracker on GitHub | `factory.yaml` |
 | `TEAM_REPOSITORY` | `owner/repo` of this definition and the knowledge base | `factory.yaml`, `workflow.yaml` |
 | `GITHUB_USER` | GitHub login told about tickets that wait for a person (`owner`) | `factory.yaml` |
@@ -136,14 +143,13 @@ Placeholders (`tests/this-repo.answers.json` holds this repository's answers;
 
 For each selected target, show a plan first:
 
-- **air** — `factory deploy --dry-run` compares the definition with the live
-  `[factory]` automations and environments (the air-automations and air-cloud
-  MCPs) and lists creates, updates and prunes. Apply only after the user
-  approves. Never touch an automation without the `[factory]` prefix.
+- **air** — Follow the engine's canonical
+  [factory-deploy skill](../../.agents/skills/factory-deploy/SKILL.md). It covers
+  the Air plan, review, approval and apply.
 - **local** — `factory setup --environment <name>` installs each role's skills
   and runs the setup scripts (`references/harnesses.md`). The optional progress
-  browser starts only when a user runs `factory ui --team <team-path>`; do not
-  add it to local setup or Air startup. See [Progress UI](../../docs/progress-ui.md).
+  browser starts only when a user runs `factory ui --team <team-path>`. See
+  [Progress UI](../../docs/progress-ui.md).
 
 ## 4. Verify
 
