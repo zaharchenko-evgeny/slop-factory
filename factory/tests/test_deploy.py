@@ -2012,6 +2012,44 @@ class LabelPlanTest(unittest.TestCase):
         self.assertLessEqual({"factory:needs-human", "factory:map"}, set(plan["label_plan"][self.TRACKER]))
         self.assertEqual({r: v for r, v in plan["label_plan"].items() if not v}, {self.WEB: [], self.DOCS: []})
 
+    def test_doctor_fallback_repository_keeps_its_triage_and_risk_labels(self):
+        before = cfg.team_root()
+        cfg.set_team(HERE / "fixtures/slop")
+        try:
+            conf = copy.deepcopy(cfg.load())
+        finally:
+            cfg.set_team(before)
+        conf["tracker"]["adapter"] = "youtrack"
+        conf["tracker"].pop("repository", None)
+        conf["vcs"] = {"repository": "JetBrains/jbeval"}
+        with mock.patch.dict(os.environ, {"FACTORY_ENV": ""}):
+            planned = deploy.label_plan(nodes.load(), conf)
+        labels = planned["JetBrains/jbeval"]
+        self.assertEqual(set(labels), {"factory:triage", "risk:low", "risk:high"})
+
+        have = {repo: {} for repo in planned}
+        have["JetBrains/jbeval"] = {"factory:triage": ("c2e0c6", ""), "risk:low": ("f9d0c4", "")}
+        changes = deploy.reconcile_labels(
+            {"label_plan": planned, "labels": [], "label_specs": {}, "owned_label_prefixes": ["factory:", "risk:"]},
+            run=fake_labels(have))
+        self.assertNotIn(("remove", "JetBrains/jbeval", "factory:triage"), [change[:3] for change in changes])
+        self.assertNotIn(("remove", "JetBrains/jbeval", "risk:low"), [change[:3] for change in changes])
+
+    def test_doctor_fallback_repository_keeps_pr_labels_too(self):
+        before = cfg.team_root()
+        cfg.set_team(HERE / "fixtures/slop")
+        try:
+            conf = copy.deepcopy(cfg.load())
+        finally:
+            cfg.set_team(before)
+        conf["tracker"]["adapter"] = "youtrack"
+        conf["tracker"].pop("repository", None)
+        conf["vcs"] = {"repository": "JetBrains/jbeval"}
+        conf["repositories"] = [*conf.get("repositories", []), {"url": "https://github.com/JetBrains/jbeval"}]
+        with mock.patch.dict(os.environ, {"FACTORY_ENV": ""}):
+            planned = deploy.label_plan(nodes.load(), conf, tickets=["JetBrains/jbeval"])
+        self.assertLessEqual({"factory:triage", "risk:low", "risk:high"}, set(planned["JetBrains/jbeval"]))
+
     def test_reconcile_removes_labels_from_a_repository_no_longer_holding_tickets(self):
         plan = self.plan()
         have = {"factory:ready": ("c2e0c6", ""), "factory:hold": ("ededed", ""), "bug": ("ff0000", "")}
