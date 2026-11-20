@@ -137,6 +137,10 @@ def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="change
     elif kind == "conflict":
         apply(kind="label", value=label or vocab.cmd("fix-<tier>", "cheap"), on="pr")
         apply(kind="stage", value=fix_stage)
+    elif kind == "person-changes":  # the comment last: once per head (#1533)
+        apply(kind="label", value=label, on="pr")
+        apply(kind="stage", value=fix_stage)
+        apply(kind="comment", value=effects.tagged(f"{PREFIX} stage={stage} head={head} person-changes {why}"))
     elif kind == "blocked":
         apply(kind="label", value=vocab.needs_human())
         apply(kind="comment", value=effects.tagged(f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets {vocab.stage('ready')}."))
@@ -199,6 +203,17 @@ def late_external_review(defn, facts, ago, head):
             if on:
                 return name, wake, on, f"no review by {bot} at the head {hours}h after {label}"
     return None
+
+
+def person_changes(facts, head):
+    """The reviewers (names) whose change request is not older than the PR head, else [] (#1533): `waiting_reviewers`
+    asked for changes, a fix round received them, and the head has not been pushed since the latest request."""
+    waiting = set(facts.get("waiting_reviewers") or [])
+    asked = [r.get("submitted_at") or "" for r in facts.get("reviews") or []
+             if r.get("author") in waiting and r.get("verdict") == "changes"]
+    if not waiting or not asked or (facts.get("commit_at") or "") > max(asked):
+        return []
+    return sorted(waiting)
 
 
 def stage_wakes(defn, tracker_stages, default):
@@ -304,7 +319,12 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
                     if progress:
                         progress(r)
                 continue
-            if (fix and facts.get("conflict") and facts.get("pr") and facts.get("pr_state") in (None, "none", "open")
+            people = fix and facts.get("pr") and facts.get("pr_state") in (None, "none", "open") and fix[1] not in on_pr \
+                and person_changes(facts, head) or []
+            if people and gate.holds(nodes[fix[0]].get("when") or {}, facts, {}) \
+                    and not any(f"stage={stage} head={head} person-changes" in c for c in facts.get("recover_comments", [])):
+                step = ("person-changes", fix[0], fix[1], "pr", f"{', '.join(people)} asked for changes after the last push")
+            elif (fix and facts.get("conflict") and facts.get("pr") and facts.get("pr_state") in (None, "none", "open")
                     and fix[1] not in on_pr and gate.holds(nodes[fix[0]].get("when") or {}, facts, {})
                     and ago(since) > timedelta(minutes=default)):
                 step = ("conflict", fix[0], fix[1], "pr", "the PR conflicts with main and has no fix label")

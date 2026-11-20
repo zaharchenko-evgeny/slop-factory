@@ -264,6 +264,27 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertIn('"factory:needs-human"', logged(t, "label"))
         self.assertNotIn("factory:review-low", logged(t, "label"))
 
+    def person_changes(self, **kw):  # #1533: a person's change request, received by an earlier fix, newer than the head
+        review = {"author": "alice", "verdict": "changes", "submitted_at": "2026-11-03T10:00:00Z",
+                  "commit_id": "0ld", "agent": False, "bot": False}
+        return self.pr(**{"ci": "green", "attrs": ["risk:low"], "waiting_reviewers": ["alice"], "reviews": [review],
+                          "commit_at": "2026-11-03T09:00:00Z", **kw})
+
+    def test_a_person_change_request_newer_than_the_head_goes_to_fix_once(self):
+        ticket = self.person_changes()
+        t, results = self.recover(ticket)
+        self.assertEqual([(r["node"], r["reconcile"]) for r in results], [("fix", "person-changes")])
+        self.assertEqual(logged(t, "label"), ['"factory:fix"'])
+        self.assertEqual(t.get_stage(t.tickets[1]), "changes-requested")
+        note = logged(t, "comment")[0]
+        self.assertIn("stage=in-review head=abc123def456 person-changes alice", note)
+        ticket.update(stage="in-review", log=[("comment", note)])
+        self.assertEqual(self.recover(ticket)[1], [])  # once per head
+
+    def test_a_push_newer_than_the_person_review_or_a_fix_label_is_left_alone(self):
+        self.assertEqual(self.recover(self.person_changes(commit_at="2026-11-03T10:30:00Z"))[1], [])
+        self.assertEqual(self.recover(self.person_changes(pr_labels=["factory:fix"]))[1], [])
+
     def test_conflict_uses_the_fix_stage_of_the_definition(self):
         import copy
         defn = copy.deepcopy(self.defn)
