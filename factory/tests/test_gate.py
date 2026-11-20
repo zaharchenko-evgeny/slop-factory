@@ -281,6 +281,7 @@ class GateTest(unittest.TestCase):
         comments = [json.loads(v) for kind, v in tr.tickets["7"]["log"] if kind == "comment"]
         self.assertEqual(len(comments), 1)
         self.assertIn("review", comments[0])
+        self.assertIn("stopped at unlabel (unlabel failed)", comments[0])  # #1527
         self.assertEqual((tr.report["on"], tr.report["run_id"]), ("pr", "run-1"))
 
     def test_field_effect_skipped_on_github_ticket(self):

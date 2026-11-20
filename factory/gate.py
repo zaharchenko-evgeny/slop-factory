@@ -1011,7 +1011,9 @@ def apply(name, outcome, payload, tracker, nodes, focus=None, tier=None):
         except Exception as error:
             if written:
                 report = {"kind": "comment", "ticket": ticket, "on": "pr",
-                          "value": effects_mod.tagged(f"Outcome stopped after these effects landed: {', '.join(written)}."),
+                          "value": effects_mod.tagged(
+                              f"Outcome stopped at {e['kind']} ({str(error)[:300]}) after these effects landed: "
+                              f"{', '.join(written)}."),  # #1527: name the effect that failed and why
                           "run_id": payload.get("run_id") or "gate:partial-outcome"}
                 try:
                     tracker.apply(report)
