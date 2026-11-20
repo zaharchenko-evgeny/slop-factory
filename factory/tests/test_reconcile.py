@@ -821,3 +821,26 @@ class StateRulesSkipGitHubStoreTest(unittest.TestCase):
         config = {"tracker": {"adapter": "youtrack", "state_rules": {"Obsolete": "stop"}, "stages": {"triage": {}}}}
         with mock.patch.object(gate, "tracker_of", return_value=tracker):
             self.assertEqual(state.reconcile_pass(config, True, None), {"state_rules": ([], False)})
+
+
+class ReportEndFailedTest(unittest.TestCase):
+    """offline-eval-factory Q11: one Doctor ticket per node whose end keeps failing."""
+
+    def test_one_report_per_node(self):
+        import doctor
+        from unittest import mock
+        got = []
+        failed = [{"ticket": 1, "node": "review-low", "why": "boom"}, {"ticket": 2, "node": "review-low", "why": "boom"},
+                  {"ticket": 3, "node": "fix", "why": "other"}]
+        with mock.patch.object(doctor, "ticket_repository", lambda c: "o/r"), \
+                mock.patch.object(doctor, "file_tickets", lambda repo, rs, run, run_id: got.extend(rs)):
+            reconcile.report_end_failed({}, failed, run=lambda a: "")
+            reconcile.report_end_failed({}, [], run=lambda a: "")
+        self.assertEqual([r["probe"] for r in got], ["end:review-low", "end:fix"])
+        self.assertIn("#1, #2", got[0]["detail"])
+
+    def test_readable_note_keeps_the_engine_line_findable(self):
+        body = reconcile.readable("**Stuck:** x", "y.", "reconcile: stage=ready head=abc stuck: z")
+        self.assertTrue(reconcile.effects.has_tag(body, "reconcile:"))
+        self.assertIn("<details>", body)
+        self.assertIn("stage=ready head=abc stuck:", body)

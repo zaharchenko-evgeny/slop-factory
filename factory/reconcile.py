@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as config_mod
 import effects
 import definition
+import tag
 import vocab
 
 PREFIX = "reconcile:"
@@ -142,21 +143,30 @@ def last_end_failure(facts, node, head):
     return None
 
 
+def readable(headline, you, detail):
+    """A reconcile note a person reads in one look: the headline, the action, and the engine's line collapsed. The
+    kind marker keeps `has_tag(.., "reconcile:")` and the once-per-head counters finding the line inside."""
+    return effects.tagged(f"{headline}\n**You:** {you}\n\n<details><summary>Details</summary>\n\n{detail}\n\n"
+                          f"</details>\n\n{tag.kind_marker(PREFIX)}")
+
+
 def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="changes-requested"):
     def apply(**e):
         return tracker.apply({"ticket": n, "run_id": RUN, **e})
+    ready = vocab.stage("ready")
     if kind == "end-failed":
         apply(kind="label", value=vocab.needs_human())
-        apply(kind="comment", value=effects.tagged(
-            f"{PREFIX} stage={stage} head={head} end failed, not re-fired: {why}\n"
-            f"Options: fix the cause (a new head, a token, a setting), then set {vocab.stage('ready')} "
-            f"or re-add `{label}`."))
+        apply(kind="comment", value=readable(
+            "**Stuck:** the step fails the same way on every retry.",
+            f"fix the cause (a new head, a token, a setting), then set `{ready}` or re-add `{label}`.",
+            f"{PREFIX} stage={stage} head={head} end failed, not re-fired: {why}"))
         apply(kind="stage", value="blocked")
     elif kind == "stuck":
         apply(kind="label", value=vocab.needs_human())
-        apply(kind="comment", value=effects.tagged(
-            f"{PREFIX} stage={stage} head={head} stuck: {why}\nOptions: fix the cause and set "
-            f"{vocab.stage('ready')}, or remove `{label}` and move the ticket by hand."))
+        apply(kind="comment", value=readable(
+            "**Stuck:** no step can move this ticket.",
+            f"fix the cause and set `{ready}`, or remove `{label}` and move the ticket by hand.",
+            f"{PREFIX} stage={stage} head={head} stuck: {why}"))
         apply(kind="stage", value="blocked")
     elif kind == "conflict":
         apply(kind="label", value=label or vocab.cmd("fix-<tier>", "cheap"), on="pr")
@@ -164,15 +174,21 @@ def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="change
     elif kind == "person-changes":  # the comment last: once per head (#1533)
         apply(kind="label", value=label, on="pr")
         apply(kind="stage", value=fix_stage)
-        apply(kind="comment", value=effects.tagged(f"{PREFIX} stage={stage} head={head} person-changes {why}"))
+        apply(kind="comment", value=readable("**Fixing:** a person asked for changes on the PR.",
+                                             "nothing, for your information.",
+                                             f"{PREFIX} stage={stage} head={head} person-changes {why}"))
     elif kind == "blocked":
         apply(kind="label", value=vocab.needs_human())
-        apply(kind="comment", value=effects.tagged(f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets {vocab.stage('ready')}."))
+        apply(kind="comment", value=readable(
+            "**Stopped:** a step ended twice without a result.", f"decide what to do, then set `{ready}`.",
+            f"{PREFIX} stage={stage} stopped: {why} twice."))
         apply(kind="stage", value="blocked")
     else:  # the comment last: the counter for the second miss
         apply(kind="unlabel", value=label, on=on)
         apply(kind="label", value=label, on=on)
-        apply(kind="comment", value=effects.tagged(f"{PREFIX} stage={stage} head={head} re-fired {label} ({why})"))
+        apply(kind="comment", value=readable(f"**Retried:** the step had no result, so `{label}` was set again.",
+                                             "nothing, for your information.",
+                                             f"{PREFIX} stage={stage} head={head} re-fired {label} ({why})"))
 
 
 def _outcome_effects(node):
@@ -509,6 +525,24 @@ def report_systemic(config, systemic, run=None):
                                     f"blocking each; check the install or the environment first (#973)."}], run, run_id=RUN)
 
 
+def report_end_failed(config, failed, run=None):
+    """One `Doctor: end:<node> fails` ticket per node whose `factory end` failed the same way on a head, so the cause
+    (usually an engine or definition gap) reaches ops once instead of on each ticket (offline-eval-factory Q11)."""
+    import doctor
+    if not failed:
+        return
+    run = run or doctor.issue_run(config)
+    repo, by_node = doctor.ticket_repository(config), {}
+    for r in failed:
+        by_node.setdefault(r["node"], []).append(r)
+    reports = []
+    for node, rs in by_node.items():
+        tickets = ", ".join(f"#{r['ticket']}" for r in rs)
+        reports.append({"probe": f"end:{node}", "result": "fail",
+                        "detail": f"`factory end` of `{node}` fails the same way on {tickets}:\n{rs[0]['why']}"})
+    doctor.file_tickets(repo, reports, run, run_id=RUN)
+
+
 def ticket_passes(config, dry_run, progress, out):
     """The plugins' passes over the tickets (youtrack: the State rules, #1260), for every team: their results go in
     `out`; True when one failed."""
@@ -547,6 +581,7 @@ def reconcile_main(argv):
                            dry_run, progress)
     if not dry_run and not spec:
         report_systemic(config, [r for r in results if r.get("systemic")])
+        report_end_failed(config, [r for r in results if r.get("reconcile") == "end-failed"])
     out, failed = {"dry_run": dry_run, "reconcile": results}, any("error" in r for r in results)
     if not spec:
         failed = ticket_passes(config, dry_run, progress, out) or failed
