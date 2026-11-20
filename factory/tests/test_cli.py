@@ -591,11 +591,29 @@ class EndFailureTest(unittest.TestCase):
             cli.report_end_failure({"ticket": 7, "node": "review-low", "head": "abc123def456"}, "approve-low",
                                    "Traceback\nRuntimeError: HTTP 403: Resource not accessible by integration\n",
                                    run=lambda args, **kw: calls.append(args))
-        args = calls[0]
+        args = next(c for c in calls if c[:3] == ["gh", "issue", "comment"])
         self.assertEqual(args[:5], ["gh", "issue", "comment", "7", "-R"])
         body = args[args.index("--body") + 1]
         self.assertTrue(body.startswith("[factory]\nend failed: node=review-low head=abc123def456 outcome=approve-low"))
         self.assertIn("HTTP 403", body)
+
+    def test_a_second_identical_failure_writes_no_comment(self):
+        """#1532: same node, head and error as the ticket's latest `end failed:` comment."""
+        posted, state = [], {"ticket": 7, "node": "review-low", "head": None}
+
+        def gh(args, **kw):
+            if args[:3] == ["gh", "issue", "view"]:
+                return mock.Mock(stdout=json.dumps({"comments": [{"body": b} for b in posted]}))
+            posted.append(args[args.index("--body") + 1])
+
+        with mock.patch.object(cli.config, "load", lambda: {"tracker": {"repository": "o/r"}}):
+            for _ in range(2):
+                cli.report_end_failure(state, "approve-low", "RuntimeError: 403", run=gh)
+            self.assertEqual(len(posted), 1)
+            self.assertIn("head=none outcome=", posted[0])
+            cli.report_end_failure(state, "approve-low", "RuntimeError: other", run=gh)  # a new error is written
+            cli.report_end_failure({**state, "head": "abc"}, "approve-low", "RuntimeError: other", run=gh)  # a new head too
+            self.assertEqual(len(posted), 3)
 
     def test_a_memory_tracker_run_posts_nothing(self):
         calls = []

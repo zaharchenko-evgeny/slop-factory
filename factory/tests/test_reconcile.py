@@ -468,6 +468,17 @@ class RecoverDefinitionTest(unittest.TestCase):
         ticket.update(stage="in-review", log=[("comment", json.dumps(failure)), ("comment", note)])
         self.assertEqual(self.recover(ticket)[1], [])  # one notice per stage and head
 
+    def test_a_failed_end_with_head_none_blocks_instead_of_refiring(self):
+        """#1532: a run with no head wrote `head=none`; reconcile still sees it and does not fire again."""
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": OLD})
+        ticket["log"] = [("comment", json.dumps("[factory] end failed: node=review-low head=none outcome=x\n\n```\nboom\n```\n\n"
+                                                "The outcome did not land; x"))]
+        t, results = self.recover(ticket)
+        self.assertEqual([r["reconcile"] for r in results], ["end-failed"])
+        self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
+        self.assertNotIn('"factory:review-low"', logged(t, "label"))
+
     def test_a_failed_end_on_an_older_head_does_not_stop_the_refire(self):
         ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
                          label_at={"factory:review-low": OLD})

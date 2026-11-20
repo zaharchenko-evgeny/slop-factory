@@ -109,9 +109,10 @@ def stuck_label(wakes, nodes, facts, on_pr, ago):
 
 
 def last_end_failure(facts, node, head):
-    """The error block of the last `[factory]` `end failed:` comment for `node` at `head`, else None (#997)."""
+    """The error block of the last `[factory]` `end failed:` comment for `node` at `head` (or with `head=none`, written
+    when the run had no head, #1532), else None (#997)."""
     for c in reversed(facts.get("recover_comments", [])):
-        if effects.has_tag(c, "end failed:") and f"node={node} " in c and f"head={head} " in c:
+        if effects.has_tag(c, "end failed:") and f"node={node} " in c and (f"head={head} " in c or "head=none " in c):
             body = c.split("\n", 1)[1] if "\n" in c else ""
             return body.split("The outcome did not land")[0].strip() or "no error output"
     return None
