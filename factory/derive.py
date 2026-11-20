@@ -161,6 +161,13 @@ def notes(items, since):
     return [(at or "", n) for at, body, login, kind in items if (at or "") >= since for n in parse_notes(body, login, kind)]
 
 
+def product_changed(pr, heads):
+    """Whether the files changed since the last review round's head include one outside `.factory/` (#1535).
+    True without a round head; the record's `product_changed` is read only then (an API call on GitHub)."""
+    old = next(iter(heads)) if len(heads) == 1 else None
+    return old is None or (old != pr.head and bool(pr.product_changed.get(old, True)))
+
+
 def pr_facts(pr, required, since, trusted):
     """(PR_DEFAULTS keys, agent notes) of the ticket's PR record `pr`."""
     head = pr.head
@@ -179,6 +186,7 @@ def pr_facts(pr, required, since, trusted):
            + notes([(pr.updated_at, pr.body, pr.author, pr.author_type)], since))  # the PR body is edited after creation
     return {"branch": pr.branch, "handed_to_fix": bool(writes) and max(writes) > max(latest_review, pr.commit_date),
             "behind": bool(pr.behind),
+            "product_changed": product_changed(pr, heads if all(x in latest for x in required) else ()),
             "pr_state": "merged" if pr.merged else "closed" if pr.state == "closed" else "open",
             "pr": pr.number, "head": head, "mergeable": pr.mergeable, "conflict": pr.mergeable is False,
             "ci": pr.ci, "reviews": reviews, "requested_reviewers": requested, "round_verdict": verdict,

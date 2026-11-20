@@ -400,6 +400,12 @@ class GateTest(unittest.TestCase):
             self.assertEqual(facts["stage"], "in-dev")
             self.assertIn(f"factory:implement-{size}", facts["attrs"])
 
+    def test_guard_product_changed(self):
+        """(#1535) `pr: product-changed` reads the fact; a missing fact (no round head) passes."""
+        self.assertTrue(gate.guard_holds({"pr": "product-changed"}, {}))
+        self.assertTrue(gate.guard_holds({"pr": "product-changed"}, {"product_changed": True}))
+        self.assertFalse(gate.guard_holds({"pr": "product-changed"}, {"product_changed": False}))
+
     def test_guard_facts(self):
         f = {"attrs": ["risk:low"], "pr_state": "open", "behind": True, "conflict": False, "ci": "green",
              "head": "h2", "blockers_open": 0, "stage": "in-review",

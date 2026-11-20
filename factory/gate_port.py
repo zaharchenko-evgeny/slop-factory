@@ -106,7 +106,7 @@ PR_DEFAULTS = {"head": None, "pr": None, "branch": None, "mergeable": None, "con
                "reviews": [], "requested_reviewers": [], "focus_missing": [], "round_complete": False,
                "round_verdict": None, "round_head": None, "ignored_reviews": [], "waiting_reviewers": [],
                "pr_labels": [], "fix_rounds": 0, "pr_state": "none",
-               "handed_to_fix": False, "behind": False}
+               "handed_to_fix": False, "behind": False, "product_changed": True}
 
 
 def combine_prs(prs):
@@ -130,6 +130,7 @@ def combine_prs(prs):
             "pr_state": next((s for s in ("open", "none", "closed") if s in states), "merged"),
             "mergeable": False if False in mergeable else None if None in mergeable else True,
             "conflict": any(p["conflict"] for p in prs), "behind": any(p["behind"] for p in prs),
+            "product_changed": any(p["product_changed"] for p in prs),
             "round_complete": complete,
             "round_verdict": "changes" if changes else "approve" if complete and all(
                 p["round_verdict"] == "approve" for p in active) else None,
@@ -437,7 +438,8 @@ class MemorySystem(DescriptorPort):
             return PrRecord(p.get("repo") or "primary", p["pr"], p.get("head"), branch=t.get("branch"),
                             merged=p.get("pr_state", t.get("pr_state")) == "merged", labels=list(t.get("pr_labels", [])),
                             reviews=list(t.get("reviews", [])) + [r for r in t.get("posted", []) if r.get("repo") in (None, p.get("repo"))],
-                            ci=p.get("ci", t.get("ci", "none")), behind=bool(t.get("behind")) if "behind" in want else None)
+                            ci=p.get("ci", t.get("ci", "none")), product_changed={k: bool(t.get("product_changed", True)) for k in {r.get("commit_id") for r in t.get("reviews", [])}},
+                            behind=bool(t.get("behind")) if "behind" in want else None)
         raise ValueError(f"read: unknown subject {subject.kind}")
 
     def find(self, query):

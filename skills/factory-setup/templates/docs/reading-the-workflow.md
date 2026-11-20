@@ -54,6 +54,7 @@ dispatch:
   applies the outcome's effects.
 - **`if` and `else`.** An outcome's `if` (`ci`, `pr`, `stage`, `label`, `review`, `children`) is checked by the
   gate. When it fails, the gate applies the outcome named by `else`, or refuses and changes nothing.
+  `pr: product-changed` holds when a file outside `.factory/` changed since the last review round's head, or there is no such head.
 - **Effects.** `stage: X` moves the ticket. `label` and `unlabel` add and remove labels (`on: pr` targets the PR).
   `comment` posts a text that the agent reported (`reason`, `verdict`, `questions`); `{ comment: text, edit: status }` rewrites one comment per key in place instead of posting a new one. `field` sets a tracker field.
   `review`, `merge` and `update-branch` act on the PR, with their own checks (a merge needs an approved head with

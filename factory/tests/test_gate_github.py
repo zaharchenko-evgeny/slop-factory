@@ -188,7 +188,8 @@ class FakeGh:
         if "pulls?state=closed" in a:
             return json.dumps([json.loads(x) for x in recorded_pull(a, getattr(self, "recent_pulls", [])).splitlines()])
         if "/compare/" in a:
-            return recorded_pull(a, {"behind_by": getattr(self, "behind_by", 0)})
+            return recorded_pull(a, {"behind_by": getattr(self, "behind_by", 0),
+                                     "files": [{"filename": x} for x in getattr(self, "files", [])]})
         if "/commits/" in a:
             return recorded_pull(a, {"commit": {"committer": {"date": getattr(self, "head_date", "2026-01-02T00:00:00Z")}}})
         if "/collaborators/" in a:
@@ -1280,6 +1281,14 @@ class EffectsTest(unittest.TestCase):
         gh = FakeGh(labels=("factory:approved", "risk:low"))
         gh.behind_by = 2
         self.assertEqual((tr(gh).facts(7)["risk"], tr(gh).facts(7)["behind"]), ("low", True))
+
+    def test_product_changed_reads_files_since_the_round_head(self):
+        """(#1535) False when only `.factory/` files changed since the review's head; True for a product file or without a round head."""
+        for files, want in ([[".factory/runs/1.json"], False], [[".factory/a", "src/x.py"], True]):
+            gh = FakeGh(reviews=[review(BOT, M, commit="old")])
+            gh.files = files
+            self.assertIs(tr(gh).facts(7)["product_changed"], want, files)
+        self.assertIs(tr(FakeGh()).facts(7)["product_changed"], True)
 
     def test_seen_is_a_no_op(self):
         gh = FakeGh()
