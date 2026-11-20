@@ -186,6 +186,33 @@ def file_tickets(repo, failed, run, run_id="doctor", now=None):
             print(json.dumps({"probe": "report", "result": "denied", "detail": f"{title}: {e}"[:200]}))
 
 
+def health_body(env, results, run_id):
+    """The text of environment `env`'s `Factory health` issue: a headline, the action, and every probe collapsed."""
+    bad = [r for r in results if r["result"] != "ok"]
+    cell = lambda t: re.sub(r"\s+", " ", str(t or "")).replace("|", "\\|")[:200]  # noqa: E731
+    rows = "\n".join(f"| `{r['probe']}` | {r['result'] if r['result'] == 'ok' else '**' + r['result'] + '**'} | "
+                     f"{cell(r.get('detail'))} |" for r in results)
+    you = "open the `Doctor: <probe> fails` ticket of each failing check" if bad else "nothing, for your information"
+    return effects.tagged(f"**{len(bad)} of {len(results)} checks fail** in `{env}`.\n**You:** {you}.\n\n"
+                          f"<details><summary>All checks</summary>\n\n| Check | Result | Detail |\n|---|---|---|\n{rows}\n\n"
+                          f"</details>\n\nFactory-Run: {run_id}")
+
+
+def health_issue(repo, env, results, run, run_id="doctor"):
+    """One `Factory health: <env>` issue per environment, its body rewritten in place on every run and left without a
+    stage label, so no node triages it; a new failure kind still opens its own `Doctor:` ticket (offline-eval-factory Q4)."""
+    title, body = f"Factory health: {env}", health_body(env, results, run_id)
+    try:
+        pages = json.loads(run(["api", "--paginate", "--slurp", f"repos/{repo}/issues?state=open&per_page=100"]))
+        found = next((i for page in pages for i in page if i.get("title") == title and "pull_request" not in i), None)
+        if found is None:
+            run(["issue", "create", "-R", repo, "--title", title, "--body", body])
+        elif _report_text(found.get("body")) != _report_text(body):
+            run(["api", "-X", "PATCH", f"repos/{repo}/issues/{found['number']}", "-f", f"body={body}"])
+    except Exception as e:
+        print(json.dumps({"probe": "report", "result": "denied", "detail": f"{title}: {e}"[:200]}))
+
+
 NS = "factory"  # probe names, not labels
 STUCK, FACTS = f"{NS}:stuck", f"{NS}:facts"
 STUCK_HOURS = 6
@@ -336,6 +363,7 @@ def main(argv=None, run=None):
         file_tickets(repo, [r for r in results if r["result"] != "ok"], run, run_id)
     if engine:
         report_engine(repo, engine, run, run_id)
+    health_issue(repo, env, [*results, *engine], run, run_id)
     return 1 if failed else 0
 
 

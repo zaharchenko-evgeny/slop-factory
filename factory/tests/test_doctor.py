@@ -513,3 +513,29 @@ class MissingPermissionTest(unittest.TestCase):
                 self.assertEqual(sum("lacks" in r["detail"] for r in rs), 1 if want else 0)
                 if want == 2:
                     self.assertIn("`checks: read` and `statuses: read`", rs[0]["detail"])
+
+
+class HealthIssueTest(unittest.TestCase):
+    """offline-eval-factory Q4: one `Factory health: <env>` issue, rewritten in place, no stage label."""
+
+    def test_creates_then_edits_only_on_change(self):
+        gh = FakeGh()
+        ok = [{"probe": "read:issues", "result": "ok", "detail": ""}]
+        bad = [*ok, {"probe": "env:X", "result": "missing", "detail": "unset | here\nnext"}]
+        doctor.health_issue(REPO, "team", ok, gh, "r1")
+        create = [c for c in gh.calls if c[:2] == ["issue", "create"]]
+        self.assertEqual(len(create), 1)
+        self.assertNotIn("--label", create[0])
+        body = create[0][create[0].index("--body") + 1]
+        self.assertIn("**0 of 1 checks fail** in `team`", body)
+        self.assertIn("nothing, for your information", body)
+        gh.pr_items = [{"number": 10, "title": "Factory health: team", "body": body.replace("r1", "r2")}]
+        gh.open_tickets = []
+        gh.calls.clear()
+        doctor.health_issue(REPO, "team", ok, gh, "r2")
+        self.assertFalse([c for c in gh.calls if c[:2] in (["issue", "create"], ["api", "-X"])])  # same text
+        doctor.health_issue(REPO, "team", bad, gh, "r3")
+        patch_call = next(c for c in gh.calls if c[:3] == ["api", "-X", "PATCH"])
+        self.assertTrue(patch_call[3].endswith("/issues/10"))
+        self.assertIn("**1 of 2 checks fail**", patch_call[-1])
+        self.assertIn("unset \\| here next", patch_call[-1])
