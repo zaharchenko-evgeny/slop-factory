@@ -526,6 +526,8 @@ def same(key: str, have, want) -> bool:
         return same_repository(have, want)
     if key == "mcpConnectors":
         return sorted(have or []) == sorted(want or [])
+    if key == "triggers":  # Air may return them in another order; a plan's triggerVcs entries are all the same
+        return sorted(json.dumps(t, sort_keys=True) for t in have or []) == sorted(json.dumps(t, sort_keys=True) for t in want or [])
     if key == "domains":
         return set(want or []) <= set(have or [])
     if key == "secrets":  # deploy cannot set or delete one: a missing one is `set by a person`, an extra one is theirs
