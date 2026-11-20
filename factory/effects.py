@@ -19,6 +19,7 @@ route, reply, skip; notify: resolve), `plugin_target` finds the plugin that rewr
 (comments: `on: mention`), and the `gate.send` hook sends after the match check (notify).
 """
 import importlib
+import re
 
 import derive
 from tag import current as tag_text, has_tag, same_text, tagged, untag  # noqa: F401  (re-exported: one tag helper, #1365)
@@ -150,6 +151,28 @@ def frame(body, run_id=None, once=True):
     if run_id and (not once or "Factory-Run:" not in body):
         body += f"\n\nFactory-Run: {run_id}"
     return body
+
+
+def edit_marker(key):
+    """The hidden marker of a comment a `comment` effect with `edit: <key>` rewrites in place (#1531)."""
+    return f"<!-- factory:edit {key} -->"
+
+
+def edit_error(kind, key):
+    """Why `edit: <key>` is refused on an effect of `kind`, else None: only `comment` takes it, with a short slug (#1531)."""
+    if kind != "comment" or not (isinstance(key, str) and re.fullmatch(r"[\w.-]+", key)):
+        return "`edit: <key>` goes only on a `comment` effect, the key a short slug"
+
+
+def edit_target(comments, key):
+    """The latest factory comment among `comments` that carries the edit marker of `key`, else None (#1531)."""
+    return next((c for c in reversed(comments) if c.get("author_is_factory") and edit_marker(key) in c["body"]), None)
+
+
+def same_edit(old, new):
+    """True when comment texts `old` and `new` differ at most in the `Factory-Run:` trailer (#1531)."""
+    strip = lambda t: re.sub(r"\n\nFactory-Run:[^\n]*(?=\n\n<!--|\Z)", "", t or "").strip()
+    return strip(old) == strip(new)
 
 
 def once_marker(node, outcome, head):

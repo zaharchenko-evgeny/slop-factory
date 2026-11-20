@@ -511,6 +511,11 @@ class GitHubTicketStore:
         self.run(["issue", "comment", str(n), "-R", self.repo, "--body", body])
 
     @in_ticket_repository
+    def edit_comment(self, n, cid, body):
+        """Rewrite comment `cid` of ticket `n` in place (#1531)."""
+        self.run(["api", "-X", "PATCH", f"repos/{self.repo}/issues/comments/{cid}", "-f", f"body={body}"])
+
+    @in_ticket_repository
     def close(self, n, reason=None):
         self.run(["issue", "close", str(n), "-R", self.repo, *(["--reason", reason] if reason else [])])
 
@@ -1329,8 +1334,25 @@ class GitHubGateTracker(DescriptorPort):
                 changed = True
         return changed
 
+    def _edit_comment(self, e, comments, post, patch):
+        """`comment` with `edit: <key>` (#1531): rewrite the factory comment that carries the key's marker, else post
+        one; nothing when the text is unchanged."""
+        body = (effects_mod.frame(e["value"], e.get("run_id")) + self._block(e)
+                + f"\n\n{effects_mod.edit_marker(e['edit'])}")
+        old = effects_mod.edit_target(comments, e["edit"])
+        if old is None:
+            post(body)
+        elif effects_mod.same_edit(old["body"], body):
+            return False
+        else:
+            patch(old["id"], body)
+        return True
+
     def _fx_comment(self, e, ctx):
         n, body = e["ticket"], effects_mod.frame(e["value"], e.get("run_id"))
+        if e.get("edit"):
+            return self._edit_comment(e, self.tickets.comments(n), lambda b: self.tickets.comment(n, b),
+                                      lambda cid, b: self.tickets.edit_comment(n, cid, b))
         with self._once_claim(e, n) as mine:
             if not mine or any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"])
                                for c in self.tickets.comments(n)):
@@ -1385,6 +1407,13 @@ class GitHubGateTracker(DescriptorPort):
             pr = self._pr(n)
         if pr is None:
             raise RuntimeError(f"comment: no PR for ticket {n}")
+        if e.get("edit"):
+            comments = [{"id": c["id"], "body": c.get("body") or "",
+                         "author_is_factory": bool(self.bot) and (c.get("user") or {}).get("login") == self.bot}
+                        for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)]
+            return self._edit_comment(
+                e, comments, lambda b: self.run(["issue", "comment", str(pr["number"]), "-R", self.pr_repo, "--body", b]),
+                lambda cid, b: self.run(["api", "-X", "PATCH", f"repos/{self.pr_repo}/issues/comments/{cid}", "-f", f"body={b}"]))
         with self._once_claim(e, n) as mine:
             if not mine or any(effects_mod.same_text(c["body"], body) or self._once(e, c["body"])
                                for c in self._list(f"issues/{pr['number']}/comments", repo=self.pr_repo)):

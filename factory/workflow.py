@@ -157,7 +157,7 @@ def validate(project, wf):
                 state(f"{name}.{oname}.from", s)
                 covered.add(s)
             for e in o.get("effects") or []:
-                keys = [k for k in e if k != "on"] if isinstance(e, dict) else []
+                keys = [k for k in e if k not in ("on", "edit")] if isinstance(e, dict) else []
                 if len(keys) != 1 or keys[0] not in EFFECTS and not plugins.owner(keys[0], "effect"):
                     errs.append(f"unknown-effect: {name}.{oname}: {e}")
                 elif keys[0] == "state":

@@ -626,6 +626,66 @@ class CarriedApprovalTest(unittest.TestCase):
         self.assertEqual((f["round_complete"], f["focus_missing"]), (False, ["full"]))
 
 
+class CommentEditGh(FakeGh):
+    """FakeGh whose ticket (7) and PR (5) comments are a stateful list of {id, user, body}."""
+
+    def __init__(self):
+        super().__init__()
+        self.store, self.next_id = {7: [], 5: []}, 1
+
+    def __call__(self, args, timeout=None):
+        path = next((x for x in args if x.startswith("repos/")), "")
+        if m := re.fullmatch(r"repos/o/r/issues/(\d+)/comments", path):
+            return "\n".join(json.dumps(c) for c in self.store[int(m[1])])
+        if args[:2] == ["issue", "comment"]:
+            self.writes.append(args)
+            self.store[int(args[2])].append({"id": self.next_id, "user": {"login": BOT}, "body": args[args.index("--body") + 1]})
+            self.next_id += 1
+            return ""
+        if "PATCH" in args and "/issues/comments/" in path:
+            self.writes.append(args)
+            c = next(c for cs in self.store.values() for c in cs if c["id"] == int(path.rsplit("/", 1)[1]))
+            c["body"] = args[-1].removeprefix("body=")
+            return ""
+        return super().__call__(args, timeout)
+
+
+class CommentEditTest(unittest.TestCase):
+    """`comment` with `edit: <key>` (#1531): one factory comment per key, rewritten in place."""
+
+    def edits(self, on):
+        gh, t = CommentEditGh(), None
+        t = tr(gh)
+        where = gh.store[5 if on else 7]
+        e = lambda text, run: eff("comment", text, edit="status", run_id=run, **({"on": "pr"} if on else {}))
+        self.assertTrue(t.apply(e("[factory] one", "r1")))
+        self.assertEqual(len(where), 1)
+        self.assertIn("<!-- factory:edit status -->", where[0]["body"])
+        self.assertFalse(t.apply(e("[factory] one", "r2")))  # same text, new run: nothing written
+        self.assertTrue(t.apply(e("[factory] two", "r3")))
+        self.assertEqual(len(where), 1)
+        self.assertIn("two", where[0]["body"])
+        self.assertEqual(len(gh.writes), 2)
+        self.assertTrue(t.apply({**e("[factory] other", "r4"), "edit": "other"}))  # another key: its own comment
+        self.assertEqual(len(where), 2)
+
+    def test_ticket_comment_is_edited_in_place(self):
+        self.edits(on=False)
+
+    def test_pr_comment_is_edited_in_place(self):
+        self.edits(on=True)
+
+    def test_a_person_comment_with_the_marker_is_not_edited(self):
+        gh = CommentEditGh()
+        gh.store[7].append({"id": 99, "user": {"login": "eve"}, "body": "x <!-- factory:edit status -->"})
+        self.assertTrue(tr(gh).apply(eff("comment", "[factory] one", edit="status")))
+        self.assertEqual(len(gh.store[7]), 2)
+
+    def test_resolve_carries_edit(self):
+        got = gate.resolve({"comment": "msg", "edit": "status", "on": "pr"}, {"msg": "hi"}, 7)
+        self.assertEqual(got, {"kind": "comment", "ticket": 7, "value": "hi", "edit": "status", "on": "pr"})
+
+
 class EffectsTest(unittest.TestCase):
     def twice(self, gh, e):
         t = tr(gh)

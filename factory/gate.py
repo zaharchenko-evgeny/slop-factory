@@ -815,7 +815,7 @@ def payload_logins(value, name):
 
 def resolve(effect, payload, ticket):
     """(kind, value) of one effect; a missing payload field raises Bad naming it."""
-    (kind, arg), = [(k, v) for k, v in effect.items() if k != "on"]
+    (kind, arg), = [(k, v) for k, v in effect.items() if k not in ("on", "edit")]
     on = effect.get("on")
 
     def field(f):
@@ -836,7 +836,7 @@ def resolve(effect, payload, ticket):
         out = {"kind": kind, "ticket": ticket, "value": arg}
         return {**out, "on": on} if on else out
     if kind in ("comment", "create-issues"):
-        out = {"kind": kind, "ticket": ticket, "value": field(arg)}
+        out = {"kind": kind, "ticket": ticket, "value": field(arg), **({"edit": effect["edit"]} if effect.get("edit") else {})}
         return {**out, "on": on} if on else out
     if kind in ("park-behind-main-red", "route", "reply"):
         return {"kind": kind, "ticket": ticket, "value": field(arg)}

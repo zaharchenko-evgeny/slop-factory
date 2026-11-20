@@ -35,7 +35,7 @@ def _trigger(raw, stage_of_label, schedules):
 
 def _outcome(name, o, node_stages):
     o = o or {}
-    effects = [{"kind": next((k for k in e if k not in ("on",)), None), "value": e.get(next((k for k in e if k != "on"), None)),
+    effects = [{"kind": next((k for k in e if k not in ("on", "edit")), None), "value": e.get(next((k for k in e if k not in ("on", "edit")), None)),
                 "on": e.get("on")} for e in o.get("effects") or [] if isinstance(e, dict)]
     stage = next((e["value"] for e in effects if e["kind"] in ("stage", "state")), None)
     comment_only = bool(effects) and all(e["kind"] in ("comment", "review") for e in effects)

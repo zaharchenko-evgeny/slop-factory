@@ -565,7 +565,17 @@ class MemorySystem(DescriptorPort):
     def _fx_log(self, effect, ctx):  # label, comment, review, create-issues, merge, join: a set of applied values
         t, kind, value = self._t(effect["ticket"]), effect["kind"], effect.get("value")
         log = t.setdefault("log", [])
-        entry = [kind, json.dumps(value, sort_keys=True)]
+        if kind == "comment" and effect.get("edit"):  # one logged comment per key, rewritten in place (#1531)
+            import effects  # derive imports this module
+            marker = effects.edit_marker(effect["edit"])
+            entry = [kind, json.dumps(f"{value}\n\n{marker}", sort_keys=True)]
+            old = next((i for i, (k, v) in reversed(list(enumerate(log))) if k == kind and marker in json.loads(v)), None)
+            if old is not None:
+                changed = log[old] != entry
+                log[old] = entry
+                return changed
+        else:
+            entry = [kind, json.dumps(value, sort_keys=True)]
         if entry in log:
             return False
         log.append(entry)

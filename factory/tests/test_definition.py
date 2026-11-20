@@ -729,6 +729,14 @@ class DefinitionTest(unittest.TestCase):
         self.edit("workflow.yaml", lambda w: w["nodes"]["intake"]["outcomes"]["ready"]["effects"].append({"set-field": "risk"}))
         self.assertError("unknown-effect: nodes.intake.ready: set-field")
 
+    def test_edit_goes_only_on_a_comment_effect(self):
+        """#1531: `edit: <key>` is a modifier of `comment`; anywhere else it is refused."""
+        effects = lambda w: w["nodes"]["intake"]["outcomes"]["ready"]["effects"]
+        self.edit("workflow.yaml", lambda w: effects(w).append({"comment": "reason", "edit": "status", "on": "pr"}))
+        self.assertFalse([e for e in self.errors() if "bad-effect" in e or "unknown-effect" in e], self.errors())
+        self.edit("workflow.yaml", lambda w: effects(w).append({"label": "factory:x", "edit": "status"}))
+        self.assertError("bad-effect: nodes.intake.ready: `edit: <key>`")
+
     def test_undefined_template_name(self):
         body = self.root / "roles/router/role.md"
         body.write_text(body.read_text() + "\nLimit {{ settings.nope }}\n")

@@ -149,7 +149,7 @@ def vcs_errors(config, where="factory.yaml", nodes=None):
     for node, (env, used) in (nodes or {}).items():
         name = config_mod.vcs(config, env).get("adapter") or "github"
         pr = [k for e in used or [] if isinstance(e, dict)
-              for k in [next((k for k in e if k != "on"), None)] if k and effects.target({"kind": k, "on": e.get("on")}) == "pr"]
+              for k in [next((k for k in e if k not in ("on", "edit")), None)] if k and effects.target({"kind": k, "on": e.get("on")}) == "pr"]
         if not pr or not named(env) or name in bad:
             continue
         declared = {(x.kind, x.target) for x in getattr(registry.impl("vcs", name), "effects", ()) or ()}

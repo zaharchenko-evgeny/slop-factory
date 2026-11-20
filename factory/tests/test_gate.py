@@ -262,6 +262,17 @@ class GateTest(unittest.TestCase):
         gate.apply("review-high", "approve", {"ticket": "7"}, tr, graph)
         self.assertEqual(tr.get_stage(tr.tickets["7"]), "changes-requested")
 
+    def test_comment_edit_rewrites_one_logged_comment(self):
+        """#1531: `comment` with `edit: status` keeps one comment per key in the memory tracker."""
+        graph = {"nodes": {"notify": {"when": {}, "outcomes": {"note": {"effects": [{"comment": "text", "edit": "status"}]}}}}}
+        tr = MemorySystem({"7": {"stage": "approved"}})
+        for text in ("one", "one", "two"):
+            gate.apply("notify", "note", {"ticket": "7", "text": text}, tr, graph)
+        from ports.system import Subject
+        sent = [c["body"] for c in tr.read(Subject("ticket", "7")).comments]
+        self.assertEqual(len(sent), 1)
+        self.assertTrue(sent[0].startswith("two") and sent[0].endswith("<!-- factory:edit status -->"), sent)
+
     def test_partial_outcome_failure_reports_effects_that_landed(self):
         graph = {"nodes": {"review": {"when": {}, "outcomes": {"changes": {"effects": [
             {"review": "request-changes-at-head"}, {"unlabel": "factory:review-x", "on": "pr"}]}}}}}

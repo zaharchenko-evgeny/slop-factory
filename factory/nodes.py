@@ -17,6 +17,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 import config as config_mod  # noqa: E402  (`validate` takes a `config` dict)
+import effects as effects_mod  # noqa: E402
 import plugins  # noqa: E402  (ADR-0026)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -126,10 +127,12 @@ def validate(nodes, config):
             if n.get("routine") and n.get("triggers") and all(str(t).startswith("schedule ") for t in n["triggers"]) and (o or {}).get("effects"):  # ADR-0015: `apply_routine` applies no effects
                 errs.append(f"routine-effects: {name}.{oname}")
             for e in (o or {}).get("effects") or []:
-                keys = [k for k in e if k != "on"] if isinstance(e, dict) else []
+                keys = [k for k in e if k not in ("on", "edit")] if isinstance(e, dict) else []
                 if len(keys) != 1 or keys[0] not in effects:
                     errs.append(len(keys) == 1 and off(f"{name}.{oname}", keys[0], "effect")
                                 or f"unknown-effect: {name}.{oname}: {e}")
+                elif "edit" in e and (why := effects_mod.edit_error(keys[0], e["edit"])):
+                    errs.append(f"bad-effect: {name}.{oname}: {why}")
                 elif "on" in e:
                     target = e["on"]
                     if target in ("issue", "pr"):

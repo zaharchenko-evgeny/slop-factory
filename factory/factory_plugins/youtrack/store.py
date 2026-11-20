@@ -26,7 +26,7 @@ ISSUE_FIELDS = ("idReadable,summary,description,resolved,updated,reporter(login)
 CHILD_FIELDS = "idReadable,resolved,tags(name),project(shortName),customFields(name,value(name))"
 ACTIVITY_FIELDS = "timestamp,author(login),category(id),added(name),removed(name),field(name)"
 ACTIVITY_CATEGORIES = "TagsCategory,CustomFieldCategory,IssueResolvedCategory"
-COMMENT_FIELDS = "text,created,author(login)"
+COMMENT_FIELDS = "id,text,created,author(login)"
 TOP = "$top=1000"
 
 # YouTrack tag colors are a fixed palette (`FieldStyle`), not free hex: {background color: palette id}. Read from
@@ -272,7 +272,7 @@ class YouTrackTicketStore:
         return next((v.get("name") or v.get("login") for v in self._field(self._issue(n), name)), None)
 
     def comments(self, n):
-        return [{"author": (login := (c.get("author") or {}).get("login", "")),
+        return [{"id": c.get("id"), "author": (login := (c.get("author") or {}).get("login", "")),
                  "author_is_bot": login in self.bots or login.endswith("[bot]"),
                  "author_is_factory": login in self.bots, "body": c.get("text") or "",
                  "at": iso(c.get("created")) or ""}
@@ -477,6 +477,10 @@ class YouTrackTicketStore:
 
     def comment(self, n, body):
         self.run("POST", f"/api/issues/{n}/comments?fields=id", {"text": body})
+
+    def edit_comment(self, n, cid, body):
+        """Rewrite comment `cid` of ticket `n` in place (#1531)."""
+        self.run("POST", f"/api/issues/{n}/comments/{cid}?fields=id", {"text": body})
 
     def close(self, n, reason=None):  # the State is the only close a YouTrack ticket has
         self.set_field(n, self.state_field or "State", self.done_state)

@@ -59,7 +59,10 @@ class FakeYouTrack:
             return self.activities
         if parts[2] == "comments":
             if method == "POST":
-                self.comments.append({"text": body["text"], "created": 2, "author": {"login": "factory"}})
+                if len(parts) == 4:  # an edit of comment parts[3]
+                    next(c for c in self.comments if c["id"] == parts[3])["text"] = body["text"]
+                else:
+                    self.comments.append({"id": str(len(self.comments)), "text": body["text"], "created": 2, "author": {"login": "factory"}})
                 return {}
             return self.comments
         if parts[2] == "tags":
@@ -73,6 +76,21 @@ class FakeYouTrack:
 
 
 class StoreTest(unittest.TestCase):
+    def test_edit_comment_rewrites_the_comment_in_place(self):
+        """#1531: a `comment` effect with `edit` posts once, then POSTs the new text to the comment's own URL."""
+        from factory_plugins.github.gate import GitHubGateTracker
+        fake = FakeYouTrack()
+        store = yt.YouTrackTicketStore(fake, bots=["factory"])
+        gate_tracker = GitHubGateTracker("o/r", contract.STAGES, "factory", tickets=store)
+        e = {"ticket": "T-1", "kind": "comment", "edit": "status"}
+        self.assertTrue(gate_tracker._fx_comment({**e, "value": "[factory] one"}, None))
+        self.assertFalse(gate_tracker._fx_comment({**e, "value": "[factory] one", "run_id": "r2"}, None))
+        self.assertTrue(gate_tracker._fx_comment({**e, "value": "[factory] two"}, None))
+        self.assertEqual(len(fake.comments), 1)
+        self.assertIn("two", fake.comments[0]["text"])
+        self.assertIn("<!-- factory:edit status -->", fake.comments[0]["text"])
+        self.assertIn("POST", [m for m, p, _ in fake.calls if p.startswith("/api/issues/T-1/comments/0")])
+
     def test_ticket_store_contract(self):
         def make(attrs, body, assignees, comments, events):
             issue = {"idReadable": "T-1", "summary": "t", "description": body, "resolved": None, "updated": 1,

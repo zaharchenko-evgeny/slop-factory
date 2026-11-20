@@ -778,7 +778,7 @@ def errors(defn):
             if oc.get("else") is not None and oc["else"] not in outcomes:
                 errs.append(f"unknown-else: {where}.{o}: {oc['else']}")
             guards = [k for k in oc.get("if") or {} if k not in GUARDS]
-            kinds = [next((k for k in e if k != "on"), None) for e in oc.get("effects") or []]
+            kinds = [next((k for k in e if k not in ("on", "edit")), None) for e in oc.get("effects") or []]
             errs += _plugin_key_errors(registry, f"{where}.{o}", o, guards, kinds, oc.get("effects") or [])
             if any(isinstance(effect, dict) and "field" in effect and effect.get("on") != "pr"
                    for effect in oc.get("effects") or []):
@@ -787,6 +787,8 @@ def errors(defn):
                         for repo in repositories(defn, node_env)) for node_env in node_envs or [default_env]):
                     errs.append(f"unsupported-effect: {where}.{o}: field requires a YouTrack ticket environment")
             for effect in oc.get("effects") or []:
+                if isinstance(effect, dict) and "edit" in effect and (why := effects.edit_error(next((k for k in effect if k not in ("on", "edit")), None), effect["edit"])):
+                    errs.append(f"bad-effect: {where}.{o}: {why}")
                 if isinstance(effect, dict) and ("assign" in effect or "unassign" in effect):
                     key = "assign" if "assign" in effect else "unassign"
                     value = effect[key]
@@ -1221,7 +1223,7 @@ def _wake(t, name, prefix, schedules, env):
 
 
 def _effect(e, prefix):
-    key = next(k for k in e if k != "on")
+    key = next(k for k in e if k not in ("on", "edit"))
     if key == "stage":
         return {"state": e["stage"]}
     if key in ("label", "unlabel"):
@@ -1347,7 +1349,7 @@ def _outcome(oc, on_pr, all_stages):
 
 def _label_effect(e, on_pr):
     """A label is on the PR when any effect puts it there; `comment` with `on: mention` stays as written."""
-    key = next(k for k in e if k != "on")
+    key = next(k for k in e if k not in ("on", "edit"))
     if key in ("label", "unlabel"):
         return {key: e[key], **({"on": "pr"} if e[key] in on_pr else {})}
     return dict(e)

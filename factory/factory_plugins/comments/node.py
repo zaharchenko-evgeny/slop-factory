@@ -17,7 +17,7 @@ SEEN = re.compile(r"<!-- factory:comment-seen (\d+) -->")
 
 
 def is_comment_node(node):
-    return any(next((k for k in e if k != "on"), None) in EFFECTS
+    return any(next((k for k in e if k not in ("on", "edit")), None) in EFFECTS
                for o in node["outcomes"].values() for e in (o or {}).get("effects") or [])
 
 
