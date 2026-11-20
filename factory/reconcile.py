@@ -80,6 +80,30 @@ def finish_lost(tracker, defn, stages, open_listed, dry_run, progress):
     return results
 
 
+def finish_answered(tracker, defn, stages, dry_run, progress):
+    """A ticket waiting for answers whose person replied after the question gets `finish: answered`, as `gate sweep`
+    would; the sweep that the reply's event started may have been lost (#1534)."""
+    import gate
+    graph, results = definition.nodes(defn), []
+    for n in tracker.sweep_tickets(stages, open_only=True):
+        try:
+            facts = tracker.facts(n)
+            plan = definition.plan(graph, facts)
+            if plan is None or plan[:2] != ("finish", "answered"):
+                continue
+            r = {"ticket": n, "stage": facts["stage"], "node": "finish", "outcome": "answered", "reconcile": "answered"}
+            results.append(r)
+            if not dry_run:
+                _, out = gate.apply("finish", "answered", {"ticket": n, **plan[2], "run_id": RUN}, tracker, graph)
+                r.update(applied=out["applied"], written=out.get("written", []))
+        except Exception as e:  # one ticket failing does not stop the others
+            r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
+            results.append(r)
+        if progress:
+            progress(r)
+    return results
+
+
 def fact_value(key, facts):
     """The fact a `when` key reads, as text for a person."""
     if key == "fix-rounds":
@@ -515,6 +539,7 @@ def reconcile_main(argv):
     results += wake_approved(tracker, approval_graph(defn), minutes, dry_run=dry_run)
     results += recover_definition(tracker, defn, stages, kinds, config["limits"],
                                   dry_run=dry_run, progress=progress)
+    results += finish_answered(tracker, defn, [s for s in stages if kinds.get(s) == "waiting"], dry_run, progress)
     results += finish_lost(tracker, defn, [s for s in LOST_FINISH if s in stages],
                            tracker.sweep_tickets([s for s in stages if kinds.get(s) != "final"], open_only=True),
                            dry_run, progress)

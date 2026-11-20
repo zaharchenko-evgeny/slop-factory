@@ -549,6 +549,38 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertEqual(tracker.tickets[1].get("log", []), [])
 
 
+class FinishAnsweredTest(unittest.TestCase):
+    """#1534: a waiting ticket whose person replied is finished by reconcile, as `gate sweep` would."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.defn = copy.deepcopy(definition.load(Path(__file__).resolve().parent / "fixtures/slop"))
+        cls.defn["workflow"]["nodes"]["finish"]["outcomes"]["answered"] = {
+            "from": ["needs-answers"], "effects": [{"stage": "triage"}]}
+
+    def run_pass(self, ticket, **kw):
+        tr = MemorySystem({1: {"stage": "needs-answers", **ticket}, 2: {"stage": "needs-answers", "answered": True,
+                                                                          "issue_state": "closed"}})
+        waiting = [s for s in STAGES if CONFIG["tracker"].get("stage_kinds", {}).get(s) == "waiting"]
+        return tr, reconcile.finish_answered(tr, self.defn, waiting, **{"dry_run": False, "progress": None, **kw})
+
+    def test_a_persons_reply_resumes_the_ticket_and_a_closed_one_is_skipped(self):
+        tr, results = self.run_pass({"answered": True})
+        self.assertEqual([(r["ticket"], r["reconcile"], r["applied"]) for r in results], [(1, "answered", True)])
+        self.assertEqual(tr.get_stage(tr.tickets[1]), "triage")
+
+    def test_no_answer_no_step(self):  # a bot or an older factory comment leaves `answered` false (derive)
+        tr, results = self.run_pass({"answered": False})
+        self.assertEqual(results, [])
+        self.assertEqual(tr.get_stage(tr.tickets[1]), "needs-answers")
+
+    def test_dry_run_writes_nothing(self):
+        tr, results = self.run_pass({"answered": True}, dry_run=True)
+        self.assertEqual([r["reconcile"] for r in results], ["answered"])
+        self.assertEqual(tr.get_stage(tr.tickets[1]), "needs-answers")
+        self.assertEqual(tr.tickets[1].get("log", []), [])
+
+
 class ReconcileMainBlockersTest(unittest.TestCase):
     """`reconcile_main` hands `wake_approved` the definition's graph, whatever the engine node file says."""
     SLOP = Path(__file__).resolve().parent / "fixtures/slop"

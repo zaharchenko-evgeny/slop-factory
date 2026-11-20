@@ -1789,6 +1789,20 @@ class ResumeTest(unittest.TestCase):
         gh.comments = [{"created_at": "2026-01-03T00:00:00Z", "user": {"login": "bob", "type": "User"}}]
         self.assertTrue(tr(gh).facts(7)["answered"])
 
+    def test_a_reply_older_than_a_newer_factory_comment_is_not_an_answer(self):
+        """#1534: a follow-up question by the factory waits for a fresh answer."""
+        gh = FakeGh(labels=(STAGES["needs-answers"], "risk:low"))
+        gh.issue_events = [
+            {"event": "labeled", "label": {"name": STAGES["ready"]}, "created_at": "2026-01-01T00:00:00Z",
+             "actor": {"login": "alice"}},
+            {"event": "labeled", "label": {"name": STAGES["needs-answers"]}, "created_at": "2026-01-02T00:00:00Z"},
+        ]
+        gh.comments = [{"created_at": "2026-01-03T00:00:00Z", "user": {"login": "alice", "type": "User"}},
+                       {"created_at": "2026-01-04T00:00:00Z", "user": {"login": BOT, "type": "Bot"}}]
+        self.assertFalse(tr(gh).facts(7)["answered"])
+        gh.comments.append({"created_at": "2026-01-05T00:00:00Z", "user": {"login": "alice", "type": "User"}})
+        self.assertTrue(tr(gh).facts(7)["answered"])
+
     def test_stage_is_the_latest_stage_label_added(self):
         gh = FakeGh(labels=["factory:in-review", "factory:ready", "risk:low"])
         gh.label_events = [("factory:in-review", "2026-01-01T00:00:00Z"), ("factory:ready", "2026-01-02T00:00:00Z")]
