@@ -264,6 +264,29 @@ class RecoverDefinitionTest(unittest.TestCase):
         self.assertIn('"factory:needs-human"', logged(t, "label"))
         self.assertNotIn("factory:review-low", logged(t, "label"))
 
+    def person_changes(self, **kw):  # #1533: a person's change request, received by an earlier fix, newer than the head
+        review = {"author": "alice", "verdict": "changes", "submitted_at": "2026-11-03T10:00:00Z",
+                  "commit_id": "0ld", "agent": False, "bot": False}
+        return self.pr(**{"ci": "green", "attrs": ["risk:low"], "waiting_reviewers": ["alice"], "reviews": [review],
+                          "commit_at": "2026-11-03T09:00:00Z", **kw})
+
+    def test_a_person_change_request_newer_than_the_head_goes_to_fix_once(self):
+        ticket = self.person_changes()
+        t, results = self.recover(ticket)
+        self.assertEqual([(r["node"], r["reconcile"]) for r in results], [("fix", "person-changes")])
+        self.assertEqual(logged(t, "label"), ['"factory:fix"'])
+        self.assertEqual(t.get_stage(t.tickets[1]), "changes-requested")
+        note = logged(t, "comment")[0]
+        self.assertIn("stage=in-review head=abc123def456 person-changes alice", note)
+        ticket.update(stage="in-review", log=[("comment", note)])
+        self.assertEqual(self.recover(ticket)[1], [])  # once per head
+
+    def test_a_push_newer_than_the_person_review_or_a_fix_label_is_left_alone(self):
+        self.assertEqual(self.recover(self.person_changes(commit_at="2026-11-03T10:30:00Z"))[1], [])
+        self.assertEqual(self.recover(self.person_changes(pr_labels=["factory:fix"]))[1], [])
+        fresh = {"author": "alice", "verdict": "changes", "submitted_at": FRESH, "commit_id": "0ld"}
+        self.assertEqual(self.recover(self.person_changes(reviews=[fresh]))[1], [])  # its own trigger starts the fix
+
     def test_conflict_uses_the_fix_stage_of_the_definition(self):
         import copy
         defn = copy.deepcopy(self.defn)
@@ -468,6 +491,17 @@ class RecoverDefinitionTest(unittest.TestCase):
         ticket.update(stage="in-review", log=[("comment", json.dumps(failure)), ("comment", note)])
         self.assertEqual(self.recover(ticket)[1], [])  # one notice per stage and head
 
+    def test_a_failed_end_with_head_none_blocks_instead_of_refiring(self):
+        """#1532: a run with no head wrote `head=none`; reconcile still sees it and does not fire again."""
+        ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
+                         label_at={"factory:review-low": OLD})
+        ticket["log"] = [("comment", json.dumps("[factory] end failed: node=review-low head=none outcome=x\n\n```\nboom\n```\n\n"
+                                                "The outcome did not land; x"))]
+        t, results = self.recover(ticket)
+        self.assertEqual([r["reconcile"] for r in results], ["end-failed"])
+        self.assertEqual(t.get_stage(t.tickets[1]), "blocked")
+        self.assertNotIn('"factory:review-low"', logged(t, "label"))
+
     def test_a_failed_end_on_an_older_head_does_not_stop_the_refire(self):
         ticket = self.pr(ci="green", attrs=["risk:low"], pr_labels=["factory:review-low"],
                          label_at={"factory:review-low": OLD})
@@ -515,6 +549,38 @@ class RecoverDefinitionTest(unittest.TestCase):
                                                now=NOW, dry_run=True)
         self.assertIn("error", results[0])
         self.assertEqual(tracker.tickets[1].get("log", []), [])
+
+
+class FinishAnsweredTest(unittest.TestCase):
+    """#1534: a waiting ticket whose person replied is finished by reconcile, as `gate sweep` would."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.defn = copy.deepcopy(definition.load(Path(__file__).resolve().parent / "fixtures/slop"))
+        cls.defn["workflow"]["nodes"]["finish"]["outcomes"]["answered"] = {
+            "from": ["needs-answers"], "effects": [{"stage": "triage"}]}
+
+    def run_pass(self, ticket, **kw):
+        tr = MemorySystem({1: {"stage": "needs-answers", **ticket}, 2: {"stage": "needs-answers", "answered": True,
+                                                                          "issue_state": "closed"}})
+        waiting = [s for s in STAGES if CONFIG["tracker"].get("stage_kinds", {}).get(s) == "waiting"]
+        return tr, reconcile.finish_answered(tr, self.defn, waiting, **{"dry_run": False, "progress": None, **kw})
+
+    def test_a_persons_reply_resumes_the_ticket_and_a_closed_one_is_skipped(self):
+        tr, results = self.run_pass({"answered": True})
+        self.assertEqual([(r["ticket"], r["reconcile"], r["applied"]) for r in results], [(1, "answered", True)])
+        self.assertEqual(tr.get_stage(tr.tickets[1]), "triage")
+
+    def test_no_answer_no_step(self):  # a bot or an older factory comment leaves `answered` false (derive)
+        tr, results = self.run_pass({"answered": False})
+        self.assertEqual(results, [])
+        self.assertEqual(tr.get_stage(tr.tickets[1]), "needs-answers")
+
+    def test_dry_run_writes_nothing(self):
+        tr, results = self.run_pass({"answered": True}, dry_run=True)
+        self.assertEqual([r["reconcile"] for r in results], ["answered"])
+        self.assertEqual(tr.get_stage(tr.tickets[1]), "needs-answers")
+        self.assertEqual(tr.tickets[1].get("log", []), [])
 
 
 class ReconcileMainBlockersTest(unittest.TestCase):

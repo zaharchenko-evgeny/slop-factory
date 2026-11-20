@@ -315,13 +315,23 @@ def gate_error(stdout):
     return ""
 
 
+def same_end_failure(run, repo, number, key, tail):
+    """True when the ticket's latest `end failed:` comment names `key` (`node=.. head=..`) and the error `tail` (#1532)."""
+    got = run(["gh", "issue", "view", str(number), *(["-R", repo] if repo else []), "--json", "comments"],
+              capture_output=True, text=True, timeout=60)
+    last = next((c["body"] for c in reversed(json.loads(got.stdout).get("comments", [])) if f"{END_FAILED} node=" in c["body"]), "")
+    return f"{END_FAILED} {key} " in last and f"```\n{tail}\n```" in last
+
+
 def report_end_failure(state, outcome, error, run=subprocess.run):
     """One ticket comment naming the node, head, outcome and the error's last lines, so reconcile and a person see
-    why the outcome did not land, and that a retry on this head fails the same way (#997)."""
+    why the outcome did not land, and that a retry on this head fails the same way (#997). Not written again when the
+    ticket's latest `end failed:` comment has the same node, head and error (#1532)."""
     if not state.get("ticket") or state.get("tracker"):  # a memory tracker (`--tracker`, tests) has no GitHub ticket
         return
     tail = "\n".join(line for line in error.strip().splitlines()[-5:])[:1500] or "no error output"
-    body = (f"{END_FAILED} node={state['node']} head={state.get('head') or 'none'} outcome={outcome}\n\n```\n{tail}\n```\n\n"
+    key = f"node={state['node']} head={state.get('head') or 'none'}"
+    body = (f"{END_FAILED} {key} outcome={outcome}\n\n```\n{tail}\n```\n\n"
             "The outcome did not land; a retry on this head fails the same way until the cause is fixed.")
     try:
         cfg = config.load()  # sets the comment tag
@@ -329,6 +339,11 @@ def report_end_failure(state, outcome, error, run=subprocess.run):
         body = f"{tagged(body)}\n\nFactory-Run: {os.environ.get('FACTORY_NODE') or state['node']}"
         from gate_port import split_ticket
         repo, number = split_ticket(state["ticket"], cfg["tracker"].get("repository"))
+        try:
+            if same_end_failure(run, repo, number, key, tail):
+                return
+        except Exception:  # an unreadable ticket must not hide the failure
+            pass
         run(["gh", "issue", "comment", str(number), *(["-R", repo] if repo else []), "--body", body],
             capture_output=True, text=True, timeout=60)
     except Exception as e:

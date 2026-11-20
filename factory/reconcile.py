@@ -80,6 +80,30 @@ def finish_lost(tracker, defn, stages, open_listed, dry_run, progress):
     return results
 
 
+def finish_answered(tracker, defn, stages, dry_run, progress):
+    """A ticket waiting for answers whose person replied after the question gets `finish: answered`, as `gate sweep`
+    would; the sweep that the reply's event started may have been lost (#1534)."""
+    import gate
+    graph, results = definition.nodes(defn), []
+    for n in tracker.sweep_tickets(stages, open_only=True):
+        try:
+            facts = tracker.facts(n)
+            plan = definition.plan(graph, facts)
+            if plan is None or plan[:2] != ("finish", "answered"):
+                continue
+            r = {"ticket": n, "stage": facts["stage"], "node": "finish", "outcome": "answered", "reconcile": "answered"}
+            results.append(r)
+            if not dry_run:
+                _, out = gate.apply("finish", "answered", {"ticket": n, **plan[2], "run_id": RUN}, tracker, graph)
+                r.update(applied=out["applied"], written=out.get("written", []))
+        except Exception as e:  # one ticket failing does not stop the others
+            r = {"ticket": n, "error": f"{type(e).__name__}: {e}"}
+            results.append(r)
+        if progress:
+            progress(r)
+    return results
+
+
 def fact_value(key, facts):
     """The fact a `when` key reads, as text for a person."""
     if key == "fix-rounds":
@@ -109,9 +133,10 @@ def stuck_label(wakes, nodes, facts, on_pr, ago):
 
 
 def last_end_failure(facts, node, head):
-    """The error block of the last `[factory]` `end failed:` comment for `node` at `head`, else None (#997)."""
+    """The error block of the last `[factory]` `end failed:` comment for `node` at `head` (or with `head=none`, written
+    when the run had no head, #1532), else None (#997)."""
     for c in reversed(facts.get("recover_comments", [])):
-        if effects.has_tag(c, "end failed:") and f"node={node} " in c and f"head={head} " in c:
+        if effects.has_tag(c, "end failed:") and f"node={node} " in c and (f"head={head} " in c or "head=none " in c):
             body = c.split("\n", 1)[1] if "\n" in c else ""
             return body.split("The outcome did not land")[0].strip() or "no error output"
     return None
@@ -136,6 +161,10 @@ def send(tracker, n, nodes, stage, head, kind, label, on, why, fix_stage="change
     elif kind == "conflict":
         apply(kind="label", value=label or vocab.cmd("fix-<tier>", "cheap"), on="pr")
         apply(kind="stage", value=fix_stage)
+    elif kind == "person-changes":  # the comment last: once per head (#1533)
+        apply(kind="label", value=label, on="pr")
+        apply(kind="stage", value=fix_stage)
+        apply(kind="comment", value=effects.tagged(f"{PREFIX} stage={stage} head={head} person-changes {why}"))
     elif kind == "blocked":
         apply(kind="label", value=vocab.needs_human())
         apply(kind="comment", value=effects.tagged(f"{PREFIX} stage={stage} stopped: {why} twice. A person decides, then sets {vocab.stage('ready')}."))
@@ -198,6 +227,17 @@ def late_external_review(defn, facts, ago, head):
             if on:
                 return name, wake, on, f"no review by {bot} at the head {hours}h after {label}"
     return None
+
+
+def person_changes(facts, head):
+    """(reviewers, latest request time) whose change request is not older than the PR head, else ([], None) (#1533): `waiting_reviewers`
+    asked for changes, a fix round received them, and the head has not been pushed since the latest request."""
+    waiting = set(facts.get("waiting_reviewers") or [])
+    asked = [r.get("submitted_at") or "" for r in facts.get("reviews") or []
+             if r.get("author") in waiting and r.get("verdict") == "changes"]
+    if not waiting or not asked or (facts.get("commit_at") or "") > max(asked):
+        return [], None
+    return sorted(waiting), max(asked)
 
 
 def stage_wakes(defn, tracker_stages, default):
@@ -303,7 +343,14 @@ def recover_definition(tracker, defn, stages, stage_kinds, limits, now=None, dry
                     if progress:
                         progress(r)
                 continue
-            if (fix and facts.get("conflict") and facts.get("pr") and facts.get("pr_state") in (None, "none", "open")
+            people, asked_at = person_changes(facts, head) if fix and facts.get("pr") and \
+                facts.get("pr_state") in (None, "none", "open") and fix[1] not in on_pr else ([], None)
+            # the review's own trigger starts the fix; reconcile steps in only after the fix node's timeout
+            if people and ago(asked_at) > timedelta(minutes=nodes[fix[0]].get("timeout_minutes", default)) \
+                    and gate.holds(nodes[fix[0]].get("when") or {}, facts, {}) \
+                    and not any(f"stage={stage} head={head} person-changes" in c for c in facts.get("recover_comments", [])):
+                step = ("person-changes", fix[0], fix[1], "pr", f"{', '.join(people)} asked for changes after the last push")
+            elif (fix and facts.get("conflict") and facts.get("pr") and facts.get("pr_state") in (None, "none", "open")
                     and fix[1] not in on_pr and gate.holds(nodes[fix[0]].get("when") or {}, facts, {})
                     and ago(since) > timedelta(minutes=default)):
                 step = ("conflict", fix[0], fix[1], "pr", "the PR conflicts with main and has no fix label")
@@ -494,6 +541,7 @@ def reconcile_main(argv):
     results += wake_approved(tracker, approval_graph(defn), minutes, dry_run=dry_run)
     results += recover_definition(tracker, defn, stages, kinds, config["limits"],
                                   dry_run=dry_run, progress=progress)
+    results += finish_answered(tracker, defn, [s for s in stages if kinds.get(s) == "waiting"], dry_run, progress)
     results += finish_lost(tracker, defn, [s for s in LOST_FINISH if s in stages],
                            tracker.sweep_tickets([s for s in stages if kinds.get(s) != "final"], open_only=True),
                            dry_run, progress)

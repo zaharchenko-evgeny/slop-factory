@@ -237,6 +237,8 @@ def facts(ticket, prs, rules, children=None):
             started = waiting[-1]["at"] or ""
             ready = [e for e in events if e["kind"] == "labeled" and e["value"] in (stages["triage"], stages["ready"])]
             setter = ready[-1]["actor"] if ready else None
+            # newer than the question and than the factory's latest comment, so a follow-up question waits (#1534)
+            started = max([started, *(c["at"] or "" for c in comments if c["author_is_factory"])])
             f["answered"] = any(c["at"] > started and not c["author_is_bot"] and
                                 (c["author"] == setter or ticket.can_answer[c["author"]])
                                 for c in comments)
